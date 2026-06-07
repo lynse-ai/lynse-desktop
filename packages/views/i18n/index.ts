@@ -1,0 +1,1 @@
+export { RESOURCES } from "../locales";

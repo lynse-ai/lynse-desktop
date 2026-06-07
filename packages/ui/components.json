@@ -1,0 +1,21 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "base-nova",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "styles/tokens.css",
+    "baseColor": "zinc",
+    "cssVariables": true,
+    "prefix": ""
+  },
+  "iconLibrary": "lucide",
+  "aliases": {
+    "components": "@lynse/ui/components",
+    "ui": "@lynse/ui/components/ui",
+    "hooks": "@lynse/ui/hooks",
+    "lib": "@lynse/ui/lib",
+    "utils": "@lynse/ui/lib/utils"
+  }
+}

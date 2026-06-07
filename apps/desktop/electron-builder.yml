@@ -1,0 +1,19 @@
+appId: app.lynse.desktop
+productName: Lynse
+directories:
+  buildResources: resources
+files:
+  - out/**
+  - "!out/**/*.map"
+mac:
+  category: public.app-category.productivity
+  target:
+    - dmg
+    - zip
+win:
+  target:
+    - nsis
+linux:
+  target:
+    - AppImage
+    - deb

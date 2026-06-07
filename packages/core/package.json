@@ -1,0 +1,43 @@
+{
+  "name": "@lynse/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "exports": {
+    ".": "./index.ts",
+    "./api": "./api/index.ts",
+    "./api/client": "./api/client.ts",
+    "./api/schema": "./api/schema.ts",
+    "./auth": "./auth/index.ts",
+    "./config": "./config/index.ts",
+    "./navigation": "./navigation/index.ts",
+    "./query-client": "./query-client.ts",
+    "./provider": "./provider.tsx",
+    "./logger": "./logger.ts",
+    "./utils": "./utils.ts",
+    "./platform": "./platform/index.ts",
+    "./i18n": "./i18n/index.ts",
+    "./i18n/react": "./i18n/react.ts"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "catalog:",
+    "i18next": "catalog:",
+    "react-i18next": "catalog:",
+    "zod": "catalog:",
+    "zustand": "catalog:"
+  },
+  "peerDependencies": {
+    "react": "catalog:"
+  },
+  "devDependencies": {
+    "@lynse/tsconfig": "workspace:*",
+    "@types/react": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "name": "@lynse.ai/lynse-cli",
+  "version": "1.3.1",
+  "description": "Lynse CLI 技能包 - 调用 lynse.ai 后端服务的 API，支持用户管理、文件管理、设备管理、AI 模型管理等功能。跨平台支持 Windows/macOS/Linux。",
+  "main": "lynse.py",
+  "bin": {
+    "lynse": "./lynse.bat",
+    "lynse-api": "./api_wrapper.sh",
+    "lynse-install": "./install.sh",
+    "lynse-install-win": "./install.ps1"
+  },
+  "scripts": {
+    "test": "echo \"No tests configured\" && exit 0"
+  },
+  "keywords": [
+    "lynse",
+    "cli",
+    "ai",
+    "transcription",
+    "api-wrapper",
+    "openclaw",
+    "cross-platform",
+    "windows"
+  ],
+  "author": "Lynse",
+  "license": "MIT",
+  "homepage": "https://www.lynse.ai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/johneyzhao-lynse/lynse-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/johneyzhao-lynse/lynse-cli/issues"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "files": [
+    "lynse.py",
+    "lynse_cli.py",
+    "requirements.txt",
+    "install.sh",
+    "install.ps1",
+    "lynse.bat",
+    "api_wrapper.sh",
+    "lynse_unified.sh",
+    "lynse-cli-a/",
+    "lynse-cli-b/",
+    "SKILL.md",
+    "compatibility.md",
+    ".env.example"
+  ],
+  "engines": {
+    "python": ">=3.8"
+  }
+}

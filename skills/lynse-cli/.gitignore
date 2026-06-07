@@ -1,0 +1,7 @@
+.env
+token_cache.json
+__pycache__/
+*.pyc
+autoresearch-lynse-cli/
+.DS_Store
+.npmrc

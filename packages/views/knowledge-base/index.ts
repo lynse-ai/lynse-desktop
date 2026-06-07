@@ -1,0 +1,1 @@
+export { KnowledgeBasePage } from "./page";

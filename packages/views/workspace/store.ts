@@ -173,3 +173,8 @@ function getStore() {
 export function useWorkspaceStore<T>(selector: (s: WorkspaceState) => T): T {
   return getStore()(selector);
 }
+
+/** Access workspace store state outside of React (e.g., in callbacks). */
+export function getWorkspaceState(): WorkspaceState {
+  return getStore().getState();
+}

@@ -28,6 +28,7 @@ const en = {
     collapse_folders: "Collapse",
     expand_folders: "Expand",
     move_to_folder: "Move to...",
+    default_plan: "Standard",
     language: "Language",
     lang_en: "English",
     lang_zh: "中文",
@@ -39,6 +40,8 @@ const en = {
     help_docs: "Help Docs",
     changelog: "Changelog",
     feedback: "Feedback",
+    credits_label: "Credits",
+    credits_remaining: "{remaining} / {total}",
   },
   settings: {
     appearance: "Appearance",

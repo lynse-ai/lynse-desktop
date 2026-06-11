@@ -40,6 +40,7 @@ export {
   Check,            // Confirm / Copied
   Pencil,           // Rename / Edit inline
   MoreHorizontal,   // Context menu trigger
+  GripVertical,     // Drag handle
 
   // ── Content / Document ────────────────────────────────
   FileText,         // Generic document / file
@@ -49,6 +50,10 @@ export {
   Eye,              // Preview mode
   Columns2,         // Split mode
   Bot,              // AI assistant
+
+  // ── Membership / Credits ──────────────────────────────
+  Crown,            // Membership tier
+  Zap,              // Credits / points
 
   // ── Misc ──────────────────────────────────────────────
   Loader2,          // Spinner (animate-spin)

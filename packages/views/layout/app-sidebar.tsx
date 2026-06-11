@@ -11,7 +11,6 @@ import {
   MessageSquare,
   Settings,
   Plus,
-  Circle,
   Grid3X3,
   Sun,
   Moon,
@@ -22,6 +21,8 @@ import {
   MessageCircle,
   Check,
   LogOut,
+  Crown,
+  Zap,
 } from "../icons";
 import {
   Sidebar,
@@ -47,9 +48,8 @@ import {
 } from "@lynse/ui/components/ui/dropdown-menu";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
-import { useFolders } from "../workspace/hooks/use-folders";
-import { useFiles } from "../workspace/hooks/use-files";
-import { useWorkspaceStore } from "../workspace/store";
+import { useUserCredits } from "./use-user-credits";
+import { FolderTreeSection } from "../workspace/sidebar/folder-tree-section";
 
 function isNavActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(href + "/");
@@ -134,7 +134,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
         </SidebarGroup>
 
         {/* Folder tree — shown on workspace routes */}
-        <WorkspaceFolderTree />
+        <FolderTreeSection />
 
         {/* Tools section */}
         <SidebarGroup className="border-t border-border/40 py-1 mt-1">
@@ -160,77 +160,13 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
         </SidebarGroup>
       </SidebarContent>
 
-      {/* ── Footer: User profile + Settings dropdown ───── */}
-      <SidebarFooter className="border-t border-border/40 p-2">
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <button className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-muted/60">
-                <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
-                  JZ
-                </div>
-                <div className="flex-1 text-left min-w-0">
-                  <p className="truncate text-[13px] font-medium leading-tight">johney zhao</p>
-                  <p className="truncate text-[11px] text-muted-foreground/60">Community</p>
-                </div>
-                <Settings className="size-3.5 shrink-0 text-muted-foreground/50" />
-              </button>
-            }
-          />
-          <DropdownMenuContent align="start" side="top" sideOffset={4} className="w-52">
-            {/* Settings */}
-            <DropdownMenuItem onClick={() => push("/settings")}>
-              <Settings className="size-3.5" />
-              <span>{t("nav.settings")}</span>
-            </DropdownMenuItem>
+      {/* ── Footer: Credits + User profile ──────────────── */}
+      <SidebarFooter className="border-t border-border/40 p-2 gap-0">
+        {/* Credits usage section */}
+        <UserCredits />
 
-            {/* Language */}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <Globe className="size-3.5" />
-                <span>{t("layout.language")}</span>
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <LanguageItem code="en" label={t("layout.lang_en")} />
-                <LanguageItem code="zh-Hans" label={t("layout.lang_zh")} />
-                <LanguageItem code="ja" label={t("layout.lang_ja")} />
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-
-            {/* Theme */}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <Moon className="size-3.5" />
-                <span>{t("layout.theme")}</span>
-              </DropdownMenuSubTrigger>
-              <ThemeSubmenu />
-            </DropdownMenuSub>
-
-            <DropdownMenuSeparator />
-
-            {/* Help & Info */}
-            <DropdownMenuItem>
-              <HelpCircle className="size-3.5" />
-              <span>{t("layout.help_docs")}</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem>
-              <FileClock className="size-3.5" />
-              <span>{t("layout.changelog")}</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem>
-              <MessageCircle className="size-3.5" />
-              <span>{t("layout.feedback")}</span>
-            </DropdownMenuItem>
-
-            <DropdownMenuSeparator />
-
-            {/* Logout */}
-            <DropdownMenuItem variant="destructive">
-              <LogOut className="size-3.5" />
-              <span>{t("layout.log_out")}</span>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        {/* User profile dropdown */}
+        <UserProfileDropdown push={push} />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
@@ -251,6 +187,130 @@ function LanguageItem({ code, label }: { code: string; label: string }) {
       )}
       <span className={cn(!isActive && "text-muted-foreground")}>{label}</span>
     </DropdownMenuItem>
+  );
+}
+
+/* ── User credits display ──────────────────────────────── */
+function UserCredits() {
+  const { t } = useTranslation();
+  const { data, isLoading } = useUserCredits();
+
+  const plan = data?.benefitType || t("layout.default_plan");
+  const total = data?.pointsAmount ?? 0;
+  const used = data?.usedPointsAmount ?? 0;
+  const remaining = Math.max(0, total - used);
+  const percentage = total > 0 ? Math.min(100, Math.max(0, (remaining / total) * 100)) : 0;
+
+  if (isLoading) {
+    return (
+      <div className="mx-1 mb-1.5 rounded-lg border border-border/50 bg-muted/30 px-2.5 py-2">
+        <div className="h-3 w-24 animate-pulse rounded bg-muted" />
+        <div className="mt-1.5 h-1 w-full rounded-full bg-muted" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-1 mb-1.5 rounded-lg border border-border/50 bg-muted/30 px-2.5 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <Crown className="size-3 text-amber-500" />
+          <span className="text-[11px] font-semibold">{plan}</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <Zap className="size-3 text-muted-foreground" />
+          <span className="text-[11px] tabular-nums text-muted-foreground">
+            {remaining.toLocaleString()} / {total.toLocaleString()}
+          </span>
+        </div>
+      </div>
+      <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-muted">
+        <div
+          className={cn(
+            "h-full rounded-full transition-all",
+            percentage <= 20 ? "bg-destructive/70" : "bg-primary/70"
+          )}
+          style={{ width: `${percentage}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/* ── User profile dropdown ─────────────────────────────── */
+function UserProfileDropdown({ push }: { push: (path: string) => void }) {
+  const { t } = useTranslation();
+  const { data } = useUserCredits();
+
+  const nickname = (data?.nickname as string) || "User";
+  const planName = data?.benefitType || t("layout.default_plan");
+  const initials = nickname.slice(0, 2).toUpperCase();
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-muted/60">
+            <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
+              {initials}
+            </div>
+            <div className="flex-1 text-left min-w-0">
+              <p className="truncate text-[13px] font-medium leading-tight">{nickname}</p>
+              <p className="truncate text-[11px] text-muted-foreground/60">{planName}</p>
+            </div>
+            <Settings className="size-3.5 shrink-0 text-muted-foreground/50" />
+          </button>
+        }
+      />
+      <DropdownMenuContent align="start" side="top" sideOffset={4} className="w-52">
+        <DropdownMenuItem onClick={() => push("/settings")}>
+          <Settings className="size-3.5" />
+          <span>{t("nav.settings")}</span>
+        </DropdownMenuItem>
+
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <Globe className="size-3.5" />
+            <span>{t("layout.language")}</span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            <LanguageItem code="en" label={t("layout.lang_en")} />
+            <LanguageItem code="zh-Hans" label={t("layout.lang_zh")} />
+            <LanguageItem code="ja" label={t("layout.lang_ja")} />
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <Moon className="size-3.5" />
+            <span>{t("layout.theme")}</span>
+          </DropdownMenuSubTrigger>
+          <ThemeSubmenu />
+        </DropdownMenuSub>
+
+        <DropdownMenuSeparator />
+
+        <DropdownMenuItem>
+          <HelpCircle className="size-3.5" />
+          <span>{t("layout.help_docs")}</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem>
+          <FileClock className="size-3.5" />
+          <span>{t("layout.changelog")}</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem>
+          <MessageCircle className="size-3.5" />
+          <span>{t("layout.feedback")}</span>
+        </DropdownMenuItem>
+
+        <DropdownMenuSeparator />
+
+        <DropdownMenuItem variant="destructive">
+          <LogOut className="size-3.5" />
+          <span>{t("layout.log_out")}</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -282,86 +342,3 @@ function ThemeSubmenu() {
   );
 }
 
-/* ── Folder tree component ──────────────────────────────── */
-function WorkspaceFolderTree() {
-  const { pathname } = useNavigation();
-  const { t } = useTranslation();
-  const selectedFolderId = useWorkspaceStore((s) => s.selectedFolderId);
-  const selectFolder = useWorkspaceStore((s) => s.selectFolder);
-  const { data: folders } = useFolders();
-  const { data: files } = useFiles({ pageNum: 1, pageSize: 200 });
-
-  // Only show on workspace routes
-  const workspaceRoutes = ["/recordings", "/meetings", "/knowledge", "/files"];
-  const isWorkspace = workspaceRoutes.some((r) => pathname.startsWith(r));
-  if (!isWorkspace) return null;
-
-  const folderItems = Array.isArray(folders)
-    ? folders.map((f) => {
-        const obj = f as Record<string, unknown>;
-        return {
-          id: String(obj.id ?? ""),
-          name: String(obj.folderName ?? ""),
-          color: obj.color as string | undefined,
-        };
-      })
-    : [];
-
-  const countsByFolder = new Map<string, number>();
-  let ungrouped = 0;
-  if (Array.isArray(files)) {
-    for (const f of files) {
-      if (f.folderId) countsByFolder.set(f.folderId, (countsByFolder.get(f.folderId) ?? 0) + 1);
-      else ungrouped++;
-    }
-  }
-
-  return (
-    <SidebarGroup className="py-1">
-      <div className="px-2 py-1.5">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-          {t("layout.folders")}
-        </span>
-      </div>
-      <SidebarGroupContent>
-        <div className="space-y-px px-1">
-          {folderItems.map((folder) => (
-            <button
-              key={folder.id}
-              onClick={() => selectFolder(folder.id)}
-              className={cn(
-                "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors",
-                selectedFolderId === folder.id
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-muted-foreground hover:bg-sidebar-accent/50"
-              )}
-            >
-              {folder.color ? (
-                <span className="size-2 shrink-0 rounded-full" style={{ backgroundColor: folder.color }} />
-              ) : (
-                <Circle className="size-2 shrink-0 fill-current" />
-              )}
-              <span className="flex-1 truncate text-left">{folder.name}</span>
-              <span className="text-[10px] tabular-nums text-muted-foreground/50">
-                {countsByFolder.get(folder.id) ?? 0}
-              </span>
-            </button>
-          ))}
-          <button
-            onClick={() => selectFolder("__uncategorized__")}
-            className={cn(
-              "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors",
-              selectedFolderId === "__uncategorized__"
-                ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                : "text-muted-foreground hover:bg-sidebar-accent/50"
-            )}
-          >
-            <Circle className="size-2 shrink-0 fill-current opacity-40" />
-            <span className="flex-1 truncate text-left">{t("layout.uncategorized")}</span>
-            <span className="text-[10px] tabular-nums text-muted-foreground/50">{ungrouped}</span>
-          </button>
-        </div>
-      </SidebarGroupContent>
-    </SidebarGroup>
-  );
-}

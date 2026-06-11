@@ -16,14 +16,11 @@ export function FolderTree() {
 
   const folderItems = useMemo(() => {
     if (!Array.isArray(folders)) return [];
-    return folders.map((f) => {
-      const obj = f as Record<string, unknown>;
-      return {
-        id: String(obj.id ?? ""),
-        name: String(obj.folderName ?? ""),
-        color: obj.color as string | undefined,
-      };
-    });
+    return folders.map((f) => ({
+      id: f.id,
+      name: f.folderName,
+      color: f.color,
+    }));
   }, [folders]);
 
   const countsByFolder = useMemo(() => {

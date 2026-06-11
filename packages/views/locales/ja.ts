@@ -28,6 +28,7 @@ const ja = {
     collapse_folders: "折りたたむ",
     expand_folders: "展開",
     move_to_folder: "移動先...",
+    default_plan: "スタンダード",
     language: "言語",
     lang_en: "English",
     lang_zh: "中文",
@@ -39,6 +40,8 @@ const ja = {
     help_docs: "ヘルプ",
     changelog: "更新履歴",
     feedback: "フィードバック",
+    credits_label: "クレジット",
+    credits_remaining: "{remaining} / {total}",
   },
   settings: {
     appearance: "外観",

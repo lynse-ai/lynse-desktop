@@ -42,10 +42,7 @@ export function ItemDirectory() {
     const map = new Map<string, { name: string; color?: string }>();
     if (Array.isArray(folders)) {
       for (const f of folders) {
-        const id = String((f as Record<string, unknown>).id ?? "");
-        const name = String((f as Record<string, unknown>).folderName ?? "");
-        const color = (f as Record<string, unknown>).color as string | undefined;
-        if (id) map.set(id, { name, color });
+        if (f.id) map.set(f.id, { name: f.folderName, color: f.color });
       }
     }
     return map;
@@ -73,8 +70,7 @@ export function ItemDirectory() {
     const order: string[] = [];
     if (Array.isArray(folders)) {
       for (const f of folders) {
-        const id = String((f as Record<string, unknown>).id ?? "");
-        if (id) order.push(id);
+        if (f.id) order.push(f.id);
       }
     }
     order.push("__uncategorized__");

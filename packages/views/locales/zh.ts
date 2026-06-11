@@ -28,6 +28,7 @@ const zh = {
     collapse_folders: "折叠",
     expand_folders: "展开",
     move_to_folder: "移动到...",
+    default_plan: "标准会员",
     language: "界面语言",
     lang_en: "English",
     lang_zh: "中文",
@@ -39,6 +40,8 @@ const zh = {
     help_docs: "帮助文档",
     changelog: "更新日志",
     feedback: "问题反馈",
+    credits_label: "积分",
+    credits_remaining: "{remaining} / {total}",
   },
   settings: {
     appearance: "外观",

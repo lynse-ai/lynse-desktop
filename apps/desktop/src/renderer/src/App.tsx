@@ -3,14 +3,34 @@ import { CoreProvider } from "@lynse/core/platform";
 import { ThemeProvider } from "@lynse/ui/components/common/theme-provider";
 import { Toaster } from "@lynse/ui/components/ui/sonner";
 import { DashboardLayout } from "@lynse/views/layout";
-import { RecordingsPage } from "@lynse/views/recordings";
+import { useNavigation } from "@lynse/views/navigation";
+import { WorkspaceLayout } from "@lynse/views/workspace";
+import { ChatPage } from "@lynse/views/chat";
+import { SettingsPage } from "@lynse/views/settings";
+import { RESOURCES } from "@lynse/views/locales";
 import { DesktopNavigationProvider } from "./platform/navigation";
+
+/**
+ * Routes pages based on the current navigation pathname.
+ * Workspace routes (recordings, meetings, knowledge, files) all share
+ * the same three-panel WorkspaceLayout — matching the web app exactly.
+ * Settings and Chat remain standalone pages.
+ */
+function PageRouter() {
+  const { pathname } = useNavigation();
+
+  if (pathname.startsWith("/chat")) return <ChatPage />;
+  if (pathname.startsWith("/settings")) return <SettingsPage />;
+
+  // All workspace routes share the same three-panel layout
+  return <WorkspaceLayout />;
+}
 
 function AppContent() {
   return (
     <DesktopNavigationProvider>
       <DashboardLayout>
-        <RecordingsPage />
+        <PageRouter />
       </DashboardLayout>
     </DesktopNavigationProvider>
   );
@@ -29,7 +49,7 @@ export default function App() {
         wsUrl={import.meta.env.VITE_WS_URL}
         identity={identity}
         locale="en"
-        resources={{}}
+        resources={RESOURCES}
       >
         <AppContent />
       </CoreProvider>

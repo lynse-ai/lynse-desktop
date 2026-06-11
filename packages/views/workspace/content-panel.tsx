@@ -1,10 +1,14 @@
 "use client";
 
-import { useMemo, useState, useCallback } from "react";
-import { Bot, FileText, Sparkles, List, X } from "lucide-react";
+import { useMemo, useState, useCallback, useRef, useEffect } from "react";
+import { Bot, FileText, FileAudio, Sparkles, List, X } from "../icons";
 import { useWorkspaceStore } from "./store";
 import { MilkdownViewer } from "./milkdown-viewer";
-import { useFiles, useFileOutline, useFileConclusions, useFileTranscription } from "./hooks/use-files";
+import { AudioPlayer } from "./audio-player";
+import type { AudioPlayerHandle } from "./audio-player";
+import { useFiles, useFileOutline, useFileConclusions, useFileTranscription, useFileAudioUrl } from "./hooks/use-files";
+import { api } from "@lynse/core/api/client";
+import { useTranslation } from "@lynse/core/i18n/react";
 import "./content-preview.css";
 
 function extractBody(html: string): { content: string; scopedStyles: string } {
@@ -102,6 +106,28 @@ function isHtmlContent(text: string): boolean {
   return trimmed.startsWith("<") && /<\/\w+>/.test(trimmed);
 }
 
+/** Distinct colors for different speakers — cycles if more speakers than colors. */
+const SPEAKER_COLORS = [
+  "#4A90E2", // blue
+  "#50C878", // green
+  "#E67E22", // orange
+  "#9B59B6", // purple
+  "#E74C3C", // red
+  "#1ABC9C", // teal
+  "#F39C12", // amber
+  "#2980B9", // dark blue
+];
+
+/** Simple hash to consistently assign a color to a speaker name. */
+function getSpeakerColor(name: string): string {
+  if (!name) return SPEAKER_COLORS[0]!;
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
+  }
+  return SPEAKER_COLORS[Math.abs(hash) % SPEAKER_COLORS.length]!;
+}
+
 export function ContentPanel() {
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
   const contentTab = useWorkspaceStore((s) => s.contentTab);
@@ -110,11 +136,48 @@ export function ContentPanel() {
   const toggleOutlineSidebar = useWorkspaceStore((s) => s.toggleOutlineSidebar);
   const chatPanelVisible = useWorkspaceStore((s) => s.chatPanelVisible);
   const toggleChatPanel = useWorkspaceStore((s) => s.toggleChatPanel);
+  const { t } = useTranslation();
 
   const { data: files } = useFiles({ pageNum: 1, pageSize: 200 });
-  const { data: outline, isLoading: outlineLoading } = useFileOutline(selectedItemId);
-  const { data: conclusions, isLoading: conclusionsLoading } = useFileConclusions(selectedItemId);
-  const { data: transcription, isLoading: transLoading } = useFileTranscription(selectedItemId);
+  const { data: outline, isLoading: outlineLoading, error: outlineError } = useFileOutline(selectedItemId);
+  const { data: conclusions, isLoading: conclusionsLoading, error: conclusionsError } = useFileConclusions(selectedItemId);
+  const { data: transcription, isLoading: transLoading, error: transError } = useFileTranscription(selectedItemId);
+  const { data: audioUrl } = useFileAudioUrl(selectedItemId);
+
+  // Debug: log all data
+  console.log("[content-panel] selectedItemId:", selectedItemId);
+  console.log("[content-panel] outline:", outline, "loading:", outlineLoading, "error:", outlineError);
+  console.log("[content-panel] conclusions:", conclusions, "loading:", conclusionsLoading, "error:", conclusionsError);
+  console.log("[content-panel] transcription:", transcription, "loading:", transLoading, "error:", transError);
+
+  // Debug: check API client
+  try {
+    console.log("[content-panel] api client:", !!api());
+  } catch (e) {
+    console.log("[content-panel] api client NOT initialized:", e);
+  }
+
+  // Debug: test API endpoints directly
+  useEffect(() => {
+    if (!selectedItemId) return;
+    const testApis = async () => {
+      try {
+        const outlineRes = await api().getWithParams("/api/business/file/outline/get", { fileId: selectedItemId });
+        console.log("[debug-api] outline response:", JSON.stringify(outlineRes).slice(0, 200));
+      } catch (e) {
+        console.log("[debug-api] outline ERROR:", e);
+      }
+      try {
+        const transRes = await api().getWithParams("/api/business/file/trans/get", { fileId: selectedItemId });
+        console.log("[debug-api] trans response:", JSON.stringify(transRes).slice(0, 200));
+      } catch (e) {
+        console.log("[debug-api] trans ERROR:", e);
+      }
+    };
+    testApis();
+  }, [selectedItemId]);
+  const audioPlayerRef = useRef<AudioPlayerHandle>(null);
+  const [highlightTimeMs, setHighlightTimeMs] = useState<number | null>(null);
 
   const selectedTitle = useMemo(() => {
     if (!selectedItemId || !files) return null;
@@ -151,13 +214,29 @@ export function ContentPanel() {
 
   // Transcription: speaker segments
   const transSegments = useMemo(() => {
-    if (!Array.isArray(transcription) || transcription.length === 0) return null;
-    return transcription.map((seg) => {
+    // API may return an array directly, or an object with a nested records array
+    let records: unknown[] = [];
+    if (Array.isArray(transcription)) {
+      records = transcription;
+    } else if (transcription && typeof transcription === "object") {
+      const obj = transcription as Record<string, unknown>;
+      // Try common nested array keys
+      for (const key of ["records", "list", "data", "transcriptionRecords", "segments"]) {
+        const arr = obj[key];
+        if (Array.isArray(arr) && arr.length > 0) {
+          records = arr;
+          break;
+        }
+      }
+    }
+    if (records.length === 0) return null;
+    return records.map((seg) => {
       const s = seg as Record<string, unknown>;
       return {
         speaker: String(s.speakerName ?? ""),
         time: String(s.beginTimeStr ?? ""),
         text: String(s.text ?? ""),
+        beginTimeMs: typeof s.beginTime === "number" ? s.beginTime : null,
       };
     });
   }, [transcription]);
@@ -193,21 +272,21 @@ export function ContentPanel() {
             onClick={() => setContentTab("outline")}
           >
             <List className="size-3.5" />
-            <span>Outline</span>
+            <span>{t("workspace.outline")}</span>
           </TabButton>
           <TabButton
             active={contentTab === "summary"}
             onClick={() => setContentTab("summary")}
           >
             <Sparkles className="size-3.5" />
-            <span>Summary</span>
+            <span>{t("workspace.summary")}</span>
           </TabButton>
           <TabButton
             active={contentTab === "transcription"}
             onClick={() => setContentTab("transcription")}
           >
-            <FileText className="size-3.5" />
-            <span>Transcription</span>
+            <FileAudio className="size-3.5" />
+            <span>{t("workspace.transcription")}</span>
           </TabButton>
         </div>
         <div className="flex-1" />
@@ -220,7 +299,7 @@ export function ContentPanel() {
                   ? "bg-accent text-accent-foreground"
                   : "text-muted-foreground hover:bg-accent/50"
               }`}
-              title="Toggle outline sidebar"
+              title={t("workspace.toggle_outline")}
             >
               <List className="size-3" />
             </button>
@@ -232,10 +311,10 @@ export function ContentPanel() {
                 ? "bg-primary text-primary-foreground"
                 : "text-muted-foreground hover:bg-accent/50"
             }`}
-            title="Ask AI"
+            title={t("workspace.ask_ai")}
           >
             <Bot className="size-3.5" />
-            <span>Ask AI</span>
+            <span>{t("workspace.ask_ai")}</span>
           </button>
         </div>
       </div>
@@ -243,31 +322,31 @@ export function ContentPanel() {
       {/* Content area with optional outline sidebar */}
       <div className="flex flex-1 min-h-0">
         {/* Main content */}
-        <div className="flex-1 min-w-0 overflow-auto">
+        <div className={`flex-1 min-w-0 ${contentTab === "transcription" ? "overflow-hidden" : "overflow-auto"}`}>
           {!selectedItemId ? (
             <EmptyState />
           ) : isLoading ? (
             <LoadingState />
           ) : (
-            <div className="px-6 py-6">
+            <div className={`px-6 py-6 ${contentTab === "transcription" ? "flex flex-col h-full" : ""}`}>
               {/* Title */}
               <input
                 type="text"
                 value={displayTitle ?? ""}
                 onChange={(e) => setEditedTitle(e.target.value)}
-                placeholder="Enter file name..."
-                className="w-full border-none bg-transparent text-base font-semibold outline-none placeholder:text-muted-foreground/50"
+                placeholder={t("workspace.enter_filename")}
+                className="w-full border-none bg-transparent text-base font-semibold outline-none placeholder:text-muted-foreground/50 shrink-0"
               />
 
               {/* Metadata */}
               {selectedCreatedAt && (
-                <div className="mt-1 text-[11px] text-muted-foreground">
+                <div className="mt-1 text-[11px] text-muted-foreground shrink-0">
                   {formatDate(selectedCreatedAt)}
                 </div>
               )}
 
               {/* Tab content */}
-              <div className="content-preview mt-4">
+              <div className={`content-preview mt-2 ${contentTab === "transcription" ? "flex flex-col flex-1 min-h-0" : ""}`}>
                 {/* Scoped styles extracted from HTML — only apply inside .content-preview-inner */}
                 {outlineStyles && contentTab === "outline" && (
                   <style dangerouslySetInnerHTML={{ __html: outlineStyles }} />
@@ -277,7 +356,7 @@ export function ContentPanel() {
                   outlineBody ? (
                     <div className="content-preview-inner" dangerouslySetInnerHTML={{ __html: outlineBody }} />
                   ) : (
-                    <NoContentState label="No outline available" />
+                    <NoContentState label={t("workspace.no_outline")} />
                   )
                 )}
 
@@ -286,7 +365,6 @@ export function ContentPanel() {
                     <div className="space-y-6">
                       {conclusionTexts.map((block, i) => (
                         <div key={block.key}>
-                          <SectionLabel>Conclusion {conclusionTexts.length > 1 ? i + 1 : ""}</SectionLabel>
                           {isHtmlContent(block.text) ? (
                             (() => {
                               const { content, scopedStyles } = extractBody(block.text);
@@ -304,37 +382,79 @@ export function ContentPanel() {
                       ))}
                     </div>
                   ) : (
-                    <NoContentState label="No summary available" />
+                    <NoContentState label={t("workspace.no_summary")} />
                   )
                 )}
 
                 {contentTab === "transcription" && (
                   transSegments && transSegments.length > 0 ? (
-                    <div className="space-y-1 text-sm leading-relaxed">
-                      {transSegments.map((seg, i) => (
-                        <div key={i} className="flex gap-2">
-                          <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums pt-px w-14 text-right">
-                            {seg.time}
-                          </span>
-                          <span className="shrink-0 font-medium text-primary text-xs pt-px w-20 truncate">
-                            {seg.speaker}
-                          </span>
-                          <span className="text-foreground">{seg.text}</span>
+                    <div className="flex flex-col flex-1 min-h-0 space-y-3">
+                      {/* Audio Player — fixed at top */}
+                      {audioUrl && (
+                        <div className="shrink-0">
+                          <AudioPlayer
+                            ref={audioPlayerRef}
+                            src={audioUrl as string}
+                            highlightTimeMs={highlightTimeMs}
+                          />
                         </div>
-                      ))}
+                      )}
+                      {/* Transcript segments — scrollable */}
+                      <div className="flex-1 min-h-0 overflow-y-auto space-y-1 text-sm leading-relaxed pb-4">
+                        {transSegments.map((seg, i) => {
+                          const color = getSpeakerColor(seg.speaker);
+                          return (
+                            <button
+                              key={i}
+                              onClick={() => {
+                                if (seg.beginTimeMs != null) {
+                                  setHighlightTimeMs(seg.beginTimeMs);
+                                }
+                              }}
+                              className={`block w-full text-left rounded-md px-2 py-1.5 transition-colors ${
+                                highlightTimeMs === seg.beginTimeMs && seg.beginTimeMs != null
+                                  ? "bg-accent/60"
+                                  : "hover:bg-accent/30"
+                              } ${seg.beginTimeMs != null ? "cursor-pointer" : ""}`}
+                              title={seg.beginTimeMs != null ? "Click to jump to this time" : undefined}
+                            >
+                              <div className="flex items-baseline gap-2">
+                                <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                                  {seg.time}
+                                </span>
+                                <span
+                                  className="shrink-0 font-semibold text-xs"
+                                  style={{ color }}
+                                >
+                                  {seg.speaker}
+                                </span>
+                              </div>
+                              <p className="text-foreground mt-0.5">{seg.text}</p>
+                            </button>
+                          );
+                        })}
+                        {/* Disclaimer at bottom of scrollable area */}
+                        <div className="mt-6 border-t border-border pt-3 text-center">
+                          <p className="text-[10px] text-muted-foreground/60">
+                            {t("workspace.ai_disclaimer")}
+                          </p>
+                        </div>
+                      </div>
                     </div>
                   ) : (
-                    <NoContentState label="No transcription available" />
+                    <NoContentState label={t("workspace.no_transcription")} />
                   )
                 )}
               </div>
 
-              {/* AI Disclaimer */}
-              <div className="mt-8 border-t border-border pt-3 text-center">
+              {/* AI Disclaimer — only shown in non-transcription tabs */}
+              {contentTab !== "transcription" && (
+              <div className="mt-8 border-t border-border pt-3 text-center shrink-0">
                 <p className="text-[10px] text-muted-foreground/60">
-                  Content generated by AI, for reference only
+                  {t("workspace.ai_disclaimer")}
                 </p>
               </div>
+              )}
             </div>
           )}
         </div>
@@ -344,7 +464,7 @@ export function ContentPanel() {
           <div className="w-52 shrink-0 border-l border-border bg-background overflow-y-auto">
             <div className="flex items-center justify-between px-3 py-2 border-b border-border">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Outline
+                {t("workspace.outline")}
               </span>
               <button
                 onClick={toggleOutlineSidebar}
@@ -369,7 +489,7 @@ export function ContentPanel() {
               ))}
               {headings.length === 0 && (
                 <p className="px-2 py-3 text-[11px] text-muted-foreground">
-                  No headings found
+                  {t("workspace.no_headings")}
                 </p>
               )}
             </div>
@@ -412,23 +532,25 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 function EmptyState() {
+  const { t } = useTranslation();
   return (
     <div className="flex h-full flex-col items-center justify-center">
       <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full bg-muted">
         <FileText className="size-5 text-muted-foreground" />
       </div>
-      <h3 className="text-sm font-medium">No file selected</h3>
+      <h3 className="text-sm font-medium">{t("workspace.no_file_selected")}</h3>
       <p className="mt-1 text-xs text-muted-foreground">
-        Select a file from the sidebar to view its content
+        {t("workspace.select_file_hint")}
       </p>
     </div>
   );
 }
 
 function LoadingState() {
+  const { t } = useTranslation();
   return (
     <div className="flex h-full items-center justify-center">
-      <p className="text-xs text-muted-foreground">Loading content...</p>
+      <p className="text-xs text-muted-foreground">{t("workspace.loading")}</p>
     </div>
   );
 }

@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { MessageSquare, Send } from "lucide-react";
+import { MessageSquare, Send } from "../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
 import { ScrollArea } from "@lynse/ui/components/ui/scroll-area";
+import { useTranslation } from "@lynse/core/i18n/react";
 
 interface Message {
   id: string;
@@ -15,6 +16,7 @@ interface Message {
 export function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const { t } = useTranslation();
 
   const handleSend = () => {
     if (!input.trim()) return;
@@ -36,9 +38,9 @@ export function ChatPage() {
             <MessageSquare className="size-5 text-muted-foreground" />
           </div>
           <div className="text-center">
-            <h3 className="text-sm font-medium">AI Chat</h3>
+            <h3 className="text-sm font-medium">{t("chat.page_title")}</h3>
             <p className="mt-1 text-xs text-muted-foreground">
-              Ask questions about your recordings, meetings, and notes
+              {t("chat.page_description")}
             </p>
           </div>
         </div>
@@ -71,7 +73,7 @@ export function ChatPage() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
-            placeholder="Ask about your recordings, meetings..."
+            placeholder={t("chat.page_placeholder")}
             className="flex-1"
           />
           <Button size="icon" onClick={handleSend} disabled={!input.trim()}>

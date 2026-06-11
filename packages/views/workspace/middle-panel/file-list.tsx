@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Search } from "lucide-react";
+import { Search, FolderOpen } from "../../icons";
 import { Input } from "@lynse/ui/components/ui/input";
+import { useTranslation } from "@lynse/core/i18n/react";
 import { useWorkspaceStore } from "../store";
 import { useFiles } from "../hooks/use-files";
 import { useFolders } from "../hooks/use-folders";
@@ -13,18 +14,19 @@ export function FileList() {
   const selectItem = useWorkspaceStore((s) => s.selectItem);
   const fileListWidth = useWorkspaceStore((s) => s.fileListWidth);
   const [search, setSearch] = useState("");
+  const { t } = useTranslation();
 
   const { data: files } = useFiles({ pageNum: 1, pageSize: 200 });
   const { data: folders } = useFolders();
 
   const folderName = useMemo(() => {
-    if (!selectedFolderId || selectedFolderId === "__uncategorized__") return "Uncategorized";
-    if (!Array.isArray(folders)) return "Files";
+    if (!selectedFolderId || selectedFolderId === "__uncategorized__") return t("layout.uncategorized");
+    if (!Array.isArray(folders)) return t("workspace.files");
     const found = folders.find(
       (f) => String((f as Record<string, unknown>).id) === selectedFolderId,
     );
-    return found ? String((found as Record<string, unknown>).folderName ?? "Files") : "Files";
-  }, [selectedFolderId, folders]);
+    return found ? String((found as Record<string, unknown>).folderName ?? t("workspace.files")) : t("workspace.files");
+  }, [selectedFolderId, folders, t]);
 
   const folderColor = useMemo(() => {
     if (!selectedFolderId || selectedFolderId === "__uncategorized__") return null;
@@ -68,7 +70,7 @@ export function FileList() {
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search files..."
+              placeholder={t("workspace.search_files")}
               className="h-7 pl-7 text-xs"
             />
           </div>
@@ -79,14 +81,14 @@ export function FileList() {
       <div className="flex-1 overflow-y-auto">
         {!selectedFolderId ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
-            <FolderIcon className="size-6 text-muted-foreground/50" />
+            <FolderOpen className="size-6 text-muted-foreground/50" />
             <p className="mt-2 text-[11px] text-muted-foreground">
-              Select a folder
+              {t("workspace.select_folder")}
             </p>
           </div>
         ) : filteredFiles.length === 0 ? (
           <p className="px-2 py-6 text-center text-[11px] text-muted-foreground">
-            No files
+            {t("workspace.no_files")}
           </p>
         ) : (
           filteredFiles.map((file) => {
@@ -116,14 +118,6 @@ export function FileList() {
         )}
       </div>
     </div>
-  );
-}
-
-function FolderIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-      <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-    </svg>
   );
 }
 

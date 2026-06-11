@@ -41,6 +41,12 @@ interface WorkspaceState {
   contentTab: "outline" | "summary" | "transcription";
   outlineSidebarVisible: boolean;
 
+  // Sidebar directory state
+  sidebarSectionsCollapsed: Set<string>;
+  sidebarSearchQuery: string;
+  editingFolderId: string | null;
+  draggingFileIds: Set<string>;
+
   selectItem: (id: string | null, type: ItemType | null) => void;
   selectFolder: (id: string | null) => void;
   setSearchQuery: (query: string) => void;
@@ -55,6 +61,12 @@ interface WorkspaceState {
   handleChatPanelResize: (delta: number) => void;
   handleFileListResize: (delta: number) => void;
   handleFolderTreeResize: (delta: number) => void;
+
+  // Sidebar directory actions
+  toggleSidebarSection: (section: string) => void;
+  setSidebarSearchQuery: (query: string) => void;
+  setEditingFolderId: (id: string | null) => void;
+  setDraggingFileIds: (ids: Set<string>) => void;
 }
 
 let workspaceStoreInstance: ReturnType<typeof createWorkspaceStore> | null = null;
@@ -74,6 +86,12 @@ function createWorkspaceStore() {
     chatPanelWidth: loadNumber(CHAT_PANEL_WIDTH_KEY, DEFAULT_CHAT_PANEL_WIDTH),
     fileListWidth: loadNumber(FILE_LIST_WIDTH_KEY, DEFAULT_FILE_LIST_WIDTH),
     folderTreeWidth: loadNumber(FOLDER_TREE_WIDTH_KEY, DEFAULT_FOLDER_TREE_WIDTH),
+
+    // Sidebar directory state
+    sidebarSectionsCollapsed: new Set<string>(),
+    sidebarSearchQuery: "",
+    editingFolderId: null,
+    draggingFileIds: new Set<string>(),
 
     selectItem: (id, type) =>
       set({ selectedItemId: id, selectedItemType: type }),
@@ -127,6 +145,21 @@ function createWorkspaceStore() {
       saveNumber(FOLDER_TREE_WIDTH_KEY, next);
       set({ folderTreeWidth: next });
     },
+
+    // Sidebar directory actions
+    toggleSidebarSection: (section) =>
+      set((state) => {
+        const next = new Set(state.sidebarSectionsCollapsed);
+        if (next.has(section)) next.delete(section);
+        else next.add(section);
+        return { sidebarSectionsCollapsed: next };
+      }),
+
+    setSidebarSearchQuery: (query) => set({ sidebarSearchQuery: query }),
+
+    setEditingFolderId: (id) => set({ editingFolderId: id }),
+
+    setDraggingFileIds: (ids) => set({ draggingFileIds: ids }),
   }));
 }
 

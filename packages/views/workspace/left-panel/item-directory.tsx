@@ -5,7 +5,7 @@ import {
   FolderOpen,
   ChevronRight,
   Search,
-} from "lucide-react";
+} from "../../icons";
 import { Input } from "@lynse/ui/components/ui/input";
 import { ScrollArea } from "@lynse/ui/components/ui/scroll-area";
 import { Collapsible } from "@lynse/ui/components/ui/collapsible";

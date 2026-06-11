@@ -66,6 +66,39 @@ export interface Folder {
   createdAt?: string;
 }
 
+/** Backend-aligned folder type (matches FolderInfoVO) */
+export interface FolderInfo {
+  id: string;
+  folderName: string;
+  color?: string;
+  sort?: number;
+  createTime?: string;
+}
+
+export interface FolderAddOrEditReq {
+  id?: string;
+  folderName: string;
+  color?: string;
+  sort?: number;
+}
+
+export interface FolderSortUpdateReq {
+  folderSortList: Array<{ folderId: string; sort: number }>;
+}
+
+export interface FolderStatItem {
+  folderId: string;
+  folderName: string;
+  count: number;
+}
+
+export interface FileCategoryCount {
+  all: number;
+  classified: number;
+  unclassified: number;
+  folderStats: FolderStatItem[];
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { FolderOpen } from "lucide-react";
+import { FolderOpen } from "../../icons";
 import { useWorkspaceStore } from "../store";
 import { useFolders } from "../hooks/use-folders";
 import { useFiles } from "../hooks/use-files";

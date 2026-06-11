@@ -96,6 +96,30 @@ export function useFileTranscription(fileId: string | null) {
   });
 }
 
+/**
+ * Get a presigned download URL for the file's original audio/media.
+ */
+export function useFileAudioUrl(fileId: string | null) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+
+  return useQuery({
+    queryKey: ["file-audio-url", fileId],
+    queryFn: async () => {
+      try {
+        const data = await api().getWithParams<string>("/api/business/file/presign/download", {
+          fileId: fileId!,
+        });
+        return data;
+      } catch {
+        return null;
+      }
+    },
+    enabled: !!fileId && isAuthenticated,
+    staleTime: 5 * 60 * 1000, // presigned URLs expire, but cache for 5 min
+    retry: false, // don't retry — endpoint may not exist
+  });
+}
+
 export function useInvalidateOnAuth() {
   const queryClient = useQueryClient();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);

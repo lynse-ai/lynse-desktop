@@ -5,6 +5,7 @@ import { ApiClient, setApiInstance } from "../api/client";
 import { createAuthStore, registerAuthStore } from "../auth";
 import { defaultStorage } from "./storage";
 import { QueryProvider } from "../provider";
+import { initI18n } from "../i18n";
 import type { CoreProviderProps } from "./types";
 import type { StorageAdapter } from "../types/storage";
 
@@ -57,9 +58,14 @@ export function CoreProvider({
   onLogin,
   onLogout,
   identity,
+  locale,
+  resources,
 }: CoreProviderProps) {
   useMemo(
-    () => initCore(apiBaseUrl, storage, onLogin, onLogout, cookieAuth, identity),
+    () => {
+      initI18n({ locale, resources });
+      initCore(apiBaseUrl, storage, onLogin, onLogout, cookieAuth, identity);
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );

@@ -1,22 +1,24 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { FileText, Eye, Columns2 } from "lucide-react";
+import { FileText, Eye, Columns2 } from "../../icons";
 import { MilkdownEditor, setMarkdown, getHTML } from "./milkdown-editor";
 import { useWorkspaceStore } from "../store";
 import { useFileOutline, useFileConclusions } from "../hooks/use-files";
+import { useTranslation } from "@lynse/core/i18n/react";
 import type { EditorMode } from "../types";
-
-const MODE_TABS: { mode: EditorMode; icon: typeof FileText; label: string }[] = [
-  { mode: "edit", icon: FileText, label: "Edit" },
-  { mode: "preview", icon: Eye, label: "Preview" },
-  { mode: "split", icon: Columns2, label: "Split" },
-];
 
 export function EditorPanel() {
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
   const editorMode = useWorkspaceStore((s) => s.editorMode);
   const setEditorMode = useWorkspaceStore((s) => s.setEditorMode);
+  const { t } = useTranslation();
+
+  const MODE_TABS: { mode: EditorMode; icon: typeof FileText; label: string }[] = [
+    { mode: "edit", icon: FileText, label: t("workspace.edit") },
+    { mode: "preview", icon: Eye, label: t("workspace.preview") },
+    { mode: "split", icon: Columns2, label: t("workspace.split") },
+  ];
 
   const { data: outline } = useFileOutline(selectedItemId);
   const { data: conclusions } = useFileConclusions(selectedItemId);
@@ -52,9 +54,9 @@ export function EditorPanel() {
         <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full bg-muted">
           <FileText className="size-5 text-muted-foreground" />
         </div>
-        <h3 className="text-sm font-medium">No file selected</h3>
+        <h3 className="text-sm font-medium">{t("workspace.no_file_selected")}</h3>
         <p className="mt-1 text-xs text-muted-foreground">
-          Select a file from the directory to view and edit
+          {t("workspace.select_file_hint")}
         </p>
       </div>
     );

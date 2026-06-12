@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 (2026-06-12)
+
+### New Features
+
+- Add settings dialog with theme switching and API configuration
+- Add drag-and-drop file moving in workspace
+- Add user credits display in workspace UI
+
 ## 0.1.0 (2026-06-11)
 
 ### New Features

@@ -40,6 +40,7 @@ export interface FileConclusion {
   id: string;
   fileId: string;
   conclusionText: string;
+  templateName?: string;
   createdAt: string;
   [key: string]: unknown;
 }

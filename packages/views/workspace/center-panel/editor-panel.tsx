@@ -3,9 +3,11 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { FileText, Eye, Columns2 } from "../../icons";
 import { MilkdownEditor, setMarkdown, getHTML } from "./milkdown-editor";
+import { FloatingMarkdownToolbar } from "./markdown-toolbar";
 import { useWorkspaceStore } from "../store";
 import { useFileOutline, useFileConclusions } from "../hooks/use-files";
 import { useTranslation } from "@lynse/core/i18n/react";
+import type { Editor } from "@milkdown/kit/core";
 import type { EditorMode } from "../types";
 
 export function EditorPanel() {
@@ -13,6 +15,8 @@ export function EditorPanel() {
   const editorMode = useWorkspaceStore((s) => s.editorMode);
   const setEditorMode = useWorkspaceStore((s) => s.setEditorMode);
   const { t } = useTranslation();
+
+  const [editor, setEditor] = useState<Editor | null>(null);
 
   const MODE_TABS: { mode: EditorMode; icon: typeof FileText; label: string }[] = [
     { mode: "edit", icon: FileText, label: t("workspace.edit") },
@@ -28,7 +32,7 @@ export function EditorPanel() {
     if (outline?.content) parts.push(outline.content);
     if (conclusions?.length) {
       parts.push(
-        ...conclusions.map((c) => c.content).filter(Boolean),
+        ...conclusions.map((c) => String(c.content ?? c.conclusionText ?? "")).filter(Boolean),
       );
     }
     return parts.join("\n\n") || "# Select a file to view its content";
@@ -47,6 +51,10 @@ export function EditorPanel() {
       setPreviewHtml(getHTML());
     }
   }, [editorMode]);
+
+  const handleEditorReady = useCallback((inst: Editor | null) => {
+    setEditor(inst);
+  }, []);
 
   if (!selectedItemId) {
     return (
@@ -82,18 +90,22 @@ export function EditorPanel() {
       </div>
       <div className="flex-1 overflow-hidden">
         {editorMode === "edit" && (
-          <MilkdownEditor onChange={handleEditorChange} />
+          <>
+            <MilkdownEditor onChange={handleEditorChange} onEditorReady={handleEditorReady} />
+            <FloatingMarkdownToolbar editor={editor} />
+          </>
         )}
         {editorMode === "preview" && (
           <div
-            className="prose prose-sm max-w-none px-6 py-4"
+            className="prose prose-sm max-w-none overflow-auto px-6 py-4 h-full"
             dangerouslySetInnerHTML={{ __html: previewHtml || getHTML() }}
           />
         )}
         {editorMode === "split" && (
           <div className="flex h-full">
             <div className="flex-1 overflow-auto border-r">
-              <MilkdownEditor onChange={handleEditorChange} />
+              <MilkdownEditor onChange={handleEditorChange} onEditorReady={handleEditorReady} />
+              <FloatingMarkdownToolbar editor={editor} />
             </div>
             <div
               className="flex-1 overflow-auto"

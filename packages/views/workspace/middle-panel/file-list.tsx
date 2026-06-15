@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
-import { Search, FolderOpen, GripVertical } from "../../icons";
+import { Search, FolderOpen, GripVertical, ArrowUpDown, ArrowDown, ArrowUp } from "../../icons";
 import { Input } from "@lynse/ui/components/ui/input";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useWorkspaceStore } from "../store";
@@ -10,12 +10,17 @@ import { useFiles } from "../hooks/use-files";
 import { useFolders } from "../hooks/use-folders";
 import type { WorkspaceItem } from "../types";
 
+type SortField = "updatedAt" | "createdAt";
+type SortDir = "desc" | "asc";
+
 export function FileList() {
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
   const selectedFolderId = useWorkspaceStore((s) => s.selectedFolderId);
   const selectItem = useWorkspaceStore((s) => s.selectItem);
   const fileListWidth = useWorkspaceStore((s) => s.fileListWidth);
   const [search, setSearch] = useState("");
+  const [sortField, setSortField] = useState<SortField>("createdAt");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
   const { t } = useTranslation();
 
   const { data: files } = useFiles({ pageNum: 1, pageSize: 200 });
@@ -49,10 +54,26 @@ export function FileList() {
       if (selectedFolderId === "__trash__") return false; // No API yet
       return f.folderId === selectedFolderId;
     });
-    if (!search.trim()) return inFolder;
-    const q = search.toLowerCase();
-    return inFolder.filter((f) => f.title.toLowerCase().includes(q));
-  }, [files, selectedFolderId, search]);
+    let result = inFolder;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      result = result.filter((f) => f.title.toLowerCase().includes(q));
+    }
+    // Sort by field and direction
+    const dir = sortDir === "asc" ? 1 : -1;
+    return [...result].sort((a, b) => {
+      const aTime = new Date(a[sortField] || 0).getTime();
+      const bTime = new Date(b[sortField] || 0).getTime();
+      return (aTime - bTime) * dir;
+    });
+  }, [files, selectedFolderId, search, sortField, sortDir]);
+
+  const toggleSortField = () => {
+    setSortField((f) => (f === "createdAt" ? "updatedAt" : "createdAt"));
+  };
+  const toggleSortDir = () => {
+    setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+  };
 
   return (
     <div
@@ -70,8 +91,8 @@ export function FileList() {
             {filteredFiles.length}
           </span>
         </div>
-        <div className="px-2 pb-2">
-          <div className="relative">
+        <div className="flex items-center gap-1 px-2 pb-2">
+          <div className="relative flex-1">
             <Search className="absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={search}
@@ -80,6 +101,26 @@ export function FileList() {
               className="h-7 pl-7 text-xs"
             />
           </div>
+          {/* Sort by field toggle */}
+          <button
+            onClick={toggleSortField}
+            title={sortField === "createdAt" ? t("workspace.sort_by_created") : t("workspace.sort_by_updated")}
+            className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+          >
+            <ArrowUpDown className="size-3" />
+          </button>
+          {/* Sort direction toggle */}
+          <button
+            onClick={toggleSortDir}
+            title={sortDir === "desc" ? t("workspace.sort_desc") : t("workspace.sort_asc")}
+            className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+          >
+            {sortDir === "desc" ? (
+              <ArrowDown className="size-3" />
+            ) : (
+              <ArrowUp className="size-3" />
+            )}
+          </button>
         </div>
       </div>
 

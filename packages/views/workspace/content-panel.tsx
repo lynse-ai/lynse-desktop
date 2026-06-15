@@ -6,6 +6,7 @@ import { useWorkspaceStore } from "./store";
 import { TAB_BAR_HEIGHT } from "./layout-constants";
 import { api } from "@lynse/core/api/client";
 import { SummaryMarkdownEditor } from "./summary-editor";
+import { FloatingMarkdownToolbar } from "./center-panel/markdown-toolbar";
 import { AudioPlayer } from "./audio-player";
 import type { AudioPlayerHandle } from "./audio-player";
 import { useFiles, useFileOutline, useFileConclusions, useFileTranscription, useFileAudioUrl, useUpdateConclusion } from "./hooks/use-files";
@@ -131,6 +132,7 @@ export function ContentPanel() {
 
   const audioPlayerRef = useRef<AudioPlayerHandle>(null);
   const [highlightTimeMs, setHighlightTimeMs] = useState<number | null>(null);
+  const [summaryEditor, setSummaryEditor] = useState<import("@milkdown/kit/core").Editor | null>(null);
 
   const selectedTitle = useMemo(() => {
     if (!selectedItemId || !files) return null;
@@ -145,17 +147,16 @@ export function ContentPanel() {
   const [editedTitle, setEditedTitle] = useState<string | null>(null);
   const displayTitle = editedTitle ?? selectedTitle;
 
-  // Conclusions
+  // Conclusions — each FileConclusionVO has a `templateName` field for the conclusion template name
   const conclusionTexts = useMemo(() => {
     if (!Array.isArray(conclusions)) return [];
-    // Debug: log first conclusion's keys to find the name field
-    if (conclusions.length > 0) console.log("[conclusion-keys]", Object.keys(conclusions[0] as object));
     return conclusions
       .map((c, i) => {
         const obj = c as Record<string, unknown>;
         const text = String(obj.conclusionText ?? "");
         const id = String(obj.id ?? "");
-        const name = String(obj.conclusionName ?? obj.title ?? obj.name ?? "").trim();
+        // templateName is the conclusion template name from the API
+        const name = String(obj.templateName ?? obj.conclusionName ?? obj.title ?? obj.name ?? "").trim();
         return text ? { key: i, text, id, name } : null;
       })
       .filter(Boolean) as { key: number; text: string; id: string; name: string }[];
@@ -392,17 +393,19 @@ export function ContentPanel() {
                 )}
 
                 {contentTab === "transcription" && (
-                  transSegments && transSegments.length > 0 ? (
-                    <div className="flex flex-col flex-1 min-h-0 space-y-3">
-                      {audioUrl && (
-                        <div className="shrink-0">
-                          <AudioPlayer
-                            ref={audioPlayerRef}
-                            src={audioUrl as string}
-                            highlightTimeMs={highlightTimeMs}
-                          />
-                        </div>
-                      )}
+                  <div className="flex flex-col flex-1 min-h-0 space-y-3">
+                    {/* Audio player — always visible when audio URL exists */}
+                    {audioUrl && (
+                      <div className="shrink-0">
+                        <AudioPlayer
+                          ref={audioPlayerRef}
+                          src={audioUrl as string}
+                          highlightTimeMs={highlightTimeMs}
+                        />
+                      </div>
+                    )}
+                    {/* Transcription segments or empty state */}
+                    {transSegments && transSegments.length > 0 ? (
                       <div className="flex-1 min-h-0 overflow-y-auto space-y-1 text-sm leading-relaxed pb-4">
                         {transSegments.map((seg, i) => {
                           const color = getSpeakerColor(seg.speaker);
@@ -430,10 +433,10 @@ export function ContentPanel() {
                           <p className="text-[10px] text-muted-foreground/60">{t("workspace.ai_disclaimer")}</p>
                         </div>
                       </div>
-                    </div>
-                  ) : (
-                    <NoContentState label={t("workspace.no_transcription")} />
-                  )
+                    ) : (
+                      <NoContentState label={t("workspace.no_transcription")} />
+                    )}
+                  </div>
                 )}
 
                 {/* Single summary tab */}
@@ -448,10 +451,14 @@ export function ContentPanel() {
                       </>
                     );
                   })() : (
-                    <SummaryMarkdownEditor
-                      content={block.text}
-                      onChange={(markdown) => handleConclusionChange(block.id, markdown)}
-                    />
+                    <>
+                      <SummaryMarkdownEditor
+                        content={block.text}
+                        onChange={(markdown) => handleConclusionChange(block.id, markdown)}
+                        onEditorReady={setSummaryEditor}
+                      />
+                      <FloatingMarkdownToolbar editor={summaryEditor} />
+                    </>
                   );
                 })()}
 

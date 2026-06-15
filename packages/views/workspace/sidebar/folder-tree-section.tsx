@@ -11,8 +11,6 @@ import {
   ChevronDown,
   ChevronRight,
   Circle,
-  Search,
-  X,
 } from "../../icons";
 import {
   SidebarGroup,
@@ -35,8 +33,6 @@ export function FolderTreeSection() {
   const selectFolder = useWorkspaceStore((s) => s.selectFolder);
   const sidebarSectionsCollapsed = useWorkspaceStore((s) => s.sidebarSectionsCollapsed);
   const toggleSidebarSection = useWorkspaceStore((s) => s.toggleSidebarSection);
-  const sidebarSearchQuery = useWorkspaceStore((s) => s.sidebarSearchQuery);
-  const setSidebarSearchQuery = useWorkspaceStore((s) => s.setSidebarSearchQuery);
   const editingFolderId = useWorkspaceStore((s) => s.editingFolderId);
   const setEditingFolderId = useWorkspaceStore((s) => s.setEditingFolderId);
 
@@ -54,13 +50,7 @@ export function FolderTreeSection() {
 
   const foldersCollapsed = sidebarSectionsCollapsed.has("folders");
 
-  // Filter folders by search query
-  const filteredFolders = useMemo(() => {
-    const items = Array.isArray(folders) ? folders : [];
-    if (!sidebarSearchQuery.trim()) return items;
-    const q = sidebarSearchQuery.toLowerCase();
-    return items.filter((f: FolderInfo) => f.folderName.toLowerCase().includes(q));
-  }, [folders, sidebarSearchQuery]);
+  const folderList: FolderInfo[] = Array.isArray(folders) ? folders : [];
 
   // Build count map from server response
   const countMap = useMemo(() => {
@@ -155,27 +145,6 @@ export function FolderTreeSection() {
       {!foldersCollapsed && (
         <SidebarGroupContent>
           <div className="space-y-px px-1">
-            {/* Search input */}
-            {(filteredFolders.length > 3 || sidebarSearchQuery) && (
-              <div className="relative mb-1">
-                <Search className="absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
-                <input
-                  value={sidebarSearchQuery}
-                  onChange={(e) => setSidebarSearchQuery(e.target.value)}
-                  placeholder={t("layout.search_folders")}
-                  className="w-full rounded-md border border-border/50 bg-muted/30 py-1 pl-6 pr-6 text-[11px] text-foreground placeholder:text-muted-foreground/50 outline-none focus:border-primary/50"
-                />
-                {sidebarSearchQuery && (
-                  <button
-                    onClick={() => setSidebarSearchQuery("")}
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-muted-foreground"
-                  >
-                    <X className="size-3" />
-                  </button>
-                )}
-              </div>
-            )}
-
             {/* New folder inline input */}
             {showNewFolderInput && (
               <input
@@ -196,13 +165,13 @@ export function FolderTreeSection() {
             )}
 
             {/* Folder items */}
-            {filteredFolders.length === 0 && !showNewFolderInput && (
+            {folderList.length === 0 && !showNewFolderInput && (
               <p className="px-2 py-2 text-[11px] text-muted-foreground/50">
                 {t("layout.no_folders")}
               </p>
             )}
 
-            {filteredFolders.map((folder: FolderInfo) => (
+            {folderList.map((folder: FolderInfo) => (
               <FolderRow
                 key={folder.id}
                 folder={folder}

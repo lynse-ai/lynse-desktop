@@ -137,7 +137,6 @@ export function useUpdateConclusion() {
 
 export function useInvalidateOnAuth() {
   const queryClient = useQueryClient();
-  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
   return function invalidateAll() {
     queryClient.invalidateQueries();

@@ -27,7 +27,14 @@ function PageRouter() {
 function AppContent() {
   return (
     <DesktopNavigationProvider>
-      <DashboardLayout>
+      <DashboardLayout
+        topSlot={
+          <div
+            className="w-full shrink-0"
+            style={{ height: 38, WebkitAppRegion: "drag" } as React.CSSProperties}
+          />
+        }
+      >
         <PageRouter />
       </DashboardLayout>
     </DesktopNavigationProvider>

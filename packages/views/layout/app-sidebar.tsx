@@ -4,10 +4,7 @@ import React, { useState } from "react";
 import { cn } from "@lynse/ui/lib/utils";
 import { AppLink, useNavigation } from "../navigation";
 import {
-  Headphones,
-  CalendarDays,
-  BookOpen,
-  FolderOpen,
+  Lightbulb,
   MessageSquare,
   Settings,
   Plus,
@@ -21,8 +18,8 @@ import {
   MessageCircle,
   Check,
   LogOut,
-  Crown,
   Zap,
+  Crown,
 } from "../icons";
 import {
   Sidebar,
@@ -46,9 +43,14 @@ import {
   DropdownMenuSubContent,
   DropdownMenuTrigger,
 } from "@lynse/ui/components/ui/dropdown-menu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@lynse/ui/components/ui/popover";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
-import { useUserCredits } from "./use-user-credits";
+import { useUserCredits, useMembership } from "./use-user-credits";
 import { FolderTreeSection } from "../workspace/sidebar/folder-tree-section";
 import { SettingsDialog } from "../settings/settings-dialog";
 
@@ -69,10 +71,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const workspaceNav = [
-    { key: "recordings", label: t("nav.recordings"), icon: Headphones, path: "/recordings" },
-    { key: "meetings", label: t("nav.meetings"), icon: CalendarDays, path: "/meetings" },
-    { key: "knowledge", label: t("nav.knowledge"), icon: BookOpen, path: "/knowledge" },
-    { key: "files", label: t("nav.files"), icon: FolderOpen, path: "/files" },
+    { key: "inspiration", label: t("nav.inspiration"), icon: Lightbulb, path: "/inspiration" },
   ];
 
   return (
@@ -162,13 +161,20 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
         </SidebarGroup>
       </SidebarContent>
 
-      {/* ── Footer: Credits + User profile ──────────────── */}
+      {/* ── Footer: User profile + Credits icon + Settings icon ── */}
       <SidebarFooter className="border-t border-border/40 p-2 gap-0">
-        {/* Credits usage section */}
-        <UserCredits />
-
-        {/* User profile dropdown */}
-        <UserProfileDropdown onOpenSettings={() => setSettingsOpen(true)} />
+        <div className="flex items-center gap-1">
+          <div className="flex-1 min-w-0">
+            <UserProfileDropdown />
+          </div>
+          <CreditsPopover />
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted/60"
+          >
+            <Settings className="size-3.5 text-muted-foreground/50" />
+          </button>
+        </div>
       </SidebarFooter>
       <SidebarRail />
 
@@ -195,60 +201,110 @@ function LanguageItem({ code, label }: { code: string; label: string }) {
   );
 }
 
-/* ── User credits display ──────────────────────────────── */
-function UserCredits() {
+/* ── Map API memberLevel to localized plan name ────────────── */
+function useLocalizedPlan(rawLevel?: string) {
   const { t } = useTranslation();
-  const { data, isLoading } = useUserCredits();
+  if (!rawLevel) return t("layout.default_plan");
+  const key = rawLevel.toLowerCase();
+  if (key === "elite") return t("layout.plan_elite");
+  if (key === "advanced" || key === "premium") return t("layout.plan_advanced");
+  if (key === "standard" || key === "basic") return t("layout.plan_standard");
+  if (key === "free" || key === "trial") return t("layout.plan_free");
+  // Unknown tier — return as-is
+  return rawLevel;
+}
 
-  const plan = data?.benefitType || t("layout.default_plan");
-  const total = data?.pointsAmount ?? 0;
-  const used = data?.usedPointsAmount ?? 0;
-  const remaining = Math.max(0, total - used);
-  const percentage = total > 0 ? Math.min(100, Math.max(0, (remaining / total) * 100)) : 0;
+/* ── Credits popover triggered by Zap icon ────────────────── */
+function CreditsPopover() {
+  const { t } = useTranslation();
+  const { data } = useUserCredits();
+  const { data: membership } = useMembership();
 
-  if (isLoading) {
-    return (
-      <div className="mx-1 mb-1.5 rounded-lg border border-border/50 bg-muted/30 px-2.5 py-2">
-        <div className="h-3 w-24 animate-pulse rounded bg-muted" />
-        <div className="mt-1.5 h-1 w-full rounded-full bg-muted" />
-      </div>
-    );
-  }
+  const plan = useLocalizedPlan(membership?.memberLevel || data?.benefitType);
+  const totalMin = membership?.totalMinutes ?? 0;
+  const usedMin = membership?.usedMinutes ?? 0;
+  const remainingMin = membership?.remainingMinutes ?? Math.max(0, totalMin - usedMin);
+  const isUnlimited = membership?.unlimited === true;
+  const percentage = totalMin > 0 ? Math.min(100, Math.max(0, (remainingMin / totalMin) * 100)) : 0;
+
+  // Also show points if available from customer/current
+  const pointsTotal = data?.pointsAmount ?? 0;
+  const pointsUsed = data?.usedPointsAmount ?? 0;
+  const pointsRemaining = Math.max(0, pointsTotal - pointsUsed);
+  const hasPoints = pointsTotal > 0;
 
   return (
-    <div className="mx-1 mb-1.5 rounded-lg border border-border/50 bg-muted/30 px-2.5 py-2">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          <Crown className="size-3 text-amber-500" />
-          <span className="text-[11px] font-semibold">{plan}</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <Zap className="size-3 text-muted-foreground" />
-          <span className="text-[11px] tabular-nums text-muted-foreground">
-            {remaining.toLocaleString()} / {total.toLocaleString()}
-          </span>
-        </div>
-      </div>
-      <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-muted">
-        <div
-          className={cn(
-            "h-full rounded-full transition-all",
-            percentage <= 20 ? "bg-destructive/70" : "bg-primary/70"
+    <Popover>
+      <PopoverTrigger
+        className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted/60 cursor-pointer"
+      >
+        <Zap className="size-4 text-muted-foreground" />
+      </PopoverTrigger>
+      <PopoverContent side="top" align="end" sideOffset={8} alignOffset={-48} className="w-64 p-0">
+        <div className="flex flex-col gap-3 p-3">
+          {/* Membership tier */}
+          <div className="flex items-center gap-2">
+            <Crown className="size-4 text-amber-500" />
+            <span className="text-sm font-medium">{plan}</span>
+          </div>
+
+          {/* Minutes quota (from membership API) */}
+          {(totalMin > 0 || isUnlimited) && (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">{t("layout.minutes")}</span>
+                <span className="text-xs tabular-nums font-medium">
+                  {isUnlimited ? t("layout.unlimited") : `${remainingMin} / ${totalMin} min`}
+                </span>
+              </div>
+              {!isUnlimited && (
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className={cn(
+                      "h-full rounded-full transition-all",
+                      percentage <= 20 ? "bg-destructive/70" : "bg-primary/70"
+                    )}
+                    style={{ width: `${percentage}%` }}
+                  />
+                </div>
+              )}
+            </div>
           )}
-          style={{ width: `${percentage}%` }}
-        />
-      </div>
-    </div>
+
+          {/* Credits usage (from customer/current, if available) */}
+          {hasPoints && (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">{t("layout.credits")}</span>
+                <span className="text-xs tabular-nums font-medium">
+                  {pointsRemaining.toLocaleString()} / {pointsTotal.toLocaleString()}
+                </span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-all",
+                    (pointsRemaining / pointsTotal) <= 0.2 ? "bg-destructive/70" : "bg-primary/70"
+                  )}
+                  style={{ width: `${Math.min(100, (pointsRemaining / pointsTotal) * 100)}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 
 /* ── User profile dropdown ─────────────────────────────── */
-function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void }) {
+function UserProfileDropdown() {
   const { t } = useTranslation();
   const { data } = useUserCredits();
+  const { data: membership } = useMembership();
 
   const nickname = (data?.nickname as string) || "User";
-  const planName = data?.benefitType || t("layout.default_plan");
+  const plan = useLocalizedPlan(membership?.memberLevel || data?.benefitType);
   const initials = nickname.slice(0, 2).toUpperCase();
 
   return (
@@ -261,18 +317,12 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
             </div>
             <div className="flex-1 text-left min-w-0">
               <p className="truncate text-[13px] font-medium leading-tight">{nickname}</p>
-              <p className="truncate text-[11px] text-muted-foreground/60">{planName}</p>
+              <p className="truncate text-[11px] text-muted-foreground/60">{plan}</p>
             </div>
-            <Settings className="size-3.5 shrink-0 text-muted-foreground/50" />
           </button>
         }
       />
       <DropdownMenuContent align="start" side="top" sideOffset={4} className="w-52">
-        <DropdownMenuItem onClick={() => onOpenSettings()}>
-          <Settings className="size-3.5" />
-          <span>{t("nav.settings")}</span>
-        </DropdownMenuItem>
-
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <Globe className="size-3.5" />

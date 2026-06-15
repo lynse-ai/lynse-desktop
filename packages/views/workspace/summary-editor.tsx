@@ -81,15 +81,19 @@ function proxyImages(root: HTMLElement) {
 interface SummaryMarkdownEditorProps {
   content: string;
   onChange?: (markdown: string) => void;
+  /** Called when the internal editor instance is ready or destroyed. */
+  onEditorReady?: (editor: Editor | null) => void;
 }
 
-export function SummaryMarkdownEditor({ content, onChange }: SummaryMarkdownEditorProps) {
+export function SummaryMarkdownEditor({ content, onChange, onEditorReady }: SummaryMarkdownEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<Editor | null>(null);
   const onChangeRef = useRef(onChange);
+  const onEditorReadyRef = useRef(onEditorReady);
   const isInternalUpdate = useRef(false);
 
   onChangeRef.current = onChange;
+  onEditorReadyRef.current = onEditorReady;
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -138,10 +142,12 @@ export function SummaryMarkdownEditor({ content, onChange }: SummaryMarkdownEdit
       .create()
       .then((editor) => {
         editorRef.current = editor;
+        onEditorReadyRef.current?.(editor);
         requestAnimationFrame(() => proxyImages(root));
       });
 
     return () => {
+      onEditorReadyRef.current?.(null);
       editorRef.current?.destroy();
       editorRef.current = null;
     };

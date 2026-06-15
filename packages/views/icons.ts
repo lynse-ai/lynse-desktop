@@ -16,6 +16,7 @@ export {
   CalendarDays,     // Meetings
   BookOpen,         // Knowledge Base
   FolderOpen,       // Files / Folders
+  Lightbulb,        // Inspiration
   MessageSquare,    // AI Chat
   Settings,         // Settings
   LogOut,           // Log out
@@ -51,6 +52,20 @@ export {
   Columns2,         // Split mode
   Bot,              // AI assistant
 
+  // ── Markdown Toolbar ─────────────────────────────────
+  Bold,             // Bold mark
+  Italic,           // Italic mark
+  Code,             // Inline code
+  ListOrdered,      // Ordered list
+  ListChecks,       // Task list
+  Quote,            // Blockquote
+  Image,            // Image insert
+  Heading1,         // Heading level 1
+  Heading2,         // Heading level 2
+  Heading3,         // Heading level 3
+  Type,             // Paragraph / body text
+  Undo,             // Undo history
+
   // ── Membership / Credits ──────────────────────────────
   Crown,            // Membership tier
   Zap,              // Credits / points
@@ -63,6 +78,10 @@ export {
   Globe,            // Language
   HelpCircle,       // Help docs
   FileClock,        // Changelog
+  ArrowUpDown,      // Sort toggle
+  ArrowDown,        // Sort descending
+  ArrowUp,          // Sort ascending
+  Clock,            // Time-based sort
   MessageCircle,    // Feedback
 
   // ── Audio Player ────────────────────────────────────

@@ -22,7 +22,10 @@ function createWindow(): void {
 
   mainWindow.on("ready-to-show", () => {
     mainWindow?.show();
-    if (is.dev) mainWindow?.webContents.openDevTools({ mode: "detach" });
+    // Only open DevTools when explicitly requested (e.g. DEBUG_DEVTOOLS=1)
+    if (is.dev && process.env.DEBUG_DEVTOOLS === "1") {
+      mainWindow?.webContents.openDevTools({ mode: "detach" });
+    }
   });
 
   mainWindow.webContents.setWindowOpenHandler((details) => {

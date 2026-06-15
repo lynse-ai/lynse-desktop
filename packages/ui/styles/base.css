@@ -212,6 +212,11 @@
   }
 }
 
+/* Markdown toolbar button base style */
+.toolbar-btn {
+  @apply flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground;
+}
+
 /* Sidebar: open triggers (dropdown/popover) get active background */
 [data-sidebar="menu-button"][data-popup-open] {
   background-color: var(--sidebar-accent);

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.3 (2026-06-17)
+
+### New Features
+
+- Floating Markdown toolbar with formatting, heading, list, blockquote, image, and undo actions integrated with the Milkdown editor
+- Draggable desktop title bar with folder/file breadcrumb and outline, source, and chat panel toggles
+- Source view mode to inspect raw HTML or Markdown for outlines and summaries
+- User membership tier display in sidebar with localized plan names
+- Detailed minutes and credits usage popover in user profile dropdown
+- API hook to fetch membership quota and details
+
+### Changed
+
+- Move file list search query and sort state (field + direction) into the workspace store for persistence
+- Relocate chat panel, outline sidebar, and source view toggles from the content panel into the title bar
+- Polish Markdown toolbar interactions and summary editor layout
+- Conditionally open desktop DevTools based on a debug environment variable
+
 ## 0.1.2 (2026-06-12)
 
 ### New Features

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import {
   Editor,
   rootCtx,
@@ -22,6 +22,64 @@ import { api } from "@lynse/core/api/client";
 import "@milkdown/kit/prose/view/style/prosemirror.css";
 
 const PROXY_PREFIX = "/api/proxy";
+
+/** Sanitize base64 image data URIs — convert Markdown image syntax to HTML <img> for reliable rendering. */
+function sanitizeBase64Images(markdown: string): string {
+  // Convert ![alt](data:image/...;base64,...) to <img> tags with cleaned base64
+  let result = "";
+  let pos = 0;
+
+  while (pos < markdown.length) {
+    const imgStart = markdown.indexOf("![", pos);
+    if (imgStart === -1) {
+      result += markdown.slice(pos);
+      break;
+    }
+
+    result += markdown.slice(pos, imgStart);
+
+    // Parse ![alt](url)
+    const altEnd = markdown.indexOf("](", imgStart + 2);
+    if (altEnd === -1) {
+      result += markdown.slice(imgStart);
+      break;
+    }
+
+    const alt = markdown.slice(imgStart + 2, altEnd);
+    const urlStart = altEnd + 2;
+
+    // Find the matching closing paren — for data URIs, scan for the last ) on the line or after base64 data
+    let urlEnd = urlStart;
+    let parenDepth = 1;
+    while (urlEnd < markdown.length && parenDepth > 0) {
+      if (markdown[urlEnd] === "(") parenDepth++;
+      else if (markdown[urlEnd] === ")") parenDepth--;
+      if (parenDepth > 0) urlEnd++;
+    }
+
+    const url = markdown.slice(urlStart, urlEnd).trim();
+
+    if (url.startsWith("data:image/")) {
+      // Clean whitespace from base64 data and convert to HTML img tag
+      const semicolonIdx = url.indexOf(";");
+      const commaIdx = url.indexOf(",");
+      if (semicolonIdx > -1 && commaIdx > semicolonIdx) {
+        const prefix = url.slice(0, commaIdx + 1);
+        const b64data = url.slice(commaIdx + 1).replace(/\s+/g, "");
+        result += `<img alt="${alt}" src="${prefix}${b64data}" />`;
+      } else {
+        result += `<img alt="${alt}" src="${url}" />`;
+      }
+    } else {
+      // Keep as Markdown for non-data-URI images
+      result += `![${alt}](${url})`;
+    }
+
+    pos = urlEnd + 1; // skip past the closing )
+  }
+
+  return result;
+}
 
 /** Fetch an image through the authenticated proxy and return a blob URL. */
 async function fetchImageAsBlob(src: string): Promise<string> {
@@ -64,12 +122,28 @@ async function fetchImageAsBlob(src: string): Promise<string> {
   }
 }
 
-/** Scan an element for <img> tags and replace their src with authenticated blob URLs. */
+/** Scan an element for <img> tags and replace their src with authenticated blob URLs. Also fixes broken data: URIs. */
 function proxyImages(root: HTMLElement) {
   const imgs = root.querySelectorAll<HTMLImageElement>("img");
   for (const img of imgs) {
     const src = img.getAttribute("src");
-    if (!src || src.startsWith("blob:") || src.startsWith("data:") || img.dataset.proxying) continue;
+    if (!src || img.dataset.proxying) continue;
+
+    // Fix data: URIs that might have whitespace
+    if (src.startsWith("data:image/")) {
+      const commaIdx = src.indexOf(",");
+      if (commaIdx > -1) {
+        const prefix = src.slice(0, commaIdx + 1);
+        const b64data = src.slice(commaIdx + 1);
+        const cleaned = b64data.replace(/\s+/g, "");
+        if (cleaned !== b64data) {
+          img.src = `${prefix}${cleaned}`;
+        }
+      }
+      continue;
+    }
+
+    if (src.startsWith("blob:")) continue;
     img.dataset.proxying = "1";
     fetchImageAsBlob(src).then((blobUrl) => {
       if (blobUrl !== src) img.src = blobUrl;
@@ -95,6 +169,9 @@ export function SummaryMarkdownEditor({ content, onChange, onEditorReady }: Summ
   onChangeRef.current = onChange;
   onEditorReadyRef.current = onEditorReady;
 
+  // Sanitize base64 images in content to prevent parsing issues
+  const sanitizedContent = useMemo(() => sanitizeBase64Images(content), [content]);
+
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
@@ -106,14 +183,14 @@ export function SummaryMarkdownEditor({ content, onChange, onEditorReady }: Summ
       currentMarkdown = serializer(view.state.doc);
     });
 
-    if (currentMarkdown !== content) {
+    if (currentMarkdown !== sanitizedContent) {
       isInternalUpdate.current = true;
-      editor.action(replaceAll(content));
+      editor.action(replaceAll(sanitizedContent));
       requestAnimationFrame(() => {
         isInternalUpdate.current = false;
       });
     }
-  }, [content]);
+  }, [sanitizedContent]);
 
   useEffect(() => {
     const root = containerRef.current;
@@ -122,7 +199,7 @@ export function SummaryMarkdownEditor({ content, onChange, onEditorReady }: Summ
     Editor.make()
       .config((ctx) => {
         ctx.set(rootCtx, root);
-        ctx.set(defaultValueCtx, content);
+        ctx.set(defaultValueCtx, sanitizedContent);
         ctx.set(remarkPluginsCtx, [{ plugin: remarkBreaks, options: undefined as unknown as Record<string, unknown> }]);
         ctx.update(editorViewOptionsCtx, (prev) => ({
           ...prev,

@@ -29,10 +29,12 @@ function AppContent() {
     <DesktopNavigationProvider>
       <DashboardLayout
         topSlot={
-          <div
-            className="w-full shrink-0"
-            style={{ height: 38, WebkitAppRegion: "drag" } as React.CSSProperties}
-          />
+          <div className="flex items-center gap-2 px-3 pt-10 pb-2">
+            <div className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <span className="text-xs font-bold">L</span>
+            </div>
+            <span className="text-sm font-semibold tracking-tight">Lynse</span>
+          </div>
         }
       >
         <PageRouter />

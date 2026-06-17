@@ -6,6 +6,7 @@ import { FileList } from "./middle-panel/file-list";
 import { ContentPanel } from "./content-panel";
 import { ChatPanel } from "./right-panel/chat-panel";
 import { ResizableHandle } from "./resizable-handle";
+import { TitleBar } from "../layout/title-bar";
 import { useDndBridge } from "./dnd-provider";
 import { useMoveFiles } from "./hooks/use-folder-mutations";
 import type { WorkspaceItem } from "./types";
@@ -50,24 +51,30 @@ export function WorkspaceLayout() {
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
-      {/* Middle panel: file list */}
+      {/* Left panel: file list (full height) */}
       <FileList />
       <ResizableHandle onResize={handleFileListResize} side="right" />
 
-      {/* Content panel: tabs + content + outline sidebar */}
-      <div className="flex-1 min-w-0">
-        <ContentPanel />
-      </div>
-
-      {/* Chat panel: slides in from right when "Ask AI" is clicked */}
-      {chatPanelVisible && (
-        <>
-          <ResizableHandle onResize={handleChatPanelResize} side="right" />
-          <div className="shrink-0 overflow-hidden" style={{ width: chatPanelWidth }}>
-            <ChatPanel />
+      {/* Right column: title bar + content panel + chat panel */}
+      <div className="flex flex-1 min-w-0 flex-col">
+        <TitleBar />
+        <div className="flex flex-1 min-h-0">
+          {/* Content panel: tabs + content + outline sidebar */}
+          <div className="flex-1 min-w-0">
+            <ContentPanel />
           </div>
-        </>
-      )}
+
+          {/* Chat panel: slides in from right when "Ask AI" is clicked */}
+          {chatPanelVisible && (
+            <>
+              <ResizableHandle onResize={handleChatPanelResize} side="left" />
+              <div className="shrink-0 overflow-hidden" style={{ width: chatPanelWidth }}>
+                <ChatPanel />
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

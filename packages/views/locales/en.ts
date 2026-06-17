@@ -90,6 +90,7 @@ const en = {
     transcription: "Transcription",
     notes: "Notes",
     toggle_outline: "Toggle outline sidebar",
+    view_source: "View source code",
     ask_ai: "Ask AI",
     enter_filename: "Enter file name...",
     no_outline: "No outline available",

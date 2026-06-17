@@ -32,6 +32,7 @@ export type MarkdownEditorAction =
 /**
  * Execute a formatting action on the active Milkdown editor.
  * For the "image" action, pass payload { url, alt? }.
+ * Wraps each command in try/catch to prevent unhandled errors from breaking the toolbar.
  */
 export function executeAction(
   editor: Editor | null,
@@ -40,62 +41,65 @@ export function executeAction(
 ): void {
   if (!editor) return;
 
-  switch (action) {
-    case "heading-1":
-      editor.action(callCommand("WrapInHeading", 1));
-      break;
-    case "heading-2":
-      editor.action(callCommand("WrapInHeading", 2));
-      break;
-    case "heading-3":
-      editor.action(callCommand("WrapInHeading", 3));
-      break;
-    case "paragraph":
-      editor.action(callCommand("TurnIntoText"));
-      break;
-    case "bold":
-      editor.action(callCommand("ToggleBold"));
-      break;
-    case "italic":
-      editor.action(callCommand("ToggleItalic"));
-      break;
-    case "inline-code":
-      editor.action(callCommand("ToggleInlineCode"));
-      break;
-    case "bullet-list":
-      editor.action(callCommand("WrapInBulletList"));
-      break;
-    case "ordered-list":
-      editor.action(callCommand("WrapInOrderedList"));
-      break;
-    case "task-list":
-      // GFM task list — command name may vary
-      tryCmd(editor, "WrapInTaskList", "WrapInTaskListItem");
-      break;
-    case "blockquote":
-      editor.action(callCommand("WrapInBlockquote"));
-      break;
-    case "image":
-      if (payload?.url) {
-        editor.action(
-          callCommand("InsertImage", {
-            src: payload.url,
-            alt: payload.alt || "",
-            title: payload.alt || "",
-          }),
-        );
+  try {
+    switch (action) {
+      case "heading-1":
+        editor.action(callCommand("WrapInHeading", 1));
+        break;
+      case "heading-2":
+        editor.action(callCommand("WrapInHeading", 2));
+        break;
+      case "heading-3":
+        editor.action(callCommand("WrapInHeading", 3));
+        break;
+      case "paragraph":
+        editor.action(callCommand("TurnIntoText"));
+        break;
+      case "bold":
+        editor.action(callCommand("ToggleStrong"));
+        break;
+      case "italic":
+        editor.action(callCommand("ToggleEmphasis"));
+        break;
+      case "inline-code":
+        editor.action(callCommand("ToggleInlineCode"));
+        break;
+      case "bullet-list":
+        editor.action(callCommand("WrapInBulletList"));
+        break;
+      case "ordered-list":
+        editor.action(callCommand("WrapInOrderedList"));
+        break;
+      case "task-list":
+        tryCmd(editor, "WrapInTaskList", "WrapInTaskListItem");
+        break;
+      case "blockquote":
+        editor.action(callCommand("WrapInBlockquote"));
+        break;
+      case "image":
+        if (payload?.url) {
+          editor.action(
+            callCommand("InsertImage", {
+              src: payload.url,
+              alt: payload.alt || "",
+              title: payload.alt || "",
+            }),
+          );
+        }
+        break;
+      case "undo":
+        editor.action(callCommand("Undo"));
+        break;
+      case "blur": {
+        editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          (view.dom as HTMLElement).blur();
+        });
+        break;
       }
-      break;
-    case "undo":
-      editor.action(callCommand("Undo"));
-      break;
-    case "blur": {
-      editor.action((ctx) => {
-        const view = ctx.get(editorViewCtx);
-        (view.dom as HTMLElement).blur();
-      });
-      break;
     }
+  } catch (err) {
+    console.warn(`[editor-actions] Failed to execute "${action}":`, err);
   }
 }
 

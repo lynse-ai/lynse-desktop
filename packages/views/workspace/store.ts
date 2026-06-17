@@ -44,6 +44,8 @@ function saveNoteTabs(tabs: NoteTab[]) {
 }
 
 type ContentTab = "outline" | "transcription" | `summary-${number}` | `note-${string}`;
+type FileSortField = "updatedAt" | "createdAt";
+type FileSortDir = "desc" | "asc";
 
 interface WorkspaceState {
   selectedItemId: string | null;
@@ -59,7 +61,10 @@ interface WorkspaceState {
   folderTreeWidth: number;
   contentTab: ContentTab;
   outlineSidebarVisible: boolean;
+  sourceViewVisible: boolean;
   noteTabs: NoteTab[];
+  fileSortField: FileSortField;
+  fileSortDir: FileSortDir;
 
   // Sidebar directory state
   sidebarSectionsCollapsed: Set<string>;
@@ -77,6 +82,9 @@ interface WorkspaceState {
   toggleChatPanel: () => void;
   setContentTab: (tab: ContentTab) => void;
   toggleOutlineSidebar: () => void;
+  toggleSourceView: () => void;
+  toggleFileSortField: () => void;
+  toggleFileSortDir: () => void;
   setChatPanelWidth: (width: number) => void;
   handleChatPanelResize: (delta: number) => void;
   handleFileListResize: (delta: number) => void;
@@ -105,7 +113,10 @@ function createWorkspaceStore() {
     chatPanelVisible: false,
     contentTab: "outline",
     outlineSidebarVisible: false,
+    sourceViewVisible: false,
     noteTabs: loadNoteTabs(),
+    fileSortField: "createdAt" as FileSortField,
+    fileSortDir: "desc" as FileSortDir,
     chatPanelWidth: loadNumber(CHAT_PANEL_WIDTH_KEY, DEFAULT_CHAT_PANEL_WIDTH),
     fileListWidth: loadNumber(FILE_LIST_WIDTH_KEY, DEFAULT_FILE_LIST_WIDTH),
     folderTreeWidth: loadNumber(FOLDER_TREE_WIDTH_KEY, DEFAULT_FOLDER_TREE_WIDTH),
@@ -146,6 +157,19 @@ function createWorkspaceStore() {
 
     toggleOutlineSidebar: () =>
       set((state) => ({ outlineSidebarVisible: !state.outlineSidebarVisible })),
+
+    toggleSourceView: () =>
+      set((state) => ({ sourceViewVisible: !state.sourceViewVisible })),
+
+    toggleFileSortField: () =>
+      set((state) => ({
+        fileSortField: state.fileSortField === "createdAt" ? "updatedAt" : "createdAt",
+      })),
+
+    toggleFileSortDir: () =>
+      set((state) => ({
+        fileSortDir: state.fileSortDir === "desc" ? "asc" : "desc",
+      })),
 
     addNoteTab: () => {
       const id = Date.now().toString(36);

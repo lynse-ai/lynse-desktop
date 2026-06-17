@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
-import { Bot, FileText, FileAudio, Sparkles, List, X, Plus } from "../icons";
+import { FileText, FileAudio, Sparkles, List, X, Plus } from "../icons";
 import { useWorkspaceStore } from "./store";
 import { TAB_BAR_HEIGHT } from "./layout-constants";
 import { api } from "@lynse/core/api/client";
@@ -116,8 +116,7 @@ export function ContentPanel() {
   const setContentTab = useWorkspaceStore((s) => s.setContentTab);
   const outlineSidebarVisible = useWorkspaceStore((s) => s.outlineSidebarVisible);
   const toggleOutlineSidebar = useWorkspaceStore((s) => s.toggleOutlineSidebar);
-  const chatPanelVisible = useWorkspaceStore((s) => s.chatPanelVisible);
-  const toggleChatPanel = useWorkspaceStore((s) => s.toggleChatPanel);
+  const sourceViewVisible = useWorkspaceStore((s) => s.sourceViewVisible);
   const noteTabs = useWorkspaceStore((s) => s.noteTabs);
   const addNoteTab = useWorkspaceStore((s) => s.addNoteTab);
   const removeNoteTab = useWorkspaceStore((s) => s.removeNoteTab);
@@ -162,13 +161,13 @@ export function ContentPanel() {
       .filter(Boolean) as { key: number; text: string; id: string; name: string }[];
   }, [conclusions]);
 
-  // Outline
-  const { outlineBody, outlineStyles } = useMemo(() => {
+  // Outline — keep raw text for source view
+  const { outlineBody, outlineStyles, outlineRaw } = useMemo(() => {
     const obj = outline as Record<string, unknown> | null;
-    if (!obj?.outlineText) return { outlineBody: null, outlineStyles: "" };
+    if (!obj?.outlineText) return { outlineBody: null, outlineStyles: "", outlineRaw: null };
     const raw = String(obj.outlineText);
     const { content, scopedStyles } = extractBody(raw);
-    return { outlineBody: content, outlineStyles: scopedStyles };
+    return { outlineBody: content, outlineStyles: scopedStyles, outlineRaw: raw };
   }, [outline]);
 
   // Transcription
@@ -328,33 +327,6 @@ export function ContentPanel() {
           </button>
         </div>
         <div className="flex-1" />
-        <div className="flex items-center gap-1">
-          {outlineBody && headings.length > 0 && contentTab === "outline" && (
-            <button
-              onClick={toggleOutlineSidebar}
-              className={`flex items-center gap-1 rounded-md px-2 py-1 text-[11px] transition-colors ${
-                outlineSidebarVisible
-                  ? "bg-accent text-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent/50"
-              }`}
-              title={t("workspace.toggle_outline")}
-            >
-              <List className="size-3" />
-            </button>
-          )}
-          <button
-            onClick={toggleChatPanel}
-            className={`flex items-center gap-1 rounded-md px-2 py-1 text-[11px] transition-colors ${
-              chatPanelVisible
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-accent/50"
-            }`}
-            title={t("workspace.ask_ai")}
-          >
-            <Bot className="size-3.5" />
-            <span>{t("workspace.ask_ai")}</span>
-          </button>
-        </div>
       </div>
 
       {/* Content area */}
@@ -365,7 +337,7 @@ export function ContentPanel() {
           ) : isLoading ? (
             <LoadingState />
           ) : (
-            <div className={`px-6 py-6 ${contentTab === "transcription" ? "flex flex-col h-full" : ""}`}>
+            <div className={`px-6 py-6 ${contentTab === "transcription" ? "flex flex-col h-full" : "min-h-full flex flex-col"}`}>
               <input
                 type="text"
                 value={displayTitle ?? ""}
@@ -379,14 +351,18 @@ export function ContentPanel() {
                 </div>
               )}
 
-              <div ref={contentPreviewRef} className={`content-preview mt-2 ${contentTab === "transcription" ? "flex flex-col flex-1 min-h-0" : ""}`}>
+              <div ref={contentPreviewRef} className={`content-preview mt-2 flex-1 min-h-0 ${contentTab === "transcription" ? "flex flex-col flex-1 min-h-0" : ""}`}>
                 {outlineStyles && contentTab === "outline" && (
                   <style dangerouslySetInnerHTML={{ __html: outlineStyles }} />
                 )}
 
                 {contentTab === "outline" && (
                   outlineBody ? (
-                    <div className="content-preview-inner" dangerouslySetInnerHTML={{ __html: outlineBody }} />
+                    sourceViewVisible ? (
+                      <SourceView code={outlineRaw ?? outlineBody} language="html" />
+                    ) : (
+                      <div className="content-preview-inner" dangerouslySetInnerHTML={{ __html: outlineBody }} />
+                    )
                   ) : (
                     <NoContentState label={t("workspace.no_outline")} />
                   )
@@ -442,6 +418,9 @@ export function ContentPanel() {
                 {/* Single summary tab */}
                 {activeSummaryIdx >= 0 && conclusionTexts[activeSummaryIdx] && (() => {
                   const block = conclusionTexts[activeSummaryIdx]!;
+                  if (sourceViewVisible) {
+                    return <SourceView code={block.text} language={isHtmlContent(block.text) ? "html" : "markdown"} />;
+                  }
                   return isHtmlContent(block.text) ? (() => {
                     const { content, scopedStyles } = extractBody(block.text);
                     return (
@@ -469,7 +448,7 @@ export function ContentPanel() {
               </div>
 
               {contentTab !== "transcription" && (
-                <div className="mt-8 border-t border-stroke-quaternary pt-3 text-center shrink-0">
+                <div className="mt-2 border-t border-stroke-quaternary pt-1.5 pb-1 text-center shrink-0">
                   <p className="text-[10px] text-muted-foreground/60">{t("workspace.ai_disclaimer")}</p>
                 </div>
               )}
@@ -523,6 +502,12 @@ function NoteContent({ fileId, noteId }: { fileId: string | null; noteId: string
     }, 500);
   }, [storageKey]);
 
+  const sourceViewVisible = useWorkspaceStore((s) => s.sourceViewVisible);
+
+  if (sourceViewVisible) {
+    return <SourceView code={content} language="markdown" />;
+  }
+
   return <SummaryMarkdownEditor content={content} onChange={handleChange} />;
 }
 
@@ -532,12 +517,184 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
       onClick={onClick}
       className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
         active
-          ? "bg-accent-brand-strong text-accent-brand-text"
-          : "text-muted-foreground hover:bg-accent-brand hover:text-foreground"
+          ? "bg-accent text-accent-foreground"
+          : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
       }`}
     >
       {children}
     </button>
+  );
+}
+
+// ── Syntax highlighting for source viewer (rich GitHub-like palette) ──
+const SH_COLORS = {
+  // HTML
+  tag: "#6B5CE7",         // purple — HTML tags
+  tagSpecial: "#af52de",  // magenta — DOCTYPE, special tags
+  attr: "#ff9500",        // orange — attribute names
+  string: "#34c759",      // green — strings / attr values
+  comment: "#6e6e73",     // gray — comments
+  punctuation: "#888888", // muted — brackets, angle brackets
+  // Markdown
+  keyword: "#ff7b72",     // red — bold markers, list markers
+  heading: "#79c0ff",     // cyan — markdown headings
+  code: "#ffa657",        // orange — inline code
+  link: "#d2a8ff",        // purple — links
+  // CSS (inside <style>)
+  cssProp: "#61dafb",     // light blue — CSS property names
+  cssValue: "#e5e5e7",    // light gray — CSS property values
+  cssVar: "#888888",      // gray — CSS variable declarations
+  cssVarRef: "#00bfff",   // cyan — var(--xxx) references
+  cssSelector: "#ff9500", // orange — CSS selectors
+  // Shared
+  plain: "#e5e5e7",       // default text
+};
+
+function highlightHtml(code: string): string {
+  let result = code
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  // Comments: <!-- ... -->
+  result = result.replace(/(&lt;!--[\s\S]*?--&gt;)/g, `<span style="color:${SH_COLORS.comment};font-style:italic">$1</span>`);
+
+  // DOCTYPE and special declarations
+  result = result.replace(/(&lt;!)(DOCTYPE)(\s+html)(&gt;)/gi, (_, open, kw, rest, close) =>
+    `<span style="color:${SH_COLORS.punctuation}">${open}</span><span style="color:${SH_COLORS.tagSpecial};font-weight:600">${kw}</span><span style="color:${SH_COLORS.plain}">${rest}</span><span style="color:${SH_COLORS.punctuation}">${close}</span>`
+  );
+
+  // CSS inside <style> blocks — highlight property names, values, variables, selectors
+  result = result.replace(/(&lt;style[^&]*?&gt;)([\s\S]*?)(&lt;\/style&gt;)/gi, (_, openTag, cssBody, _closeTag) => {
+    // Color the style tags themselves
+    let out = `<span style="color:${SH_COLORS.tag}">${openTag.replace(/(&lt;\/?)(\w+)/g, `$1<span style="color:${SH_COLORS.tag}">$2</span>`)}</span>`;
+    // Highlight CSS content
+    let css = cssBody
+      // CSS variable declarations --xxx:
+      .replace(/(--[a-zA-Z0-9_-]+)(\s*:)/g, `<span style="color:${SH_COLORS.cssVar}">$1</span>$2`)
+      // var(--xxx) references
+      .replace(/(var\()([^)]+)(\))/g, `<span style="color:${SH_COLORS.punctuation}">$1</span><span style="color:${SH_COLORS.cssVarRef}">$2</span><span style="color:${SH_COLORS.punctuation}">$3</span>`)
+      // CSS property: value pairs
+      .replace(/(\s+)([a-z-]+)(\s*:)/g, `$1<span style="color:${SH_COLORS.cssProp}">$2</span>$3`)
+      // Hex color values #xxx
+      .replace(/(#[0-9a-fA-F]{3,8})/g, `<span style="color:${SH_COLORS.cssValue}">$1</span>`)
+      // Numeric values with units
+      .replace(/(\d+(?:\.\d+)?(?:px|rem|em|%|vh|vw|s|ms|deg))/g, `<span style="color:${SH_COLORS.cssValue}">$1</span>`)
+      // CSS selectors (lines ending with {)
+      .replace(/^(\s*)([.#]?[a-zA-Z][a-zA-Z0-9_\-\s,.:#>+~[\]="']*)(\s*\{)/gm, `$1<span style="color:${SH_COLORS.cssSelector}">$2</span>$3`);
+    out = out.replace(/(&lt;\/)(style)(&gt;)/gi, `<span style="color:${SH_COLORS.tag}">$1$2$3</span>`);
+    return out.replace(/(&lt;style[^&]*?&gt;)/, "") + css + out.slice(out.lastIndexOf("&lt;\/"));
+  });
+
+  // HTML tags with attributes
+  result = result.replace(/(&lt;\/?)([a-zA-Z][a-zA-Z0-9-]*)([\s\S]*?)(&gt;)/g, (_, open, tag, attrs, close) => {
+    // Skip if already highlighted (inside style block)
+    if (open.includes("span")) return _;
+    let highlightedAttrs = attrs
+      // Attribute name
+      .replace(/\b([a-zA-Z][a-zA-Z0-9-:]*)(=)/g, `<span style="color:${SH_COLORS.attr}">$1</span>$2`)
+      // Attribute value (double-quoted)
+      .replace(/(=")(.*?)(")/g, `$1<span style="color:${SH_COLORS.string}">$2</span>$3`)
+      // Attribute value (single-quoted)
+      .replace(/(=')(.*?)(')/g, `$1<span style="color:${SH_COLORS.string}">$2</span>$3`);
+    return `<span style="color:${SH_COLORS.punctuation}">${open}</span><span style="color:${SH_COLORS.tag}">${tag}</span>${highlightedAttrs}<span style="color:${SH_COLORS.punctuation}">${close}</span>`;
+  });
+
+  return result;
+}
+
+function highlightMarkdown(code: string): string {
+  return code
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    // Headings (lines starting with #)
+    .replace(/^(#{1,6}\s.*)$/gm, `<span style="color:${SH_COLORS.heading};font-weight:600">$1</span>`)
+    // Bold **text**
+    .replace(/(\*\*|__)(.*?)\1/g, `<span style="color:${SH_COLORS.keyword};font-weight:600">$1$2$1</span>`)
+    // Italic *text*
+    .replace(/(\*|_)(.*?)\1/g, `<span style="color:${SH_COLORS.plain};font-style:italic">$1$2$1</span>`)
+    // Inline code `code`
+    .replace(/(`)(.*?)(`)/g, `<span style="color:${SH_COLORS.code}">$1$2$3</span>`)
+    // Code blocks ```
+    .replace(/(```[\s\S]*?```)/g, `<span style="color:${SH_COLORS.code}">$1</span>`)
+    // Links [text](url)
+    .replace(/(\[)(.*?)(\]\()(.*?)(\))/g, `<span style="color:${SH_COLORS.punctuation}">$1</span><span style="color:${SH_COLORS.link}">$2</span><span style="color:${SH_COLORS.punctuation}">$3</span><span style="color:${SH_COLORS.string}">$4</span><span style="color:${SH_COLORS.punctuation}">$5</span>`)
+    // List markers
+    .replace(/^(\s*)([-*+]|\d+\.)\s/gm, `$1<span style="color:${SH_COLORS.keyword}">$2</span> `)
+    // Blockquotes >
+    .replace(/^(&gt;\s?.*)$/gm, `<span style="color:${SH_COLORS.comment}">$1</span>`);
+}
+
+function highlightCode(code: string, language: "html" | "markdown"): string {
+  return language === "html" ? highlightHtml(code) : highlightMarkdown(code);
+}
+
+/** Extract base64 images from HTML/Markdown, return { cleaned code, image data URIs } */
+function extractBase64Images(code: string): { cleaned: string; images: string[] } {
+  const images: string[] = [];
+  // 1. HTML <img> tags with base64 src
+  let cleaned = code.replace(
+    /<img\b([^>]*)src\s*=\s*["'](data:image\/[^;]+;base64,[A-Za-z0-9+/=\s]+)["']([^>]*)\/?>/gi,
+    (_fullMatch, before, dataUri, after) => {
+      images.push(dataUri);
+      return `<img${before}src="[base64-image-${images.length}]"${after}/>`;
+    }
+  );
+  // 2. Markdown ![alt](data:image/...;base64,...)
+  cleaned = cleaned.replace(
+    /(!\[[^\]]*\])\((data:image\/[^;]+;base64,[A-Za-z0-9+/=\s]+)\)/g,
+    (_fullMatch, altPart, dataUri) => {
+      images.push(dataUri);
+      return `${altPart}([base64-image-${images.length}])`;
+    }
+  );
+  return { cleaned, images };
+}
+
+/** Source code viewer — displays raw HTML/Markdown with syntax highlighting + base64 image preview */
+function SourceView({ code, language }: { code: string; language: "html" | "markdown" }) {
+  const { highlighted, images } = useMemo(() => {
+    const { cleaned, images } = extractBase64Images(code);
+    return { highlighted: highlightCode(cleaned, language), images };
+  }, [code, language]);
+
+  return (
+    <div className="rounded-md overflow-auto flex-1 min-h-0" style={{ backgroundColor: "#0d1117", border: "1px solid #30363d" }}>
+      <div className="sticky top-0 flex items-center gap-2 px-3 py-1.5" style={{ backgroundColor: "#161b22", borderBottom: "1px solid #30363d" }}>
+        <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#8b949e" }}>
+          {language}
+        </span>
+      </div>
+      <pre
+        className="p-4 text-xs leading-relaxed whitespace-pre-wrap break-words font-mono"
+        style={{ color: SH_COLORS.plain }}
+        dangerouslySetInnerHTML={{ __html: highlighted }}
+      />
+      {/* Base64 image previews */}
+      {images.length > 0 && (
+        <div className="border-t px-4 py-3 space-y-3" style={{ borderColor: "#30363d" }}>
+          <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#8b949e" }}>
+            Image Previews ({images.length})
+          </div>
+          {images.map((dataUri, i) => (
+            <div key={i} className="rounded-md overflow-hidden" style={{ border: "1px solid #30363d" }}>
+              <div className="px-3 py-1 text-[10px]" style={{ backgroundColor: "#161b22", color: "#8b949e", borderBottom: "1px solid #30363d" }}>
+                Image {i + 1}
+              </div>
+              <div className="p-3 flex justify-center" style={{ backgroundColor: "#0d1117" }}>
+                <img
+                  src={dataUri}
+                  alt={`base64-image-${i + 1}`}
+                  className="max-w-full rounded"
+                  style={{ maxHeight: 400 }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

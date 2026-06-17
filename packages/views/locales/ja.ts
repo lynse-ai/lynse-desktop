@@ -89,6 +89,7 @@ const ja = {
     summary: "要約",
     transcription: "文字起こし",
     toggle_outline: "アウトラインサイドバーを切替",
+    view_source: "ソースコードを表示",
     ask_ai: "AI に聞く",
     enter_filename: "ファイル名を入力...",
     no_outline: "アウトラインがありません",

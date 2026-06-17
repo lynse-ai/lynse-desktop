@@ -31,7 +31,7 @@ export function ResizableHandle({ onResize, side = "right" }: ResizableHandlePro
         if (!dragging.current) return;
         const delta = ev.clientX - lastX.current;
         lastX.current = ev.clientX;
-        const effective = side === "right" ? -delta : delta;
+        const effective = side === "right" ? delta : -delta;
         if (effective !== 0) {
           pendingDelta.current += effective;
           requestAnimationFrame(flush);

@@ -217,6 +217,21 @@
   @apply flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground;
 }
 
+/* Floating markdown toolbar: enter animation (opacity + slight slide down). */
+@keyframes floating-toolbar-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.floating-toolbar {
+  animation: floating-toolbar-enter 0.15s ease-out;
+}
+
 /* Sidebar: open triggers (dropdown/popover) get active background */
 [data-sidebar="menu-button"][data-popup-open] {
   background-color: var(--sidebar-accent);

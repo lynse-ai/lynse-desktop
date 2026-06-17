@@ -90,6 +90,7 @@ const zh = {
     transcription: "转写",
     notes: "笔记",
     toggle_outline: "切换大纲侧边栏",
+    view_source: "查看源代码",
     ask_ai: "AI 助手",
     enter_filename: "输入文件名称...",
     no_outline: "暂无大纲",

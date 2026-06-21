@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.4 (2026-06-21)
+
+### New Features
+
+- Upload dialog for adding new recordings to the workspace
+- Template manager and template selector with search, filtering, and selection
+- Resummarize dialog to regenerate summaries with a chosen template and processing feedback
+- SSE streaming support in the API client with abort control and chunk parsing
+
+### Changed
+
+- Add API proxy in the Electron Vite config for reliable streaming and request body forwarding
+- Extend localization with upload, template, and resummarize texts in English, Japanese, and Chinese
+- Adapt content-preview styles for desktop and override mobile-fixed widths
+- Add RefreshCw and Square icons for the new UI actions
+- Add a resummarize button to the content panel toolbar
+
 ## 0.1.3 (2026-06-17)
 
 ### New Features

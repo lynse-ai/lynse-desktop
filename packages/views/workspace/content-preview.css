@@ -216,10 +216,71 @@
 .content-preview-inner div,
 .content-preview-inner section,
 .content-preview-inner article {
-  max-width: 100%;
+  max-width: 100% !important;
   overflow-wrap: break-word;
+  box-sizing: border-box;
 }
 
 .content-preview-inner table {
   table-layout: auto;
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+/* ── Desktop adaptation: override mobile-first fixed widths ── */
+
+/* Force all block-level elements to fill available width */
+.content-preview-inner > div,
+.content-preview-inner > section,
+.content-preview-inner > article,
+.content-preview-inner > main,
+.content-preview-inner > header,
+.content-preview-inner > footer {
+  width: 100% !important;
+  min-width: 0 !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+/* Override inline fixed pixel widths on any element (mobile template artifacts) */
+.content-preview-inner [style*="width:"] {
+  max-width: 100% !important;
+}
+.content-preview-inner [style*="width: "] {
+  max-width: 100% !important;
+}
+.content-preview-inner [width] {
+  width: auto !important;
+  max-width: 100% !important;
+}
+
+/* Ensure images scale to container */
+.content-preview-inner img {
+  max-width: 100% !important;
+  height: auto !important;
+}
+
+/* Override fixed-width inline styles on tables and their wrappers */
+.content-preview-inner table,
+.content-preview-inner .table-wrapper,
+.content-preview-inner .table-container {
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: auto;
+}
+
+/* Ensure nested containers don't constrain width */
+.content-preview-inner * {
+  box-sizing: border-box;
+}
+
+/* Override common mobile-wrapper patterns */
+.content-preview-inner .container,
+.content-preview-inner .wrapper,
+.content-preview-inner .content,
+.content-preview-inner .page {
+  width: 100% !important;
+  max-width: 100% !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
 }

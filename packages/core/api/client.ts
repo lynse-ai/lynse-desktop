@@ -122,6 +122,89 @@ export class ApiClient {
   delete<T>(path: string) {
     return this.request<T>(path, { method: "DELETE" });
   }
+
+  /**
+   * Stream SSE responses. Calls `onChunk` for each `data:` line received.
+   * Returns an AbortController so the caller can cancel the stream.
+   */
+  stream(
+    path: string,
+    body: unknown,
+    onChunk: (data: string) => void,
+    onError?: (err: Error) => void,
+  ): AbortController {
+    const controller = new AbortController();
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+      "X-Lynse-Api-Url": this.backendUrl,
+    };
+    if (this.token) headers["Authorization"] = this.token;
+    if (this.apiKey) headers["X-API-Key"] = this.apiKey;
+    if (this.identity?.platform) headers["X-Client-Platform"] = this.identity.platform;
+
+    const url = `${PROXY_PREFIX}${path}`;
+
+    (async () => {
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+
+        if (res.status === 401) {
+          this.onUnauthorized?.();
+          throw new ApiError(res.status, "Unauthorized");
+        }
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          console.error(`[api-stream] ${res.status} response:`, text.slice(0, 500));
+          throw new ApiError(res.status, text || res.statusText);
+        }
+
+        const reader = res.body?.getReader();
+        if (!reader) throw new Error("No response body");
+
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith("data:")) {
+              const payload = trimmed.slice(5).trim();
+              if (payload === "[DONE]") continue;
+              onChunk(payload);
+            }
+          }
+        }
+
+        // Flush remaining buffer
+        if (buffer.trim()) {
+          const trimmed = buffer.trim();
+          if (trimmed.startsWith("data:")) {
+            const payload = trimmed.slice(5).trim();
+            if (payload !== "[DONE]") onChunk(payload);
+          }
+        }
+      } catch (err) {
+        if ((err as Error).name === "AbortError") return;
+        onError?.(err as Error);
+      }
+    })();
+
+    return controller;
+  }
 }
 
 export class ApiError extends Error {

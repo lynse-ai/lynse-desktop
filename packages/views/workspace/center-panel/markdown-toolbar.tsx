@@ -20,7 +20,7 @@ import {
 import type { Editor } from "@milkdown/kit/core";
 import { editorViewCtx } from "@milkdown/kit/core";
 import { TextSelection } from "@milkdown/kit/prose/state";
-import { executeAction, type MarkdownEditorAction } from "./editor-actions";
+import { resolveCommand, type MarkdownEditorAction } from "./editor-actions";
 import { useTranslation } from "@lynse/core/i18n/react";
 
 interface FloatingMarkdownToolbarProps {
@@ -199,24 +199,38 @@ export function FloatingMarkdownToolbar({ editor }: FloatingMarkdownToolbarProps
       setOpenMenu(null);
       setImageOpen(false);
 
-      // Restore saved selection before executing
-      editor?.action((ctx) => {
+      if (!editor) return;
+
+      // Execute everything in a single editor.action() call so that
+      // focus → selection restore → command dispatch are atomic.
+      // This prevents the selection from being lost between steps.
+      editor.action((ctx) => {
         const v = ctx.get(editorViewCtx) as unknown as EditorViewLike;
         try {
+          // 1. Focus the editor (Tolaria pattern)
           (v.dom as HTMLElement).focus();
+
+          // 2. Restore saved selection
           const { from, to } = savedSelRef.current;
           if (from !== to) {
             const sel = TextSelection.create(v.state.doc, from, to);
             v.dispatch(v.state.tr.setSelection(sel));
           }
-        } catch { /* best effort */ }
+
+          // 3. Resolve and dispatch the command using the same ctx
+          const cmdFn = resolveCommand(action, payload);
+          if (cmdFn) {
+            const result = cmdFn(ctx);
+            console.debug(`[toolbar] "${action}" → ${result}`);
+          }
+        } catch (err) {
+          console.warn(`[toolbar] Failed to execute "${action}":`, err);
+        }
       });
 
-      executeAction(editor, action, payload);
-
-      // Refocus editor after action
+      // Refocus editor after action (in case command moved focus)
       requestAnimationFrame(() => {
-        editor?.action((ctx) => {
+        editor.action((ctx) => {
           const v = ctx.get(editorViewCtx) as unknown as EditorViewLike;
           (v.dom as HTMLElement).focus();
         });
@@ -246,6 +260,8 @@ export function FloatingMarkdownToolbar({ editor }: FloatingMarkdownToolbarProps
         if (isFocusStillWithinToolbar(e.currentTarget, e.relatedTarget)) return;
         setToolbarHasFocus(false);
       }}
+      // Container-level focus guard (from Tolaria) — prevents editor blur on any click inside.
+      onMouseDownCapture={handleToolbarMouseDownCapture}
       className="floating-toolbar pointer-events-auto z-50 flex h-10 items-center gap-1 rounded-lg border border-border/30 bg-popover px-2 shadow-lg shadow-black/10"
       style={{
         position: "fixed",
@@ -255,44 +271,44 @@ export function FloatingMarkdownToolbar({ editor }: FloatingMarkdownToolbarProps
     >
       {/* H — Heading submenu */}
       <div className="relative">
-        <button className="toolbar-btn" onMouseDown={keepFocus} onClick={() => toggleMenu("heading")}>
+        <button className="toolbar-btn" onClick={() => toggleMenu("heading")}>
           <span className="text-sm font-bold">H</span>
         </button>
         {openMenu === "heading" && (
           <SubMenu>
-            <MenuBtn icon={Heading1} label={t("toolbar.heading_1")} keepFocus={keepFocus} onClick={() => run("heading-1")} />
-            <MenuBtn icon={Heading2} label={t("toolbar.heading_2")} keepFocus={keepFocus} onClick={() => run("heading-2")} />
-            <MenuBtn icon={Heading3} label={t("toolbar.heading_3")} keepFocus={keepFocus} onClick={() => run("heading-3")} />
+            <MenuBtn icon={Heading1} label={t("toolbar.heading_1")} onClick={() => run("heading-1")} />
+            <MenuBtn icon={Heading2} label={t("toolbar.heading_2")} onClick={() => run("heading-2")} />
+            <MenuBtn icon={Heading3} label={t("toolbar.heading_3")} onClick={() => run("heading-3")} />
             <div className="mx-0.5 h-5 w-px bg-border/50" />
-            <MenuBtn icon={Type} label={t("toolbar.paragraph")} keepFocus={keepFocus} onClick={() => run("paragraph")} />
+            <MenuBtn icon={Type} label={t("toolbar.paragraph")} onClick={() => run("paragraph")} />
           </SubMenu>
         )}
       </div>
 
       {/* Aa — Text formatting submenu */}
       <div className="relative">
-        <button className="toolbar-btn" onMouseDown={keepFocus} onClick={() => toggleMenu("text")}>
+        <button className="toolbar-btn" onClick={() => toggleMenu("text")}>
           <span className="text-xs font-medium">Aa</span>
         </button>
         {openMenu === "text" && (
           <SubMenu>
-            <MenuBtn icon={Bold} label={t("toolbar.bold")} keepFocus={keepFocus} onClick={() => run("bold")} />
-            <MenuBtn icon={Italic} label={t("toolbar.italic")} keepFocus={keepFocus} onClick={() => run("italic")} />
-            <MenuBtn icon={Code} label={t("toolbar.inline_code")} keepFocus={keepFocus} onClick={() => run("inline-code")} />
+            <MenuBtn icon={Bold} label={t("toolbar.bold")} onClick={() => run("bold")} />
+            <MenuBtn icon={Italic} label={t("toolbar.italic")} onClick={() => run("italic")} />
+            <MenuBtn icon={Code} label={t("toolbar.inline_code")} onClick={() => run("inline-code")} />
           </SubMenu>
         )}
       </div>
 
       {/* ≡ — List submenu */}
       <div className="relative">
-        <button className="toolbar-btn" onMouseDown={keepFocus} onClick={() => toggleMenu("list")}>
+        <button className="toolbar-btn" onClick={() => toggleMenu("list")}>
           <span className="text-sm">≡</span>
         </button>
         {openMenu === "list" && (
           <SubMenu>
-            <MenuBtn icon={List} label={t("toolbar.bullet_list")} keepFocus={keepFocus} onClick={() => run("bullet-list")} />
-            <MenuBtn icon={ListOrdered} label={t("toolbar.ordered_list")} keepFocus={keepFocus} onClick={() => run("ordered-list")} />
-            <MenuBtn icon={ListChecks} label={t("toolbar.task_list")} keepFocus={keepFocus} onClick={() => run("task-list")} />
+            <MenuBtn icon={List} label={t("toolbar.bullet_list")} onClick={() => run("bullet-list")} />
+            <MenuBtn icon={ListOrdered} label={t("toolbar.ordered_list")} onClick={() => run("ordered-list")} />
+            <MenuBtn icon={ListChecks} label={t("toolbar.task_list")} onClick={() => run("task-list")} />
           </SubMenu>
         )}
       </div>
@@ -300,13 +316,13 @@ export function FloatingMarkdownToolbar({ editor }: FloatingMarkdownToolbarProps
       <div className="mx-0.5 h-5 w-px bg-border/50" />
 
       {/* ❝ — Blockquote (direct) */}
-      <button className="toolbar-btn" onMouseDown={keepFocus} onClick={() => run("blockquote")} title={t("toolbar.blockquote")}>
+      <button className="toolbar-btn" onClick={() => run("blockquote")} title={t("toolbar.blockquote")}>
         <Quote className="size-3.5" />
       </button>
 
       {/* 🖼️ — Image popover */}
       <div className="relative">
-        <button className="toolbar-btn" onMouseDown={keepFocus} onClick={() => { setImageOpen((v) => !v); setOpenMenu(null); }} title={t("toolbar.insert_image")}>
+        <button className="toolbar-btn" onClick={() => { setImageOpen((v) => !v); setOpenMenu(null); }} title={t("toolbar.insert_image")}>
           <Image className="size-3.5" />
         </button>
         {imageOpen && (
@@ -320,7 +336,7 @@ export function FloatingMarkdownToolbar({ editor }: FloatingMarkdownToolbarProps
       </div>
 
       {/* Undo */}
-      <button className="toolbar-btn" onMouseDown={keepFocus} onClick={() => run("undo")} title={t("toolbar.undo")}>
+      <button className="toolbar-btn" onClick={() => run("undo")} title={t("toolbar.undo")}>
         <Undo className="size-3.5" />
       </button>
     </div>,
@@ -343,8 +359,18 @@ interface EditorViewLike {
 
 // ── Helpers ─────────────────────────────────────────────────
 
-/** Prevents focus loss (and selection clearing) when clicking toolbar buttons. */
-const keepFocus = (e: React.MouseEvent) => e.preventDefault();
+/**
+ * Container-level mousedown prevention (from Tolaria).
+ * Applied once on the toolbar root instead of on each button individually.
+ * Stops the editor from losing focus/selection when clicking any toolbar element.
+ * Input elements inside image forms are exempt so they can still receive focus.
+ */
+function handleToolbarMouseDownCapture(e: React.MouseEvent<HTMLDivElement>) {
+  // Let input/textarea elements receive focus normally
+  const target = e.target as HTMLElement;
+  if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+  e.preventDefault();
+}
 
 /** Focus moving between toolbar children should not count as a real blur. */
 function isFocusStillWithinToolbar(currentTarget: Element, nextTarget: EventTarget | null): boolean {
@@ -428,25 +454,18 @@ function SubMenu({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Icon-only button inside a submenu. onMouseDown prevents editor blur. */
+/** Icon-only button inside a submenu. */
 function MenuBtn({
   icon: Icon,
   label,
-  keepFocus,
   onClick,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
-  keepFocus: (e: React.MouseEvent) => void;
   onClick: () => void;
 }) {
   return (
-    <button
-      className="toolbar-btn"
-      title={label}
-      onMouseDown={keepFocus}
-      onClick={onClick}
-    >
+    <button className="toolbar-btn" title={label} onClick={onClick}>
       <Icon className="size-3.5" />
     </button>
   );
@@ -464,7 +483,7 @@ function ImageForm({ onInsert, onCancel }: { onInsert: (url: string, alt: string
   };
 
   return (
-    <div className="flex flex-col gap-2" onMouseDown={(e) => e.stopPropagation()}>
+    <div className="flex flex-col gap-2">
       <p className="text-xs font-medium">{t("toolbar.insert_image")}</p>
       <input
         value={url}

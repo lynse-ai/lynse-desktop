@@ -1,21 +1,29 @@
 "use client";
 
-import { useRef, useEffect, useState } from "react";
-import { Bot, X, Send, FileText, Plus } from "../../icons";
+import { useRef, useEffect, useState, useMemo } from "react";
+import { Bot, X, Send, FileText, Plus, Square } from "../../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
 import { useTranslation } from "@lynse/core/i18n/react";
 
 import { useWorkspaceStore } from "../store";
 import { useChat } from "../hooks/use-chat";
+import { useFiles } from "../hooks/use-files";
 
 export function ChatPanel() {
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
   const toggleChatPanel = useWorkspaceStore((s) => s.toggleChatPanel);
-  const { messages, isLoading, sendMessage, clearMessages } = useChat();
+  const { messages, isLoading, sendMessage, clearMessages, stopStreaming } = useChat();
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
+  const { data: files } = useFiles({ pageSize: 200 });
+
+  // Get file name for context display
+  const selectedFileName = useMemo(() => {
+    if (!selectedItemId || !files) return null;
+    return files.find((f) => f.id === selectedItemId)?.title ?? null;
+  }, [selectedItemId, files]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -69,7 +77,7 @@ export function ChatPanel() {
           style={{ padding: "6px 12px", gap: 6, fontSize: 11 }}
         >
           <FileText className="size-3 shrink-0" />
-          <span className="truncate font-medium">{selectedItemId}</span>
+          <span className="truncate font-medium">{selectedFileName || selectedItemId}</span>
         </div>
       )}
 
@@ -97,9 +105,13 @@ export function ChatPanel() {
                     : "bg-muted text-foreground"
                 }`}
               >
-                {msg.content || (
-                  <span className="flex items-center gap-1">
-                    <span className="animate-pulse">{t("workspace.thinking")}</span>
+                {msg.content ? (
+                  <div className="whitespace-pre-wrap">{msg.content}</div>
+                ) : (
+                  <span className="flex items-center gap-1.5">
+                    <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:0ms]" />
+                    <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:150ms]" />
+                    <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:300ms]" />
                   </span>
                 )}
               </div>
@@ -122,19 +134,31 @@ export function ChatPanel() {
               disabled={isLoading}
             />
           </div>
-          <Button
-            size="icon"
-            className="size-8 shrink-0"
-            onClick={handleSend}
-            disabled={!input.trim() || isLoading}
-            style={{
-              background: input.trim() ? "var(--primary)" : "var(--muted)",
-              color: input.trim() ? "var(--primary-foreground)" : "var(--muted-foreground)",
-              borderRadius: 8,
-            }}
-          >
-            <Send className="size-3.5" />
-          </Button>
+          {isLoading ? (
+            <Button
+              size="icon"
+              variant="destructive"
+              className="size-8 shrink-0"
+              onClick={stopStreaming}
+              style={{ borderRadius: 8 }}
+            >
+              <Square className="size-3.5 fill-current" />
+            </Button>
+          ) : (
+            <Button
+              size="icon"
+              className="size-8 shrink-0"
+              onClick={handleSend}
+              disabled={!input.trim()}
+              style={{
+                background: input.trim() ? "var(--primary)" : "var(--muted)",
+                color: input.trim() ? "var(--primary-foreground)" : "var(--muted-foreground)",
+                borderRadius: 8,
+              }}
+            >
+              <Send className="size-3.5" />
+            </Button>
+          )}
         </div>
       </div>
     </aside>

@@ -90,6 +90,10 @@ export {
   SkipForward,      // Fast forward / skip
   Volume2,          // Volume on
   VolumeX,          // Volume off / mute
+
+  // ── Actions (extra) ──────────────────────────────────
+  RefreshCw,        // Re-summarize / refresh
+  Square,           // Stop streaming
 } from "lucide-react";
 
 // ── Icon sizing tokens ────────────────────────────────────

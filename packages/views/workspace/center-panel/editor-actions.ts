@@ -6,8 +6,11 @@
  */
 
 import type { Editor } from "@milkdown/kit/core";
-import { editorViewCtx } from "@milkdown/kit/core";
+import { editorViewCtx, commandsCtx } from "@milkdown/kit/core";
 import { callCommand } from "@milkdown/kit/utils";
+import type { Ctx } from "@milkdown/kit/ctx";
+
+type CommandFn = (ctx: Ctx) => boolean;
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -32,7 +35,9 @@ export type MarkdownEditorAction =
 /**
  * Execute a formatting action on the active Milkdown editor.
  * For the "image" action, pass payload { url, alt? }.
- * Wraps each command in try/catch to prevent unhandled errors from breaking the toolbar.
+ *
+ * Tolaria-inspired: always focus the editor before dispatching commands
+ * to prevent selection loss. Wraps each command in try/catch.
  */
 export function executeAction(
   editor: Editor | null,
@@ -42,75 +47,85 @@ export function executeAction(
   if (!editor) return;
 
   try {
-    switch (action) {
-      case "heading-1":
-        editor.action(callCommand("WrapInHeading", 1));
-        break;
-      case "heading-2":
-        editor.action(callCommand("WrapInHeading", 2));
-        break;
-      case "heading-3":
-        editor.action(callCommand("WrapInHeading", 3));
-        break;
-      case "paragraph":
-        editor.action(callCommand("TurnIntoText"));
-        break;
-      case "bold":
-        editor.action(callCommand("ToggleStrong"));
-        break;
-      case "italic":
-        editor.action(callCommand("ToggleEmphasis"));
-        break;
-      case "inline-code":
-        editor.action(callCommand("ToggleInlineCode"));
-        break;
-      case "bullet-list":
-        editor.action(callCommand("WrapInBulletList"));
-        break;
-      case "ordered-list":
-        editor.action(callCommand("WrapInOrderedList"));
-        break;
-      case "task-list":
-        tryCmd(editor, "WrapInTaskList", "WrapInTaskListItem");
-        break;
-      case "blockquote":
-        editor.action(callCommand("WrapInBlockquote"));
-        break;
-      case "image":
-        if (payload?.url) {
-          editor.action(
-            callCommand("InsertImage", {
-              src: payload.url,
-              alt: payload.alt || "",
-              title: payload.alt || "",
-            }),
-          );
-        }
-        break;
-      case "undo":
-        editor.action(callCommand("Undo"));
-        break;
-      case "blur": {
-        editor.action((ctx) => {
-          const view = ctx.get(editorViewCtx);
-          (view.dom as HTMLElement).blur();
-        });
-        break;
+    // Tolaria pattern: focus editor BEFORE executing any command
+    // so ProseMirror can properly dispatch to the active view.
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      (view.dom as HTMLElement).focus();
+    });
+
+    editor.action((ctx) => {
+      const cmdFn = resolveCommand(action, payload);
+      if (cmdFn) {
+        const result = cmdFn(ctx);
+        console.debug(`[editor-actions] "${action}" → ${result}`);
       }
-    }
+    });
   } catch (err) {
     console.warn(`[editor-actions] Failed to execute "${action}":`, err);
   }
 }
 
-/** Try multiple command names, stopping at the first that succeeds. */
-function tryCmd(editor: Editor, ...names: string[]): void {
-  for (const name of names) {
-    try {
-      editor.action(callCommand(name));
-      return;
-    } catch {
-      // Try next name
-    }
+/**
+ * Resolve a MarkdownEditorAction to its command function.
+ * Returns a (ctx) => boolean function that can be called within editor.action().
+ * Returns null for actions that don't map to a command.
+ */
+export function resolveCommand(
+  action: MarkdownEditorAction,
+  payload?: { alt?: string; url?: string },
+): CommandFn | null {
+  switch (action) {
+    case "heading-1":
+      return callCommand("WrapInHeading", 1);
+    case "heading-2":
+      return callCommand("WrapInHeading", 2);
+    case "heading-3":
+      return callCommand("WrapInHeading", 3);
+    case "paragraph":
+      return callCommand("TurnIntoText");
+    case "bold":
+      return callCommand("ToggleStrong");
+    case "italic":
+      return callCommand("ToggleEmphasis");
+    case "inline-code":
+      return callCommand("ToggleInlineCode");
+    case "bullet-list":
+      return callCommand("WrapInBulletList");
+    case "ordered-list":
+      return callCommand("WrapInOrderedList");
+    case "task-list":
+      return (ctx: Ctx) => {
+        try {
+          return ctx.get(commandsCtx).call("WrapInTaskList");
+        } catch {
+          try {
+            return ctx.get(commandsCtx).call("WrapInTaskListItem");
+          } catch {
+            return false;
+          }
+        }
+      };
+    case "blockquote":
+      return callCommand("WrapInBlockquote");
+    case "image":
+      if (payload?.url) {
+        return callCommand("InsertImage", {
+          src: payload.url,
+          alt: payload.alt || "",
+          title: payload.alt || "",
+        });
+      }
+      return null;
+    case "undo":
+      return callCommand("Undo");
+    case "blur":
+      return (ctx: Ctx) => {
+        const view = ctx.get(editorViewCtx);
+        (view.dom as HTMLElement).blur();
+        return true;
+      };
+    default:
+      return null;
   }
 }

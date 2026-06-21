@@ -53,6 +53,9 @@ import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
 import { useUserCredits, useMembership } from "./use-user-credits";
 import { FolderTreeSection } from "../workspace/sidebar/folder-tree-section";
 import { SettingsDialog } from "../settings/settings-dialog";
+import { UploadDialog } from "../workspace/upload-dialog";
+import { TemplateManager } from "../workspace/template-manager";
+import { LayoutTemplate } from "lucide-react";
 
 function isNavActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(href + "/");
@@ -69,6 +72,8 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
   const { pathname } = useNavigation();
   const { t } = useTranslation();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [templateManagerOpen, setTemplateManagerOpen] = useState(false);
 
   const workspaceNav = [
     { key: "inspiration", label: t("nav.inspiration"), icon: Lightbulb, path: "/inspiration" },
@@ -81,7 +86,10 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
       {/* ── Header: Create bar ─────────────────────────── */}
       <SidebarHeader className={cn("gap-2 px-3 pt-3 pb-1", headerClassName)} style={headerStyle}>
         {/* Search / Create bar */}
-        <button className="flex w-full items-center gap-2 rounded-lg border border-border/60 bg-background px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted/60">
+        <button
+          className="flex w-full items-center gap-2 rounded-lg border border-border/60 bg-background px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted/60"
+          onClick={() => setUploadOpen(true)}
+        >
           <Plus className="size-4 shrink-0" />
           <span className="flex-1 text-left">{t("layout.new_recording")}</span>
           <kbd className="pointer-events-none inline-flex h-5 items-center gap-0.5 rounded border border-border/50 bg-muted/60 px-1.5 text-[10px] font-medium text-muted-foreground">
@@ -169,6 +177,13 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
           </div>
           <CreditsPopover />
           <button
+            onClick={() => setTemplateManagerOpen(true)}
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted/60"
+            title={t("templates.title")}
+          >
+            <LayoutTemplate className="size-3.5 text-muted-foreground/50" />
+          </button>
+          <button
             onClick={() => setSettingsOpen(true)}
             className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted/60"
           >
@@ -180,6 +195,8 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
 
       {/* Settings dialog */}
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
+      <TemplateManager open={templateManagerOpen} onOpenChange={setTemplateManagerOpen} />
     </Sidebar>
   );
 }

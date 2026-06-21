@@ -107,7 +107,6 @@ export function TitleBar() {
         )}
 
         {/* Ask AI button */}
-        {selectedItemId && (
           <button
             onClick={toggleChatPanel}
             className={cn(
@@ -121,7 +120,6 @@ export function TitleBar() {
             <Bot className="size-3.5" />
             <span>{t("workspace.ask_ai")}</span>
           </button>
-        )}
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
-import { FileText, FileAudio, Sparkles, List, X, Plus } from "../icons";
+import { FileText, FileAudio, Sparkles, List, X, Plus, RefreshCw } from "../icons";
 import { useWorkspaceStore } from "./store";
 import { TAB_BAR_HEIGHT } from "./layout-constants";
 import { api } from "@lynse/core/api/client";
@@ -11,6 +11,7 @@ import { AudioPlayer } from "./audio-player";
 import type { AudioPlayerHandle } from "./audio-player";
 import { useFiles, useFileOutline, useFileConclusions, useFileTranscription, useFileAudioUrl, useUpdateConclusion } from "./hooks/use-files";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { ResummarizeDialog } from "./resummarize-dialog";
 import "./content-preview.css";
 
 function extractBody(html: string): { content: string; scopedStyles: string } {
@@ -39,6 +40,31 @@ function extractBody(html: string): { content: string; scopedStyles: string } {
     scopedStyles = scopeCss(rawCss, ".content-preview-inner");
   }
 
+  // Desktop override: neutralize mobile-first fixed widths from backend templates
+  // Also strip borders/backgrounds that leaked from body/html scoping
+  const desktopOverride = `
+.content-preview-inner {
+  border: none !important;
+  background: transparent !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+.content-preview-inner,
+.content-preview-inner > *,
+.content-preview-inner * {
+  max-width: 100% !important;
+}
+.content-preview-inner img {
+  max-width: 100% !important;
+  height: auto !important;
+}
+.content-preview-inner table {
+  width: 100% !important;
+  table-layout: auto !important;
+}
+`;
+  scopedStyles += desktopOverride;
+
   return { content, scopedStyles };
 }
 
@@ -59,6 +85,24 @@ function scopeCss(css: string, scope: string): string {
         else if (cleaned[j] === "}") depth--;
         j++;
       }
+      const atHeader = cleaned.slice(i, braceStart).trim();
+      const atBody = cleaned.slice(braceStart + 1, j - 1);
+
+      // Strip @page rules (page-specific styles should not leak)
+      if (/^@page\b/i.test(atHeader)) {
+        i = j;
+        continue;
+      }
+
+      // Recursively scope selectors inside @media blocks
+      if (/^@media\b/i.test(atHeader)) {
+        const scopedInner = scopeCss(atBody, scope);
+        parts.push(`${atHeader} { ${scopedInner} }`);
+        i = j;
+        continue;
+      }
+
+      // Pass through @keyframes, @supports, etc. as-is
       parts.push(cleaned.slice(i, j));
       i = j;
       continue;
@@ -79,7 +123,9 @@ function scopeCss(css: string, scope: string): string {
       .map((s) => s.trim())
       .filter(Boolean)
       .map((s) => {
+        // Replace global selectors with scope
         if (/^(html|body|:root|\*)$/.test(s)) return scope;
+        // Scope each selector
         return `${scope} ${s}`;
       })
       .join(", ");
@@ -132,6 +178,7 @@ export function ContentPanel() {
   const audioPlayerRef = useRef<AudioPlayerHandle>(null);
   const [highlightTimeMs, setHighlightTimeMs] = useState<number | null>(null);
   const [summaryEditor, setSummaryEditor] = useState<import("@milkdown/kit/core").Editor | null>(null);
+  const [resummarizeOpen, setResummarizeOpen] = useState(false);
 
   const selectedTitle = useMemo(() => {
     if (!selectedItemId || !files) return null;
@@ -327,6 +374,16 @@ export function ContentPanel() {
           </button>
         </div>
         <div className="flex-1" />
+        {selectedItemId && (
+          <button
+            onClick={() => setResummarizeOpen(true)}
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+            title={t("resummarize.button")}
+          >
+            <RefreshCw className="size-3" />
+            <span className="hidden sm:inline">{t("resummarize.button")}</span>
+          </button>
+        )}
       </div>
 
       {/* Content area */}
@@ -481,6 +538,12 @@ export function ContentPanel() {
           </div>
         )}
       </div>
+
+      <ResummarizeDialog
+        open={resummarizeOpen}
+        onOpenChange={setResummarizeOpen}
+        fileId={selectedItemId}
+      />
     </div>
   );
 }

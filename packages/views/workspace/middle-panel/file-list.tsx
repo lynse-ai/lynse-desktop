@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { useDraggable } from "@dnd-kit/core";
-import { Search, FolderOpen, GripVertical, ArrowUpDown, ArrowDown, ArrowUp } from "../../icons";
+import { Search, FolderOpen, GripVertical, ArrowUpDown, ArrowDown, ArrowUp, Loader2 } from "../../icons";
 import { Input } from "@lynse/ui/components/ui/input";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useWorkspaceStore } from "../store";
@@ -21,6 +21,7 @@ export function FileList() {
   const fileSortDir = useWorkspaceStore((s) => s.fileSortDir);
   const toggleFileSortField = useWorkspaceStore((s) => s.toggleFileSortField);
   const toggleFileSortDir = useWorkspaceStore((s) => s.toggleFileSortDir);
+  const summarizingFileIds = useWorkspaceStore((s) => s.summarizingFileIds);
   const { t } = useTranslation();
 
   const { data: files } = useFiles({ pageNum: 1, pageSize: 200 });
@@ -69,6 +70,14 @@ export function FileList() {
       className="flex h-full shrink-0 flex-col border-r border-border bg-background"
       style={{ width: fileListWidth }}
     >
+      <style>
+        {`
+          @keyframes ai-file-text-shimmer {
+            0% { background-position: 0% 50%; }
+            100% { background-position: 240% 50%; }
+          }
+        `}
+      </style>
       {/* Header — Folder name + Search + Sort */}
       {selectedFolderId && (
         <div className="flex shrink-0 flex-col border-b border-border">
@@ -132,6 +141,7 @@ export function FileList() {
               key={file.id}
               file={file}
               isSelected={selectedItemId === file.id}
+              isSummarizing={summarizingFileIds.has(file.id)}
               onSelect={() => selectItem(file.id, "file")}
             />
           ))
@@ -145,11 +155,12 @@ function formatShortDate(dateStr: string): string {
   try {
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return dateStr;
+    const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, "0");
     const day = String(d.getDate()).padStart(2, "0");
     const hour = String(d.getHours()).padStart(2, "0");
     const min = String(d.getMinutes()).padStart(2, "0");
-    return `${month}-${day} ${hour}:${min}`;
+    return `${year}-${month}-${day} ${hour}:${min}`;
   } catch {
     return dateStr;
   }
@@ -159,18 +170,23 @@ function formatShortDate(dateStr: string): string {
 function DraggableFileRow({
   file,
   isSelected,
+  isSummarizing,
   onSelect,
 }: {
   file: WorkspaceItem;
   isSelected: boolean;
+  isSummarizing: boolean;
   onSelect: () => void;
 }) {
+  const { t } = useTranslation();
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: `file-${file.id}`,
     data: { file, fileTitle: file.title },
   });
 
   const dateLabel = formatShortDate(file.createdAt);
+  const visibleTags = file.tags?.slice(0, 2) ?? [];
+  const hiddenTagCount = Math.max(0, (file.tags?.length ?? 0) - visibleTags.length);
 
   return (
     <button
@@ -196,7 +212,46 @@ function DraggableFileRow({
         <span className={`truncate text-xs leading-snug ${isSelected ? "font-medium" : ""}`}>
           {file.title}
         </span>
-        <span className="text-[10px] text-muted-foreground tabular-nums">{dateLabel}</span>
+        {visibleTags.length > 0 ? (
+          <span className="flex min-w-0 flex-wrap items-center gap-1">
+            {visibleTags.map((tag) => (
+              <span
+                key={tag}
+                className={`max-w-[5.5rem] truncate rounded px-1.5 py-0.5 text-[9px] leading-none ${
+                  isSelected
+                    ? "bg-background/35 text-accent-foreground/75"
+                    : "bg-muted text-muted-foreground"
+                }`}
+                title={tag}
+              >
+                {tag}
+              </span>
+            ))}
+            {hiddenTagCount > 0 ? (
+              <span
+                className={`rounded px-1.5 py-0.5 text-[9px] leading-none ${
+                  isSelected
+                    ? "bg-background/35 text-accent-foreground/75"
+                    : "bg-muted text-muted-foreground"
+                }`}
+              >
+                +{hiddenTagCount}
+              </span>
+            ) : null}
+          </span>
+        ) : null}
+        <span className="flex items-center gap-1 text-[10px] text-muted-foreground tabular-nums">
+          {isSummarizing ? (
+            <>
+              <Loader2 className="size-2.5 animate-spin text-violet-400" />
+              <span className="bg-[linear-gradient(90deg,#38bdf8,#a78bfa,#34d399,#38bdf8)] bg-[length:240%_100%] bg-clip-text font-medium text-transparent animate-[ai-file-text-shimmer_1.8s_linear_infinite]">
+                {t("workspace.summarizing")}
+              </span>
+            </>
+          ) : (
+            dateLabel
+          )}
+        </span>
       </div>
     </button>
   );

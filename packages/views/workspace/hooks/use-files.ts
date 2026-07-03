@@ -13,11 +13,70 @@ import type {
   TransferFileResult,
   TransStatusMap,
   AiTaskAddReq,
+  AiTaskResultVO,
 } from "../types";
 
 // Lynse API returns { code, data: [...files], total, msg }
 // ApiClient unwraps to the inner data field (the file array)
 type FileListResponse = Record<string, unknown>[];
+
+export interface SummaryTabModel {
+  key: string;
+  id: string;
+  name: string;
+  text: string;
+  status: "ready" | "pending" | "error";
+  pendingId?: string;
+}
+
+function normalizeTagValue(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => normalizeTagValue(item));
+  }
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    return normalizeTagValue(obj.name ?? obj.label ?? obj.categoryName ?? obj.category);
+  }
+  if (typeof value !== "string" && typeof value !== "number") return [];
+  return String(value)
+    .split(/[,\s，、|/]+/)
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+export function parseFileTags(file: Record<string, unknown>): string[] {
+  const tags = [
+    ...normalizeTagValue(file.tags),
+    ...normalizeTagValue(file.tagList),
+    ...normalizeTagValue(file.labels),
+    ...normalizeTagValue(file.labelList),
+    ...normalizeTagValue(file.categoryName),
+    ...normalizeTagValue(file.category),
+    ...normalizeTagValue(file.folderName),
+  ];
+  return Array.from(new Set(tags));
+}
+
+export function mergePendingSummaryTab({
+  tabs,
+  pendingId,
+  conclusion,
+}: {
+  tabs: SummaryTabModel[];
+  pendingId: string;
+  conclusion: FileConclusion;
+}): SummaryTabModel[] {
+  return tabs.map((tab) => {
+    if (tab.pendingId !== pendingId) return tab;
+    return {
+      key: conclusion.id,
+      id: conclusion.id,
+      name: String(conclusion.templateName ?? tab.name ?? ""),
+      text: conclusion.conclusionText,
+      status: "ready",
+    };
+  });
+}
 
 export function useFiles(params: {
   pageNum?: number;
@@ -51,6 +110,7 @@ export function useFiles(params: {
         updatedAt: String((f as Record<string, unknown>).updateTime ?? ""),
         createdAt: String((f as Record<string, unknown>).createTime ?? ""),
         folderId: (f as Record<string, unknown>).folderId as string | undefined,
+        tags: parseFileTags(f as Record<string, unknown>),
       })),
     enabled: isAuthenticated,
   });
@@ -143,6 +203,54 @@ export function useUpdateConclusion() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["file-conclusions"] });
+    },
+  });
+}
+
+/** Permanently delete a generated conclusion. */
+export function useDeleteConclusion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (conclusionId: string) =>
+      api().delete<unknown>(`/api/business/file/conclusion/${encodeURIComponent(conclusionId)}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["file-conclusions"] });
+    },
+  });
+}
+
+export async function replaceSummaryTemplate({
+  fileId,
+  oldConclusionId,
+  templateId,
+  startAiTask = (req) => api().post<string>("/api/business/file/ai", req),
+  waitForResult = (args) => waitForAiTaskResult(args),
+  deleteConclusion = (conclusionId) =>
+    api().delete<unknown>(`/api/business/file/conclusion/${encodeURIComponent(conclusionId)}`),
+}: {
+  fileId: string;
+  oldConclusionId: string;
+  templateId: string;
+  startAiTask?: (req: AiTaskAddReq) => Promise<string>;
+  waitForResult?: (args: { fileId: string; taskId: string; aiTaskType: "CONCLUSION" }) => Promise<AiTaskResultVO>;
+  deleteConclusion?: (conclusionId: string) => Promise<unknown>;
+}): Promise<AiTaskResultVO> {
+  const aiTaskType = "CONCLUSION";
+  const taskId = await startAiTask({ aiTaskType, fileId, templateId });
+  const result = await waitForResult({ fileId, taskId, aiTaskType });
+  await deleteConclusion(oldConclusionId);
+  return result;
+}
+
+/** Replace one summary tab with a newly generated summary using another template. */
+export function useReplaceSummaryTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: { fileId: string; oldConclusionId: string; templateId: string }) =>
+      replaceSummaryTemplate(req),
+    onSuccess: (_data, req) => {
+      qc.invalidateQueries({ queryKey: ["file-conclusions", req.fileId] });
+      qc.invalidateQueries({ queryKey: ["files"] });
     },
   });
 }
@@ -251,18 +359,115 @@ export function useTranscriptionStatus(fileIds: string[]) {
   });
 }
 
-/**
- * Trigger re-summarization for an existing file (no re-upload needed).
- * Uses POST /api/business/file/ai with aiTaskType="conclusion".
- */
-export function useResummarize() {
+const DEFAULT_POLL_INTERVAL_MS = 3000;
+const DEFAULT_MAX_POLL_ATTEMPTS = 60;
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeStatus(status: unknown): string {
+  return String(status ?? "").trim().toLowerCase();
+}
+
+function isCompletedStatus(status: unknown): boolean {
+  return ["completed", "complete", "success", "succeeded", "done", "finished", "1"].includes(
+    normalizeStatus(status),
+  );
+}
+
+function isFailedStatus(status: unknown): boolean {
+  return ["failed", "failure", "error", "errored", "canceled", "cancelled", "-1"].includes(
+    normalizeStatus(status),
+  );
+}
+
+export async function waitForTranscriptionCompletion({
+  fileIds,
+  getStatus = (ids) => api().post<TransStatusMap>("/api/business/file/trans/status", { fileIds: ids }),
+  sleep: wait = sleep,
+  intervalMs = DEFAULT_POLL_INTERVAL_MS,
+  maxAttempts = DEFAULT_MAX_POLL_ATTEMPTS,
+}: {
+  fileIds: string[];
+  getStatus?: (fileIds: string[]) => Promise<TransStatusMap>;
+  sleep?: (ms: number) => Promise<void>;
+  intervalMs?: number;
+  maxAttempts?: number;
+}): Promise<TransStatusMap> {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const data = await getStatus(fileIds);
+    const statuses = fileIds.map((id) => data[id]?.status);
+    const failed = statuses.find(isFailedStatus);
+    if (failed) throw new Error(`Transcription failed: ${String(failed)}`);
+    if (statuses.length > 0 && statuses.every(isCompletedStatus)) return data;
+    if (attempt < maxAttempts - 1) await wait(intervalMs);
+  }
+  throw new Error("Transcription did not complete in time");
+}
+
+export async function waitForAiTaskResult({
+  fileId,
+  taskId,
+  aiTaskType,
+  getResult = (body) => api().post<AiTaskResultVO>("/api/business/file/ai/result", body),
+  sleep: wait = sleep,
+  intervalMs = DEFAULT_POLL_INTERVAL_MS,
+  maxAttempts = DEFAULT_MAX_POLL_ATTEMPTS,
+}: {
+  fileId: string;
+  taskId: string;
+  aiTaskType: string;
+  getResult?: (body: { fileId: string; taskId: string; aiTaskType: string }) => Promise<AiTaskResultVO>;
+  sleep?: (ms: number) => Promise<void>;
+  intervalMs?: number;
+  maxAttempts?: number;
+}): Promise<AiTaskResultVO> {
+  const body = { fileId, taskId, aiTaskType };
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const result = await getResult(body);
+    if (isFailedStatus(result.status) || result.conclusion?.generateSuccess === false) {
+      throw new Error(`AI task failed: ${String(result.status ?? "unknown")}`);
+    }
+    if (isCompletedStatus(result.status) || result.conclusion?.generateSuccess === true) return result;
+    if (attempt < maxAttempts - 1) await wait(intervalMs);
+  }
+  throw new Error("AI task did not complete in time");
+}
+
+/** Add a new summary for an existing file without re-transcribing. */
+export function useAddSummary() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (req: AiTaskAddReq) =>
-      api().post<string>("/api/business/file/ai", req),
+    mutationFn: async (req: AiTaskAddReq) => {
+      const taskId = await api().post<string>("/api/business/file/ai", req);
+      return waitForAiTaskResult({
+        fileId: req.fileId,
+        taskId,
+        aiTaskType: req.aiTaskType,
+      });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["file-conclusions"] });
       qc.invalidateQueries({ queryKey: ["files"] });
+    },
+  });
+}
+
+/** Re-run the full transcription + summarization pipeline for an existing file. */
+export function useRerunSummary() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (req: TransferFileReq) => {
+      const result = await api().post<TransferFileResult>("/api/business/file/trans", req);
+      await waitForTranscriptionCompletion({ fileIds: [req.fileId] });
+      return result;
+    },
+    onSuccess: (_data, req) => {
+      qc.invalidateQueries({ queryKey: ["files"] });
+      qc.invalidateQueries({ queryKey: ["file-conclusions", req.fileId] });
+      qc.invalidateQueries({ queryKey: ["file-outline", req.fileId] });
+      qc.invalidateQueries({ queryKey: ["file-transcription", req.fileId] });
     },
   });
 }

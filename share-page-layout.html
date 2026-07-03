@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>灵光记分享页排版方案</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --page-bg: #f6f7fb;
+        --surface: #ffffff;
+        --surface-soft: #f8fafc;
+        --text: #141824;
+        --muted: #737b8c;
+        --subtle: #a0a7b5;
+        --line: #e6e9ef;
+        --brand: #5c4ebe;
+        --brand-soft: rgba(92, 78, 190, 0.1);
+        --shadow: 0 18px 50px rgba(24, 32, 56, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+        background: var(--page-bg);
+        color: var(--text);
+      }
+
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        background:
+          radial-gradient(circle at 12% 0%, rgba(92, 78, 190, 0.08), transparent 32rem),
+          var(--page-bg);
+      }
+
+      .share-page {
+        min-height: 100dvh;
+        padding: clamp(12px, 2.6vw, 36px);
+      }
+
+      .share-document {
+        width: min(100%, 920px);
+        margin: 0 auto;
+        padding: clamp(20px, 3.2vw, 42px);
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        box-shadow: var(--shadow);
+      }
+
+      .share-header {
+        padding-bottom: 22px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .share-kicker {
+        margin: 0 0 10px;
+        color: var(--brand);
+        font-size: 13px;
+        font-weight: 650;
+      }
+
+      .share-title {
+        margin: 0;
+        color: #111827;
+        font-size: clamp(22px, 2.6vw, 32px);
+        font-weight: 700;
+        line-height: 1.25;
+        letter-spacing: 0;
+      }
+
+      .share-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 18px;
+        margin-top: 14px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .meta-item {
+        display: inline-flex;
+        align-items: center;
+        min-width: 0;
+      }
+
+      .meta-dot {
+        width: 6px;
+        height: 6px;
+        margin-right: 8px;
+        border-radius: 999px;
+        background: var(--brand);
+      }
+
+      .audio-panel {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 14px;
+        align-items: center;
+        margin: 24px 0 22px;
+        padding: 14px 16px;
+        background: var(--surface-soft);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+      }
+
+      .play-button {
+        width: 40px;
+        height: 40px;
+        display: grid;
+        place-items: center;
+        border: 0;
+        border-radius: 999px;
+        background: var(--brand);
+        color: #fff;
+        font-size: 16px;
+        cursor: pointer;
+      }
+
+      .audio-track {
+        min-width: 0;
+      }
+
+      .audio-bar {
+        height: 6px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #dfe3eb;
+      }
+
+      .audio-progress {
+        width: 38%;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--brand);
+      }
+
+      .audio-label {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 8px;
+        color: var(--subtle);
+        font-size: 12px;
+      }
+
+      .speed-pill {
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: #fff;
+        color: var(--muted);
+        font-size: 13px;
+        border: 1px solid var(--line);
+      }
+
+      .share-tabs {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        margin: 0 -4px 24px;
+        padding: 0 4px 10px;
+        background: rgba(255, 255, 255, 0.94);
+        border-bottom: 1px solid var(--line);
+        backdrop-filter: blur(12px);
+        scrollbar-width: none;
+      }
+
+      .share-tabs::-webkit-scrollbar {
+        display: none;
+      }
+
+      .share-tab {
+        flex: 0 0 auto;
+        padding: 8px 12px;
+        border-radius: 8px;
+        color: #667085;
+        font-size: 14px;
+        line-height: 1;
+      }
+
+      .share-tab.is-active {
+        color: var(--brand);
+        background: var(--brand-soft);
+        font-weight: 650;
+      }
+
+      .content-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 26px;
+      }
+
+      .section {
+        min-width: 0;
+      }
+
+      .section-title {
+        margin: 0 0 12px;
+        color: #111827;
+        font-size: 20px;
+        line-height: 1.35;
+      }
+
+      .share-body {
+        color: #252b37;
+        font-size: 16px;
+        line-height: 1.75;
+        word-break: break-word;
+      }
+
+      .share-body h3 {
+        margin: 1.25em 0 0.5em;
+        color: #111827;
+        font-size: 18px;
+        line-height: 1.4;
+      }
+
+      .share-body p,
+      .share-body ul,
+      .share-body ol {
+        margin: 0 0 0.85em;
+      }
+
+      .share-body ul,
+      .share-body ol {
+        padding-left: 1.45em;
+      }
+
+      .share-body li {
+        margin: 0.25em 0;
+      }
+
+      .quote-block {
+        margin: 18px 0;
+        padding: 14px 16px;
+        border-left: 4px solid var(--brand);
+        border-radius: 10px;
+        background: var(--brand-soft);
+        color: #403876;
+      }
+
+      .transcript-list {
+        display: grid;
+        gap: 14px;
+      }
+
+      .transcript-item {
+        display: grid;
+        grid-template-columns: 72px minmax(0, 1fr);
+        gap: 14px;
+        padding-bottom: 14px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .transcript-time {
+        color: var(--subtle);
+        font-size: 13px;
+        line-height: 1.75;
+      }
+
+      .transcript-text {
+        margin: 0;
+        color: #252b37;
+        font-size: 15px;
+        line-height: 1.75;
+      }
+
+      .mindmap-preview {
+        min-height: 220px;
+        display: grid;
+        place-items: center;
+        margin-top: 10px;
+        padding: 22px;
+        border: 1px dashed #ccd2df;
+        border-radius: 14px;
+        background: linear-gradient(180deg, #ffffff, #f8fafc);
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .footer {
+        margin-top: 34px;
+        padding-top: 18px;
+        border-top: 1px solid var(--line);
+        color: var(--subtle);
+        font-size: 13px;
+        text-align: center;
+      }
+
+      @media (max-width: 640px) {
+        html,
+        body {
+          background: #fff;
+        }
+
+        .share-page {
+          padding: 0;
+        }
+
+        .share-document {
+          width: 100%;
+          min-height: 100dvh;
+          padding: 18px 16px 28px;
+          border: 0;
+          border-radius: 0;
+          box-shadow: none;
+        }
+
+        .share-header {
+          padding-bottom: 18px;
+        }
+
+        .share-title {
+          font-size: 20px;
+        }
+
+        .share-meta {
+          display: grid;
+          gap: 8px;
+        }
+
+        .audio-panel {
+          grid-template-columns: auto 1fr;
+          gap: 12px;
+          margin: 18px 0;
+          padding: 12px;
+        }
+
+        .speed-pill {
+          grid-column: 2;
+          width: max-content;
+          padding: 4px 9px;
+        }
+
+        .share-tabs {
+          margin-left: -16px;
+          margin-right: -16px;
+          padding-left: 16px;
+          padding-right: 16px;
+        }
+
+        .section-title {
+          font-size: 18px;
+        }
+
+        .share-body {
+          font-size: 16px;
+          line-height: 1.75;
+        }
+
+        .transcript-item {
+          grid-template-columns: 1fr;
+          gap: 4px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="share-page">
+      <article class="share-document">
+        <header class="share-header">
+          <p class="share-kicker">灵光记分享</p>
+          <h1 class="share-title">产品周会：分享页阅读体验优化讨论</h1>
+          <div class="share-meta">
+            <span class="meta-item"><span class="meta-dot"></span>2026-06-30 20:15</span>
+            <span class="meta-item"><span class="meta-dot"></span>会议时长 00:42:18</span>
+            <span class="meta-item"><span class="meta-dot"></span>包含音频、转写、总结、思维导图</span>
+          </div>
+        </header>
+
+        <section class="audio-panel" aria-label="录音播放">
+          <button class="play-button" type="button" aria-label="播放">▶</button>
+          <div class="audio-track">
+            <div class="audio-bar"><div class="audio-progress"></div></div>
+            <div class="audio-label">
+              <span>00:16:04</span>
+              <span>00:42:18</span>
+            </div>
+          </div>
+          <span class="speed-pill">1.0x</span>
+        </section>
+
+        <nav class="share-tabs" aria-label="内容切换">
+          <span class="share-tab is-active">会议总结</span>
+          <span class="share-tab">转写概要</span>
+          <span class="share-tab">行动项</span>
+          <span class="share-tab">思维导图</span>
+        </nav>
+
+        <div class="content-grid">
+          <section class="section">
+            <h2 class="section-title">会议总结</h2>
+            <div class="share-body">
+              <p>
+                本次会议主要讨论 App 分享页在桌面端和移动端的阅读体验。当前页面偏移动端实现，桌面端缺少阅读宽度约束，正文、标题和标签区域的视觉层级不够稳定。
+              </p>
+              <div class="quote-block">
+                建议把分享页定位为公开阅读文档页：桌面端提供居中卡片和舒适阅读宽度，移动端保持原生详情页的轻量体验。
+              </div>
+              <h3>核心结论</h3>
+              <ul>
+                <li>桌面端正文最大宽度控制在 860-920px，避免长行阅读疲劳。</li>
+                <li>移动端取消卡片阴影和圆角，使用 16px 安全边距。</li>
+                <li>音频、元信息和标签区保留，但视觉上弱化工具感，突出正文。</li>
+                <li>iframe 内部 HTML 也需要统一字号、行高、图片和标题样式。</li>
+              </ul>
+              <h3>下一步</h3>
+              <ol>
+                <li>将该版式迁移到 uni-app 分享页源码。</li>
+                <li>用真实分享数据验证长标题、多总结模板和长转写内容。</li>
+                <li>分别检查 390px 手机、768px 平板、1440px 桌面视口。</li>
+              </ol>
+            </div>
+          </section>
+
+          <section class="section">
+            <h2 class="section-title">转写片段</h2>
+            <div class="transcript-list">
+              <div class="transcript-item">
+                <span class="transcript-time">00:02:18</span>
+                <p class="transcript-text">分享页现在在手机上能用，但桌面打开以后内容铺得太满，阅读体验不太像一个正式的公开文档。</p>
+              </div>
+              <div class="transcript-item">
+                <span class="transcript-time">00:08:42</span>
+                <p class="transcript-text">我们不需要增加复杂功能，第一版先把标题、音频、标签和正文排版做好，保证用户能舒服看完。</p>
+              </div>
+              <div class="transcript-item">
+                <span class="transcript-time">00:19:06</span>
+                <p class="transcript-text">总结内容是 iframe 渲染，所以外层和 iframe 内层都要处理响应式宽度、字号和图片样式。</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="section">
+            <h2 class="section-title">思维导图区域</h2>
+            <div class="mindmap-preview">
+              思维导图可在这里展示预览；点击后进入全屏查看，移动端保留手势缩放空间。
+            </div>
+          </section>
+        </div>
+
+        <footer class="footer">由灵光记分享 · Lynse.ai</footer>
+      </article>
+    </main>
+  </body>
+</html>

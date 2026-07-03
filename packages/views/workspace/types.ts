@@ -7,6 +7,7 @@ export interface WorkspaceItem {
   updatedAt: string;
   createdAt: string;
   folderId?: string;
+  tags?: string[];
 }
 
 export interface FileItem {
@@ -15,6 +16,7 @@ export interface FileItem {
   createdAt: string;
   updatedAt: string;
   folderId?: string;
+  tags?: string[];
   fileSize?: number;
   status?: string;
 }
@@ -165,7 +167,7 @@ export type UploadPhase = "idle" | "uploading" | "transcribing" | "summarizing" 
 // ── AI task types (re-summarize without re-upload) ─────
 
 export interface AiTaskAddReq {
-  aiTaskType: string;
+  aiTaskType: "CONCLUSION";
   fileId: string;
   templateId?: string;
   teamId?: string;

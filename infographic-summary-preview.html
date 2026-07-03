@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>图文总结预览</title>
+  <style>
+    body {
+      margin: 0;
+      background: #ffffff;
+      color: #172033;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    .lynse-infographic-summary {
+      --blue: #1677ff;
+      --green: #10b96b;
+      --purple: #b65bd8;
+      --orange: #ff8a00;
+      --cyan: #58c5e8;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #e9edf5;
+      max-width: 1360px;
+      margin: 0 auto;
+      padding: 34px 38px 42px;
+      line-height: 1.65;
+    }
+    * { box-sizing: border-box; }
+    h1 {
+      margin: 0 0 18px;
+      font-size: 28px;
+      line-height: 1.2;
+      font-weight: 850;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 34px 0 16px;
+      font-size: 24px;
+      line-height: 1.25;
+      font-weight: 850;
+    }
+    ul { margin: 0; padding-left: 20px; }
+    li { margin: 8px 0; color: #596273; }
+    strong { font-weight: 850; }
+    .title-icon {
+      width: 22px;
+      height: 22px;
+      flex: 0 0 22px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: currentColor;
+    }
+    .title-icon svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2.3;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .hero-icon {
+      width: 28px;
+      height: 28px;
+      flex-basis: 28px;
+      color: var(--blue);
+    }
+
+    .hero-note {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 68px;
+      padding: 16px 20px;
+      border-radius: 8px;
+      background: #dbeafe;
+      font-size: 18px;
+      font-weight: 780;
+    }
+
+    .grid-2,
+    .grid-3 {
+      display: grid;
+      gap: 22px;
+    }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      background: #fff;
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+    }
+    .card.green { background: #effaf4; }
+    .card.purple { background: #fbf4ff; }
+    .card.orange { background: #fff8ee; }
+    .card.blue { background: #f0f6ff; }
+    .card.cyan { background: #f1fbff; }
+
+    .card-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 13px 18px;
+      font-size: 19px;
+      font-weight: 850;
+    }
+    .green .card-head { background: var(--green); color: #fff; }
+    .purple .card-head { background: var(--purple); color: #fff; }
+    .orange .card-head { color: var(--orange); }
+    .blue .card-head { color: var(--blue); }
+    .cyan .card-head { color: var(--cyan); }
+    .card-body { padding: 18px 20px 20px; }
+    .pill {
+      margin-left: auto;
+      padding: 2px 10px;
+      border-radius: 999px;
+      border: 1px solid currentColor;
+      font-size: 12px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+    .bottom-note {
+      margin-top: 18px;
+      padding: 9px 13px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.72);
+      color: #4b5565;
+      font-weight: 760;
+    }
+
+    .green strong, .green .accent { color: var(--green); }
+    .purple strong, .purple .accent { color: var(--purple); }
+    .orange strong, .orange .accent { color: var(--orange); }
+    .blue strong, .blue .accent { color: var(--blue); }
+    .cyan strong, .cyan .accent { color: var(--cyan); }
+
+    .insight {
+      display: grid;
+      grid-template-columns: 8px 1fr;
+      gap: 18px;
+      padding: 14px 18px 16px 12px;
+      border: 1.5px solid currentColor;
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.04);
+    }
+    .insight.green { color: var(--green); }
+    .insight.purple { color: var(--purple); }
+    .insight-bar {
+      border-radius: 999px;
+      background: currentColor;
+    }
+    .insight-content { color: var(--ink); }
+    .insight h3 {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 10px;
+      color: currentColor;
+      font-size: 18px;
+      font-weight: 850;
+    }
+    .insight .pill { margin-left: 0; font-size: 11px; }
+    .insight .bottom-note {
+      border-top: 1px solid #e5e7eb;
+      border-radius: 0;
+      background: transparent;
+      padding: 10px 0 0;
+      color: currentColor;
+    }
+
+    .path {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 22px;
+      padding: 22px 20px;
+      border-radius: 10px;
+      background: #f8fafc;
+    }
+    .step-num {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      font-size: 52px;
+      line-height: 1;
+      font-weight: 900;
+    }
+    .step-num::after {
+      content: "";
+      height: 1px;
+      flex: 1;
+      background: currentColor;
+      opacity: 0.75;
+    }
+    .step h3 {
+      margin: 18px 0 6px;
+      font-size: 17px;
+      font-weight: 850;
+    }
+    .step p {
+      margin: 0;
+      color: #4b5565;
+      font-size: 14px;
+    }
+    .blue-text { color: var(--blue); }
+    .green-text { color: var(--green); }
+    .orange-text { color: var(--orange); }
+    .purple-text { color: var(--purple); }
+    .watermark {
+      margin-top: 18px;
+      text-align: right;
+      color: #c0c6d0;
+      font-size: 12px;
+    }
+
+    @media (max-width: 980px) {
+      .lynse-infographic-summary { padding: 22px 16px 32px; }
+      .grid-2, .grid-3, .path { grid-template-columns: 1fr; }
+      h1 { font-size: 24px; }
+      h2 { font-size: 21px; }
+    }
+  </style>
+</head>
+<body>
+  <article class="lynse-infographic-summary">
+    <h1>AI 硬件与数字版权创新</h1>
+
+    <div class="hero-note">
+      <span class="title-icon hero-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 3l2.7 5.7 6.3.8-4.6 4.4 1.2 6.2L12 17l-5.6 3.1 1.2-6.2L3 9.5l6.3-.8z"></path></svg>
+      </span>
+      <span>本期分享：AI 相框与画框产品开发，以及数字版权增值服务商业模式的系统化构建</span>
+    </div>
+
+    <h2>核心发展脉络</h2>
+    <section class="grid-2">
+      <div class="card green">
+        <div class="card-head">
+          <span class="title-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="11" rx="2"></rect><path d="M8 21h8"></path><path d="M12 16v5"></path></svg></span>
+          <span>产品方向</span>
+          <span class="pill">双线布局</span>
+        </div>
+        <div class="card-body">
+          <ul>
+            <li>聚焦 AI 相框与水墨屏画框，覆盖动态展示与艺术复刻场景</li>
+            <li>开拓海外 DIY 市场，开发刺绣枪、3D 打印机等硬件衍生品</li>
+            <li><strong>避免同质化</strong>，以 AI 原生体验替代传统 APP 方案</li>
+            <li>彩屏与水墨屏互补，提升用户场景覆盖广度</li>
+          </ul>
+          <div class="bottom-note">硬件即内容入口</div>
+        </div>
+      </div>
+
+      <div class="card purple">
+        <div class="card-head">
+          <span class="title-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M15 4l5 5-9 9H6v-5z"></path><path d="M14 5l5 5"></path></svg></span>
+          <span>技术实现</span>
+          <span class="pill">AI 生成</span>
+        </div>
+        <div class="card-body">
+          <ul>
+            <li>利用大模型生成梵高等风格艺术内容，降低版权成本</li>
+            <li>研发 5 秒动态图片展示，增强交互沉浸感</li>
+            <li><strong>原生集成</strong> AI 能力，不依赖第三方应用生态</li>
+            <li>构建专属内容引擎，形成技术护城河</li>
+          </ul>
+          <div class="bottom-note">内容即算力输出</div>
+        </div>
+      </div>
+    </section>
+
+    <h2>商业模式创新</h2>
+    <section class="grid-3">
+      <div class="card orange">
+        <div class="card-head">
+          <span class="title-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" rx="2"></rect><path d="M8 10h8"></path><path d="M8 14h5"></path></svg></span>
+          <span>版权运营</span>
+          <span class="pill">付费内容</span>
+        </div>
+        <div class="card-body">
+          <ul>
+            <li>获取美术馆数字版权授权，建立独家内容壁垒</li>
+            <li>推出单幅 5 元付费壁纸，打造轻量化订阅收入</li>
+            <li>通过数字展品引流，转化线下展览门票销售</li>
+            <li><strong>内容即服务</strong>，构建可持续变现模型</li>
+          </ul>
+          <div class="bottom-note">版权是核心资产</div>
+        </div>
+      </div>
+
+      <div class="card blue">
+        <div class="card-head">
+          <span class="title-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 8l8-4 8 4-8 4z"></path><path d="M4 8v8l8 4 8-4V8"></path><path d="M12 12v8"></path></svg></span>
+          <span>硬件溢价</span>
+          <span class="pill">分层定价</span>
+        </div>
+        <div class="card-body">
+          <ul>
+            <li>高端款采用名贵木材，定位别墅与高端家居场景</li>
+            <li>基础款走量，通过版权内容提升性价比感知</li>
+            <li>硬件为载体，内容为利润源，实现“薄硬件、厚服务”</li>
+            <li><strong>软硬协同</strong>，提升整体客单价与用户粘性</li>
+          </ul>
+          <div class="bottom-note">硬件是入口，内容是利润</div>
+        </div>
+      </div>
+
+      <div class="card cyan">
+        <div class="card-head">
+          <span class="title-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3c3 3 3 15 0 18"></path><path d="M12 3c-3 3-3 15 0 18"></path></svg></span>
+          <span>渠道拓展</span>
+          <span class="pill">生态合作</span>
+        </div>
+        <div class="card-body">
+          <ul>
+            <li>与芯片厂商联合打包软硬解决方案</li>
+            <li>开放白牌授权，快速覆盖亚马逊、山姆会员店等渠道</li>
+            <li>避开 Frame 等 APP 生态竞争，专注硬件体验创新</li>
+            <li>年市场规模预估 2000-4000 万件，具备规模化潜力</li>
+          </ul>
+          <div class="bottom-note">渠道即增长引擎</div>
+        </div>
+      </div>
+    </section>
+
+    <h2>行业洞察与对标</h2>
+    <section class="grid-2">
+      <div class="insight green">
+        <div class="insight-bar"></div>
+        <div class="insight-content">
+          <h3>
+            <span class="title-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 16l5-5 4 4 7-8"></path><path d="M15 7h5v5"></path></svg></span>
+            <span>AI 应用趋势</span>
+            <span class="pill">不可逆</span>
+          </h3>
+          <ul>
+            <li>无 AI 功能的硬件将被市场淘汰</li>
+            <li>警惕大模型对细分领域的技术碾压</li>
+            <li>选择有业务门槛的方向，如艺术版权授权</li>
+            <li>硬件需要成为 AI 能力的具象化载体</li>
+          </ul>
+          <div class="bottom-note">AI 不是选修课，是硬件的生存底线</div>
+        </div>
+      </div>
+
+      <div class="insight purple">
+        <div class="insight-bar"></div>
+        <div class="insight-content">
+          <h3>
+            <span class="title-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"></circle><path d="M8 12l-2 8 6-3 6 3-2-8"></path></svg></span>
+            <span>成功案例</span>
+            <span class="pill">垂直深耕</span>
+          </h3>
+          <ul>
+            <li>服装 AI 质检设备年利润达 2 亿</li>
+            <li>拓竹 3D 打印通过家庭场景实现 40 亿营收</li>
+            <li>证明垂直领域 + 硬件创新具备高价值回报</li>
+            <li>AI 硬件需扎根真实生活场景</li>
+          </ul>
+          <div class="bottom-note">技术深耕，终将兑现商业价值</div>
+        </div>
+      </div>
+    </section>
+
+    <h2>增长路径</h2>
+    <section class="path">
+      <div class="step">
+        <div class="step-num blue-text">01</div>
+        <h3>技术筑基 <span class="pill blue-text">AI 生成</span></h3>
+        <p>基于大模型生成艺术内容，降低版权获取成本，构建内容生产引擎。</p>
+      </div>
+      <div class="step">
+        <div class="step-num green-text">02</div>
+        <h3>产品落地 <span class="pill green-text">双线产品</span></h3>
+        <p>推出彩屏相框与水墨屏画框，覆盖多元用户场景。</p>
+      </div>
+      <div class="step">
+        <div class="step-num orange-text">03</div>
+        <h3>商业变现 <span class="pill orange-text">内容付费</span></h3>
+        <p>单幅壁纸定价 5 元，构建持续性订阅收入与线下展览导流。</p>
+      </div>
+      <div class="step">
+        <div class="step-num purple-text">04</div>
+        <h3>生态扩张 <span class="pill purple-text">渠道开放</span></h3>
+        <p>联合芯片商打包方案，开放白牌授权，快速覆盖全球零售渠道。</p>
+      </div>
+    </section>
+
+    <div class="watermark">由 AI 听记生成</div>
+  </article>
+</body>
+</html>

@@ -65,6 +65,7 @@ interface WorkspaceState {
   noteTabs: NoteTab[];
   fileSortField: FileSortField;
   fileSortDir: FileSortDir;
+  summarizingFileIds: Set<string>;
 
   // Sidebar directory state
   sidebarSectionsCollapsed: Set<string>;
@@ -91,6 +92,7 @@ interface WorkspaceState {
   handleFolderTreeResize: (delta: number) => void;
   addNoteTab: () => void;
   removeNoteTab: (id: string) => void;
+  setFileSummarizing: (fileId: string, summarizing: boolean) => void;
 
   // Sidebar directory actions
   toggleSidebarSection: (section: string) => void;
@@ -117,6 +119,7 @@ function createWorkspaceStore() {
     noteTabs: loadNoteTabs(),
     fileSortField: "createdAt" as FileSortField,
     fileSortDir: "desc" as FileSortDir,
+    summarizingFileIds: new Set<string>(),
     chatPanelWidth: loadNumber(CHAT_PANEL_WIDTH_KEY, DEFAULT_CHAT_PANEL_WIDTH),
     fileListWidth: loadNumber(FILE_LIST_WIDTH_KEY, DEFAULT_FILE_LIST_WIDTH),
     folderTreeWidth: loadNumber(FOLDER_TREE_WIDTH_KEY, DEFAULT_FOLDER_TREE_WIDTH),
@@ -188,6 +191,14 @@ function createWorkspaceStore() {
       }
       set(updates);
     },
+
+    setFileSummarizing: (fileId, summarizing) =>
+      set((state) => {
+        const next = new Set(state.summarizingFileIds);
+        if (summarizing) next.add(fileId);
+        else next.delete(fileId);
+        return { summarizingFileIds: next };
+      }),
 
     setChatPanelWidth: (width) => {
       const clamped = Math.max(MIN_CHAT_PANEL_WIDTH, Math.min(MAX_CHAT_PANEL_WIDTH, width));

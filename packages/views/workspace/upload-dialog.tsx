@@ -17,6 +17,7 @@ import { cn } from "@lynse/ui/lib/utils";
 import {
   useTemplateCategories,
   useTransferFile,
+  waitForTranscriptionCompletion,
   uploadFileToOSS,
 } from "./hooks/use-files";
 import { useQueryClient } from "@tanstack/react-query";
@@ -117,12 +118,18 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
         templateId: effectiveTemplateId,
       });
 
+      setPhase("summarizing");
+      await waitForTranscriptionCompletion({ fileIds: [fileId] });
+
       // Phase 3: Complete
       setPhase("complete");
       toast.success(t("upload.success"));
 
       // Refresh file list
       qc.invalidateQueries({ queryKey: ["files"] });
+      qc.invalidateQueries({ queryKey: ["file-conclusions", fileId] });
+      qc.invalidateQueries({ queryKey: ["file-outline", fileId] });
+      qc.invalidateQueries({ queryKey: ["file-transcription", fileId] });
 
       // Auto-close after 1.5s
       setTimeout(() => {

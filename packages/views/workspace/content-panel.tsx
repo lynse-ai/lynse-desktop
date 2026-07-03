@@ -1,7 +1,19 @@
 "use client";
 
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
-import { FileText, FileAudio, Sparkles, List, X, Plus, RefreshCw } from "../icons";
+import {
+  ChevronDown,
+  FileText,
+  FileAudio,
+  Sparkles,
+  List,
+  MoreHorizontal,
+  X,
+  Plus,
+  RefreshCw,
+  Loader2,
+  Trash2,
+} from "../icons";
 import { useWorkspaceStore } from "./store";
 import { TAB_BAR_HEIGHT } from "./layout-constants";
 import { api } from "@lynse/core/api/client";
@@ -9,9 +21,27 @@ import { SummaryMarkdownEditor } from "./summary-editor";
 import { FloatingMarkdownToolbar } from "./center-panel/markdown-toolbar";
 import { AudioPlayer } from "./audio-player";
 import type { AudioPlayerHandle } from "./audio-player";
-import { useFiles, useFileOutline, useFileConclusions, useFileTranscription, useFileAudioUrl, useUpdateConclusion } from "./hooks/use-files";
+import {
+  mergePendingSummaryTab,
+  useDeleteConclusion,
+  useFiles,
+  useFileOutline,
+  useFileConclusions,
+  useFileTranscription,
+  useFileAudioUrl,
+  useUpdateConclusion,
+} from "./hooks/use-files";
+import type { SummaryTabModel } from "./hooks/use-files";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { ResummarizeDialog } from "./resummarize-dialog";
+import { ResummarizeDialog, type SummaryTemplateDialogMode } from "./resummarize-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@lynse/ui/components/ui/dropdown-menu";
 import "./content-preview.css";
 
 function extractBody(html: string): { content: string; scopedStyles: string } {
@@ -156,6 +186,30 @@ function getSpeakerColor(name: string): string {
 
 const NOTE_STORAGE_PREFIX = "lynse_note_";
 
+const SUMMARY_TAB_FALLBACK_TEXT = {
+  en: {
+    replaceTemplate: "Change summary template",
+    delete: "Delete summary",
+    deleteConfirm: "Delete this summary permanently?",
+  },
+  "zh-Hans": {
+    replaceTemplate: "更换总结模板",
+    delete: "删除总结",
+    deleteConfirm: "永久删除这条总结？",
+  },
+  ja: {
+    replaceTemplate: "要約テンプレートを変更",
+    delete: "要約を削除",
+    deleteConfirm: "この要約を完全に削除しますか？",
+  },
+} as const;
+
+function getSummaryTabFallbackLanguage(language: string | undefined): keyof typeof SUMMARY_TAB_FALLBACK_TEXT {
+  if (language?.startsWith("zh")) return "zh-Hans";
+  if (language?.startsWith("ja")) return "ja";
+  return "en";
+}
+
 export function ContentPanel() {
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
   const contentTab = useWorkspaceStore((s) => s.contentTab);
@@ -164,9 +218,18 @@ export function ContentPanel() {
   const toggleOutlineSidebar = useWorkspaceStore((s) => s.toggleOutlineSidebar);
   const sourceViewVisible = useWorkspaceStore((s) => s.sourceViewVisible);
   const noteTabs = useWorkspaceStore((s) => s.noteTabs);
-  const addNoteTab = useWorkspaceStore((s) => s.addNoteTab);
   const removeNoteTab = useWorkspaceStore((s) => s.removeNoteTab);
-  const { t } = useTranslation();
+  const summarizingFileIds = useWorkspaceStore((s) => s.summarizingFileIds);
+  const setFileSummarizing = useWorkspaceStore((s) => s.setFileSummarizing);
+  const { t, i18n } = useTranslation();
+  const summaryTabFallback = SUMMARY_TAB_FALLBACK_TEXT[getSummaryTabFallbackLanguage(i18n.language)];
+  const text = useCallback(
+    (key: string, fallbackValue: string) => {
+      const translated = t(key);
+      return translated === key ? fallbackValue : translated;
+    },
+    [t],
+  );
 
   const { data: files } = useFiles({ pageNum: 1, pageSize: 200 });
   const { data: outline, isLoading: outlineLoading } = useFileOutline(selectedItemId);
@@ -174,11 +237,18 @@ export function ContentPanel() {
   const { data: transcription, isLoading: transLoading } = useFileTranscription(selectedItemId);
   const { data: audioUrl } = useFileAudioUrl(selectedItemId);
   const updateConclusion = useUpdateConclusion();
+  const deleteConclusion = useDeleteConclusion();
 
   const audioPlayerRef = useRef<AudioPlayerHandle>(null);
   const [highlightTimeMs, setHighlightTimeMs] = useState<number | null>(null);
   const [summaryEditor, setSummaryEditor] = useState<import("@milkdown/kit/core").Editor | null>(null);
   const [resummarizeOpen, setResummarizeOpen] = useState(false);
+  const [summaryDialogMode, setSummaryDialogMode] = useState<SummaryTemplateDialogMode>("add");
+  const [selectedConclusionIdForTemplate, setSelectedConclusionIdForTemplate] = useState<string | null>(null);
+  const [resummaryErrorFileId, setResummaryErrorFileId] = useState<string | null>(null);
+  const [clearedSummaryFileIds, setClearedSummaryFileIds] = useState<Set<string>>(() => new Set());
+  const [pendingSummaryTabsByFile, setPendingSummaryTabsByFile] = useState<Record<string, SummaryTabModel[]>>({});
+  const summaryCountBeforeResummary = useRef(0);
 
   const selectedTitle = useMemo(() => {
     if (!selectedItemId || !files) return null;
@@ -203,10 +273,21 @@ export function ContentPanel() {
         const id = String(obj.id ?? "");
         // templateName is the conclusion template name from the API
         const name = String(obj.templateName ?? obj.conclusionName ?? obj.title ?? obj.name ?? "").trim();
-        return text ? { key: i, text, id, name } : null;
+        return text ? { key: id || `summary-${i}`, text, id, name, status: "ready" as const } : null;
       })
-      .filter(Boolean) as { key: number; text: string; id: string; name: string }[];
+      .filter(Boolean) as SummaryTabModel[];
   }, [conclusions]);
+  const currentFileSummariesCleared = !!selectedItemId && clearedSummaryFileIds.has(selectedItemId);
+  const pendingSummaryTabs = selectedItemId ? (pendingSummaryTabsByFile[selectedItemId] ?? []) : [];
+  const visibleConclusionTexts = currentFileSummariesCleared ? [] : [...conclusionTexts, ...pendingSummaryTabs];
+
+  useEffect(() => {
+    if (!selectedItemId || pendingSummaryTabs.length === 0 || conclusionTexts.length === 0) return;
+    const conclusionIds = new Set(conclusionTexts.map((tab) => tab.id).filter(Boolean));
+    const nextPendingTabs = pendingSummaryTabs.filter((tab) => !tab.id || !conclusionIds.has(tab.id));
+    if (nextPendingTabs.length === pendingSummaryTabs.length) return;
+    setPendingSummaryTabsByFile((current) => ({ ...current, [selectedItemId]: nextPendingTabs }));
+  }, [conclusionTexts, pendingSummaryTabs, selectedItemId]);
 
   // Outline — keep raw text for source view
   const { outlineBody, outlineStyles, outlineRaw } = useMemo(() => {
@@ -315,11 +396,97 @@ export function ContentPanel() {
         })
         .catch(() => { delete img.dataset.proxying; });
     }
-  }, [contentTab, outlineBody, conclusionTexts]);
+  }, [contentTab, outlineBody, visibleConclusionTexts]);
 
   // Parse current tab
   const activeSummaryIdx = contentTab.startsWith("summary-") ? parseInt(contentTab.slice(8), 10) : -1;
   const activeNoteId = contentTab.startsWith("note-") ? contentTab.slice(5) : null;
+  const activeSummary = activeSummaryIdx >= 0 ? visibleConclusionTexts[activeSummaryIdx] : undefined;
+
+  useEffect(() => {
+    if (!selectedItemId || summarizingFileIds.has(selectedItemId)) return;
+    const previousCount = summaryCountBeforeResummary.current;
+    if (previousCount === 0 || visibleConclusionTexts.length <= previousCount) return;
+    setContentTab(`summary-${visibleConclusionTexts.length - 1}`);
+    summaryCountBeforeResummary.current = 0;
+  }, [visibleConclusionTexts.length, selectedItemId, setContentTab, summarizingFileIds]);
+
+  const currentFileSummarizing = !!selectedItemId && summarizingFileIds.has(selectedItemId);
+  const currentFileRerunning = currentFileSummarizing && currentFileSummariesCleared;
+  const currentFileResummaryError = !!selectedItemId && resummaryErrorFileId === selectedItemId;
+
+  const handleResummaryStarted = useCallback((
+    fileId: string,
+    mode: SummaryTemplateDialogMode,
+    options?: { pendingId?: string; templateName?: string },
+  ) => {
+    summaryCountBeforeResummary.current = mode === "add" ? visibleConclusionTexts.length : 0;
+    setResummaryErrorFileId(null);
+    if (mode === "add" && options?.pendingId) {
+      const pendingTab: SummaryTabModel = {
+        key: options.pendingId,
+        id: "",
+        name: options.templateName || t("workspace.summary"),
+        text: "",
+        status: "pending",
+        pendingId: options.pendingId,
+      };
+      setPendingSummaryTabsByFile((current) => ({
+        ...current,
+        [fileId]: [...(current[fileId] ?? []), pendingTab],
+      }));
+      setContentTab(`summary-${visibleConclusionTexts.length}`);
+    }
+    if (mode === "rerun") {
+      setClearedSummaryFileIds((current) => {
+        const next = new Set(current);
+        next.add(fileId);
+        return next;
+      });
+      setContentTab("outline");
+    }
+    setFileSummarizing(fileId, true);
+  }, [setContentTab, setFileSummarizing, t, visibleConclusionTexts.length]);
+
+  const handleResummaryFinished = useCallback((
+    fileId: string,
+    success: boolean,
+    mode: SummaryTemplateDialogMode,
+    options?: { pendingId?: string; conclusion?: import("./types").FileConclusion },
+  ) => {
+    setFileSummarizing(fileId, false);
+    setResummaryErrorFileId(success ? null : fileId);
+    if (mode === "add" && options?.pendingId) {
+      setPendingSummaryTabsByFile((current) => {
+        const tabs = current[fileId] ?? [];
+        const nextTabs =
+          success && options.conclusion
+            ? mergePendingSummaryTab({ tabs, pendingId: options.pendingId!, conclusion: options.conclusion })
+            : tabs.map((tab) => tab.pendingId === options.pendingId ? { ...tab, status: "error" as const } : tab);
+        return { ...current, [fileId]: nextTabs };
+      });
+    }
+    if (mode === "rerun" && success) {
+      setClearedSummaryFileIds((current) => {
+        const next = new Set(current);
+        next.delete(fileId);
+        return next;
+      });
+      setContentTab("summary-0");
+    }
+  }, [setContentTab, setFileSummarizing]);
+
+  const handleDeleteSummary = useCallback((conclusionId: string, idx: number) => {
+    if (!selectedItemId || !window.confirm(text("summary_tab.delete_confirm", summaryTabFallback.deleteConfirm))) return;
+    deleteConclusion.mutate(conclusionId, {
+      onSuccess: () => {
+        if (contentTab === `summary-${idx}`) {
+          const nextIdx = idx > 0 ? idx - 1 : 0;
+          setContentTab(visibleConclusionTexts.length > 1 ? `summary-${nextIdx}` : "outline");
+        }
+      },
+    });
+  }, [contentTab, deleteConclusion, selectedItemId, setContentTab, text, summaryTabFallback.deleteConfirm, visibleConclusionTexts.length]);
 
   return (
     <div className="flex h-full flex-col min-w-0">
@@ -340,16 +507,38 @@ export function ContentPanel() {
             <FileAudio className="size-3.5" />
             <span>{t("workspace.transcription")}</span>
           </TabButton>
-          {conclusionTexts.map((block, idx) => (
-            <TabButton
-              key={block.key}
-              active={contentTab === `summary-${idx}`}
-              onClick={() => setContentTab(`summary-${idx}`)}
-            >
-              <Sparkles className="size-3.5" />
-              <span>{block.name || t("workspace.summary")}</span>
-            </TabButton>
-          ))}
+          {visibleConclusionTexts.length > 0 && (
+            <>
+              <div className="mx-1 h-4 w-px bg-border" />
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  className="flex max-w-60 shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground data-popup-open:bg-accent data-popup-open:text-accent-foreground"
+                >
+                  <Sparkles className="size-3.5 shrink-0" />
+                  <span className="shrink-0">{t("workspace.summary")}:</span>
+                  <span className="min-w-0 truncate text-foreground">
+                    {activeSummary?.name || t("workspace.summary")}
+                  </span>
+                  <ChevronDown className="size-3 shrink-0" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-64">
+                  {visibleConclusionTexts.map((block, idx) => (
+                    <DropdownMenuCheckboxItem
+                      key={block.key}
+                      checked={contentTab === `summary-${idx}`}
+                      onClick={() => setContentTab(`summary-${idx}`)}
+                      className="pr-8 pl-1.5 [&>span:first-child]:right-2 [&>span:first-child]:left-auto"
+                    >
+                      <Sparkles className="size-3.5 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate">
+                        {block.name || t("workspace.summary")}
+                      </span>
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </>
+          )}
           {noteTabs.map((note) => (
             <TabButton
               key={note.id}
@@ -366,23 +555,65 @@ export function ContentPanel() {
             </TabButton>
           ))}
           <button
-            onClick={addNoteTab}
-            className="flex items-center justify-center rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
-            title={t("workspace.notes")}
+            onClick={() => {
+              setSelectedConclusionIdForTemplate(null);
+              setSummaryDialogMode("add");
+              setResummarizeOpen(true);
+            }}
+            disabled={!selectedItemId || currentFileSummarizing}
+            className="flex items-center justify-center rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors disabled:pointer-events-none disabled:opacity-50"
+            title={t("add_summary.button")}
           >
             <Plus className="size-3.5" />
           </button>
         </div>
         <div className="flex-1" />
         {selectedItemId && (
-          <button
-            onClick={() => setResummarizeOpen(true)}
-            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
-            title={t("resummarize.button")}
-          >
-            <RefreshCw className="size-3" />
-            <span className="hidden sm:inline">{t("resummarize.button")}</span>
-          </button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground data-popup-open:bg-accent data-popup-open:text-accent-foreground"
+              title="More actions"
+            >
+              <MoreHorizontal className="size-3.5" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <DropdownMenuItem
+                onClick={() => {
+                  if (!activeSummary?.id) return;
+                  setSelectedConclusionIdForTemplate(activeSummary.id);
+                  setSummaryDialogMode("replace");
+                  setResummarizeOpen(true);
+                }}
+                disabled={currentFileSummarizing || !activeSummary?.id}
+              >
+                <RefreshCw className="size-3.5" />
+                <span>{text("summary_tab.replace_template", summaryTabFallback.replaceTemplate)}</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                variant="destructive"
+                onClick={() => {
+                  if (!activeSummary?.id || activeSummaryIdx < 0) return;
+                  handleDeleteSummary(activeSummary.id, activeSummaryIdx);
+                }}
+                disabled={deleteConclusion.isPending || !activeSummary?.id}
+              >
+                <Trash2 className="size-3.5" />
+                <span>{text("summary_tab.delete", summaryTabFallback.delete)}</span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={() => {
+                  setSelectedConclusionIdForTemplate(null);
+                  setSummaryDialogMode("rerun");
+                  setResummarizeOpen(true);
+                }}
+                disabled={currentFileSummarizing}
+              >
+                <RefreshCw className="size-3.5" />
+                <span>{t("resummarize.button")}</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </div>
 
@@ -409,98 +640,108 @@ export function ContentPanel() {
               )}
 
               <div ref={contentPreviewRef} className={`content-preview mt-2 flex-1 min-h-0 ${contentTab === "transcription" ? "flex flex-col flex-1 min-h-0" : ""}`}>
-                {outlineStyles && contentTab === "outline" && (
-                  <style dangerouslySetInnerHTML={{ __html: outlineStyles }} />
-                )}
+                {currentFileRerunning ? (
+                  <ResummaryPendingState />
+                ) : currentFileResummaryError ? (
+                  <ResummaryErrorState />
+                ) : (
+                  <>
+                    {outlineStyles && contentTab === "outline" && (
+                      <style dangerouslySetInnerHTML={{ __html: outlineStyles }} />
+                    )}
 
-                {contentTab === "outline" && (
-                  outlineBody ? (
-                    sourceViewVisible ? (
-                      <SourceView code={outlineRaw ?? outlineBody} language="html" />
-                    ) : (
-                      <div className="content-preview-inner" dangerouslySetInnerHTML={{ __html: outlineBody }} />
-                    )
-                  ) : (
-                    <NoContentState label={t("workspace.no_outline")} />
-                  )
-                )}
+                    {contentTab === "outline" && (
+                      outlineBody ? (
+                        sourceViewVisible ? (
+                          <SourceView code={outlineRaw ?? outlineBody} language="html" />
+                        ) : (
+                          <div className="content-preview-inner" dangerouslySetInnerHTML={{ __html: outlineBody }} />
+                        )
+                      ) : (
+                        <NoContentState label={t("workspace.no_outline")} />
+                      )
+                    )}
 
-                {contentTab === "transcription" && (
-                  <div className="flex flex-col flex-1 min-h-0 space-y-3">
-                    {/* Audio player — always visible when audio URL exists */}
-                    {audioUrl && (
-                      <div className="shrink-0">
-                        <AudioPlayer
-                          ref={audioPlayerRef}
-                          src={audioUrl as string}
-                          highlightTimeMs={highlightTimeMs}
-                        />
+                    {contentTab === "transcription" && (
+                      <div className="flex flex-col flex-1 min-h-0 space-y-3">
+                        {/* Audio player — always visible when audio URL exists */}
+                        {audioUrl && (
+                          <div className="shrink-0">
+                            <AudioPlayer
+                              ref={audioPlayerRef}
+                              src={audioUrl as string}
+                              highlightTimeMs={highlightTimeMs}
+                            />
+                          </div>
+                        )}
+                        {/* Transcription segments or empty state */}
+                        {transSegments && transSegments.length > 0 ? (
+                          <div className="flex-1 min-h-0 overflow-y-auto space-y-1 text-sm leading-relaxed pb-4">
+                            {transSegments.map((seg, i) => {
+                              const color = getSpeakerColor(seg.speaker);
+                              return (
+                                <button
+                                  key={i}
+                                  onClick={() => {
+                                    if (seg.beginTimeMs != null) setHighlightTimeMs(seg.beginTimeMs);
+                                  }}
+                                  className={`block w-full text-left rounded-md px-2 py-1.5 transition-colors ${
+                                    highlightTimeMs === seg.beginTimeMs && seg.beginTimeMs != null
+                                      ? "bg-accent/60"
+                                      : "hover:bg-accent/30"
+                                  } ${seg.beginTimeMs != null ? "cursor-pointer" : ""}`}
+                                >
+                                  <div className="flex items-baseline gap-2">
+                                    <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{seg.time}</span>
+                                    <span className="shrink-0 font-semibold text-xs" style={{ color }}>{seg.speaker}</span>
+                                  </div>
+                                  <p className="text-foreground mt-0.5">{seg.text}</p>
+                                </button>
+                              );
+                            })}
+                            <div className="mt-6 border-t border-border pt-3 text-center">
+                              <p className="text-[10px] text-muted-foreground/60">{t("workspace.ai_disclaimer")}</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <NoContentState label={t("workspace.no_transcription")} />
+                        )}
                       </div>
                     )}
-                    {/* Transcription segments or empty state */}
-                    {transSegments && transSegments.length > 0 ? (
-                      <div className="flex-1 min-h-0 overflow-y-auto space-y-1 text-sm leading-relaxed pb-4">
-                        {transSegments.map((seg, i) => {
-                          const color = getSpeakerColor(seg.speaker);
-                          return (
-                            <button
-                              key={i}
-                              onClick={() => {
-                                if (seg.beginTimeMs != null) setHighlightTimeMs(seg.beginTimeMs);
-                              }}
-                              className={`block w-full text-left rounded-md px-2 py-1.5 transition-colors ${
-                                highlightTimeMs === seg.beginTimeMs && seg.beginTimeMs != null
-                                  ? "bg-accent/60"
-                                  : "hover:bg-accent/30"
-                              } ${seg.beginTimeMs != null ? "cursor-pointer" : ""}`}
-                            >
-                              <div className="flex items-baseline gap-2">
-                                <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{seg.time}</span>
-                                <span className="shrink-0 font-semibold text-xs" style={{ color }}>{seg.speaker}</span>
-                              </div>
-                              <p className="text-foreground mt-0.5">{seg.text}</p>
-                            </button>
-                          );
-                        })}
-                        <div className="mt-6 border-t border-border pt-3 text-center">
-                          <p className="text-[10px] text-muted-foreground/60">{t("workspace.ai_disclaimer")}</p>
-                        </div>
-                      </div>
-                    ) : (
-                      <NoContentState label={t("workspace.no_transcription")} />
+
+                    {/* Single summary tab */}
+                    {activeSummaryIdx >= 0 && visibleConclusionTexts[activeSummaryIdx] && (() => {
+                      const block = visibleConclusionTexts[activeSummaryIdx]!;
+                      if (block.status === "pending") return <SummaryTabPendingState />;
+                      if (block.status === "error") return <SummaryTabErrorState />;
+                      if (sourceViewVisible) {
+                        return <SourceView code={block.text} language={isHtmlContent(block.text) ? "html" : "markdown"} />;
+                      }
+                      return isHtmlContent(block.text) ? (() => {
+                        const { content, scopedStyles } = extractBody(block.text);
+                        return (
+                          <>
+                            {scopedStyles && <style dangerouslySetInnerHTML={{ __html: scopedStyles }} />}
+                            <div className="content-preview-inner" dangerouslySetInnerHTML={{ __html: content }} />
+                          </>
+                        );
+                      })() : (
+                        <>
+                          <SummaryMarkdownEditor
+                            content={block.text}
+                            onChange={(markdown) => handleConclusionChange(block.id, markdown)}
+                            onEditorReady={setSummaryEditor}
+                          />
+                          <FloatingMarkdownToolbar editor={summaryEditor} />
+                        </>
+                      );
+                    })()}
+
+                    {/* Note tab */}
+                    {activeNoteId && (
+                      <NoteContent key={activeNoteId} fileId={selectedItemId} noteId={activeNoteId} />
                     )}
-                  </div>
-                )}
-
-                {/* Single summary tab */}
-                {activeSummaryIdx >= 0 && conclusionTexts[activeSummaryIdx] && (() => {
-                  const block = conclusionTexts[activeSummaryIdx]!;
-                  if (sourceViewVisible) {
-                    return <SourceView code={block.text} language={isHtmlContent(block.text) ? "html" : "markdown"} />;
-                  }
-                  return isHtmlContent(block.text) ? (() => {
-                    const { content, scopedStyles } = extractBody(block.text);
-                    return (
-                      <>
-                        {scopedStyles && <style dangerouslySetInnerHTML={{ __html: scopedStyles }} />}
-                        <div className="content-preview-inner" dangerouslySetInnerHTML={{ __html: content }} />
-                      </>
-                    );
-                  })() : (
-                    <>
-                      <SummaryMarkdownEditor
-                        content={block.text}
-                        onChange={(markdown) => handleConclusionChange(block.id, markdown)}
-                        onEditorReady={setSummaryEditor}
-                      />
-                      <FloatingMarkdownToolbar editor={summaryEditor} />
-                    </>
-                  );
-                })()}
-
-                {/* Note tab */}
-                {activeNoteId && (
-                  <NoteContent key={activeNoteId} fileId={selectedItemId} noteId={activeNoteId} />
+                  </>
                 )}
               </div>
 
@@ -543,7 +784,57 @@ export function ContentPanel() {
         open={resummarizeOpen}
         onOpenChange={setResummarizeOpen}
         fileId={selectedItemId}
+        conclusionId={selectedConclusionIdForTemplate}
+        mode={summaryDialogMode}
+        onStarted={handleResummaryStarted}
+        onFinished={handleResummaryFinished}
       />
+    </div>
+  );
+}
+
+function ResummaryPendingState() {
+  const { t } = useTranslation();
+  return (
+    <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 text-center">
+      <Loader2 className="size-6 animate-spin text-muted-foreground" />
+      <div>
+        <p className="text-sm font-medium text-foreground">{t("resummarize.generating_title")}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{t("resummarize.generating_description")}</p>
+      </div>
+    </div>
+  );
+}
+
+function ResummaryErrorState() {
+  const { t } = useTranslation();
+  return (
+    <div className="flex min-h-[320px] flex-col items-center justify-center gap-2 text-center">
+      <p className="text-sm font-medium text-foreground">{t("resummarize.error_title")}</p>
+      <p className="text-xs text-muted-foreground">{t("resummarize.error_description")}</p>
+    </div>
+  );
+}
+
+function SummaryTabPendingState() {
+  const { t } = useTranslation();
+  return (
+    <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 text-center">
+      <Loader2 className="size-5 animate-spin text-muted-foreground" />
+      <div>
+        <p className="text-sm font-medium text-foreground">{t("resummarize.generating_title")}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{t("resummarize.generating_description")}</p>
+      </div>
+    </div>
+  );
+}
+
+function SummaryTabErrorState() {
+  const { t } = useTranslation();
+  return (
+    <div className="flex min-h-[320px] flex-col items-center justify-center gap-2 text-center">
+      <p className="text-sm font-medium text-foreground">{t("resummarize.error_title")}</p>
+      <p className="text-xs text-muted-foreground">{t("resummarize.error_description")}</p>
     </div>
   );
 }
@@ -777,7 +1068,8 @@ function EmptyState() {
 function LoadingState() {
   const { t } = useTranslation();
   return (
-    <div className="flex h-full items-center justify-center">
+    <div className="flex h-full items-center justify-center gap-2">
+      <Loader2 className="size-4 animate-spin text-muted-foreground" />
       <p className="text-xs text-muted-foreground">{t("workspace.loading")}</p>
     </div>
   );

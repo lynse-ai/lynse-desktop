@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.5 (2026-07-06)
+
+### Changed
+
+- Refine voiceprint settings and the enrollment flow
+- Simplify web app routing and remove obsolete code
+
 ## 0.1.4 (2026-06-21)
 
 ### New Features

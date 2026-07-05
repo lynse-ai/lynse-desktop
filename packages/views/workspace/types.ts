@@ -62,6 +62,73 @@ export interface FileTranscription {
   [key: string]: unknown;
 }
 
+export interface LocalTranscriptionSegment {
+  id: string;
+  text: string;
+  startMs?: number;
+  endMs?: number;
+  speakerId?: string;
+  speakerName?: string;
+  rawSpeaker?: string;
+  confidence?: number;
+  voiceprintId?: string;
+  /** @deprecated compatibility with first local records */
+  speaker?: string;
+}
+
+export type LocalTranscriptionStatus = "queued" | "transcribing" | "completed" | "failed";
+
+export interface LocalTranscriptionRecord {
+  id: string;
+  title: string;
+  sourcePath: string;
+  createdAt: string;
+  updatedAt: string;
+  transcriptText: string;
+  status: LocalTranscriptionStatus;
+  progressPhase?: LocalTranscriptionStatus;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+  expectedSpeakers?: number;
+  hotwordPackageId?: string;
+  engine: "funasr";
+  segments: LocalTranscriptionSegment[];
+  error?: string;
+}
+
+export interface LocalTranscriptionOptions {
+  expectedSpeakers?: number;
+  hotwordPackageId?: string;
+}
+
+export interface LocalHotwordTerm {
+  term: string;
+  replacement?: string;
+  enabled: boolean;
+  weight?: number;
+}
+
+export interface LocalHotwordPackage {
+  id: string;
+  name: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+  terms: LocalHotwordTerm[];
+}
+
+export interface LocalVoiceprint {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  sampleRecordId: string;
+  sampleSegmentIds: string[];
+  embedding: number[];
+  sampleText?: string;
+}
+
 export interface Folder {
   id: string;
   name: string;

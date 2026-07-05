@@ -5,6 +5,9 @@ directories:
 files:
   - out/**
   - "!out/**/*.map"
+extraResources:
+  - from: resources/funasr_transcribe.py
+    to: funasr_transcribe.py
 mac:
   category: public.app-category.productivity
   target:

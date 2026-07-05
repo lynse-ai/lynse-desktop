@@ -9,6 +9,8 @@ import { useWorkspaceStore } from "../store";
 import { useFiles } from "../hooks/use-files";
 import { useFolders } from "../hooks/use-folders";
 import type { WorkspaceItem } from "../types";
+import { filterWorkspaceFilesByFolder } from "./file-list-filter";
+import { LOCAL_TRANSCRIPTION_FOLDER_ID } from "../local-transcription";
 
 export function FileList() {
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
@@ -24,11 +26,16 @@ export function FileList() {
   const summarizingFileIds = useWorkspaceStore((s) => s.summarizingFileIds);
   const { t } = useTranslation();
 
-  const { data: files } = useFiles({ pageNum: 1, pageSize: 200 });
+  const { data: files } = useFiles({
+    pageNum: 1,
+    pageSize: 200,
+    folderId: selectedFolderId ?? undefined,
+  });
   const { data: folders } = useFolders();
 
   const folderName = useMemo(() => {
     if (selectedFolderId === "__all__") return t("layout.all_files");
+    if (selectedFolderId === LOCAL_TRANSCRIPTION_FOLDER_ID) return t("layout.local_transcriptions");
     if (selectedFolderId === "__uncategorized__") return t("layout.uncategorized");
     if (selectedFolderId === "__trash__") return t("layout.trash");
     if (!Array.isArray(folders)) return t("workspace.files");
@@ -45,12 +52,7 @@ export function FileList() {
 
   const filteredFiles = useMemo(() => {
     if (!Array.isArray(files)) return [];
-    const inFolder = files.filter((f) => {
-      if (selectedFolderId === "__all__") return true;
-      if (selectedFolderId === "__uncategorized__") return !f.folderId;
-      if (selectedFolderId === "__trash__") return false; // No API yet
-      return f.folderId === selectedFolderId;
-    });
+    const inFolder = filterWorkspaceFilesByFolder(files, selectedFolderId);
     let result = inFolder;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();

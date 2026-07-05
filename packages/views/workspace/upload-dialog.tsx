@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -22,7 +22,12 @@ import {
 } from "./hooks/use-files";
 import { useQueryClient } from "@tanstack/react-query";
 import type { PromptTemplate, UploadPhase } from "./types";
+import type { LocalHotwordPackage } from "./types";
 import { TemplateSelector } from "./template-selector";
+import {
+  getDesktopLocalTranscriptionApi,
+  OFFLINE_TRANSCRIPTION_ENABLED_KEY,
+} from "./local-transcription";
 
 // Accepted audio/video file types
 const ACCEPTED_TYPES = [
@@ -43,11 +48,16 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
 
   // State
   const [file, setFile] = useState<File | null>(null);
+  const [localAudioPath, setLocalAudioPath] = useState<string | null>(null);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const [phase, setPhase] = useState<UploadPhase>("idle");
   const [uploadPct, setUploadPct] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  const [offlineMode, setOfflineMode] = useState(false);
+  const [expectedSpeakers, setExpectedSpeakers] = useState("");
+  const [selectedHotwordPackageId, setSelectedHotwordPackageId] = useState("");
+  const [hotwordPackages, setHotwordPackages] = useState<LocalHotwordPackage[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { data: categories } = useTemplateCategories();
@@ -66,16 +76,32 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
 
   // Ensure a template is selected
   const effectiveTemplateId = selectedTemplateId || defaultTemplate?.id || "";
+  const localApi = getDesktopLocalTranscriptionApi();
+  const useOfflineTranscription = offlineMode && !!localApi;
+  const localAudioName = localAudioPath ? localAudioPath.split(/[\\/]/).pop() ?? localAudioPath : "";
+  const selectedFileName = useOfflineTranscription ? localAudioName : file?.name ?? "";
+  const hasSelectedSource = useOfflineTranscription ? !!localAudioPath : !!file;
 
   const isProcessing = phase !== "idle" && phase !== "complete" && phase !== "error";
 
+  useEffect(() => {
+    if (!open) return;
+    setOfflineMode(localStorage.getItem(OFFLINE_TRANSCRIPTION_ENABLED_KEY) === "1");
+    getDesktopLocalTranscriptionApi()?.listHotwordPackages()
+      .then(setHotwordPackages)
+      .catch(() => setHotwordPackages([]));
+  }, [open]);
+
   const reset = useCallback(() => {
     setFile(null);
+    setLocalAudioPath(null);
     setSelectedTemplateId("");
     setPhase("idle");
     setUploadPct(0);
     setErrorMsg("");
     setDragOver(false);
+    setExpectedSpeakers("");
+    setSelectedHotwordPackageId("");
   }, []);
 
   const handleClose = useCallback(
@@ -93,19 +119,52 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
     if (f) setFile(f);
   }, []);
 
+  const handleFileInputClick = useCallback(async () => {
+    if (useOfflineTranscription) {
+      const selectedPath = await localApi?.pickAudioFile();
+      if (selectedPath) setLocalAudioPath(selectedPath);
+      return;
+    }
+    fileInputRef.current?.click();
+  }, [localApi, useOfflineTranscription]);
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
+    if (useOfflineTranscription) return;
     const f = e.dataTransfer.files?.[0];
     if (f) setFile(f);
-  }, []);
+  }, [useOfflineTranscription]);
 
   // Main upload pipeline
   const handleStart = useCallback(async () => {
-    if (!file || !effectiveTemplateId) return;
+    if (!hasSelectedSource) return;
+    if (!useOfflineTranscription && (!file || !effectiveTemplateId)) return;
     setErrorMsg("");
 
     try {
+      if (useOfflineTranscription) {
+        if (!localAudioPath || !localApi) return;
+        setPhase("transcribing");
+        const expectedSpeakersValue = Number.parseInt(expectedSpeakers, 10);
+        const record = await localApi.transcribe(localAudioPath, {
+          expectedSpeakers: Number.isFinite(expectedSpeakersValue) && expectedSpeakersValue > 0
+            ? expectedSpeakersValue
+            : undefined,
+          hotwordPackageId: selectedHotwordPackageId || undefined,
+        });
+        setPhase("complete");
+        toast.success(t("upload.local_success"));
+        qc.invalidateQueries({ queryKey: ["files"] });
+        qc.invalidateQueries({ queryKey: ["file-transcription", record.id] });
+        setTimeout(() => {
+          reset();
+          onOpenChange(false);
+        }, 1500);
+        return;
+      }
+
+      if (!file) return;
       // Phase 1: Upload to OSS
       setPhase("uploading");
       setUploadPct(0);
@@ -142,7 +201,7 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
       setErrorMsg(msg);
       toast.error(t("upload.failed"), { description: msg });
     }
-  }, [file, effectiveTemplateId, transferFile, qc, t, reset, onOpenChange]);
+  }, [file, effectiveTemplateId, transferFile, qc, t, reset, onOpenChange, hasSelectedSource, localApi, localAudioPath, useOfflineTranscription, expectedSpeakers, selectedHotwordPackageId]);
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -155,21 +214,33 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
         {phase === "idle" || phase === "error" ? (
           <IdleContent
             file={file}
+            localAudioName={localAudioName}
+            offlineMode={useOfflineTranscription}
             phase={phase}
             errorMsg={errorMsg}
             dragOver={dragOver}
             categories={categories ?? []}
             selectedTemplateId={effectiveTemplateId}
+            expectedSpeakers={expectedSpeakers}
+            hotwordPackages={hotwordPackages}
+            selectedHotwordPackageId={selectedHotwordPackageId}
             onFileSelect={handleFileSelect}
             onDrop={handleDrop}
             onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
             onTemplateSelect={setSelectedTemplateId}
-            onFileInputClick={() => fileInputRef.current?.click()}
+            onExpectedSpeakersChange={setExpectedSpeakers}
+            onHotwordPackageSelect={setSelectedHotwordPackageId}
+            onFileInputClick={handleFileInputClick}
             fileInputRef={fileInputRef}
           />
         ) : (
-          <ProgressContent phase={phase} uploadPct={uploadPct} fileName={file?.name ?? ""} />
+          <ProgressContent
+            phase={phase}
+            uploadPct={uploadPct}
+            fileName={selectedFileName}
+            offlineMode={useOfflineTranscription}
+          />
         )}
 
         <DialogFooter>
@@ -185,10 +256,10 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
               </Button>
               <Button
                 onClick={handleStart}
-                disabled={!file || !effectiveTemplateId || phase === "error" && !file}
+                disabled={!hasSelectedSource || (!useOfflineTranscription && !effectiveTemplateId) || phase === "error" && !hasSelectedSource}
               >
                 <Sparkles className="size-3.5 mr-1.5" />
-                {t("upload.start")}
+                {useOfflineTranscription ? t("upload.local_start") : t("upload.start")}
               </Button>
             </>
           )}
@@ -202,32 +273,46 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
 
 interface IdleContentProps {
   file: File | null;
+  localAudioName: string;
+  offlineMode: boolean;
   phase: UploadPhase;
   errorMsg: string;
   dragOver: boolean;
   categories: { category: string; templates: PromptTemplate[] }[];
   selectedTemplateId: string;
+  expectedSpeakers: string;
+  hotwordPackages: LocalHotwordPackage[];
+  selectedHotwordPackageId: string;
   onFileSelect: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onDrop: (e: React.DragEvent) => void;
   onDragOver: (e: React.DragEvent) => void;
   onDragLeave: () => void;
   onTemplateSelect: (id: string) => void;
-  onFileInputClick: () => void;
+  onExpectedSpeakersChange: (value: string) => void;
+  onHotwordPackageSelect: (id: string) => void;
+  onFileInputClick: () => void | Promise<void>;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
 }
 
 function IdleContent({
   file,
+  localAudioName,
+  offlineMode,
   phase,
   errorMsg,
   dragOver,
   categories,
   selectedTemplateId,
+  expectedSpeakers,
+  hotwordPackages,
+  selectedHotwordPackageId,
   onFileSelect,
   onDrop,
   onDragOver,
   onDragLeave,
   onTemplateSelect,
+  onExpectedSpeakersChange,
+  onHotwordPackageSelect,
   onFileInputClick,
   fileInputRef,
 }: IdleContentProps) {
@@ -245,7 +330,7 @@ function IdleContent({
         )}
         onClick={onFileInputClick}
         onDrop={onDrop}
-        onDragOver={onDragOver}
+        onDragOver={offlineMode ? undefined : onDragOver}
         onDragLeave={onDragLeave}
       >
         <input
@@ -255,7 +340,13 @@ function IdleContent({
           className="hidden"
           onChange={onFileSelect}
         />
-        {file ? (
+        {offlineMode && localAudioName ? (
+          <>
+            <FileAudio className="size-8 text-primary" />
+            <p className="text-sm font-medium">{localAudioName}</p>
+            <p className="text-xs text-muted-foreground">{t("upload.local_file_hint")}</p>
+          </>
+        ) : file ? (
           <>
             <FileAudio className="size-8 text-primary" />
             <p className="text-sm font-medium">{file.name}</p>
@@ -266,8 +357,12 @@ function IdleContent({
         ) : (
           <>
             <Upload className="size-8 text-muted-foreground/50" />
-            <p className="text-sm text-muted-foreground">{t("upload.drop_hint")}</p>
-            <p className="text-xs text-muted-foreground/60">{t("upload.format_hint")}</p>
+            <p className="text-sm text-muted-foreground">
+              {offlineMode ? t("upload.local_pick_hint") : t("upload.drop_hint")}
+            </p>
+            <p className="text-xs text-muted-foreground/60">
+              {offlineMode ? t("upload.local_format_hint") : t("upload.format_hint")}
+            </p>
           </>
         )}
       </div>
@@ -277,13 +372,42 @@ function IdleContent({
         <p className="text-sm text-destructive">{errorMsg}</p>
       )}
 
-      {/* Template selector */}
-      <TemplateSelector
-        categories={categories}
-        selectedId={selectedTemplateId}
-        onSelect={onTemplateSelect}
-        scrollHeight="h-56"
-      />
+      {!offlineMode && (
+        <TemplateSelector
+          categories={categories}
+          selectedId={selectedTemplateId}
+          onSelect={onTemplateSelect}
+          scrollHeight="h-56"
+        />
+      )}
+
+      {offlineMode && (
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            预计发言人数
+            <input
+              value={expectedSpeakers}
+              onChange={(event) => onExpectedSpeakersChange(event.target.value.replace(/[^\d]/g, ""))}
+              placeholder="自动"
+              inputMode="numeric"
+              className="h-9 rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            热词包
+            <select
+              value={selectedHotwordPackageId}
+              onChange={(event) => onHotwordPackageSelect(event.target.value)}
+              className="h-9 rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
+            >
+              <option value="">不使用</option>
+              {hotwordPackages.filter((pkg) => pkg.enabled).map((pkg) => (
+                <option key={pkg.id} value={pkg.id}>{pkg.name}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
     </div>
   );
 }
@@ -296,20 +420,24 @@ function ProgressContent({
   phase,
   uploadPct,
   fileName,
+  offlineMode,
 }: {
   phase: UploadPhase;
   uploadPct: number;
   fileName: string;
+  offlineMode: boolean;
 }) {
   const { t } = useTranslation();
 
-  const steps = [
+  const steps = offlineMode ? [
+    { key: "transcribing", label: t("upload.phase_local_transcribing"), pct: -1 },
+  ] as const : [
     { key: "uploading", label: t("upload.phase_uploading"), pct: phase === "uploading" ? uploadPct : phase === "transcribing" || phase === "summarizing" || phase === "complete" ? 100 : 0 },
     { key: "transcribing", label: t("upload.phase_transcribing"), pct: -1 },
     { key: "summarizing", label: t("upload.phase_summarizing"), pct: -1 },
   ] as const;
 
-  const phaseOrder = ["uploading", "transcribing", "summarizing", "complete"];
+  const phaseOrder = offlineMode ? ["transcribing", "complete"] : ["uploading", "transcribing", "summarizing", "complete"];
   const currentIdx = phaseOrder.indexOf(phase);
 
   return (

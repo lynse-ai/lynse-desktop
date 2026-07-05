@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "path";
 import { electronApp, optimizer, is } from "@electron-toolkit/utils";
+import { registerLocalTranscriptionIpc } from "./local-transcription";
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -72,6 +73,12 @@ if (!gotTheLock) {
 
     ipcMain.handle("shell:openExternal", (_event, url: string) => {
       require("electron").shell.openExternal(url);
+    });
+
+    registerLocalTranscriptionIpc({
+      app,
+      ipcMain,
+      getMainWindow: () => mainWindow,
     });
 
     createWindow();

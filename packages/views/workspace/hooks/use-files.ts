@@ -14,11 +14,27 @@ import type {
   TransStatusMap,
   AiTaskAddReq,
   AiTaskResultVO,
+  LocalTranscriptionRecord,
 } from "../types";
+import {
+  getDesktopLocalTranscriptionApi,
+  isLocalFileId,
+  localRecordToTranscription,
+  mergeCloudAndLocalFiles,
+} from "../local-transcription";
 
 // Lynse API returns { code, data: [...files], total, msg }
 // ApiClient unwraps to the inner data field (the file array)
 type FileListResponse = Record<string, unknown>[];
+type FilesQueryResult = {
+  cloudItems: FileListResponse;
+  localRecords: LocalTranscriptionRecord[];
+};
+type FilesRequest = {
+  path: string;
+  params: Record<string, string | number | boolean | undefined>;
+  includeLocalRecords: boolean;
+};
 
 export interface SummaryTabModel {
   key: string;
@@ -27,6 +43,41 @@ export interface SummaryTabModel {
   text: string;
   status: "ready" | "pending" | "error";
   pendingId?: string;
+}
+
+export function createInfographicSummaryHtml({
+  title,
+  source,
+}: {
+  title: string;
+  source: string;
+}): string {
+  const safeTitle = escapeHtml(title);
+  const lines = source
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const listItems = lines
+    .map((line) => line.replace(/^[-*]\s*/, ""))
+    .map((line) => `<li>${escapeHtml(line)}</li>`)
+    .join("");
+
+  return [
+    '<section data-summary-template="infographic">',
+    `<h1>${safeTitle}</h1>`,
+    "<h2>核心发展脉络</h2>",
+    `<ul>${listItems}</ul>`,
+    "</section>",
+  ].join("");
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function normalizeTagValue(value: unknown): string[] {
@@ -57,6 +108,27 @@ export function parseFileTags(file: Record<string, unknown>): string[] {
   return Array.from(new Set(tags));
 }
 
+export function buildFilesRequest(params: {
+  pageNum?: number;
+  pageSize?: number;
+  originalFilename?: string;
+  folderId?: string;
+}): FilesRequest {
+  const baseParams = {
+    pageNum: params.pageNum ?? 1,
+    pageSize: params.pageSize ?? 100,
+  };
+
+  return {
+    path: "/api/business/file/page",
+    params: {
+      ...baseParams,
+      originalFilename: params.originalFilename,
+    },
+    includeLocalRecords: params.folderId !== "__trash__",
+  };
+}
+
 export function mergePendingSummaryTab({
   tabs,
   pendingId,
@@ -82,28 +154,33 @@ export function useFiles(params: {
   pageNum?: number;
   pageSize?: number;
   originalFilename?: string;
+  folderId?: string;
 }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
   return useQuery({
     queryKey: ["files", params],
     queryFn: async () => {
-      const data = await api().getWithParams<FileListResponse | Record<string, unknown>>("/api/business/file/page", {
-        pageNum: params.pageNum ?? 1,
-        pageSize: params.pageSize ?? 100,
-        originalFilename: params.originalFilename,
-      });
+      const request = buildFilesRequest(params);
+      const localApi = getDesktopLocalTranscriptionApi();
+      const localRecords = localApi && request.includeLocalRecords ? await localApi.list() : [];
+      if (!isAuthenticated) return { cloudItems: [], localRecords };
+
+      const data = await api().getWithParams<FileListResponse | Record<string, unknown>>(
+        request.path,
+        request.params,
+      );
       // After unwrapping, data might be the file array directly
       // or an object with list/records/data key
-      if (Array.isArray(data)) return data;
+      if (Array.isArray(data)) return { cloudItems: data, localRecords };
       for (const key of ["list", "records", "data"]) {
         const arr = (data as Record<string, unknown>)[key];
-        if (Array.isArray(arr)) return arr;
+        if (Array.isArray(arr)) return { cloudItems: arr, localRecords };
       }
-      return [];
+      return { cloudItems: [], localRecords };
     },
-    select: (items): WorkspaceItem[] =>
-      items.map((f) => ({
+    select: (result: FilesQueryResult): WorkspaceItem[] => {
+      const cloudItems = result.cloudItems.map((f) => ({
         id: String((f as Record<string, unknown>).id ?? ""),
         type: "file" as const,
         title: String((f as Record<string, unknown>).originalFilename ?? ""),
@@ -111,8 +188,10 @@ export function useFiles(params: {
         createdAt: String((f as Record<string, unknown>).createTime ?? ""),
         folderId: (f as Record<string, unknown>).folderId as string | undefined,
         tags: parseFileTags(f as Record<string, unknown>),
-      })),
-    enabled: isAuthenticated,
+      }));
+      return mergeCloudAndLocalFiles(cloudItems, result.localRecords);
+    },
+    enabled: isAuthenticated || !!getDesktopLocalTranscriptionApi(),
   });
 }
 
@@ -125,7 +204,7 @@ export function useFileDetail(fileId: string | null) {
       api().getWithParams<FileDetail>("/api/business/file/info", {
         fileId: fileId!,
       }),
-    enabled: !!fileId && isAuthenticated,
+    enabled: !!fileId && !isLocalFileId(fileId) && isAuthenticated,
   });
 }
 
@@ -138,7 +217,7 @@ export function useFileConclusions(fileId: string | null) {
       api().getWithParams<FileConclusion[]>("/api/business/file/conclusion/list", {
         fileId: fileId!,
       }),
-    enabled: !!fileId && isAuthenticated,
+    enabled: !!fileId && !isLocalFileId(fileId) && isAuthenticated,
   });
 }
 
@@ -151,7 +230,7 @@ export function useFileOutline(fileId: string | null) {
       api().getWithParams<FileOutline>("/api/business/file/outline/get", {
         fileId: fileId!,
       }),
-    enabled: !!fileId && isAuthenticated,
+    enabled: !!fileId && !isLocalFileId(fileId) && isAuthenticated,
   });
 }
 
@@ -160,11 +239,17 @@ export function useFileTranscription(fileId: string | null) {
 
   return useQuery({
     queryKey: ["file-transcription", fileId],
-    queryFn: () =>
-      api().getWithParams<FileTranscription>("/api/business/file/trans/get", {
+    queryFn: async () => {
+      if (isLocalFileId(fileId)) {
+        const record = await getDesktopLocalTranscriptionApi()?.get(fileId!);
+        if (!record) throw new Error("Local transcription not found");
+        return localRecordToTranscription(record);
+      }
+      return api().getWithParams<FileTranscription>("/api/business/file/trans/get", {
         fileId: fileId!,
-      }),
-    enabled: !!fileId && isAuthenticated,
+      });
+    },
+    enabled: !!fileId && (isLocalFileId(fileId) || isAuthenticated),
   });
 }
 
@@ -177,6 +262,9 @@ export function useFileAudioUrl(fileId: string | null) {
   return useQuery({
     queryKey: ["file-audio-url", fileId],
     queryFn: async () => {
+      if (isLocalFileId(fileId)) {
+        return getDesktopLocalTranscriptionApi()?.getAudioUrl(fileId!) ?? null;
+      }
       try {
         const data = await api().getWithParams<string>("/api/business/file/presign/download", {
           fileId: fileId!,
@@ -186,7 +274,7 @@ export function useFileAudioUrl(fileId: string | null) {
         return null;
       }
     },
-    enabled: !!fileId && isAuthenticated,
+    enabled: !!fileId && (isLocalFileId(fileId) || isAuthenticated),
     staleTime: 5 * 60 * 1000, // presigned URLs expire, but cache for 5 min
     retry: false, // don't retry — endpoint may not exist
   });

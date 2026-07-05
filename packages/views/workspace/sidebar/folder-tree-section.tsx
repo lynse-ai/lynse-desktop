@@ -8,6 +8,7 @@ import {
   Layers,
   Trash2,
   FolderPlus,
+  FileAudio,
   ChevronDown,
   ChevronRight,
   Circle,
@@ -19,8 +20,10 @@ import {
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useFolders } from "../hooks/use-folders";
 import { useFolderCounts } from "../hooks/use-folder-counts";
+import { useFiles } from "../hooks/use-files";
 import { useCreateFolder, useEditFolder } from "../hooks/use-folder-mutations";
 import { useWorkspaceStore, getWorkspaceState } from "../store";
+import { isLocalFileId, LOCAL_TRANSCRIPTION_FOLDER_ID } from "../local-transcription";
 import { FolderContextMenu } from "./folder-context-menu";
 import type { FolderInfo } from "../types";
 
@@ -29,6 +32,7 @@ export function FolderTreeSection() {
   const { t } = useTranslation();
   const { data: folders } = useFolders();
   const { data: counts } = useFolderCounts();
+  const { data: allFiles } = useFiles({ pageNum: 1, pageSize: 200, folderId: "__all__" });
   const selectedFolderId = useWorkspaceStore((s) => s.selectedFolderId);
   const selectFolder = useWorkspaceStore((s) => s.selectFolder);
   const sidebarSectionsCollapsed = useWorkspaceStore((s) => s.sidebarSectionsCollapsed);
@@ -51,6 +55,10 @@ export function FolderTreeSection() {
   const foldersCollapsed = sidebarSectionsCollapsed.has("folders");
 
   const folderList: FolderInfo[] = Array.isArray(folders) ? folders : [];
+  const localTranscriptionCount = useMemo(
+    () => Array.isArray(allFiles) ? allFiles.filter((file) => isLocalFileId(file.id)).length : 0,
+    [allFiles],
+  );
 
   // Build count map from server response
   const countMap = useMemo(() => {
@@ -102,6 +110,14 @@ export function FolderTreeSection() {
           count={counts?.all ?? 0}
           active={selectedFolderId === "__all__"}
           onClick={() => selectFolder("__all__")}
+        />
+        <VirtualItem
+          icon={FileAudio}
+          label={t("layout.local_transcriptions")}
+          count={localTranscriptionCount}
+          active={selectedFolderId === LOCAL_TRANSCRIPTION_FOLDER_ID}
+          onClick={() => selectFolder(LOCAL_TRANSCRIPTION_FOLDER_ID)}
+          iconClassName="opacity-70"
         />
         <VirtualItem
           icon={Circle}

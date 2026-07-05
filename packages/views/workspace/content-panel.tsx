@@ -21,6 +21,7 @@ import { SummaryMarkdownEditor } from "./summary-editor";
 import { FloatingMarkdownToolbar } from "./center-panel/markdown-toolbar";
 import { AudioPlayer } from "./audio-player";
 import type { AudioPlayerHandle } from "./audio-player";
+import { getDisplayTitle, type EditedTitleState } from "./title-edit-state";
 import {
   mergePendingSummaryTab,
   useDeleteConclusion,
@@ -33,7 +34,12 @@ import {
 } from "./hooks/use-files";
 import type { SummaryTabModel } from "./hooks/use-files";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ResummarizeDialog, type SummaryTemplateDialogMode } from "./resummarize-dialog";
+import {
+  getDesktopLocalTranscriptionApi,
+  isLocalFileId,
+} from "./local-transcription";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -219,9 +225,11 @@ export function ContentPanel() {
   const sourceViewVisible = useWorkspaceStore((s) => s.sourceViewVisible);
   const noteTabs = useWorkspaceStore((s) => s.noteTabs);
   const removeNoteTab = useWorkspaceStore((s) => s.removeNoteTab);
+  const selectItem = useWorkspaceStore((s) => s.selectItem);
   const summarizingFileIds = useWorkspaceStore((s) => s.summarizingFileIds);
   const setFileSummarizing = useWorkspaceStore((s) => s.setFileSummarizing);
   const { t, i18n } = useTranslation();
+  const qc = useQueryClient();
   const summaryTabFallback = SUMMARY_TAB_FALLBACK_TEXT[getSummaryTabFallbackLanguage(i18n.language)];
   const text = useCallback(
     (key: string, fallbackValue: string) => {
@@ -255,13 +263,21 @@ export function ContentPanel() {
     return files.find((f) => f.id === selectedItemId)?.title ?? null;
   }, [selectedItemId, files]);
 
+  const selectedFile = useMemo(() => {
+    if (!selectedItemId || !files) return null;
+    return files.find((f) => f.id === selectedItemId) ?? null;
+  }, [selectedItemId, files]);
+
+  const isLocalSelectedItem = isLocalFileId(selectedItemId);
+  const localStatusTag = selectedFile?.tags?.find((tag) => ["排队中", "转写中", "失败", "已完成"].includes(tag));
+
   const selectedCreatedAt = useMemo(() => {
     if (!selectedItemId || !files) return null;
     return files.find((f) => f.id === selectedItemId)?.createdAt ?? null;
   }, [selectedItemId, files]);
 
-  const [editedTitle, setEditedTitle] = useState<string | null>(null);
-  const displayTitle = editedTitle ?? selectedTitle;
+  const [editedTitle, setEditedTitle] = useState<EditedTitleState | null>(null);
+  const displayTitle = getDisplayTitle(selectedItemId, selectedTitle, editedTitle);
 
   // Conclusions — each FileConclusionVO has a `templateName` field for the conclusion template name
   const conclusionTexts = useMemo(() => {
@@ -317,6 +333,7 @@ export function ContentPanel() {
     return records.map((seg) => {
       const s = seg as Record<string, unknown>;
       return {
+        id: String(s.id ?? ""),
         speaker: String(s.speakerName ?? ""),
         time: String(s.beginTimeStr ?? ""),
         text: String(s.text ?? ""),
@@ -357,6 +374,38 @@ export function ContentPanel() {
   const scrollToHeading = useCallback((id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
+
+  const refreshLocalQueries = useCallback((fileId?: string | null) => {
+    qc.invalidateQueries({ queryKey: ["files"] });
+    if (fileId) {
+      qc.invalidateQueries({ queryKey: ["file-transcription", fileId] });
+      qc.invalidateQueries({ queryKey: ["file-audio-url", fileId] });
+    }
+  }, [qc]);
+
+  const handleRetryLocalTranscription = useCallback(async () => {
+    if (!selectedItemId) return;
+    await getDesktopLocalTranscriptionApi()?.retry(selectedItemId);
+    refreshLocalQueries(selectedItemId);
+  }, [refreshLocalQueries, selectedItemId]);
+
+  const handleDeleteLocalTranscription = useCallback(async () => {
+    if (!selectedItemId) return;
+    await getDesktopLocalTranscriptionApi()?.delete(selectedItemId);
+    refreshLocalQueries(selectedItemId);
+    selectItem(null, null);
+  }, [refreshLocalQueries, selectItem, selectedItemId]);
+
+  const handleCreateVoiceprint = useCallback(async (segmentId: string, speakerName: string) => {
+    if (!selectedItemId || !segmentId) return;
+    const name = window.prompt("保存声纹名称", speakerName || "发言人");
+    if (!name?.trim()) return;
+    await getDesktopLocalTranscriptionApi()?.createVoiceprint({
+      name: name.trim(),
+      sampleRecordId: selectedItemId,
+      sampleSegmentIds: [segmentId],
+    });
+  }, [selectedItemId]);
 
   // Post-render: replace <img> src with blob URLs for authenticated image loading
   const contentPreviewRef = useRef<HTMLDivElement>(null);
@@ -629,10 +678,40 @@ export function ContentPanel() {
               <input
                 type="text"
                 value={displayTitle ?? ""}
-                onChange={(e) => setEditedTitle(e.target.value)}
+                onChange={(e) => {
+                  if (!selectedItemId) return;
+                  setEditedTitle({ itemId: selectedItemId, title: e.target.value });
+                }}
                 placeholder={t("workspace.enter_filename")}
                 className="w-full border-none bg-transparent text-base font-semibold outline-none placeholder:text-muted-foreground/50 shrink-0"
               />
+              {isLocalSelectedItem && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                  {localStatusTag && (
+                    <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
+                      {localStatusTag}
+                    </span>
+                  )}
+                  {localStatusTag === "失败" && (
+                    <button
+                      type="button"
+                      onClick={handleRetryLocalTranscription}
+                      className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    >
+                      <RefreshCw className="size-3" />
+                      重试
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleDeleteLocalTranscription}
+                    className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    <Trash2 className="size-3" />
+                    删除
+                  </button>
+                </div>
+              )}
               {selectedCreatedAt && (
                 <div className="mt-1 text-[11px] text-muted-foreground shrink-0">
                   {formatDate(selectedCreatedAt)}
@@ -680,7 +759,7 @@ export function ContentPanel() {
                             {transSegments.map((seg, i) => {
                               const color = getSpeakerColor(seg.speaker);
                               return (
-                                <button
+                                <div
                                   key={i}
                                   onClick={() => {
                                     if (seg.beginTimeMs != null) setHighlightTimeMs(seg.beginTimeMs);
@@ -696,7 +775,21 @@ export function ContentPanel() {
                                     <span className="shrink-0 font-semibold text-xs" style={{ color }}>{seg.speaker}</span>
                                   </div>
                                   <p className="text-foreground mt-0.5">{seg.text}</p>
-                                </button>
+                                  {isLocalSelectedItem && seg.id && (
+                                    <div className="mt-1">
+                                      <button
+                                        type="button"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          handleCreateVoiceprint(seg.id, seg.speaker);
+                                        }}
+                                        className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                                      >
+                                        保存声纹
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
                               );
                             })}
                             <div className="mt-6 border-t border-border pt-3 text-center">

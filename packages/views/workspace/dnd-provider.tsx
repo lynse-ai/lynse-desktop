@@ -3,8 +3,9 @@
 import {
   createContext,
   useContext,
-  useState,
   useCallback,
+  useRef,
+  useState,
   type ReactNode,
 } from "react";
 import {
@@ -35,7 +36,10 @@ export function useDndBridge() {
 
 export function DndProvider({ children }: { children: ReactNode }) {
   const [activeFileTitle, setActiveFileTitle] = useState<string | null>(null);
-  const [handler, setHandler] = useState<((event: DragEndEvent) => void) | null>(null);
+  const handlerRef = useRef<((event: DragEndEvent) => void) | null>(null);
+  const setOnDragEnd = useCallback((handler: ((event: DragEndEvent) => void) | null) => {
+    handlerRef.current = handler;
+  }, []);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -49,13 +53,13 @@ export function DndProvider({ children }: { children: ReactNode }) {
   const onDragEnd = useCallback(
     (event: DragEndEvent) => {
       setActiveFileTitle(null);
-      handler?.(event);
+      handlerRef.current?.(event);
     },
-    [handler],
+    [],
   );
 
   return (
-    <DndBridgeContext.Provider value={{ setOnDragEnd: setHandler }}>
+    <DndBridgeContext.Provider value={{ setOnDragEnd }}>
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
         {children}
         <DragOverlay>

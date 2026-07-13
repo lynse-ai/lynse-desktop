@@ -13,11 +13,12 @@ const TITLE_BAR_HEIGHT = 38;
 /**
  * Full-width title bar for the desktop app.
  * Layout: [Logo] — [Folder > File Title] — [Spacer]
- * The entire bar is draggable for window movement (Electron).
+ * The entire bar is draggable for window movement in Electron and Tauri.
  */
 export function TitleBar() {
   const { t } = useTranslation();
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
+  const selectedItemTitle = useWorkspaceStore((s) => s.selectedItemTitle);
   const selectedFolderId = useWorkspaceStore((s) => s.selectedFolderId);
   const contentTab = useWorkspaceStore((s) => s.contentTab);
   const chatPanelVisible = useWorkspaceStore((s) => s.chatPanelVisible);
@@ -39,13 +40,15 @@ export function TitleBar() {
   }, [selectedFolderId, folders, t]);
 
   const fileTitle = useMemo(() => {
-    if (!selectedItemId || !Array.isArray(files)) return null;
+    if (!selectedItemId) return null;
+    if (!Array.isArray(files)) return selectedItemTitle;
     const found = files.find((f) => f.id === selectedItemId);
-    return found?.title ?? null;
-  }, [selectedItemId, files]);
+    return found?.title || selectedItemTitle;
+  }, [selectedItemId, files, selectedItemTitle]);
 
   const dragStyle = { WebkitAppRegion: "drag" } as React.CSSProperties;
   const noDragStyle = { WebkitAppRegion: "no-drag" } as React.CSSProperties;
+  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
   return (
     <div
@@ -53,7 +56,10 @@ export function TitleBar() {
       style={{ height: TITLE_BAR_HEIGHT, ...dragStyle }}
     >
       {/* Left — Folder breadcrumb + File title */}
-      <div className="flex-1 flex items-center gap-1.5 min-w-0 px-4">
+      <div
+        className="flex-1 flex items-center gap-1.5 min-w-0 px-4"
+        data-tauri-drag-region={isTauri || undefined}
+      >
         {folderName && (
           <>
             <span className="truncate text-xs text-muted-foreground">{folderName}</span>

@@ -144,7 +144,7 @@ export function FileList() {
               file={file}
               isSelected={selectedItemId === file.id}
               isSummarizing={summarizingFileIds.has(file.id)}
-              onSelect={() => selectItem(file.id, "file")}
+              onSelect={() => selectItem(file.id, "file", file.title)}
             />
           ))
         )}

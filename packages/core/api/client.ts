@@ -6,6 +6,19 @@ type ClientOptions = {
 // All requests go through /api/proxy to avoid CORS issues.
 // The proxy reads x-lynse-api-url to know where to forward.
 const PROXY_PREFIX = "/api/proxy";
+let apiTransportMode: "proxy" | "direct" = "proxy";
+
+/**
+ * Desktop shells that provide a native fetch implementation can bypass the
+ * browser-only development proxy while the web app keeps its existing route.
+ */
+export function setApiTransportMode(mode: "proxy" | "direct") {
+  apiTransportMode = mode;
+}
+
+function apiRequestUrl(backendUrl: string, path: string): string {
+  return apiTransportMode === "direct" ? `${backendUrl}${path}` : `${PROXY_PREFIX}${path}`;
+}
 
 export class ApiClient {
   // The actual Lynse backend URL (e.g. http://api.lynse.cn)
@@ -54,7 +67,7 @@ export class ApiClient {
     }
 
     // Route through local proxy
-    const url = `${PROXY_PREFIX}${path}`;
+    const url = apiRequestUrl(this.backendUrl, path);
 
     const res = await fetch(url, {
       ...options,
@@ -144,7 +157,7 @@ export class ApiClient {
     if (this.apiKey) headers["X-API-Key"] = this.apiKey;
     if (this.identity?.platform) headers["X-Client-Platform"] = this.identity.platform;
 
-    const url = `${PROXY_PREFIX}${path}`;
+    const url = apiRequestUrl(this.backendUrl, path);
 
     (async () => {
       try {

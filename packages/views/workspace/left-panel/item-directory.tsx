@@ -153,7 +153,7 @@ export function ItemDirectory() {
                       groupItems.map((item) => (
                         <button
                           key={item.id}
-                          onClick={() => selectItem(item.id, "file")}
+                          onClick={() => selectItem(item.id, "file", item.title)}
                           className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-sidebar-accent ${
                             selectedItemId === item.id
                               ? "bg-sidebar-accent text-sidebar-accent-foreground"

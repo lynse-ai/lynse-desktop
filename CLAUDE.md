@@ -16,7 +16,7 @@ Lynse is a meeting knowledge management platform — recording, transcription, n
 **Monorepo frontend (pnpm workspaces + Turborepo) with shared packages.**
 
 - `apps/web/` — Next.js frontend (App Router)
-- `apps/desktop/` — Electron desktop app (electron-vite)
+- `apps/tauri/` — Tauri 2 desktop app (Rust shell + Vite renderer). Native capabilities — local FunASR transcription, voiceprints, hotwords, `local-media://` streaming — live in `apps/tauri/src-tauri/src/lib.rs`.
 - `packages/ui/` — Atomic UI components (shadcn, Base UI). Extracted from Multica's design system.
 - `packages/views/` — Shared business pages/components (zero next/* imports, zero react-router imports)
 - `packages/core/` — Headless business logic: API client, auth, navigation, platform layer
@@ -44,7 +44,7 @@ Lynse is a meeting knowledge management platform — recording, transcription, n
 - `packages/ui/` — zero `@lynse/core` imports (pure UI)
 - `packages/views/` — zero `next/*` imports, zero `react-router-dom` imports. Use `NavigationAdapter` for all routing.
 - `apps/web/platform/` — the only place for Next.js APIs (`next/navigation`)
-- `apps/desktop/src/renderer/src/platform/` — the only place for react-router-dom navigation wiring
+- `apps/tauri/src/platform/` — the only place for desktop navigation wiring (state-based `NavigationAdapter`)
 
 ## Commands
 
@@ -54,7 +54,7 @@ pnpm install
 
 # Development
 pnpm dev:web          # Next.js dev server (port 3000)
-pnpm dev:desktop      # Electron dev (electron-vite, HMR)
+pnpm dev:desktop      # Tauri desktop dev (alias of dev:tauri)
 
 # Build
 pnpm build            # Build all apps
@@ -67,9 +67,8 @@ pnpm test             # TS tests (Vitest)
 # shadcn — add UI components
 pnpm ui:add badge     # Adds component to packages/ui/components/ui/
 
-# Desktop packaging
-pnpm --filter @lynse/desktop build     # Compile TS → JS
-pnpm --filter @lynse/desktop package   # Package into .app/.dmg/.exe
+# Desktop packaging (Tauri)
+pnpm --filter @lynse/tauri build       # Build + bundle into .app/.dmg (Rust + Vite)
 ```
 
 ## Coding Rules

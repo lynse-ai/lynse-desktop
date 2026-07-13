@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev:web": "turbo dev --filter=@lynse/web",
-    "dev:desktop": "turbo dev --filter=@lynse/desktop",
+    "dev:desktop": "turbo dev --filter=@lynse/tauri",
+    "dev:tauri": "turbo dev --filter=@lynse/tauri",
     "build": "turbo build",
     "typecheck": "turbo typecheck",
     "lint": "turbo lint",
@@ -15,8 +16,7 @@
   "packageManager": "pnpm@10.28.2",
   "pnpm": {
     "onlyBuiltDependencies": [
-      "esbuild",
-      "electron"
+      "esbuild"
     ],
     "overrides": {
       "@types/react": "catalog:",

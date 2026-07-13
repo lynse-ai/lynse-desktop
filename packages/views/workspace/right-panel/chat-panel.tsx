@@ -12,6 +12,7 @@ import { useFiles } from "../hooks/use-files";
 
 export function ChatPanel() {
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
+  const selectedItemTitle = useWorkspaceStore((s) => s.selectedItemTitle);
   const toggleChatPanel = useWorkspaceStore((s) => s.toggleChatPanel);
   const { messages, isLoading, sendMessage, clearMessages, stopStreaming } = useChat();
   const [input, setInput] = useState("");
@@ -21,9 +22,10 @@ export function ChatPanel() {
 
   // Get file name for context display
   const selectedFileName = useMemo(() => {
-    if (!selectedItemId || !files) return null;
-    return files.find((f) => f.id === selectedItemId)?.title ?? null;
-  }, [selectedItemId, files]);
+    if (!selectedItemId) return null;
+    const listedTitle = files?.find((f) => f.id === selectedItemId)?.title ?? null;
+    return listedTitle || selectedItemTitle;
+  }, [selectedItemId, files, selectedItemTitle]);
 
   useEffect(() => {
     if (scrollRef.current) {

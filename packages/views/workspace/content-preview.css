@@ -124,7 +124,7 @@
   padding: 2px 6px;
   border-radius: 3px;
   font-size: 0.875em;
-  font-family: 'SF Mono', 'Fira Code', Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 .content-preview-inner pre {

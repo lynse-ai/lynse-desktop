@@ -1,0 +1,55 @@
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { setApiTransportMode } from "@lynse/core/api/client";
+
+type DesktopApi = {
+  openExternal: (url: string) => Promise<void>;
+  localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
+  appInfo: { version: string; platform: string };
+};
+
+function command<T>(name: string, payload?: Record<string, unknown>): Promise<T> {
+  return invoke<T>(name, payload);
+}
+
+export async function installTauriBridge(): Promise<void> {
+  // Keep WKWebView's fetch implementation. Routing every fetch through the
+  // Tauri HTTP IPC bridge can monopolize the renderer on macOS.
+  setApiTransportMode("direct");
+
+  const desktopAPI: DesktopApi = {
+    openExternal: async (url) => {
+      await openUrl(url);
+    },
+    localTranscription: {
+      pickAudioFile: async () => {
+        const selected = await open({
+          multiple: false,
+          directory: false,
+          filters: [{ name: "Audio and video", extensions: ["mp3", "wav", "m4a", "mp4", "flac", "aac", "ogg", "webm", "mov"] }],
+        });
+        return typeof selected === "string" ? selected : null;
+      },
+      transcribe: (audioPath: string, options?: unknown) => command("local_transcription_transcribe", { audioPath, options }),
+      list: () => command("local_transcription_list"),
+      get: (id: string) => command("local_transcription_get", { id }),
+      retry: (id: string) => command("local_transcription_retry", { id }),
+      delete: (id: string) => command("local_transcription_delete", { id }),
+      getAudioUrl: (id: string) => command("local_transcription_audio_url", { id }),
+      getModelStatus: () => command("local_transcription_model_status"),
+      downloadModel: () => command("local_transcription_download_model"),
+      deleteModel: () => command("local_transcription_delete_model"),
+      listHotwordPackages: () => command("local_transcription_list_hotword_packages"),
+      saveHotwordPackage: (pkg: unknown) => command("local_transcription_save_hotword_package", { pkg }),
+      deleteHotwordPackage: (id: string) => command("local_transcription_delete_hotword_package", { id }),
+      listVoiceprints: () => command("local_transcription_list_voiceprints"),
+      createVoiceprint: (input: unknown) => command("local_transcription_create_voiceprint", { input }),
+      updateVoiceprint: (voiceprint: unknown) => command("local_transcription_update_voiceprint", { voiceprint }),
+      deleteVoiceprint: (id: string) => command("local_transcription_delete_voiceprint", { id }),
+    },
+    appInfo: { version: "0.1.0", platform: "darwin" },
+  };
+
+  (window as Window & { desktopAPI?: DesktopApi }).desktopAPI = desktopAPI;
+}

@@ -40,6 +40,8 @@ import {
   getDesktopLocalTranscriptionApi,
   isLocalFileId,
 } from "./local-transcription";
+import { retryLocalTranscription } from "./local-transcription-retry";
+import { isLocalTranscriptionActive } from "./local-transcription-status";
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -218,6 +220,7 @@ function getSummaryTabFallbackLanguage(language: string | undefined): keyof type
 
 export function ContentPanel() {
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
+  const selectedItemTitle = useWorkspaceStore((s) => s.selectedItemTitle);
   const contentTab = useWorkspaceStore((s) => s.contentTab);
   const setContentTab = useWorkspaceStore((s) => s.setContentTab);
   const outlineSidebarVisible = useWorkspaceStore((s) => s.outlineSidebarVisible);
@@ -256,12 +259,16 @@ export function ContentPanel() {
   const [resummaryErrorFileId, setResummaryErrorFileId] = useState<string | null>(null);
   const [clearedSummaryFileIds, setClearedSummaryFileIds] = useState<Set<string>>(() => new Set());
   const [pendingSummaryTabsByFile, setPendingSummaryTabsByFile] = useState<Record<string, SummaryTabModel[]>>({});
+  const [retryingLocalFileIds, setRetryingLocalFileIds] = useState<Set<string>>(() => new Set());
+  const [localRetryError, setLocalRetryError] = useState<string | null>(null);
+  const [voiceprintDraft, setVoiceprintDraft] = useState<{ segmentId: string; name: string } | null>(null);
   const summaryCountBeforeResummary = useRef(0);
 
   const selectedTitle = useMemo(() => {
-    if (!selectedItemId || !files) return null;
-    return files.find((f) => f.id === selectedItemId)?.title ?? null;
-  }, [selectedItemId, files]);
+    if (!selectedItemId) return null;
+    const listedTitle = files?.find((f) => f.id === selectedItemId)?.title ?? null;
+    return listedTitle || selectedItemTitle;
+  }, [selectedItemId, files, selectedItemTitle]);
 
   const selectedFile = useMemo(() => {
     if (!selectedItemId || !files) return null;
@@ -270,6 +277,12 @@ export function ContentPanel() {
 
   const isLocalSelectedItem = isLocalFileId(selectedItemId);
   const localStatusTag = selectedFile?.tags?.find((tag) => ["排队中", "转写中", "失败", "已完成"].includes(tag));
+  const selectedLocalRetrying = !!selectedItemId && retryingLocalFileIds.has(selectedItemId);
+  const effectiveLocalStatusTag = selectedLocalRetrying ? "转写中" : localStatusTag;
+  const localTranscriptionActive = isLocalTranscriptionActive({
+    statusTag: localStatusTag,
+    retrying: selectedLocalRetrying,
+  });
 
   const selectedCreatedAt = useMemo(() => {
     if (!selectedItemId || !files) return null;
@@ -277,7 +290,7 @@ export function ContentPanel() {
   }, [selectedItemId, files]);
 
   const [editedTitle, setEditedTitle] = useState<EditedTitleState | null>(null);
-  const displayTitle = getDisplayTitle(selectedItemId, selectedTitle, editedTitle);
+  const displayTitle = getDisplayTitle(selectedItemId, selectedTitle, editedTitle, selectedItemTitle);
 
   // Conclusions — each FileConclusionVO has a `templateName` field for the conclusion template name
   const conclusionTexts = useMemo(() => {
@@ -384,9 +397,20 @@ export function ContentPanel() {
   }, [qc]);
 
   const handleRetryLocalTranscription = useCallback(async () => {
-    if (!selectedItemId) return;
-    await getDesktopLocalTranscriptionApi()?.retry(selectedItemId);
-    refreshLocalQueries(selectedItemId);
+    await retryLocalTranscription({
+      fileId: selectedItemId,
+      api: getDesktopLocalTranscriptionApi(),
+      refresh: refreshLocalQueries,
+      setError: setLocalRetryError,
+      setRetrying: (fileId, retrying) => {
+        setRetryingLocalFileIds((current) => {
+          const next = new Set(current);
+          if (retrying) next.add(fileId);
+          else next.delete(fileId);
+          return next;
+        });
+      },
+    });
   }, [refreshLocalQueries, selectedItemId]);
 
   const handleDeleteLocalTranscription = useCallback(async () => {
@@ -396,16 +420,17 @@ export function ContentPanel() {
     selectItem(null, null);
   }, [refreshLocalQueries, selectItem, selectedItemId]);
 
-  const handleCreateVoiceprint = useCallback(async (segmentId: string, speakerName: string) => {
+  const handleCreateVoiceprint = useCallback(async (segmentId: string, name: string) => {
     if (!selectedItemId || !segmentId) return;
-    const name = window.prompt("保存声纹名称", speakerName || "发言人");
-    if (!name?.trim()) return;
+    if (!name.trim()) return;
     await getDesktopLocalTranscriptionApi()?.createVoiceprint({
       name: name.trim(),
       sampleRecordId: selectedItemId,
       sampleSegmentIds: [segmentId],
     });
-  }, [selectedItemId]);
+    setVoiceprintDraft(null);
+    refreshLocalQueries(selectedItemId);
+  }, [refreshLocalQueries, selectedItemId]);
 
   // Post-render: replace <img> src with blob URLs for authenticated image loading
   const contentPreviewRef = useRef<HTMLDivElement>(null);
@@ -683,16 +708,16 @@ export function ContentPanel() {
                   setEditedTitle({ itemId: selectedItemId, title: e.target.value });
                 }}
                 placeholder={t("workspace.enter_filename")}
-                className="w-full border-none bg-transparent text-base font-semibold outline-none placeholder:text-muted-foreground/50 shrink-0"
+                className="w-full border-none bg-transparent text-xl font-semibold leading-tight outline-none placeholder:text-muted-foreground/50 shrink-0"
               />
               {isLocalSelectedItem && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                  {localStatusTag && (
+                  {effectiveLocalStatusTag && (
                     <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
-                      {localStatusTag}
+                      {effectiveLocalStatusTag}
                     </span>
                   )}
-                  {localStatusTag === "失败" && (
+                  {localStatusTag === "失败" && !selectedLocalRetrying && (
                     <button
                       type="button"
                       onClick={handleRetryLocalTranscription}
@@ -710,6 +735,11 @@ export function ContentPanel() {
                     <Trash2 className="size-3" />
                     删除
                   </button>
+                  {localRetryError && (
+                    <span className="basis-full text-[11px] text-destructive">
+                      {localRetryError}
+                    </span>
+                  )}
                 </div>
               )}
               {selectedCreatedAt && (
@@ -754,7 +784,9 @@ export function ContentPanel() {
                           </div>
                         )}
                         {/* Transcription segments or empty state */}
-                        {transSegments && transSegments.length > 0 ? (
+                        {localTranscriptionActive ? (
+                          <LocalTranscriptionPendingState retrying={selectedLocalRetrying} />
+                        ) : transSegments && transSegments.length > 0 ? (
                           <div className="flex-1 min-h-0 overflow-y-auto space-y-1 text-sm leading-relaxed pb-4">
                             {transSegments.map((seg, i) => {
                               const color = getSpeakerColor(seg.speaker);
@@ -776,17 +808,51 @@ export function ContentPanel() {
                                   </div>
                                   <p className="text-foreground mt-0.5">{seg.text}</p>
                                   {isLocalSelectedItem && seg.id && (
-                                    <div className="mt-1">
-                                      <button
-                                        type="button"
-                                        onClick={(event) => {
-                                          event.stopPropagation();
-                                          handleCreateVoiceprint(seg.id, seg.speaker);
-                                        }}
-                                        className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
-                                      >
-                                        保存声纹
-                                      </button>
+                                    <div className="mt-1 flex flex-wrap items-center gap-1">
+                                      {voiceprintDraft?.segmentId === seg.id ? (
+                                        <>
+                                          <input
+                                            value={voiceprintDraft.name}
+                                            onClick={(event) => event.stopPropagation()}
+                                            onChange={(event) => setVoiceprintDraft({
+                                              segmentId: seg.id,
+                                              name: event.target.value,
+                                            })}
+                                            className="h-6 w-28 rounded border border-border bg-background px-1.5 text-[10px] outline-none focus:border-primary"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              handleCreateVoiceprint(seg.id, voiceprintDraft.name);
+                                            }}
+                                            className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                                          >
+                                            保存
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              setVoiceprintDraft(null);
+                                            }}
+                                            className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                                          >
+                                            取消
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            setVoiceprintDraft({ segmentId: seg.id, name: seg.speaker || "发言人" });
+                                          }}
+                                          className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                                        >
+                                          保存声纹
+                                        </button>
+                                      )}
                                     </div>
                                   )}
                                 </div>
@@ -1164,6 +1230,24 @@ function LoadingState() {
     <div className="flex h-full items-center justify-center gap-2">
       <Loader2 className="size-4 animate-spin text-muted-foreground" />
       <p className="text-xs text-muted-foreground">{t("workspace.loading")}</p>
+    </div>
+  );
+}
+
+function LocalTranscriptionPendingState({ retrying }: { retrying: boolean }) {
+  return (
+    <div className="flex flex-1 items-center justify-center py-12">
+      <div className="flex flex-col items-center gap-3 text-center">
+        <div className="relative flex size-12 items-center justify-center">
+          <span className="absolute size-12 rounded-full border border-primary/20" />
+          <span className="absolute size-10 animate-ping rounded-full bg-primary/10" />
+          <Loader2 className="relative size-5 animate-spin text-primary" />
+        </div>
+        <div>
+          <p className="text-sm font-medium">{retrying ? "正在重新转写" : "正在本地转写"}</p>
+          <p className="mt-1 text-xs text-muted-foreground">FunASR 正在处理音频，请稍候</p>
+        </div>
+      </div>
     </div>
   );
 }

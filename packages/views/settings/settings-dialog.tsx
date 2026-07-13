@@ -25,6 +25,8 @@ import {
 import type { LocalHotwordPackage, LocalVoiceprint } from "../workspace/types";
 
 const DEFAULT_API_URL = "http://119.97.160.133:10060";
+export const SETTINGS_DIALOG_CONTENT_CLASS =
+  "sm:max-w-2xl max-h-[min(90vh,760px)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0";
 
 type ThemeOption = "light" | "dark" | "system";
 
@@ -189,12 +191,12 @@ export function SettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md max-h-[80vh] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className={SETTINGS_DIALOG_CONTENT_CLASS}>
+        <DialogHeader className="border-b px-4 py-3 pr-12">
           <DialogTitle>{t("nav.settings")}</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 mt-2">
+        <div className="min-h-0 space-y-4 overflow-y-auto px-4 py-4">
           {/* ── Appearance ─────────────────────────────── */}
           <Card>
             <CardHeader className="pb-2">

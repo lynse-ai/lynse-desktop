@@ -1,0 +1,71 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e6]:
+        - generic [ref=e7]:
+          - generic [ref=e8]: L
+          - generic [ref=e10]: Lynse
+        - button "New Recording ⌘N" [ref=e12]:
+          - generic [ref=e14]: New Recording
+          - generic: ⌘N
+        - generic [ref=e15]:
+          - generic [ref=e16]:
+            - generic [ref=e17]:
+              - generic [ref=e18]: Workspace
+              - generic [ref=e19]:
+                - button [ref=e20]
+                - button [ref=e23]
+            - list [ref=e26]:
+              - listitem [ref=e27]:
+                - link "Inspiration" [ref=e28] [cursor=pointer]:
+                  - /url: /inspiration
+          - generic [ref=e32]:
+            - generic [ref=e33]:
+              - button "All Files 0" [ref=e34]:
+                - generic [ref=e39]: All Files
+                - generic [ref=e40]: "0"
+              - button "Local Transcriptions 0" [ref=e41]:
+                - generic [ref=e46]: Local Transcriptions
+                - generic [ref=e47]: "0"
+              - button "Uncategorized 0" [ref=e48]:
+                - generic [ref=e51]: Uncategorized
+                - generic [ref=e52]: "0"
+            - generic [ref=e53]:
+              - button "Folders" [ref=e54]
+              - button "New Folder" [ref=e58]
+            - paragraph [ref=e63]: No folders yet
+            - button "Trash 0" [ref=e65]:
+              - generic [ref=e69]: Trash
+              - generic [ref=e70]: "0"
+          - list [ref=e73]:
+            - listitem [ref=e74]:
+              - link "AI Chat" [ref=e75] [cursor=pointer]:
+                - /url: /chat
+        - generic [ref=e80]:
+          - button "US User Standard" [ref=e82]:
+            - generic [ref=e83]: US
+            - generic [ref=e84]:
+              - paragraph [ref=e85]: User
+              - paragraph [ref=e86]: Standard
+          - button [ref=e87] [cursor=pointer]
+          - button "Template Manager" [ref=e90]
+          - button [ref=e95]
+        - button "toggle_sidebar" [ref=e99]
+      - main [ref=e100]:
+        - generic [ref=e101]:
+          - paragraph [ref=e107]: Select a folder
+          - generic [ref=e109]:
+            - generic [ref=e110]:
+              - generic [ref=e111]: Lynse
+              - button "Ask AI" [ref=e114]
+            - generic [ref=e121]:
+              - generic [ref=e123]:
+                - button "Outline" [ref=e124]
+                - button "Transcription" [ref=e127]
+                - button "Add summary" [disabled]
+              - generic [ref=e135]:
+                - heading "No file selected" [level=3] [ref=e140]
+                - paragraph [ref=e141]: Select a file from the sidebar to view its content
+    - status [ref=e142]
+    - region "Notifications alt+T"
+  - generic: "step: armed — click anywhere mousedown: 0 | click: 0 lastEvt: — dragRegions: — topmost@center: —"

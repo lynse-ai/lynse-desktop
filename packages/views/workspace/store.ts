@@ -50,6 +50,7 @@ type FileSortDir = "desc" | "asc";
 interface WorkspaceState {
   selectedItemId: string | null;
   selectedItemType: ItemType | null;
+  selectedItemTitle: string | null;
   selectedFolderId: string | null;
   searchQuery: string;
   collapsedGroups: Set<string>;
@@ -73,7 +74,7 @@ interface WorkspaceState {
   editingFolderId: string | null;
   draggingFileIds: Set<string>;
 
-  selectItem: (id: string | null, type: ItemType | null) => void;
+  selectItem: (id: string | null, type: ItemType | null, title?: string | null) => void;
   selectFolder: (id: string | null) => void;
   setSearchQuery: (query: string) => void;
   toggleGroup: (group: string) => void;
@@ -107,6 +108,7 @@ function createWorkspaceStore() {
   return create<WorkspaceState>()((set, get) => ({
     selectedItemId: null,
     selectedItemType: null,
+    selectedItemTitle: null,
     selectedFolderId: null,
     searchQuery: "",
     collapsedGroups: new Set<string>(),
@@ -130,11 +132,11 @@ function createWorkspaceStore() {
     editingFolderId: null,
     draggingFileIds: new Set<string>(),
 
-    selectItem: (id, type) =>
-      set({ selectedItemId: id, selectedItemType: type }),
+    selectItem: (id, type, title = null) =>
+      set({ selectedItemId: id, selectedItemType: type, selectedItemTitle: id ? title : null }),
 
     selectFolder: (id) =>
-      set({ selectedFolderId: id, selectedItemId: null, selectedItemType: null }),
+      set({ selectedFolderId: id, selectedItemId: null, selectedItemType: null, selectedItemTitle: null }),
 
     setSearchQuery: (query) => set({ searchQuery: query }),
 

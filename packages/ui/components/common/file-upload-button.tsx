@@ -21,7 +21,7 @@ function FileUploadButton({
 }: FileUploadButtonProps) {
   const { t } = useTranslation("ui");
   const inputRef = useRef<HTMLInputElement>(null);
-  const attachLabel = t(($) => $.attach_file);
+  const attachLabel = t("attach_file");
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

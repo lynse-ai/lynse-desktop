@@ -180,7 +180,7 @@ export function CodeBlock({
       {/* Language label + copy button */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-muted/50 border-b text-xs">
         <span className="text-muted-foreground font-medium uppercase tracking-wide">
-          {resolvedLang !== 'text' ? resolvedLang : t(($) => $.plain_text)}
+          {resolvedLang !== 'text' ? resolvedLang : t("plain_text")}
         </span>
         <Tooltip>
           <TooltipTrigger
@@ -190,7 +190,7 @@ export function CodeBlock({
                 size="icon-xs"
                 onClick={handleCopy}
                 className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-foreground"
-                aria-label={t(($) => $.copy_code)}
+                aria-label={t("copy_code")}
               >
                 {copied ? (
                   <Check className="size-3.5 text-success" />
@@ -200,7 +200,7 @@ export function CodeBlock({
               </Button>
             }
           />
-          <TooltipContent>{t(($) => $.copy_code)}</TooltipContent>
+          <TooltipContent>{t("copy_code")}</TooltipContent>
         </Tooltip>
       </div>
 

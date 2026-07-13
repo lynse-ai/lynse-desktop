@@ -282,7 +282,7 @@ function SidebarTrigger({
       {...props}
     >
       <PanelLeftIcon />
-      <span className="sr-only">{t(($) => $.toggle_sidebar)}</span>
+      <span className="sr-only">{t("toggle_sidebar")}</span>
     </Button>
   )
 }
@@ -290,7 +290,7 @@ function SidebarTrigger({
 function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
   const { toggleSidebar, setWidth, setIsResizing } = useSidebar()
   const { t } = useTranslation("ui")
-  const toggleLabel = t(($) => $.toggle_sidebar)
+  const toggleLabel = t("toggle_sidebar")
   const didDragRef = React.useRef(false)
   const dragRef = React.useRef<{ startX: number; startWidth: number } | null>(null)
 

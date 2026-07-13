@@ -1,15 +1,8 @@
 import "i18next";
 
 // Local slice of the i18next augmentation that owns the `ui` namespace.
-// The base augmentation lives in packages/views/i18n/resources-types.ts and
-// declares everything else; this file contributes only the `ui` entry via
-// declaration merging on the global `I18nResources` interface so
-// packages/ui can typecheck the selector form standalone without depending
-// on @multica/views.
-//
-// When both files are loaded together (in a consumer's typecheck program),
-// the two augmentations compose: views contributes common/auth/... and ui
-// contributes `ui`. No properties overlap, so the merge is conflict-free.
+// Declares the `ui` resource keys so packages/ui can validate ui-namespace key
+// usage in its own typecheck without depending on @lynse/views.
 //
 // The resource shape is mirrored from packages/views/locales/{en,zh-Hans}/ui.json.
 // Drift between the JSON and these types is not caught by the locale parity
@@ -30,6 +23,5 @@ declare global {
 declare module "i18next" {
   interface CustomTypeOptions {
     resources: I18nResources;
-    enableSelector: true;
   }
 }

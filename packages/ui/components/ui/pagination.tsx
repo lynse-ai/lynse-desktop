@@ -71,7 +71,7 @@ function PaginationPrevious({
   const { t } = useTranslation("ui")
   return (
     <PaginationLink
-      aria-label={t(($) => $.pagination_previous)}
+      aria-label={t("pagination_previous")}
       size="default"
       className={cn("pl-1.5!", className)}
       {...props}
@@ -90,7 +90,7 @@ function PaginationNext({
   const { t } = useTranslation("ui")
   return (
     <PaginationLink
-      aria-label={t(($) => $.pagination_next)}
+      aria-label={t("pagination_next")}
       size="default"
       className={cn("pr-1.5!", className)}
       {...props}

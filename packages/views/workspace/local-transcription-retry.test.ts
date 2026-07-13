@@ -12,7 +12,7 @@ function deferred<T>() {
 
 describe("retryLocalTranscription", () => {
   it("marks a local record as retrying before the retry finishes", async () => {
-    const pending = deferred({} as Awaited<ReturnType<DesktopLocalTranscriptionApi["retry"]>>);
+    const pending = deferred<Awaited<ReturnType<DesktopLocalTranscriptionApi["retry"]>>>();
     const api = { retry: vi.fn(() => pending.promise) } as unknown as DesktopLocalTranscriptionApi;
     const refresh = vi.fn();
     const setRetrying = vi.fn();

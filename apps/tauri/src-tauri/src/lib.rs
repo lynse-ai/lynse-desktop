@@ -1,4 +1,5 @@
-use chrono::Utc;
+use chrono::{DateTime, Utc};
+use highlandcows_eventkit::{CalendarEvent, CalendarStore};
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -110,6 +111,60 @@ fn update_store_value(app: &AppHandle, directory: &str, id: &str, patch: Map<Str
 
 fn now() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+fn save_todo(app: &AppHandle, mut todo: Value) -> CommandResult<Value> {
+    let object = todo.as_object_mut().ok_or("Todo must be an object")?;
+    let title = object.get("title").and_then(Value::as_str).map(str::trim).unwrap_or_default();
+    if title.is_empty() { return Err("Todo title is required".to_owned()) }
+    if object.get("id").and_then(Value::as_str).map(str::trim).unwrap_or_default().is_empty() {
+        object.insert("id".to_owned(), json!(format!("todo:{}", Uuid::new_v4())));
+    }
+    let timestamp = now();
+    object.entry("createdAt".to_owned()).or_insert_with(|| json!(timestamp));
+    object.insert("updatedAt".to_owned(), json!(timestamp));
+    object.entry("completed".to_owned()).or_insert_with(|| json!(false));
+    save_store_value(app, "local-todos", todo)
+}
+
+fn calendar_event_times(start_at: &str, end_at: &str) -> CommandResult<(DateTime<Utc>, DateTime<Utc>)> {
+    let start = DateTime::parse_from_rfc3339(start_at)
+        .map_err(|_| "Calendar start time must be an ISO-8601 timestamp")?
+        .with_timezone(&Utc);
+    let end = DateTime::parse_from_rfc3339(end_at)
+        .map_err(|_| "Calendar end time must be an ISO-8601 timestamp")?
+        .with_timezone(&Utc);
+    if end <= start { return Err("Calendar end time must be later than start time".to_owned()) }
+    Ok((start, end))
+}
+
+fn add_todo_to_system_calendar(app: &AppHandle, todo_id: &str, start_at: &str, end_at: &str) -> CommandResult<Value> {
+    let todo = get_store_value(app, "local-todos", todo_id)?.ok_or("Todo not found")?;
+    let title = todo.get("title").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()).ok_or("Todo title is required")?;
+    let (start, end) = calendar_event_times(start_at, end_at)?;
+    let source = todo.get("sourceTitle").and_then(Value::as_str).filter(|value| !value.trim().is_empty());
+    let notes = source.map(|value| format!("来自 Lynse 待办\n来源：{value}"));
+
+    let store = CalendarStore::builder().connect().map_err(|error| error.to_string())?;
+    let access = store.authorize_write_only().map_err(|error| error.to_string())?;
+    let event_id = store.save(&CalendarEvent {
+        identifier: None,
+        title: title.to_owned(),
+        notes,
+        calendar_identifier: None,
+        start_date: Some(start),
+        end_date: Some(end),
+        is_all_day: false,
+        location: None,
+    }, &access).map_err(|error| error.to_string())?;
+
+    let mut patch = Map::new();
+    patch.insert("calendarEventId".to_owned(), json!(event_id));
+    patch.insert("calendarAddedAt".to_owned(), json!(now()));
+    patch.insert("calendarStartAt".to_owned(), json!(start_at));
+    patch.insert("calendarEndAt".to_owned(), json!(end_at));
+    patch.insert("updatedAt".to_owned(), json!(now()));
+    update_store_value(app, "local-todos", todo_id, patch)?.ok_or("Todo disappeared while adding it to Calendar".to_owned())
 }
 
 fn script_path(app: &AppHandle) -> CommandResult<PathBuf> {
@@ -486,6 +541,23 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
 fn local_transcription_list(app: AppHandle) -> CommandResult<Vec<Value>> { list_store(&app, "local-transcriptions") }
 
 #[tauri::command]
+fn todo_list(app: AppHandle) -> CommandResult<Vec<Value>> { list_store(&app, "local-todos") }
+
+#[tauri::command]
+fn todo_save(app: AppHandle, todo: Value) -> CommandResult<Value> { save_todo(&app, todo) }
+
+#[tauri::command]
+fn todo_delete(app: AppHandle, id: String) -> CommandResult<()> { remove_store_value(&app, "local-todos", &id) }
+
+#[tauri::command]
+async fn todo_add_to_calendar(app: AppHandle, todo_id: String, start_at: String, end_at: String, confirmed: bool) -> CommandResult<Value> {
+    if !confirmed { return Err("Calendar events can only be created after explicit confirmation".to_owned()) }
+    tauri::async_runtime::spawn_blocking(move || add_todo_to_system_calendar(&app, &todo_id, &start_at, &end_at))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 fn local_transcription_get(app: AppHandle, id: String) -> CommandResult<Option<Value>> { get_store_value(&app, "local-transcriptions", &id) }
 
 #[tauri::command]
@@ -729,6 +801,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             local_transcription_list, local_transcription_get, local_transcription_delete, local_transcription_audio_url,
+            todo_list, todo_save, todo_delete, todo_add_to_calendar,
             local_transcription_model_status, local_transcription_download_model, local_transcription_delete_model,
             local_transcription_transcribe, local_transcription_retry, local_transcription_list_hotword_packages,
             local_transcription_save_hotword_package, local_transcription_delete_hotword_package,
@@ -761,5 +834,12 @@ mod tests {
         let id = "local:example id";
         let url = format!("local-media://localhost/{}", utf8_percent_encode(id, NON_ALPHANUMERIC));
         assert_eq!(url, "local-media://localhost/local%3Aexample%20id");
+    }
+
+    #[test]
+    fn validates_calendar_event_times() {
+        let (start, end) = calendar_event_times("2026-07-13T10:00:00+08:00", "2026-07-13T11:00:00+08:00").unwrap();
+        assert!(end > start);
+        assert!(calendar_event_times("2026-07-13T11:00:00+08:00", "2026-07-13T10:00:00+08:00").is_err());
     }
 }

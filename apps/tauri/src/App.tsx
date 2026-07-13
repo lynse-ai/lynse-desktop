@@ -8,6 +8,7 @@ import { WorkspaceLayout } from "@lynse/views/workspace";
 import { ChatPage } from "@lynse/views/chat";
 import { RESOURCES } from "@lynse/views/locales";
 import { DesktopNavigationProvider } from "./platform/navigation";
+import lynseWordmark from "./assets/lynse-wordmark.png";
 
 function PageRouter() {
   const { pathname } = useNavigation();
@@ -19,11 +20,16 @@ function AppContent() {
     <DesktopNavigationProvider>
       <DashboardLayout
         topSlot={
-          <div className="flex items-center gap-2 px-3 pt-10 pb-2">
-            <div className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <span className="text-xs font-bold">L</span>
+          <div className="bg-sidebar" data-tauri-drag-region>
+            <div className="h-11" />
+            <div className="flex h-7 items-center px-3">
+              <img
+                src={lynseWordmark}
+                alt="Lynse"
+                className="h-3.5 w-auto select-none opacity-80 dark:invert"
+                draggable={false}
+              />
             </div>
-            <span className="text-sm font-semibold tracking-tight">Lynse</span>
           </div>
         }
       >

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.6 (2026-07-13)
+
+### New Features
+
+- Local todos in the desktop app, with the option to add a todo to the macOS system Calendar
+
+### Changed
+
+- Simplify web app state and remove obsolete code paths
+- Redesign the desktop sidebar header with the Lynse wordmark and a draggable region for the frameless window
+
+### Bug Fixes
+
+- Fix TypeScript errors that broke `pnpm typecheck` (i18next selector form did not resolve across packages; correct a test helper call)
+
 ## 0.1.5 (2026-07-06)
 
 ### Changed

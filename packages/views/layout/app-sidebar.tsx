@@ -20,6 +20,7 @@ import {
   LogOut,
   Zap,
   Crown,
+  ListChecks,
 } from "../icons";
 import {
   Sidebar,
@@ -145,6 +146,46 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
         {/* Folder tree — shown on workspace routes */}
         <FolderTreeSection />
 
+        {/* Template / Management section — above AI Assistant */}
+        <SidebarGroup className="border-t border-border/40 py-1 mt-1">
+          <SidebarGroupContent>
+            <SidebarMenu className="gap-px">
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  onClick={() => setTemplateManagerOpen(true)}
+                  className="h-8 rounded-md px-2 text-[13px] text-muted-foreground hover:bg-sidebar-accent/50"
+                >
+                  <LayoutTemplate className="size-4 shrink-0" />
+                  <span>{t("templates.title")}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        {/* Todo section */}
+        <SidebarGroup className="border-t border-border/40 py-1 mt-1">
+          <SidebarGroupContent>
+            <SidebarMenu className="gap-px">
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={isNavActive(pathname, "/todo")}
+                  render={<AppLink href="/todo" />}
+                  className={cn(
+                    "h-8 rounded-md px-2 text-[13px]",
+                    isNavActive(pathname, "/todo")
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
+                      : "text-muted-foreground hover:bg-sidebar-accent/50"
+                  )}
+                >
+                  <ListChecks className="size-4 shrink-0" />
+                  <span>{t("nav.todo")}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
         {/* Tools section */}
         <SidebarGroup className="border-t border-border/40 py-1 mt-1">
           <SidebarGroupContent>
@@ -176,13 +217,6 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
             <UserProfileDropdown />
           </div>
           <CreditsPopover />
-          <button
-            onClick={() => setTemplateManagerOpen(true)}
-            className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted/60"
-            title={t("templates.title")}
-          >
-            <LayoutTemplate className="size-3.5 text-muted-foreground/50" />
-          </button>
           <button
             onClick={() => setSettingsOpen(true)}
             className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted/60"

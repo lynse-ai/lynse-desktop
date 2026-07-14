@@ -178,7 +178,13 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
       });
 
       setPhase("summarizing");
-      await waitForTranscriptionCompletion({ fileIds: [fileId] });
+      // Initial transcription re-processes the whole audio server-side; match
+      // the re-run window so large files aren't cut off at 3 minutes.
+      await waitForTranscriptionCompletion({
+        fileIds: [fileId],
+        intervalMs: 5000,
+        maxAttempts: 240, // up to 20 minutes
+      });
 
       // Phase 3: Complete
       setPhase("complete");

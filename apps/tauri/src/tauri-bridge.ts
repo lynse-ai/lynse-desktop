@@ -6,6 +6,7 @@ import { setApiTransportMode } from "@lynse/core/api/client";
 type DesktopApi = {
   openExternal: (url: string) => Promise<void>;
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
+  todo: Record<string, (...args: any[]) => Promise<unknown>>;
   appInfo: { version: string; platform: string };
 };
 
@@ -49,6 +50,13 @@ export async function installTauriBridge(): Promise<void> {
       deleteVoiceprint: (id: string) => command("local_transcription_delete_voiceprint", { id }),
     },
     appInfo: { version: "0.1.0", platform: "darwin" },
+    todo: {
+      list: () => command("todo_list"),
+      save: (todo: unknown) => command("todo_save", { todo }),
+      delete: (id: string) => command("todo_delete", { id }),
+      addToCalendar: (id: string, startAt: string, endAt: string, confirmed: boolean) =>
+        command("todo_add_to_calendar", { todo_id: id, start_at: startAt, end_at: endAt, confirmed }),
+    },
   };
 
   (window as Window & { desktopAPI?: DesktopApi }).desktopAPI = desktopAPI;

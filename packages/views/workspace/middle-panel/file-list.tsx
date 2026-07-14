@@ -24,6 +24,8 @@ export function FileList() {
   const toggleFileSortField = useWorkspaceStore((s) => s.toggleFileSortField);
   const toggleFileSortDir = useWorkspaceStore((s) => s.toggleFileSortDir);
   const summarizingFileIds = useWorkspaceStore((s) => s.summarizingFileIds);
+  const filterTags = useWorkspaceStore((s) => s.filterTags);
+  const filterDate = useWorkspaceStore((s) => s.filterDate);
   const { t } = useTranslation();
 
   const { data: files } = useFiles({
@@ -58,6 +60,17 @@ export function FileList() {
       const q = searchQuery.toLowerCase();
       result = result.filter((f) => f.title.toLowerCase().includes(q));
     }
+    if (filterDate !== "all") {
+      const days = filterDate === "7d" ? 7 : 30;
+      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+      result = result.filter((f) => {
+        const time = new Date(f.createdAt || 0).getTime();
+        return !isNaN(time) && time >= cutoff;
+      });
+    }
+    if (filterTags.length > 0) {
+      result = result.filter((f) => (f.tags ?? []).some((tag) => filterTags.includes(tag)));
+    }
     // Sort by field and direction
     const dir = fileSortDir === "asc" ? 1 : -1;
     return [...result].sort((a, b) => {
@@ -65,7 +78,7 @@ export function FileList() {
       const bTime = new Date(b[fileSortField] || 0).getTime();
       return (aTime - bTime) * dir;
     });
-  }, [files, selectedFolderId, searchQuery, fileSortField, fileSortDir]);
+  }, [files, selectedFolderId, searchQuery, filterTags, filterDate, fileSortField, fileSortDir]);
 
   return (
     <div
@@ -195,7 +208,7 @@ function DraggableFileRow({
       ref={setNodeRef}
       onClick={onSelect}
       style={{ opacity: isDragging ? 0.4 : 1 }}
-      className={`flex w-full items-center gap-1 px-3 py-2 text-left transition-colors border-b border-border/50 ${
+      className={`group flex w-full items-center gap-1 px-3 py-2 text-left transition-colors border-b border-border/50 ${
         isSelected
           ? "bg-accent text-accent-foreground"
           : "text-foreground hover:bg-accent/30"

@@ -59,7 +59,7 @@ export function WorkspaceLayout() {
       <div className="flex flex-1 min-w-0 flex-col">
         <TitleBar />
         <div className="flex flex-1 min-h-0">
-          {/* Content panel: tabs + content + outline sidebar */}
+          {/* Primary content panel */}
           <div className="flex-1 min-w-0">
             <ContentPanel />
           </div>

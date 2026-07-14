@@ -2,17 +2,20 @@ import { useMemo } from "react";
 import { CoreProvider } from "@lynse/core/platform";
 import { ThemeProvider } from "@lynse/ui/components/common/theme-provider";
 import { Toaster } from "@lynse/ui/components/ui/sonner";
-import { DashboardLayout } from "@lynse/views/layout";
+import { DashboardLayout, SidebarToolbar } from "@lynse/views/layout";
 import { useNavigation } from "@lynse/views/navigation";
 import { WorkspaceLayout } from "@lynse/views/workspace";
 import { ChatPage } from "@lynse/views/chat";
+import { TodoPage } from "@lynse/views/todo";
 import { RESOURCES } from "@lynse/views/locales";
 import { DesktopNavigationProvider } from "./platform/navigation";
 import lynseWordmark from "./assets/lynse-wordmark.png";
 
 function PageRouter() {
   const { pathname } = useNavigation();
-  return pathname.startsWith("/chat") ? <ChatPage /> : <WorkspaceLayout />;
+  if (pathname.startsWith("/chat")) return <ChatPage />;
+  if (pathname.startsWith("/todo")) return <TodoPage />;
+  return <WorkspaceLayout />;
 }
 
 function AppContent() {
@@ -21,7 +24,7 @@ function AppContent() {
       <DashboardLayout
         topSlot={
           <div className="bg-sidebar" data-tauri-drag-region>
-            <div className="h-11" />
+            <SidebarToolbar />
             <div className="flex h-7 items-center px-3">
               <img
                 src={lynseWordmark}

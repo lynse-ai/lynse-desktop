@@ -604,17 +604,20 @@ fn local_transcription_delete_model(app: AppHandle, state: tauri::State<AppState
 }
 
 #[tauri::command]
-fn local_transcription_transcribe(app: AppHandle, audio_path: String, options: Option<Value>) -> CommandResult<Value> {
+async fn local_transcription_transcribe(app: AppHandle, audio_path: String, options: Option<Value>) -> CommandResult<Value> {
     if !model_dir(&app)?.join(".ready").exists() {
         return Err("Local ASR model is not installed".to_owned());
     }
     let record = create_queued_record(&audio_path, options.as_ref());
     save_store_value(&app, "local-transcriptions", record.clone())?;
-    transcribe_record(&app, record)
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || transcribe_record(&handle, record))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-fn local_transcription_retry(app: AppHandle, id: String) -> CommandResult<Value> {
+async fn local_transcription_retry(app: AppHandle, id: String) -> CommandResult<Value> {
     if !model_dir(&app)?.join(".ready").exists() {
         return Err("Local ASR model is not installed".to_owned());
     }
@@ -626,7 +629,10 @@ fn local_transcription_retry(app: AppHandle, id: String) -> CommandResult<Value>
     object.insert("progressPhase".to_owned(), json!("queued"));
     object.insert("error".to_owned(), Value::Null);
     save_store_value(&app, "local-transcriptions", record.clone())?;
-    transcribe_record(&app, record)
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || transcribe_record(&handle, record))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

@@ -12,7 +12,7 @@ import {
 } from "@lynse/ui/components/ui/dialog";
 import { Button } from "@lynse/ui/components/ui/button";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { useAddSummary, useReplaceSummaryTemplate, useRerunSummary, useTemplateCategories } from "./hooks/use-files";
+import { useAddSummary, useReplaceSummaryTemplate, useRerunSummary, useTemplateCategories, useFileDetail } from "./hooks/use-files";
 import type { FileConclusion } from "./types";
 import { useQueryClient } from "@tanstack/react-query";
 import { TemplateSelector } from "./template-selector";
@@ -24,14 +24,14 @@ const FALLBACK_TEXT = {
     addTitle: "Add summary",
     addDescription: "Select a template to add a new summary from the existing transcript",
     rerunTitle: "Re-summarize",
-    rerunDescription: "Select a template to clear the current transcript and summaries, then process the file again",
+    rerunDescription: "Select a template to process the file again and regenerate its summary",
     replaceTitle: "Change summary template",
     replaceDescription: "Select a template to replace this summary",
     cancel: "Cancel",
     apply: "Generate",
     addSuccess: "New summary generated",
     addFailed: "Add summary failed",
-    rerunSuccess: "Re-summarization started, check back shortly",
+    rerunSuccess: "Summary regenerated",
     rerunFailed: "Re-summarization failed",
     replaceSuccess: "Summary template changed",
     replaceFailed: "Template change failed",
@@ -41,14 +41,14 @@ const FALLBACK_TEXT = {
     addTitle: "添加总结",
     addDescription: "选择模板，基于现有转写内容新增一份总结",
     rerunTitle: "重新总结",
-    rerunDescription: "选择模板，清空当前转写与总结并重新开始处理",
+    rerunDescription: "选择模板，重新处理文件并生成总结",
     replaceTitle: "更换总结模板",
     replaceDescription: "选择模板，替换当前这条总结",
     cancel: "取消",
     apply: "生成",
     addSuccess: "新总结已生成",
     addFailed: "添加总结失败",
-    rerunSuccess: "重新总结已触发，请稍后查看结果",
+    rerunSuccess: "总结已重新生成",
     rerunFailed: "重新总结失败",
     replaceSuccess: "总结模板已更换",
     replaceFailed: "更换模板失败",
@@ -58,14 +58,14 @@ const FALLBACK_TEXT = {
     addTitle: "要約を追加",
     addDescription: "既存の文字起こしから新しい要約を追加するテンプレートを選択します",
     rerunTitle: "再要約",
-    rerunDescription: "テンプレートを選択し、現在の文字起こしと要約をクリアして再処理します",
+    rerunDescription: "テンプレートを選択し、ファイルを再処理して要約を生成します",
     replaceTitle: "要約テンプレートを変更",
     replaceDescription: "テンプレートを選択してこの要約を置き換えます",
     cancel: "キャンセル",
     apply: "生成",
     addSuccess: "新しい要約を生成しました",
     addFailed: "要約の追加に失敗しました",
-    rerunSuccess: "再要約を開始しました。しばらくお待ちください",
+    rerunSuccess: "要約を再生成しました",
     rerunFailed: "再要約に失敗しました",
     replaceSuccess: "要約テンプレートを変更しました",
     replaceFailed: "テンプレートの変更に失敗しました",
@@ -102,6 +102,7 @@ export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mo
   const { t, i18n } = useTranslation();
   const qc = useQueryClient();
   const { data: categories } = useTemplateCategories();
+  const { data: fileDetail } = useFileDetail(fileId);
   const addSummary = useAddSummary();
   const rerunSummary = useRerunSummary();
   const replaceSummary = useReplaceSummaryTemplate();
@@ -161,10 +162,13 @@ export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mo
           templateId: currentTemplateId,
         });
       } else {
-        await rerunSummary.mutateAsync({
+        const result = await rerunSummary.mutateAsync({
           fileId: currentFileId,
           templateId: currentTemplateId,
+          modelId: (fileDetail as Record<string, unknown> | undefined)?.modelId as string | undefined,
+          languageId: (fileDetail as Record<string, unknown> | undefined)?.languageId as string | undefined,
         });
+        conclusion = result.conclusion;
       }
       toast.success(
         currentMode === "add"
@@ -174,7 +178,9 @@ export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mo
           : text("resummarize.success", fallback.rerunSuccess),
       );
       onFinished?.(currentFileId, true, currentMode, { pendingId, conclusion });
-      await qc.invalidateQueries({ queryKey: ["file-conclusions", currentFileId] });
+      if (currentMode !== "rerun" || !conclusion) {
+        await qc.invalidateQueries({ queryKey: ["file-conclusions", currentFileId] });
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : text("resummarize.unknown_error", fallback.unknownError);
       toast.error(

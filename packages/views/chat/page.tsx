@@ -32,6 +32,16 @@ export function ChatPage() {
 
   return (
     <div className="flex h-full flex-col">
+      {/* ── Draggable strip at top (3 toolbar icons live in the sidebar) ── */}
+      <div
+        className="flex shrink-0 items-center border-b border-border bg-background/80 backdrop-blur-sm select-none"
+        style={{ height: 38 }}
+        data-tauri-drag-region
+      >
+        <div className="flex-1 px-4">
+          <span className="text-xs text-muted-foreground">{t("chat.page_title")}</span>
+        </div>
+      </div>
       {messages.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-4">
           <div className="flex size-12 items-center justify-center rounded-full bg-muted">

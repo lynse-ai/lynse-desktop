@@ -221,12 +221,13 @@ export interface TransferFileResult {
   requiredPoints?: number;
 }
 
-export interface TransFileStatus {
+export interface TransFileStatusDetails {
   status: string;
   taskId?: string;
   [key: string]: unknown;
 }
 
+export type TransFileStatus = string | TransFileStatusDetails;
 export type TransStatusMap = Record<string, TransFileStatus>;
 
 export type UploadPhase = "idle" | "uploading" | "transcribing" | "summarizing" | "complete" | "error";

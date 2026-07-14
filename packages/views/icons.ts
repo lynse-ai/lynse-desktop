@@ -28,6 +28,7 @@ export {
 
   // ── Chevron / Disclosure ──────────────────────────────
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
 
   // ── Actions ───────────────────────────────────────────
@@ -48,8 +49,10 @@ export {
   FileAudio,        // Audio transcription
   Sparkles,         // AI-generated summary
   List,             // Outline / TOC
+  Calendar,         // Date / calendar event
   Eye,              // Preview mode
   Columns2,         // Split mode
+  PanelLeft,        // Collapse / expand left sidebar
   Bot,              // AI assistant
 
   // ── Markdown Toolbar ─────────────────────────────────

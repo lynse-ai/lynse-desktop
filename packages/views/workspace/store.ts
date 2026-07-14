@@ -53,6 +53,8 @@ interface WorkspaceState {
   selectedItemTitle: string | null;
   selectedFolderId: string | null;
   searchQuery: string;
+  filterTags: string[];
+  filterDate: "all" | "7d" | "30d";
   collapsedGroups: Set<string>;
   editorMode: EditorMode;
   chatMessages: ChatMessage[];
@@ -77,6 +79,9 @@ interface WorkspaceState {
   selectItem: (id: string | null, type: ItemType | null, title?: string | null) => void;
   selectFolder: (id: string | null) => void;
   setSearchQuery: (query: string) => void;
+  setFilterTags: (tags: string[]) => void;
+  setFilterDate: (date: "all" | "7d" | "30d") => void;
+  resetFilters: () => void;
   toggleGroup: (group: string) => void;
   setEditorMode: (mode: EditorMode) => void;
   addChatMessage: (message: ChatMessage) => void;
@@ -111,6 +116,8 @@ function createWorkspaceStore() {
     selectedItemTitle: null,
     selectedFolderId: null,
     searchQuery: "",
+    filterTags: [],
+    filterDate: "all",
     collapsedGroups: new Set<string>(),
     editorMode: "edit",
     chatMessages: [],
@@ -139,6 +146,12 @@ function createWorkspaceStore() {
       set({ selectedFolderId: id, selectedItemId: null, selectedItemType: null, selectedItemTitle: null }),
 
     setSearchQuery: (query) => set({ searchQuery: query }),
+
+    setFilterTags: (tags) => set({ filterTags: tags }),
+
+    setFilterDate: (date) => set({ filterDate: date }),
+
+    resetFilters: () => set({ filterTags: [], filterDate: "all" }),
 
     toggleGroup: (group) =>
       set((state) => {

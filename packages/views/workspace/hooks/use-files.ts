@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@lynse/core/api/client";
+import { api, ApiError } from "@lynse/core/api/client";
 import { useAuthStore } from "@lynse/core/auth";
 import type {
   FileDetail,
@@ -43,6 +43,17 @@ export interface SummaryTabModel {
   text: string;
   status: "ready" | "pending" | "error";
   pendingId?: string;
+}
+
+export function sortConclusionsChronologically(conclusions: FileConclusion[]): FileConclusion[] {
+  return [...conclusions].sort((left, right) => {
+    const leftRecord = left as Record<string, unknown>;
+    const rightRecord = right as Record<string, unknown>;
+    const leftTime = String(leftRecord.createTime ?? leftRecord.createdAt ?? "");
+    const rightTime = String(rightRecord.createTime ?? rightRecord.createdAt ?? "");
+    if (leftTime && rightTime && leftTime !== rightTime) return leftTime.localeCompare(rightTime);
+    return String(left.id ?? "").localeCompare(String(right.id ?? ""));
+  });
 }
 
 export function createInfographicSummaryHtml({
@@ -155,6 +166,7 @@ export function useFiles(params: {
   pageSize?: number;
   originalFilename?: string;
   folderId?: string;
+  enabled?: boolean;
 }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
@@ -191,7 +203,7 @@ export function useFiles(params: {
       }));
       return mergeCloudAndLocalFiles(cloudItems, result.localRecords);
     },
-    enabled: isAuthenticated || !!getDesktopLocalTranscriptionApi(),
+    enabled: (isAuthenticated || !!getDesktopLocalTranscriptionApi()) && (params.enabled ?? true),
   });
 }
 
@@ -439,8 +451,8 @@ export function useTranscriptionStatus(fileIds: string[]) {
       if (!data) return 3000;
       // Stop polling when all files are in terminal state
       const allDone = fileIds.every((id) => {
-        const s = data[id]?.status;
-        return s === "completed" || s === "failed" || s === "COMPLETED" || s === "FAILED";
+        const status = getTranscriptionStatus(data[id]);
+        return isCompletedStatus(status) || isFailedStatus(status);
       });
       return allDone ? false : 3000;
     },
@@ -456,6 +468,10 @@ function sleep(ms: number) {
 
 function normalizeStatus(status: unknown): string {
   return String(status ?? "").trim().toLowerCase();
+}
+
+function getTranscriptionStatus(entry: TransStatusMap[string] | undefined): unknown {
+  return typeof entry === "object" && entry !== null ? entry.status : entry;
 }
 
 function isCompletedStatus(status: unknown): boolean {
@@ -485,13 +501,35 @@ export async function waitForTranscriptionCompletion({
 }): Promise<TransStatusMap> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const data = await getStatus(fileIds);
-    const statuses = fileIds.map((id) => data[id]?.status);
+    const statuses = fileIds.map((id) => getTranscriptionStatus(data[id]));
     const failed = statuses.find(isFailedStatus);
-    if (failed) throw new Error(`Transcription failed: ${String(failed)}`);
+    if (failed) {
+      // Surface the backend's detailed reason: TransFileStatus carries extra
+      // fields (errorMsg / message / reason …) that the caller otherwise drops.
+      const failedEntries = fileIds
+        .map((id) => data[id])
+        .filter((entry) => isFailedStatus(getTranscriptionStatus(entry)));
+      const detail = failedEntries
+        .map((entry) => {
+          if (typeof entry !== "object" || entry === null) return "";
+          const rest = { ...entry } as Record<string, unknown>;
+          delete rest.status;
+          return JSON.stringify(rest);
+        })
+        .filter(Boolean)
+        .join(" | ");
+      throw new Error(
+        `Transcription failed: ${String(failed)}${detail ? ` — ${detail}` : ""}`,
+      );
+    }
     if (statuses.length > 0 && statuses.every(isCompletedStatus)) return data;
     if (attempt < maxAttempts - 1) await wait(intervalMs);
   }
-  throw new Error("Transcription did not complete in time");
+  throw new Error(
+    `Transcription did not complete in time (fileIds: ${fileIds.join(", ")}; waited ~${Math.round(
+      (maxAttempts * intervalMs) / 1000,
+    )}s)`,
+  );
 }
 
 export async function waitForAiTaskResult({
@@ -506,21 +544,100 @@ export async function waitForAiTaskResult({
   fileId: string;
   taskId: string;
   aiTaskType: string;
-  getResult?: (body: { fileId: string; taskId: string; aiTaskType: string }) => Promise<AiTaskResultVO>;
+  getResult?: (body: { fileId: string; taskId: string; aiTaskType: string }) => Promise<AiTaskResultVO | null>;
   sleep?: (ms: number) => Promise<void>;
   intervalMs?: number;
   maxAttempts?: number;
 }): Promise<AiTaskResultVO> {
   const body = { fileId, taskId, aiTaskType };
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const result = await getResult(body);
-    if (isFailedStatus(result.status) || result.conclusion?.generateSuccess === false) {
+    let result: AiTaskResultVO | null;
+    try {
+      result = await getResult(body);
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 1001)) throw error;
+      if (attempt < maxAttempts - 1) await wait(intervalMs);
+      continue;
+    }
+    if (!result) {
+      if (attempt < maxAttempts - 1) await wait(intervalMs);
+      continue;
+    }
+    if (isFailedStatus(result.status) || isFailedStatus(result.conclusion?.status)) {
       throw new Error(`AI task failed: ${String(result.status ?? "unknown")}`);
     }
-    if (isCompletedStatus(result.status) || result.conclusion?.generateSuccess === true) return result;
+    if (
+      isCompletedStatus(result.status) ||
+      result.conclusion?.generateSuccess === true ||
+      (typeof result.conclusion?.conclusionText === "string" &&
+        result.conclusion.conclusionText.trim().length > 0)
+    ) {
+      return result;
+    }
     if (attempt < maxAttempts - 1) await wait(intervalMs);
   }
   throw new Error("AI task did not complete in time");
+}
+
+export async function waitForConclusionCompletion({
+  fileId,
+  previousConclusions,
+  getConclusions = (params) =>
+    api().getWithParams<FileConclusion[]>("/api/business/file/conclusion/list", params),
+  sleep: wait = sleep,
+  intervalMs = DEFAULT_POLL_INTERVAL_MS,
+  maxAttempts = DEFAULT_MAX_POLL_ATTEMPTS,
+}: {
+  fileId: string;
+  previousConclusions: FileConclusion[];
+  getConclusions?: (params: { fileId: string }) => Promise<FileConclusion[]>;
+  sleep?: (ms: number) => Promise<void>;
+  intervalMs?: number;
+  maxAttempts?: number;
+}): Promise<FileConclusion> {
+  const params = { fileId };
+  const previousVersions = new Set(previousConclusions.map(conclusionVersion));
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let conclusions: FileConclusion[];
+    try {
+      conclusions = await getConclusions(params);
+    } catch (error) {
+      if (!(error instanceof ApiError && error.status === 1001)) throw error;
+      if (attempt < maxAttempts - 1) await wait(intervalMs);
+      continue;
+    }
+    const changedConclusions = conclusions.filter(
+      (conclusion) => !previousVersions.has(conclusionVersion(conclusion)),
+    );
+    for (const conclusion of changedConclusions) {
+      const status = conclusion.status;
+      if (isFailedStatus(status)) {
+        throw new Error(`Summary generation failed: ${String(status ?? "unknown")}`);
+      }
+      if (
+        conclusion.generateSuccess === true ||
+        isCompletedStatus(status) ||
+        (typeof conclusion.conclusionText === "string" && conclusion.conclusionText.trim().length > 0)
+      ) {
+        return conclusion;
+      }
+    }
+    if (attempt < maxAttempts - 1) await wait(intervalMs);
+  }
+  throw new Error("Summary generation did not complete in time");
+}
+
+function conclusionVersion(conclusion: FileConclusion): string {
+  return JSON.stringify([
+    conclusion.id,
+    conclusion.conclusionText,
+    conclusion.status,
+    conclusion.generateSuccess,
+    conclusion.taskId,
+    conclusion.againTaskId,
+    conclusion.updateTime,
+    conclusion.templateId,
+  ]);
 }
 
 /** Add a new summary for an existing file without re-transcribing. */
@@ -542,20 +659,58 @@ export function useAddSummary() {
   });
 }
 
-/** Re-run the full transcription + summarization pipeline for an existing file. */
+/** Re-run file processing and wait for the summary produced by that task. */
+export async function rerunSummaryPipeline({
+  req,
+  getCurrentConclusions = (params) =>
+    api().getWithParams<FileConclusion[]>("/api/business/file/conclusion/list", params),
+  startProcessing = (request) =>
+    api().post<TransferFileResult>("/api/business/file/trans", request),
+  waitForProcessing = (args) => waitForTranscriptionCompletion(args),
+  waitForConclusion = (args) => waitForConclusionCompletion(args),
+}: {
+  req: TransferFileReq;
+  getCurrentConclusions?: (params: { fileId: string }) => Promise<FileConclusion[]>;
+  startProcessing?: (req: TransferFileReq) => Promise<TransferFileResult>;
+  waitForProcessing?: (args: {
+    fileIds: string[];
+    intervalMs: number;
+    maxAttempts: number;
+  }) => Promise<TransStatusMap>;
+  waitForConclusion?: (args: {
+    fileId: string;
+    previousConclusions: FileConclusion[];
+    intervalMs: number;
+    maxAttempts: number;
+  }) => Promise<FileConclusion>;
+}): Promise<AiTaskResultVO> {
+  const previousConclusions = await getCurrentConclusions({ fileId: req.fileId });
+  const task = await startProcessing(req);
+  await waitForProcessing({
+    fileIds: [req.fileId],
+    intervalMs: 5000,
+    maxAttempts: 240,
+  });
+  const conclusion = await waitForConclusion({
+    fileId: req.fileId,
+    previousConclusions,
+    intervalMs: 5000,
+    maxAttempts: 240,
+  });
+  return { status: "COMPLETED", taskId: task.taskId, conclusion };
+}
+
 export function useRerunSummary() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (req: TransferFileReq) => {
-      const result = await api().post<TransferFileResult>("/api/business/file/trans", req);
-      await waitForTranscriptionCompletion({ fileIds: [req.fileId] });
-      return result;
-    },
-    onSuccess: (_data, req) => {
+    mutationFn: (req: TransferFileReq) => rerunSummaryPipeline({ req }),
+    onSuccess: (data, req) => {
       qc.invalidateQueries({ queryKey: ["files"] });
-      qc.invalidateQueries({ queryKey: ["file-conclusions", req.fileId] });
-      qc.invalidateQueries({ queryKey: ["file-outline", req.fileId] });
-      qc.invalidateQueries({ queryKey: ["file-transcription", req.fileId] });
+      if (data.conclusion) {
+        qc.setQueryData(["file-conclusions", req.fileId], [data.conclusion]);
+      } else {
+        qc.invalidateQueries({ queryKey: ["file-conclusions", req.fileId] });
+      }
     },
   });
 }

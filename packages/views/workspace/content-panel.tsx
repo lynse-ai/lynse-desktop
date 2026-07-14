@@ -1,8 +1,7 @@
 "use client";
 
-import { useMemo, useState, useCallback, useRef, useEffect } from "react";
+import { useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect, Children, type ReactNode } from "react";
 import {
-  ChevronDown,
   FileText,
   FileAudio,
   Sparkles,
@@ -13,6 +12,8 @@ import {
   RefreshCw,
   Loader2,
   Trash2,
+  ChevronLeft,
+  ChevronRight,
 } from "../icons";
 import { useWorkspaceStore } from "./store";
 import { TAB_BAR_HEIGHT } from "./layout-constants";
@@ -31,6 +32,10 @@ import {
   useFileTranscription,
   useFileAudioUrl,
   useUpdateConclusion,
+  useRerunSummary,
+  useFileDetail,
+  useTemplateCategories,
+  sortConclusionsChronologically,
 } from "./hooks/use-files";
 import type { SummaryTabModel } from "./hooks/use-files";
 import { useTranslation } from "@lynse/core/i18n/react";
@@ -44,13 +49,19 @@ import { retryLocalTranscription } from "./local-transcription-retry";
 import { isLocalTranscriptionActive } from "./local-transcription-status";
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@lynse/ui/components/ui/dropdown-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@lynse/ui/components/ui/context-menu";
 import "./content-preview.css";
+import { toast } from "sonner";
 
 function extractBody(html: string): { content: string; scopedStyles: string } {
   const styleBlocks: string[] = [];
@@ -249,6 +260,14 @@ export function ContentPanel() {
   const { data: audioUrl } = useFileAudioUrl(selectedItemId);
   const updateConclusion = useUpdateConclusion();
   const deleteConclusion = useDeleteConclusion();
+  const rerunSummary = useRerunSummary();
+  const { data: fileDetail } = useFileDetail(selectedItemId);
+  const { data: templateCategories } = useTemplateCategories();
+
+  const defaultTemplateId = useMemo(() => {
+    const all = templateCategories?.flatMap((c) => c.templates) ?? [];
+    return all.find((tpl) => tpl.isDefault === 1)?.id ?? all[0]?.id ?? "";
+  }, [templateCategories]);
 
   const audioPlayerRef = useRef<AudioPlayerHandle>(null);
   const [highlightTimeMs, setHighlightTimeMs] = useState<number | null>(null);
@@ -295,7 +314,7 @@ export function ContentPanel() {
   // Conclusions — each FileConclusionVO has a `templateName` field for the conclusion template name
   const conclusionTexts = useMemo(() => {
     if (!Array.isArray(conclusions)) return [];
-    return conclusions
+    return sortConclusionsChronologically(conclusions)
       .map((c, i) => {
         const obj = c as Record<string, unknown>;
         const text = String(obj.conclusionText ?? "");
@@ -550,6 +569,54 @@ export function ContentPanel() {
     }
   }, [setContentTab, setFileSummarizing]);
 
+  // One-click "auto generate": only available in the regenerate (重新生成)
+  // context. Reruns the file with the default template, skipping the picker
+  // dialog. Mirrors the rerun branch of ResummarizeDialog.
+  const handleAutoRerun = useCallback(async () => {
+    if (!selectedItemId || !defaultTemplateId || currentFileSummarizing) return;
+    const fileId = selectedItemId;
+    handleResummaryStarted(fileId, "rerun", {});
+    qc.setQueryData(["file-conclusions", fileId], []);
+    try {
+      const result = await rerunSummary.mutateAsync({
+        fileId,
+        templateId: defaultTemplateId,
+        modelId: (fileDetail as Record<string, unknown> | undefined)?.modelId as string | undefined,
+        languageId: (fileDetail as Record<string, unknown> | undefined)?.languageId as string | undefined,
+      });
+      handleResummaryFinished(fileId, true, "rerun", {});
+      if (!result.conclusion) {
+        await qc.invalidateQueries({ queryKey: ["file-conclusions", fileId] });
+      }
+      toast.success(text("resummarize.success", "总结已重新生成"));
+    } catch (err) {
+      const fileDetailRec = fileDetail as Record<string, unknown> | undefined;
+      console.error(
+        "[重新总结失败] 完整错误对象:",
+        err,
+        "\n请求参数:",
+        {
+          fileId,
+          templateId: defaultTemplateId,
+          modelId: fileDetailRec?.modelId,
+          languageId: fileDetailRec?.languageId,
+        },
+      );
+      const msg = err instanceof Error ? err.message : text("resummarize.unknown_error", "未知错误");
+      toast.error(text("resummarize.failed", "重新总结失败"), { description: msg });
+      handleResummaryFinished(fileId, false, "rerun", {});
+    }
+  }, [
+    selectedItemId,
+    defaultTemplateId,
+    currentFileSummarizing,
+    handleResummaryStarted,
+    handleResummaryFinished,
+    rerunSummary,
+    qc,
+    text,
+  ]);
+
   const handleDeleteSummary = useCallback((conclusionId: string, idx: number) => {
     if (!selectedItemId || !window.confirm(text("summary_tab.delete_confirm", summaryTabFallback.deleteConfirm))) return;
     deleteConclusion.mutate(conclusionId, {
@@ -566,7 +633,7 @@ export function ContentPanel() {
     <div className="flex h-full flex-col min-w-0">
       {/* Tab bar */}
       <div className="flex shrink-0 items-center border-b border-stroke-secondary px-4" style={{ height: TAB_BAR_HEIGHT }}>
-        <div className="flex items-center gap-0.5 overflow-x-auto">
+        <ScrollableTabs activeTab={contentTab}>
           <TabButton
             active={contentTab === "outline"}
             onClick={() => setContentTab("outline")}
@@ -581,45 +648,46 @@ export function ContentPanel() {
             <FileAudio className="size-3.5" />
             <span>{t("workspace.transcription")}</span>
           </TabButton>
-          {visibleConclusionTexts.length > 0 && (
-            <>
-              <div className="mx-1 h-4 w-px bg-border" />
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  className="flex max-w-60 shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground data-popup-open:bg-accent data-popup-open:text-accent-foreground"
+          {visibleConclusionTexts.map((block, idx) => (
+            <ContextMenu key={block.key}>
+              <ContextMenuTrigger>
+                <TabButton
+                  active={contentTab === `summary-${idx}`}
+                  onClick={() => setContentTab(`summary-${idx}`)}
                 >
                   <Sparkles className="size-3.5 shrink-0" />
-                  <span className="shrink-0">{t("workspace.summary")}:</span>
-                  <span className="min-w-0 truncate text-foreground">
-                    {activeSummary?.name || t("workspace.summary")}
-                  </span>
-                  <ChevronDown className="size-3 shrink-0" />
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-64">
-                  {visibleConclusionTexts.map((block, idx) => (
-                    <DropdownMenuCheckboxItem
-                      key={block.key}
-                      checked={contentTab === `summary-${idx}`}
-                      onClick={() => setContentTab(`summary-${idx}`)}
-                      className="pr-8 pl-1.5 [&>span:first-child]:right-2 [&>span:first-child]:left-auto"
-                    >
-                      <Sparkles className="size-3.5 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate">
-                        {block.name || t("workspace.summary")}
-                      </span>
-                    </DropdownMenuCheckboxItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </>
-          )}
+                  <span className="max-w-28 truncate">{block.name || t("workspace.summary")}</span>
+                </TabButton>
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                <ContextMenuItem
+                  onClick={() => {
+                    setSelectedConclusionIdForTemplate(block.id);
+                    setSummaryDialogMode("replace");
+                    setResummarizeOpen(true);
+                  }}
+                  disabled={currentFileSummarizing || !block.id}
+                >
+                  <RefreshCw className="size-3.5" />
+                  <span>{text("summary_tab.replace_template", summaryTabFallback.replaceTemplate)}</span>
+                </ContextMenuItem>
+                <ContextMenuItem
+                  onClick={handleAutoRerun}
+                  disabled={!selectedItemId || currentFileSummarizing || !defaultTemplateId}
+                >
+                  <RefreshCw className="size-3.5" />
+                  <span>{t("resummarize.button")}</span>
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
+          ))}
           {noteTabs.map((note) => (
             <TabButton
               key={note.id}
               active={contentTab === `note-${note.id}`}
               onClick={() => setContentTab(`note-${note.id}`)}
             >
-              <span>{note.title}</span>
+              <span className="max-w-28 truncate">{note.title}</span>
               <button
                 onClick={(e) => { e.stopPropagation(); removeNoteTab(note.id); }}
                 className="ml-0.5 rounded p-0.5 hover:bg-accent/50"
@@ -635,13 +703,12 @@ export function ContentPanel() {
               setResummarizeOpen(true);
             }}
             disabled={!selectedItemId || currentFileSummarizing}
-            className="flex items-center justify-center rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors disabled:pointer-events-none disabled:opacity-50"
+            className="ml-0.5 flex shrink-0 items-center justify-center rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors disabled:pointer-events-none disabled:opacity-50"
             title={t("add_summary.button")}
           >
             <Plus className="size-3.5" />
           </button>
-        </div>
-        <div className="flex-1" />
+        </ScrollableTabs>
         {selectedItemId && (
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -676,12 +743,8 @@ export function ContentPanel() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                onClick={() => {
-                  setSelectedConclusionIdForTemplate(null);
-                  setSummaryDialogMode("rerun");
-                  setResummarizeOpen(true);
-                }}
-                disabled={currentFileSummarizing}
+                onClick={handleAutoRerun}
+                disabled={!selectedItemId || currentFileSummarizing || !defaultTemplateId}
               >
                 <RefreshCw className="size-3.5" />
                 <span>{t("resummarize.button")}</span>
@@ -1027,6 +1090,7 @@ function NoteContent({ fileId, noteId }: { fileId: string | null; noteId: string
 function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
+      data-tab-active={active ? "true" : undefined}
       onClick={onClick}
       className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
         active
@@ -1036,6 +1100,96 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
     >
       {children}
     </button>
+  );
+}
+
+function ScrollableTabs({ activeTab, children }: { activeTab: string; children: ReactNode }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const itemCount = Children.count(children);
+  const { t } = useTranslation();
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateArrows = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const { scrollLeft, scrollWidth, clientWidth } = container;
+    setCanScrollLeft(scrollLeft > 1);
+    setCanScrollRight(scrollLeft + clientWidth < scrollWidth - 1);
+  }, []);
+
+  // Keep arrow visibility in sync with overflow + scroll position.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    updateArrows();
+    const onScroll = () => updateArrows();
+    container.addEventListener("scroll", onScroll, { passive: true });
+    const ro = new ResizeObserver(() => updateArrows());
+    ro.observe(container);
+    return () => {
+      container.removeEventListener("scroll", onScroll);
+      ro.disconnect();
+    };
+  }, [updateArrows, itemCount]);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const active = container.querySelector<HTMLElement>('[data-tab-active="true"]');
+    if (!active) return;
+    const containerRect = container.getBoundingClientRect();
+    const activeRect = active.getBoundingClientRect();
+    if (activeRect.left < containerRect.left) {
+      container.scrollBy({ left: activeRect.left - containerRect.left - 4, behavior: "smooth" });
+    } else if (activeRect.right > containerRect.right) {
+      container.scrollBy({ left: activeRect.right - containerRect.right + 4, behavior: "smooth" });
+    }
+  }, [activeTab, itemCount]);
+
+  const scrollByDir = (dir: 1 | -1) => {
+    const container = containerRef.current;
+    if (!container) return;
+    const amount = Math.max(container.clientWidth * 0.7, 140);
+    container.scrollBy({ left: dir * amount, behavior: "smooth" });
+  };
+
+  return (
+    <div className="flex flex-1 min-w-0 items-center gap-0.5">
+      {canScrollLeft && (
+        <button
+          type="button"
+          onClick={() => scrollByDir(-1)}
+          aria-label={t("workspace.scroll_tabs_left")}
+          title={t("workspace.scroll_tabs_left")}
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        >
+          <ChevronLeft className="size-4" />
+        </button>
+      )}
+      <div
+        ref={containerRef}
+        onWheel={(event) => {
+          if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+            event.currentTarget.scrollLeft += event.deltaY;
+          }
+        }}
+        className="flex flex-1 min-w-0 items-center gap-0.5 overflow-x-auto overscroll-x-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
+        {children}
+      </div>
+      {canScrollRight && (
+        <button
+          type="button"
+          onClick={() => scrollByDir(1)}
+          aria-label={t("workspace.scroll_tabs_right")}
+          title={t("workspace.scroll_tabs_right")}
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        >
+          <ChevronRight className="size-4" />
+        </button>
+      )}
+    </div>
   );
 }
 

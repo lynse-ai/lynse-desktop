@@ -1,6 +1,6 @@
 [package]
 name = "lynse-tauri"
-version = "0.1.0"
+version = "0.1.8"
 description = "Lynse macOS desktop shell"
 authors = ["Lynse"]
 edition = "2021"
@@ -14,7 +14,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
-highlandcows-eventkit = "0.5.8"
 mime_guess = "2"
 percent-encoding = "2"
 serde = { version = "1", features = ["derive"] }
@@ -24,3 +23,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
+
+# macOS-only: EventKit bridge for system calendar integration.
+[target.'cfg(target_os = "macos")'.dependencies]
+highlandcows-eventkit = "0.5.8"

@@ -171,7 +171,10 @@ export function useFiles(params: {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
   return useQuery({
-    queryKey: ["files", params],
+    // Include auth state in the key so that queries cached while unauthenticated
+    // (e.g. the always-mounted "__all__" query from FolderTreeSection) are
+    // re-fetched once the user is authenticated, instead of showing stale empties.
+    queryKey: ["files", params, isAuthenticated],
     queryFn: async () => {
       const request = buildFilesRequest(params);
       const localApi = getDesktopLocalTranscriptionApi();

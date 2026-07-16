@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+#[cfg(target_os = "macos")]
 use highlandcows_eventkit::{CalendarEvent, CalendarStore};
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use serde_json::{json, Map, Value};
@@ -138,6 +139,7 @@ fn calendar_event_times(start_at: &str, end_at: &str) -> CommandResult<(DateTime
     Ok((start, end))
 }
 
+#[cfg(target_os = "macos")]
 fn add_todo_to_system_calendar(app: &AppHandle, todo_id: &str, start_at: &str, end_at: &str) -> CommandResult<Value> {
     let todo = get_store_value(app, "local-todos", todo_id)?.ok_or("Todo not found")?;
     let title = todo.get("title").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()).ok_or("Todo title is required")?;
@@ -549,12 +551,25 @@ fn todo_save(app: AppHandle, todo: Value) -> CommandResult<Value> { save_todo(&a
 #[tauri::command]
 fn todo_delete(app: AppHandle, id: String) -> CommandResult<()> { remove_store_value(&app, "local-todos", &id) }
 
+#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn todo_add_to_calendar(app: AppHandle, todo_id: String, start_at: String, end_at: String, confirmed: bool) -> CommandResult<Value> {
     if !confirmed { return Err("Calendar events can only be created after explicit confirmation".to_owned()) }
     tauri::async_runtime::spawn_blocking(move || add_todo_to_system_calendar(&app, &todo_id, &start_at, &end_at))
         .await
         .map_err(|error| error.to_string())?
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+async fn todo_add_to_calendar(
+    _app: AppHandle,
+    _todo_id: String,
+    _start_at: String,
+    _end_at: String,
+    _confirmed: bool,
+) -> CommandResult<Value> {
+    Err("System calendar integration is only available on macOS".to_owned())
 }
 
 #[tauri::command]

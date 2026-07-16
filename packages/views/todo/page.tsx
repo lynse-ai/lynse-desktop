@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Plus, Calendar, Trash2, X } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
@@ -11,7 +11,8 @@ import {
   DialogFooter,
 } from "@lynse/ui/components/ui/dialog";
 import { Button } from "@lynse/ui/components/ui/button";
-import { getDesktopTodoApi, type TodoItem } from "./todo-api";
+import { type TodoItem, addTodoToSystemCalendar } from "./todo-api";
+import { useTodos } from "./use-todos";
 
 // ── Helpers ────────────────────────────────────────────────
 
@@ -302,21 +303,23 @@ function DetailPanel({
 
       {/* Actions */}
       <div className="mt-auto border-t border-border/40 px-4 py-3 space-y-2">
-        {!todo.calendarEventId ? (
-          <Button
-            variant="default"
-            size="sm"
-            className="w-full justify-start gap-2"
-            onClick={handleAddToCalendar}
-          >
-            <Calendar className="size-4" />
-            {t("todo.actions_join_calendar")}
-          </Button>
-        ) : (
-          <div className="flex items-center gap-2 text-xs text-green-600 dark:text-green-400 px-2 py-1.5 rounded bg-green-50 dark:bg-green-950/30">
-            <Calendar className="size-3.5" />
-            {t("todo.added_to_calendar")}
-          </div>
+        {!todo.backend && (
+          !todo.calendarEventId ? (
+            <Button
+              variant="default"
+              size="sm"
+              className="w-full justify-start gap-2"
+              onClick={handleAddToCalendar}
+            >
+              <Calendar className="size-4" />
+              {t("todo.actions_join_calendar")}
+            </Button>
+          ) : (
+            <div className="flex items-center gap-2 text-xs text-green-600 dark:text-green-400 px-2 py-1.5 rounded bg-green-50 dark:bg-green-950/30">
+              <Calendar className="size-3.5" />
+              {t("todo.added_to_calendar")}
+            </div>
+          )
         )}
         <button
           onClick={onDelete}
@@ -409,82 +412,58 @@ function CalendarConfirmDialog({
 
 export function TodoPage() {
   const { t } = useTranslation();
-  const api = getDesktopTodoApi();
-  const [todos, setTodos] = useState<TodoItem[]>([]);
+  const { todos, loading, error, load, addLocal, toggle, remove, clearCompleted } = useTodos();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [pendingCalendarStart, setPendingCalendarStart] = useState("");
-  const [loading, setLoading] = useState(true);
-
-  const loadTodos = useCallback(async () => {
-    if (!api) { setLoading(false); return; }
-    try {
-      const list = await api.list();
-      // Sort: incomplete first, then by createdAt desc
-      list.sort((a, b) => {
-        if (a.completed !== b.completed) return a.completed ? 1 : -1;
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-      });
-      setTodos(list);
-    } catch { /* silently fail */ }
-    setLoading(false);
-  }, [api]);
-
-  useEffect(() => { loadTodos(); }, [loadTodos]);
 
   const handleAdd = useCallback(
-    async (title: string) => {
-      if (!api) return;
-      const saved = await api.save({ title });
-      setTodos((prev) => [saved, ...prev]);
-      setSelectedId(saved.id);
+    (title: string) => {
+      addLocal(title);
+      setSelectedId(null);
     },
-    [api],
+    [addLocal],
   );
 
   const handleToggle = useCallback(
-    async (id: string) => {
-      if (!api) return;
+    (id: string) => {
       const todo = todos.find((x) => x.id === id);
-      if (!todo) return;
-      await api.save({ ...todo, completed: !todo.completed });
-      setTodos((prev) =>
-        prev.map((x) => (x.id === id ? { ...x, completed: !x.completed, updatedAt: new Date().toISOString() } : x)),
-      );
+      if (todo) toggle(todo);
     },
-    [api, todos],
+    [todos, toggle],
   );
 
   const handleDelete = useCallback(
     async (id: string) => {
-      if (!api) return;
-      await api.delete(id);
-      setTodos((prev) => prev.filter((x) => x.id !== id));
+      const todo = todos.find((x) => x.id === id);
+      if (todo) await remove(todo);
       if (selectedId === id) setSelectedId(null);
     },
-    [api, selectedId],
+    [todos, remove, selectedId],
   );
 
   const handleAddToCalendar = useCallback(
     (startAt: string) => {
-      if (!api || !selectedId) return;
+      if (!selectedId) return;
       setPendingCalendarStart(startAt);
       setCalendarOpen(true);
     },
-    [api, selectedId],
+    [selectedId],
   );
 
   const confirmAddToCalendar = useCallback(async () => {
-    if (!api || !selectedId || !pendingCalendarStart) return;
+    if (!selectedId || !pendingCalendarStart) return;
+    const todo = todos.find((x) => x.id === selectedId);
+    if (!todo || todo.backend) return; // system calendar only works for local todos
     try {
       const end = new Date(pendingCalendarStart);
       end.setHours(end.getHours() + 1);
-      const updated = await api.addToCalendar(selectedId, pendingCalendarStart, end.toISOString());
-      setTodos((prev) => prev.map((x) => (x.id === selectedId ? updated : x)));
+      await addTodoToSystemCalendar(todo, pendingCalendarStart, end.toISOString());
+      load();
     } catch (err) {
       console.error("[Todo] addToCalendar failed:", err);
     }
-  }, [api, selectedId, pendingCalendarStart]);
+  }, [selectedId, pendingCalendarStart, todos, load]);
 
   const groups = useMemo(() => groupTodos(todos), [todos]);
   const selected = todos.find((x) => x.id === selectedId) ?? null;
@@ -493,9 +472,35 @@ export function TodoPage() {
   return (
     <div className="flex h-full flex-col min-w-0">
       {/* Header */}
-      <div className="flex shrink-0 items-center border-b border-stroke-secondary px-4" style={{ height: 44 }}>
+      <div className="flex shrink-0 items-center justify-between border-b border-stroke-secondary px-4" style={{ height: 44 }}>
         <h1 className="text-base font-semibold text-foreground">{t("todo.page_title")}</h1>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => load()}
+            className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50"
+            title={t("todo.refresh")}
+          >
+            {t("todo.refresh")}
+          </button>
+          <button
+            onClick={() => clearCompleted()}
+            className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 disabled:opacity-40"
+            disabled={!todos.some((x) => x.completed)}
+          >
+            {t("todo.clear_completed")}
+          </button>
+        </div>
       </div>
+
+      {/* Error banner */}
+      {error && (
+        <div className="flex items-center justify-between gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">
+          <span>{t("todo.load_error")}</span>
+          <button onClick={() => load()} className="underline">
+            {t("todo.retry")}
+          </button>
+        </div>
+      )}
 
       {/* Add input */}
       <AddTodoInput onAdd={handleAdd} />
@@ -564,14 +569,16 @@ export function TodoPage() {
         />
       )}
 
-      {/* Calendar confirmation dialog */}
-      <CalendarConfirmDialog
-        open={calendarOpen}
-        onOpenChange={setCalendarOpen}
-        todo={selected!}
-        startAt={pendingCalendarStart}
-        onConfirm={confirmAddToCalendar}
-      />
+      {/* Calendar confirmation dialog (only when a todo is selected) */}
+      {selected && (
+        <CalendarConfirmDialog
+          open={calendarOpen}
+          onOpenChange={setCalendarOpen}
+          todo={selected}
+          startAt={pendingCalendarStart}
+          onConfirm={confirmAddToCalendar}
+        />
+      )}
     </div>
   );
 }

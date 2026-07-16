@@ -289,6 +289,10 @@ const ja = {
     deleted: " ToDo が削除されました",
     delete_confirm: "この ToDo を削除しますか？",
     completed_toggle: "完了状態を切り替え",
+    refresh: "更新",
+    clear_completed: "完了済みを削除",
+    load_error: "ToDo の読み込みに失敗しました。ログイン状態やネットワークを確認してください",
+    retry: "再試行",
   },
 };
 

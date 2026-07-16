@@ -3,7 +3,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { cn } from "@lynse/ui/lib/utils";
-import { useNavigation } from "../../navigation";
 import {
   Layers,
   Trash2,
@@ -28,7 +27,6 @@ import { FolderContextMenu } from "./folder-context-menu";
 import type { FolderInfo } from "../types";
 
 export function FolderTreeSection() {
-  const { pathname } = useNavigation();
   const { t } = useTranslation();
   const { data: folders } = useFolders();
   const { data: counts } = useFolderCounts();
@@ -47,10 +45,10 @@ export function FolderTreeSection() {
   const [newFolderName, setNewFolderName] = useState("");
   const newFolderInputRef = useRef<HTMLInputElement>(null);
 
-  // Only show on workspace routes
-  const workspaceRoutes = ["/recordings", "/meetings", "/knowledge", "/files"];
-  const isWorkspace = workspaceRoutes.some((r) => pathname.startsWith(r));
-  if (!isWorkspace) return null;
+  // The folder tree (All Files / folders / Trash) is part of the persistent
+  // sidebar navigation, so it renders on every route — not just workspace ones.
+  // (No early return before the hooks below: that would change the hook count
+  // between routes and make React throw "Rendered fewer hooks".)
 
   const foldersCollapsed = sidebarSectionsCollapsed.has("folders");
 

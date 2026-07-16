@@ -291,6 +291,10 @@ const en = {
     deleted: "Todo deleted",
     delete_confirm: "Delete this todo?",
     completed_toggle: "Toggle completed status",
+    refresh: "Refresh",
+    clear_completed: "Clear completed",
+    load_error: "Failed to load todos. Check your login or network.",
+    retry: "Retry",
   },
 };
 

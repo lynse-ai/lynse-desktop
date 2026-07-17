@@ -10,9 +10,17 @@ permissions:
   contents: write
 
 jobs:
-  windows:
-    name: Build Windows x64
-    runs-on: windows-latest
+  build:
+    name: Build ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            args: --bundles msi
+          - os: macos-latest
+            args: --bundles dmg
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,16 +42,16 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Tauri app (Windows x64 msi)
+      - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/tauri
-          args: --bundles msi
+          args: ${{ matrix.args }}
           tagName: ${{ github.ref_name }}
           releaseName: "Lynse ${{ github.ref_name }}"
-          releaseBody: "Lynse desktop for Windows x64 (msi installer)."
+          releaseBody: "Lynse desktop — Windows (msi) and macOS (dmg)."
           releaseDraft: false
           prerelease: false
           includeRelease: true

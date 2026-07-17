@@ -40,6 +40,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: apps/tauri
+          packageManager: pnpm
           args: --bundles msi
           tagName: ${{ github.ref_name }}
           releaseName: "Lynse ${{ github.ref_name }}"

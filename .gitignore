@@ -37,3 +37,7 @@ coverage/
 
 # Project operational data (WorkBuddy memory / notes) — not source
 .workbuddy/
+
+# Local STT sidecar binaries (whisper/moss-transcribe/ffmpeg/ffprobe)
+# Fetched by CI via scripts/fetch-sidecars.sh; never committed.
+apps/tauri/src-tauri/resources/sidecars/

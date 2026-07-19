@@ -27,6 +27,8 @@ import { TemplateSelector } from "./template-selector";
 import {
   getDesktopLocalTranscriptionApi,
   OFFLINE_TRANSCRIPTION_ENABLED_KEY,
+  resolveSttProvider,
+  findModelStatus,
 } from "./local-transcription";
 import { isInsufficientCreditsError } from "../layout/use-user-credits";
 
@@ -146,6 +148,16 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
     try {
       if (useOfflineTranscription) {
         if (!localAudioPath || !localApi) return;
+        // Pre-flight: the resolved engine's model must be installed.
+        const sttConfig = await localApi.getSttConfig().catch(() => ({ default: null, per_language: {} }));
+        const { models } = await localApi.listSttModels().catch(() => ({ models: [] }));
+        const provider = resolveSttProvider(sttConfig, undefined, undefined);
+        const status = findModelStatus(models, provider);
+        if (!status || status.status !== "installed") {
+          toast.error(t("upload.offline_model_missing"));
+          setErrorMsg(t("upload.offline_model_missing"));
+          return;
+        }
         setPhase("transcribing");
         const expectedSpeakersValue = Number.parseInt(expectedSpeakers, 10);
         const record = await localApi.transcribe(localAudioPath, {

@@ -8,12 +8,30 @@ import type {
   WorkspaceItem,
 } from "./types";
 
+export type SttEngine = "funasr" | "whisper" | "moss_transcribe_diarize";
+
+export type WhisperModel = "small-q5_1" | "medium-q5_0" | "large-v3-turbo-q5_0";
+
+export const WHISPER_MODELS: WhisperModel[] = ["small-q5_1", "medium-q5_0", "large-v3-turbo-q5_0"];
+export const WHISPER_MODEL_LABELS: Record<WhisperModel, string> = {
+  "small-q5_1": "Whisper small (q5_1, ~190 MB)",
+  "medium-q5_0": "Whisper medium (q5_0, ~539 MB)",
+  "large-v3-turbo-q5_0": "Whisper large-v3-turbo (q5_0, ~574 MB)",
+};
+export const DEFAULT_WHISPER_MODEL: WhisperModel = "large-v3-turbo-q5_0";
+export const MOSS_MODEL_ID = "moss-0.9b-q5";
+export const FUNASR_MODEL_ID = "funasr-paraformer";
+
 export type SttProviderConfig =
+  | { provider: "funasr"; expected_speakers?: number | null; hotword_package_id?: string | null }
   | {
-      provider: "funasr";
+      provider: "whisper";
+      model?: WhisperModel;
+      campp_diarization?: boolean;
       expected_speakers?: number | null;
       hotword_package_id?: string | null;
-    };
+    }
+  | { provider: "moss_transcribe_diarize"; hotword_package_id?: string | null };
 
 export type TranscribeConfig = {
   default?: SttProviderConfig | null;
@@ -24,11 +42,15 @@ export const LOCAL_FILE_ID_PREFIX = "local:";
 export const LOCAL_TRANSCRIPTION_FOLDER_ID = "__local_transcriptions__";
 export const LOCAL_TRANSCRIPTION_TAG = "本地转写";
 export const OFFLINE_TRANSCRIPTION_ENABLED_KEY = "lynse_offline_transcription_enabled";
+export const OFFLINE_TRANSCRIPTION_DEFAULT_OFF = true;
 
-export interface LocalAsrModelStatus {
-  status: "not_installed" | "installed" | "downloading";
+export interface SttModelInfo {
+  provider: SttEngine;
+  id: string;
+  label: string;
+  sizeBytes: number;
+  status: "installed" | "not_installed" | "downloading";
   modelDir: string;
-  modelName: string;
 }
 
 export interface DesktopLocalTranscriptionApi {
@@ -39,9 +61,9 @@ export interface DesktopLocalTranscriptionApi {
   retry: (id: string) => Promise<LocalTranscriptionRecord>;
   delete: (id: string) => Promise<void>;
   getAudioUrl: (id: string) => Promise<string | null>;
-  getModelStatus: () => Promise<LocalAsrModelStatus>;
-  downloadModel: () => Promise<LocalAsrModelStatus>;
-  deleteModel: () => Promise<LocalAsrModelStatus>;
+  listSttModels: () => Promise<{ models: SttModelInfo[] }>;
+  downloadSttModel: (provider: SttEngine, modelId: string) => Promise<{ models: SttModelInfo[] }>;
+  deleteSttModel: (provider: SttEngine, modelId: string) => Promise<{ models: SttModelInfo[] }>;
   listHotwordPackages: () => Promise<LocalHotwordPackage[]>;
   saveHotwordPackage: (pkg: LocalHotwordPackage) => Promise<LocalHotwordPackage>;
   deleteHotwordPackage: (id: string) => Promise<void>;
@@ -86,7 +108,7 @@ export function localRecordToTranscription(record: LocalTranscriptionRecord): Fi
   return {
     id: record.id,
     fileId: record.id,
-    taskId: "local-funasr",
+    taskId: `local-${record.engine}`,
     content: transcriptText,
     records: segments.map((segment) => ({
       id: segment.id,
@@ -145,4 +167,79 @@ export function mergeCloudAndLocalFiles(
     ...localRecords.map(localRecordToWorkspaceItem),
     ...cloudFiles,
   ];
+}
+
+// ── Provider config resolution & migration ───────────────
+
+/** Coerce legacy/loose shapes into a typed provider config. */
+export function migrateSttProviderConfig(value: unknown): SttProviderConfig | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const provider = record.provider;
+  if (provider === "whisper") {
+    const model = (record.model as WhisperModel) ?? DEFAULT_WHISPER_MODEL;
+    return {
+      provider: "whisper",
+      model,
+      campp_diarization: Boolean(record.campp_diarization),
+      expected_speakers: (record.expected_speakers as number | null | undefined) ?? null,
+      hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
+    };
+  }
+  if (provider === "moss_transcribe_diarize") {
+    return {
+      provider: "moss_transcribe_diarize",
+      hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
+    };
+  }
+  // Legacy: a bare funasr object (or a config without a `provider` tag) maps to FunASR.
+  return {
+    provider: "funasr",
+    expected_speakers: (record.expected_speakers as number | null | undefined) ?? null,
+    hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
+  };
+}
+
+/** Resolve the effective provider, mirroring the Rust `TranscribeConfig::resolve`. */
+export function resolveSttProvider(
+  config: TranscribeConfig,
+  language: string | null | undefined,
+  perNote?: SttProviderConfig | null,
+): SttProviderConfig {
+  const fromNote = perNote ? migrateSttProviderConfig(perNote) : null;
+  if (fromNote) return fromNote;
+  if (language && config.per_language[language]) {
+    const migrated = migrateSttProviderConfig(config.per_language[language]);
+    if (migrated) return migrated;
+  }
+  if (config.default) {
+    const migrated = migrateSttProviderConfig(config.default);
+    if (migrated) return migrated;
+  }
+  return { provider: "funasr" };
+}
+
+export function providerEngine(config: SttProviderConfig): SttEngine {
+  return config.provider;
+}
+
+export function providerModelId(config: SttProviderConfig): string {
+  switch (config.provider) {
+    case "funasr":
+      return FUNASR_MODEL_ID;
+    case "whisper":
+      return config.model ?? DEFAULT_WHISPER_MODEL;
+    case "moss_transcribe_diarize":
+      return MOSS_MODEL_ID;
+  }
+}
+
+/** Find the install status of the model backing a given provider config. */
+export function findModelStatus(
+  models: SttModelInfo[],
+  config: SttProviderConfig,
+): SttModelInfo | undefined {
+  const engine = providerEngine(config);
+  const modelId = providerModelId(config);
+  return models.find((model) => model.provider === engine && model.id === modelId);
 }

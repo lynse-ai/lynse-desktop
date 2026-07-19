@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.11 (2026-07-19)
+
+### New Features
+
+- Multi-engine local transcription: choose between FunASR, Whisper, and MOSS-Transcribe-Diarize as the local STT engine, with per-engine settings (Whisper model, CAM++ diarization, expected speaker count, hotwords)
+- STT routing UI in Settings with an engine picker and engine-specific configuration, localized in English, Japanese, and Chinese
+- Bundle STT engine and media binaries (whisper, moss-transcribe, ffmpeg, ffprobe) as Tauri sidecar resources
+
+### Changed
+
+- CI fetches/builds the STT sidecars and smoke-tests whisper, moss-transcribe, and ffmpeg on both Windows and macOS before bundling
+- Refactor the local transcription adapter to route by STT provider and resolve per-model status
+- Auto-migrate legacy FunASR transcription configs to the new provider-tagged format; normalize Whisper and MOSS configs with sensible defaults
+
 ## 0.1.6 (2026-07-13)
 
 ### New Features

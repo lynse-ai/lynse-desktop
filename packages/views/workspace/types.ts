@@ -1,5 +1,7 @@
 export type ItemType = "recording" | "meeting" | "note" | "file";
 
+import type { SttProviderConfig } from "./local-transcription";
+
 export interface WorkspaceItem {
   id: string;
   type: ItemType;
@@ -92,7 +94,9 @@ export interface LocalTranscriptionRecord {
   durationMs?: number;
   expectedSpeakers?: number;
   hotwordPackageId?: string;
-  engine: "funasr";
+  engine: "funasr" | "whisper" | "moss_transcribe_diarize";
+  modelId?: string;
+  providerConfig?: SttProviderConfig;
   segments: LocalTranscriptionSegment[];
   error?: string;
 }
@@ -100,6 +104,8 @@ export interface LocalTranscriptionRecord {
 export interface LocalTranscriptionOptions {
   expectedSpeakers?: number;
   hotwordPackageId?: string;
+  language?: string | null;
+  providerConfig?: SttProviderConfig | null;
 }
 
 export interface LocalHotwordTerm {

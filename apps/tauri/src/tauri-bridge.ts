@@ -3,7 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { setApiTransportMode } from "@lynse/core/api/client";
 import { hydrateSecrets } from "./secure-storage";
-import type { TranscribeConfig } from "@lynse/views/workspace";
+import type { SttModelInfo, TranscribeConfig } from "@lynse/views/workspace";
 
 type DesktopApi = {
   openExternal: (url: string) => Promise<void>;
@@ -44,9 +44,11 @@ export async function installTauriBridge(): Promise<void> {
       retry: (id: string) => command("local_transcription_retry", { id }),
       delete: (id: string) => command("local_transcription_delete", { id }),
       getAudioUrl: (id: string) => command("local_transcription_audio_url", { id }),
-      getModelStatus: () => command("local_transcription_model_status"),
-      downloadModel: () => command("local_transcription_download_model"),
-      deleteModel: () => command("local_transcription_delete_model"),
+      listSttModels: () => command<{ models: SttModelInfo[] }>("local_stt_model_status"),
+      downloadSttModel: (provider: string, modelId: string) =>
+        command<{ models: SttModelInfo[] }>("local_stt_download_model", { provider, modelId }),
+      deleteSttModel: (provider: string, modelId: string) =>
+        command<{ models: SttModelInfo[] }>("local_stt_delete_model", { provider, modelId }),
       listHotwordPackages: () => command("local_transcription_list_hotword_packages"),
       saveHotwordPackage: (pkg: unknown) => command("local_transcription_save_hotword_package", { pkg }),
       deleteHotwordPackage: (id: string) => command("local_transcription_delete_hotword_package", { id }),

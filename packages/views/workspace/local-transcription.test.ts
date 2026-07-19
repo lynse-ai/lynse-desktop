@@ -4,7 +4,15 @@ import {
   localRecordToTranscription,
   localRecordToWorkspaceItem,
   mergeCloudAndLocalFiles,
+  migrateSttProviderConfig,
+  resolveSttProvider,
+  providerModelId,
+  findModelStatus,
+  FUNASR_MODEL_ID,
+  MOSS_MODEL_ID,
+  DEFAULT_WHISPER_MODEL,
 } from "./local-transcription";
+import type { SttModelInfo, TranscribeConfig } from "./local-transcription";
 import type { LocalTranscriptionRecord, WorkspaceItem } from "./types";
 
 const localRecord: LocalTranscriptionRecord = {
@@ -116,5 +124,57 @@ describe("local transcription helpers", () => {
 
     expect(result.map((item) => item.id)).toEqual(["local:abc", "cloud-1"]);
     expect(cloudFiles).toHaveLength(1);
+  });
+});
+
+describe("STT provider config", () => {
+  it("migrates legacy funasr configs without a provider tag", () => {
+    expect(migrateSttProviderConfig({ expected_speakers: 2, hotword_package_id: "h1" })).toEqual({
+      provider: "funasr",
+      expected_speakers: 2,
+      hotword_package_id: "h1",
+    });
+    expect(migrateSttProviderConfig(null)).toBeNull();
+  });
+
+  it("normalizes whisper and moss configs", () => {
+    expect(migrateSttProviderConfig({ provider: "whisper" })).toEqual({
+      provider: "whisper",
+      model: DEFAULT_WHISPER_MODEL,
+      campp_diarization: false,
+      expected_speakers: null,
+      hotword_package_id: null,
+    });
+    expect(migrateSttProviderConfig({ provider: "moss_transcribe_diarize" })).toEqual({
+      provider: "moss_transcribe_diarize",
+      hotword_package_id: null,
+    });
+  });
+
+  it("resolves per-note > language > default > funasr", () => {
+    const config: TranscribeConfig = {
+      default: { provider: "funasr" },
+      per_language: { zh: { provider: "whisper", model: "small-q5_1" } },
+    };
+    expect(resolveSttProvider(config, null, null).provider).toBe("funasr");
+    expect(resolveSttProvider(config, "zh", null).provider).toBe("whisper");
+    expect(resolveSttProvider(config, "en", { provider: "moss_transcribe_diarize" }).provider).toBe(
+      "moss_transcribe_diarize",
+    );
+  });
+
+  it("derives the backing model id per engine", () => {
+    expect(providerModelId({ provider: "funasr" })).toBe(FUNASR_MODEL_ID);
+    expect(providerModelId({ provider: "whisper", model: "medium-q5_0" })).toBe("medium-q5_0");
+    expect(providerModelId({ provider: "moss_transcribe_diarize" })).toBe(MOSS_MODEL_ID);
+  });
+
+  it("finds the install status for a resolved provider", () => {
+    const models: SttModelInfo[] = [
+      { provider: "funasr", id: FUNASR_MODEL_ID, label: "f", sizeBytes: 0, status: "installed", modelDir: "/x" },
+      { provider: "whisper", id: "small-q5_1", label: "w", sizeBytes: 1, status: "not_installed", modelDir: "/y" },
+    ];
+    const resolved = resolveSttProvider({ default: { provider: "whisper", model: "small-q5_1" }, per_language: {} }, null, null);
+    expect(findModelStatus(models, resolved)?.status).toBe("not_installed");
   });
 });

@@ -15,9 +15,7 @@ use tauri::{AppHandle, Manager, Runtime, UriSchemeContext};
 use uuid::Uuid;
 
 mod stt;
-use crate::stt::BatchSttAdapter;
 
-const FUNASR_MODEL_NAME: &str = "FunASR Paraformer + VAD + PUNC + CAM++";
 const VOICEPRINT_MATCH_THRESHOLD: f64 = 0.31;
 
 struct AppState {
@@ -42,6 +40,20 @@ fn local_store_path(app: &AppHandle, directory: &str) -> CommandResult<PathBuf> 
 
 pub(crate) fn model_dir(app: &AppHandle) -> CommandResult<PathBuf> {
     let path = app_data_dir(app)?.join("local-asr-models").join("funasr");
+    fs::create_dir_all(&path).map_err(|error| error.to_string())?;
+    Ok(path)
+}
+
+/// Directory holding a concrete engine/model's artifacts. FunASR keeps a
+/// single model bundle at the base; Whisper/MOSS use a per-model subfolder.
+pub(crate) fn engine_model_dir(app: &AppHandle, engine: &str, model_id: &str) -> CommandResult<PathBuf> {
+    if engine == "funasr" {
+        return model_dir(app);
+    }
+    let path = app_data_dir(app)?
+        .join("local-asr-models")
+        .join(engine)
+        .join(model_id);
     fs::create_dir_all(&path).map_err(|error| error.to_string())?;
     Ok(path)
 }
@@ -311,13 +323,285 @@ fn active_hotword_terms(app: &AppHandle, package_id: Option<&str>) -> CommandRes
     Ok(package.get("terms").and_then(Value::as_array).cloned().unwrap_or_default())
 }
 
-fn model_status(app: &AppHandle, downloading: bool) -> CommandResult<Value> {
-    let directory = model_dir(app)?;
-    Ok(json!({
-        "status": if downloading { "downloading" } else if directory.join(".ready").exists() { "installed" } else { "not_installed" },
-        "modelDir": directory,
-        "modelName": FUNASR_MODEL_NAME
-    }))
+// ── STT model catalog (multi-engine) ────────────────────
+
+/// A pinned, downloadable model for one engine.
+pub struct SttModelEntry {
+    pub provider: &'static str,
+    pub id: &'static str,
+    pub label: &'static str,
+    pub size_bytes: u64,
+    /// Fixed-version download URL. Empty for engines with a custom download.
+    pub download_url: &'static str,
+    /// Pinned SHA-256 of the artifact. Empty => verification skipped (must be
+    /// filled with the pinned hash before shipping).
+    pub sha256: &'static str,
+}
+
+pub const STT_MODELS: &[SttModelEntry] = &[
+    SttModelEntry {
+        provider: "funasr",
+        id: "funasr-paraformer",
+        label: "FunASR Paraformer + VAD + PUNC + CAM++",
+        size_bytes: 0,
+        download_url: "",
+        sha256: "",
+    },
+    SttModelEntry {
+        provider: "whisper",
+        id: "small-q5_1",
+        label: "Whisper small (q5_1, ~190 MB)",
+        size_bytes: 199_229_824,
+        download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
+        sha256: "",
+    },
+    SttModelEntry {
+        provider: "whisper",
+        id: "medium-q5_0",
+        label: "Whisper medium (q5_0, ~539 MB)",
+        size_bytes: 565_165_670,
+        download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin",
+        sha256: "",
+    },
+    SttModelEntry {
+        provider: "whisper",
+        id: "large-v3-turbo-q5_0",
+        label: "Whisper large-v3-turbo (q5_0, ~574 MB)",
+        size_bytes: 601_882_112,
+        download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+        sha256: "",
+    },
+    SttModelEntry {
+        provider: "moss_transcribe_diarize",
+        id: "moss-0.9b-q5",
+        label: "MOSS-Transcribe-Diarize 0.9B Q5 (~619 MiB)",
+        size_bytes: 649_061_580,
+        download_url:
+            "https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize/resolve/main/moss-transcribe-diarize-0.9b-q5_0.gguf",
+        sha256: "",
+    },
+];
+
+fn stt_model_entry(provider: &str, model_id: &str) -> CommandResult<&'static SttModelEntry> {
+    STT_MODELS
+        .iter()
+        .find(|entry| entry.provider == provider && entry.id == model_id)
+        .ok_or_else(|| format!("未知的 STT 模型：{provider}/{model_id}"))
+}
+
+fn model_artifact_path(app: &AppHandle, provider: &str, model_id: &str) -> CommandResult<PathBuf> {
+    let directory = engine_model_dir(app, provider, model_id)?;
+    if let Some(file) = stt::model_file_name(provider, model_id) {
+        Ok(directory.join(file))
+    } else {
+        // FunASR marks readiness with a directory file rather than an artifact.
+        Ok(directory.join(".ready"))
+    }
+}
+
+fn model_is_installed(app: &AppHandle, provider: &str, model_id: &str) -> bool {
+    model_artifact_path(app, provider, model_id)
+        .map(|path| path.exists())
+        .unwrap_or(false)
+}
+
+fn model_status_list(app: &AppHandle) -> CommandResult<Value> {
+    let models: Vec<Value> = STT_MODELS
+        .iter()
+        .map(|entry| {
+            json!({
+                "provider": entry.provider,
+                "id": entry.id,
+                "label": entry.label,
+                "sizeBytes": entry.size_bytes,
+                "status": if model_is_installed(app, entry.provider, entry.id) { "installed" } else { "not_installed" },
+                "modelDir": engine_model_dir(app, entry.provider, entry.id)
+                    .map(|path| path.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            })
+        })
+        .collect();
+    Ok(json!({ "models": models }))
+}
+
+/// Assign speaker labels to segments using CAM++ embeddings + greedy
+/// clustering. Used by Whisper's optional speaker separation.
+pub(crate) fn assign_campp_speakers(
+    app: &AppHandle,
+    audio_path: &str,
+    segments: &mut [Value],
+    funasr_dir: &Path,
+    expected_speakers: Option<u64>,
+) -> CommandResult<()> {
+    if segments.is_empty() {
+        return Ok(());
+    }
+    let candidates: Vec<Value> = segments
+        .iter()
+        .filter_map(|segment| {
+            let id = segment.get("id")?.clone();
+            let start = segment.get("startMs")?.clone();
+            let end = segment.get("endMs")?.clone();
+            if start.as_i64()? >= end.as_i64()? {
+                None
+            } else {
+                Some(json!({ "id": id, "startMs": start, "endMs": end }))
+            }
+        })
+        .collect();
+    let embeddings = run_voiceprint_extraction(app, audio_path, &candidates, funasr_dir)?;
+    let threshold = VOICEPRINT_MATCH_THRESHOLD;
+    let mut clusters: Vec<Vec<f64>> = Vec::new();
+    let mut assignment: HashMap<String, usize> = HashMap::new();
+    for candidate in &candidates {
+        let id = candidate.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let Some(embedding) = embeddings.get(&id) else { continue };
+        let mut best: Option<(f64, usize)> = None;
+        for (index, centroid) in clusters.iter().enumerate() {
+            let score = cosine_similarity(embedding, centroid);
+            if score > best.as_ref().map(|found| found.0).unwrap_or(0.0) {
+                best = Some((score, index));
+            }
+        }
+        let cluster_index = match best {
+            Some((score, index)) if score >= threshold => index,
+            _ => {
+                clusters.push(embedding.clone());
+                clusters.len() - 1
+            }
+        };
+        assignment.insert(id, cluster_index);
+    }
+    if let Some(expected) = expected_speakers.filter(|value| *value > 0) {
+        if clusters.len() as u64 > expected {
+            for index in assignment.values_mut() {
+                if *index >= expected as usize {
+                    *index = 0;
+                }
+            }
+        }
+    }
+    for segment in segments.iter_mut() {
+        let id = segment.get("id").and_then(Value::as_str).map(str::to_owned);
+        if let Some(id) = id.as_deref() {
+            if let Some(object) = segment.as_object_mut() {
+                let cluster_index = assignment.get(id).copied().unwrap_or(0);
+                object.insert("speakerId".to_owned(), json!(format!("spk-{}", cluster_index + 1)));
+                object.insert("speakerName".to_owned(), json!(format!("发言人{}", cluster_index + 1)));
+                object.insert("rawSpeaker".to_owned(), json!(cluster_index));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn sha256_of_file(path: &Path) -> CommandResult<String> {
+    let output = if cfg!(target_os = "windows") {
+        Command::new("certutil")
+            .args(["-hashfile", path.to_string_lossy().as_ref(), "SHA256"])
+            .output()
+    } else {
+        Command::new("shasum")
+            .args(["-a", "256", path.to_string_lossy().as_ref()])
+            .output()
+    }
+    .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err("无法计算文件哈希".to_owned());
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    Ok(text.split_whitespace().next().unwrap_or("").to_owned())
+}
+
+/// Produce the list of URLs to try, in order. Hugging Face (`huggingface.co`)
+/// is blocked or extremely slow from mainland China, so when the primary URL
+/// points there we also try the `hf-mirror.com` mirror which proxies the same
+/// repositories and is reachable domestically. Direct access is always
+/// attempted first so users outside China are unaffected.
+fn model_download_candidates(primary: &str) -> Vec<String> {
+    let mirror = primary
+        .replacen("https://huggingface.co/", "https://hf-mirror.com/", 1)
+        .replacen("http://huggingface.co/", "https://hf-mirror.com/", 1);
+    if mirror != primary {
+        vec![primary.to_owned(), mirror]
+    } else {
+        vec![primary.to_owned()]
+    }
+}
+
+fn download_stt_model_file(app: &AppHandle, entry: &SttModelEntry) -> CommandResult<()> {
+    if entry.download_url.is_empty() {
+        return Err(format!("模型 {} 需要通过专用流程下载", entry.id));
+    }
+    let directory = engine_model_dir(app, entry.provider, entry.id)?;
+    let file_name = stt::model_file_name(entry.provider, entry.id).ok_or("该模型没有可下载的单一文件")?;
+    let target = directory.join(&file_name);
+    let part = directory.join(format!("{file_name}.part"));
+    if target.exists() {
+        return Ok(());
+    }
+    let candidates = model_download_candidates(entry.download_url);
+    let mut last_error = "模型下载失败".to_owned();
+    for url in &candidates {
+        let status = Command::new("curl")
+            .args([
+                "-fL",
+                "--retry",
+                "3",
+                "--connect-timeout",
+                "20",
+                "-o",
+                part.to_string_lossy().as_ref(),
+                url,
+            ])
+            .status()
+            .map_err(|error| format!("无法启动下载（curl）：{error}"))?;
+        if status.success() {
+            return verify_and_install(&part, &target, &entry.sha256);
+        }
+        // Clean up any partial file from the failed attempt before trying the
+        // next candidate (or bailing out).
+        let _ = fs::remove_file(&part);
+        if candidates.len() > 1 {
+            last_error = format!("通过 {url} 下载失败，正在尝试备用镜像");
+        }
+    }
+    Err(last_error)
+}
+
+/// Verify the downloaded `.part` file against the expected SHA-256 and
+/// atomically move it into place. On a hash mismatch the partial file is
+/// removed so no "installed" artifact — and therefore no `model_is_installed`
+/// state — is left behind.
+fn verify_and_install(part: &Path, target: &Path, expected_sha256: &str) -> CommandResult<()> {
+    if !expected_sha256.is_empty() {
+        let actual = sha256_of_file(part)?;
+        if actual != expected_sha256 {
+            let _ = fs::remove_file(part);
+            return Err(format!(
+                "模型校验失败：期望 {expected}，实际 {actual}",
+                expected = expected_sha256,
+                actual = actual
+            ));
+        }
+    }
+    fs::rename(part, target).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn resolve_provider(app: &AppHandle, language: Option<&str>, per_note: Option<&stt::ProviderConfig>) -> stt::ProviderConfig {
+    let config = load_transcribe_config(app).unwrap_or_default();
+    config.resolve(language, per_note)
+}
+
+fn ensure_model_installed(app: &AppHandle, provider: &str, model_id: &str) -> CommandResult<()> {
+    if !model_is_installed(app, provider, model_id) {
+        return Err(match provider {
+            "funasr" => "本地 ASR 模型未安装".to_owned(),
+            _ => format!("STT 模型未安装：{provider}/{model_id}"),
+        });
+    }
+    Ok(())
 }
 
 fn record_speaker_key(segment: &Value) -> Option<String> {
@@ -381,7 +665,7 @@ fn average_embeddings(embeddings: &[Vec<f64>]) -> Vec<f64> {
     averaged
 }
 
-fn run_voiceprint_extraction(app: &AppHandle, audio_path: &str, candidates: &[Value], directory: &Path) -> CommandResult<HashMap<String, Vec<f64>>> {
+pub(crate) fn run_voiceprint_extraction(app: &AppHandle, audio_path: &str, candidates: &[Value], directory: &Path) -> CommandResult<HashMap<String, Vec<f64>>> {
     if candidates.is_empty() { return Ok(HashMap::new()) }
     let segments: Vec<Value> = candidates.iter().map(|candidate| json!({
         "id": candidate.get("id").cloned().unwrap_or(Value::Null),
@@ -398,6 +682,11 @@ fn run_voiceprint_extraction(app: &AppHandle, audio_path: &str, candidates: &[Va
 }
 
 fn apply_voiceprints(app: &AppHandle, audio_path: &str, segments: &mut [Value], directory: &Path) -> CommandResult<()> {
+    // Voiceprint matching relies on the FunASR/CAM++ model. If it isn't
+    // installed, skip silently rather than failing a Whisper/MOSS job.
+    if !directory.join(".ready").exists() {
+        return Ok(());
+    }
     let voiceprints = list_store(app, "local-voiceprints")?;
     if voiceprints.is_empty() || segments.is_empty() { return Ok(()) }
     let candidates = voiceprint_candidates(segments);
@@ -429,9 +718,20 @@ fn apply_voiceprints(app: &AppHandle, audio_path: &str, segments: &mut [Value], 
     Ok(())
 }
 
-fn create_queued_record(audio_path: &str, options: Option<&Value>) -> Value {
+fn create_queued_record(app: &AppHandle, audio_path: &str, options: Option<&Value>) -> CommandResult<Value> {
     let created_at = now();
-    json!({
+    let language = options.and_then(|value| value.get("language")).and_then(Value::as_str);
+    let per_note = options
+        .and_then(|value| value.get("providerConfig"))
+        .filter(|value| !value.is_null())
+        .and_then(|value| serde_json::from_value::<stt::ProviderConfig>(value.clone()).ok());
+    let provider = resolve_provider(app, language, per_note.as_ref());
+    let model_id = match &provider {
+        stt::ProviderConfig::Funasr(_) => "funasr-paraformer",
+        stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
+        stt::ProviderConfig::MossTranscribeDiarize(_) => "moss-0.9b-q5",
+    };
+    Ok(json!({
         "id": format!("local:{}", Uuid::new_v4()),
         "title": Path::new(audio_path).file_name().and_then(|value| value.to_str()).unwrap_or(audio_path),
         "sourcePath": audio_path,
@@ -443,11 +743,12 @@ fn create_queued_record(audio_path: &str, options: Option<&Value>) -> Value {
         "expectedSpeakers": options.and_then(|value| value.get("expectedSpeakers")).cloned().unwrap_or(Value::Null),
         "hotwordPackageId": options.and_then(|value| value.get("hotwordPackageId")).cloned().unwrap_or(Value::Null),
         "language": options.and_then(|value| value.get("language")).cloned().unwrap_or(Value::Null),
-        "providerConfig": options.and_then(|value| value.get("providerConfig")).cloned().unwrap_or(Value::Null),
+        "providerConfig": serde_json::to_value(&provider).map_err(|error| error.to_string())?,
         "priorContext": options.and_then(|value| value.get("priorContext")).cloned().unwrap_or(Value::Null),
-        "engine": "funasr",
+        "engine": provider.engine(),
+        "modelId": model_id,
         "segments": []
-    })
+    }))
 }
 
 fn fail_interrupted_records(app: &AppHandle) -> CommandResult<()> {
@@ -475,8 +776,6 @@ fn fail_interrupted_records(app: &AppHandle) -> CommandResult<()> {
 }
 
 fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
-    let directory = model_dir(app)?;
-    if !directory.join(".ready").exists() { return Err("Local ASR model is not installed".to_owned()) }
     let id = record.get("id").and_then(Value::as_str).ok_or("Record id is required")?.to_owned();
     let started_at = now();
     let mut started = Map::new();
@@ -489,16 +788,23 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
 
     let result: CommandResult<(String, Vec<Value>)> = (|| {
         let audio_path = record.get("sourcePath").and_then(Value::as_str).ok_or("Source path is required")?;
-        let config = load_transcribe_config(app)?;
-        let language = record.get("language").and_then(Value::as_str);
-        let per_note = record
+        // Use the frozen per-record provider config (set at creation time) so a
+        // later change to the default routing never affects an in-flight task.
+        let provider: stt::ProviderConfig = record
             .get("providerConfig")
             .filter(|value| !value.is_null())
-            .and_then(|value| serde_json::from_value::<stt::ProviderConfig>(value.clone()).ok());
-        let provider = config.resolve(language, per_note.as_ref());
-        let (expected_speakers, hotword_package_id) = match provider {
-            stt::ProviderConfig::Funasr(ref config) => (config.expected_speakers, config.hotword_package_id.clone()),
-        };
+            .and_then(|value| serde_json::from_value::<stt::ProviderConfig>(value.clone()).ok())
+            .ok_or("本地转写缺少引擎配置")?;
+        let model_id = record.get("modelId").and_then(Value::as_str).unwrap_or_else(|| match &provider {
+            stt::ProviderConfig::Funasr(_) => "funasr-paraformer",
+            stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
+            stt::ProviderConfig::MossTranscribeDiarize(_) => "moss-0.9b-q5",
+        });
+        ensure_model_installed(app, provider.engine(), model_id)?;
+        let directory = engine_model_dir(app, provider.engine(), model_id)?;
+        let funasr_dir = model_dir(app)?;
+        let expected_speakers = provider.expected_speakers();
+        let hotword_package_id = provider.hotword_package_id().map(str::to_owned);
         let terms = active_hotword_terms(app, hotword_package_id.as_deref())?;
         let hotword = terms.iter().filter(|term| term.get("enabled").and_then(Value::as_bool) != Some(false))
             .filter_map(|term| term.get("term").and_then(Value::as_str)).collect::<Vec<_>>().join(" ");
@@ -506,13 +812,13 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
         let request = stt::SttRequest {
             audio_path: audio_path.to_owned(),
             model_directory: directory.clone(),
+            provider: provider.clone(),
             expected_speakers,
             hotword,
             prior_context,
         };
-        let adapter = provider.adapter();
-        let output = adapter.transcribe(app, request)?;
-        let normalized = normalize_funasr_output(output.raw);
+        let output = provider.adapter().transcribe(app, &request)?;
+        let normalized = json!({ "text": output.text, "segments": output.segments });
         let transcript = apply_hotwords(value_text(normalized.get("text")), &terms);
         let mut segments = normalized.get("segments").and_then(Value::as_array).cloned().unwrap_or_default();
         for segment in &mut segments {
@@ -521,7 +827,7 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
                 object.insert("text".to_owned(), json!(apply_hotwords(text, &terms)));
             }
         }
-        apply_voiceprints(app, audio_path, &mut segments, &directory)?;
+        apply_voiceprints(app, audio_path, &mut segments, &funasr_dir)?;
         Ok((transcript, segments))
     })();
 
@@ -603,44 +909,74 @@ fn local_transcription_audio_url(app: AppHandle, id: String) -> CommandResult<Op
 }
 
 #[tauri::command]
-fn local_transcription_model_status(app: AppHandle, state: tauri::State<AppState>) -> CommandResult<Value> {
-    let downloading = *state.model_download_in_progress.lock().map_err(|_| "Model download lock is poisoned")?;
-    model_status(&app, downloading)
+fn local_stt_model_status(app: AppHandle) -> CommandResult<Value> {
+    model_status_list(&app)
 }
 
 #[tauri::command]
-fn local_transcription_download_model(app: AppHandle, state: tauri::State<AppState>) -> CommandResult<Value> {
+fn local_stt_download_model(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+    provider: String,
+    model_id: String,
+) -> CommandResult<Value> {
     {
         let mut downloading = state.model_download_in_progress.lock().map_err(|_| "Model download lock is poisoned")?;
-        if *downloading { return model_status(&app, true) }
+        if *downloading { return model_status_list(&app); }
         *downloading = true;
     }
     let result = (|| {
-        let directory = model_dir(&app)?;
-        let args = vec![script_path(&app)?.to_string_lossy().into_owned(), "--download-models".to_owned(), "--model-dir".to_owned(), directory.to_string_lossy().into_owned()];
-        run_funasr(&app, &args, &directory)?;
-        model_status(&app, false)
+        let entry = stt_model_entry(&provider, &model_id)?;
+        if entry.download_url.is_empty() {
+            // FunASR downloads through its Python helper rather than a fixed URL.
+            let directory = model_dir(&app)?;
+            let args = vec![
+                script_path(&app)?.to_string_lossy().into_owned(),
+                "--download-models".to_owned(),
+                "--model-dir".to_owned(),
+                directory.to_string_lossy().into_owned(),
+            ];
+            run_funasr(&app, &args, &directory)?;
+        } else {
+            download_stt_model_file(&app, entry)?;
+        }
+        model_status_list(&app)
     })();
     if let Ok(mut downloading) = state.model_download_in_progress.lock() { *downloading = false; }
     result
 }
 
 #[tauri::command]
-fn local_transcription_delete_model(app: AppHandle, state: tauri::State<AppState>) -> CommandResult<Value> {
+fn local_stt_delete_model(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+    provider: String,
+    model_id: String,
+) -> CommandResult<Value> {
     if *state.model_download_in_progress.lock().map_err(|_| "Model download lock is poisoned")? {
-        return Err("Cannot delete while model is downloading".to_owned());
+        return Err("Cannot delete while a model is downloading".to_owned());
     }
-    let directory = model_dir(&app)?;
-    fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
-    model_status(&app, false)
+    let directory = engine_model_dir(&app, &provider, &model_id)?;
+    remove_model_dir(&directory)?;
+    if provider == "funasr" {
+        let base = model_dir(&app)?;
+        remove_model_dir(&base)?;
+    }
+    model_status_list(&app)
+}
+
+/// Remove a single model directory. A model deletion only ever touches its own
+/// directory, so other installed models remain completely unaffected.
+fn remove_model_dir(directory: &Path) -> CommandResult<()> {
+    if directory.exists() {
+        fs::remove_dir_all(directory).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
 async fn local_transcription_transcribe(app: AppHandle, audio_path: String, options: Option<Value>) -> CommandResult<Value> {
-    if !model_dir(&app)?.join(".ready").exists() {
-        return Err("Local ASR model is not installed".to_owned());
-    }
-    let record = create_queued_record(&audio_path, options.as_ref());
+    let record = create_queued_record(&app, &audio_path, options.as_ref())?;
     save_store_value(&app, "local-transcriptions", record.clone())?;
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || transcribe_record(&handle, record))
@@ -650,9 +986,6 @@ async fn local_transcription_transcribe(app: AppHandle, audio_path: String, opti
 
 #[tauri::command]
 async fn local_transcription_retry(app: AppHandle, id: String) -> CommandResult<Value> {
-    if !model_dir(&app)?.join(".ready").exists() {
-        return Err("Local ASR model is not installed".to_owned());
-    }
     let mut record = get_store_value(&app, "local-transcriptions", &id)?.ok_or("Local transcription not found")?;
     let object = record.as_object_mut().ok_or("Stored record must be an object")?;
     object.insert("transcriptText".to_owned(), json!(""));
@@ -902,7 +1235,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             local_transcription_list, local_transcription_get, local_transcription_delete, local_transcription_audio_url,
             todo_list, todo_save, todo_delete, todo_add_to_calendar,
-            local_transcription_model_status, local_transcription_download_model, local_transcription_delete_model,
+            local_stt_model_status, local_stt_download_model, local_stt_delete_model,
             local_transcription_transcribe, local_transcription_retry, local_transcription_list_hotword_packages,
             local_transcription_save_hotword_package, local_transcription_delete_hotword_package,
             local_transcription_list_voiceprints, local_transcription_create_voiceprint,
@@ -943,5 +1276,75 @@ mod tests {
         let (start, end) = calendar_event_times("2026-07-13T10:00:00+08:00", "2026-07-13T11:00:00+08:00").unwrap();
         assert!(end > start);
         assert!(calendar_event_times("2026-07-13T11:00:00+08:00", "2026-07-13T10:00:00+08:00").is_err());
+    }
+
+    /// Create a uniquely-named temp directory for a test and return it. The
+    /// caller is responsible for cleanup.
+    fn test_temp_dir(name: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("lynse-stt-test-{name}-{nanos}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn sha256_of_file_matches_known_hash() {
+        let dir = test_temp_dir("sha");
+        let file = dir.join("hello.txt");
+        std::fs::write(&file, b"hello").unwrap();
+        let hash = sha256_of_file(&file).unwrap();
+        // SHA-256("hello")
+        assert_eq!(hash, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn model_download_hash_mismatch_leaves_no_installed_artifact() {
+        let dir = test_temp_dir("hashfail");
+        // Simulate a finished download sitting in the `.part` file.
+        let part = dir.join("model.bin.part");
+        std::fs::write(&part, b"corrupted bytes").unwrap();
+        let target = dir.join("model.bin");
+        // Expected hash deliberately does not match the file's real hash.
+        let expected = "0000000000000000000000000000000000000000000000000000000000000000";
+        let result = verify_and_install(&part, &target, expected);
+        assert!(result.is_err(), "hash mismatch must fail the install");
+        assert!(!target.exists(), "no installed target after hash failure");
+        assert!(!part.exists(), "partial file must be cleaned up after hash failure");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn verify_and_install_succeeds_when_hash_matches() {
+        let dir = test_temp_dir("hashok");
+        let part = dir.join("model.bin.part");
+        std::fs::write(&part, b"real model").unwrap();
+        let target = dir.join("model.bin");
+        let expected = sha256_of_file(&part).unwrap();
+        verify_and_install(&part, &target, &expected).unwrap();
+        assert!(target.exists(), "target must exist after successful install");
+        assert!(!part.exists(), "partial file replaced by target");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn delete_one_model_does_not_affect_others() {
+        let root = test_temp_dir("delete");
+        // Two independent model directories (e.g. whisper small vs large).
+        let model_a = root.join("whisper").join("small-q5_1");
+        let model_b = root.join("whisper").join("large-v3-turbo-q5_0");
+        std::fs::create_dir_all(&model_a).unwrap();
+        std::fs::create_dir_all(&model_b).unwrap();
+        std::fs::write(model_a.join("ggml-small-q5_1.bin"), b"x").unwrap();
+        let b_artifact = model_b.join("ggml-large-v3-turbo-q5_0.bin");
+        std::fs::write(&b_artifact, b"y").unwrap();
+        remove_model_dir(&model_a).unwrap();
+        assert!(!model_a.exists(), "deleted model A directory is gone");
+        assert!(model_b.exists(), "model B directory survives deletion of A");
+        assert!(b_artifact.exists(), "model B artifact remains intact");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -19,10 +19,12 @@ import { Loader2, RefreshCw, Sun, Moon, Monitor, Trash2 } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
 import {
   getDesktopLocalTranscriptionApi,
+  type DesktopLocalTranscriptionApi,
   type LocalAsrModelStatus,
   OFFLINE_TRANSCRIPTION_ENABLED_KEY,
 } from "../workspace/local-transcription";
 import type { LocalHotwordPackage, LocalVoiceprint } from "../workspace/types";
+import { SttConfigSection } from "./stt-config-section";
 
 const DEFAULT_API_URL = "http://119.97.160.133:10060";
 export const SETTINGS_DIALOG_CONTENT_CLASS =
@@ -367,6 +369,10 @@ export function SettingsDialog({
                     ))}
                   </div>
                 </div>
+                <SttConfigSection
+                  api={localTranscriptionApi as DesktopLocalTranscriptionApi}
+                  hotwordPackages={hotwordPackages}
+                />
               </CardContent>
             </Card>
           )}

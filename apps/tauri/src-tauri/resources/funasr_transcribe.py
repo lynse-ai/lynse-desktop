@@ -17,6 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--download-models", action="store_true")
     parser.add_argument("--expected-speakers", type=int, default=0)
     parser.add_argument("--hotword", default="")
+    parser.add_argument("--prompt", default="", help="Trailing prior context fed to the model as an initial prompt to reduce hallucination and keep专有名词 consistent.")
     parser.add_argument("--extract-voiceprint", action="store_true")
     parser.add_argument("--segments-json", default="[]")
     parser.add_argument("--device", default=os.environ.get("LYNSE_FUNASR_DEVICE", "auto"))
@@ -175,6 +176,8 @@ def main() -> int:
         generate_kwargs["preset_spk_num"] = args.expected_speakers
     if args.hotword.strip():
         generate_kwargs["hotword"] = args.hotword.strip()
+    if args.prompt.strip():
+        generate_kwargs["prompt"] = args.prompt.strip()
 
     result = model.generate(**generate_kwargs)
     print(json.dumps(result[0] if isinstance(result, list) else result, ensure_ascii=False))

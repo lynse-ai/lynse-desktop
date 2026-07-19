@@ -22,7 +22,9 @@
     "./utils": "./utils.ts",
     "./platform": "./platform/index.ts",
     "./i18n": "./i18n/index.ts",
-    "./i18n/react": "./i18n/react.ts"
+    "./i18n/react": "./i18n/react.ts",
+    "./types": "./types/index.ts",
+    "./types/storage": "./types/storage.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "catalog:",

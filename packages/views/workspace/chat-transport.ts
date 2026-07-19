@@ -66,15 +66,22 @@ export class CloudChatTransport implements ChatTransport {
     if (fileIds.length && userSpecifiedFile) body.fileIds = fileIds;
     if (sessionId) body.sessionId = sessionId;
     if (token) body.token = token;
-    this.controller = api().stream(
-      CHAT_STREAM_PATH,
-      body,
-      (data) => {
-        const evt = parseChatChunk(data);
-        if (evt) onEvent(evt);
-      },
-      (err) => onEvent({ type: "error", message: err.message }),
-    );
+    await new Promise<void>((resolve) => {
+      this.controller = api().stream(
+        CHAT_STREAM_PATH,
+        body,
+        (data) => {
+          const evt = parseChatChunk(data);
+          if (evt) onEvent(evt);
+        },
+        (err) => {
+          onEvent({ type: "error", message: err.message });
+          resolve();
+        },
+        resolve,
+      );
+    });
+    this.controller = null;
   }
 
   cancel(): void {

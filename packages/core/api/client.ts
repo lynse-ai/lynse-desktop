@@ -138,13 +138,15 @@ export class ApiClient {
 
   /**
    * Stream SSE responses. Calls `onChunk` for each `data:` line received.
-   * Returns an AbortController so the caller can cancel the stream.
+   * Returns an AbortController so the caller can cancel the stream. `onComplete`
+   * runs after the response closes or is aborted.
    */
   stream(
     path: string,
     body: unknown,
     onChunk: (data: string) => void,
     onError?: (err: Error) => void,
+    onComplete?: () => void,
   ): AbortController {
     const controller = new AbortController();
 
@@ -211,9 +213,15 @@ export class ApiClient {
           }
         }
       } catch (err) {
-        if ((err as Error).name === "AbortError") return;
+        if ((err as Error).name === "AbortError") {
+          onComplete?.();
+          return;
+        }
         onError?.(err as Error);
+        return;
       }
+
+      onComplete?.();
     })();
 
     return controller;

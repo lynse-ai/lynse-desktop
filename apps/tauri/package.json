@@ -1,7 +1,7 @@
 {
   "name": "@lynse/tauri",
   "productName": "Lynse",
-  "version": "0.1.8",
+  "version": "0.1.10",
   "private": true,
   "type": "module",
   "scripts": {

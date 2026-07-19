@@ -14,6 +14,9 @@ use tauri::http::{header, Request, Response, StatusCode};
 use tauri::{AppHandle, Manager, Runtime, UriSchemeContext};
 use uuid::Uuid;
 
+mod stt;
+use crate::stt::BatchSttAdapter;
+
 const FUNASR_MODEL_NAME: &str = "FunASR Paraformer + VAD + PUNC + CAM++";
 const VOICEPRINT_MATCH_THRESHOLD: f64 = 0.31;
 
@@ -37,7 +40,7 @@ fn local_store_path(app: &AppHandle, directory: &str) -> CommandResult<PathBuf> 
     Ok(path)
 }
 
-fn model_dir(app: &AppHandle) -> CommandResult<PathBuf> {
+pub(crate) fn model_dir(app: &AppHandle) -> CommandResult<PathBuf> {
     let path = app_data_dir(app)?.join("local-asr-models").join("funasr");
     fs::create_dir_all(&path).map_err(|error| error.to_string())?;
     Ok(path)
@@ -169,7 +172,7 @@ fn add_todo_to_system_calendar(app: &AppHandle, todo_id: &str, start_at: &str, e
     update_store_value(app, "local-todos", todo_id, patch)?.ok_or("Todo disappeared while adding it to Calendar".to_owned())
 }
 
-fn script_path(app: &AppHandle) -> CommandResult<PathBuf> {
+pub(crate) fn script_path(app: &AppHandle) -> CommandResult<PathBuf> {
     let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("resources/funasr_transcribe.py");
     if development.exists() {
@@ -191,7 +194,7 @@ fn python_command() -> String {
     "python3".to_owned()
 }
 
-fn run_funasr(_app: &AppHandle, arguments: &[String], model_directory: &Path) -> CommandResult<String> {
+pub(crate) fn run_funasr(_app: &AppHandle, arguments: &[String], model_directory: &Path) -> CommandResult<String> {
     let output = Command::new(python_command())
         .args(arguments)
         .env("MODELSCOPE_CACHE", model_directory)
@@ -208,7 +211,7 @@ fn run_funasr(_app: &AppHandle, arguments: &[String], model_directory: &Path) ->
     })
 }
 
-fn parse_funasr_json(stdout: &str) -> CommandResult<Value> {
+pub(crate) fn parse_funasr_json(stdout: &str) -> CommandResult<Value> {
     stdout
         .lines()
         .rev()
@@ -439,6 +442,9 @@ fn create_queued_record(audio_path: &str, options: Option<&Value>) -> Value {
         "progressPhase": "queued",
         "expectedSpeakers": options.and_then(|value| value.get("expectedSpeakers")).cloned().unwrap_or(Value::Null),
         "hotwordPackageId": options.and_then(|value| value.get("hotwordPackageId")).cloned().unwrap_or(Value::Null),
+        "language": options.and_then(|value| value.get("language")).cloned().unwrap_or(Value::Null),
+        "providerConfig": options.and_then(|value| value.get("providerConfig")).cloned().unwrap_or(Value::Null),
+        "priorContext": options.and_then(|value| value.get("priorContext")).cloned().unwrap_or(Value::Null),
         "engine": "funasr",
         "segments": []
     })
@@ -483,19 +489,30 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
 
     let result: CommandResult<(String, Vec<Value>)> = (|| {
         let audio_path = record.get("sourcePath").and_then(Value::as_str).ok_or("Source path is required")?;
-        let hotword_id = record.get("hotwordPackageId").and_then(Value::as_str);
-        let terms = active_hotword_terms(app, hotword_id)?;
+        let config = load_transcribe_config(app)?;
+        let language = record.get("language").and_then(Value::as_str);
+        let per_note = record
+            .get("providerConfig")
+            .filter(|value| !value.is_null())
+            .and_then(|value| serde_json::from_value::<stt::ProviderConfig>(value.clone()).ok());
+        let provider = config.resolve(language, per_note.as_ref());
+        let (expected_speakers, hotword_package_id) = match provider {
+            stt::ProviderConfig::Funasr(ref config) => (config.expected_speakers, config.hotword_package_id.clone()),
+        };
+        let terms = active_hotword_terms(app, hotword_package_id.as_deref())?;
         let hotword = terms.iter().filter(|term| term.get("enabled").and_then(Value::as_bool) != Some(false))
             .filter_map(|term| term.get("term").and_then(Value::as_str)).collect::<Vec<_>>().join(" ");
-        let mut args = vec![
-            script_path(app)?.to_string_lossy().into_owned(), audio_path.to_owned(),
-            "--model-dir".to_owned(), directory.to_string_lossy().into_owned()
-        ];
-        if let Some(expected) = record.get("expectedSpeakers").and_then(Value::as_i64).filter(|value| *value > 0) {
-            args.extend(["--expected-speakers".to_owned(), expected.to_string()]);
-        }
-        if !hotword.is_empty() { args.extend(["--hotword".to_owned(), hotword]); }
-        let normalized = normalize_funasr_output(parse_funasr_json(&run_funasr(app, &args, &directory)?)?);
+        let prior_context = record.get("priorContext").and_then(Value::as_str).map(str::to_owned);
+        let request = stt::SttRequest {
+            audio_path: audio_path.to_owned(),
+            model_directory: directory.clone(),
+            expected_speakers,
+            hotword,
+            prior_context,
+        };
+        let adapter = provider.adapter();
+        let output = adapter.transcribe(app, request)?;
+        let normalized = normalize_funasr_output(output.raw);
         let transcript = apply_hotwords(value_text(normalized.get("text")), &terms);
         let mut segments = normalized.get("segments").and_then(Value::as_array).cloned().unwrap_or_default();
         for segment in &mut segments {
@@ -729,6 +746,68 @@ fn local_transcription_create_voiceprint(app: AppHandle, input: Value) -> Comman
     Ok(voiceprint)
 }
 
+fn stt_config_path(app: &AppHandle) -> CommandResult<PathBuf> {
+    let path = app_data_dir(app)?.join("local-stt-config").join("config.json");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    Ok(path)
+}
+
+fn load_transcribe_config(app: &AppHandle) -> CommandResult<stt::TranscribeConfig> {
+    let path = stt_config_path(app)?;
+    match fs::read_to_string(&path) {
+        Ok(content) => Ok(serde_json::from_str(&content).unwrap_or_default()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(stt::TranscribeConfig::default()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn save_transcribe_config(app: &AppHandle, config: stt::TranscribeConfig) -> CommandResult<stt::TranscribeConfig> {
+    let path = stt_config_path(app)?;
+    let content = serde_json::to_string_pretty(&config).map_err(|error| error.to_string())?;
+    fs::write(&path, content).map_err(|error| error.to_string())?;
+    Ok(config)
+}
+
+#[tauri::command]
+fn local_stt_config_get(app: AppHandle) -> CommandResult<stt::TranscribeConfig> {
+    load_transcribe_config(&app)
+}
+
+#[tauri::command]
+fn local_stt_config_save(app: AppHandle, config: stt::TranscribeConfig) -> CommandResult<stt::TranscribeConfig> {
+    save_transcribe_config(&app, config)
+}
+
+const SECRET_SERVICE: &str = "app.lynse.desktop";
+
+#[tauri::command]
+fn secure_set_secret(account: String, value: String) -> CommandResult<()> {
+    let entry = keyring::Entry::new(SECRET_SERVICE, &account).map_err(|error| error.to_string())?;
+    entry.set_password(&value).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn secure_get_secret(account: String) -> CommandResult<Option<String>> {
+    let entry = keyring::Entry::new(SECRET_SERVICE, &account).map_err(|error| error.to_string())?;
+    match entry.get_password() {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[tauri::command]
+fn secure_delete_secret(account: String) -> CommandResult<()> {
+    let entry = keyring::Entry::new(SECRET_SERVICE, &account).map_err(|error| error.to_string())?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 fn media_response<R: Runtime>(context: UriSchemeContext<'_, R>, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let id = request
         .uri()
@@ -827,7 +906,9 @@ pub fn run() {
             local_transcription_transcribe, local_transcription_retry, local_transcription_list_hotword_packages,
             local_transcription_save_hotword_package, local_transcription_delete_hotword_package,
             local_transcription_list_voiceprints, local_transcription_create_voiceprint,
-            local_transcription_update_voiceprint, local_transcription_delete_voiceprint
+            local_transcription_update_voiceprint, local_transcription_delete_voiceprint,
+            local_stt_config_get, local_stt_config_save,
+            secure_set_secret, secure_get_secret, secure_delete_secret
         ])
         .run(tauri::generate_context!())
         .expect("error while running Lynse Tauri application");

@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { setApiTransportMode } from "@lynse/core/api/client";
+import { hydrateSecrets } from "./secure-storage";
+import type { TranscribeConfig } from "@lynse/views/workspace";
 
 type DesktopApi = {
   openExternal: (url: string) => Promise<void>;
@@ -15,6 +17,10 @@ function command<T>(name: string, payload?: Record<string, unknown>): Promise<T>
 }
 
 export async function installTauriBridge(): Promise<void> {
+  // Load credentials from the OS keychain into the in-memory cache before the
+  // app renders, so the auth store can read them synchronously.
+  await hydrateSecrets();
+
   // Keep WKWebView's fetch implementation. Routing every fetch through the
   // Tauri HTTP IPC bridge can monopolize the renderer on macOS.
   setApiTransportMode("direct");
@@ -48,6 +54,8 @@ export async function installTauriBridge(): Promise<void> {
       createVoiceprint: (input: unknown) => command("local_transcription_create_voiceprint", { input }),
       updateVoiceprint: (voiceprint: unknown) => command("local_transcription_update_voiceprint", { voiceprint }),
       deleteVoiceprint: (id: string) => command("local_transcription_delete_voiceprint", { id }),
+      getSttConfig: () => command<TranscribeConfig>("local_stt_config_get"),
+      saveSttConfig: (config: TranscribeConfig) => command<TranscribeConfig>("local_stt_config_save", { config }),
     },
     appInfo: { version: "0.1.0", platform: "darwin" },
     todo: {

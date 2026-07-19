@@ -8,6 +8,18 @@ import type {
   WorkspaceItem,
 } from "./types";
 
+export type SttProviderConfig =
+  | {
+      provider: "funasr";
+      expected_speakers?: number | null;
+      hotword_package_id?: string | null;
+    };
+
+export type TranscribeConfig = {
+  default?: SttProviderConfig | null;
+  per_language: Record<string, SttProviderConfig>;
+};
+
 export const LOCAL_FILE_ID_PREFIX = "local:";
 export const LOCAL_TRANSCRIPTION_FOLDER_ID = "__local_transcriptions__";
 export const LOCAL_TRANSCRIPTION_TAG = "本地转写";
@@ -37,6 +49,8 @@ export interface DesktopLocalTranscriptionApi {
   createVoiceprint: (input: { name: string; sampleRecordId: string; sampleSegmentIds: string[] }) => Promise<LocalVoiceprint>;
   updateVoiceprint: (voiceprint: LocalVoiceprint) => Promise<LocalVoiceprint>;
   deleteVoiceprint: (id: string) => Promise<void>;
+  getSttConfig: () => Promise<TranscribeConfig>;
+  saveSttConfig: (config: TranscribeConfig) => Promise<TranscribeConfig>;
 }
 
 export function getDesktopLocalTranscriptionApi(): DesktopLocalTranscriptionApi | null {

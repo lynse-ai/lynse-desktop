@@ -34,3 +34,6 @@ pnpm-debug.log*
 coverage/
 .playwright-mcp/
 .token_cache
+
+# Project operational data (WorkBuddy memory / notes) — not source
+.workbuddy/

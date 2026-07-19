@@ -17,6 +17,7 @@ import {
   SidebarGroupContent,
 } from "@lynse/ui/components/ui/sidebar";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { useNavigation } from "../../navigation";
 import { useFolders } from "../hooks/use-folders";
 import { useFolderCounts } from "../hooks/use-folder-counts";
 import { useFiles } from "../hooks/use-files";
@@ -28,6 +29,7 @@ import type { FolderInfo } from "../types";
 
 export function FolderTreeSection() {
   const { t } = useTranslation();
+  const { push } = useNavigation();
   const { data: folders } = useFolders();
   const { data: counts } = useFolderCounts();
   const { data: allFiles } = useFiles({ pageNum: 1, pageSize: 200, folderId: "__all__" });
@@ -98,6 +100,11 @@ export function FolderTreeSection() {
     );
   };
 
+  const handleSelectFolder = (folderId: string) => {
+    selectFolder(folderId);
+    push("/recordings");
+  };
+
   return (
     <SidebarGroup className="py-1">
       {/* Virtual items: All Files + Uncategorized */}
@@ -107,14 +114,14 @@ export function FolderTreeSection() {
           label={t("layout.all_files")}
           count={counts?.all ?? 0}
           active={selectedFolderId === "__all__"}
-          onClick={() => selectFolder("__all__")}
+          onClick={() => handleSelectFolder("__all__")}
         />
         <VirtualItem
           icon={FileAudio}
           label={t("layout.local_transcriptions")}
           count={localTranscriptionCount}
           active={selectedFolderId === LOCAL_TRANSCRIPTION_FOLDER_ID}
-          onClick={() => selectFolder(LOCAL_TRANSCRIPTION_FOLDER_ID)}
+          onClick={() => handleSelectFolder(LOCAL_TRANSCRIPTION_FOLDER_ID)}
           iconClassName="opacity-70"
         />
         <VirtualItem
@@ -122,7 +129,7 @@ export function FolderTreeSection() {
           label={t("layout.uncategorized")}
           count={counts?.unclassified ?? 0}
           active={selectedFolderId === "__uncategorized__"}
-          onClick={() => selectFolder("__uncategorized__")}
+          onClick={() => handleSelectFolder("__uncategorized__")}
           iconClassName="opacity-40"
           droppableFolderId=""
         />
@@ -193,7 +200,7 @@ export function FolderTreeSection() {
                 active={selectedFolderId === folder.id}
                 editing={editingFolderId === folder.id}
                 onEditDone={(newName) => handleEditFolder(folder, newName)}
-                onClick={() => selectFolder(folder.id)}
+                onClick={() => handleSelectFolder(folder.id)}
               />
             ))}
           </div>
@@ -207,7 +214,7 @@ export function FolderTreeSection() {
           label={t("layout.trash")}
           count={0}
           active={selectedFolderId === "__trash__"}
-          onClick={() => selectFolder("__trash__")}
+          onClick={() => handleSelectFolder("__trash__")}
         />
       </div>
     </SidebarGroup>

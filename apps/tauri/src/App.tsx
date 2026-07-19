@@ -9,6 +9,7 @@ import { ChatPage } from "@lynse/views/chat";
 import { TodoPage } from "@lynse/views/todo";
 import { RESOURCES } from "@lynse/views/locales";
 import { DesktopNavigationProvider } from "./platform/navigation";
+import { secureStorage } from "./secure-storage";
 import lynseWordmark from "./assets/lynse-wordmark.png";
 
 function PageRouter() {
@@ -53,6 +54,7 @@ export default function App() {
       <CoreProvider
         apiBaseUrl={import.meta.env.VITE_API_URL}
         wsUrl={import.meta.env.VITE_WS_URL}
+        storage={secureStorage}
         identity={identity}
         locale="en"
         resources={RESOURCES}

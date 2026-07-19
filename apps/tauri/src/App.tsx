@@ -44,10 +44,11 @@ function AppContent() {
 }
 
 export default function App() {
-  const identity = useMemo(
-    () => ({ platform: "desktop" as const, version: "0.1.0" }),
-    [],
-  );
+  const identity = useMemo(() => {
+    const appInfo = (window as unknown as { desktopAPI?: { appInfo?: { version: string } } })
+      .desktopAPI?.appInfo;
+    return { platform: "desktop" as const, version: appInfo?.version ?? "0.1.0" };
+  }, []);
 
   return (
     <ThemeProvider>

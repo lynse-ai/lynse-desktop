@@ -1,17 +1,20 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useEffect, useRef } from "react";
 import { cn } from "@lynse/ui/lib/utils";
 import { useWorkspaceStore } from "../workspace/store";
 import { useFiles } from "../workspace/hooks/use-files";
 import { useFolders } from "../workspace/hooks/use-folders";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { toast } from "sonner";
+import { useAppUpdate, openExternalUrl } from "../app-update";
 import {
   ChevronRight,
   FileText,
   Bot,
   List,
   Code,
+  Bell,
 } from "../icons";
 
 const TITLE_BAR_HEIGHT = 38;
@@ -41,6 +44,22 @@ export function TitleBar() {
   const toggleSourceView = useWorkspaceStore((s) => s.toggleSourceView);
   const { data: files } = useFiles({ pageNum: 1, pageSize: 200 });
   const { data: folders } = useFolders();
+
+  // ── Update reminder ──
+  const { update } = useAppUpdate();
+  const updateNotified = useRef(false);
+  useEffect(() => {
+    if (update?.hasUpdate && !updateNotified.current) {
+      updateNotified.current = true;
+      toast.info(t("settings.update_available_toast"), {
+        action: {
+          label: t("settings.view_release"),
+          onClick: () => openExternalUrl(update.releaseUrl),
+        },
+        duration: 9000,
+      });
+    }
+  }, [update, t]);
 
   const folderName = useMemo(() => {
     if (selectedFolderId === "__all__") return t("layout.all_files");
@@ -120,6 +139,18 @@ export function TitleBar() {
             title={t("workspace.view_source")}
           >
             <Code className="size-3.5" />
+          </button>
+        )}
+
+        {/* Update reminder — only shown when a newer release exists */}
+        {update?.hasUpdate && (
+          <button
+            onClick={() => openExternalUrl(update.releaseUrl)}
+            className="relative flex items-center justify-center rounded-md p-1 text-amber-500 transition-colors hover:bg-accent/50"
+            title={t("settings.update_available")}
+          >
+            <Bell className="size-3.5" />
+            <span className="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-amber-500 ring-2 ring-background" />
           </button>
         )}
 

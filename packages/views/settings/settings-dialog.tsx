@@ -15,15 +15,22 @@ import { Switch } from "@lynse/ui/components/ui/switch";
 import { useAuthStore } from "@lynse/core/auth";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { Sun, Moon, Monitor } from "../icons";
+import { Sun, Moon, Monitor, Download } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
 import {
   getDesktopLocalTranscriptionApi,
   type DesktopLocalTranscriptionApi,
+  type SttDownloadProgress,
   type SttEngine,
   type SttModelInfo,
   OFFLINE_TRANSCRIPTION_ENABLED_KEY,
 } from "../workspace/local-transcription";
+import {
+  useAppUpdate,
+  getDesktopAppApi,
+  getAppInfoSync,
+  openExternalUrl,
+} from "../app-update";
 import type { LocalHotwordPackage, LocalVoiceprint } from "../workspace/types";
 import { SttConfigSection } from "./stt-config-section";
 
@@ -59,9 +66,13 @@ export function SettingsDialog({
   const [offlineTranscription, setOfflineTranscription] = useState(false);
   const localTranscriptionApi = getDesktopLocalTranscriptionApi();
   const hasLocalTranscription = !!localTranscriptionApi;
+  const appApi = getDesktopAppApi();
+  const appInfo = getAppInfoSync();
+  const { update, checking, error: updateError, checkForUpdate } = useAppUpdate();
   const [models, setModels] = useState<SttModelInfo[]>([]);
   const [modelBusy, setModelBusy] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<SttDownloadProgress | null>(null);
   const [hotwordPackages, setHotwordPackages] = useState<LocalHotwordPackage[]>([]);
   const [voiceprints, setVoiceprints] = useState<LocalVoiceprint[]>([]);
   const [hotwordName, setHotwordName] = useState("");
@@ -78,6 +89,24 @@ export function SettingsDialog({
       refreshLocalAssets();
     }
   }, [open]);
+
+  // Subscribe once to download-progress events so the progress bar can update
+  // live while a model downloads. Only one download runs at a time (Rust holds
+  // a global lock), so a single latest-progress state is sufficient.
+  useEffect(() => {
+    if (!localTranscriptionApi) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    localTranscriptionApi.onSttDownloadProgress((progress) => {
+      setDownloadProgress(progress);
+    }).then((fn) => {
+      if (!cancelled) unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [localTranscriptionApi]);
 
   async function handleConnect() {
     if (!apiKey.trim()) return;
@@ -127,12 +156,14 @@ export function SettingsDialog({
     if (!localTranscriptionApi) return;
     setModelBusy(true);
     setModelError(null);
+    setDownloadProgress(null);
     try {
       setModels((await localTranscriptionApi.downloadSttModel(provider, modelId)).models);
     } catch (e: unknown) {
       setModelError(e instanceof Error ? e.message : t("settings.local_model_download_failed"));
     } finally {
       setModelBusy(false);
+      setDownloadProgress(null);
     }
   }
 
@@ -257,6 +288,7 @@ export function SettingsDialog({
                       models={models}
                       modelBusy={modelBusy}
                       modelError={modelError}
+                      downloadProgress={downloadProgress}
                       onDownloadModel={handleDownloadModel}
                       onDeleteModel={handleDeleteModel}
                       hotwordPackages={hotwordPackages}
@@ -395,6 +427,62 @@ export function SettingsDialog({
               )}
             </CardContent>
           </Card>
+
+          {/* ── About / Version ────────────────────────── */}
+          {appApi && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-xs">{t("settings.about")}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium">{t("app_name")}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {t("settings.version")}: {appInfo?.version ?? "—"}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 shrink-0 text-xs"
+                    onClick={checkForUpdate}
+                    disabled={checking}
+                  >
+                    {checking ? t("settings.checking_update") : t("settings.check_update")}
+                  </Button>
+                </div>
+
+                {updateError && (
+                  <p className="text-[11px] text-destructive">{t("settings.update_check_failed")}</p>
+                )}
+
+                {update?.hasUpdate ? (
+                  <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5">
+                    <p className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                      <Download className="size-3.5" />
+                      {t("settings.update_available")} (v{update.latestVersion})
+                    </p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                      {t("settings.update_available_desc")}
+                    </p>
+                    <Button
+                      size="sm"
+                      className="mt-2 h-7 text-xs"
+                      onClick={() => openExternalUrl(update.releaseUrl)}
+                    >
+                      <Download className="size-3.5" />
+                      {t("settings.view_release")}
+                    </Button>
+                  </div>
+                ) : (
+                  !updateError && (
+                    <p className="text-[11px] text-muted-foreground">{t("settings.up_to_date")}</p>
+                  )
+                )}
+              </CardContent>
+            </Card>
+          )}
         </div>
       </DialogContent>
     </Dialog>

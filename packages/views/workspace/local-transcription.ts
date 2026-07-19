@@ -53,6 +53,19 @@ export interface SttModelInfo {
   modelDir: string;
 }
 
+/** Real-time progress of an offline STT model download, streamed from the
+ *  Rust side via the `stt-download-progress` event. */
+export interface SttDownloadProgress {
+  provider: SttEngine;
+  modelId: string;
+  receivedBytes: number;
+  totalBytes: number;
+  /** 0–100, or null when the total size is unknown (e.g. FunASR). */
+  percent: number | null;
+  phase: "downloading" | "verifying" | "done" | "error";
+  error?: string | null;
+}
+
 export interface DesktopLocalTranscriptionApi {
   pickAudioFile: () => Promise<string | null>;
   transcribe: (audioPath: string, options?: LocalTranscriptionOptions) => Promise<LocalTranscriptionRecord>;
@@ -64,6 +77,8 @@ export interface DesktopLocalTranscriptionApi {
   listSttModels: () => Promise<{ models: SttModelInfo[] }>;
   downloadSttModel: (provider: SttEngine, modelId: string) => Promise<{ models: SttModelInfo[] }>;
   deleteSttModel: (provider: SttEngine, modelId: string) => Promise<{ models: SttModelInfo[] }>;
+  /** Subscribe to `stt-download-progress` events; returns an unlisten fn. */
+  onSttDownloadProgress: (callback: (progress: SttDownloadProgress) => void) => Promise<() => void>;
   listHotwordPackages: () => Promise<LocalHotwordPackage[]>;
   saveHotwordPackage: (pkg: LocalHotwordPackage) => Promise<LocalHotwordPackage>;
   deleteHotwordPackage: (id: string) => Promise<void>;

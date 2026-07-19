@@ -86,6 +86,8 @@ export {
   ArrowUp,          // Sort ascending
   Clock,            // Time-based sort
   MessageCircle,    // Feedback
+  Bell,             // Update reminder
+  Download,         // Download / update action
 
   // ── Audio Player ────────────────────────────────────
   Play,             // Play

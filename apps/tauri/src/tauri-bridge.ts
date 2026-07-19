@@ -1,15 +1,29 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { setApiTransportMode } from "@lynse/core/api/client";
 import { hydrateSecrets } from "./secure-storage";
-import type { SttModelInfo, TranscribeConfig } from "@lynse/views/workspace";
+import type { SttDownloadProgress, SttModelInfo, TranscribeConfig } from "@lynse/views/workspace";
+
+export type AppUpdateInfo = {
+  currentVersion: string;
+  latestVersion: string;
+  hasUpdate: boolean;
+  releaseUrl: string;
+  releaseNotes?: string | null;
+  publishedAt?: string | null;
+};
 
 type DesktopApi = {
   openExternal: (url: string) => Promise<void>;
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
   todo: Record<string, (...args: any[]) => Promise<unknown>>;
   appInfo: { version: string; platform: string };
+  app: {
+    getInfo: () => Promise<{ version: string; platform: string }>;
+    checkForUpdate: () => Promise<AppUpdateInfo>;
+  };
 }
 
 function command<T>(name: string, payload?: Record<string, unknown>): Promise<T> {
@@ -49,6 +63,10 @@ export async function installTauriBridge(): Promise<void> {
         command<{ models: SttModelInfo[] }>("local_stt_download_model", { provider, modelId }),
       deleteSttModel: (provider: string, modelId: string) =>
         command<{ models: SttModelInfo[] }>("local_stt_delete_model", { provider, modelId }),
+      onSttDownloadProgress: (callback: (progress: SttDownloadProgress) => void) =>
+        getCurrentWebview().listen<SttDownloadProgress>("stt-download-progress", (event) =>
+          callback(event.payload),
+        ),
       listHotwordPackages: () => command("local_transcription_list_hotword_packages"),
       saveHotwordPackage: (pkg: unknown) => command("local_transcription_save_hotword_package", { pkg }),
       deleteHotwordPackage: (id: string) => command("local_transcription_delete_hotword_package", { id }),
@@ -60,6 +78,10 @@ export async function installTauriBridge(): Promise<void> {
       saveSttConfig: (config: TranscribeConfig) => command<TranscribeConfig>("local_stt_config_save", { config }),
     },
     appInfo: { version: "0.1.0", platform: "darwin" },
+    app: {
+      getInfo: () => command<{ version: string; platform: string }>("get_app_info"),
+      checkForUpdate: () => command<AppUpdateInfo>("check_app_update"),
+    },
     todo: {
       list: () => command("todo_list"),
       save: (todo: unknown) => command("todo_save", { todo }),
@@ -70,4 +92,14 @@ export async function installTauriBridge(): Promise<void> {
   };
 
   (window as Window & { desktopAPI?: DesktopApi }).desktopAPI = desktopAPI;
+
+  // Replace the hardcoded fallback with the authoritative version reported by
+  // the Rust host (package_info), so the UI version stays correct across
+  // releases without manual edits. Failures keep the static fallback so the
+  // app still boots.
+  try {
+    desktopAPI.appInfo = await desktopAPI.app.getInfo();
+  } catch {
+    /* keep fallback */
+  }
 }

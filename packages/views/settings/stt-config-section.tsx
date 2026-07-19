@@ -4,9 +4,12 @@ import { useState, useEffect } from "react";
 import { Label } from "@lynse/ui/components/ui/label";
 import { Input } from "@lynse/ui/components/ui/input";
 import { Button } from "@lynse/ui/components/ui/button";
+import { Progress, ProgressValue } from "@lynse/ui/components/ui/progress";
+import { cn } from "@lynse/ui/lib/utils";
 import { Loader2, Plus, Trash2 } from "../icons";
 import {
   type DesktopLocalTranscriptionApi,
+  type SttDownloadProgress,
   type SttEngine,
   type SttModelInfo,
   type SttProviderConfig,
@@ -78,11 +81,13 @@ function HotwordSelect({
 function ModelManager({
   model,
   busy,
+  progress,
   onDownload,
   onDelete,
 }: {
   model: SttModelInfo | undefined;
   busy: boolean;
+  progress: SttDownloadProgress | null;
   onDownload: () => void;
   onDelete: () => void;
 }) {
@@ -90,6 +95,20 @@ function ModelManager({
     return <p className="text-[11px] text-muted-foreground">该引擎暂无可下载模型。</p>;
   }
   const installed = model.status === "installed";
+  const isThisDownloading =
+    !!progress && progress.provider === model.provider && progress.modelId === model.id;
+  const phase = progress?.phase;
+  const isError = phase === "error";
+  const isDone = phase === "done";
+  const statusText = isError
+    ? "下载失败"
+    : isThisDownloading
+      ? phase === "verifying"
+        ? "校验中…"
+        : "下载中…"
+      : installed
+        ? "已安装"
+        : "未安装";
   return (
     <div className="mt-2 rounded bg-background p-2">
       <div className="flex items-center justify-between gap-2">
@@ -97,17 +116,31 @@ function ModelManager({
           <p className="truncate text-[11px] font-medium">{model.label}</p>
           <p className="truncate text-[11px] text-muted-foreground">{model.modelDir}</p>
         </div>
-        <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-          {model.status === "installed"
-            ? "已安装"
-            : model.status === "downloading"
-              ? "下载中"
-              : "未安装"}
+        <span
+          className={cn(
+            "shrink-0 rounded-full px-2 py-0.5 text-[11px]",
+            isError ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground",
+          )}
+        >
+          {statusText}
         </span>
       </div>
+
+      {isThisDownloading && !isError && !isDone ? <DownloadProgress progress={progress} /> : null}
+
+      {isError && progress?.error ? (
+        <p className="mt-2 text-[11px] text-destructive">{progress.error}</p>
+      ) : null}
+
       <div className="mt-2 flex flex-wrap gap-2">
-        <Button type="button" size="sm" className="h-7 text-xs" onClick={onDownload} disabled={busy || installed}>
-          {busy ? <Loader2 className="mr-1.5 size-3 animate-spin" /> : null}
+        <Button
+          type="button"
+          size="sm"
+          className="h-7 text-xs"
+          onClick={onDownload}
+          disabled={busy || installed || isThisDownloading}
+        >
+          {busy && !isThisDownloading ? <Loader2 className="mr-1.5 size-3 animate-spin" /> : null}
           下载模型
         </Button>
         <Button
@@ -116,13 +149,35 @@ function ModelManager({
           variant="outline"
           className="h-7 text-xs"
           onClick={onDelete}
-          disabled={busy || !installed}
+          disabled={busy || !installed || isThisDownloading}
         >
           <Trash2 className="mr-1.5 size-3" />
           删除模型
         </Button>
       </div>
     </div>
+  );
+}
+
+/** Live download progress for a single model. Shows a determinate bar with a
+ *  percentage when the total size is known, or an indeterminate sweep for
+ *  unknown-size downloads (e.g. FunASR). */
+function DownloadProgress({ progress }: { progress: SttDownloadProgress | null }) {
+  if (!progress) return null;
+  if (progress.percent === null) {
+    return (
+      <div className="relative mt-2 h-1 w-full overflow-hidden rounded-full bg-muted">
+        <div className="absolute inset-y-0 left-0 h-full w-1/3 rounded-full bg-primary animate-[stt-download-sweep_1.4s_ease-in-out_infinite]" />
+      </div>
+    );
+  }
+  return (
+    <Progress value={progress.percent} className="mt-2 flex-col items-stretch gap-1">
+      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+        <span>{progress.phase === "verifying" ? "校验中…" : "下载中…"}</span>
+        <ProgressValue className="text-[11px]" />
+      </div>
+    </Progress>
   );
 }
 
@@ -202,6 +257,7 @@ export function SttConfigSection({
   models,
   modelBusy,
   modelError,
+  downloadProgress,
   onDownloadModel,
   onDeleteModel,
   hotwordPackages,
@@ -210,6 +266,7 @@ export function SttConfigSection({
   models: SttModelInfo[];
   modelBusy: boolean;
   modelError: string | null;
+  downloadProgress: SttDownloadProgress | null;
   onDownloadModel: (provider: SttEngine, modelId: string) => void;
   onDeleteModel: (provider: SttEngine, modelId: string) => void;
   hotwordPackages: LocalHotwordPackage[];
@@ -285,6 +342,7 @@ export function SttConfigSection({
 
   return (
     <div className="space-y-3">
+      <style>{`@keyframes stt-download-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }`}</style>
       <div className="space-y-1">
         <Label className="text-[11px]">默认离线引擎</Label>
         <select
@@ -302,6 +360,7 @@ export function SttConfigSection({
         <ModelManager
           model={defaultModel}
           busy={modelBusy}
+          progress={downloadProgress}
           onDownload={() => onDownloadModel(defaultConfig.provider, defaultModelId)}
           onDelete={() => onDeleteModel(defaultConfig.provider, defaultModelId)}
         />
@@ -382,6 +441,7 @@ export function SttConfigSection({
               <ModelManager
                 model={model}
                 busy={modelBusy}
+                progress={downloadProgress}
                 onDownload={() => onDownloadModel(entry.config.provider, modelId)}
                 onDelete={() => onDeleteModel(entry.config.provider, modelId)}
               />

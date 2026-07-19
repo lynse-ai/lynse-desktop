@@ -10,8 +10,10 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
 use tauri::http::{header, Request, Response, StatusCode};
-use tauri::{AppHandle, Manager, Runtime, UriSchemeContext};
+use tauri::{AppHandle, Emitter, Manager, Runtime, UriSchemeContext};
 use uuid::Uuid;
 
 mod stt;
@@ -540,10 +542,16 @@ fn download_stt_model_file(app: &AppHandle, entry: &SttModelEntry) -> CommandRes
     if target.exists() {
         return Ok(());
     }
+    // Announce the start. Entries with an unknown size (no `size_bytes`) report
+    // `None` progress so the UI shows an indeterminate bar; Whisper/MOSS report
+    // concrete byte progress.
+    emit_download_progress(app, entry.provider, entry.id, 0, entry.size_bytes, None, "downloading", None);
     let candidates = model_download_candidates(entry.download_url);
     let mut last_error = "模型下载失败".to_owned();
     for url in &candidates {
-        let status = Command::new("curl")
+        // Spawn curl (instead of blocking on `.status()`) so we can poll the
+        // partial file's size while it downloads and stream progress to the UI.
+        let mut child = Command::new("curl")
             .args([
                 "-fL",
                 "--retry",
@@ -554,16 +562,34 @@ fn download_stt_model_file(app: &AppHandle, entry: &SttModelEntry) -> CommandRes
                 part.to_string_lossy().as_ref(),
                 url,
             ])
-            .status()
+            .spawn()
             .map_err(|error| format!("无法启动下载（curl）：{error}"))?;
-        if status.success() {
-            return verify_and_install(&part, &target, &entry.sha256);
-        }
-        // Clean up any partial file from the failed attempt before trying the
-        // next candidate (or bailing out).
-        let _ = fs::remove_file(&part);
-        if candidates.len() > 1 {
-            last_error = format!("通过 {url} 下载失败，正在尝试备用镜像");
+        let total = entry.size_bytes;
+        loop {
+            let received = fs::metadata(&part).map(|meta| meta.len()).unwrap_or(0);
+            let percent = if total > 0 {
+                Some(((received as f64 / total as f64) * 100.0).min(100.0) as u32)
+            } else {
+                None
+            };
+            emit_download_progress(app, entry.provider, entry.id, received, total, percent, "downloading", None);
+            match child.try_wait().map_err(|error| error.to_string())? {
+                Some(status) => {
+                    if status.success() {
+                        // Brief "verifying" phase before the atomic move.
+                        emit_download_progress(app, entry.provider, entry.id, total, total, Some(100), "verifying", None);
+                        return verify_and_install(&part, &target, &entry.sha256);
+                    }
+                    // Failed attempt: drop the partial file and try the next
+                    // candidate (or bail out).
+                    let _ = fs::remove_file(&part);
+                    if candidates.len() > 1 {
+                        last_error = format!("通过 {url} 下载失败，正在尝试备用镜像");
+                    }
+                    break;
+                }
+                None => thread::sleep(Duration::from_millis(250)),
+            }
         }
     }
     Err(last_error)
@@ -587,6 +613,32 @@ fn verify_and_install(part: &Path, target: &Path, expected_sha256: &str) -> Comm
     }
     fs::rename(part, target).map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// Stream STT model download progress to the frontend. Emit failures (e.g. no
+/// active listener) are intentionally swallowed so they never abort a download.
+fn emit_download_progress(
+    app: &AppHandle,
+    provider: &str,
+    model_id: &str,
+    received_bytes: u64,
+    total_bytes: u64,
+    percent: Option<u32>,
+    phase: &str,
+    error: Option<&str>,
+) {
+    let _ = app.emit(
+        "stt-download-progress",
+        json!({
+            "provider": provider,
+            "modelId": model_id,
+            "receivedBytes": received_bytes,
+            "totalBytes": total_bytes,
+            "percent": percent,
+            "phase": phase,
+            "error": error,
+        }),
+    );
 }
 
 fn resolve_provider(app: &AppHandle, language: Option<&str>, per_note: Option<&stt::ProviderConfig>) -> stt::ProviderConfig {
@@ -929,6 +981,8 @@ fn local_stt_download_model(
         let entry = stt_model_entry(&provider, &model_id)?;
         if entry.download_url.is_empty() {
             // FunASR downloads through its Python helper rather than a fixed URL.
+            // Its size is unknown, so we only signal an indeterminate download.
+            emit_download_progress(&app, &provider, &model_id, 0, 0, None, "downloading", None);
             let directory = model_dir(&app)?;
             let args = vec![
                 script_path(&app)?.to_string_lossy().into_owned(),
@@ -936,9 +990,17 @@ fn local_stt_download_model(
                 "--model-dir".to_owned(),
                 directory.to_string_lossy().into_owned(),
             ];
-            run_funasr(&app, &args, &directory)?;
+            if let Err(error) = run_funasr(&app, &args, &directory) {
+                emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
+                return Err(error);
+            }
+            emit_download_progress(&app, &provider, &model_id, 0, 0, None, "done", None);
         } else {
-            download_stt_model_file(&app, entry)?;
+            if let Err(error) = download_stt_model_file(&app, entry) {
+                emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
+                return Err(error);
+            }
+            emit_download_progress(&app, &provider, &model_id, 0, 0, None, "done", None);
         }
         model_status_list(&app)
     })();
@@ -1217,6 +1279,110 @@ fn migrate_electron_data(app: &AppHandle) -> CommandResult<()> {
     fs::write(marker, now()).map_err(|error| error.to_string())
 }
 
+// ── Version / update checking ──────────────────────────────
+// GitHub repository that hosts the desktop releases. This must match the repo
+// the release workflow (`.github/workflows/release.yml`) publishes to.
+const UPDATE_REPO: &str = "lynse-ai/lynse-desktop";
+
+/// Split a semver-ish string ("v0.1.12", "1.2.3-beta") into comparable numeric
+/// segments, ignoring non-digit separators and any pre-release/build suffix.
+fn parse_version_segments(version: &str) -> Vec<u32> {
+    version
+        .split(|character: char| !character.is_ascii_digit())
+        .filter_map(|segment| segment.parse::<u32>().ok())
+        .collect()
+}
+
+/// True only when `latest` is strictly newer than `current`.
+fn is_newer_version(latest: &str, current: &str) -> bool {
+    let latest_segments = parse_version_segments(latest);
+    let current_segments = parse_version_segments(current);
+    let length = latest_segments.len().max(current_segments.len());
+    for index in 0..length {
+        let left = *latest_segments.get(index).unwrap_or(&0);
+        let right = *current_segments.get(index).unwrap_or(&0);
+        if left != right {
+            return left > right;
+        }
+    }
+    false
+}
+
+#[tauri::command]
+fn get_app_info(app: AppHandle) -> Value {
+    let version = app.package_info().version.to_string();
+    let platform = match std::env::consts::OS {
+        "macos" => "darwin",
+        "windows" => "win32",
+        "linux" => "linux",
+        other => other,
+    };
+    json!({ "version": version, "platform": platform })
+}
+
+#[tauri::command]
+fn check_app_update(app: AppHandle) -> CommandResult<Value> {
+    let current_version = app.package_info().version.to_string();
+    let url = format!("https://api.github.com/repos/{UPDATE_REPO}/releases/latest");
+
+    let output = Command::new("curl")
+        .args([
+            "-sS",
+            "-L",
+            "--max-time",
+            "20",
+            "-H",
+            "User-Agent: lynse-desktop",
+            "-H",
+            "Accept: application/vnd.github+json",
+            &url,
+        ])
+        .output()
+        .map_err(|error| format!("failed to run curl: {error}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "GitHub request failed (exit code {})",
+            output
+                .status
+                .code()
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        ));
+    }
+
+    let body = String::from_utf8_lossy(&output.stdout);
+    let release: Value = serde_json::from_str(&body)
+        .map_err(|error| format!("invalid GitHub release response: {error}"))?;
+
+    let tag = release
+        .get("tag_name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let latest_version = tag.trim_start_matches('v').to_string();
+    let has_update = !latest_version.is_empty() && is_newer_version(&latest_version, &current_version);
+    let release_url = release
+        .get("html_url")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let release_notes = release.get("body").and_then(Value::as_str).map(String::from);
+    let published_at = release
+        .get("published_at")
+        .and_then(Value::as_str)
+        .map(String::from);
+
+    Ok(json!({
+        "currentVersion": current_version,
+        "latestVersion": latest_version,
+        "hasUpdate": has_update,
+        "releaseUrl": release_url,
+        "releaseNotes": release_notes,
+        "publishedAt": published_at,
+    }))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -1241,7 +1407,8 @@ pub fn run() {
             local_transcription_list_voiceprints, local_transcription_create_voiceprint,
             local_transcription_update_voiceprint, local_transcription_delete_voiceprint,
             local_stt_config_get, local_stt_config_save,
-            secure_set_secret, secure_get_secret, secure_delete_secret
+            secure_set_secret, secure_get_secret, secure_delete_secret,
+            get_app_info, check_app_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running Lynse Tauri application");

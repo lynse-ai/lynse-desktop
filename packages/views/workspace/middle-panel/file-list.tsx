@@ -233,6 +233,15 @@ export function FileList() {
         className="absolute inset-y-0 right-0 w-3 select-none"
         data-tauri-drag-region
       />
+      {/* Top window-drag region — absolute overlay over the top padding only
+          (matches the left/right strips' philosophy: never over interactive
+          rows). Fixes the bug where the top-center of the meeting list could
+          not drag the window, especially when no folder is selected and the
+          conditional header is absent. */}
+      <div
+        className="absolute inset-x-0 top-0 h-2 select-none"
+        data-tauri-drag-region
+      />
       <style>
         {`
           @keyframes ai-file-text-shimmer {

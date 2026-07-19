@@ -55,6 +55,34 @@ lynse-desktop/
 
 ---
 
+## 安装（从 Release 下载）
+
+适用于不想自己编译、直接从 GitHub Release 取安装包的用户。
+
+### macOS（未签名 dmg）
+
+> 当前仅提供 **Apple Silicon（aarch64）** 版本（`Lynse_x.x.x_aarch64.dmg`），M 系列芯片适用；Intel Mac 暂未发布。安装包**未经过 Apple 公证（Notarization）**，首次打开会被 Gatekeeper 拦截，属于正常现象。
+
+1. 在 [Releases](https://github.com/lynse-ai/lynse-desktop/releases) 下载 `Lynse_x.x.x_aarch64.dmg`。
+2. 双击挂载，把 **`Lynse.app`** 拖到「应用程序」文件夹。
+3. 首次打开会被拦截，任选一种方式放行：
+   - **方式 A（推荐）**：在「应用程序」里**右键点击 Lynse → 打开**，弹窗中点「打开」。
+   - **方式 B**：系统设置 → **隐私与安全性**，滚动到底部，点 **「仍要打开」**。
+4. 若提示 App **「已损坏，无法打开」**（下载后 Gatekeeper 给文件打了隔离属性）：
+   ```bash
+   sudo xattr -cr /Applications/Lynse.app
+   ```
+   执行后重新打开即可。
+
+### Windows（msi）
+
+1. 下载 `Lynse_x.x.x_x64_en-US.msi`。
+2. 双击运行，按向导安装。
+3. 若 SmartScreen 拦截，点「更多信息 → 仍要运行」。
+4. 安装后从开始菜单启动 **Lynse**。
+
+---
+
 ## 快速开始
 
 ### 前置要求
@@ -143,7 +171,7 @@ git push origin v0.1.x
 
 - 当前本地 STT 仅内置 **FunASR** 一种引擎，`BatchSttAdapter` 已预留多引擎扩展位（OpenAI / Deepgram / Groq 等可按同样 trait 接入）。
 - 转写块的 `prior_context` 防幻觉、本地 Ollama 原生摘要、本地存储 SQLite 化等为后续规划项。
-- macOS 安装包目前为**未签名 dmg**，首次打开需在“系统设置 → 隐私与安全性”中允许。
+- macOS / Windows 安装包目前均**未签名 / 未公证**，放行步骤见上方「安装」章节。
 
 ---
 

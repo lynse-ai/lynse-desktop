@@ -13,6 +13,7 @@ import {
 import { Button } from "@lynse/ui/components/ui/button";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useAddSummary, useReplaceSummaryTemplate, useRerunSummary, useTemplateCategories, useFileDetail } from "./hooks/use-files";
+import { isInsufficientCreditsError } from "../layout/use-user-credits";
 import type { FileConclusion } from "./types";
 import { useQueryClient } from "@tanstack/react-query";
 import { TemplateSelector } from "./template-selector";
@@ -36,6 +37,7 @@ const FALLBACK_TEXT = {
     replaceSuccess: "Summary template changed",
     replaceFailed: "Template change failed",
     unknownError: "Unknown error",
+    creditsInsufficient: "Insufficient credits to process. Please recharge and try again.",
   },
   "zh-Hans": {
     addTitle: "添加总结",
@@ -53,6 +55,7 @@ const FALLBACK_TEXT = {
     replaceSuccess: "总结模板已更换",
     replaceFailed: "更换模板失败",
     unknownError: "未知错误",
+    creditsInsufficient: "积分不足，无法完成处理，请充值后重试",
   },
   ja: {
     addTitle: "要約を追加",
@@ -70,6 +73,7 @@ const FALLBACK_TEXT = {
     replaceSuccess: "要約テンプレートを変更しました",
     replaceFailed: "テンプレートの変更に失敗しました",
     unknownError: "不明なエラー",
+    creditsInsufficient: "処理に必要なポイントが不足しています。チャージしてから再度お試しください。",
   },
 } as const;
 
@@ -153,6 +157,8 @@ export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mo
           aiTaskType: "CONCLUSION",
           fileId: currentFileId,
           templateId: currentTemplateId,
+          modelId: (fileDetail as Record<string, unknown> | undefined)?.modelId as string | undefined,
+          languageId: (fileDetail as Record<string, unknown> | undefined)?.languageId as string | undefined,
         });
         conclusion = result.conclusion;
       } else if (currentMode === "replace" && currentConclusionId) {
@@ -182,14 +188,17 @@ export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mo
         await qc.invalidateQueries({ queryKey: ["file-conclusions", currentFileId] });
       }
     } catch (err) {
+      const isCreditsError = isInsufficientCreditsError(err);
       const msg = err instanceof Error ? err.message : text("resummarize.unknown_error", fallback.unknownError);
       toast.error(
-        currentMode === "add"
-          ? text("add_summary.failed", fallback.addFailed)
-          : currentMode === "replace"
-            ? text("summary_tab.replace_failed", fallback.replaceFailed)
-          : text("resummarize.failed", fallback.rerunFailed),
-        { description: msg },
+        isCreditsError
+          ? text("resummarize.credits_insufficient", fallback.creditsInsufficient)
+          : currentMode === "add"
+            ? text("add_summary.failed", fallback.addFailed)
+            : currentMode === "replace"
+              ? text("summary_tab.replace_failed", fallback.replaceFailed)
+              : text("resummarize.failed", fallback.rerunFailed),
+        { description: isCreditsError ? undefined : msg },
       );
       onFinished?.(currentFileId, false, currentMode, { pendingId });
     }

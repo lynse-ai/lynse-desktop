@@ -28,6 +28,7 @@ import {
   getDesktopLocalTranscriptionApi,
   OFFLINE_TRANSCRIPTION_ENABLED_KEY,
 } from "./local-transcription";
+import { isInsufficientCreditsError } from "../layout/use-user-credits";
 
 // Accepted audio/video file types
 const ACCEPTED_TYPES = [
@@ -203,9 +204,17 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
       }, 1500);
     } catch (err) {
       setPhase("error");
-      const msg = err instanceof Error ? err.message : t("upload.unknown_error");
+      const isCreditsError = isInsufficientCreditsError(err);
+      const msg = isCreditsError
+        ? t("upload.credits_insufficient")
+        : err instanceof Error
+          ? err.message
+          : t("upload.unknown_error");
       setErrorMsg(msg);
-      toast.error(t("upload.failed"), { description: msg });
+      toast.error(
+        isCreditsError ? t("upload.credits_insufficient") : t("upload.failed"),
+        { description: isCreditsError ? undefined : msg },
+      );
     }
   }, [file, effectiveTemplateId, transferFile, qc, t, reset, onOpenChange, hasSelectedSource, localApi, localAudioPath, useOfflineTranscription, expectedSpeakers, selectedHotwordPackageId]);
 

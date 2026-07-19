@@ -66,6 +66,16 @@
     --stroke-overlay: color-mix(in srgb, currentColor 6%, transparent);
 }
 
+/* Motion tokens — easing curves (distilled from Emil Kowalski's motion philosophy).
+   Declared in @theme (non-inline) so each generates a Tailwind `ease-*` utility AND
+   is emitted to :root as a global CSS var for hand-written keyframes. These strong
+   curves intentionally override Tailwind's weak built-in ease-out / ease-in-out. */
+@theme {
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);     /* entrances / exits — the UI default */
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1); /* on-screen movement / morphing */
+    --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);  /* iOS-like drawer / sheet curve */
+}
+
 :root {
     /* System font stack — CJK-friendly (PingFang SC on macOS, Microsoft YaHei on Windows) */
     --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
@@ -136,6 +146,14 @@
     --speaker-6: oklch(0.6 0.12 185);
     --speaker-7: oklch(0.7 0.15 85);
     --speaker-8: oklch(0.55 0.14 250);
+    /* Motion tokens — durations (UI stays ≤ 300ms). Theme-independent, so defined
+       once on :root. Plain CSS vars (no Tailwind namespace) consumed by keyframes
+       and motion configs; use duration-[var(--duration-standard)] in markup. */
+    --duration-instant: 100ms;   /* press feedback lower bound */
+    --duration-quick: 150ms;     /* tooltips, small popovers, dropdowns */
+    --duration-standard: 200ms;  /* popovers, dropdowns, modal/drawer entry */
+    --duration-moderate: 300ms;  /* the UI ceiling; larger panels */
+    --duration-slow: 450ms;      /* drawers upper bound, onboarding, marketing */
 }
 
 .dark {

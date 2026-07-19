@@ -21,7 +21,7 @@ struct AppState {
     model_download_in_progress: Mutex<bool>,
 }
 
-type CommandResult<T> = Result<T, String>;
+pub(crate) type CommandResult<T> = Result<T, String>;
 
 fn app_data_dir(app: &AppHandle) -> CommandResult<PathBuf> {
     let path = app.path().app_data_dir().map_err(|error| error.to_string())?;
@@ -70,7 +70,7 @@ fn list_store(app: &AppHandle, directory: &str) -> CommandResult<Vec<Value>> {
     Ok(values)
 }
 
-fn get_store_value(app: &AppHandle, directory: &str, id: &str) -> CommandResult<Option<Value>> {
+pub(crate) fn get_store_value(app: &AppHandle, directory: &str, id: &str) -> CommandResult<Option<Value>> {
     Ok(list_store(app, directory)?.into_iter().find(|value| value.get("id").and_then(Value::as_str) == Some(id)))
 }
 
@@ -110,7 +110,7 @@ fn update_store_value(app: &AppHandle, directory: &str, id: &str, patch: Map<Str
     Ok(Some(updated))
 }
 
-fn now() -> String {
+pub(crate) fn now() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 

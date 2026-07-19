@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useState } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useWorkspaceStore } from "./store";
 import { FileList } from "./middle-panel/file-list";
 import { ContentPanel } from "./content-panel";
@@ -17,6 +18,9 @@ export function WorkspaceLayout() {
   const chatPanelWidth = useWorkspaceStore((s) => s.chatPanelWidth);
   const handleChatPanelResize = useWorkspaceStore((s) => s.handleChatPanelResize);
   const handleFileListResize = useWorkspaceStore((s) => s.handleFileListResize);
+
+  const [isChatResizing, setIsChatResizing] = useState(false);
+  const reduceMotion = useReducedMotion();
 
   const { setOnDragEnd } = useDndBridge();
   const moveFilesMutation = useMoveFiles();
@@ -45,7 +49,7 @@ export function WorkspaceLayout() {
   );
 
   useEffect(() => {
-    setOnDragEnd(() => handleDragEnd);
+    setOnDragEnd(handleDragEnd);
     return () => setOnDragEnd(null);
   }, [setOnDragEnd, handleDragEnd]);
 
@@ -65,14 +69,32 @@ export function WorkspaceLayout() {
           </div>
 
           {/* Chat panel: slides in from right when "Ask AI" is clicked */}
-          {chatPanelVisible && (
-            <>
-              <ResizableHandle onResize={handleChatPanelResize} side="left" />
-              <div className="shrink-0 overflow-hidden" style={{ width: chatPanelWidth }}>
-                <ChatPanel />
-              </div>
-            </>
-          )}
+          <AnimatePresence initial={false}>
+            {chatPanelVisible && (
+              <motion.div
+                key="chat-panel"
+                className="flex shrink-0 overflow-hidden"
+                initial={{ width: 0, opacity: 0 }}
+                animate={{ width: chatPanelWidth, opacity: 1 }}
+                exit={{ width: 0, opacity: 0 }}
+                transition={
+                  isChatResizing || reduceMotion
+                    ? { duration: 0 }
+                    : { duration: 0.24, ease: [0.23, 1, 0.32, 1] }
+                }
+              >
+                <ResizableHandle
+                  onResize={handleChatPanelResize}
+                  onResizeStart={() => setIsChatResizing(true)}
+                  onResizeEnd={() => setIsChatResizing(false)}
+                  side="left"
+                />
+                <div className="h-full overflow-hidden" style={{ width: chatPanelWidth }}>
+                  <ChatPanel />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
     </div>

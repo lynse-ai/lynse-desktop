@@ -10,6 +10,8 @@ import {
   waitForAiTaskResult,
   waitForConclusionCompletion,
   waitForTranscriptionCompletion,
+  addSummaryPipeline,
+  isTranscriptionCompleted,
 } from "./use-files";
 
 describe("summary task polling", () => {
@@ -134,6 +136,37 @@ describe("summary task polling", () => {
     expect(getConclusions).toHaveBeenCalledTimes(3);
   });
 
+  it("treats error.first.conclusion.not.ready (code 500) as a transient 'keep polling' state", async () => {
+    const previousConclusion = {
+      id: "conclusion_1",
+      fileId: "file_1",
+      conclusionText: "old summary",
+      createdAt: "before",
+      updateTime: "before",
+      generateSuccess: true,
+    };
+    const getConclusions = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiError(500, "error.first.conclusion.not.ready"))
+      .mockResolvedValueOnce([
+        {
+          ...previousConclusion,
+          conclusionText: "new summary",
+          updateTime: "after",
+        },
+      ]);
+
+    const result = await waitForConclusionCompletion({
+      fileId: "file_1",
+      previousConclusions: [previousConclusion],
+      getConclusions,
+      sleep: async () => {},
+    });
+
+    expect(result.conclusionText).toBe("new summary");
+    expect(getConclusions).toHaveBeenCalledTimes(2);
+  });
+
   it("waits for the summary created by POST /file/trans", async () => {
     const previousConclusion = {
       id: "old_conclusion",
@@ -180,6 +213,81 @@ describe("summary task polling", () => {
     expect(waitForProcessing.mock.invocationCallOrder[0]).toBeLessThan(
       waitForConclusion.mock.invocationCallOrder[0]!,
     );
+  });
+
+  it("retries add-summary task creation on error.first.conclusion.not.ready, then waits for the result", async () => {
+    const startAiTask = vi
+      .fn()
+      .mockRejectedValueOnce(new ApiError(500, "error.first.conclusion.not.ready"))
+      .mockResolvedValueOnce("task_1");
+    const waitForResult = vi.fn().mockResolvedValue({
+      status: "COMPLETED",
+      taskId: "task_1",
+      conclusion: {
+        id: "conclusion_1",
+        fileId: "file_1",
+        conclusionText: "add summary",
+        generateSuccess: true,
+      },
+    });
+
+    const result = await addSummaryPipeline({
+      req: { fileId: "file_1", templateId: "template_1", aiTaskType: "CONCLUSION" },
+      startAiTask,
+      waitForResult,
+      sleep: async () => {},
+    });
+
+    expect(startAiTask).toHaveBeenCalledTimes(2);
+    expect(result.conclusion?.conclusionText).toBe("add summary");
+    expect(waitForResult).toHaveBeenCalledWith({
+      fileId: "file_1",
+      taskId: "task_1",
+      aiTaskType: "CONCLUSION",
+    });
+  });
+
+  it("falls back to the initial transcription pipeline when the add task never becomes ready", async () => {
+    // File has no first conclusion yet: every attempt to create the add task
+    // fails with `not.ready`. The pipeline must fall back to rerun (initial
+    // transcription + first summary) instead of surfacing "添加总结失败".
+    const startAiTask = vi
+      .fn()
+      .mockRejectedValue(new ApiError(500, "error.first.conclusion.not.ready"));
+    const startRerun = vi.fn().mockResolvedValue({
+      status: "COMPLETED",
+      taskId: "rerun_task_1",
+      conclusion: {
+        id: "conclusion_1",
+        fileId: "file_1",
+        conclusionText: "first summary",
+        generateSuccess: true,
+      },
+    });
+    const waitForResult = vi.fn();
+
+    const result = await addSummaryPipeline({
+      req: { fileId: "file_1", templateId: "template_1", aiTaskType: "CONCLUSION" },
+      startAiTask,
+      startRerun,
+      waitForResult,
+      sleep: async () => {},
+      intervalMs: 0,
+      maxAttempts: 3,
+    });
+
+    // Retried up to maxAttempts, then gave up on add and fell back to rerun.
+    expect(startAiTask).toHaveBeenCalledTimes(3);
+    expect(startRerun).toHaveBeenCalledTimes(1);
+    expect(startRerun).toHaveBeenCalledWith({
+      fileId: "file_1",
+      templateId: "template_1",
+      modelId: undefined,
+      languageId: undefined,
+    });
+    // The add-result waiter is never reached once we fall back.
+    expect(waitForResult).not.toHaveBeenCalled();
+    expect(result.conclusion?.conclusionText).toBe("first summary");
   });
 
   it("replaces a summary by generating the new one before deleting the old one", async () => {
@@ -259,5 +367,20 @@ describe("summary task polling", () => {
     expect(html).toContain("核心发展脉络");
     expect(html).toContain("产品方向");
     expect(html).toContain("技术实现");
+  });
+});
+
+describe("isTranscriptionCompleted", () => {
+  it("treats a completed status as already transcribed", () => {
+    expect(isTranscriptionCompleted("completed")).toBe(true);
+    expect(isTranscriptionCompleted({ status: "success" })).toBe(true);
+    expect(isTranscriptionCompleted("1")).toBe(true);
+  });
+
+  it("treats missing / in-progress / failed status as not transcribed", () => {
+    expect(isTranscriptionCompleted(undefined)).toBe(false);
+    expect(isTranscriptionCompleted("not_started")).toBe(false);
+    expect(isTranscriptionCompleted({ status: "transcribing" })).toBe(false);
+    expect(isTranscriptionCompleted("failed")).toBe(false);
   });
 });

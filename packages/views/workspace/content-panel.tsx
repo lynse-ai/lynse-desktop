@@ -5,6 +5,7 @@ import {
   FileText,
   FileAudio,
   Sparkles,
+  MessageSquare,
   List,
   MoreHorizontal,
   X,
@@ -925,8 +926,15 @@ export function ContentPanel() {
                               <p className="text-[10px] text-muted-foreground/60">{t("workspace.ai_disclaimer")}</p>
                             </div>
                           </div>
-                        ) : (
+                        ) : isLocalSelectedItem ? (
                           <NoContentState label={t("workspace.no_transcription")} />
+                        ) : (
+                          <TranscriptionGeneratePrompt
+                            hint={t("workspace.transcription_generate_hint")}
+                            buttonText={t("workspace.transcription_generate_button")}
+                            onGenerate={handleAutoRerun}
+                            disabled={currentFileSummarizing || !defaultTemplateId}
+                          />
                         )}
                       </div>
                     )}
@@ -1410,6 +1418,36 @@ function NoContentState({ label }: { label: string }) {
   return (
     <div className="flex items-center justify-center py-12">
       <p className="text-xs text-muted-foreground">{label}</p>
+    </div>
+  );
+}
+
+function TranscriptionGeneratePrompt({
+  hint,
+  buttonText,
+  onGenerate,
+  disabled,
+}: {
+  hint: string;
+  buttonText: string;
+  onGenerate: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-5 py-10">
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+        <MessageSquare className="size-6" />
+      </div>
+      <p className="text-sm text-muted-foreground">{hint}</p>
+      <button
+        type="button"
+        onClick={onGenerate}
+        disabled={disabled}
+        className="inline-flex items-center justify-center gap-2 rounded-full bg-foreground px-6 py-2.5 text-sm font-medium text-background transition-colors hover:bg-foreground/90 disabled:pointer-events-none disabled:opacity-50"
+      >
+        <Sparkles className="size-4" />
+        <span>{buttonText}</span>
+      </button>
     </div>
   );
 }

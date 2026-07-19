@@ -8,7 +8,7 @@ type DesktopApi = {
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
   todo: Record<string, (...args: any[]) => Promise<unknown>>;
   appInfo: { version: string; platform: string };
-};
+}
 
 function command<T>(name: string, payload?: Record<string, unknown>): Promise<T> {
   return invoke<T>(name, payload);

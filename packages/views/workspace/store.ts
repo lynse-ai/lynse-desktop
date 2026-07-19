@@ -6,12 +6,12 @@ const FILE_LIST_WIDTH_KEY = "lynse_file_list_width";
 const FOLDER_TREE_WIDTH_KEY = "lynse_folder_tree_width";
 const NOTE_TABS_KEY = "lynse_note_tabs";
 
-const DEFAULT_CHAT_PANEL_WIDTH = 340;
+const DEFAULT_CHAT_PANEL_WIDTH = 420;
 const DEFAULT_FILE_LIST_WIDTH = 240;
 const DEFAULT_FOLDER_TREE_WIDTH = 220;
 
 const MIN_CHAT_PANEL_WIDTH = 260;
-const MAX_CHAT_PANEL_WIDTH = 500;
+const MAX_CHAT_PANEL_WIDTH = 600;
 const MIN_FILE_LIST_WIDTH = 180;
 const MAX_FILE_LIST_WIDTH = 400;
 const MIN_FOLDER_TREE_WIDTH = 180;
@@ -77,6 +77,10 @@ interface WorkspaceState {
   draggingFileIds: Set<string>;
 
   selectItem: (id: string | null, type: ItemType | null, title?: string | null) => void;
+  selectedFileIds: Set<string>;
+  toggleFileSelected: (id: string) => void;
+  selectAllFiles: (ids: string[]) => void;
+  clearFileSelection: () => void;
   selectFolder: (id: string | null) => void;
   setSearchQuery: (query: string) => void;
   setFilterTags: (tags: string[]) => void;
@@ -114,6 +118,7 @@ function createWorkspaceStore() {
     selectedItemId: null,
     selectedItemType: null,
     selectedItemTitle: null,
+    selectedFileIds: new Set<string>(),
     selectedFolderId: null,
     searchQuery: "",
     filterTags: [],
@@ -142,8 +147,26 @@ function createWorkspaceStore() {
     selectItem: (id, type, title = null) =>
       set({ selectedItemId: id, selectedItemType: type, selectedItemTitle: id ? title : null }),
 
+    toggleFileSelected: (id) =>
+      set((state) => {
+        const next = new Set(state.selectedFileIds);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return { selectedFileIds: next };
+      }),
+
+    selectAllFiles: (ids) => set({ selectedFileIds: new Set(ids) }),
+
+    clearFileSelection: () => set({ selectedFileIds: new Set<string>() }),
+
     selectFolder: (id) =>
-      set({ selectedFolderId: id, selectedItemId: null, selectedItemType: null, selectedItemTitle: null }),
+      set({
+        selectedFolderId: id,
+        selectedItemId: null,
+        selectedItemType: null,
+        selectedItemTitle: null,
+        selectedFileIds: new Set<string>(),
+      }),
 
     setSearchQuery: (query) => set({ searchQuery: query }),
 

@@ -4,10 +4,12 @@ import { useCallback, useRef } from "react";
 
 interface ResizableHandleProps {
   onResize: (delta: number) => void;
+  onResizeStart?: () => void;
+  onResizeEnd?: () => void;
   side?: "left" | "right";
 }
 
-export function ResizableHandle({ onResize, side = "right" }: ResizableHandleProps) {
+export function ResizableHandle({ onResize, onResizeStart, onResizeEnd, side = "right" }: ResizableHandleProps) {
   const dragging = useRef(false);
   const lastX = useRef(0);
   const pendingDelta = useRef(0);
@@ -26,6 +28,7 @@ export function ResizableHandle({ onResize, side = "right" }: ResizableHandlePro
       lastX.current = e.clientX;
       document.body.style.cursor = "col-resize";
       document.body.style.userSelect = "none";
+      onResizeStart?.();
 
       const onMouseMove = (ev: MouseEvent) => {
         if (!dragging.current) return;
@@ -43,6 +46,7 @@ export function ResizableHandle({ onResize, side = "right" }: ResizableHandlePro
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
         flush();
+        onResizeEnd?.();
         document.removeEventListener("mousemove", onMouseMove);
         document.removeEventListener("mouseup", onMouseUp);
       };
@@ -50,13 +54,13 @@ export function ResizableHandle({ onResize, side = "right" }: ResizableHandlePro
       document.addEventListener("mousemove", onMouseMove);
       document.addEventListener("mouseup", onMouseUp);
     },
-    [side, flush],
+    [side, flush, onResizeStart, onResizeEnd],
   );
 
   return (
     <div
       onMouseDown={handleMouseDown}
-      className="relative z-30 w-px shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary/40"
+      className="group relative z-30 w-px shrink-0 cursor-col-resize bg-border transition-colors hover:bg-primary/40 before:absolute before:-inset-x-1.5 before:inset-y-0 before:cursor-col-resize before:content-['']"
     />
   );
 }

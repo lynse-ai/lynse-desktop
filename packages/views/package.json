@@ -30,6 +30,7 @@
     "@milkdown/kit": "^7.19.2",
     "@milkdown/react": "^7.3.0",
     "lucide-react": "catalog:",
+    "motion": "catalog:",
     "react-virtuoso": "^4.14.0",
     "remark-breaks": "^4.0.0",
     "sonner": "^2.0.7"

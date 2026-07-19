@@ -12,6 +12,7 @@ import type {
   TransferFileReq,
   TransferFileResult,
   TransStatusMap,
+  TransFileStatus,
   AiTaskAddReq,
   AiTaskResultVO,
   LocalTranscriptionRecord,
@@ -228,10 +229,19 @@ export function useFileConclusions(fileId: string | null) {
 
   return useQuery({
     queryKey: ["file-conclusions", fileId],
-    queryFn: () =>
-      api().getWithParams<FileConclusion[]>("/api/business/file/conclusion/list", {
-        fileId: fileId!,
-      }),
+    queryFn: async () => {
+      try {
+        return await api().getWithParams<FileConclusion[]>("/api/business/file/conclusion/list", {
+          fileId: fileId!,
+        });
+      } catch (error) {
+        // The first conclusion may not be ready yet (e.g. `error.first.conclusion.not.ready`).
+        // Treat that as "no conclusions yet" instead of surfacing a hard error — a later
+        // invalidation / poll will refresh once the summary is generated.
+        if (isTransientConclusionError(error)) return [];
+        throw error;
+      }
+    },
     enabled: !!fileId && !isLocalFileId(fileId) && isAuthenticated,
   });
 }
@@ -434,6 +444,31 @@ export function useTransferFile() {
   });
 }
 
+/** DELETE /api/business/file/delete?fileIds=... (soft-delete files to bin) */
+export function useDeleteFiles() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (fileIds: string[]) =>
+      api().delete<unknown>(`/api/business/file/delete?fileIds=${fileIds.join(",")}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["files"] });
+      qc.invalidateQueries({ queryKey: ["folder-counts"] });
+    },
+  });
+}
+
+/** PUT /api/business/file/{fileId} — rename a file. */
+export function useRenameFile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ fileId, newOriginalFilename }: { fileId: string; newOriginalFilename: string }) =>
+      api().put<unknown>(`/api/business/file/${fileId}`, { newOriginalFilename }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["files"] });
+    },
+  });
+}
+
 /**
  * Poll transcription/summarization status for a set of files.
  * Polls every 3s until all statuses are terminal (completed/failed).
@@ -487,6 +522,54 @@ function isFailedStatus(status: unknown): boolean {
   return ["failed", "failure", "error", "errored", "canceled", "cancelled", "-1"].includes(
     normalizeStatus(status),
   );
+}
+
+/**
+ * A file counts as "already transcribed" when its transcription pipeline has
+ * reached a completed state. Used by the file-list context menu to choose
+ * between the first-time label ("转写"/"生成") and the re-run label ("重新生成").
+ */
+export function isTranscriptionCompleted(entry: TransFileStatus | undefined): boolean {
+  return isCompletedStatus(getTranscriptionStatus(entry));
+}
+
+/**
+ * A conclusion/summary query error that means "still in progress / not generated yet"
+ * rather than a hard failure. Covers the known `1001` (TASK_PROCESSING) code and the
+ * `error.first.conclusion.not.ready` business error (code 500) returned by
+ * `/api/business/file/conclusion/list` before the first conclusion is ready.
+ * Callers should keep polling / treat it as "no conclusion yet" instead of throwing.
+ */
+function isTransientConclusionError(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    (error.status === 1001 || /not\.ready|conclusion\.not\.ready/i.test(error.message))
+  );
+}
+
+/**
+ * Retry `fn` while it throws a transient conclusion error (e.g. the backend's
+ * `error.first.conclusion.not.ready`, code 500, while the file's FIRST conclusion
+ * is still being generated). Used when creating a new AI task for a file that has
+ * not produced its first conclusion yet — the request should be retried, not failed.
+ */
+async function withTransientRetry<T>(
+  fn: () => Promise<T>,
+  wait: (ms: number) => Promise<void> = sleep,
+  intervalMs: number = DEFAULT_POLL_INTERVAL_MS,
+  maxAttempts: number = DEFAULT_MAX_POLL_ATTEMPTS,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!isTransientConclusionError(error)) throw error;
+      lastError = error;
+      if (attempt < maxAttempts - 1) await wait(intervalMs);
+    }
+  }
+  throw lastError;
 }
 
 export async function waitForTranscriptionCompletion({
@@ -558,7 +641,7 @@ export async function waitForAiTaskResult({
     try {
       result = await getResult(body);
     } catch (error) {
-      if (!(error instanceof ApiError && error.status === 1001)) throw error;
+      if (!isTransientConclusionError(error)) throw error;
       if (attempt < maxAttempts - 1) await wait(intervalMs);
       continue;
     }
@@ -605,7 +688,7 @@ export async function waitForConclusionCompletion({
     try {
       conclusions = await getConclusions(params);
     } catch (error) {
-      if (!(error instanceof ApiError && error.status === 1001)) throw error;
+      if (!isTransientConclusionError(error)) throw error;
       if (attempt < maxAttempts - 1) await wait(intervalMs);
       continue;
     }
@@ -644,17 +727,57 @@ function conclusionVersion(conclusion: FileConclusion): string {
 }
 
 /** Add a new summary for an existing file without re-transcribing. */
+export async function addSummaryPipeline({
+  req,
+  modelId,
+  languageId,
+  startAiTask = (request) => api().post<string>("/api/business/file/ai", request),
+  waitForResult = (args) => waitForAiTaskResult(args),
+  startRerun = (rerunReq: TransferFileReq) => rerunSummaryPipeline({ req: rerunReq }),
+  sleep: wait = sleep,
+  intervalMs = DEFAULT_POLL_INTERVAL_MS,
+  maxAttempts = DEFAULT_MAX_POLL_ATTEMPTS,
+}: {
+  req: AiTaskAddReq;
+  /** Passed through to the rerun fallback so the initial transcription uses the right model/language. */
+  modelId?: string;
+  languageId?: string;
+  startAiTask?: (req: AiTaskAddReq) => Promise<string>;
+  waitForResult?: (args: { fileId: string; taskId: string; aiTaskType: string }) => Promise<AiTaskResultVO>;
+  startRerun?: (req: TransferFileReq) => Promise<AiTaskResultVO>;
+  sleep?: (ms: number) => Promise<void>;
+  intervalMs?: number;
+  maxAttempts?: number;
+}): Promise<AiTaskResultVO> {
+  // Creating an add-summary task fails with `error.first.conclusion.not.ready`
+  // (code 500) while the file's first conclusion is still generating. Retry the
+  // creation instead of surfacing it as a hard "添加总结失败" error.
+  let taskId: string;
+  try {
+    taskId = await withTransientRetry(() => startAiTask(req), wait, intervalMs, maxAttempts);
+  } catch (error) {
+    // The add-task keeps failing with `not.ready`, which means the file has NO
+    // first conclusion yet (brand-new / never-transcribed file). The correct
+    // recovery is to run the initial transcription + first-summary pipeline,
+    // which actually produces that first conclusion — instead of giving up.
+    if (isTransientConclusionError(error)) {
+      return startRerun({
+        fileId: req.fileId,
+        templateId: req.templateId ?? "",
+        modelId,
+        languageId,
+      });
+    }
+    throw error;
+  }
+  return waitForResult({ fileId: req.fileId, taskId, aiTaskType: req.aiTaskType });
+}
+
 export function useAddSummary() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (req: AiTaskAddReq) => {
-      const taskId = await api().post<string>("/api/business/file/ai", req);
-      return waitForAiTaskResult({
-        fileId: req.fileId,
-        taskId,
-        aiTaskType: req.aiTaskType,
-      });
-    },
+    mutationFn: (req: AiTaskAddReq & { modelId?: string; languageId?: string }) =>
+      addSummaryPipeline({ req, modelId: req.modelId, languageId: req.languageId }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["file-conclusions"] });
       qc.invalidateQueries({ queryKey: ["files"] });

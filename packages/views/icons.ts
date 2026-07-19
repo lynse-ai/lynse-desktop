@@ -97,6 +97,7 @@ export {
   // ── Actions (extra) ──────────────────────────────────
   RefreshCw,        // Re-summarize / refresh
   Square,           // Stop streaming
+  Cloud,            // Cloud assistant
 } from "lucide-react";
 
 // ── Icon sizing tokens ────────────────────────────────────

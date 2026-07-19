@@ -22,7 +22,7 @@
 }
 
 .animate-entrance-spin {
-  animation: entrance-spin 0.6s ease-out forwards;
+  animation: entrance-spin 0.6s var(--ease-out) forwards;
 }
 
 /* Onboarding: step / phase entry — 400ms fade.
@@ -42,7 +42,7 @@
 }
 
 .animate-onboarding-enter {
-  animation: onboarding-enter 0.4s ease both;
+  animation: onboarding-enter 0.4s var(--ease-out) both;
 }
 
 /* Welcome-after-onboarding Modal: emoji pops in with two quick scale
@@ -56,7 +56,7 @@
   100% { transform: scale(1); }
 }
 .animate-welcome-emoji-pop {
-  animation: welcome-emoji-pop 0.7s cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: welcome-emoji-pop 0.7s var(--ease-out) both;
 }
 
 /* Onboarding completion: success badge spring-pop.
@@ -83,7 +83,7 @@
 }
 
 .animate-completion-check {
-  animation: completion-check 400ms ease-out 350ms both;
+  animation: completion-check 400ms var(--ease-out) 350ms both;
 }
 
 /* Chat FAB: gentle color + border tint while a chat task is running.
@@ -101,7 +101,7 @@
 }
 
 .animate-chat-impulse {
-  animation: chat-impulse 1.6s ease-in-out infinite;
+  animation: chat-impulse 1.6s var(--ease-in-out) infinite;
 }
 
 /* ChatGPT-style "thinking" shimmer for inline text — a soft light sweep
@@ -146,7 +146,7 @@
 }
 
 .animate-nav-progress-sweep {
-  animation: nav-progress-sweep 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  animation: nav-progress-sweep 1.4s linear infinite;
 }
 
 /* Border beam: a brand-tinted highlight sweeps continuously around the
@@ -229,7 +229,7 @@
   }
 }
 .floating-toolbar {
-  animation: floating-toolbar-enter 0.15s ease-out;
+  animation: floating-toolbar-enter var(--duration-quick) var(--ease-out);
 }
 
 /* Sidebar: open triggers (dropdown/popover) get active background */
@@ -245,6 +245,13 @@
 
 [data-sonner-toast] [data-icon] {
   margin-top: 2.5px;
+}
+
+/* Overlays (tw-animate-css animate-in/out) use the strong ease-out curve.
+   base.css is imported after tw-animate-css (globals.css:2,5), so this wins the cascade. */
+.animate-in,
+.animate-out {
+  animation-timing-function: var(--ease-out);
 }
 
 @layer base {
@@ -276,5 +283,35 @@
       /* iOS Safari zooms the page when focused editable text is below 16px. */
       font-size: 16px !important;
     }
+  }
+}
+
+/* Reduced-motion: drop movement, keep opacity/color feedback (AUDIT §6).
+   base.css is imported last (globals.css:5) so these override tw-animate-css. */
+@media (prefers-reduced-motion: reduce) {
+  /* Positional/movement keyframes: snap to end state — element visible, no movement */
+  .animate-entrance-spin,
+  .animate-welcome-emoji-pop,
+  .animate-completion-badge,
+  .animate-floating-toolbar {
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+  }
+  /* Continuous/ambient loops: stop; element rests in its natural state */
+  .animate-chat-impulse,
+  .animate-nav-progress-sweep,
+  .animate-chat-text-shimmer {
+    animation: none;
+  }
+  /* tw-animate-css overlays + Tailwind animate-* utilities: appear without movement.
+     Content still resolves to final opacity, so feedback is preserved. */
+  .animate-in,
+  .animate-out,
+  .animate-spin,
+  .animate-ping,
+  .animate-bounce,
+  .animate-pulse {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }

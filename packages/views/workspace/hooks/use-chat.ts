@@ -1,126 +1,158 @@
-import { useState, useCallback, useRef } from "react";
-import { api } from "@lynse/core/api";
-import type { ChatMessage } from "../types";
+import { useCallback, useRef, useState } from "react";
+import type { ChatMessage, ChatStreamEvent } from "../types";
+import { CloudChatTransport, type ChatTransport } from "../chat-transport";
+import { useAuthStore } from "@lynse/core/auth";
 
-const CHAT_STREAM_PATH = "/api/business/ai/chat/stream";
+function makeId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function readLynseToken(): string | null {
+  try {
+    if (typeof localStorage !== "undefined") return localStorage.getItem("lynse_token");
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
 
 export function useChat() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const sessionIdRef = useRef<string | null>(null);
+  const transportRef = useRef<ChatTransport | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+
+  const user = useAuthStore((s) => s.user);
+  const userId = user?.id ?? "user";
+
+  const makeTransport = useCallback((): ChatTransport => {
+    return new CloudChatTransport();
+  }, []);
+
+  const handleEvent = useCallback((evt: ChatStreamEvent, assistantId: string) => {
+    switch (evt.type) {
+      case "status":
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantId ? { ...m, status: evt.text } : m)),
+        );
+        break;
+      case "content":
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + evt.delta } : m)),
+        );
+        break;
+      case "meta":
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, sources: evt.sources, attachments: evt.attachments } : m,
+          ),
+        );
+        break;
+      case "done":
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== assistantId) return m;
+            // Reconcile: ensure the final text matches done.text for consistency,
+            // but NEVER append done.text again (avoids duplication).
+            const finalContent =
+              evt.text && evt.text.length >= m.content.length ? evt.text : m.content;
+            return {
+              ...m,
+              content: finalContent,
+              status: undefined,
+              sources: evt.sources ?? m.sources,
+              attachments: evt.attachments ?? m.attachments,
+            };
+          }),
+        );
+        break;
+      case "error":
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: m.content || `Error: ${evt.message}`, error: true, status: undefined }
+              : m,
+          ),
+        );
+        break;
+    }
+  }, []);
 
   const sendMessage = useCallback(
-    (content: string, fileId?: string) => {
+    (content: string, fileId?: string, userSpecifiedFile = false) => {
+      if (!content.trim() || isLoading) return;
+
       const userMsg: ChatMessage = {
-        id: `user-${Date.now()}`,
+        id: makeId("user"),
         role: "user",
         content,
         timestamp: Date.now(),
       };
-      setMessages((prev) => [...prev, userMsg]);
-      setIsLoading(true);
-
-      const assistantId = `assistant-${Date.now()}`;
+      const assistantId = makeId("assistant");
       const assistantMsg: ChatMessage = {
         id: assistantId,
         role: "assistant",
         content: "",
         timestamp: Date.now(),
       };
-      setMessages((prev) => [...prev, assistantMsg]);
+      setMessages((prev) => [...prev, userMsg, assistantMsg]);
+      setIsLoading(true);
 
-      const body: Record<string, unknown> = {
-        query: content,
-      };
-      if (fileId) body.fileIds = [fileId];
-      if (sessionIdRef.current) body.seesionId = sessionIdRef.current;
+      if (!sessionIdRef.current) sessionIdRef.current = makeId("session");
+      const sessionId = sessionIdRef.current;
 
-      console.log("[chat] sending:", JSON.stringify(body));
+      const transport = makeTransport();
+      transportRef.current = transport;
+      const controller = new AbortController();
+      abortRef.current = controller;
 
-      const controller = api().stream(
-        CHAT_STREAM_PATH,
-        body,
-        (data) => {
-          // Try to parse as JSON; fall back to raw text
-          let text = data;
-          try {
-            const parsed = JSON.parse(data);
-            if (typeof parsed === "string") {
-              text = parsed;
-            } else if (parsed.content) {
-              text = parsed.content;
-            } else if (parsed.text) {
-              text = parsed.text;
-            } else if (parsed.delta) {
-              text = parsed.delta;
-            } else if (parsed.choices?.[0]?.delta?.content) {
-              text = parsed.choices[0].delta.content;
-            }
-          } catch {
-            // raw text, use as-is
-          }
-
+      transport
+        .send({
+          query: content,
+          sessionId,
+          userId,
+          fileIds: fileId ? [fileId] : [],
+          userSpecifiedFile,
+          token: readLynseToken(),
+          signal: controller.signal,
+          onEvent: (evt) => handleEvent(evt, assistantId),
+        })
+        .then(() => {
+          setIsLoading(false);
+          transportRef.current = null;
+          abortRef.current = null;
+        })
+        .catch((err: Error) => {
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId
-                ? { ...m, content: m.content + text }
-                : m,
-            ),
-          );
-        },
-        (err) => {
-          console.error("[chat] stream error:", err.message);
-          // Try to parse JSON error from backend
-          let displayMsg = err.message;
-          try {
-            const parsed = JSON.parse(err.message);
-            displayMsg = parsed.msg || parsed.message || parsed.error || err.message;
-          } catch {
-            // not JSON, use as-is
-          }
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId && !m.content
-                ? { ...m, content: `Error: ${displayMsg}` }
+                ? {
+                    ...m,
+                    content: m.content || `Error: ${err.message}`,
+                    error: true,
+                    status: undefined,
+                  }
                 : m,
             ),
           );
           setIsLoading(false);
-        },
-      );
-
-      abortRef.current = controller;
-
-      // Detect stream end via message content stability
-      let lastLen = 0;
-      let stableTicks = 0;
-      const doneChecker = setInterval(() => {
-        setMessages((prev) => {
-          const msg = prev.find((m) => m.id === assistantId);
-          if (!msg) return prev;
-          if (msg.content.length === lastLen && msg.content.length > 0) {
-            stableTicks++;
-            if (stableTicks >= 2) {
-              clearInterval(doneChecker);
-              setIsLoading(false);
-              // Generate a session ID from the conversation
-              if (!sessionIdRef.current) {
-                sessionIdRef.current = `session-${Date.now()}`;
-              }
-            }
-          } else {
-            stableTicks = 0;
-          }
-          lastLen = msg.content.length;
-          return prev;
+          transportRef.current = null;
+          abortRef.current = null;
         });
-      }, 500);
     },
-    [],
+    [isLoading, userId, makeTransport, handleEvent],
   );
 
+  const stopStreaming = useCallback(() => {
+    transportRef.current?.cancel();
+    abortRef.current?.abort();
+    setIsLoading(false);
+  }, []);
+
   const clearMessages = useCallback(() => {
+    transportRef.current?.cancel();
+    transportRef.current = null;
     abortRef.current?.abort();
     abortRef.current = null;
     sessionIdRef.current = null;
@@ -128,11 +160,11 @@ export function useChat() {
     setIsLoading(false);
   }, []);
 
-  const stopStreaming = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setIsLoading(false);
-  }, []);
-
-  return { messages, isLoading, sendMessage, clearMessages, stopStreaming };
+  return {
+    messages,
+    isLoading,
+    sendMessage,
+    clearMessages,
+    stopStreaming,
+  };
 }

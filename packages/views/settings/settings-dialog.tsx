@@ -185,6 +185,8 @@ export function SettingsDialog({
     }
   }
 
+
+
   const modelStatusLabel = modelStatus
     ? t(`settings.local_model_status_${modelStatus.status}`)
     : t("settings.local_model_status_unknown");

@@ -59,3 +59,31 @@ export function useMembership() {
     staleTime: 60_000,
   });
 }
+
+/**
+ * Returns true when an error represents "insufficient credits / balance" —
+ * e.g. a transcription request rejected because the user ran out of points
+ * or membership minutes. The Lynse backend surfaces this either via HTTP 402
+ * or a message containing credit/balance keywords (Chinese or English).
+ */
+export function isInsufficientCreditsError(error: unknown): boolean {
+  if (!error) return false;
+  const status = (error as { status?: number }).status;
+  if (status === 402) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  if (!message) return false;
+  const haystack = message.toLowerCase();
+  return (
+    haystack.includes("积分") ||
+    haystack.includes("点数") ||
+    haystack.includes("余额") ||
+    haystack.includes("额度") ||
+    haystack.includes("时长") ||
+    haystack.includes("credit") ||
+    haystack.includes("insufficient") ||
+    haystack.includes("not enough") ||
+    haystack.includes("quota") ||
+    haystack.includes("balance") ||
+    haystack.includes("expired")
+  );
+}

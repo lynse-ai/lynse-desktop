@@ -174,6 +174,47 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   timestamp: number;
+  /** Transient progress text shown while the assistant is "thinking"/running tools. */
+  status?: string;
+  /** Sources (meeting titles / ids) referenced by the answer. */
+  sources?: string[];
+  /** Report / visual-card / image attachments. */
+  attachments?: ChatAttachment[];
+  /** Marks an errored assistant message so the UI can style it. */
+  error?: boolean;
+}
+
+/** Which backend serves a chat session. */
+export type ChatProvider = "cloud";
+
+export interface ChatAttachment {
+  id?: string;
+  name?: string;
+  type?: "pdf" | "image" | "file" | string;
+  /** Render/preview URL (image) or download URL (pdf/file). */
+  url?: string;
+  downloadUrl?: string;
+  thumbnailUrl?: string;
+}
+
+/**
+ * Typed events emitted by a ChatTransport as the assistant responds.
+ * Replaces the previous "guess done by content stability" heuristic.
+ */
+export type ChatStreamEvent =
+  | { type: "status"; text: string }
+  | { type: "content"; delta: string }
+  | { type: "meta"; sources: string[]; attachments: ChatAttachment[] }
+  | { type: "done"; text?: string; sources?: string[]; attachments?: ChatAttachment[] }
+  | { type: "error"; message: string };
+
+/** Stable identity for one conversation turn series. */
+export interface ChatSessionMeta {
+  sessionId: string;
+  userId: string;
+  provider: ChatProvider;
+  fileIds: string[];
+  userSpecifiedFile: boolean;
 }
 
 export type EditorMode = "edit" | "preview" | "split";

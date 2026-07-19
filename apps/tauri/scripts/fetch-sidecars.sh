@@ -10,7 +10,7 @@
 set -euo pipefail
 
 # Pinned upstream revisions (override via env if needed).
-MOSS_COMMIT="${MOSS_COMMIT:-main}"
+MOSS_COMMIT="${MOSS_COMMIT:-master}"
 WHISPER_REF="${WHISPER_REF:-master}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

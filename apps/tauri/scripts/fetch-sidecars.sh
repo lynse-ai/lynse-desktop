@@ -38,7 +38,7 @@ build_whisper() {
     metal_opt="-DWHISPER_METAL=on"
   fi
   cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release \
-    -DWHISPER_COREML=0 $metal_opt
+    -DWHISPER_COREML=0 -DBUILD_SHARED_LIBS=OFF $metal_opt
   cmake --build "$src/build" --config Release -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
   local bin
   bin="$(find "$src/build" -type f \( -name 'whisper-cli' -o -name 'whisper-cli.exe' \) | head -n1)"
@@ -116,12 +116,23 @@ fetch_ffmpeg
 # sidecar. Tauri validates all listed source files at build time on every
 # platform, so each platform must ship both variants even though the app only
 # ever invokes the one matching its own OS. Create the missing counterpart.
+# NOTE: on Windows, `cp x.exe x` silently yields `x.exe` again (the OS appends
+# .exe to executable paths), so we use redirection there to obtain a truly
+# extensionless file.
 for b in whisper moss-transcribe ffmpeg ffprobe; do
-  if [[ -f "$SIDECARS/$b" && ! -f "$SIDECARS/$b.exe" ]]; then
-    cp "$SIDECARS/$b" "$SIDECARS/$b.exe"
+  if [[ -f "$SIDECARS/$b" && ! -e "$SIDECARS/$b.exe" ]]; then
+    if [[ "$IS_WINDOWS" -eq 1 ]]; then
+      cat "$SIDECARS/$b" > "$SIDECARS/$b.exe"
+    else
+      cp "$SIDECARS/$b" "$SIDECARS/$b.exe"
+    fi
   fi
-  if [[ -f "$SIDECARS/$b.exe" && ! -f "$SIDECARS/$b" ]]; then
-    cp "$SIDECARS/$b.exe" "$SIDECARS/$b"
+  if [[ -f "$SIDECARS/$b.exe" && ! -e "$SIDECARS/$b" ]]; then
+    if [[ "$IS_WINDOWS" -eq 1 ]]; then
+      cat "$SIDECARS/$b.exe" > "$SIDECARS/$b"
+    else
+      cp "$SIDECARS/$b.exe" "$SIDECARS/$b"
+    fi
   fi
 done
 

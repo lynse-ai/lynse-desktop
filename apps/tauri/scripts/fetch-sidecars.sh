@@ -90,16 +90,19 @@ fetch_ffmpeg() {
     cp "$tmp"/ffmpeg-master-latest-win64-lgpl-shared/bin/ffprobe.exe "$SIDECARS/"
     rm -rf "$tmp" "$zip"
   else
-    # johnvansickle LGPL static build (x64 macOS).
-    local tar
-    tar="$(mktemp)"
-    curl -fL "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-x64-static.tar.xz" -o "$tar"
-    local tmp
+    # ffbinaries LGPL static build (x64 macOS; runs via Rosetta on Apple Silicon).
+    # johnvansickle's old /releases/ffmpeg-release-x64-static.tar.xz now 404s, and
+    # evermeet moved to a .7z on a different host. ffbinaries is GitHub-hosted and
+    # reliably ships both ffmpeg and ffprobe for macOS.
+    local fz pz tmp
+    fz="$(mktemp)"; pz="$(mktemp)"
+    curl -fL "https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v6.1/ffmpeg-6.1-macos-64.zip" -o "$fz"
+    curl -fL "https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v6.1/ffprobe-6.1-macos-64.zip" -o "$pz"
     tmp="$(mktemp -d)"
-    (cd "$tmp" && tar xf "$tar")
-    cp "$tmp"/ffmpeg-*/ffmpeg "$SIDECARS/"
-    cp "$tmp"/ffmpeg-*/ffprobe "$SIDECARS/"
-    rm -rf "$tmp" "$tar"
+    (cd "$tmp" && unzip -o "$fz" >/dev/null && unzip -o "$pz" >/dev/null)
+    cp "$(find "$tmp" -type f -name ffmpeg | head -n1)" "$SIDECARS/"
+    cp "$(find "$tmp" -type f -name ffprobe | head -n1)" "$SIDECARS/"
+    rm -rf "$tmp" "$fz" "$pz"
   fi
   echo "    ffmpeg / ffprobe fetched"
 }
@@ -107,6 +110,23 @@ fetch_ffmpeg() {
 build_whisper
 build_moss
 fetch_ffmpeg
+
+# tauri.conf.json's `resources` map references BOTH the extensionless name
+# (used on macOS/Linux) and the `.exe` name (used on Windows) for every
+# sidecar. Tauri validates all listed source files at build time on every
+# platform, so each platform must ship both variants even though the app only
+# ever invokes the one matching its own OS. Create the missing counterpart.
+for b in whisper moss-transcribe ffmpeg ffprobe; do
+  if [[ -f "$SIDECARS/$b" && ! -f "$SIDECARS/$b.exe" ]]; then
+    cp "$SIDECARS/$b" "$SIDECARS/$b.exe"
+  fi
+  if [[ -f "$SIDECARS/$b.exe" && ! -f "$SIDECARS/$b" ]]; then
+    cp "$SIDECARS/$b.exe" "$SIDECARS/$b"
+  fi
+done
+
+# Ensure every bundled sidecar is executable.
+chmod +x "$SIDECARS"/* 2>/dev/null || true
 
 echo "==> Sidecars ready in $SIDECARS"
 ls -la "$SIDECARS"

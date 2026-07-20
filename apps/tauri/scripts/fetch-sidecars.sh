@@ -65,9 +65,9 @@ build_moss() {
   cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release $metal_opt
   cmake --build "$src/build" --config Release -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
   local bin
-  # moss-transcribe.cpp builds the CLI target as `moss-transcribe-cli`; rename
-  # it to `moss-transcribe` to match tauri.conf.json's externalBin entries.
-  bin="$(find "$src/build" -type f \( -name 'moss-transcribe-cli' -o -name 'moss-transcribe-cli.exe' \) | head -n1)"
+  # The CLI target is `moss-transcribe-cli` but its OUTPUT_NAME is
+  # `moss-transcribe` (resp. `.exe` on Windows) — that's the file cmake emits.
+  bin="$(find "$src/build" -type f \( -name 'moss-transcribe' -o -name 'moss-transcribe.exe' \) | head -n1)"
   local name
   name="$(basename "$bin")"
   local target="$SIDECARS/moss-transcribe"

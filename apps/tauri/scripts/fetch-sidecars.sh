@@ -28,9 +28,17 @@ echo "==> Building STT sidecars for $OS into $SIDECARS"
 build_whisper() {
   local src
   src="$(mktemp -d)"
-  git clone --depth 1 --branch "$WHISPER_REF" https://github.com/ggerganov/whisper.cpp "$src"
+  # --recursive: whisper.cpp vendors ggml as a git submodule (third_party/ggml);
+  # a shallow clone alone leaves it empty and cmake's add_subdirectory fails.
+  git clone --depth 1 --branch "$WHISPER_REF" --recursive https://github.com/ggerganov/whisper.cpp "$src"
+  local metal_opt
+  if [[ "$IS_WINDOWS" -eq 1 ]]; then
+    metal_opt="-DWHISPER_METAL=0"
+  else
+    metal_opt="-DWHISPER_METAL=on"
+  fi
   cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release \
-    -DWHISPER_COREML=0 ${IS_WINDOWS:+-DWHISPER_METAL=0} ${IS_WINDOWS:- -DWHISPER_METAL=on}
+    -DWHISPER_COREML=0 $metal_opt
   cmake --build "$src/build" --config Release -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
   local bin
   bin="$(find "$src/build" -type f \( -name 'whisper-cli' -o -name 'whisper-cli.exe' \) | head -n1)"
@@ -46,15 +54,27 @@ build_whisper() {
 build_moss() {
   local src
   src="$(mktemp -d)"
-  git clone --depth 1 --branch "$MOSS_COMMIT" https://github.com/localai-org/moss-transcribe.cpp "$src"
-  cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release \
-    ${IS_WINDOWS:+-DGGML_METAL=0} ${IS_WINDOWS:- -DGGML_METAL=on}
+  # --recursive: moss-transcribe.cpp vendors ggml as a git submodule too.
+  git clone --depth 1 --branch "$MOSS_COMMIT" --recursive https://github.com/localai-org/moss-transcribe.cpp "$src"
+  local metal_opt
+  if [[ "$IS_WINDOWS" -eq 1 ]]; then
+    metal_opt="-DGGML_METAL=0"
+  else
+    metal_opt="-DGGML_METAL=on"
+  fi
+  cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release $metal_opt
   cmake --build "$src/build" --config Release -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
   local bin
-  bin="$(find "$src/build" -type f \( -name 'moss-transcribe' -o -name 'moss-transcribe.exe' \) | head -n1)"
-  cp "$bin" "$SIDECARS/"
+  # moss-transcribe.cpp builds the CLI target as `moss-transcribe-cli`; rename
+  # it to `moss-transcribe` to match tauri.conf.json's externalBin entries.
+  bin="$(find "$src/build" -type f \( -name 'moss-transcribe-cli' -o -name 'moss-transcribe-cli.exe' \) | head -n1)"
+  local name
+  name="$(basename "$bin")"
+  local target="$SIDECARS/moss-transcribe"
+  [[ "$name" == *.exe ]] && target="$SIDECARS/moss-transcribe.exe"
+  cp "$bin" "$target"
   rm -rf "$src"
-  echo "    moss-transcribe -> $(basename "$bin")"
+  echo "    moss-transcribe -> $(basename "$target")"
 }
 
 fetch_ffmpeg() {

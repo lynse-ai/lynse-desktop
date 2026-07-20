@@ -13,7 +13,7 @@ set -euo pipefail
 MOSS_COMMIT="${MOSS_COMMIT:-master}"
 WHISPER_REF="${WHISPER_REF:-master}"
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SIDECARS="$ROOT/apps/tauri/src-tauri/resources/sidecars"
 mkdir -p "$SIDECARS"
 

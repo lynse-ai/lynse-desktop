@@ -1,7 +1,7 @@
 export type LiveAudioSource = "mic" | "system";
 
 export const DEFAULT_ILIVEDATA_RTVT_ENDPOINT =
-  "wss://rtvt-bj-test.ilivedata.com/gate/websocket";
+  "wss://rtvt-cn-app.ilivedata.com/gate/websocket";
 
 export type LiveTranslationProvider = "lynse_backend" | "ilivedata_direct";
 

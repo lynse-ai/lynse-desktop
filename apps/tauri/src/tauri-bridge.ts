@@ -47,13 +47,18 @@ const LIVE_TRANSLATION_PROVIDER_KEY = "lynse_live_translation_provider";
 const ILIVEDATA_ENDPOINT_KEY = "lynse_live_translation_ilivedata_endpoint";
 const ILIVEDATA_PID_KEY = "lynse_live_translation_ilivedata_pid";
 const ILIVEDATA_SECRET_KEY = "lynse_live_translation_ilivedata_secret_key";
+const LEGACY_ILIVEDATA_RTVT_ENDPOINT =
+  "wss://rtvt-bj-test.ilivedata.com/gate/websocket";
 
 function getLiveTranslationProviderConfig(): LiveTranslationProviderConfig {
   const savedProvider = window.localStorage.getItem(LIVE_TRANSLATION_PROVIDER_KEY);
+  const savedEndpoint = window.localStorage.getItem(ILIVEDATA_ENDPOINT_KEY);
   return {
     provider: savedProvider === "ilivedata_direct" ? "ilivedata_direct" : "lynse_backend",
     ilivedata: {
-      endpoint: window.localStorage.getItem(ILIVEDATA_ENDPOINT_KEY) ?? DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
+      endpoint: savedEndpoint && savedEndpoint !== LEGACY_ILIVEDATA_RTVT_ENDPOINT
+        ? savedEndpoint
+        : DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
       pid: window.localStorage.getItem(ILIVEDATA_PID_KEY) ?? "",
       secretKey: secureStorage.getItem(ILIVEDATA_SECRET_KEY) ?? "",
     },

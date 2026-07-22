@@ -10,7 +10,7 @@ describe("iLiveData direct authentication", () => {
 
   it("builds a signed realtime translation URL", () => {
     const result = buildILiveDataWebSocketUrl({
-      endpoint: "wss://rtvt-bj-test.ilivedata.com/gate/websocket",
+      endpoint: "wss://rtvt-cn-app.ilivedata.com/gate/websocket",
       pid: "81700002",
       token: "signed/token=",
       timestamp: 1_700_000_000,
@@ -21,6 +21,7 @@ describe("iLiveData direct authentication", () => {
     const url = new URL(result);
 
     expect(url.protocol).toBe("wss:");
+    expect(url.hostname).toBe("rtvt-cn-app.ilivedata.com");
     expect(url.searchParams.get("pid")).toBe("81700002");
     expect(url.searchParams.get("token")).toBe("signed/token=");
     expect(url.searchParams.get("srcLanguage")).toBe("zh");

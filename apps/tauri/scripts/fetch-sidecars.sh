@@ -121,19 +121,19 @@ fetch_ffmpeg
 # .exe to executable paths), so we use redirection there to obtain a truly
 # extensionless file.
 for b in whisper moss-transcribe ffmpeg ffprobe; do
-  if [[ -f "$SIDECARS/$b" && ! -e "$SIDECARS/$b.exe" ]]; then
-    if [[ "$IS_WINDOWS" -eq 1 ]]; then
-      cat "$SIDECARS/$b" > "$SIDECARS/$b.exe"
-    else
-      cp "$SIDECARS/$b" "$SIDECARS/$b.exe"
-    fi
-  fi
-  if [[ -f "$SIDECARS/$b.exe" && ! -e "$SIDECARS/$b" ]]; then
-    if [[ "$IS_WINDOWS" -eq 1 ]]; then
+  if [[ "$IS_WINDOWS" -eq 1 ]]; then
+    # MSYS treats `foo` as existing when only `foo.exe` exists, so use find
+    # to check the exact filename before creating the extensionless resource.
+    extensionless="$(find "$SIDECARS" -maxdepth 1 -type f -name "$b" -print -quit)"
+    if [[ -f "$SIDECARS/$b.exe" && -z "$extensionless" ]]; then
       cat "$SIDECARS/$b.exe" > "$SIDECARS/$b"
-    else
-      cp "$SIDECARS/$b.exe" "$SIDECARS/$b"
     fi
+    if [[ -z "$(find "$SIDECARS" -maxdepth 1 -type f -name "$b" -print -quit)" ]]; then
+      echo "missing extensionless packaging resource for $b" >&2
+      exit 1
+    fi
+  elif [[ -f "$SIDECARS/$b" && ! -e "$SIDECARS/$b.exe" ]]; then
+    cp "$SIDECARS/$b" "$SIDECARS/$b.exe"
   fi
 done
 

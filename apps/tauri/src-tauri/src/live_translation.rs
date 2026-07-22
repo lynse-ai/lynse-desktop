@@ -18,6 +18,13 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_tungstenite::tungstenite::Message;
 
+// `Sample` is needed as a trait bound on `feed_samples` (a function signature),
+// so the import must be at module scope — a `use` inside the function body is
+// not visible to the generic parameter bound. Gated to Windows because cpal is
+// a Windows-only dependency.
+#[cfg(target_os = "windows")]
+use cpal::Sample;
+
 const LIVE_EVENT: &str = "live-translation-event";
 const PCM_FRAME_BYTES: usize = 640;
 const AUDIO_HEADER_BYTES: usize = 19;
@@ -1684,7 +1691,6 @@ fn feed_samples<T: Sample>(
     leftover: &Arc<Mutex<Vec<u8>>>,
     session: &Arc<LiveSession>,
 ) {
-    use cpal::Sample;
     if !session.capture_stop.load(Ordering::Relaxed) {
         return;
     }

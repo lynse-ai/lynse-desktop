@@ -1,12 +1,14 @@
 {
   "name": "@lynse/tauri",
   "productName": "Lynse",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
+    "build:audio-capture": "./scripts/build-audio-capture.sh",
+    "test:audio-capture": "swift run --package-path audio-capture audio-capture-core-tests",
     "tauri": "tauri",
     "check": "cargo check --manifest-path src-tauri/Cargo.toml"
   },

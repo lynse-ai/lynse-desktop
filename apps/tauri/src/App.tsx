@@ -7,6 +7,7 @@ import { useNavigation } from "@lynse/views/navigation";
 import { WorkspaceLayout } from "@lynse/views/workspace";
 import { ChatPage } from "@lynse/views/chat";
 import { TodoPage } from "@lynse/views/todo";
+import { LiveSubtitleOverlay, LiveTranslationPage } from "@lynse/views/live-translation";
 import { RESOURCES } from "@lynse/views/locales";
 import { DesktopNavigationProvider } from "./platform/navigation";
 import { secureStorage } from "./secure-storage";
@@ -16,6 +17,7 @@ function PageRouter() {
   const { pathname } = useNavigation();
   if (pathname.startsWith("/chat")) return <ChatPage />;
   if (pathname.startsWith("/todo")) return <TodoPage />;
+  if (pathname.startsWith("/live-translation")) return <LiveTranslationPage />;
   return <WorkspaceLayout />;
 }
 
@@ -44,6 +46,7 @@ function AppContent() {
 }
 
 export default function App() {
+  const subtitleWindow = new URLSearchParams(window.location.search).get("window") === "live-subtitles";
   const identity = useMemo(() => {
     const appInfo = (window as unknown as { desktopAPI?: { appInfo?: { version: string } } })
       .desktopAPI?.appInfo;
@@ -52,16 +55,20 @@ export default function App() {
 
   return (
     <ThemeProvider>
-      <CoreProvider
-        apiBaseUrl={import.meta.env.VITE_API_URL}
-        wsUrl={import.meta.env.VITE_WS_URL}
-        storage={secureStorage}
-        identity={identity}
-        locale="en"
-        resources={RESOURCES}
-      >
-        <AppContent />
-      </CoreProvider>
+      {subtitleWindow ? (
+        <LiveSubtitleOverlay />
+      ) : (
+        <CoreProvider
+          apiBaseUrl={import.meta.env.VITE_API_URL}
+          wsUrl={import.meta.env.VITE_WS_URL}
+          storage={secureStorage}
+          identity={identity}
+          locale="en"
+          resources={RESOURCES}
+        >
+          <AppContent />
+        </CoreProvider>
+      )}
       <Toaster />
     </ThemeProvider>
   );

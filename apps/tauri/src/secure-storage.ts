@@ -6,7 +6,11 @@ import type { StorageAdapter } from "@lynse/core/types/storage";
  * the OS keychain (macOS Keychain / Windows Credential Manager) and only ever
  * held in this in-memory cache on the webview side.
  */
-const SECRET_KEYS = new Set(["lynse_api_key", "lynse_token"]);
+const SECRET_KEYS = new Set([
+  "lynse_api_key",
+  "lynse_token",
+  "lynse_live_translation_ilivedata_secret_key",
+]);
 
 const secretCache = new Map<string, string>();
 

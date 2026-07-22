@@ -283,17 +283,20 @@ function createComponents(
       ),
       ol: ({ children }) => <ol className="my-2 space-y-1 pl-6 list-decimal">{children}</ol>,
       li: ({ children }) => <li>{children}</li>,
-      // Clean tables
+      // Clean tables — use table-fixed so column widths are strictly honored
+      // (auto layout only treats width as a hint and can let a long cell
+      // blow the first/# column wide). First column is pinned narrow; the
+      // rest share remaining space. Long cells truncate instead of overflow.
       table: ({ children }) => (
         <div className="my-3 overflow-x-auto">
-          <table className="w-max text-sm">{children}</table>
+          <table className="w-full table-fixed text-sm">{children}</table>
         </div>
       ),
       thead: ({ children }) => <thead className="border-b">{children}</thead>,
       th: ({ children }) => (
-        <th className="text-left py-2 px-3 font-semibold text-muted-foreground whitespace-nowrap">{children}</th>
+        <th className="text-left py-2 px-3 font-semibold text-muted-foreground whitespace-nowrap first:w-10">{children}</th>
       ),
-      td: ({ children }) => <td className="py-2 px-3 border-b border-border/50 whitespace-nowrap">{children}</td>,
+      td: ({ children }) => <td className="truncate py-2 px-3 border-b border-border/50 first:w-10">{children}</td>,
       // Headings - H1/H2 same size, differentiated by weight
       h1: ({ children }) => <h1 className="font-sans text-base font-bold mt-5 mb-3">{children}</h1>,
       h2: ({ children }) => (

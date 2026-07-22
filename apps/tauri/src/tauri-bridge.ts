@@ -3,8 +3,20 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { setApiTransportMode } from "@lynse/core/api/client";
-import { hydrateSecrets } from "./secure-storage";
+import { hydrateSecrets, secureStorage } from "./secure-storage";
 import type { SttDownloadProgress, SttModelInfo, TranscribeConfig } from "@lynse/views/workspace";
+import type {
+  CompletedLiveSession,
+  DesktopLiveTranslationApi,
+  LivePermissionStatus,
+  LiveRecoverySummary,
+  LiveResumeRequest,
+  LiveStartRequest,
+  LiveTranslationEvent,
+  LiveTranslationProviderConfig,
+  LiveTranslationSnapshot,
+} from "@lynse/views/live-translation";
+import { DEFAULT_ILIVEDATA_RTVT_ENDPOINT } from "@lynse/views/live-translation";
 
 export type AppUpdateInfo = {
   currentVersion: string;
@@ -18,6 +30,7 @@ export type AppUpdateInfo = {
 type DesktopApi = {
   openExternal: (url: string) => Promise<void>;
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
+  liveTranslation: DesktopLiveTranslationApi;
   todo: Record<string, (...args: any[]) => Promise<unknown>>;
   appInfo: { version: string; platform: string };
   app: {
@@ -28,6 +41,45 @@ type DesktopApi = {
 
 function command<T>(name: string, payload?: Record<string, unknown>): Promise<T> {
   return invoke<T>(name, payload);
+}
+
+const LIVE_TRANSLATION_PROVIDER_KEY = "lynse_live_translation_provider";
+const ILIVEDATA_ENDPOINT_KEY = "lynse_live_translation_ilivedata_endpoint";
+const ILIVEDATA_PID_KEY = "lynse_live_translation_ilivedata_pid";
+const ILIVEDATA_SECRET_KEY = "lynse_live_translation_ilivedata_secret_key";
+
+function getLiveTranslationProviderConfig(): LiveTranslationProviderConfig {
+  const savedProvider = window.localStorage.getItem(LIVE_TRANSLATION_PROVIDER_KEY);
+  return {
+    provider: savedProvider === "ilivedata_direct" ? "ilivedata_direct" : "lynse_backend",
+    ilivedata: {
+      endpoint: window.localStorage.getItem(ILIVEDATA_ENDPOINT_KEY) ?? DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
+      pid: window.localStorage.getItem(ILIVEDATA_PID_KEY) ?? "",
+      secretKey: secureStorage.getItem(ILIVEDATA_SECRET_KEY) ?? "",
+    },
+  };
+}
+
+function saveLiveTranslationProviderConfig(
+  config: LiveTranslationProviderConfig,
+): LiveTranslationProviderConfig {
+  const normalized: LiveTranslationProviderConfig = {
+    provider: config.provider,
+    ilivedata: {
+      endpoint: config.ilivedata.endpoint.trim() || DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
+      pid: config.ilivedata.pid.trim(),
+      secretKey: config.ilivedata.secretKey.trim(),
+    },
+  };
+  window.localStorage.setItem(LIVE_TRANSLATION_PROVIDER_KEY, normalized.provider);
+  window.localStorage.setItem(ILIVEDATA_ENDPOINT_KEY, normalized.ilivedata.endpoint);
+  window.localStorage.setItem(ILIVEDATA_PID_KEY, normalized.ilivedata.pid);
+  if (normalized.ilivedata.secretKey) {
+    secureStorage.setItem(ILIVEDATA_SECRET_KEY, normalized.ilivedata.secretKey);
+  } else {
+    secureStorage.removeItem(ILIVEDATA_SECRET_KEY);
+  }
+  return normalized;
 }
 
 export async function installTauriBridge(): Promise<void> {
@@ -76,6 +128,23 @@ export async function installTauriBridge(): Promise<void> {
       deleteVoiceprint: (id: string) => command("local_transcription_delete_voiceprint", { id }),
       getSttConfig: () => command<TranscribeConfig>("local_stt_config_get"),
       saveSttConfig: (config: TranscribeConfig) => command<TranscribeConfig>("local_stt_config_save", { config }),
+    },
+    liveTranslation: {
+      getProviderConfig: async () => getLiveTranslationProviderConfig(),
+      saveProviderConfig: async (config) => saveLiveTranslationProviderConfig(config),
+      permissions: () => command<LivePermissionStatus>("live_translation_permissions"),
+      requestPermission: (kind) => command<LivePermissionStatus>("live_translation_request_permission", { kind }),
+      start: (request: LiveStartRequest) => command<LiveTranslationSnapshot>("live_translation_start", { request }),
+      pause: () => command<LiveTranslationSnapshot>("live_translation_pause"),
+      resume: (request: LiveResumeRequest) => command<LiveTranslationSnapshot>("live_translation_resume", { request }),
+      stop: () => command<CompletedLiveSession>("live_translation_stop"),
+      getState: () => command<LiveTranslationSnapshot>("live_translation_state"),
+      finalizeLocal: (sessionId, synced) => command<void>("live_translation_finalize_local", { sessionId, synced }),
+      listRecoveries: () => command<LiveRecoverySummary[]>("live_translation_recoveries"),
+      recover: (sessionId) => command<CompletedLiveSession>("live_translation_recover", { sessionId }),
+      showSubtitles: (show) => command<void>("live_translation_show_subtitles", { show }),
+      onEvent: (callback: (event: LiveTranslationEvent) => void) =>
+        getCurrentWebview().listen<LiveTranslationEvent>("live-translation-event", (event) => callback(event.payload)),
     },
     appInfo: { version: "0.1.0", platform: "darwin" },
     app: {

@@ -17,6 +17,9 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, UriSchemeContext};
 use uuid::Uuid;
 
 mod stt;
+mod live_translation;
+
+use live_translation::LiveTranslationManager;
 
 const VOICEPRINT_MATCH_THRESHOLD: f64 = 0.31;
 
@@ -1388,6 +1391,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState { model_download_in_progress: Mutex::new(false) })
+        .manage(LiveTranslationManager::default())
         .register_uri_scheme_protocol("local-media", media_response)
         .setup(|app| {
             if let Err(error) = migrate_electron_data(&app.handle()) {
@@ -1408,7 +1412,18 @@ pub fn run() {
             local_transcription_update_voiceprint, local_transcription_delete_voiceprint,
             local_stt_config_get, local_stt_config_save,
             secure_set_secret, secure_get_secret, secure_delete_secret,
-            get_app_info, check_app_update
+            get_app_info, check_app_update,
+            live_translation::live_translation_permissions,
+            live_translation::live_translation_request_permission,
+            live_translation::live_translation_state,
+            live_translation::live_translation_start,
+            live_translation::live_translation_pause,
+            live_translation::live_translation_resume,
+            live_translation::live_translation_stop,
+            live_translation::live_translation_finalize_local,
+            live_translation::live_translation_recoveries,
+            live_translation::live_translation_recover,
+            live_translation::live_translation_show_subtitles
         ])
         .run(tauri::generate_context!())
         .expect("error while running Lynse Tauri application");

@@ -370,6 +370,8 @@ export function ContentPanel() {
         speaker: String(s.speakerName ?? ""),
         time: String(s.beginTimeStr ?? ""),
         text: String(s.text ?? ""),
+        translatedText: String(s.translatedText ?? ""),
+        source: String(s.source ?? ""),
         beginTimeMs: typeof s.beginTime === "number" ? s.beginTime : null,
       };
     });
@@ -870,7 +872,10 @@ export function ContentPanel() {
                                     <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{seg.time}</span>
                                     <span className="shrink-0 font-semibold text-xs" style={{ color }}>{seg.speaker}</span>
                                   </div>
-                                  <p className="text-foreground mt-0.5">{seg.text}</p>
+                                  <p className="text-foreground mt-0.5">{seg.translatedText || seg.text}</p>
+                                  {seg.translatedText && (
+                                    <p className="mt-0.5 text-xs text-muted-foreground">{seg.text}</p>
+                                  )}
                                   {isLocalSelectedItem && seg.id && (
                                     <div className="mt-1 flex flex-wrap items-center gap-1">
                                       {voiceprintDraft?.segmentId === seg.id ? (

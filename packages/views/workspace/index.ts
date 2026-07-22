@@ -1,2 +1,7 @@
 export { WorkspaceLayout } from "./workspace-layout";
-export type { SttProviderConfig, TranscribeConfig } from "./local-transcription";
+export type {
+  SttDownloadProgress,
+  SttModelInfo,
+  SttProviderConfig,
+  TranscribeConfig,
+} from "./local-transcription";

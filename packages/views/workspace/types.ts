@@ -74,6 +74,11 @@ export interface LocalTranscriptionSegment {
   rawSpeaker?: string;
   confidence?: number;
   voiceprintId?: string;
+  source?: "mic" | "system";
+  translatedText?: string;
+  sourceLanguage?: string;
+  targetLanguage?: string;
+  isFinal?: boolean;
   /** @deprecated compatibility with first local records */
   speaker?: string;
 }
@@ -94,7 +99,7 @@ export interface LocalTranscriptionRecord {
   durationMs?: number;
   expectedSpeakers?: number;
   hotwordPackageId?: string;
-  engine: "funasr" | "whisper" | "moss_transcribe_diarize";
+  engine: "funasr" | "whisper" | "moss_transcribe_diarize" | "ilivedata_rtvt";
   modelId?: string;
   providerConfig?: SttProviderConfig;
   segments: LocalTranscriptionSegment[];

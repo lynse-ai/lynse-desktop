@@ -45,12 +45,19 @@ export function createAuthStore(opts: AuthOpts) {
       // Set apiKey BEFORE the token request so X-API-Key header is sent
       opts.api.setApiKey(apiKey);
 
+      // Persist the API key up-front (before the network call) so a failed
+      // connect — e.g. the test server being unreachable ("Load failed") —
+      // does NOT force the user to re-type the key on the next app open.
+      // The session token is still only saved after a successful login.
+      if (!opts.cookieAuth) {
+        opts.storage.setItem("lynse_api_key", apiKey);
+      }
+
       const res = await opts.api.post<{ accessToken: string }>(
         "/api/auth/apikey/token",
       );
 
       if (!opts.cookieAuth) {
-        opts.storage.setItem("lynse_api_key", apiKey);
         opts.storage.setItem("lynse_token", res.accessToken);
         opts.api.setToken(res.accessToken);
       }

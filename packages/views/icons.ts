@@ -13,6 +13,7 @@
 export {
   // ── Navigation / Sidebar ──────────────────────────────
   Headphones,       // Recordings
+  Mic,              // Microphone input
   CalendarDays,     // Meetings
   BookOpen,         // Knowledge Base
   FolderOpen,       // Files / Folders

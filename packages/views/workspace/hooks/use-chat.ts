@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import type { ChatMessage, ChatStreamEvent } from "../types";
 import { CloudChatTransport, type ChatTransport } from "../chat-transport";
 import { useAuthStore } from "@lynse/core/auth";
+import { redactMeetingIds } from "../meeting-id-redact";
 
 function makeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -39,13 +40,21 @@ export function useChat() {
         break;
       case "content":
         setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + evt.delta } : m)),
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, content: redactMeetingIds(m.content + evt.delta) } : m,
+          ),
         );
         break;
       case "meta":
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === assistantId ? { ...m, sources: evt.sources, attachments: evt.attachments } : m,
+            m.id === assistantId
+              ? {
+                  ...m,
+                  sources: evt.sources ? evt.sources.map(redactMeetingIds) : evt.sources,
+                  attachments: evt.attachments,
+                }
+              : m,
           ),
         );
         break;
@@ -59,9 +68,9 @@ export function useChat() {
               evt.text && evt.text.length >= m.content.length ? evt.text : m.content;
             return {
               ...m,
-              content: finalContent,
+              content: redactMeetingIds(finalContent),
               status: undefined,
-              sources: evt.sources ?? m.sources,
+              sources: evt.sources ? evt.sources.map(redactMeetingIds) : m.sources,
               attachments: evt.attachments ?? m.attachments,
             };
           }),

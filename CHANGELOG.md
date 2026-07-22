@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.13 (2026-07-22)
+
+### New Features
+
+- Add real-time bilingual transcription and translation on macOS with separate microphone and system-audio streams, floating subtitles, pause/resume, and local recovery
+- Add switchable live-translation providers, including test-only iLiveData direct client authentication with credentials stored in the operating system keychain
+
+### Changed
+
+- Require macOS 15 for dual-stream capture and bundle the native audio-capture helper in the desktop installer
+- Preserve API keys after failed connection attempts and display source and translated text in local transcription details
+- Improve Markdown table sizing and truncation
+
+### Bug Fixes
+
+- Hide internal meeting identifiers from assistant replies while preserving Markdown links
+
 ## 0.1.11 (2026-07-19)
 
 ### New Features

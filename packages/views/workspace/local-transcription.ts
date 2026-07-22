@@ -132,6 +132,8 @@ export function localRecordToTranscription(record: LocalTranscriptionRecord): Fi
       beginTime: segment.startMs,
       endTime: segment.endMs,
       text: cleanLocalTranscriptText(segment.text),
+      translatedText: segment.translatedText ? cleanLocalTranscriptText(segment.translatedText) : undefined,
+      source: segment.source,
     })),
   };
 }

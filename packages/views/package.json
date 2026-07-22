@@ -19,6 +19,7 @@
     "./files": "./files/index.ts",
     "./workspace": "./workspace/index.ts",
     "./todo": "./todo/index.ts",
+    "./live-translation": "./live-translation/index.ts",
     "./i18n": "./i18n/index.ts",
     "./locales": "./locales/index.ts"
   },

@@ -21,6 +21,7 @@ import {
   Zap,
   Crown,
   ListChecks,
+  Headphones,
 } from "../icons";
 import {
   Sidebar,
@@ -76,8 +77,14 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
   const [uploadOpen, setUploadOpen] = useState(false);
   const [templateManagerOpen, setTemplateManagerOpen] = useState(false);
 
+  const liveTranslationAvailable = typeof window !== "undefined" && Boolean(
+    (window as Window & { desktopAPI?: { liveTranslation?: unknown } }).desktopAPI?.liveTranslation,
+  );
   const workspaceNav = [
     { key: "inspiration", label: t("nav.inspiration"), icon: Lightbulb, path: "/inspiration" },
+    ...(liveTranslationAvailable
+      ? [{ key: "live_translation", label: t("nav.live_translation"), icon: Headphones, path: "/live-translation" }]
+      : []),
   ];
 
   return (

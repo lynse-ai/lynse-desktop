@@ -2,8 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>NSCalendarsWriteOnlyAccessUsageDescription</key>
-  <string>Lynse 仅在你确认后将待办写入系统日历。</string>
+  <key>CFBundleIdentifier</key>
+  <string>app.lynse.desktop.audio-capture</string>
+  <key>CFBundleName</key>
+  <string>Lynse Audio Capture</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>LSUIElement</key>
+  <true/>
   <key>NSMicrophoneUsageDescription</key>
   <string>Lynse 使用麦克风记录你的发言并生成实时双语字幕。</string>
   <key>NSAudioCaptureUsageDescription</key>

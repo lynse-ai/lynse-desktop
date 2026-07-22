@@ -732,6 +732,33 @@ fn handle_provider_message(
     }
 }
 
+/// Apply the recognized/translated text from a provider message to a segment,
+/// honouring the "final results win, interim results are ignored once final"
+/// rule used throughout the live-translation handling.
+fn apply_method_text(segment: &mut LiveSegment, method: &str, text: &str) {
+    match method {
+        "recognizedResult" => {
+            segment.recognized_text = text.to_owned();
+            segment.recognized_final = true;
+        }
+        "recognizedTempResult" => {
+            if !segment.recognized_final {
+                segment.recognized_text = text.to_owned();
+            }
+        }
+        "translatedResult" => {
+            segment.translated_text = text.to_owned();
+            segment.translated_final = true;
+        }
+        "translatedTempResult" => {
+            if !segment.translated_final {
+                segment.translated_text = text.to_owned();
+            }
+        }
+        _ => {}
+    }
+}
+
 fn apply_provider_message(
     session: &LiveSession,
     source: AudioSource,
@@ -751,88 +778,95 @@ fn apply_provider_message(
     ) {
         return None;
     }
-    let task_id =
-        value_string(&value, "taskId").unwrap_or_else(|| value_u64(&value, "startTs").to_string());
+    let is_recognized = matches!(method, "recognizedResult" | "recognizedTempResult");
+    let is_final_method = matches!(method, "recognizedResult" | "translatedResult");
     let stream_id = value_string(&value, "streamId");
-    let segment_id = format!(
-        "{}:{epoch}:{:?}:{}:{task_id}",
-        session.session_id,
-        source,
-        stream_id.as_deref().unwrap_or("unknown"),
-    );
     let start_ms = epoch_offset_ms.saturating_add(value_u64(&value, "startTs"));
     let raw_end = value_u64(&value, "endTs");
     let end_ms = (raw_end > 0).then(|| epoch_offset_ms.saturating_add(raw_end));
+    let incoming = value_string(&value, if is_recognized { "asr" } else { "trans" })
+        .unwrap_or_default();
+    // Utterance key: prefer the provider task id, fall back to the start
+    // timestamp (stable per utterance for most providers).
+    let task_id = value_string(&value, "taskId")
+        .unwrap_or_else(|| value_u64(&value, "startTs").to_string());
 
     let mut segments = session.segments.lock().expect("live segments lock");
-    let index = segments
-        .iter()
-        .position(|segment| segment.id == segment_id)
-        .unwrap_or_else(|| {
-            segments.push(LiveSegment {
-                id: segment_id.clone(),
-                session_id: session.session_id.clone(),
-                epoch,
+
+    // The currently open (non-final) utterance being coalesced for this source
+    // and stream. Interim results for the same utterance must refresh this block
+    // in place rather than spawning a new one — otherwise the provider's rolling
+    // buffer (each update echoes the previous sentence) renders as a stack of
+    // duplicated cards on the frontend.
+    let open_pos = segments.iter().rposition(|segment| {
+        !segment.is_final && segment.source == source && segment.provider_stream_id == stream_id
+    });
+
+    // Continue the open utterance when the message carries the same task id, or
+    // (different task id, e.g. a re-keyed rolling buffer) when its text begins
+    // with what we already have. Otherwise it is a genuinely new utterance:
+    // close the open block as best-effort and start a fresh one.
+    let continues_open = match open_pos {
+        None => false,
+        Some(pos) => {
+            let same_task = segments[pos].task_id.as_deref() == Some(task_id.as_str());
+            if same_task {
+                true
+            } else {
+                let current = if is_recognized {
+                    segments[pos].recognized_text.as_str()
+                } else {
+                    segments[pos].translated_text.as_str()
+                };
+                current.is_empty() || incoming.starts_with(current)
+            }
+        }
+    };
+
+    let index = if continues_open {
+        open_pos.expect("open_pos is Some when continues_open")
+    } else {
+        if let Some(pos) = open_pos {
+            // Close the previous open utterance so it stops being the coalescing
+            // target. Its text is kept intact.
+            segments[pos].is_final = true;
+        }
+        segments.push(LiveSegment {
+            id: format!(
+                "{}:{epoch}:{:?}:{}:{}",
+                session.session_id,
                 source,
-                recognized_text: String::new(),
-                translated_text: String::new(),
-                start_ms,
-                end_ms,
-                is_final: false,
-                provider_stream_id: stream_id.clone(),
-                task_id: Some(task_id.clone()),
-                echo_of: None,
-                recognized_final: false,
-                translated_final: false,
-            });
-            segments.len() - 1
+                stream_id.as_deref().unwrap_or("unknown"),
+                uuid::Uuid::new_v4(),
+            ),
+            session_id: session.session_id.clone(),
+            epoch,
+            source,
+            recognized_text: String::new(),
+            translated_text: String::new(),
+            start_ms,
+            end_ms,
+            is_final: false,
+            provider_stream_id: stream_id.clone(),
+            task_id: Some(task_id.clone()),
+            echo_of: None,
+            recognized_final: false,
+            translated_final: false,
         });
+        segments.len() - 1
+    };
+
     let segment = &mut segments[index];
-    segment.start_ms = start_ms;
+    segment.start_ms = segment.start_ms.min(start_ms);
     if end_ms.is_some() {
         segment.end_ms = end_ms;
     }
-    segment.provider_stream_id = stream_id;
-    match method {
-        "recognizedResult" => {
-            segment.recognized_text = value
-                .get("asr")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            segment.recognized_final = true;
-        }
-        "recognizedTempResult" => {
-            if !segment.recognized_final {
-                segment.recognized_text = value
-                    .get("asr")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-            }
-        }
-        "translatedResult" => {
-            segment.translated_text = value
-                .get("trans")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            segment.translated_final = true;
-        }
-        "translatedTempResult" => {
-            if !segment.translated_final {
-                segment.translated_text = value
-                    .get("trans")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-            }
-        }
-        _ => {}
-    }
+    segment.provider_stream_id = stream_id.clone();
+    segment.task_id = Some(task_id);
+    apply_method_text(segment, method, &incoming);
     segment.is_final = segment.recognized_final && segment.translated_final;
-    let is_final_message = matches!(method, "recognizedResult" | "translatedResult");
-    if is_final_message {
+
+    if is_final_method {
         deduplicate_echoes(&mut segments);
         segments.sort_by_key(|segment| {
             (
@@ -1564,7 +1598,41 @@ mod tests {
         assert_eq!(segments[0].start_ms, 5_020);
         assert_eq!(segments[0].end_ms, Some(5_080));
         assert!(segments[0].is_final);
-        assert!(segments[0].id.contains(":2:Mic:9:3"));
+        assert!(segments[0].id.contains(":2:Mic:9:"));
+    }
+
+    #[test]
+    fn coalesces_rolling_buffer_updates_into_one_refreshing_segment() {
+        let session = live_session();
+        // One utterance streamed as rolling buffers that each re-key with a new
+        // task id (the duplication the frontend used to show as separate cards).
+        let m1 = r#"{"method":"recognizedTempResult","streamId":"9","taskId":"a1","startTs":"20","endTs":"0","asr":"你好"}"#;
+        let m2 = r#"{"method":"recognizedTempResult","streamId":"9","taskId":"a2","startTs":"20","endTs":"0","asr":"你好世界"}"#;
+        let m3 = r#"{"method":"recognizedResult","streamId":"9","taskId":"a3","startTs":"20","endTs":"80","asr":"你好世界大家好"}"#;
+        apply_provider_message(&session, AudioSource::Mic, 0, 0, m1).unwrap();
+        apply_provider_message(&session, AudioSource::Mic, 0, 0, m2).unwrap();
+        apply_provider_message(&session, AudioSource::Mic, 0, 0, m3).unwrap();
+        let segments = session.segments.lock().unwrap();
+        assert_eq!(
+            segments.len(),
+            1,
+            "rolling buffers must coalesce into a single refreshing segment"
+        );
+        assert_eq!(segments[0].recognized_text, "你好世界大家好");
+        assert!(segments[0].recognized_final, "recognized result must finalize");
+        assert_eq!(segments[0].translated_text, "", "no translation streamed yet");
+        assert!(!segments[0].is_final, "segment stays open until translation finalizes");
+    }
+
+    #[test]
+    fn splits_into_a_new_segment_when_the_utterance_changes() {
+        let session = live_session();
+        let u1 = r#"{"method":"recognizedResult","streamId":"9","taskId":"a1","startTs":"20","endTs":"80","asr":"你好世界"}"#;
+        let u2 = r#"{"method":"recognizedTempResult","streamId":"9","taskId":"b1","startTs":"200","endTs":"0","asr":"今天天气真好"}"#;
+        apply_provider_message(&session, AudioSource::Mic, 0, 0, u1).unwrap();
+        apply_provider_message(&session, AudioSource::Mic, 0, 0, u2).unwrap();
+        let segments = session.segments.lock().unwrap();
+        assert_eq!(segments.len(), 2, "a new utterance must open a new segment");
     }
 
     #[test]

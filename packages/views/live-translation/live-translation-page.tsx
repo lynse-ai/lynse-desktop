@@ -24,7 +24,6 @@ import {
 import { uploadFileToOSS } from "../workspace/hooks/use-files";
 import { completeRealtimeSession, requestRealtimeSession } from "./api";
 import { useLiveTranslation } from "./use-live-translation";
-import { cleanSegmentsForDisplay } from "./segment-dedup";
 import {
   DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
   type CompletedLiveSession,
@@ -92,11 +91,6 @@ export function LiveTranslationPage() {
   const visibleSegments = useMemo(
     () => view.segments.filter((segment) => !segment.echoOf && (segment.recognizedText || segment.translatedText)),
     [view.segments],
-  );
-  // Remove rolling-buffer prefixes so consecutive blocks do not echo each other.
-  const displaySegments = useMemo(
-    () => cleanSegmentsForDisplay(visibleSegments),
-    [visibleSegments],
   );
   const active = Boolean(view.sessionId) && view.state !== "idle";
   const directProviderReady = providerConfig.provider !== "ilivedata_direct"
@@ -499,7 +493,7 @@ export function LiveTranslationPage() {
         <section className="flex min-h-0 flex-col bg-muted/10">
           <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-5">
             <span className="text-xs font-medium">{t("live_translation.live_transcript")}</span>
-            <span className="text-[11px] text-muted-foreground">{displaySegments.length} {t("live_translation.segments")}</span>
+            <span className="text-[11px] text-muted-foreground">{visibleSegments.length} {t("live_translation.segments")}</span>
           </div>
           <div ref={transcriptRef} className="flex-1 overflow-y-auto px-6 py-5">
             {visibleSegments.length === 0 ? (
@@ -512,7 +506,7 @@ export function LiveTranslationPage() {
               </div>
             ) : (
               <div className="mx-auto max-w-3xl space-y-3">
-                {displaySegments.map((segment) => (
+                {visibleSegments.map((segment) => (
                   <article key={segment.id} className="rounded-xl border border-border bg-background px-4 py-3 shadow-sm">
                     <div className="mb-2 flex items-center gap-2 text-[11px] text-muted-foreground">
                       <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
@@ -523,16 +517,16 @@ export function LiveTranslationPage() {
                     </div>
                     {/* Original language on top */}
                     <p className="text-base font-medium leading-relaxed text-foreground">
-                      {segment.displayRecognized || segment.displayTranslated}
+                      {segment.recognizedText || segment.translatedText}
                     </p>
                     {/* Target language below, only when it adds something new */}
-                    {segment.displayTranslated && segment.displayTranslated !== segment.displayRecognized && (
+                    {segment.translatedText && segment.translatedText !== segment.recognizedText && (
                       <div className="mt-1.5 border-l-2 border-border pl-2.5">
                         <span className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
                           {t("live_translation.translation")}
                         </span>
                         <p className="text-sm leading-relaxed text-muted-foreground">
-                          {segment.displayTranslated}
+                          {segment.translatedText}
                         </p>
                       </div>
                     )}

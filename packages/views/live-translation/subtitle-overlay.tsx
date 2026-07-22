@@ -3,13 +3,16 @@
 import { useMemo } from "react";
 import { X } from "../icons";
 import { useLiveTranslation } from "./use-live-translation";
+import { cleanSegmentsForDisplay } from "./segment-dedup";
 
 export function LiveSubtitleOverlay() {
   const { api, view } = useLiveTranslation();
   const active = useMemo(() => {
-    const visible = view.segments.filter((segment) => !segment.echoOf && (segment.translatedText || segment.recognizedText));
+    const cleaned = cleanSegmentsForDisplay(
+      view.segments.filter((segment) => !segment.echoOf && (segment.translatedText || segment.recognizedText)),
+    );
     return (["system", "mic"] as const).flatMap((source) => {
-      const segment = visible.filter((item) => item.source === source).at(-1);
+      const segment = cleaned.filter((item) => item.source === source).at(-1);
       return segment ? [segment] : [];
     });
   }, [view.segments]);
@@ -32,9 +35,11 @@ export function LiveSubtitleOverlay() {
             <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wider text-white/45">
               {segment.source === "mic" ? "我" : "远端"}
             </div>
-            <p className="truncate text-lg font-medium leading-snug">{segment.translatedText || segment.recognizedText}</p>
-            {segment.translatedText && segment.recognizedText && (
-              <p className="mt-0.5 truncate text-xs text-white/55">{segment.recognizedText}</p>
+            <p className="truncate text-lg font-medium leading-snug">
+              {segment.displayRecognized || segment.displayTranslated}
+            </p>
+            {segment.displayTranslated && segment.displayTranslated !== segment.displayRecognized && (
+              <p className="mt-0.5 truncate text-xs text-white/55">{segment.displayTranslated}</p>
             )}
           </div>
         ))}

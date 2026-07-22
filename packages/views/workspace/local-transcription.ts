@@ -62,7 +62,7 @@ export interface SttDownloadProgress {
   totalBytes: number;
   /** 0–100, or null when the total size is unknown (e.g. FunASR). */
   percent: number | null;
-  phase: "downloading" | "verifying" | "done" | "error";
+  phase: "downloading" | "verifying" | "done" | "error" | "runtime_downloading" | "runtime_verifying" | "runtime_installing";
   error?: string | null;
 }
 

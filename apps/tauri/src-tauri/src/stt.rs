@@ -206,23 +206,91 @@ impl TranscribeConfig {
 // ── Sidecar / media helpers ──────────────────────────────
 
 fn sidecar_binary_name(base: &str) -> String {
-    if cfg!(target_os = "windows") {
+    sidecar_binary_name_for(base, cfg!(target_os = "windows"))
+}
+
+/// Pure on-disk name resolver so both the live lookup and unit tests can
+/// exercise the macOS/Windows naming rules without relying on `cfg!`.
+pub(crate) fn sidecar_binary_name_for(base: &str, is_windows: bool) -> String {
+    if is_windows {
         format!("{base}.exe")
     } else {
         base.to_owned()
     }
 }
 
-/// Locate a bundled sidecar (whisper, moss, ffmpeg, ffprobe) in dev resources
-/// or the packaged resource directory.
+/// Platform-specific runtime subdirectory name, e.g. `macos-aarch64` /
+/// `windows-x86_64`. Keeps downloaded runtimes isolated per OS+arch.
+pub(crate) fn runtime_platform_dir() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => "macos-aarch64",
+        ("macos", "x86_64") => "macos-x86_64",
+        ("windows", "x86_64") => "windows-x86_64",
+        ("linux", "x86_64") => "linux-x86_64",
+        _ => "unknown",
+    }
+}
+
+/// The four binaries that together make up a complete shared STT runtime.
+pub(crate) const RUNTIME_BINARIES: &[&str] = &["whisper", "moss-transcribe", "ffmpeg", "ffprobe"];
+
+/// `true` only when every runtime binary exists in `dir` as a non-empty file.
+/// Prevents a half-downloaded runtime from being treated as installed.
+pub(crate) fn runtime_is_complete(dir: &Path) -> bool {
+    RUNTIME_BINARIES.iter().all(|base| {
+        let path = dir.join(sidecar_binary_name_for(base, cfg!(target_os = "windows")));
+        match std::fs::metadata(&path) {
+            Ok(meta) => meta.is_file() && meta.len() > 0,
+            Err(_) => false,
+        }
+    })
+}
+
+/// Directory of the on-demand shared runtime for `version` (e.g. `v0.1.14`)
+/// + this platform, under the app data dir. May be empty before first download.
+pub(crate) fn runtime_dir(app: &tauri::AppHandle, version: &str) -> PathBuf {
+    match app.path().app_data_dir() {
+        Ok(base) => base.join("stt-runtimes").join(version).join(runtime_platform_dir()),
+        Err(_) => PathBuf::new(),
+    }
+}
+
+/// Locate a bundled sidecar (whisper, moss, ffmpeg, ffprobe). Resolution order:
+/// 1. dev `resources/sidecars` (local development),
+/// 2. on-demand shared runtime in the app data dir (downloaded at model-install
+///    time, shared across every offline engine),
+/// 3. the packaged resource dir (backward compat with older installs that
+///    bundled the runtimes),
+/// 4. otherwise a clear error asking the user to download the offline runtime.
 pub(crate) fn sidecar_path(app: &tauri::AppHandle, base: &str) -> CommandResult<PathBuf> {
     let name = sidecar_binary_name(base);
+
+    // 1. Dev resources/sidecars (local development convenience).
     let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/sidecars").join(&name);
     if development.exists() {
         return Ok(development);
     }
-    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
-    Ok(resources.join(&name))
+
+    // 2. On-demand shared runtime in the user data dir.
+    let version = format!("v{}", app.package_info().version);
+    let runtime = runtime_dir(app, &version);
+    if runtime_is_complete(&runtime) {
+        let candidate = runtime.join(&name);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    // 3. Old packaged resources (backward compat).
+    if let Ok(resources) = app.path().resource_dir() {
+        let candidate = resources.join(&name);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    // 4. Not found.
+    Err("离线转写组件尚未下载，请先安装任意离线模型以自动获取运行时".to_owned())
 }
 
 /// Convert any audio/video to 16 kHz mono 16-bit PCM WAV via the bundled
@@ -522,6 +590,62 @@ fn normalize_whisper_output(parsed: &Value) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sidecar_binary_name_rules() {
+        assert_eq!(sidecar_binary_name_for("whisper", false), "whisper");
+        assert_eq!(sidecar_binary_name_for("ffmpeg", false), "ffmpeg");
+        assert_eq!(sidecar_binary_name_for("whisper", true), "whisper.exe");
+        assert_eq!(sidecar_binary_name_for("ffmpeg", true), "ffmpeg.exe");
+    }
+
+    #[test]
+    fn runtime_platform_dir_names() {
+        let dir = runtime_platform_dir();
+        assert!(
+            matches!(
+                dir,
+                "macos-aarch64" | "macos-x86_64" | "windows-x86_64" | "linux-x86_64" | "unknown"
+            ),
+            "unexpected platform dir: {dir}"
+        );
+    }
+
+    #[test]
+    fn runtime_is_complete_detects_missing_and_empty() {
+        let tmp = std::env::temp_dir().join(format!("lynse-runtime-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let _ = std::fs::create_dir_all(&tmp);
+
+        // Nothing present -> incomplete.
+        assert!(!runtime_is_complete(&tmp));
+
+        // Four zero-byte files -> still incomplete.
+        for base in RUNTIME_BINARIES {
+            let _ = std::fs::write(
+                tmp.join(sidecar_binary_name_for(base, cfg!(target_os = "windows"))),
+                [],
+            );
+        }
+        assert!(
+            !runtime_is_complete(&tmp),
+            "zero-byte binaries must not count as complete"
+        );
+
+        // Four non-empty files -> complete.
+        for base in RUNTIME_BINARIES {
+            let _ = std::fs::write(
+                tmp.join(sidecar_binary_name_for(base, cfg!(target_os = "windows"))),
+                b"dummy",
+            );
+        }
+        assert!(
+            runtime_is_complete(&tmp),
+            "four valid binaries must count as complete"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn whisper_model_round_trips() {

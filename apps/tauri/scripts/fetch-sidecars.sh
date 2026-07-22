@@ -112,36 +112,15 @@ build_whisper
 build_moss
 fetch_ffmpeg
 
-# tauri.conf.json's `resources` map references BOTH the extensionless name
-# (used on macOS/Linux) and the `.exe` name (used on Windows) for every
-# sidecar. Tauri validates all listed source files at build time on every
-# platform, so each platform must ship both variants even though the app only
-# ever invokes the one matching its own OS. Create the missing counterpart.
-# NOTE: on Windows, MSYS silently resolves extensionless executable paths back
-# to the `.exe` file. Use .NET's exact-path copy to create the resource name
-# Tauri validates.
-for b in whisper moss-transcribe ffmpeg ffprobe; do
-  if [[ "$IS_WINDOWS" -eq 1 ]]; then
-    # MSYS treats `foo` as existing when only `foo.exe` exists, so use find
-    # to check the exact filename before creating the extensionless resource.
-    extensionless="$(find "$SIDECARS" -maxdepth 1 -type f -name "$b" -print -quit)"
-    if [[ -f "$SIDECARS/$b.exe" && -z "$extensionless" ]]; then
-      sidecars_native="$(cygpath -aw "$SIDECARS")"
-      SIDECAR_SOURCE="${sidecars_native}\\${b}.exe" \
-        SIDECAR_TARGET="${sidecars_native}\\${b}" \
-        powershell.exe -NoProfile -NonInteractive -Command \
-        '[System.IO.File]::Copy($env:SIDECAR_SOURCE, $env:SIDECAR_TARGET, $true)'
-    fi
-    if [[ -z "$(find "$SIDECARS" -maxdepth 1 -type f -name "$b" -print -quit)" ]]; then
-      echo "missing extensionless packaging resource for $b" >&2
-      exit 1
-    fi
-  elif [[ -f "$SIDECARS/$b" && ! -e "$SIDECARS/$b.exe" ]]; then
-    cp "$SIDECARS/$b" "$SIDECARS/$b.exe"
-  fi
-done
+# Sidecars are no longer bundled into the app — they are fetched on demand at
+# first offline-model install (the Rust backend downloads, verifies and
+# atomically installs a per-platform archive). The binaries produced here still
+# serve local development (the dev `resources/sidecars` lookup) and the CI
+# smoke test, and are packaged into a per-platform `tar.gz` by the release
+# workflow. No cross-platform `.exe` counterpart is created: each platform
+# only ever emits its own binary set.
 
-# Ensure every bundled sidecar is executable.
+# Ensure every sidecar is executable.
 chmod +x "$SIDECARS"/* 2>/dev/null || true
 
 echo "==> Sidecars ready in $SIDECARS"

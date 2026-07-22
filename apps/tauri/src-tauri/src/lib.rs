@@ -409,9 +409,23 @@ fn model_artifact_path(app: &AppHandle, provider: &str, model_id: &str) -> Comma
 }
 
 fn model_is_installed(app: &AppHandle, provider: &str, model_id: &str) -> bool {
-    model_artifact_path(app, provider, model_id)
-        .map(|path| path.exists())
-        .unwrap_or(false)
+    let path = match model_artifact_path(app, provider, model_id) {
+        Ok(path) => path,
+        Err(_) => return false,
+    };
+    if !path.exists() {
+        return false;
+    }
+    // Whisper/MOSS also require the shared on-demand runtime
+    // (whisper, moss-transcribe, ffmpeg, ffprobe). FunASR does not.
+    if provider != "funasr" {
+        let version = format!("v{}", app.package_info().version);
+        let runtime = stt::runtime_dir(app, &version);
+        if !stt::runtime_is_complete(&runtime) {
+            return false;
+        }
+    }
+    true
 }
 
 fn model_status_list(app: &AppHandle) -> CommandResult<Value> {
@@ -619,6 +633,201 @@ fn verify_and_install(part: &Path, target: &Path, expected_sha256: &str) -> Comm
         }
     }
     fs::rename(part, target).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+// ── On-demand shared STT runtime ─────────────────────────
+//
+// Whisper and MOSS rely on four binaries (whisper, moss-transcribe, ffmpeg,
+// ffprobe) that are no longer bundled with the app. They are fetched once, on
+// first offline-model install, and shared across every offline engine. The
+// archive URL and its embedded SHA-256 are version-specific; the SHA is
+// compiled into the client so a tampered/replaced archive fails verification.
+
+/// GitHub repo that hosts the per-platform runtime archives. Keep in sync with
+/// the release workflow that uploads them.
+const RUNTIME_REPO: &str = "lynse-ai/lynse-desktop";
+
+/// Per-platform runtime archive base name, e.g.
+/// `lynse-stt-runtime-macos-aarch64.tar.gz`.
+fn runtime_archive_name() -> String {
+    format!("lynse-stt-runtime-{}.tar.gz", stt::runtime_platform_dir())
+}
+
+/// Download URL for this app version's runtime archive. Mirrors the git tag
+/// exactly (e.g. `v0.1.15`).
+fn runtime_download_url(version: &str) -> String {
+    format!(
+        "https://github.com/{RUNTIME_REPO}/releases/download/{version}/{}",
+        runtime_archive_name()
+    )
+}
+
+/// Same domestic-mirror strategy as model downloads: GitHub Releases is blocked
+/// or throttled from mainland China, so try `ghproxy`-style mirrors after the
+/// direct URL. Direct access is always first so non-China users are unaffected.
+fn runtime_download_candidates(primary: &str) -> Vec<String> {
+    let mirrors = [
+        primary.replace("https://github.com/", "https://ghproxy.net/https://github.com/"),
+        primary.replace("https://github.com/", "https://mirror.ghproxy.com/https://github.com/"),
+    ];
+    let mut list: Vec<String> = vec![primary.to_owned()];
+    for mirror in mirrors {
+        if mirror != *primary {
+            list.push(mirror);
+        }
+    }
+    list
+}
+
+/// Embedded SHA-256 for this platform's runtime archive, compiled in from the
+/// release CI. `None` locally (no CI env) means verification cannot run and the
+/// runtime MUST NOT be installed.
+fn expected_runtime_sha() -> Option<&'static str> {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        option_env!("LYNSE_RUNTIME_SHA_MACOS_AARCH64")
+    }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        option_env!("LYNSE_RUNTIME_SHA_MACOS_X86_64")
+    }
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        option_env!("LYNSE_RUNTIME_SHA_WINDOWS_X86_64")
+    }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        option_env!("LYNSE_RUNTIME_SHA_LINUX_X86_64")
+    }
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "x86_64"),
+    )))]
+    {
+        None
+    }
+}
+
+/// Ensure the shared runtime is present; download + verify + install it if
+/// missing. A complete runtime is a no-op, so callers may invoke freely.
+pub(crate) fn ensure_runtime_available(app: &AppHandle, provider: &str, model_id: &str) -> CommandResult<()> {
+    let version = format!("v{}", app.package_info().version);
+    let final_dir = stt::runtime_dir(app, &version);
+    if stt::runtime_is_complete(&final_dir) {
+        return Ok(());
+    }
+    download_runtime(app, provider, model_id, &version, &final_dir)
+}
+
+/// Download, verify and install the shared runtime. Errors never leave a
+/// partial or promoted runtime behind. Progress is reported under the model
+/// card the user clicked, so the runtime + model phases read as one flow.
+fn download_runtime(app: &AppHandle, provider: &str, model_id: &str, version: &str, final_dir: &Path) -> CommandResult<()> {
+    let expected_sha = expected_runtime_sha()
+        .ok_or("离线转写组件校验信息缺失，无法安全下载（请升级客户端或联系支持）")?;
+
+    let archive = runtime_archive_name();
+    let base = app.path().app_data_dir().map_err(|error| error.to_string())?.join("stt-runtimes");
+    let downloads = base.join("downloads");
+    fs::create_dir_all(&downloads).map_err(|error| error.to_string())?;
+    let part = downloads.join(format!("{archive}.part"));
+
+    emit_download_progress(app, provider, model_id, 0, 0, None, "runtime_downloading", None);
+    let candidates = runtime_download_candidates(&runtime_download_url(version));
+    let mut last_error = "离线转写组件下载失败".to_owned();
+    for url in &candidates {
+        let mut child = Command::new("curl")
+            .args(["-fL", "--retry", "3", "--connect-timeout", "20", "-o", part.to_string_lossy().as_ref(), url])
+            .spawn()
+            .map_err(|error| format!("无法启动下载（curl）：{error}"))?;
+        loop {
+            match child.try_wait().map_err(|error| error.to_string())? {
+                Some(status) => {
+                    if !status.success() {
+                        let _ = fs::remove_file(&part);
+                        last_error = format!("通过 {url} 下载失败，正在尝试备用镜像");
+                        break;
+                    }
+                    emit_download_progress(app, provider, model_id, 0, 0, Some(100), "runtime_verifying", None);
+                    if let Err(error) = install_runtime_archive(&part, final_dir, expected_sha) {
+                        let _ = fs::remove_file(&part);
+                        return Err(error);
+                    }
+                    let _ = fs::remove_file(&part);
+                    emit_download_progress(app, provider, model_id, 0, 0, Some(100), "runtime_installing", None);
+                    return Ok(());
+                }
+                None => thread::sleep(Duration::from_millis(250)),
+            }
+        }
+    }
+    Err(last_error)
+}
+
+/// Verify SHA-256, extract, confirm the four binaries, then atomically move the
+/// staging dir into the final runtime location. A failed install leaves nothing
+/// behind and never overwrites a working runtime.
+fn install_runtime_archive(part: &Path, final_dir: &Path, expected_sha: &str) -> CommandResult<()> {
+    let actual = sha256_of_file(part)?;
+    if actual != expected_sha {
+        return Err(format!("离线转写组件校验失败：期望 {expected_sha}，实际 {actual}"));
+    }
+
+    // Stage inside the same parent dir so the final move is a same-filesystem
+    // rename (atomic on the same volume).
+    let parent = final_dir.parent().ok_or("无法确定运行时父目录")?.to_path_buf();
+    fs::create_dir_all(&parent).map_err(|error| error.to_string())?;
+    let staging = parent.join(format!(".staging-{}", uuid::Uuid::new_v4().simple()));
+    if staging.exists() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    fs::create_dir_all(&staging).map_err(|error| error.to_string())?;
+
+    let status = Command::new("tar")
+        .args(["xzf", part.to_string_lossy().as_ref(), "-C", staging.to_string_lossy().as_ref()])
+        .status()
+        .map_err(|error| format!("无法解压离线转写组件：{error}"))?;
+    if !status.success() {
+        let _ = fs::remove_dir_all(&staging);
+        return Err("离线转写组件解压失败".to_owned());
+    }
+
+    if !stt::runtime_is_complete(&staging) {
+        let _ = fs::remove_dir_all(&staging);
+        return Err("离线转写组件不完整（缺少必要程序）".to_owned());
+    }
+
+    // On macOS the downloaded binaries carry a quarantine xattr and would be
+    // blocked by Gatekeeper; strip it and ad-hoc sign so they launch.
+    #[cfg(target_os = "macos")]
+    finalize_macos_runtime(&staging)?;
+
+    if final_dir.exists() {
+        fs::remove_dir_all(final_dir).map_err(|error| error.to_string())?;
+    }
+    fs::rename(&staging, final_dir).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn finalize_macos_runtime(dir: &Path) -> CommandResult<()> {
+    use std::os::unix::fs::PermissionsExt;
+    for base in stt::RUNTIME_BINARIES {
+        let path = dir.join(base);
+        if !path.exists() {
+            continue;
+        }
+        let _ = fs::set_permissions(&path, PermissionsExt::from_mode(0o755));
+        let _ = Command::new("xattr")
+            .args(["-dr", "com.apple.quarantine", path.to_string_lossy().as_ref()])
+            .status();
+        let _ = Command::new("codesign")
+            .args(["--force", "--sign", "-", path.to_string_lossy().as_ref()])
+            .status();
+    }
     Ok(())
 }
 
@@ -1003,6 +1212,14 @@ fn local_stt_download_model(
             }
             emit_download_progress(&app, &provider, &model_id, 0, 0, None, "done", None);
         } else {
+            // Whisper/MOSS require the shared on-demand runtime
+            // (whisper, moss-transcribe, ffmpeg, ffprobe). Download it first if
+            // missing; a previously-downloaded model skips the model download
+            // but still ensures the runtime is present.
+            if let Err(error) = ensure_runtime_available(&app, &provider, &model_id) {
+                emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
+                return Err(error);
+            }
             if let Err(error) = download_stt_model_file(&app, entry) {
                 emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
                 return Err(error);
@@ -1532,5 +1749,26 @@ mod tests {
         assert!(model_b.exists(), "model B directory survives deletion of A");
         assert!(b_artifact.exists(), "model B artifact remains intact");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn runtime_archive_name_matches_platform() {
+        let name = runtime_archive_name();
+        assert!(name.starts_with("lynse-stt-runtime-"), "archive has the lynse-stt-runtime prefix");
+        assert!(name.contains(stt::runtime_platform_dir()), "archive embeds the platform dir");
+        assert!(name.ends_with(".tar.gz"), "archive is a gzip tarball");
+    }
+
+    #[test]
+    fn runtime_download_url_embeds_version_repo_and_archive() {
+        let url = runtime_download_url("v0.1.15");
+        assert_eq!(
+            url,
+            format!(
+                "https://github.com/{}/releases/download/v0.1.15/{}",
+                "lynse-ai/lynse-desktop",
+                runtime_archive_name()
+            )
+        );
     }
 }

@@ -100,12 +100,20 @@ function ModelManager({
   const phase = progress?.phase;
   const isError = phase === "error";
   const isDone = phase === "done";
+  const isRuntimePhase =
+    phase === "runtime_downloading" || phase === "runtime_verifying" || phase === "runtime_installing";
   const statusText = isError
     ? "下载失败"
     : isThisDownloading
-      ? phase === "verifying"
-        ? "校验中…"
-        : "下载中…"
+      ? isRuntimePhase
+        ? phase === "runtime_downloading"
+          ? "正在下载离线转写组件"
+          : phase === "runtime_verifying"
+            ? "正在校验离线转写组件"
+            : "正在安装离线转写组件"
+        : phase === "verifying"
+          ? "校验中…"
+          : "下载中…"
       : installed
         ? "已安装"
         : "未安装";
@@ -174,7 +182,17 @@ function DownloadProgress({ progress }: { progress: SttDownloadProgress | null }
   return (
     <Progress value={progress.percent} className="mt-2 flex-col items-stretch gap-1">
       <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-        <span>{progress.phase === "verifying" ? "校验中…" : "下载中…"}</span>
+        <span>
+          {progress.phase === "verifying"
+            ? "校验中…"
+            : progress.phase === "runtime_downloading"
+              ? "正在下载离线转写组件"
+              : progress.phase === "runtime_verifying"
+                ? "正在校验离线转写组件"
+                : progress.phase === "runtime_installing"
+                  ? "正在安装离线转写组件"
+                  : "下载中…"}
+        </span>
         <ProgressValue className="text-[11px]" />
       </div>
     </Progress>

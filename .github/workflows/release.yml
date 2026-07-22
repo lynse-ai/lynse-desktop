@@ -74,14 +74,19 @@ jobs:
             ARCHIVE="lynse-stt-runtime-macos-aarch64.tar.gz"
             SHA_ENV="LYNSE_RUNTIME_SHA_MACOS_AARCH64"
           fi
-          tar -czf "$RUNNER_TEMP/$ARCHIVE" -C "$SIDECARS" "${FILES[@]}"
+          # NOTE: write the archive with a *relative* path (workspace root), not
+          # $RUNNER_TEMP. On Windows Git Bash, $RUNNER_TEMP expands to a drive
+          # path like `D:\a\_temp` which MSYS `tar` misinterprets as a remote
+          # host ("Cannot connect to D:"), breaking the Windows build. A
+          # relative path avoids that and is resolved correctly by tar,
+          # certutil/shasum, and `gh release upload` alike.
+          tar -czf "$ARCHIVE" -C "$SIDECARS" "${FILES[@]}"
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            SHA=$(certutil -hashfile "$RUNNER_TEMP/$ARCHIVE" SHA256 | grep -v ":" | tr -d ' \r\n' | tr 'A-Z' 'a-z')
+            SHA=$(certutil -hashfile "$ARCHIVE" SHA256 | grep -v ":" | tr -d ' \r\n' | tr 'A-Z' 'a-z')
           else
-            SHA=$(shasum -a 256 "$RUNNER_TEMP/$ARCHIVE" | cut -d' ' -f1)
+            SHA=$(shasum -a 256 "$ARCHIVE" | cut -d' ' -f1)
           fi
           echo "$SHA_ENV=$SHA" >> "$GITHUB_ENV"
-          cp "$RUNNER_TEMP/$ARCHIVE" "$ARCHIVE"
           echo "Packaged $ARCHIVE (sha256=$SHA)"
 
       - name: Build Tauri app

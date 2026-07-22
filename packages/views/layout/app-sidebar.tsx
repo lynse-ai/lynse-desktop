@@ -22,6 +22,8 @@ import {
   Crown,
   ListChecks,
   Headphones,
+  Bell,
+  X,
 } from "../icons";
 import {
   Sidebar,
@@ -52,6 +54,7 @@ import {
 } from "@lynse/ui/components/ui/popover";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
+import { useAppUpdate, openExternalUrl } from "../app-update";
 import { useUserCredits, useMembership } from "./use-user-credits";
 import { FolderTreeSection } from "../workspace/sidebar/folder-tree-section";
 import { SettingsDialog } from "../settings/settings-dialog";
@@ -231,6 +234,8 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
             <Settings className="size-3.5 text-muted-foreground/50" />
           </button>
         </div>
+        {/* Update reminder — pops directly below the user/membership row on startup */}
+        <UpdateReminder />
       </SidebarFooter>
       <SidebarRail />
 
@@ -424,6 +429,45 @@ function UserProfileDropdown() {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/* ── Update reminder card — shown below the user row when a newer release exists ── */
+function UpdateReminder() {
+  const { t } = useTranslation();
+  const { update } = useAppUpdate();
+  const [dismissed, setDismissed] = useState<string | null>(null);
+
+  // Nothing to show until a newer release is detected (startup check runs
+  // automatically inside useAppUpdate). Hide if the user dismissed this version.
+  if (!update?.hasUpdate) return null;
+  if (dismissed === update.latestVersion) return null;
+
+  return (
+    <div className="mt-1.5 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2">
+      <Bell className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+      <div className="flex-1 min-w-0">
+        <p className="text-[12px] font-medium leading-tight text-amber-600 dark:text-amber-400">
+          {t("settings.update_available")}
+        </p>
+        <p className="mt-0.5 truncate text-[11px] leading-tight text-muted-foreground">
+          {t("settings.update_available_desc")}
+        </p>
+        <button
+          onClick={() => openExternalUrl(update.releaseUrl)}
+          className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-amber-500 px-2 py-1 text-[11px] font-medium text-white transition-colors hover:bg-amber-600"
+        >
+          {t("settings.view_release")}
+        </button>
+      </div>
+      <button
+        onClick={() => setDismissed(update.latestVersion)}
+        className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-muted/60 hover:text-foreground"
+        title={t("chat.close")}
+      >
+        <X className="size-3" />
+      </button>
+    </div>
   );
 }
 

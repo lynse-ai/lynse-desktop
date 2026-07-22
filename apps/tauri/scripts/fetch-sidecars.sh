@@ -117,16 +117,19 @@ fetch_ffmpeg
 # sidecar. Tauri validates all listed source files at build time on every
 # platform, so each platform must ship both variants even though the app only
 # ever invokes the one matching its own OS. Create the missing counterpart.
-# NOTE: on Windows, `cp x.exe x` silently yields `x.exe` again (the OS appends
-# .exe to executable paths), so we use redirection there to obtain a truly
-# extensionless file.
+# NOTE: on Windows, MSYS silently resolves extensionless executable paths back
+# to the `.exe` file. Use .NET's exact-path copy to create the resource name
+# Tauri validates.
 for b in whisper moss-transcribe ffmpeg ffprobe; do
   if [[ "$IS_WINDOWS" -eq 1 ]]; then
     # MSYS treats `foo` as existing when only `foo.exe` exists, so use find
     # to check the exact filename before creating the extensionless resource.
     extensionless="$(find "$SIDECARS" -maxdepth 1 -type f -name "$b" -print -quit)"
     if [[ -f "$SIDECARS/$b.exe" && -z "$extensionless" ]]; then
-      cat "$SIDECARS/$b.exe" > "$SIDECARS/$b"
+      SIDECAR_SOURCE="$(cygpath -aw "$SIDECARS/$b.exe")" \
+        SIDECAR_TARGET="$(cygpath -aw "$SIDECARS/$b")" \
+        powershell.exe -NoProfile -NonInteractive -Command \
+        '[System.IO.File]::Copy($env:SIDECAR_SOURCE, $env:SIDECAR_TARGET, $true)'
     fi
     if [[ -z "$(find "$SIDECARS" -maxdepth 1 -type f -name "$b" -print -quit)" ]]; then
       echo "missing extensionless packaging resource for $b" >&2

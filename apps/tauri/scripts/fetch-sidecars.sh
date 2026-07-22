@@ -126,8 +126,9 @@ for b in whisper moss-transcribe ffmpeg ffprobe; do
     # to check the exact filename before creating the extensionless resource.
     extensionless="$(find "$SIDECARS" -maxdepth 1 -type f -name "$b" -print -quit)"
     if [[ -f "$SIDECARS/$b.exe" && -z "$extensionless" ]]; then
-      SIDECAR_SOURCE="$(cygpath -aw "$SIDECARS/$b.exe")" \
-        SIDECAR_TARGET="$(cygpath -aw "$SIDECARS/$b")" \
+      sidecars_native="$(cygpath -aw "$SIDECARS")"
+      SIDECAR_SOURCE="${sidecars_native}\\${b}.exe" \
+        SIDECAR_TARGET="${sidecars_native}\\${b}" \
         powershell.exe -NoProfile -NonInteractive -Command \
         '[System.IO.File]::Copy($env:SIDECAR_SOURCE, $env:SIDECAR_TARGET, $true)'
     fi

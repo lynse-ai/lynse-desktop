@@ -35,3 +35,7 @@ uuid = { version = "1", features = ["v4"] }
 # macOS-only: EventKit bridge for system calendar integration.
 [target.'cfg(target_os = "macos")'.dependencies]
 highlandcows-eventkit = "0.5.8"
+
+# Windows-only: microphone capture for live translation (stage 1).
+[target.'cfg(target_os = "windows")'.dependencies]
+cpal = "0.15"

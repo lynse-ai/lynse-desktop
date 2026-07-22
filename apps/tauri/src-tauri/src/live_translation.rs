@@ -6,10 +6,11 @@ use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(target_os = "macos")]
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -32,6 +33,30 @@ fn decode_audio_header(
         return Err(format!("invalid PCM frame length: {length}"));
     }
     Ok((source, sequence, elapsed_ms, length))
+}
+
+/// Push one encoded PCM frame (16kHz / mono / 16-bit, 640 bytes) into the
+/// per-source route that feeds the translation websocket. Shared by the macOS
+/// (Unix socket) and Windows (cpal) audio capture paths so both produce
+/// exactly the same on-wire format.
+fn enqueue_audio(
+    session: &LiveSession,
+    source: AudioSource,
+    elapsed_ms: u64,
+    payload: Vec<u8>,
+) {
+    session
+        .last_elapsed_ms
+        .fetch_max(elapsed_ms.saturating_add(20), Ordering::Relaxed);
+    if let Some(sender) = session
+        .routes
+        .read()
+        .expect("live routes lock")
+        .get(&source)
+        .cloned()
+    {
+        let _ = sender.send(WsCommand::Audio(payload));
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -190,6 +215,7 @@ struct LiveSession {
     segments: Mutex<Vec<LiveSegment>>,
     routes: RwLock<HashMap<AudioSource, UnboundedSender<WsCommand>>>,
     child: Mutex<Option<Child>>,
+    capture_stop: Arc<AtomicBool>,
     directory: PathBuf,
     socket_path: PathBuf,
 }
@@ -265,6 +291,7 @@ fn emit_stream_state(app: &AppHandle, source: AudioSource, state: &str, epoch: u
     );
 }
 
+#[cfg(target_os = "macos")]
 fn sidecar_command(app: &AppHandle) -> CommandResult<Command> {
     let path = crate::stt::sidecar_path(app, "audio-capture")?;
     let mut command = Command::new(path);
@@ -279,6 +306,7 @@ fn sidecar_command(app: &AppHandle) -> CommandResult<Command> {
     Ok(command)
 }
 
+#[cfg(target_os = "macos")]
 fn run_permission_command(app: &AppHandle, argument: &str) -> CommandResult<PermissionStatus> {
     let output = sidecar_command(app)?
         .arg(argument)
@@ -312,7 +340,14 @@ fn run_permission_command(app: &AppHandle, argument: &str) -> CommandResult<Perm
 
 #[tauri::command]
 pub fn live_translation_permissions(app: AppHandle) -> CommandResult<PermissionStatus> {
-    run_permission_command(&app, "--permission-status")
+    #[cfg(target_os = "macos")]
+    return run_permission_command(&app, "--permission-status");
+    #[cfg(target_os = "windows")]
+    return Ok(PermissionStatus {
+        microphone: "granted".to_owned(),
+        system_audio: "denied".to_owned(),
+        restart_required: false,
+    });
 }
 
 #[tauri::command]
@@ -320,10 +355,20 @@ pub fn live_translation_request_permission(
     app: AppHandle,
     kind: String,
 ) -> CommandResult<PermissionStatus> {
+    #[cfg(target_os = "macos")]
     match kind.as_str() {
-        "microphone" => run_permission_command(&app, "--request-microphone"),
-        "systemAudio" => run_permission_command(&app, "--request-system-audio"),
-        _ => Err("permission kind must be microphone or systemAudio".to_owned()),
+        "microphone" => return run_permission_command(&app, "--request-microphone"),
+        "systemAudio" => return run_permission_command(&app, "--request-system-audio"),
+        _ => return Err("permission kind must be microphone or systemAudio".to_owned()),
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let _ = (app, kind);
+        return Ok(PermissionStatus {
+            microphone: "granted".to_owned(),
+            system_audio: "denied".to_owned(),
+            restart_required: false,
+        });
     }
 }
 
@@ -354,6 +399,7 @@ pub async fn live_translation_start(
         return Err("at least one signed translation connection is required".to_owned());
     }
     validate_connections(&request.connections)?;
+    #[cfg(target_os = "macos")]
     if run_permission_command(&app, "--permission-status")?.microphone != "granted" {
         return Err("microphone permission is required before recording".to_owned());
     }
@@ -366,15 +412,17 @@ pub async fn live_translation_start(
             return Err("a live translation session is already active".to_owned());
         }
     }
-    let mut command = sidecar_command(&app)?;
-
     let directory = recovery_root(&app)?.join(&request.session_id);
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-    let socket_path =
-        std::env::temp_dir().join(format!("lynse-live-{}.sock", uuid::Uuid::new_v4()));
-    let _ = fs::remove_file(&socket_path);
-    let listener =
-        UnixListener::bind(&socket_path).map_err(|error| format!("bind audio IPC: {error}"))?;
+    #[cfg(target_os = "macos")]
+    let macos_audio = {
+        let socket_path =
+            std::env::temp_dir().join(format!("lynse-live-{}.sock", uuid::Uuid::new_v4()));
+        let _ = fs::remove_file(&socket_path);
+        let listener = UnixListener::bind(&socket_path)
+            .map_err(|error| format!("bind audio IPC: {error}"))?;
+        (socket_path, listener)
+    };
 
     let session = Arc::new(LiveSession {
         session_id: request.session_id.clone(),
@@ -391,8 +439,18 @@ pub async fn live_translation_start(
         segments: Mutex::new(Vec::new()),
         routes: RwLock::new(HashMap::new()),
         child: Mutex::new(None),
+        capture_stop: Arc::new(AtomicBool::new(true)),
         directory,
-        socket_path,
+        socket_path: {
+            #[cfg(target_os = "macos")]
+            {
+                macos_audio.0.clone()
+            }
+            #[cfg(target_os = "windows")]
+            {
+                PathBuf::new()
+            }
+        },
     });
     let manifest = RecoveryManifest {
         session_id: session.session_id.clone(),
@@ -409,36 +467,47 @@ pub async fn live_translation_start(
 
     spawn_connections(&app, &session, request.epoch, 0, request.connections)?;
 
-    command
-        .arg("--socket")
-        .arg(&session.socket_path)
-        .arg("--out")
-        .arg(&session.directory)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
+    #[cfg(target_os = "macos")]
+    {
+        let mut command = sidecar_command(&app)?;
+        command
+            .arg("--socket")
+            .arg(&macos_audio.0)
+            .arg("--out")
+            .arg(&session.directory)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                voice_end(&session);
+                let _ = fs::remove_file(&macos_audio.0);
+                return Err(format!("spawn audio-capture: {error}"));
+            }
+        };
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or("audio-capture stdout unavailable")?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or("audio-capture stderr unavailable")?;
+        *session
+            .child
+            .lock()
+            .map_err(|_| "live child lock is poisoned")? = Some(child);
+        spawn_audio_reader(app.clone(), session.clone(), macos_audio.1);
+        spawn_control_reader(app.clone(), session.clone(), stdout);
+        spawn_stderr_reader(app.clone(), stderr);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Err(error) = start_windows_capture(&app, &session) {
             voice_end(&session);
-            let _ = fs::remove_file(&session.socket_path);
-            return Err(format!("spawn audio-capture: {error}"));
+            return Err(error);
         }
-    };
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("audio-capture stdout unavailable")?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or("audio-capture stderr unavailable")?;
-    *session
-        .child
-        .lock()
-        .map_err(|_| "live child lock is poisoned")? = Some(child);
-    spawn_audio_reader(app.clone(), session.clone(), listener);
-    spawn_control_reader(app.clone(), session.clone(), stdout);
-    spawn_stderr_reader(app.clone(), stderr);
+    }
 
     *state
         .session
@@ -448,6 +517,7 @@ pub async fn live_translation_start(
     Ok(session.snapshot())
 }
 
+#[cfg(target_os = "macos")]
 fn spawn_audio_reader(app: AppHandle, session: Arc<LiveSession>, listener: UnixListener) {
     thread::spawn(move || {
         let result = (|| -> CommandResult<()> {
@@ -466,18 +536,7 @@ fn spawn_audio_reader(app: AppHandle, session: Arc<LiveSession>, listener: UnixL
                 stream
                     .read_exact(&mut payload)
                     .map_err(|error| format!("read audio IPC payload: {error}"))?;
-                session
-                    .last_elapsed_ms
-                    .fetch_max(elapsed_ms.saturating_add(20), Ordering::Relaxed);
-                let sender = session
-                    .routes
-                    .read()
-                    .expect("live routes lock")
-                    .get(&source)
-                    .cloned();
-                if let Some(sender) = sender {
-                    let _ = sender.send(WsCommand::Audio(payload));
-                }
+                enqueue_audio(&session, source, elapsed_ms, payload);
             }
             Ok(())
         })();
@@ -488,6 +547,7 @@ fn spawn_audio_reader(app: AppHandle, session: Arc<LiveSession>, listener: UnixL
     });
 }
 
+#[cfg(target_os = "macos")]
 fn spawn_control_reader(
     app: AppHandle,
     session: Arc<LiveSession>,
@@ -545,6 +605,7 @@ fn spawn_control_reader(
     });
 }
 
+#[cfg(target_os = "macos")]
 fn spawn_stderr_reader(app: AppHandle, stderr: impl Read + Send + 'static) {
     thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
@@ -960,6 +1021,7 @@ fn containment(left: &[String], right: &[String]) -> f32 {
     left.intersection(&right).count() as f32 / denominator as f32
 }
 
+#[cfg(target_os = "macos")]
 fn signal_child(session: &LiveSession, signal: i32) -> CommandResult<()> {
     let pid = session
         .child
@@ -974,6 +1036,14 @@ fn signal_child(session: &LiveSession, signal: i32) -> CommandResult<()> {
     } else {
         Err(std::io::Error::last_os_error().to_string())
     }
+}
+
+#[cfg(target_os = "windows")]
+fn signal_child(_session: &LiveSession, _signal: i32) -> CommandResult<()> {
+    // Windows captures audio in-process via cpal, so there is no sidecar
+    // child process to signal. Stop/pause is driven by the `capture_stop`
+    // flag instead.
+    Ok(())
 }
 
 fn voice_end(session: &LiveSession) {
@@ -1060,6 +1130,7 @@ pub async fn live_translation_stop(
         .ok_or("no live translation session")?;
     session.set_state("stopping");
     emit_snapshot(&app, &session);
+    session.capture_stop.store(false, Ordering::Relaxed);
     let _ = signal_child(&session, libc::SIGTERM);
 
     let child = session
@@ -1438,6 +1509,7 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
         child: Mutex::new(None),
         directory,
         socket_path: PathBuf::new(),
+        capture_stop: Arc::new(AtomicBool::new(true)),
     };
     persist_session(app, &session)
 }
@@ -1474,6 +1546,165 @@ pub fn live_translation_show_subtitles(app: AppHandle, show: bool) -> CommandRes
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Windows live-translation audio capture (stage 1: microphone).
+//
+// On Windows there is no Swift `audio-capture` sidecar. We capture the default
+// microphone in-process with `cpal`, resample to the 16 kHz / mono / 16-bit
+// format the rest of the pipeline expects, and feed the exact same 640-byte PCM
+// frames through `enqueue_audio` so the cloud translation path is identical to
+// macOS. System-audio loopback capture is a follow-up (stage 2).
+// ---------------------------------------------------------------------------
+#[cfg(target_os = "windows")]
+fn start_windows_capture(app: &AppHandle, session: &Arc<LiveSession>) -> CommandResult<()> {
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use cpal::Sample;
+
+    let host = cpal::default_host();
+    let device = host
+        .default_input_device()
+        .ok_or_else(|| "未找到默认麦克风输入设备".to_owned())?;
+    let config = device
+        .default_input_config()
+        .map_err(|error| format!("获取麦克风输入配置失败：{error}"))?;
+    let sample_format = config.sample_format();
+    let stream_config: cpal::StreamConfig = config.into();
+    let channels = stream_config.channels as usize;
+    let in_rate = stream_config.sample_rate.0;
+    let start = Instant::now();
+    let leftover = Arc::new(Mutex::new(Vec::<u8>::new()));
+
+    let stream = match sample_format {
+        cpal::SampleFormat::F32 => {
+            let leftover = leftover.clone();
+            let session_ref = session.clone();
+            let app_ref = app.clone();
+            device
+                .build_input_stream(
+                    &stream_config,
+                    move |data: &[f32], _| {
+                        feed_samples(data, channels, in_rate, &start, &leftover, &session_ref)
+                    },
+                    move |error| {
+                        emit_error(
+                            &app_ref,
+                            Some(AudioSource::Mic),
+                            format!("麦克风音频流错误：{error}"),
+                        )
+                    },
+                    None,
+                )
+                .map_err(|error| format!("创建麦克风输入流失败：{error}"))?
+        }
+        cpal::SampleFormat::I16 => {
+            let leftover = leftover.clone();
+            let session_ref = session.clone();
+            let app_ref = app.clone();
+            device
+                .build_input_stream(
+                    &stream_config,
+                    move |data: &[i16], _| {
+                        feed_samples(data, channels, in_rate, &start, &leftover, &session_ref)
+                    },
+                    move |error| {
+                        emit_error(
+                            &app_ref,
+                            Some(AudioSource::Mic),
+                            format!("麦克风音频流错误：{error}"),
+                        )
+                    },
+                    None,
+                )
+                .map_err(|error| format!("创建麦克风输入流失败：{error}"))?
+        }
+        cpal::SampleFormat::U16 => {
+            let leftover = leftover.clone();
+            let session_ref = session.clone();
+            let app_ref = app.clone();
+            device
+                .build_input_stream(
+                    &stream_config,
+                    move |data: &[u16], _| {
+                        feed_samples(data, channels, in_rate, &start, &leftover, &session_ref)
+                    },
+                    move |error| {
+                        emit_error(
+                            &app_ref,
+                            Some(AudioSource::Mic),
+                            format!("麦克风音频流错误：{error}"),
+                        )
+                    },
+                    None,
+                )
+                .map_err(|error| format!("创建麦克风输入流失败：{error}"))?
+        }
+        _ => return Err("不支持的麦克风采样格式".to_owned()),
+    };
+
+    stream
+        .play()
+        .map_err(|error| format!("启动麦克风输入流失败：{error}"))?;
+
+    // Keep the stream alive (and the device capturing) until the session stops.
+    while session.capture_stop.load(Ordering::Relaxed) {
+        thread::sleep(Duration::from_millis(200));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn feed_samples<T: Sample>(
+    data: &[T],
+    channels: usize,
+    in_rate: u32,
+    start: &Instant,
+    leftover: &Arc<Mutex<Vec<u8>>>,
+    session: &Arc<LiveSession>,
+) {
+    if !session.capture_stop.load(Ordering::Relaxed) {
+        return;
+    }
+    let mono: Vec<f32> = data
+        .chunks(channels)
+        .map(|frame| {
+            let sum: f32 = frame.iter().map(|sample| sample.to_f32()).sum();
+            sum / channels as f32
+        })
+        .collect();
+    let resampled = resample_linear(&mono, in_rate, 16_000);
+    let mut pcm: Vec<u8> = Vec::with_capacity(resampled.len() * 2);
+    for sample in resampled {
+        let value = (sample.clamp(-1.0, 1.0) * 32_767.0) as i16;
+        pcm.extend_from_slice(&value.to_le_bytes());
+    }
+    let mut buffer = leftover.lock().expect("live audio buffer lock");
+    buffer.extend_from_slice(&pcm);
+    let elapsed = start.elapsed().as_millis() as u64;
+    while buffer.len() >= 640 {
+        let frame: Vec<u8> = buffer.drain(..640).collect();
+        enqueue_audio(session, AudioSource::Mic, elapsed, frame);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn resample_linear(input: &[f32], in_rate: u32, out_rate: u32) -> Vec<f32> {
+    if in_rate == out_rate {
+        return input.to_vec();
+    }
+    let step = in_rate as f64 / out_rate as f64;
+    let out_len = (input.len() as f64 / step).ceil() as usize;
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let pos = i as f64 * step;
+        let idx = pos as usize;
+        let frac = (pos - idx as f64) as f32;
+        let a = *input.get(idx).unwrap_or(&0.0);
+        let b = *input.get(idx + 1).unwrap_or(&a);
+        out.push(a + (b - a) * frac);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1494,6 +1725,7 @@ mod tests {
             segments: Mutex::new(Vec::new()),
             routes: RwLock::new(HashMap::new()),
             child: Mutex::new(None),
+            capture_stop: Arc::new(AtomicBool::new(true)),
             directory: std::env::temp_dir(),
             socket_path: std::env::temp_dir().join("unused-live-translation-test.sock"),
         }

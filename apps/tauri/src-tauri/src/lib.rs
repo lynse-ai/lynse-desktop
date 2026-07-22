@@ -16,9 +16,9 @@ use tauri::http::{header, Request, Response, StatusCode};
 use tauri::{AppHandle, Emitter, Manager, Runtime, UriSchemeContext};
 use uuid::Uuid;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 mod live_translation;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[path = "live_translation_stub.rs"]
 mod live_translation;
 mod stt;

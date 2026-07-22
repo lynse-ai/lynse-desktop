@@ -503,10 +503,17 @@ pub async fn live_translation_start(
     }
     #[cfg(target_os = "windows")]
     {
-        if let Err(error) = start_windows_capture(&app, &session) {
-            voice_end(&session);
-            return Err(error);
-        }
+        // Run capture off the async runtime (mirrors macOS, where the sidecar
+        // is spawned detached). The blocking `while capture_stop` loop inside
+        // `start_windows_capture` must not run on the command's future.
+        let win_app = app.clone();
+        let win_session = session.clone();
+        thread::spawn(move || {
+            if let Err(error) = start_windows_capture(&win_app, &win_session) {
+                voice_end(&win_session);
+                emit_error(&win_app, None, error);
+            }
+        });
     }
 
     *state
@@ -1021,6 +1028,23 @@ fn containment(left: &[String], right: &[String]) -> f32 {
     left.intersection(&right).count() as f32 / denominator as f32
 }
 
+// Pause/resume/stop signals forwarded to the macOS audio-capture sidecar via
+// `signal_child`. On Windows there is no sidecar child process, so the value is
+// irrelevant (the Windows `signal_child` is a no-op); we still define a
+// platform-safe constant so the call sites compile on both targets.
+#[cfg(target_os = "macos")]
+const SIGNAL_PAUSE: i32 = libc::SIGUSR1;
+#[cfg(target_os = "windows")]
+const SIGNAL_PAUSE: i32 = 0;
+#[cfg(target_os = "macos")]
+const SIGNAL_RESUME: i32 = libc::SIGUSR2;
+#[cfg(target_os = "windows")]
+const SIGNAL_RESUME: i32 = 0;
+#[cfg(target_os = "macos")]
+const SIGNAL_STOP: i32 = libc::SIGTERM;
+#[cfg(target_os = "windows")]
+const SIGNAL_STOP: i32 = 0;
+
 #[cfg(target_os = "macos")]
 fn signal_child(session: &LiveSession, signal: i32) -> CommandResult<()> {
     let pid = session
@@ -1075,7 +1099,7 @@ pub async fn live_translation_pause(
         return Err("session is not recording".to_owned());
     }
     session.set_state("paused");
-    signal_child(&session, libc::SIGUSR1)?;
+    signal_child(&session, SIGNAL_PAUSE)?;
     voice_end(&session);
     emit_snapshot(&app, &session);
     tokio::time::sleep(Duration::from_millis(3_100)).await;
@@ -1112,7 +1136,7 @@ pub async fn live_translation_resume(
     session.epoch_offset_ms.store(offset, Ordering::Relaxed);
     session.set_state("connecting");
     spawn_connections(&app, &session, request.epoch, offset, request.connections)?;
-    signal_child(&session, libc::SIGUSR2)?;
+    signal_child(&session, SIGNAL_RESUME)?;
     emit_snapshot(&app, &session);
     Ok(session.snapshot())
 }
@@ -1131,7 +1155,7 @@ pub async fn live_translation_stop(
     session.set_state("stopping");
     emit_snapshot(&app, &session);
     session.capture_stop.store(false, Ordering::Relaxed);
-    let _ = signal_child(&session, libc::SIGTERM);
+    let _ = signal_child(&session, SIGNAL_STOP);
 
     let child = session
         .child
@@ -1558,7 +1582,6 @@ pub fn live_translation_show_subtitles(app: AppHandle, show: bool) -> CommandRes
 #[cfg(target_os = "windows")]
 fn start_windows_capture(app: &AppHandle, session: &Arc<LiveSession>) -> CommandResult<()> {
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-    use cpal::Sample;
 
     let host = cpal::default_host();
     let device = host
@@ -1661,6 +1684,7 @@ fn feed_samples<T: Sample>(
     leftover: &Arc<Mutex<Vec<u8>>>,
     session: &Arc<LiveSession>,
 ) {
+    use cpal::Sample;
     if !session.capture_stop.load(Ordering::Relaxed) {
         return;
     }

@@ -16,6 +16,8 @@
 ### Bug Fixes
 
 - Hide internal meeting identifiers from assistant replies while preserving Markdown links
+- Bundle the MOSS transcription engine as a self-contained binary and validate sidecars before publishing installers
+- Keep the macOS-only audio-capture helper from breaking Windows packaging
 
 ## 0.1.11 (2026-07-19)
 

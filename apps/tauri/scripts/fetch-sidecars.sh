@@ -62,7 +62,8 @@ build_moss() {
   else
     metal_opt="-DGGML_METAL=on"
   fi
-  cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release $metal_opt
+  cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_SHARED_LIBS=OFF $metal_opt
   cmake --build "$src/build" --config Release -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
   local bin
   # The CLI target is `moss-transcribe-cli` but its OUTPUT_NAME is

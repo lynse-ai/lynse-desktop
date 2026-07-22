@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
-    "build:audio-capture": "./scripts/build-audio-capture.sh",
+    "build:audio-capture": "bash ./scripts/build-audio-capture.sh",
     "test:audio-capture": "swift run --package-path audio-capture audio-capture-core-tests",
     "tauri": "tauri",
     "check": "cargo check --manifest-path src-tauri/Cargo.toml"

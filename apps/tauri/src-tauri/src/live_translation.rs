@@ -1683,7 +1683,7 @@ fn start_windows_capture(app: &AppHandle, session: &Arc<LiveSession>) -> Command
 }
 
 #[cfg(target_os = "windows")]
-fn feed_samples<T: Sample + cpal::traits::ToSample<f32>>(
+fn feed_samples<T: Sample>(
     data: &[T],
     channels: usize,
     in_rate: u32,
@@ -1697,7 +1697,7 @@ fn feed_samples<T: Sample + cpal::traits::ToSample<f32>>(
     let mono: Vec<f32> = data
         .chunks(channels)
         .map(|frame| {
-            let sum: f32 = frame.iter().map(|sample| sample.to_sample::<f32>()).sum();
+            let sum: f32 = frame.iter().map(|sample| sample.to_float_sample()).sum();
             sum / channels as f32
         })
         .collect();

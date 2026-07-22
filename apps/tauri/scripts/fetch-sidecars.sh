@@ -80,15 +80,15 @@ build_moss() {
 
 fetch_ffmpeg() {
   if [[ "$IS_WINDOWS" -eq 1 ]]; then
-    # BtbN LGPL shared build (CPU).
+    # BtbN LGPL static build (CPU), so the bundled executables need no DLLs.
     local zip
     zip="$(mktemp)"
-    curl -fL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl-shared.zip" -o "$zip"
+    curl -fL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip" -o "$zip"
     local tmp
     tmp="$(mktemp -d)"
     (cd "$tmp" && unzip -o "$zip" >/dev/null)
-    cp "$tmp"/ffmpeg-master-latest-win64-lgpl-shared/bin/ffmpeg.exe "$SIDECARS/"
-    cp "$tmp"/ffmpeg-master-latest-win64-lgpl-shared/bin/ffprobe.exe "$SIDECARS/"
+    cp "$tmp"/ffmpeg-master-latest-win64-lgpl/bin/ffmpeg.exe "$SIDECARS/"
+    cp "$tmp"/ffmpeg-master-latest-win64-lgpl/bin/ffprobe.exe "$SIDECARS/"
     rm -rf "$tmp" "$zip"
   else
     # ffbinaries LGPL static build (x64 macOS; runs via Rosetta on Apple Silicon).

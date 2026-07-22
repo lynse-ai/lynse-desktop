@@ -1690,14 +1690,16 @@ fn feed_samples<T: Sample>(
     start: &Instant,
     leftover: &Arc<Mutex<Vec<u8>>>,
     session: &Arc<LiveSession>,
-) {
+) where
+    f32: cpal::FromSample<T>,
+{
     if !session.capture_stop.load(Ordering::Relaxed) {
         return;
     }
     let mono: Vec<f32> = data
         .chunks(channels)
         .map(|frame| {
-            let sum: f32 = frame.iter().map(|sample| sample.to_float_sample()).sum();
+            let sum: f32 = frame.iter().map(|&sample| f32::from_sample(sample)).sum();
             sum / channels as f32
         })
         .collect();

@@ -868,44 +868,53 @@ fn apply_provider_message(
 
     let mut segments = session.segments.lock().expect("live segments lock");
 
-    // The currently open (non-final) utterance being coalesced for this source
-    // and stream. Interim results for the same utterance must refresh this block
-    // in place rather than spawning a new one — otherwise the provider's rolling
-    // buffer (each update echoes the previous sentence) renders as a stack of
-    // duplicated cards on the frontend.
-    let open_pos = segments.iter().rposition(|segment| {
+    // Coalesce each utterance onto a single live segment/card. The provider
+    // streams rolling-buffer corrections — each update may rewrite the previous
+    // sentence and is not always a strict prefix of it — so we must refresh the
+    // open card in place instead of spawning a new bubble for every interim
+    // result. Otherwise a single spoken sentence renders as a stack of cards.
+    //
+    // Rule: attach the message to the open (not-yet-fully-final) utterance for
+    // this source. A recognized interim that arrives after the current open
+    // utterance's recognition has already finalized is the start of a new
+    // sentence and opens a fresh card. Translations always land on the open
+    // utterance they stream alongside.
+    let exact_pos = segments.iter().rposition(|segment| {
         !segment.is_final && segment.source == source && segment.provider_stream_id == stream_id
     });
-
-    // Continue the open utterance when the message carries the same task id, or
-    // (different task id, e.g. a re-keyed rolling buffer) when its text begins
-    // with what we already have. Otherwise it is a genuinely new utterance:
-    // close the open block as best-effort and start a fresh one.
-    let continues_open = match open_pos {
-        None => false,
+    let open_pos = segments.iter().rposition(|segment| {
+        !segment.is_final && segment.source == source
+    });
+    let reuse_pos = match exact_pos.or(open_pos) {
+        None => None,
         Some(pos) => {
-            let same_task = segments[pos].task_id.as_deref() == Some(task_id.as_str());
-            if same_task {
-                true
-            } else {
-                let current = if is_recognized {
-                    segments[pos].recognized_text.as_str()
+            let segment = &segments[pos];
+            let recognized_done = segment.recognized_final;
+            // Providers may re-issue final results or corrections for the same
+            // utterance. If the message belongs to the exact same provider
+            // stream, refresh the open card in place unless the new result's
+            // start time has clearly moved past the previous utterance (the
+            // provider started a new sentence on the same stream). Otherwise a
+            // recognized interim that arrives after the previous utterance has
+            // finalized is treated as the start of the next sentence.
+            if is_recognized && recognized_done && exact_pos.is_none() {
+                None
+            } else if is_recognized && recognized_done && exact_pos.is_some() {
+                let previous_end = segment.end_ms.unwrap_or(segment.start_ms);
+                if start_ms > previous_end.saturating_add(100) {
+                    None
                 } else {
-                    segments[pos].translated_text.as_str()
-                };
-                current.is_empty() || incoming.starts_with(current)
+                    Some(pos)
+                }
+            } else {
+                Some(pos)
             }
         }
     };
 
-    let index = if continues_open {
-        open_pos.expect("open_pos is Some when continues_open")
+    let index = if let Some(pos) = reuse_pos {
+        pos
     } else {
-        if let Some(pos) = open_pos {
-            // Close the previous open utterance so it stops being the coalescing
-            // target. Its text is kept intact.
-            segments[pos].is_final = true;
-        }
         segments.push(LiveSegment {
             id: format!(
                 "{}:{epoch}:{:?}:{}:{}",
@@ -1897,6 +1906,45 @@ mod tests {
         apply_provider_message(&session, AudioSource::Mic, 0, 0, u2).unwrap();
         let segments = session.segments.lock().unwrap();
         assert_eq!(segments.len(), 2, "a new utterance must open a new segment");
+    }
+
+    #[test]
+    fn coalesces_repeated_final_results_on_the_same_stream() {
+        let session = live_session();
+        // Some providers emit the same final utterance more than once (e.g. a
+        // late correction or duplicate flush). The second final must refresh
+        // the existing card instead of spawning a duplicate bubble.
+        let interim = r#"{"method":"recognizedTempResult","streamId":"9","taskId":"a1","startTs":"20","endTs":"0","asr":"一、二三四，五六七"}"#;
+        let final1 = r#"{"method":"recognizedResult","streamId":"9","taskId":"a2","startTs":"20","endTs":"80","asr":"一、二三四，五六七。"}"#;
+        let final2 = r#"{"method":"recognizedResult","streamId":"9","taskId":"a3","startTs":"20","endTs":"80","asr":"一、二三四，五六七。"}"#;
+        apply_provider_message(&session, AudioSource::Mic, 0, 0, interim).unwrap();
+        apply_provider_message(&session, AudioSource::Mic, 0, 0, final1).unwrap();
+        apply_provider_message(&session, AudioSource::Mic, 0, 0, final2).unwrap();
+        let segments = session.segments.lock().unwrap();
+        assert_eq!(
+            segments.len(),
+            1,
+            "repeated recognizedResult on the same stream must coalesce"
+        );
+        assert_eq!(segments[0].recognized_text, "一、二三四，五六七。");
+        assert!(segments[0].recognized_final);
+    }
+
+    #[test]
+    fn keeps_correcting_within_a_single_segment() {
+        let session = live_session();
+        // The provider rewrites the sentence mid-stream with a correction that is
+        // NOT a strict prefix of the previous text (e.g. "五、六。" -> "五六七").
+        // This used to open a new card per correction, duplicating the utterance.
+        let m1 = r#"{"method":"recognizedTempResult","streamId":"9","taskId":"a1","startTs":"20","endTs":"0","asr":"hello world foo"}"#;
+        let m2 = r#"{"method":"recognizedTempResult","streamId":"9","taskId":"a2","startTs":"20","endTs":"0","asr":"hello world bar"}"#;
+        let m3 = r#"{"method":"recognizedResult","streamId":"9","taskId":"a3","startTs":"20","endTs":"80","asr":"hello world bar baz"}"#;
+        apply_provider_message(&session, AudioSource::Mic, 0, 0, m1).unwrap();
+        apply_provider_message(&session, AudioSource::Mic, 0, 0, m2).unwrap();
+        apply_provider_message(&session, AudioSource::Mic, 0, 0, m3).unwrap();
+        let segments = session.segments.lock().unwrap();
+        assert_eq!(segments.len(), 1, "corrections must refresh the same card");
+        assert_eq!(segments[0].recognized_text, "hello world bar baz");
     }
 
     #[test]

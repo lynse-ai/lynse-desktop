@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.18 (2026-07-23)
+
+### Bug Fixes
+
+- Fix live translation rendering the same spoken sentence as multiple duplicated dialog bubbles: each utterance now maps to a single segment, and the recognizer's rolling-buffer corrections (which are not always strict prefixes) refresh that bubble in place instead of spawning a new card
+
 ## 0.1.17 (2026-07-23)
 
 ### New Features

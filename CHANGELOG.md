@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.17 (2026-07-23)
+
+### New Features
+
+- Add real-time translation support on Windows (stage 1): capture the default microphone with cpal, resample to 16 kHz mono 16-bit PCM, and feed the existing cloud STT + translation + subtitle pipeline; system-audio loopback capture is planned for a later stage
+
+### Changed
+
+- Enable the real live_translation module on Windows (previously a stub); isolate macOS-only Unix-socket, Swift sidecar, and process-signal code behind `cfg(target_os = "macos")`
+
+## 0.1.16 (2026-07-22)
+
+### New Features
+
+- Show the software-update reminder under the username and membership in the sidebar, checked automatically on app launch
+
+### Changed
+
+- Live translation real-time view shows the source text on top and the translation below, segmented by semantics; the backend now merges rolling-buffer updates into a single in-place refreshing segment instead of appending duplicate segments
+
+### Bug Fixes
+
+- Shrink the desktop installer to ~6.4 MB by downloading the STT runtime on demand
+- Fix Windows CI packaging so the Windows msi is produced (it was missing due to an MSYS tar path bug)
+
 ## 0.1.13 (2026-07-22)
 
 ### New Features

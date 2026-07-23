@@ -33,15 +33,65 @@ import {
   type LiveTranslationProviderConfig,
 } from "./types";
 
-const LANGUAGE_OPTIONS = [
-  { code: "zh", label: "中文" },
+// Languages follow the iLiveData ISO-639-1 code list
+// (https://docs.ilivedata.com/alt/techdoc/language/). 简体中文 keeps the
+// legacy `zh` code so the production `lynse_backend` path is unaffected; all
+// other entries use the documented iLiveData codes.
+const LANGUAGE_OPTIONS: { code: string; label: string }[] = [
+  { code: "zh", label: "中文（简体）" },
+  { code: "zh-TW", label: "中文（繁体）" },
+  { code: "zh-yue", label: "粤语" },
   { code: "en", label: "English" },
   { code: "ja", label: "日本語" },
   { code: "ko", label: "한국어" },
   { code: "fr", label: "Français" },
-  { code: "de", label: "Deutsch" },
   { code: "es", label: "Español" },
+  { code: "de", label: "Deutsch" },
+  { code: "ru", label: "Русский" },
+  { code: "pt", label: "Português" },
+  { code: "it", label: "Italiano" },
+  { code: "ar", label: "العربية" },
+  { code: "hi", label: "हिन्दी" },
+  { code: "vi", label: "Tiếng Việt" },
+  { code: "th", label: "ไทย" },
+  { code: "id", label: "Bahasa Indonesia" },
+  { code: "ms", label: "Bahasa Melayu" },
+  { code: "tr", label: "Türkçe" },
+  { code: "tl", label: "Tagalog" },
+  { code: "el", label: "Ελληνικά" },
+  { code: "fa", label: "فارسی" },
+  { code: "ur", label: "اردو" },
+  { code: "bn", label: "বাংলা" },
+  { code: "gu", label: "ગુજરાતી" },
+  { code: "mr", label: "मराठी" },
+  { code: "pa", label: "ਪੰਜਾਬੀ" },
+  { code: "ta", label: "தமிழ்" },
+  { code: "te", label: "తెలుగు" },
+  { code: "kn", label: "ಕನ್ನಡ" },
+  { code: "ml", label: "മലയാളം" },
+  { code: "my", label: "မြန်မာ" },
+  { code: "km", label: "ខ្មែរ" },
+  { code: "lo", label: "ລາວ" },
+  { code: "he", label: "עברית" },
+  { code: "ro", label: "Română" },
+  { code: "hu", label: "Magyar" },
+  { code: "cs", label: "Čeština" },
+  { code: "sk", label: "Slovenčina" },
+  { code: "hr", label: "Hrvatski" },
+  { code: "fi", label: "Suomi" },
+  { code: "da", label: "Dansk" },
+  { code: "bg", label: "Български" },
+  { code: "uk", label: "Українська" },
+  { code: "et", label: "Eesti" },
+  { code: "sq", label: "Shqip" },
+  { code: "no", label: "Norsk" },
+  { code: "nl", label: "Nederlands" },
+  { code: "sv", label: "Svenska" },
+  { code: "ps", label: "پښتو" },
 ];
+
+// Source language may also be auto-detected by iLiveData.
+const SOURCE_LANGUAGE_OPTIONS = [{ code: "auto", label: "自动识别" }, ...LANGUAGE_OPTIONS];
 
 export function LiveTranslationPage() {
   const { t } = useTranslation();
@@ -383,7 +433,7 @@ export function LiveTranslationPage() {
           <section className="mt-6 space-y-3">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("live_translation.languages")}</h2>
             <div className="flex items-center gap-2">
-              <LanguageSelect value={sourceLanguage} onChange={setSourceLanguage} disabled={active} />
+              <LanguageSelect value={sourceLanguage} onChange={setSourceLanguage} disabled={active} options={SOURCE_LANGUAGE_OPTIONS} />
               <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
               <LanguageSelect value={targetLanguage} onChange={setTargetLanguage} disabled={active} />
             </div>
@@ -541,7 +591,7 @@ export function LiveTranslationPage() {
   );
 }
 
-function LanguageSelect({ value, onChange, disabled }: { value: string; onChange: (value: string) => void; disabled: boolean }) {
+function LanguageSelect({ value, onChange, disabled, options = LANGUAGE_OPTIONS }: { value: string; onChange: (value: string) => void; disabled: boolean; options?: { code: string; label: string }[] }) {
   return (
     <select
       value={value}
@@ -549,7 +599,7 @@ function LanguageSelect({ value, onChange, disabled }: { value: string; onChange
       disabled={disabled}
       className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
     >
-      {LANGUAGE_OPTIONS.map((language) => <option key={language.code} value={language.code}>{language.label}</option>)}
+      {options.map((language) => <option key={language.code} value={language.code}>{language.label}</option>)}
     </select>
   );
 }

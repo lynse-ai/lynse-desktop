@@ -116,5 +116,6 @@ export interface DesktopLiveTranslationApi {
   listRecoveries: () => Promise<LiveRecoverySummary[]>;
   recover: (sessionId: string) => Promise<CompletedLiveSession>;
   showSubtitles: (show: boolean) => Promise<void>;
+  minimizeToTray: () => Promise<void>;
   onEvent: (callback: (event: LiveTranslationEvent) => void) => Promise<() => void>;
 }

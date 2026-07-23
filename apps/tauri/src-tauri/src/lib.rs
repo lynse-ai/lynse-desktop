@@ -13,6 +13,8 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use tauri::http::{header, Request, Response, StatusCode};
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, Runtime, UriSchemeContext};
 use uuid::Uuid;
 
@@ -1607,6 +1609,54 @@ fn check_app_update(app: AppHandle) -> CommandResult<Value> {
     }))
 }
 
+/// Creates the menu-bar / notification-area tray icon and its menu so the
+/// app (and the live-translation floating window) can be minimized to and
+/// restored from the system status bar.
+fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
+    let show_main = MenuItemBuilder::with_id("show_main", "显示主窗口").build(app)?;
+    let show_subtitles = MenuItemBuilder::with_id("show_subtitles", "显示实时字幕").build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", "退出 Lynse").build(app)?;
+    let menu = MenuBuilder::new(app)
+        .item(&show_main)
+        .item(&show_subtitles)
+        .separator()
+        .item(&quit)
+        .build()?;
+
+    let Some(icon) = app.default_window_icon().cloned() else {
+        eprintln!("No default window icon available for the tray");
+        return Ok(());
+    };
+
+    TrayIconBuilder::with_id("main-tray")
+        .icon(icon)
+        .tooltip("Lynse")
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show_main" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            "show_subtitles" => {
+                if let Err(error) =
+                    live_translation::live_translation_show_subtitles(app.clone(), true)
+                {
+                    eprintln!("Failed to show live subtitles: {error}");
+                }
+            }
+            "quit" => {
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -1620,6 +1670,9 @@ pub fn run() {
             }
             if let Err(error) = fail_interrupted_records(&app.handle()) {
                 eprintln!("Failed to recover interrupted local transcriptions: {error}");
+            }
+            if let Err(error) = setup_tray(&app.handle()) {
+                eprintln!("Failed to setup system tray: {error}");
             }
             Ok(())
         })

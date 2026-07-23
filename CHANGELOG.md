@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.19 (2026-07-23)
+
+### New Features
+
+- Redesign the live-translation floating subtitle window with an Apple-style Liquid Glass look: translucent frosted-glass card with gradient fill, backdrop blur + saturation, thin specular rim highlight, and high-contrast dark text
+- Add minimize-to-status-bar for the floating subtitle window: a hover-revealed button hides the window, and a new system tray icon (menu: 显示主窗口 / 显示实时字幕 / 退出) can bring it back
+
 ## 0.1.18 (2026-07-23)
 
 ### Bug Fixes

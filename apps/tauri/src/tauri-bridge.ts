@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { setApiTransportMode } from "@lynse/core/api/client";
 import { hydrateSecrets, secureStorage } from "./secure-storage";
 import type { SttDownloadProgress, SttModelInfo, TranscribeConfig } from "@lynse/views/workspace";
@@ -148,6 +149,7 @@ export async function installTauriBridge(): Promise<void> {
       listRecoveries: () => command<LiveRecoverySummary[]>("live_translation_recoveries"),
       recover: (sessionId) => command<CompletedLiveSession>("live_translation_recover", { sessionId }),
       showSubtitles: (show) => command<void>("live_translation_show_subtitles", { show }),
+      minimizeToTray: () => getCurrentWindow().hide(),
       onEvent: (callback: (event: LiveTranslationEvent) => void) =>
         getCurrentWebview().listen<LiveTranslationEvent>("live-translation-event", (event) => callback(event.payload)),
     },

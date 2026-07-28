@@ -33,6 +33,7 @@ import {
 } from "../app-update";
 import type { LocalHotwordPackage, LocalVoiceprint } from "../workspace/types";
 import { SttConfigSection } from "./stt-config-section";
+import { FeishuAuthCard } from "./feishu-auth-card";
 
 const DEFAULT_API_URL = "http://119.97.160.133:10060";
 export const SETTINGS_DIALOG_CONTENT_CLASS =
@@ -256,6 +257,8 @@ export function SettingsDialog({
             </CardContent>
           </Card>
 
+          <FeishuAuthCard />
+
           {/* ── Speech-to-Text (STT) ───────────────────── */}
           {hasLocalTranscription && (
             <Card>
@@ -461,8 +464,17 @@ export function SettingsDialog({
                   <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5">
                     <p className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
                       <Download className="size-3.5" />
-                      {t("settings.update_available")} (v{update.latestVersion})
+                      {t("settings.update_available")}
                     </p>
+                    <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums">
+                      <span className="rounded bg-background/70 px-1.5 py-0.5 text-muted-foreground">
+                        v{update.currentVersion}
+                      </span>
+                      <span className="text-muted-foreground/50">→</span>
+                      <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-semibold text-amber-600 dark:text-amber-400">
+                        v{update.latestVersion}
+                      </span>
+                    </div>
                     <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
                       {t("settings.update_available_desc")}
                     </p>

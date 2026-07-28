@@ -16,6 +16,7 @@ import type {
   LiveTranslationEvent,
   LiveTranslationProviderConfig,
   LiveTranslationSnapshot,
+  LiveTranslationTrayAction,
 } from "@lynse/views/live-translation";
 import { DEFAULT_ILIVEDATA_RTVT_ENDPOINT } from "@lynse/views/live-translation";
 
@@ -28,8 +29,33 @@ export type AppUpdateInfo = {
   publishedAt?: string | null;
 };
 
+type FeishuAccount = {
+  openId: string;
+  unionId: string;
+  userId?: string | null;
+  name: string;
+  enName?: string | null;
+  avatarUrl?: string | null;
+  email?: string | null;
+  enterpriseEmail?: string | null;
+  tenantKey?: string | null;
+};
+
+type FeishuAuthState = {
+  configured: boolean;
+  redirectUri: string;
+  authorized: boolean;
+  account?: FeishuAccount | null;
+  accessTokenExpiresAt?: string | null;
+};
+
 type DesktopApi = {
   openExternal: (url: string) => Promise<void>;
+  feishuAuth: {
+    getState: () => Promise<FeishuAuthState>;
+    authorize: () => Promise<FeishuAuthState>;
+    disconnect: () => Promise<FeishuAuthState>;
+  };
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
   liveTranslation: DesktopLiveTranslationApi;
   todo: Record<string, (...args: any[]) => Promise<unknown>>;
@@ -50,6 +76,12 @@ const ILIVEDATA_PID_KEY = "lynse_live_translation_ilivedata_pid";
 const ILIVEDATA_SECRET_KEY = "lynse_live_translation_ilivedata_secret_key";
 const LEGACY_ILIVEDATA_RTVT_ENDPOINT =
   "wss://rtvt-bj-test.ilivedata.com/gate/websocket";
+const LIVE_TRANSLATION_TRAY_EVENT = "live-translation-tray-action";
+const LIVE_TRANSLATION_TRAY_NAVIGATE_EVENT = "lynse:live-translation-tray-action";
+const pendingLiveTranslationTrayActions: LiveTranslationTrayAction[] = [];
+const liveTranslationTrayListeners = new Set<
+  (action: LiveTranslationTrayAction) => void
+>();
 
 function getLiveTranslationProviderConfig(): LiveTranslationProviderConfig {
   const savedProvider = window.localStorage.getItem(LIVE_TRANSLATION_PROVIDER_KEY);
@@ -97,9 +129,31 @@ export async function installTauriBridge(): Promise<void> {
   // Tauri HTTP IPC bridge can monopolize the renderer on macOS.
   setApiTransportMode("direct");
 
+  await getCurrentWebview().listen<LiveTranslationTrayAction>(
+    LIVE_TRANSLATION_TRAY_EVENT,
+    (event) => {
+      if (event.payload !== "start" && event.payload !== "pause") return;
+      if (liveTranslationTrayListeners.size === 0) {
+        pendingLiveTranslationTrayActions.push(event.payload);
+      } else {
+        liveTranslationTrayListeners.forEach((listener) => listener(event.payload));
+      }
+      window.dispatchEvent(
+        new CustomEvent(LIVE_TRANSLATION_TRAY_NAVIGATE_EVENT, {
+          detail: event.payload,
+        }),
+      );
+    },
+  );
+
   const desktopAPI: DesktopApi = {
     openExternal: async (url) => {
       await openUrl(url);
+    },
+    feishuAuth: {
+      getState: () => command<FeishuAuthState>("feishu_auth_state"),
+      authorize: () => command<FeishuAuthState>("feishu_auth_authorize"),
+      disconnect: () => command<FeishuAuthState>("feishu_auth_disconnect"),
     },
     localTranscription: {
       pickAudioFile: async () => {
@@ -150,6 +204,12 @@ export async function installTauriBridge(): Promise<void> {
       recover: (sessionId) => command<CompletedLiveSession>("live_translation_recover", { sessionId }),
       showSubtitles: (show) => command<void>("live_translation_show_subtitles", { show }),
       minimizeToTray: () => getCurrentWindow().hide(),
+      onTrayAction: async (callback) => {
+        liveTranslationTrayListeners.add(callback);
+        const pending = pendingLiveTranslationTrayActions.splice(0);
+        pending.forEach(callback);
+        return () => liveTranslationTrayListeners.delete(callback);
+      },
       onEvent: (callback: (event: LiveTranslationEvent) => void) =>
         getCurrentWebview().listen<LiveTranslationEvent>("live-translation-event", (event) => callback(event.payload)),
     },

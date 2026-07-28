@@ -11,6 +11,7 @@ import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Sun, Moon, Monitor } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
+import { FeishuAuthCard } from "./feishu-auth-card";
 
 const DEFAULT_API_URL = "http://119.97.160.133:10060";
 
@@ -98,6 +99,8 @@ export function SettingsPage() {
               </div>
             </CardContent>
           </Card>
+
+          <FeishuAuthCard />
 
           {/* ── API Configuration ──────────────────────── */}
           <Card>

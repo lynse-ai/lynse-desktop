@@ -23,6 +23,8 @@ export type LiveTranslationState =
   | "stopping"
   | "failed";
 
+export type LiveTranslationTrayAction = "start" | "pause";
+
 export interface LiveTranslationSegment {
   id: string;
   sessionId: string;
@@ -54,6 +56,7 @@ export interface LiveTranslationSnapshot {
 export interface LivePermissionStatus {
   microphone: "granted" | "denied" | "notDetermined";
   systemAudio: "granted" | "denied" | "notDetermined";
+  systemAudioRequired: boolean;
   restartRequired: boolean;
 }
 
@@ -117,5 +120,6 @@ export interface DesktopLiveTranslationApi {
   recover: (sessionId: string) => Promise<CompletedLiveSession>;
   showSubtitles: (show: boolean) => Promise<void>;
   minimizeToTray: () => Promise<void>;
+  onTrayAction: (callback: (action: LiveTranslationTrayAction) => void) => Promise<() => void>;
   onEvent: (callback: (event: LiveTranslationEvent) => void) => Promise<() => void>;
 }

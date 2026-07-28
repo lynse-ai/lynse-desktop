@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.20 (2026-07-28)
+
+### New Features
+
+- Add one-click Feishu (飞书) account authorization in the desktop settings page: opens the system browser for OAuth with PKCE and random state validation; the short-term user access token is stored in the OS Keychain and account display info is saved in the app data directory, with re-authorize and disconnect options
+- Add live-translation quick controls to the system tray menu: start or pause real-time recording directly from the tray without opening the main window
+- Improve the macOS system-audio permission flow: requesting system-audio permission now opens System Settings directly to the Screen & System Audio Recording section, and the audio-capture helper pre-checks microphone and screen-capture permissions before starting with clear Chinese error messages
+
+### Changed
+
+- Permission status now includes a `system_audio_required` field; the live-translation start button checks both microphone and system-audio permissions before enabling
+- The Swift audio-capture helper now uses the return value of `CGRequestScreenCaptureAccess()` to determine whether a restart is needed, instead of always returning `restartRequired = true`
+
+### Bug Fixes
+
+- Fix the macOS audio-capture helper always reporting `restartRequired = true` regardless of whether screen-capture permission was actually granted
+
 ## 0.1.19 (2026-07-23)
 
 ### New Features

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   NavigationProvider,
   type NavigationAdapter,
@@ -10,6 +10,20 @@ export function DesktopNavigationProvider({
   children: ReactNode;
 }) {
   const [pathname, setPathname] = useState("/recordings");
+
+  useEffect(() => {
+    const openLiveTranslation = () => setPathname("/live-translation");
+    window.addEventListener(
+      "lynse:live-translation-tray-action",
+      openLiveTranslation,
+    );
+    return () => {
+      window.removeEventListener(
+        "lynse:live-translation-tray-action",
+        openLiveTranslation,
+      );
+    };
+  }, []);
 
   const adapter = useMemo<NavigationAdapter>(
     () => ({

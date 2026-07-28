@@ -116,6 +116,30 @@ pnpm test         # 运行测试
 pnpm ui:add       # 通过 shadcn 添加组件
 ```
 
+## 本地飞书授权 MVP
+
+桌面端设置页提供“一键授权当前飞书账号”。Lynse 会打开系统浏览器完成飞书 OAuth，并通过本机地址接收回调：
+
+```text
+http://127.0.0.1:43927/auth/feishu/callback
+```
+
+开发调试前需要完成一次应用级配置，最终用户无需在 Lynse 界面填写 App ID 或 App Secret：
+
+1. 在飞书开放平台创建自建应用。
+2. 在“安全设置 → 重定向 URL”中添加上面的完整本机回调地址。
+3. 通过构建或启动环境注入应用凭证：
+
+```bash
+LYNSE_FEISHU_APP_ID=cli_xxx \
+LYNSE_FEISHU_APP_SECRET=xxx \
+pnpm dev:desktop
+```
+
+授权流程使用随机 `state` 与 PKCE 校验。取得的短期 `user_access_token` 存入操作系统 Keychain，账号展示信息保存在应用数据目录；解除本地授权时会一并清除。当前 MVP 不申请 `offline_access`，令牌过期后需要重新授权。
+
+> 这是仅供本地验证的实现。飞书最新 OAuth token 接口仍要求 App Secret，因此通过构建环境注入 Secret 的桌面包不适合公开分发。生产版本应把授权码交换与令牌刷新迁移到 Lynse 服务端。
+
 ---
 
 ## 本地转写（FunASR）配置

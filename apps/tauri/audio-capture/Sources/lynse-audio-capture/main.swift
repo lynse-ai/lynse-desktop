@@ -10,6 +10,8 @@ import ScreenCaptureKit
 
 private let targetSampleRate = 16_000.0
 private let controlLock = NSLock()
+private let microphonePermissionMessage = "缺少麦克风权限。请在“系统设置 → 隐私与安全性 → 麦克风”中允许 Lynse，然后重新启动应用。"
+private let systemAudioPermissionMessage = "缺少“屏幕与系统音频录制”权限。请在“系统设置 → 隐私与安全性 → 屏幕与系统音频录制”中允许 Lynse Audio Capture，然后重新启动 Lynse。"
 
 private func emit(_ payload: [String: Any]) {
     guard JSONSerialization.isValidJSONObject(payload),
@@ -51,9 +53,9 @@ private func requestMicrophonePermission() {
 }
 
 private func requestSystemAudioPermission() {
-    _ = CGRequestScreenCaptureAccess()
+    let granted = CGRequestScreenCaptureAccess()
     var result = permissionStatus()
-    result["restartRequired"] = true
+    result["restartRequired"] = granted
     emit(result)
 }
 
@@ -84,6 +86,14 @@ guard let socketPath = argumentValue("--socket"), !socketPath.isEmpty,
       let outputPath = argumentValue("--out"), !outputPath.isEmpty else {
     emitError("missing --socket or --out")
     exit(2)
+}
+guard microphonePermission() == "granted" else {
+    emitError(microphonePermissionMessage)
+    exit(4)
+}
+guard CGPreflightScreenCaptureAccess() else {
+    emitError(systemAudioPermissionMessage)
+    exit(4)
 }
 
 NSApplication.shared.setActivationPolicy(.prohibited)
@@ -507,7 +517,13 @@ func startCapture(event: String = "ready") async {
         captureStream = stream
         emit(["event": event, "microphone": microphonePermission() == "granted", "systemAudio": CGPreflightScreenCaptureAccess()])
     } catch {
-        emitError("capture start failed: \(error.localizedDescription)")
+        if !CGPreflightScreenCaptureAccess() {
+            emitError(systemAudioPermissionMessage)
+        } else if microphonePermission() != "granted" {
+            emitError(microphonePermissionMessage)
+        } else {
+            emitError("音频采集启动失败：\(error.localizedDescription)")
+        }
     }
 }
 

@@ -29,6 +29,7 @@ import {
   type CompletedLiveSession,
   type LivePermissionStatus,
   type LiveRecoverySummary,
+  type LiveTranslationTrayAction,
   type LiveTranslationProvider,
   type LiveTranslationProviderConfig,
 } from "./types";
@@ -116,6 +117,10 @@ export function LiveTranslationPage() {
   const [providerConfigLoaded, setProviderConfigLoaded] = useState(false);
   const [savingProviderConfig, setSavingProviderConfig] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const pendingTrayActionRef = useRef<LiveTranslationTrayAction | null>(null);
+  const trayActionHandlerRef = useRef<(action: LiveTranslationTrayAction) => void>(
+    () => undefined,
+  );
 
   useEffect(() => {
     api?.permissions().then(setPermissions).catch(() => setPermissions(null));
@@ -138,6 +143,21 @@ export function LiveTranslationPage() {
     transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
   }, [view.segments]);
 
+  useEffect(() => {
+    if (!api) return;
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    api.onTrayAction((action) => trayActionHandlerRef.current(action))
+      .then((unsubscribe) => {
+        if (disposed) unsubscribe();
+        else cleanup = unsubscribe;
+      });
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, [api]);
+
   const visibleSegments = useMemo(
     () => view.segments.filter((segment) => !segment.echoOf && (segment.recognizedText || segment.translatedText)),
     [view.segments],
@@ -153,6 +173,8 @@ export function LiveTranslationPage() {
     && providerConfigLoaded
     && directProviderReady
     && permissions?.microphone === "granted"
+    && (!permissions.systemAudioRequired || permissions.systemAudio === "granted")
+    && !permissions.restartRequired
     && sourceLanguage !== targetLanguage
     && !active;
 
@@ -241,6 +263,40 @@ export function LiveTranslationPage() {
       setBusy(false);
     }
   }
+
+  trayActionHandlerRef.current = (action) => {
+    if (busy || !providerConfigLoaded || permissions === null) {
+      pendingTrayActionRef.current = action;
+      return;
+    }
+    if (action === "start") {
+      if (canStart) {
+        void start();
+      } else if (active) {
+        toast.info("实时录音已在进行");
+      } else {
+        toast.warning(t("live_translation.start_failed"), {
+          description: permissions.systemAudioRequired && permissions.systemAudio !== "granted"
+            ? t("live_translation.system_audio_permission_hint")
+            : "请先授予麦克风权限并完成实时翻译配置",
+        });
+      }
+      return;
+    }
+    if (view.state === "recording") {
+      void pause();
+    } else {
+      toast.info("当前没有正在进行的实时录音");
+    }
+  };
+
+  useEffect(() => {
+    if (busy || !providerConfigLoaded || permissions === null) return;
+    const pendingAction = pendingTrayActionRef.current;
+    if (!pendingAction) return;
+    pendingTrayActionRef.current = null;
+    trayActionHandlerRef.current(pendingAction);
+  }, [busy, permissions, providerConfigLoaded]);
 
   async function resume() {
     if (!api || !view.sessionId) return;
@@ -464,7 +520,14 @@ export function LiveTranslationPage() {
                 <AlertDescription>{t("live_translation.restart_hint")}</AlertDescription>
               </Alert>
             )}
-            {permissions?.microphone === "granted" && permissions.systemAudio !== "granted" && (
+            {permissions?.systemAudioRequired && permissions.systemAudio !== "granted" && (
+              <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+                {t("live_translation.system_audio_permission_hint")}
+              </p>
+            )}
+            {permissions?.microphone === "granted"
+              && !permissions.systemAudioRequired
+              && permissions.systemAudio !== "granted" && (
               <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
                 {t("live_translation.mic_only_hint")}
               </p>
@@ -485,7 +548,9 @@ export function LiveTranslationPage() {
               ) : (
                 <Button className="flex-1" onClick={start} disabled={!canStart || busy}>
                   {busy ? <Loader2 className="animate-spin" /> : <Play />}
-                  {permissions?.systemAudio === "granted" ? t("live_translation.start") : t("live_translation.start_mic_only")}
+                  {permissions?.systemAudioRequired || permissions?.systemAudio === "granted"
+                    ? t("live_translation.start")
+                    : t("live_translation.start_mic_only")}
                 </Button>
               )}
               {active && (

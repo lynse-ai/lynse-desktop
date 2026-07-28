@@ -23,6 +23,7 @@ mod live_translation;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[path = "live_translation_stub.rs"]
 mod live_translation;
+mod feishu_auth;
 mod stt;
 
 use live_translation::LiveTranslationManager;
@@ -1613,10 +1614,17 @@ fn check_app_update(app: AppHandle) -> CommandResult<Value> {
 /// app (and the live-translation floating window) can be minimized to and
 /// restored from the system status bar.
 fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
-    let show_main = MenuItemBuilder::with_id("show_main", "显示主窗口").build(app)?;
-    let show_subtitles = MenuItemBuilder::with_id("show_subtitles", "显示实时字幕").build(app)?;
-    let quit = MenuItemBuilder::with_id("quit", "退出 Lynse").build(app)?;
+    let start_live_recording =
+        MenuItemBuilder::with_id("start_live_recording", "▶  开启实时录音").build(app)?;
+    let pause_live_recording =
+        MenuItemBuilder::with_id("pause_live_recording", "⏸  暂停实时录音").build(app)?;
+    let show_main = MenuItemBuilder::with_id("show_main", "▣  显示主窗口").build(app)?;
+    let show_subtitles = MenuItemBuilder::with_id("show_subtitles", "▤  显示实时字幕").build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", "⏻  退出 Lynse").build(app)?;
     let menu = MenuBuilder::new(app)
+        .item(&start_live_recording)
+        .item(&pause_live_recording)
+        .separator()
         .item(&show_main)
         .item(&show_subtitles)
         .separator()
@@ -1634,6 +1642,16 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
+            "start_live_recording" => {
+                if let Err(error) = app.emit("live-translation-tray-action", "start") {
+                    eprintln!("Failed to request live recording start: {error}");
+                }
+            }
+            "pause_live_recording" => {
+                if let Err(error) = app.emit("live-translation-tray-action", "pause") {
+                    eprintln!("Failed to request live recording pause: {error}");
+                }
+            }
             "show_main" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
@@ -1686,6 +1704,9 @@ pub fn run() {
             local_transcription_update_voiceprint, local_transcription_delete_voiceprint,
             local_stt_config_get, local_stt_config_save,
             secure_set_secret, secure_get_secret, secure_delete_secret,
+            feishu_auth::feishu_auth_state,
+            feishu_auth::feishu_auth_authorize,
+            feishu_auth::feishu_auth_disconnect,
             get_app_info, check_app_update,
             live_translation::live_translation_permissions,
             live_translation::live_translation_request_permission,

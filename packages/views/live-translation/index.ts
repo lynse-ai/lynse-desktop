@@ -15,5 +15,6 @@ export type {
   LiveTranslationSegment,
   LiveTranslationSnapshot,
   LiveTranslationState,
+  LiveTranslationTrayAction,
 } from "./types";
 export { DEFAULT_ILIVEDATA_RTVT_ENDPOINT } from "./types";

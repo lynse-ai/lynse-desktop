@@ -121,6 +121,7 @@ pub struct ResumeRequest {
 pub struct PermissionStatus {
     microphone: String,
     system_audio: String,
+    system_audio_required: bool,
     restart_required: bool,
 }
 
@@ -338,6 +339,7 @@ fn run_permission_command(app: &AppHandle, argument: &str) -> CommandResult<Perm
             .and_then(Value::as_str)
             .unwrap_or("denied")
             .to_owned(),
+        system_audio_required: true,
         restart_required: value
             .get("restartRequired")
             .and_then(Value::as_bool)
@@ -353,6 +355,7 @@ pub fn live_translation_permissions(app: AppHandle) -> CommandResult<PermissionS
     return Ok(PermissionStatus {
         microphone: "granted".to_owned(),
         system_audio: "denied".to_owned(),
+        system_audio_required: false,
         restart_required: false,
     });
 }
@@ -365,7 +368,15 @@ pub fn live_translation_request_permission(
     #[cfg(target_os = "macos")]
     match kind.as_str() {
         "microphone" => return run_permission_command(&app, "--request-microphone"),
-        "systemAudio" => return run_permission_command(&app, "--request-system-audio"),
+        "systemAudio" => {
+            let status = run_permission_command(&app, "--request-system-audio")?;
+            if status.system_audio != "granted" {
+                let _ = Command::new("open")
+                    .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+                    .spawn();
+            }
+            return Ok(status);
+        }
         _ => return Err("permission kind must be microphone or systemAudio".to_owned()),
     }
     #[cfg(target_os = "windows")]
@@ -374,6 +385,7 @@ pub fn live_translation_request_permission(
         return Ok(PermissionStatus {
             microphone: "granted".to_owned(),
             system_audio: "denied".to_owned(),
+            system_audio_required: false,
             restart_required: false,
         });
     }
@@ -407,8 +419,20 @@ pub async fn live_translation_start(
     }
     validate_connections(&request.connections)?;
     #[cfg(target_os = "macos")]
-    if run_permission_command(&app, "--permission-status")?.microphone != "granted" {
-        return Err("microphone permission is required before recording".to_owned());
+    {
+        let permissions = run_permission_command(&app, "--permission-status")?;
+        if permissions.microphone != "granted" {
+            return Err(
+                "缺少麦克风权限。请在 macOS“系统设置 → 隐私与安全性 → 麦克风”中允许 Lynse。"
+                    .to_owned(),
+            );
+        }
+        if permissions.system_audio != "granted" {
+            return Err(
+                "缺少“屏幕与系统音频录制”权限。请在 macOS 系统设置中允许 Lynse Audio Capture，然后重新启动 Lynse。"
+                    .to_owned(),
+            );
+        }
     }
     {
         let guard = state

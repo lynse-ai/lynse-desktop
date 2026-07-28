@@ -450,7 +450,14 @@ function UpdateReminder() {
         <p className="text-[12px] font-medium leading-tight text-amber-600 dark:text-amber-400">
           {t("settings.update_available")}
         </p>
-        <p className="mt-0.5 truncate text-[11px] leading-tight text-muted-foreground">
+        <div className="mt-1 flex items-center gap-1.5 text-[11px] tabular-nums">
+          <span className="text-muted-foreground">v{update.currentVersion}</span>
+          <span className="text-muted-foreground/50">→</span>
+          <span className="font-semibold text-amber-600 dark:text-amber-400">
+            v{update.latestVersion}
+          </span>
+        </div>
+        <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
           {t("settings.update_available_desc")}
         </p>
         <button

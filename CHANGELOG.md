@@ -15,6 +15,7 @@
 
 - Fix macOS "Load failed" when connecting to a plaintext `http://` backend: inject `NSAppTransportSecurity` / `NSAllowsArbitraryLoads` into the bundled `Info.plist` so the WKWebView is allowed to reach HTTP test servers (App Transport Security was silently blocking non-localhost plaintext requests).
 - Change the default API base URL from the `http://119.97.160.133:10060` test server to the official HTTPS endpoint `https://api.lynse.cn` across the desktop settings dialog, settings page, and web proxy route.
+- Fix AI chat markdown table rendering: the first column was pinned to 40 px (`first:w-10`) and cells were force-truncated, causing dates to collapse into "2...", headers to overflow and visually merge (e.g. "截止时间负责人"), and owner cells to disappear. Switched minimal-mode tables to auto-layout with `min-w-[100px]` per cell, `break-words` wrapping, and visible row/column borders.
 
 ## 0.1.20 (2026-07-28)
 

@@ -7,6 +7,7 @@ import type {
 
 export interface LiveTranslationViewState extends LiveTranslationSnapshot {
   lastError?: string;
+  lastErrorSource?: LiveAudioSource;
   completed?: CompletedLiveSession;
   streamStates: Partial<Record<LiveAudioSource, string>>;
 }
@@ -32,6 +33,9 @@ export function reduceLiveTranslationEvent(
       ...current,
       ...event.snapshot,
       lastError: event.snapshot.state === "recording" ? undefined : current.lastError,
+      lastErrorSource: event.snapshot.state === "recording"
+        ? undefined
+        : current.lastErrorSource,
     };
   }
   if (event.type === "levels") {
@@ -54,13 +58,22 @@ export function reduceLiveTranslationEvent(
     return { ...current, segments: [...event.segments].sort(compareSegments) };
   }
   if (event.type === "streamState") {
+    const streamStates = { ...current.streamStates, [event.source]: event.state };
+    const connectionRecovered = current.lastErrorSource !== undefined
+      && Object.values(streamStates).every((state) => state === "connected");
     return {
       ...current,
-      streamStates: { ...current.streamStates, [event.source]: event.state },
+      lastError: connectionRecovered ? undefined : current.lastError,
+      lastErrorSource: connectionRecovered ? undefined : current.lastErrorSource,
+      streamStates,
     };
   }
   if (event.type === "error") {
-    return { ...current, lastError: event.message };
+    return {
+      ...current,
+      lastError: event.message,
+      lastErrorSource: event.source,
+    };
   }
   return { ...current, completed: event.session };
 }

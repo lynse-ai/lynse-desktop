@@ -6,7 +6,10 @@
 //! [`TranscribeConfig`] (default provider + per-language overrides), resolved
 //! per transcription request.
 
-use crate::{normalize_funasr_output, parse_funasr_json, run_funasr, script_path, CommandResult};
+use crate::{
+    ensure_mlx_venv, mlx_script_path, normalize_funasr_output, parse_funasr_json, run_funasr, run_mlx,
+    script_path, CommandResult,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -101,6 +104,9 @@ pub fn model_file_name(provider: &str, model_id: &str) -> Option<String> {
     match provider {
         "whisper" => WhisperModel::from_model_id(model_id).map(|model| model.file_name().to_owned()),
         "moss_transcribe_diarize" => Some("model.gguf".to_owned()),
+        // MLX keeps a directory of weights (marked ready with a `.ready` file),
+        // so there is no single downloadable artifact to name.
+        "mlx" => None,
         _ => None,
     }
 }
@@ -133,6 +139,16 @@ pub struct MossProviderConfig {
     pub hotword_package_id: Option<String>,
 }
 
+/// MLX-Whisper on Apple Silicon. v1 ships a single pinned model; `model` is
+/// reserved for future size selection (e.g. base/turbo/large-v3).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MlxProviderConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hotword_package_id: Option<String>,
+}
+
 /// Single source of truth for provider config. Serialized as a tagged enum so
 /// future engines can be added without breaking stored configs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,6 +157,7 @@ pub enum ProviderConfig {
     Funasr(FunasrProviderConfig),
     Whisper(WhisperProviderConfig),
     MossTranscribeDiarize(MossProviderConfig),
+    Mlx(MlxProviderConfig),
 }
 
 impl Default for ProviderConfig {
@@ -155,6 +172,7 @@ impl ProviderConfig {
             ProviderConfig::Funasr(_) => "funasr",
             ProviderConfig::Whisper(_) => "whisper",
             ProviderConfig::MossTranscribeDiarize(_) => "moss_transcribe_diarize",
+            ProviderConfig::Mlx(_) => "mlx",
         }
     }
 
@@ -163,6 +181,7 @@ impl ProviderConfig {
             ProviderConfig::Funasr(config) => config.hotword_package_id.as_deref(),
             ProviderConfig::Whisper(config) => config.hotword_package_id.as_deref(),
             ProviderConfig::MossTranscribeDiarize(config) => config.hotword_package_id.as_deref(),
+            ProviderConfig::Mlx(config) => config.hotword_package_id.as_deref(),
         }
     }
 
@@ -171,6 +190,7 @@ impl ProviderConfig {
             ProviderConfig::Funasr(config) => config.expected_speakers,
             ProviderConfig::Whisper(config) => config.expected_speakers,
             ProviderConfig::MossTranscribeDiarize(_) => None,
+            ProviderConfig::Mlx(_) => None,
         }
     }
 
@@ -179,6 +199,7 @@ impl ProviderConfig {
             ProviderConfig::Funasr(_) => &FunasrAdapter,
             ProviderConfig::Whisper(_) => &WhisperAdapter,
             ProviderConfig::MossTranscribeDiarize(_) => &MossAdapter,
+            ProviderConfig::Mlx(_) => &MlxAdapter,
         }
     }
 }
@@ -546,6 +567,66 @@ impl BatchSttAdapter for MossAdapter {
         let segments = normalize_moss_output(&parsed);
 
         // MOSS provides built-in speaker labels; map [S01] → 发言人1.
+        let text = segments
+            .iter()
+            .filter_map(|segment| segment.get("text").and_then(Value::as_str))
+            .collect::<String>();
+        Ok(SttOutput { text, segments })
+    }
+}
+
+/// MLX-Whisper on Apple Silicon. The whole pipeline runs locally via the
+/// `mlx_transcribe.py` bridge; no shared STT runtime (ffmpeg/whisper/moss) is
+/// required. Execution is refused on non-Apple-Silicon platforms with a clear
+/// message so a user who somehow selects it from the UI gets actionable info.
+pub struct MlxAdapter;
+
+impl BatchSttAdapter for MlxAdapter {
+    fn engine(&self) -> &'static str {
+        "mlx"
+    }
+
+    fn transcribe(&self, app: &tauri::AppHandle, request: &SttRequest) -> CommandResult<SttOutput> {
+        if std::env::consts::OS != "macos" || std::env::consts::ARCH != "aarch64" {
+            return Err("MLX 引擎仅支持 macOS（Apple Silicon）。请在设置中改用 FunASR / Whisper。".to_owned());
+        }
+
+        let python = ensure_mlx_venv(app)?;
+        let output_json = request.model_directory.join("mlx-output.json");
+        let mut args = vec![
+            mlx_script_path(app)?.to_string_lossy().into_owned(),
+            request.audio_path.clone(),
+            "--model-dir".to_owned(),
+            request.model_directory.to_string_lossy().into_owned(),
+            "--output".to_owned(),
+            output_json.to_string_lossy().into_owned(),
+        ];
+        if !request.hotword.is_empty() {
+            args.extend(["--hotword".to_owned(), request.hotword.clone()]);
+        }
+        if let Some(prior) = request.prior_context.as_deref().filter(|value| !value.trim().is_empty()) {
+            args.extend(["--prompt".to_owned(), prior.trim().to_owned()]);
+        }
+
+        if let Err(error) = run_mlx(app, &python, &args, &request.model_directory) {
+            return Err(error);
+        }
+
+        let parsed: Value = {
+            let content = std::fs::read_to_string(&output_json).map_err(|error| error.to_string())?;
+            serde_json::from_str(&content).map_err(|error| error.to_string())?
+        };
+        let mut segments = normalize_whisper_output(&parsed);
+
+        // v1: single-speaker. Whisper's CAM++ diarization can be wired in later.
+        for segment in &mut segments {
+            if let Some(object) = segment.as_object_mut() {
+                object.insert("speakerId".to_owned(), json!("spk-1"));
+                object.insert("speakerName".to_owned(), json!("发言人1"));
+                object.insert("rawSpeaker".to_owned(), json!("0"));
+            }
+        }
+
         let text = segments
             .iter()
             .filter_map(|segment| segment.get("text").and_then(Value::as_str))

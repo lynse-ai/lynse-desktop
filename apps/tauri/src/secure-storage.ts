@@ -10,6 +10,7 @@ const SECRET_KEYS = new Set([
   "lynse_api_key",
   "lynse_token",
   "lynse_live_translation_ilivedata_secret_key",
+  "lynse_live_translation_qwen_api_key",
 ]);
 
 const secretCache = new Map<string, string>();

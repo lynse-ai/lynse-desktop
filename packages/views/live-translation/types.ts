@@ -3,7 +3,7 @@ export type LiveAudioSource = "mic" | "system";
 export const DEFAULT_ILIVEDATA_RTVT_ENDPOINT =
   "wss://rtvt-cn-app.ilivedata.com/gate/websocket";
 
-export type LiveTranslationProvider = "lynse_backend" | "ilivedata_direct";
+export type LiveTranslationProvider = "lynse_backend" | "ilivedata_direct" | "qwen";
 
 export interface LiveTranslationProviderConfig {
   provider: LiveTranslationProvider;
@@ -12,7 +12,14 @@ export interface LiveTranslationProviderConfig {
     pid: string;
     secretKey: string;
   };
+  qwen: {
+    apiKey: string;
+    endpoint: string;
+  };
 }
+
+export const DEFAULT_QWEN_ENDPOINT =
+  "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-livetranslate-flash-realtime";
 
 export type LiveTranslationState =
   | "idle"
@@ -63,6 +70,8 @@ export interface LivePermissionStatus {
 export interface LiveConnectionDescriptor {
   source: LiveAudioSource;
   url: string;
+  provider?: LiveTranslationProvider;
+  apiKey?: string;
 }
 
 export interface LiveStartRequest {

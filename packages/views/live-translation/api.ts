@@ -5,6 +5,7 @@ import type {
   LiveTranslationProviderConfig,
   LiveTranslationSegment,
 } from "./types";
+import { DEFAULT_QWEN_ENDPOINT } from "./types";
 
 interface RealtimeSessionRequest {
   workspaceId?: string;
@@ -35,6 +36,9 @@ export async function requestRealtimeSession(
 ): Promise<RealtimeSessionCredentials> {
   if (providerConfig?.provider === "ilivedata_direct") {
     return requestILiveDataRealtimeSession(request, providerConfig);
+  }
+  if (providerConfig?.provider === "qwen") {
+    return requestQwenRealtimeSession(request, providerConfig);
   }
   const response = await api().post<RawRealtimeSessionResponse>(
     "/api/business/translate/realtime/session",
@@ -76,6 +80,33 @@ async function requestILiveDataRealtimeSession(
         userId: createILiveDataUserId(sessionId, source, request.epoch),
       }),
     })),
+  );
+  return {
+    sessionId,
+    epoch: request.epoch,
+    connections,
+  };
+}
+
+async function requestQwenRealtimeSession(
+  request: RealtimeSessionRequest,
+  config: LiveTranslationProviderConfig,
+): Promise<RealtimeSessionCredentials> {
+  const sessionId = request.sessionId ?? crypto.randomUUID();
+  const endpoint = config.qwen.endpoint.trim() || DEFAULT_QWEN_ENDPOINT;
+  if (!endpoint.startsWith("wss://")) {
+    throw new Error("Qwen WebSocket 地址必须使用 wss://");
+  }
+  if (!config.qwen.apiKey.trim()) {
+    throw new Error("Qwen 翻译引擎需要填写 DashScope API Key");
+  }
+  const connections: LiveConnectionDescriptor[] = (["mic", "system"] as const).map(
+    (source) => ({
+      source,
+      url: endpoint,
+      provider: "qwen",
+      apiKey: config.qwen.apiKey.trim(),
+    }),
   );
   return {
     sessionId,

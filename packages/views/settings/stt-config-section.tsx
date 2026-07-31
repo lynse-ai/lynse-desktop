@@ -26,6 +26,7 @@ const ENGINE_OPTIONS: { value: SttEngine; label: string }[] = [
   { value: "funasr", label: "FunASR（本地）" },
   { value: "whisper", label: "Whisper（本地）" },
   { value: "moss_transcribe_diarize", label: "MOSS-Transcribe-Diarize（本地）" },
+  { value: "mlx", label: "MLX-Whisper（本地·Apple Silicon）" },
 ];
 
 function providerForEngine(engine: SttEngine, prev?: SttProviderConfig): SttProviderConfig {
@@ -49,6 +50,12 @@ function providerForEngine(engine: SttEngine, prev?: SttProviderConfig): SttProv
         provider: "moss_transcribe_diarize",
         hotword_package_id:
           prev?.provider === "moss_transcribe_diarize" ? prev.hotword_package_id ?? null : null,
+      };
+    case "mlx":
+      return {
+        provider: "mlx",
+        model: prev?.provider === "mlx" ? prev.model ?? "whisper-large-v3-turbo" : "whisper-large-v3-turbo",
+        hotword_package_id: prev?.provider === "mlx" ? prev.hotword_package_id ?? null : null,
       };
   }
 }
@@ -213,6 +220,11 @@ function EngineFields({
     : null;
   return (
     <div className="mt-2 space-y-2 rounded bg-background p-2">
+      {config.provider === "mlx" && (
+        <p className="text-[11px] text-muted-foreground">
+          仅支持 macOS（Apple Silicon）。首次使用会自动下载 MLX-Whisper 运行时与模型权重。
+        </p>
+      )}
       {config.provider === "whisper" && (
         <>
           <div className="space-y-1">

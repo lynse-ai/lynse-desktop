@@ -12,6 +12,7 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { Sun, Moon, Monitor } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
 import { FeishuAuthCard } from "./feishu-auth-card";
+import { LiveTranslationConfigCard } from "./live-translation-config-card";
 
 const DEFAULT_API_URL = "http://119.97.160.133:10060";
 
@@ -101,6 +102,8 @@ export function SettingsPage() {
           </Card>
 
           <FeishuAuthCard />
+
+          <LiveTranslationConfigCard />
 
           {/* ── API Configuration ──────────────────────── */}
           <Card>

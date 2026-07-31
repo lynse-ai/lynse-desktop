@@ -10,6 +10,7 @@ import { Label } from "@lynse/ui/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@lynse/ui/components/ui/alert";
 import {
   Check,
+  ChevronLeft,
   ChevronRight,
   Headphones,
   Loader2,
@@ -26,6 +27,7 @@ import { completeRealtimeSession, requestRealtimeSession } from "./api";
 import { useLiveTranslation } from "./use-live-translation";
 import {
   DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
+  DEFAULT_QWEN_ENDPOINT,
   type CompletedLiveSession,
   type LivePermissionStatus,
   type LiveRecoverySummary,
@@ -102,6 +104,7 @@ export function LiveTranslationPage() {
   const [targetLanguage, setTargetLanguage] = useState("en");
   const [busy, setBusy] = useState(false);
   const [subtitlesVisible, setSubtitlesVisible] = useState(false);
+  const [settingsCollapsed, setSettingsCollapsed] = useState(false);
   const [completed, setCompleted] = useState<CompletedLiveSession | null>(null);
   const [recoveries, setRecoveries] = useState<LiveRecoverySummary[]>([]);
   const [syncing, setSyncing] = useState(false);
@@ -112,6 +115,10 @@ export function LiveTranslationPage() {
       endpoint: DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
       pid: "",
       secretKey: "",
+    },
+    qwen: {
+      endpoint: DEFAULT_QWEN_ENDPOINT,
+      apiKey: "",
     },
   });
   const [providerConfigLoaded, setProviderConfigLoaded] = useState(false);
@@ -164,11 +171,14 @@ export function LiveTranslationPage() {
   );
   const active = Boolean(view.sessionId) && view.state !== "idle";
   const directProviderReady = providerConfig.provider !== "ilivedata_direct"
-    || Boolean(
-      providerConfig.ilivedata.endpoint.trim()
-      && providerConfig.ilivedata.pid.trim()
-      && providerConfig.ilivedata.secretKey.trim(),
-    );
+    && providerConfig.provider !== "qwen"
+    || (providerConfig.provider === "ilivedata_direct"
+      && Boolean(
+        providerConfig.ilivedata.endpoint.trim()
+        && providerConfig.ilivedata.pid.trim()
+        && providerConfig.ilivedata.secretKey.trim(),
+      ))
+    || (providerConfig.provider === "qwen" && Boolean(providerConfig.qwen.apiKey.trim()));
   const canStart = !!api
     && providerConfigLoaded
     && directProviderReady
@@ -212,6 +222,16 @@ export function LiveTranslationPage() {
     }));
   }
 
+  function updateQwenConfig(
+    field: keyof LiveTranslationProviderConfig["qwen"],
+    value: string,
+  ) {
+    setProviderConfig((current) => ({
+      ...current,
+      qwen: { ...current.qwen, [field]: value },
+    }));
+  }
+
   async function requestPermission(kind: "microphone" | "systemAudio") {
     if (!api) return;
     setBusy(true);
@@ -245,6 +265,8 @@ export function LiveTranslationPage() {
         epoch: credentials.epoch,
         connections: credentials.connections,
       });
+      // Maximize the transcript area as soon as a session starts.
+      setSettingsCollapsed(true);
     } catch (error) {
       toast.error(t("live_translation.start_failed"), { description: String(error) });
     } finally {
@@ -412,8 +434,19 @@ export function LiveTranslationPage() {
         <StatusBadge state={view.state} elapsedMs={view.elapsedMs} />
       </header>
 
-      <main className="grid min-h-0 flex-1 grid-cols-[minmax(280px,360px)_1fr]">
-        <aside className="overflow-y-auto border-r border-border p-5">
+      <main className={`relative grid min-h-0 flex-1 ${settingsCollapsed ? "grid-cols-1" : "grid-cols-[minmax(280px,360px)_1fr]"}`}>
+        {!settingsCollapsed && (
+        <aside className="relative border-r border-border">
+          <button
+            type="button"
+            onClick={() => setSettingsCollapsed(true)}
+            title="收起设置栏（最大化字幕区）"
+            aria-label="收起设置栏"
+            className="absolute right-0 top-1/2 z-20 flex size-8 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition hover:bg-muted hover:text-foreground"
+          >
+            <ChevronRight className="size-4" />
+          </button>
+          <div className="h-full overflow-y-auto p-5">
           <section className="space-y-3">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t("live_translation.provider")}
@@ -426,6 +459,7 @@ export function LiveTranslationPage() {
             >
               <option value="lynse_backend">{t("live_translation.provider_backend")}</option>
               <option value="ilivedata_direct">{t("live_translation.provider_ilivedata_direct")}</option>
+              <option value="qwen">{t("live_translation.provider_qwen")}</option>
             </select>
             {providerConfig.provider === "ilivedata_direct" && (
               <div className="space-y-2 rounded-lg border border-border bg-card p-3">
@@ -467,6 +501,51 @@ export function LiveTranslationPage() {
                     id="ilivedata-endpoint"
                     value={providerConfig.ilivedata.endpoint}
                     onChange={(event) => updateILiveDataConfig("endpoint", event.target.value)}
+                    disabled={active}
+                    className="h-8 text-xs"
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 w-full text-xs"
+                  onClick={saveProviderConfig}
+                  disabled={active || savingProviderConfig}
+                >
+                  {savingProviderConfig ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                  {t("live_translation.save_provider_config")}
+                </Button>
+              </div>
+            )}
+            {providerConfig.provider === "qwen" && (
+              <div className="space-y-2 rounded-lg border border-border bg-card p-3">
+                <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+                  {t("live_translation.qwen_hint")}
+                </p>
+                <div className="space-y-1.5">
+                  <Label htmlFor="qwen-api-key" className="text-[11px]">
+                    {t("live_translation.provider_qwen_api_key")}
+                  </Label>
+                  <Input
+                    id="qwen-api-key"
+                    type="password"
+                    value={providerConfig.qwen.apiKey}
+                    onChange={(event) => updateQwenConfig("apiKey", event.target.value)}
+                    disabled={active}
+                    className="h-8 text-xs"
+                    autoComplete="off"
+                    placeholder="sk-..."
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="qwen-endpoint" className="text-[11px]">
+                    {t("live_translation.provider_qwen_endpoint")}
+                  </Label>
+                  <Input
+                    id="qwen-endpoint"
+                    value={providerConfig.qwen.endpoint}
+                    onChange={(event) => updateQwenConfig("endpoint", event.target.value)}
                     disabled={active}
                     className="h-8 text-xs"
                   />
@@ -534,37 +613,6 @@ export function LiveTranslationPage() {
             )}
           </section>
 
-          <section className="mt-6 space-y-3">
-            <div className="flex gap-2">
-              {view.state === "paused" ? (
-                <Button className="flex-1" onClick={resume} disabled={busy}>
-                  {busy ? <Loader2 className="animate-spin" /> : <Play />}
-                  {t("live_translation.resume")}
-                </Button>
-              ) : active ? (
-                <Button className="flex-1" variant="secondary" onClick={pause} disabled={busy || view.state !== "recording"}>
-                  <Pause /> {t("live_translation.pause")}
-                </Button>
-              ) : (
-                <Button className="flex-1" onClick={start} disabled={!canStart || busy}>
-                  {busy ? <Loader2 className="animate-spin" /> : <Play />}
-                  {permissions?.systemAudioRequired || permissions?.systemAudio === "granted"
-                    ? t("live_translation.start")
-                    : t("live_translation.start_mic_only")}
-                </Button>
-              )}
-              {active && (
-                <Button variant="destructive" onClick={stop} disabled={busy || view.state === "stopping"}>
-                  <Square /> {t("live_translation.stop")}
-                </Button>
-              )}
-            </div>
-            <Button variant="outline" className="w-full" onClick={toggleSubtitles} disabled={!active}>
-              <Volume2 />
-              {subtitlesVisible ? t("live_translation.hide_overlay") : t("live_translation.show_overlay")}
-            </Button>
-          </section>
-
           {view.lastError && (
             <Alert variant="destructive" className="mt-5">
               <AlertTitle>{t("live_translation.issue")}</AlertTitle>
@@ -603,7 +651,21 @@ export function LiveTranslationPage() {
               </div>
             </section>
           )}
+          </div>
         </aside>
+        )}
+
+        {settingsCollapsed && (
+          <button
+            type="button"
+            onClick={() => setSettingsCollapsed(false)}
+            title="展开设置栏"
+            aria-label="展开设置栏"
+            className="absolute left-0 top-1/2 z-20 flex size-8 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition hover:bg-muted hover:text-foreground"
+          >
+            <ChevronLeft className="size-4" />
+          </button>
+        )}
 
         <section className="flex min-h-0 flex-col bg-muted/10">
           <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-5">
@@ -650,6 +712,36 @@ export function LiveTranslationPage() {
               </div>
             )}
           </div>
+          <footer className="shrink-0 border-t border-border bg-background/95 px-5 py-3 backdrop-blur">
+            <div className="flex flex-wrap items-center gap-2">
+              {view.state === "paused" ? (
+                <Button className="flex-1 sm:flex-none" onClick={resume} disabled={busy}>
+                  {busy ? <Loader2 className="animate-spin" /> : <Play />}
+                  {t("live_translation.resume")}
+                </Button>
+              ) : active ? (
+                <Button className="flex-1 sm:flex-none" variant="secondary" onClick={pause} disabled={busy || view.state !== "recording"}>
+                  <Pause /> {t("live_translation.pause")}
+                </Button>
+              ) : (
+                <Button className="flex-1 sm:flex-none" onClick={start} disabled={!canStart || busy}>
+                  {busy ? <Loader2 className="animate-spin" /> : <Play />}
+                  {permissions?.systemAudioRequired || permissions?.systemAudio === "granted"
+                    ? t("live_translation.start")
+                    : t("live_translation.start_mic_only")}
+                </Button>
+              )}
+              {active && (
+                <Button variant="destructive" onClick={stop} disabled={busy || view.state === "stopping"}>
+                  <Square /> {t("live_translation.stop")}
+                </Button>
+              )}
+              <Button variant="outline" className="ml-auto" onClick={toggleSubtitles} disabled={!active}>
+                <Volume2 />
+                {subtitlesVisible ? t("live_translation.hide_overlay") : t("live_translation.show_overlay")}
+              </Button>
+            </div>
+          </footer>
         </section>
       </main>
     </div>

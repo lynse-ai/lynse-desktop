@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.21 (2026-07-31)
+
+### New Features
+
+- Add a local offline transcription engine powered by Apple MLX (MLX-Whisper) on macOS with Apple Silicon. It appears as a new option in the STT engine dropdown alongside FunASR / Whisper / MOSS, runs fully on-device for faster and more power-efficient transcription, downloads its model weights on first use, and decodes audio with a bundled ffmpeg so it needs no shared STT runtime. On non-Apple-Silicon platforms it shows a clear prompt to switch back to FunASR / Whisper.
+- Add Alibaba Cloud Qwen (DashScope `qwen3.5-livetranslate-flash-realtime`) as a selectable real-time translation engine, joining the existing iLiveData backend and iLiveData direct options.
+
+### Changed
+
+- Real-time translation engine is now user-selectable (lynse_backend / ilivedata_direct / qwen) from a dropdown; real-time translation remains cloud-only and does not use local/offline MLX inference.
+
+### Bug Fixes
+
+- 本次构建以功能新增与引擎接入为主，无针对性缺陷修复（如发现请补充）
+
 ## 0.1.20 (2026-07-28)
 
 ### New Features

@@ -235,6 +235,76 @@ pub(crate) fn run_funasr(_app: &AppHandle, arguments: &[String], model_directory
     })
 }
 
+/// Resource path to the MLX-Whisper bridge, mirroring [`script_path`].
+pub(crate) fn mlx_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/mlx_transcribe.py");
+    if development.exists() {
+        return Ok(development);
+    }
+    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
+    Ok(resources.join("mlx_transcribe.py"))
+}
+
+/// Ensure a usable MLX venv exists, creating one (and `pip install`-ing
+/// `mlx-whisper` + `imageio-ffmpeg`) on first use. Returns the python path.
+pub(crate) fn ensure_mlx_venv(app: &AppHandle) -> CommandResult<String> {
+    if let Ok(value) = env::var("LYNSE_MLX_PYTHON") {
+        return Ok(value);
+    }
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../.venv-mlx/bin/python");
+    if development.exists() {
+        return Ok(development.to_string_lossy().into_owned());
+    }
+    let venv = app_data_dir(app)?.join("mlx-venv");
+    let python = venv.join("bin/python");
+    if python.exists() {
+        return Ok(python.to_string_lossy().into_owned());
+    }
+
+    fs::create_dir_all(&venv).map_err(|error| error.to_string())?;
+    let status = Command::new("python3")
+        .args(["-m", "venv", venv.to_string_lossy().as_ref()])
+        .status()
+        .map_err(|error| format!("无法创建 MLX 虚拟环境（python3 不可用）：{error}"))?;
+    if !status.success() {
+        return Err("创建 MLX 虚拟环境失败".to_owned());
+    }
+    let pip = venv.join("bin/pip");
+    let install = Command::new(&pip)
+        .args(["install", "--quiet", "--disable-pip-version-check", "mlx-whisper", "imageio-ffmpeg"])
+        .status()
+        .map_err(|error| format!("安装 mlx-whisper 失败：{error}"))?;
+    if !install.success() {
+        return Err("安装 mlx-whisper 失败（请检查网络，或手动安装到 .venv-mlx）".to_owned());
+    }
+    Ok(python.to_string_lossy().into_owned())
+}
+
+/// Run the MLX-Whisper bridge with an explicit Python interpreter. `MODELSCOPE_CACHE`
+/// is harmless (MLX uses `HF_HOME`); both point the model cache at `model_directory`.
+pub(crate) fn run_mlx(
+    _app: &AppHandle,
+    python: &str,
+    arguments: &[String],
+    model_directory: &Path,
+) -> CommandResult<String> {
+    let output = Command::new(python)
+        .args(arguments)
+        .env("MODELSCOPE_CACHE", model_directory)
+        .env("HF_HOME", model_directory)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if output.status.success() {
+        return String::from_utf8(output.stdout).map_err(|error| error.to_string());
+    }
+    let error = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    Err(if error.is_empty() {
+        format!("MLX 进程退出：{}", output.status)
+    } else {
+        error
+    })
+}
+
 pub(crate) fn parse_funasr_json(stdout: &str) -> CommandResult<Value> {
     stdout
         .lines()
@@ -392,6 +462,14 @@ pub const STT_MODELS: &[SttModelEntry] = &[
             "https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize/resolve/main/moss-transcribe-diarize-0.9b-q5_0.gguf",
         sha256: "",
     },
+    SttModelEntry {
+        provider: "mlx",
+        id: "whisper-large-v3-turbo",
+        label: "MLX-Whisper large-v3-turbo（本地·Apple Silicon，~1.5 GiB）",
+        size_bytes: 0,
+        download_url: "",
+        sha256: "",
+    },
 ];
 
 fn stt_model_entry(provider: &str, model_id: &str) -> CommandResult<&'static SttModelEntry> {
@@ -420,8 +498,10 @@ fn model_is_installed(app: &AppHandle, provider: &str, model_id: &str) -> bool {
         return false;
     }
     // Whisper/MOSS also require the shared on-demand runtime
-    // (whisper, moss-transcribe, ffmpeg, ffprobe). FunASR does not.
-    if provider != "funasr" {
+    // (whisper, moss-transcribe, ffmpeg, ffprobe). FunASR and MLX do not:
+    // FunASR ships its own bundle and MLX runs through a self-contained Python
+    // venv with a vendored ffmpeg (imageio-ffmpeg).
+    if provider != "funasr" && provider != "mlx" {
         let version = format!("v{}", app.package_info().version);
         let runtime = stt::runtime_dir(app, &version);
         if !stt::runtime_is_complete(&runtime) {
@@ -1001,6 +1081,7 @@ fn create_queued_record(app: &AppHandle, audio_path: &str, options: Option<&Valu
         stt::ProviderConfig::Funasr(_) => "funasr-paraformer",
         stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
         stt::ProviderConfig::MossTranscribeDiarize(_) => "moss-0.9b-q5",
+        stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
     };
     Ok(json!({
         "id": format!("local:{}", Uuid::new_v4()),
@@ -1070,6 +1151,7 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
             stt::ProviderConfig::Funasr(_) => "funasr-paraformer",
             stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
             stt::ProviderConfig::MossTranscribeDiarize(_) => "moss-0.9b-q5",
+            stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
         });
         ensure_model_installed(app, provider.engine(), model_id)?;
         let directory = engine_model_dir(app, provider.engine(), model_id)?;
@@ -1199,19 +1281,36 @@ fn local_stt_download_model(
     let result = (|| {
         let entry = stt_model_entry(&provider, &model_id)?;
         if entry.download_url.is_empty() {
-            // FunASR downloads through its Python helper rather than a fixed URL.
-            // Its size is unknown, so we only signal an indeterminate download.
+            // FunASR and MLX download through their Python helpers rather than a
+            // fixed URL. Their size is unknown, so we only signal an
+            // indeterminate download.
             emit_download_progress(&app, &provider, &model_id, 0, 0, None, "downloading", None);
-            let directory = model_dir(&app)?;
-            let args = vec![
-                script_path(&app)?.to_string_lossy().into_owned(),
-                "--download-models".to_owned(),
-                "--model-dir".to_owned(),
-                directory.to_string_lossy().into_owned(),
-            ];
-            if let Err(error) = run_funasr(&app, &args, &directory) {
-                emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
-                return Err(error);
+            if provider == "mlx" {
+                let directory = engine_model_dir(&app, &provider, &model_id)?;
+                fs::create_dir_all(&directory).ok();
+                let python = ensure_mlx_venv(&app)?;
+                let args = vec![
+                    mlx_script_path(&app)?.to_string_lossy().into_owned(),
+                    "--download-models".to_owned(),
+                    "--model-dir".to_owned(),
+                    directory.to_string_lossy().into_owned(),
+                ];
+                if let Err(error) = run_mlx(&app, &python, &args, &directory) {
+                    emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
+                    return Err(error);
+                }
+            } else {
+                let directory = model_dir(&app)?;
+                let args = vec![
+                    script_path(&app)?.to_string_lossy().into_owned(),
+                    "--download-models".to_owned(),
+                    "--model-dir".to_owned(),
+                    directory.to_string_lossy().into_owned(),
+                ];
+                if let Err(error) = run_funasr(&app, &args, &directory) {
+                    emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
+                    return Err(error);
+                }
             }
             emit_download_progress(&app, &provider, &model_id, 0, 0, None, "done", None);
         } else {

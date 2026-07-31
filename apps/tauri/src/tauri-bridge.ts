@@ -74,6 +74,10 @@ const LIVE_TRANSLATION_PROVIDER_KEY = "lynse_live_translation_provider";
 const ILIVEDATA_ENDPOINT_KEY = "lynse_live_translation_ilivedata_endpoint";
 const ILIVEDATA_PID_KEY = "lynse_live_translation_ilivedata_pid";
 const ILIVEDATA_SECRET_KEY = "lynse_live_translation_ilivedata_secret_key";
+const QWEN_ENDPOINT_KEY = "lynse_live_translation_qwen_endpoint";
+const QWEN_API_KEY = "lynse_live_translation_qwen_api_key";
+const DEFAULT_QWEN_ENDPOINT =
+  "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-livetranslate-flash-realtime";
 const LEGACY_ILIVEDATA_RTVT_ENDPOINT =
   "wss://rtvt-bj-test.ilivedata.com/gate/websocket";
 const LIVE_TRANSLATION_TRAY_EVENT = "live-translation-tray-action";
@@ -86,14 +90,21 @@ const liveTranslationTrayListeners = new Set<
 function getLiveTranslationProviderConfig(): LiveTranslationProviderConfig {
   const savedProvider = window.localStorage.getItem(LIVE_TRANSLATION_PROVIDER_KEY);
   const savedEndpoint = window.localStorage.getItem(ILIVEDATA_ENDPOINT_KEY);
+  const savedQwenEndpoint = window.localStorage.getItem(QWEN_ENDPOINT_KEY);
   return {
-    provider: savedProvider === "ilivedata_direct" ? "ilivedata_direct" : "lynse_backend",
+    provider: savedProvider === "ilivedata_direct" || savedProvider === "qwen"
+      ? (savedProvider as LiveTranslationProvider)
+      : "lynse_backend",
     ilivedata: {
       endpoint: savedEndpoint && savedEndpoint !== LEGACY_ILIVEDATA_RTVT_ENDPOINT
         ? savedEndpoint
         : DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
       pid: window.localStorage.getItem(ILIVEDATA_PID_KEY) ?? "",
       secretKey: secureStorage.getItem(ILIVEDATA_SECRET_KEY) ?? "",
+    },
+    qwen: {
+      endpoint: savedQwenEndpoint?.trim() || DEFAULT_QWEN_ENDPOINT,
+      apiKey: secureStorage.getItem(QWEN_API_KEY) ?? "",
     },
   };
 }
@@ -108,6 +119,10 @@ function saveLiveTranslationProviderConfig(
       pid: config.ilivedata.pid.trim(),
       secretKey: config.ilivedata.secretKey.trim(),
     },
+    qwen: {
+      endpoint: config.qwen.endpoint.trim() || DEFAULT_QWEN_ENDPOINT,
+      apiKey: config.qwen.apiKey.trim(),
+    },
   };
   window.localStorage.setItem(LIVE_TRANSLATION_PROVIDER_KEY, normalized.provider);
   window.localStorage.setItem(ILIVEDATA_ENDPOINT_KEY, normalized.ilivedata.endpoint);
@@ -116,6 +131,12 @@ function saveLiveTranslationProviderConfig(
     secureStorage.setItem(ILIVEDATA_SECRET_KEY, normalized.ilivedata.secretKey);
   } else {
     secureStorage.removeItem(ILIVEDATA_SECRET_KEY);
+  }
+  window.localStorage.setItem(QWEN_ENDPOINT_KEY, normalized.qwen.endpoint);
+  if (normalized.qwen.apiKey) {
+    secureStorage.setItem(QWEN_API_KEY, normalized.qwen.apiKey);
+  } else {
+    secureStorage.removeItem(QWEN_API_KEY);
   }
   return normalized;
 }

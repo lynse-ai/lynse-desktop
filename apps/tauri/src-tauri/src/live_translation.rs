@@ -16,7 +16,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
+use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
+use base64::Engine as _;
 
 // `Sample` is needed as a trait bound on `feed_samples` (a function signature),
 // so the import must be at module scope — a `use` inside the function body is
@@ -95,6 +100,10 @@ impl AudioSource {
 pub struct ConnectionDescriptor {
     source: AudioSource,
     url: String,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -673,6 +682,7 @@ fn spawn_connections(
         routes.insert(connection.source, sender);
         let app = app.clone();
         let session = session.clone();
+        let is_qwen = connection.provider.as_deref() == Some("qwen");
         tauri::async_runtime::spawn(async move {
             websocket_loop(
                 app,
@@ -682,6 +692,8 @@ fn spawn_connections(
                 epoch_offset_ms,
                 connection.url,
                 receiver,
+                is_qwen,
+                connection.api_key.clone(),
             )
             .await;
         });
@@ -704,6 +716,11 @@ fn validate_connections(connections: &[ConnectionDescriptor]) -> CommandResult<(
         {
             return Err("translation connection must use wss://".to_owned());
         }
+        if connection.provider.as_deref() == Some("qwen")
+            && connection.api_key.as_ref().map(|key| key.trim()).unwrap_or("").is_empty()
+        {
+            return Err("Qwen 翻译引擎需要填写 DashScope API Key".to_owned());
+        }
     }
     Ok(())
 }
@@ -716,35 +733,120 @@ async fn websocket_loop(
     epoch_offset_ms: u64,
     url: String,
     mut receiver: UnboundedReceiver<WsCommand>,
+    is_qwen: bool,
+    api_key: Option<String>,
 ) {
     let mut attempt = 0u32;
     loop {
         attempt += 1;
         emit_stream_state(&app, source, "connecting", epoch);
-        match tokio_tungstenite::connect_async(&url).await {
+        let mut request = match url.as_str().into_client_request() {
+            Ok(request) => request,
+            Err(error) => {
+                emit_error(&app, Some(source), format!("实时翻译连接地址无效：{error}"));
+                break;
+            }
+        };
+        if is_qwen {
+            if let Some(key) = api_key.as_ref() {
+                if let Ok(value) = HeaderValue::from_str(&format!("Bearer {}", key.trim())) {
+                    request.headers_mut().insert(AUTHORIZATION, value);
+                }
+            }
+        }
+        match tokio_tungstenite::connect_async(request).await {
             Ok((socket, _)) => {
                 emit_stream_state(&app, source, "connected", epoch);
                 let (mut writer, mut reader) = socket.split();
+                // For Qwen, configure the session (target language + optional
+                // source-language recognition) right after the handshake.
+                if is_qwen {
+                    let source_lang = session.source_language.clone();
+                    let target_lang = session.target_language.clone();
+                    let mut session_cfg = json!({
+                        "modalities": ["text"],
+                        "input_audio_format": "pcm",
+                        "translation": { "language": target_lang },
+                    });
+                    if source_lang != "auto" {
+                        session_cfg["input_audio_transcription"] = json!({
+                            "model": "qwen3-asr-flash-realtime",
+                            "language": source_lang,
+                        });
+                    }
+                    let update = json!({
+                        "type": "session.update",
+                        "event_id": format!("evt_{}", uuid::Uuid::new_v4()),
+                        "session": session_cfg,
+                    })
+                    .to_string();
+                    if let Err(error) = writer.send(Message::Text(update.into())).await {
+                        emit_error(&app, Some(source), format!("发送 Qwen 会话配置失败：{error}"));
+                        break;
+                    }
+                }
                 let mut finishing: Option<tokio::time::Instant> = None;
+                let mut qwen_finishing = false;
                 loop {
                     tokio::select! {
                         command = receiver.recv(), if finishing.is_none() => {
                             match command {
                                 Some(WsCommand::Audio(payload)) => {
-                                    if let Err(error) = writer.send(Message::Binary(payload.into())).await {
+                                    if is_qwen {
+                                        let event = json!({
+                                            "type": "input_audio_buffer.append",
+                                            "audio": BASE64_ENGINE.encode(&payload),
+                                        })
+                                        .to_string();
+                                        if let Err(error) = writer.send(Message::Text(event.into())).await {
+                                            emit_error(&app, Some(source), format!("发送音频失败：{error}"));
+                                            break;
+                                        }
+                                    } else if let Err(error) = writer.send(Message::Binary(payload.into())).await {
                                         emit_error(&app, Some(source), format!("发送音频失败：{error}"));
                                         break;
                                     }
                                 }
                                 Some(WsCommand::VoiceEnd) | None => {
-                                    let _ = writer.send(Message::Text(r#"{"method":"voiceEnd"}"#.into())).await;
-                                    finishing = Some(tokio::time::Instant::now() + Duration::from_secs(3));
+                                    if is_qwen {
+                                        let _ = writer
+                                            .send(Message::Text(
+                                                r#"{"type":"session.finish","event_id":"evt_finish"}"#.into(),
+                                            ))
+                                            .await;
+                                        qwen_finishing = true;
+                                        finishing =
+                                            Some(tokio::time::Instant::now() + Duration::from_secs(5));
+                                    } else {
+                                        let _ = writer
+                                            .send(Message::Text(r#"{"method":"voiceEnd"}"#.into()))
+                                            .await;
+                                        finishing =
+                                            Some(tokio::time::Instant::now() + Duration::from_secs(3));
+                                    }
                                 }
                             }
                         }
                         incoming = reader.next() => {
                             match incoming {
-                                Some(Ok(Message::Text(text))) => handle_provider_message(&app, &session, source, epoch, epoch_offset_ms, text.as_ref()),
+                                Some(Ok(Message::Text(text))) => {
+                                    if is_qwen && qwen_finishing
+                                        && text.contains("\"session.finished\"")
+                                    {
+                                        let _ = writer.close().await;
+                                        emit_stream_state(&app, source, "closed", epoch);
+                                        return;
+                                    }
+                                    handle_provider_message(
+                                        &app,
+                                        &session,
+                                        source,
+                                        epoch,
+                                        epoch_offset_ms,
+                                        text.as_ref(),
+                                        is_qwen,
+                                    );
+                                }
                                 Some(Ok(Message::Close(_))) | None => {
                                     if finishing.is_some() {
                                         emit_stream_state(&app, source, "closed", epoch);
@@ -816,8 +918,14 @@ fn handle_provider_message(
     epoch: u32,
     epoch_offset_ms: u64,
     text: &str,
+    is_qwen: bool,
 ) {
-    match apply_provider_message(session, source, epoch, epoch_offset_ms, text) {
+    let emission = if is_qwen {
+        apply_qwen_message(session, source, epoch, epoch_offset_ms, text)
+    } else {
+        apply_provider_message(session, source, epoch, epoch_offset_ms, text)
+    };
+    match emission {
         Some(ProviderEmission::Segment(segment)) => {
             let _ = app.emit(LIVE_EVENT, json!({ "type": "segment", "segment": segment }));
         }
@@ -885,11 +993,120 @@ fn apply_provider_message(
     let end_ms = (raw_end > 0).then(|| epoch_offset_ms.saturating_add(raw_end));
     let incoming = value_string(&value, if is_recognized { "asr" } else { "trans" })
         .unwrap_or_default();
+    if incoming.is_empty() {
+        return None;
+    }
     // Utterance key: prefer the provider task id, fall back to the start
     // timestamp (stable per utterance for most providers).
     let task_id = value_string(&value, "taskId")
         .unwrap_or_else(|| value_u64(&value, "startTs").to_string());
+    ingest_provider_text(
+        session,
+        source,
+        epoch,
+        stream_id,
+        start_ms,
+        end_ms,
+        is_recognized,
+        is_final_method,
+        task_id,
+        &incoming,
+    )
+}
 
+/// Apply the recognized/translated text from a Qwen realtime-translation event
+/// to a segment. Qwen's protocol is event-driven (`session.update` + streaming
+/// `input_audio_buffer.append` audio) rather than iLiveData's binary-PCM +
+/// `method`-field shape, but the resulting (source-recognition, translation)
+/// pair maps onto the same live-segment model, so we reuse the shared ingest.
+fn apply_qwen_message(
+    session: &LiveSession,
+    source: AudioSource,
+    epoch: u32,
+    epoch_offset_ms: u64,
+    text: &str,
+) -> Option<ProviderEmission> {
+    let Ok(value) = serde_json::from_str::<Value>(text) else {
+        return None;
+    };
+    let event_type = value.get("type").and_then(Value::as_str)?;
+    let (is_recognized, is_final, content) = classify_qwen_event(event_type, &value)?;
+    if content.is_empty() {
+        return None;
+    }
+    // Qwen auto-detects utterance boundaries, so we approximate the utterance
+    // start with the latest captured audio time on this source.
+    let start_ms = epoch_offset_ms.saturating_add(session.last_elapsed_ms.load(Ordering::Relaxed));
+    ingest_provider_text(
+        session,
+        source,
+        epoch,
+        None,
+        start_ms,
+        None,
+        is_recognized,
+        is_final,
+        String::new(),
+        &content,
+    )
+}
+
+/// Map a Qwen realtime-translation event type to (is_recognized, is_final,
+/// text). Source recognition arrives via `input_audio_transcription.*`; the
+/// translated text arrives via `response.text.*` (text-only) or
+/// `response.audio_transcript.*` (text+audio) — both carry the same translated
+/// string, so either family is accepted.
+fn classify_qwen_event(event_type: &str, value: &Value) -> Option<(bool, bool, String)> {
+    if event_type.contains("input_audio_transcription") {
+        let text = event_text(value);
+        return if event_type.ends_with(".completed") {
+            Some((true, true, text))
+        } else if event_type.ends_with(".text") {
+            Some((true, false, text))
+        } else {
+            None
+        };
+    }
+    if event_type.contains("response.text") || event_type.contains("response.audio_transcript") {
+        let text = event_text(value);
+        return if event_type.ends_with(".done") {
+            Some((false, true, text))
+        } else if event_type.ends_with(".delta") {
+            Some((false, false, text))
+        } else {
+            None
+        };
+    }
+    None
+}
+
+/// Extract the streamed text from a Qwen event. The field name varies by event
+/// family (`text` / `delta` / `transcript` / `content`), so try each in order.
+fn event_text(value: &Value) -> String {
+    for key in ["text", "delta", "transcript", "content"] {
+        if let Some(text) = value.get(key).and_then(Value::as_str) {
+            return text.to_owned();
+        }
+    }
+    String::new()
+}
+
+/// Shared utterance-ingest core used by both the iLiveData and Qwen providers:
+/// coalesce the (source-recognition, translation) pair onto a single live
+/// segment/card, honouring "final wins, interim ignored once final".
+#[allow(clippy::too_many_arguments)]
+fn ingest_provider_text(
+    session: &LiveSession,
+    source: AudioSource,
+    epoch: u32,
+    stream_id: Option<String>,
+    start_ms: u64,
+    end_ms: Option<u64>,
+    is_recognized: bool,
+    is_final: bool,
+    task_id: String,
+    text: &str,
+) -> Option<ProviderEmission> {
     let mut segments = session.segments.lock().expect("live segments lock");
 
     // Coalesce each utterance onto a single live segment/card. The provider
@@ -971,10 +1188,16 @@ fn apply_provider_message(
     }
     segment.provider_stream_id = stream_id.clone();
     segment.task_id = Some(task_id);
-    apply_method_text(segment, method, &incoming);
+    let method = match (is_recognized, is_final) {
+        (true, true) => "recognizedResult",
+        (true, false) => "recognizedTempResult",
+        (false, true) => "translatedResult",
+        (false, false) => "translatedTempResult",
+    };
+    apply_method_text(segment, method, text);
     segment.is_final = segment.recognized_final && segment.translated_final;
 
-    if is_final_method {
+    if is_final {
         deduplicate_echoes(&mut segments);
         segments.sort_by_key(|segment| {
             (
@@ -1859,10 +2082,14 @@ mod tests {
             ConnectionDescriptor {
                 source: AudioSource::Mic,
                 url: "wss://example.test/mic".to_owned(),
+                provider: None,
+                api_key: None,
             },
             ConnectionDescriptor {
                 source: AudioSource::System,
                 url: "wss://example.test/system".to_owned(),
+                provider: None,
+                api_key: None,
             },
         ];
         assert!(validate_connections(&valid).is_ok());
@@ -1871,8 +2098,28 @@ mod tests {
         let insecure = vec![ConnectionDescriptor {
             source: AudioSource::Mic,
             url: "ws://example.test/mic".to_owned(),
+            provider: None,
+            api_key: None,
         }];
         assert!(validate_connections(&insecure).is_err());
+    }
+
+    #[test]
+    fn requires_api_key_for_qwen_connections() {
+        let missing_key = vec![ConnectionDescriptor {
+            source: AudioSource::Mic,
+            url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-livetranslate-flash-realtime".to_owned(),
+            provider: Some("qwen".to_owned()),
+            api_key: None,
+        }];
+        assert!(validate_connections(&missing_key).is_err());
+        let with_key = vec![ConnectionDescriptor {
+            source: AudioSource::Mic,
+            url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-livetranslate-flash-realtime".to_owned(),
+            provider: Some("qwen".to_owned()),
+            api_key: Some("sk-test".to_owned()),
+        }];
+        assert!(validate_connections(&with_key).is_ok());
     }
 
     #[test]

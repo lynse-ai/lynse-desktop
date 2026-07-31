@@ -8,7 +8,7 @@ import type {
   WorkspaceItem,
 } from "./types";
 
-export type SttEngine = "funasr" | "whisper" | "moss_transcribe_diarize";
+export type SttEngine = "funasr" | "whisper" | "moss_transcribe_diarize" | "mlx";
 
 export type WhisperModel = "small-q5_1" | "medium-q5_0" | "large-v3-turbo-q5_0";
 
@@ -31,7 +31,8 @@ export type SttProviderConfig =
       expected_speakers?: number | null;
       hotword_package_id?: string | null;
     }
-  | { provider: "moss_transcribe_diarize"; hotword_package_id?: string | null };
+  | { provider: "moss_transcribe_diarize"; hotword_package_id?: string | null }
+  | { provider: "mlx"; model?: string; hotword_package_id?: string | null };
 
 export type TranscribeConfig = {
   default?: SttProviderConfig | null;
@@ -209,6 +210,13 @@ export function migrateSttProviderConfig(value: unknown): SttProviderConfig | nu
       hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
     };
   }
+  if (provider === "mlx") {
+    return {
+      provider: "mlx",
+      model: (record.model as string | undefined) ?? "whisper-large-v3-turbo",
+      hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
+    };
+  }
   // Legacy: a bare funasr object (or a config without a `provider` tag) maps to FunASR.
   return {
     provider: "funasr",
@@ -248,6 +256,8 @@ export function providerModelId(config: SttProviderConfig): string {
       return config.model ?? DEFAULT_WHISPER_MODEL;
     case "moss_transcribe_diarize":
       return MOSS_MODEL_ID;
+    case "mlx":
+      return config.model ?? "whisper-large-v3-turbo";
   }
 }
 

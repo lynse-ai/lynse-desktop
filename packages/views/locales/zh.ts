@@ -14,10 +14,15 @@ const zh = {
   live_translation: {
     title: "实时转写翻译",
     subtitle: "麦克风与系统音频双流录制",
+    settings: "设置",
     record_title: "实时翻译",
     provider: "翻译供应商",
     provider_backend: "Lynse 后端签名",
     provider_ilivedata_direct: "iLiveData 客户端直连（测试）",
+    provider_qwen: "Qwen 实时翻译（通义）",
+    provider_qwen_api_key: "DashScope API Key",
+    provider_qwen_endpoint: "WebSocket 接入点",
+    qwen_hint: "使用阿里云百炼 qwen3.5-livetranslate-flash-realtime 模型。API Key 保存在系统 Keychain；默认接入点为北京公共节点，新加坡节点需替换为带 WorkspaceId 的地址。",
     provider_pid: "项目 PID",
     provider_secret_key: "HMAC Secret Key",
     provider_websocket_endpoint: "原生 WebSocket 接入点",
@@ -119,6 +124,7 @@ const zh = {
   },
   settings: {
     appearance: "外观",
+    live_translation: "实时翻译",
     api_config: "API 配置",
     api_base_url: "API 地址",
     api_key: "API 密钥",

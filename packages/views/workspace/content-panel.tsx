@@ -23,6 +23,7 @@ import { SummaryMarkdownEditor } from "./summary-editor";
 import { FloatingMarkdownToolbar } from "./center-panel/markdown-toolbar";
 import { AudioPlayer } from "./audio-player";
 import type { AudioPlayerHandle } from "./audio-player";
+import { getSpeakerColor } from "@lynse/ui/lib/speaker";
 import { getDisplayTitle, type EditedTitleState } from "./title-edit-state";
 import {
   mergePendingSummaryTab,
@@ -188,20 +189,6 @@ function scopeCss(css: string, scope: string): string {
 function isHtmlContent(text: string): boolean {
   const trimmed = text.trim();
   return trimmed.startsWith("<") && /<\/\w+>/.test(trimmed);
-}
-
-const SPEAKER_COLORS = [
-  "var(--speaker-1)", "var(--speaker-2)", "var(--speaker-3)", "var(--speaker-4)",
-  "var(--speaker-5)", "var(--speaker-6)", "var(--speaker-7)", "var(--speaker-8)",
-];
-
-function getSpeakerColor(name: string): string {
-  if (!name) return SPEAKER_COLORS[0]!;
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
-  }
-  return SPEAKER_COLORS[Math.abs(hash) % SPEAKER_COLORS.length]!;
 }
 
 const NOTE_STORAGE_PREFIX = "lynse_note_";

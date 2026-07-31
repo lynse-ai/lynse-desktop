@@ -14,10 +14,15 @@ const en = {
   live_translation: {
     title: "Live Transcription & Translation",
     subtitle: "Separate microphone and system-audio recording",
+    settings: "Settings",
     record_title: "Live translation",
     provider: "Translation provider",
     provider_backend: "Lynse backend signing",
     provider_ilivedata_direct: "iLiveData direct client (testing)",
+    provider_qwen: "Qwen Live Translate (Tongyi)",
+    provider_qwen_api_key: "DashScope API Key",
+    provider_qwen_endpoint: "WebSocket endpoint",
+    qwen_hint: "Uses Alibaba Cloud Model Studio qwen3.5-livetranslate-flash-realtime. The API Key is stored in the system Keychain; the default endpoint is the Beijing public node — for the Singapore region replace it with the WorkspaceId-based address.",
     provider_pid: "Project PID",
     provider_secret_key: "HMAC Secret Key",
     provider_websocket_endpoint: "Raw WebSocket endpoint",
@@ -119,6 +124,7 @@ const en = {
   },
   settings: {
     appearance: "Appearance",
+    live_translation: "Live Translation",
     api_config: "API Configuration",
     api_base_url: "API Base URL",
     api_key: "API Key",

@@ -34,6 +34,7 @@ import {
 import type { LocalHotwordPackage, LocalVoiceprint } from "../workspace/types";
 import { SttConfigSection } from "./stt-config-section";
 import { FeishuAuthCard } from "./feishu-auth-card";
+import { LiveTranslationConfigCard } from "./live-translation-config-card";
 
 const DEFAULT_API_URL = "http://119.97.160.133:10060";
 export const SETTINGS_DIALOG_CONTENT_CLASS =
@@ -258,6 +259,8 @@ export function SettingsDialog({
           </Card>
 
           <FeishuAuthCard />
+
+          <LiveTranslationConfigCard />
 
           {/* ── Speech-to-Text (STT) ───────────────────── */}
           {hasLocalTranscription && (

@@ -98,6 +98,24 @@ guard CGPreflightScreenCaptureAccess() else {
 
 NSApplication.shared.setActivationPolicy(.prohibited)
 
+private var sleepPreventionActivity: NSObjectProtocol?
+
+private func preventIdleSystemSleep() {
+    guard sleepPreventionActivity == nil else { return }
+    sleepPreventionActivity = ProcessInfo.processInfo.beginActivity(
+        options: [.idleSystemSleepDisabled],
+        reason: "Lynse is recording and translating live audio."
+    )
+}
+
+private func allowIdleSystemSleep() {
+    guard let activity = sleepPreventionActivity else { return }
+    ProcessInfo.processInfo.endActivity(activity)
+    sleepPreventionActivity = nil
+}
+
+preventIdleSystemSleep()
+
 private func appendLittleEndian<T: FixedWidthInteger>(_ value: T, to data: inout Data) {
     var little = value.littleEndian
     Swift.withUnsafeBytes(of: &little) { data.append(contentsOf: $0) }
@@ -553,6 +571,7 @@ captureDelegate.onUnexpectedStop = { error in
 func pauseCapture() {
     guard !paused, !shuttingDown else { return }
     paused = true
+    allowIdleSystemSleep()
     clock.pause()
     let stream = captureStream
     captureStream = nil
@@ -566,6 +585,7 @@ func pauseCapture() {
 func resumeCapture() {
     guard paused, !shuttingDown else { return }
     paused = false
+    preventIdleSystemSleep()
     clock.resume()
     Task {
         await startCapture(event: "resumed")
@@ -615,6 +635,7 @@ parentTimer.resume()
 let shutdown: () -> Void = {
     guard !shuttingDown else { return }
     shuttingDown = true
+    allowIdleSystemSleep()
     levelTimer.cancel()
     deviceTimer.cancel()
     parentTimer.cancel()

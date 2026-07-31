@@ -18,6 +18,10 @@ const ja = {
     provider: "翻訳プロバイダー",
     provider_backend: "Lynse バックエンド署名",
     provider_ilivedata_direct: "iLiveData クライアント直接接続（テスト）",
+    provider_qwen: "Qwen リアルタイム翻訳（通義）",
+    provider_qwen_api_key: "DashScope API Key",
+    provider_qwen_endpoint: "WebSocket エンドポイント",
+    qwen_hint: "Alibaba Cloud Model Studio の qwen3.5-livetranslate-flash-realtime を使用します。API Key はシステム Keychain に保存されます。デフォルトは北京パブリックノードです。シンガポール地域は WorkspaceId 付きのアドレスに置き換えてください。",
     provider_pid: "プロジェクト PID",
     provider_secret_key: "HMAC Secret Key",
     provider_websocket_endpoint: "Raw WebSocket エンドポイント",
@@ -119,6 +123,7 @@ const ja = {
   },
   settings: {
     appearance: "外観",
+    live_translation: "リアルタイム翻訳",
     api_config: "API 設定",
     api_base_url: "API ベース URL",
     api_key: "API キー",

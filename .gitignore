@@ -42,3 +42,7 @@ coverage/
 # Fetched by CI via scripts/fetch-sidecars.sh; never committed.
 apps/tauri/src-tauri/resources/sidecars/
 apps/tauri/audio-capture/.build/
+
+# Python bytecode (MLX / FunASR bridge scripts)
+__pycache__/
+*.pyc

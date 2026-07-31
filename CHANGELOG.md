@@ -13,7 +13,8 @@
 
 ### Bug Fixes
 
-- 本次构建以功能新增与引擎接入为主，无针对性缺陷修复（如发现请补充）
+- Fix macOS "Load failed" when connecting to a plaintext `http://` backend: inject `NSAppTransportSecurity` / `NSAllowsArbitraryLoads` into the bundled `Info.plist` so the WKWebView is allowed to reach HTTP test servers (App Transport Security was silently blocking non-localhost plaintext requests).
+- Change the default API base URL from the `http://119.97.160.133:10060` test server to the official HTTPS endpoint `https://api.lynse.cn` across the desktop settings dialog, settings page, and web proxy route.
 
 ## 0.1.20 (2026-07-28)
 

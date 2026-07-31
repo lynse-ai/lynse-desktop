@@ -88,6 +88,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
     ...(liveTranslationAvailable
       ? [{ key: "live_translation", label: t("nav.live_translation"), icon: Headphones, path: "/live-translation" }]
       : []),
+    { key: "chat", label: t("nav.chat"), icon: MessageSquare, path: "/chat" },
   ];
 
   return (
@@ -197,27 +198,6 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
         </SidebarGroup>
 
         {/* Tools section */}
-        <SidebarGroup className="border-t border-border/40 py-1 mt-1">
-          <SidebarGroupContent>
-            <SidebarMenu className="gap-px">
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  isActive={isNavActive(pathname, "/chat")}
-                  render={<AppLink href="/chat" />}
-                  className={cn(
-                    "h-8 rounded-md px-2 text-[13px]",
-                    isNavActive(pathname, "/chat")
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                      : "text-muted-foreground hover:bg-sidebar-accent/50"
-                  )}
-                >
-                  <MessageSquare className="size-4 shrink-0" />
-                  <span>{t("nav.chat")}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
       </SidebarContent>
 
       {/* ── Footer: User profile + Credits icon + Settings icon ── */}

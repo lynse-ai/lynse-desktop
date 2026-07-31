@@ -1,6 +1,6 @@
-import { useCallback, useRef, useState } from "react";
-import type { ChatMessage, ChatStreamEvent } from "../types";
-import { CloudChatTransport, type ChatTransport } from "../chat-transport";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { ChatMessage, ChatStreamEvent, ChatConfirm } from "../types";
+import { CloudChatTransport, extractConfirmFromText, type ChatTransport } from "../chat-transport";
 import { useAuthStore } from "@lynse/core/auth";
 import { redactMeetingIds } from "../meeting-id-redact";
 
@@ -23,9 +23,15 @@ export function useChat() {
   const transportRef = useRef<ChatTransport | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const sessionIdRef = useRef<string | null>(null);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const [pendingConfirm, setPendingConfirm] = useState<{ messageId: string; confirm: ChatConfirm } | null>(null);
 
   const user = useAuthStore((s) => s.user);
   const userId = user?.id ?? "user";
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const makeTransport = useCallback((): ChatTransport => {
     return new CloudChatTransport();
@@ -58,23 +64,36 @@ export function useChat() {
           ),
         );
         break;
-      case "done":
+      case "done": {
+        const current = messagesRef.current.find((m) => m.id === assistantId);
+        const finalContent =
+          evt.text && evt.text.length >= (current?.content.length ?? 0)
+            ? evt.text
+            : (current?.content ?? "");
+        const detected = extractConfirmFromText(finalContent);
         setMessages((prev) =>
           prev.map((m) => {
             if (m.id !== assistantId) return m;
-            // Reconcile: ensure the final text matches done.text for consistency,
-            // but NEVER append done.text again (avoids duplication).
-            const finalContent =
-              evt.text && evt.text.length >= m.content.length ? evt.text : m.content;
             return {
               ...m,
               content: redactMeetingIds(finalContent),
               status: undefined,
               sources: evt.sources ? evt.sources.map(redactMeetingIds) : m.sources,
               attachments: evt.attachments ?? m.attachments,
+              confirm: detected && !m.confirm ? detected : m.confirm,
             };
           }),
         );
+        if (detected && !current?.confirm) {
+          setPendingConfirm({ messageId: assistantId, confirm: detected });
+        }
+        break;
+      }
+      case "confirm":
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantId ? { ...m, confirm: evt.confirm } : m)),
+        );
+        setPendingConfirm({ messageId: assistantId, confirm: evt.confirm });
         break;
       case "error":
         setMessages((prev) =>
@@ -88,10 +107,8 @@ export function useChat() {
     }
   }, []);
 
-  const sendMessage = useCallback(
+  const runSend = useCallback(
     (content: string, fileId?: string, userSpecifiedFile = false) => {
-      if (!content.trim() || isLoading) return;
-
       const userMsg: ChatMessage = {
         id: makeId("user"),
         role: "user",
@@ -150,8 +167,34 @@ export function useChat() {
           abortRef.current = null;
         });
     },
-    [isLoading, userId, makeTransport, handleEvent],
+    [userId, makeTransport, handleEvent],
   );
+
+  const sendMessage = useCallback(
+    (content: string, fileId?: string, userSpecifiedFile = false) => {
+      if (!content.trim() || isLoading) return;
+      runSend(content, fileId, userSpecifiedFile);
+    },
+    [isLoading, runSend],
+  );
+
+  const answerConfirm = useCallback(
+    (messageId: string, value: string) => {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, confirm: undefined } : m)),
+      );
+      setPendingConfirm(null);
+      runSend(value);
+    },
+    [runSend],
+  );
+
+  const dismissConfirm = useCallback((messageId: string) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === messageId ? { ...m, confirm: undefined } : m)),
+    );
+    setPendingConfirm(null);
+  }, []);
 
   const stopStreaming = useCallback(() => {
     transportRef.current?.cancel();
@@ -166,6 +209,7 @@ export function useChat() {
     abortRef.current = null;
     sessionIdRef.current = null;
     setMessages([]);
+    setPendingConfirm(null);
     setIsLoading(false);
   }, []);
 
@@ -175,5 +219,8 @@ export function useChat() {
     sendMessage,
     clearMessages,
     stopStreaming,
+    pendingConfirm,
+    answerConfirm,
+    dismissConfirm,
   };
 }

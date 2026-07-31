@@ -3,19 +3,19 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
-  Bot,
   Check,
   Copy,
   FileText,
   Plus,
-  Sparkles,
   Square,
 } from "../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Textarea } from "@lynse/ui/components/ui/textarea";
 import { StreamingMarkdown } from "@lynse/ui/markdown";
+import { AssistantAvatar } from "../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useChat } from "../workspace/hooks/use-chat";
+import { ConfirmDialog } from "../workspace/ConfirmDialog";
 
 export function ChatPage() {
   const [input, setInput] = useState("");
@@ -23,7 +23,7 @@ export function ChatPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { t } = useTranslation();
-  const { messages, isLoading, sendMessage, clearMessages, stopStreaming } = useChat();
+  const { messages, isLoading, sendMessage, clearMessages, stopStreaming, pendingConfirm, answerConfirm, dismissConfirm } = useChat();
   const streamingMessageId = isLoading ? messages[messages.length - 1]?.id : undefined;
   const suggestions = [
     t("chat.suggestion_summary"),
@@ -101,12 +101,10 @@ export function ChatPage() {
                   </div>
                 </div>
               ) : (
-                <article key={message.id} className="group grid grid-cols-[28px_minmax(0,1fr)] gap-3">
-                  <div className="flex size-7 items-center justify-center rounded-lg border border-border/70 bg-background shadow-xs">
-                    <Bot className="size-3.5 text-foreground/70" />
-                  </div>
-                  <div className="min-w-0 pt-0.5">
-                    <div className="mb-2 text-xs font-medium text-muted-foreground">
+                <article key={message.id} className="group flex gap-3 items-start">
+                  <AssistantAvatar size={40} className="mt-1 shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-1 text-xs font-medium text-muted-foreground">
                       {t("chat.ai_assistant")}
                     </div>
                     <AssistantMessage
@@ -176,6 +174,16 @@ export function ChatPage() {
           </p>
         </div>
       </div>
+
+      <ConfirmDialog
+        confirm={pendingConfirm?.confirm ?? null}
+        onSelect={(value) => {
+          if (pendingConfirm) answerConfirm(pendingConfirm.messageId, value);
+        }}
+        onDismiss={() => {
+          if (pendingConfirm) dismissConfirm(pendingConfirm.messageId);
+        }}
+      />
     </div>
   );
 }
@@ -190,9 +198,7 @@ function EmptyChat({ suggestions, onSelect }: EmptyChatProps) {
 
   return (
     <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col items-center justify-center px-6 py-12 text-center">
-      <div className="mb-5 flex size-12 items-center justify-center rounded-2xl border border-border/70 bg-gradient-to-b from-muted/40 to-muted shadow-sm">
-        <Sparkles className="size-5 text-foreground/70" />
-      </div>
+      <AssistantAvatar size={179} className="mb-5" />
       <h1 className="text-xl font-semibold tracking-tight text-foreground">
         {t("chat.welcome_title")}
       </h1>

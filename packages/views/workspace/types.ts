@@ -193,6 +193,8 @@ export interface ChatMessage {
   attachments?: ChatAttachment[];
   /** Marks an errored assistant message so the UI can style it. */
   error?: boolean;
+  /** Structured confirmation prompt emitted by the assistant (a2UI-style). */
+  confirm?: ChatConfirm;
 }
 
 /** Which backend serves a chat session. */
@@ -208,6 +210,22 @@ export interface ChatAttachment {
   thumbnailUrl?: string;
 }
 
+/** A single selectable option in a confirmation prompt (a2UI-style). */
+export interface ChatConfirmOption {
+  /** Human-readable label shown on the option button. */
+  label: string;
+  /** Value sent back as the user's reply when this option is chosen. */
+  value: string;
+}
+
+/** Structured confirmation request the assistant can emit (a2UI-compatible). */
+export interface ChatConfirm {
+  /** Short question / instruction shown above the options. */
+  question: string;
+  /** Selectable options (2+). */
+  options: ChatConfirmOption[];
+}
+
 /**
  * Typed events emitted by a ChatTransport as the assistant responds.
  * Replaces the previous "guess done by content stability" heuristic.
@@ -217,7 +235,8 @@ export type ChatStreamEvent =
   | { type: "content"; delta: string }
   | { type: "meta"; sources: string[]; attachments: ChatAttachment[] }
   | { type: "done"; text?: string; sources?: string[]; attachments?: ChatAttachment[] }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "confirm"; confirm: ChatConfirm };
 
 /** Stable identity for one conversation turn series. */
 export interface ChatSessionMeta {

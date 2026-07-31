@@ -1,16 +1,18 @@
 "use client";
 
 import { useRef, useEffect, useState, useMemo } from "react";
-import { Bot, X, Send, FileText, Plus, Square } from "../../icons";
+import { X, Send, FileText, Plus, Square } from "../../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
 import { StreamingMarkdown } from "@lynse/ui/markdown";
+import { AssistantAvatar } from "../../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
 
 import { useWorkspaceStore } from "../store";
 import { useChat } from "../hooks/use-chat";
 import { useFiles } from "../hooks/use-files";
 import type { ChatAttachment } from "../types";
+import { ConfirmDialog } from "../ConfirmDialog";
 
 function AttachmentView({ attachments }: { attachments?: ChatAttachment[] }) {
   if (!attachments || attachments.length === 0) return null;
@@ -48,7 +50,7 @@ export function ChatPanel() {
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
   const selectedItemTitle = useWorkspaceStore((s) => s.selectedItemTitle);
   const toggleChatPanel = useWorkspaceStore((s) => s.toggleChatPanel);
-  const { messages, isLoading, sendMessage, clearMessages, stopStreaming } = useChat();
+  const { messages, isLoading, sendMessage, clearMessages, stopStreaming, pendingConfirm, answerConfirm, dismissConfirm } = useChat();
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
@@ -78,7 +80,7 @@ export function ChatPanel() {
       {/* Header */}
       <div className="flex shrink-0 flex-col border-b border-border" style={{ padding: "8px 12px", gap: 6 }}>
         <div className="flex items-center gap-2">
-          <Bot className="size-4 shrink-0 text-muted-foreground" />
+          <AssistantAvatar size={90} />
           <div className="flex flex-1 flex-col overflow-hidden">
             <span className="text-xs font-semibold text-muted-foreground">{t("chat.ai_assistant")}</span>
             <span className="truncate text-[11px] text-muted-foreground/60">{t("chat.ready")}</span>
@@ -103,8 +105,8 @@ export function ChatPanel() {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto" style={{ padding: 12 }}>
         {messages.length === 0 && !isLoading && (
-          <div className="flex flex-col items-center justify-center pt-10 text-center text-muted-foreground">
-            <Bot className="mb-2 size-6 opacity-50" />
+            <div className="flex flex-col items-center justify-center pt-10 text-center text-muted-foreground">
+            <AssistantAvatar size={179} className="mb-2 opacity-90" />
             <p className="text-xs">{t("chat.empty_prompt")}</p>
             <p className="mt-1 text-[11px] opacity-60">{t("chat.empty_hint")}</p>
           </div>
@@ -191,6 +193,16 @@ export function ChatPanel() {
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        confirm={pendingConfirm?.confirm ?? null}
+        onSelect={(value) => {
+          if (pendingConfirm) answerConfirm(pendingConfirm.messageId, value);
+        }}
+        onDismiss={() => {
+          if (pendingConfirm) dismissConfirm(pendingConfirm.messageId);
+        }}
+      />
     </aside>
   );
 }

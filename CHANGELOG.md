@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.22 (2026-07-31)
+
+### New Features
+
+- Add switchable AI assistant IP avatars: five transparent-background GIF personas (Default / Star Hat / Top Hat / Bow / Beret) are bundled with the app; click the assistant avatar in the chat header, empty state, or chat page to cycle through them, and the new persona animates in from small to large on each switch.
+- Add an AI assistant confirmation dialog (a2UI-style): when the assistant reply needs user confirmation, a clickable dialog pops up instead of requiring you to type "A/B/C". It supports the backend a2UI `type:"confirm"` protocol event directly, and also auto-detects a sequential option list (`A)` / `B)` / `C)` or `1.` / `2.` / `3.`) in the assistant's finished text to trigger the dialog; clicking an option sends it as the next message, while cancel closes the dialog without sending.
+
+### Changed
+
+- Move the AI Assistant entry in the sidebar from the bottom Tools section to directly under Live Translation (always visible).
+- Shrink the AI assistant avatar inside chat messages and align it to the first text line so it no longer dominates the message row.
+
+### Bug Fixes
+
+- Remove the duplicate AI Assistant navigation entry that previously appeared both in the bottom Tools section and the workspace nav.
+
 ## 0.1.21 (2026-07-31)
 
 ### New Features

@@ -36,7 +36,7 @@ import { SttConfigSection } from "./stt-config-section";
 import { FeishuAuthCard } from "./feishu-auth-card";
 import { LiveTranslationConfigCard } from "./live-translation-config-card";
 
-const DEFAULT_API_URL = "http://119.97.160.133:10060";
+const DEFAULT_API_URL = "https://api.lynse.cn";
 export const SETTINGS_DIALOG_CONTENT_CLASS =
   "sm:max-w-2xl max-h-[min(90vh,760px)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0";
 

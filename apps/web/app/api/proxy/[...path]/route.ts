@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const DEFAULT_API_URL = "http://119.97.160.133:10060";
+const DEFAULT_API_URL = "https://api.lynse.cn";
 
 async function handler(req: NextRequest) {
   const targetUrl = req.headers.get("x-lynse-api-url") || DEFAULT_API_URL;

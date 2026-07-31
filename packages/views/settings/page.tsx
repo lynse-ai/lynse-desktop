@@ -14,7 +14,7 @@ import { cn } from "@lynse/ui/lib/utils";
 import { FeishuAuthCard } from "./feishu-auth-card";
 import { LiveTranslationConfigCard } from "./live-translation-config-card";
 
-const DEFAULT_API_URL = "http://119.97.160.133:10060";
+const DEFAULT_API_URL = "https://api.lynse.cn";
 
 type ThemeOption = "light" | "dark" | "system";
 

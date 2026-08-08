@@ -427,6 +427,7 @@ const en = {
     completed_toggle: "Toggle completed status",
     refresh: "Refresh",
     clear_completed: "Clear completed",
+    clearing: "Clearing…",
     load_error: "Failed to load todos. Check your login or network.",
     retry: "Retry",
   },

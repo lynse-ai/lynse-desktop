@@ -6,6 +6,7 @@ import {
   Check,
   Copy,
   FileText,
+  Mic,
   Plus,
   Square,
 } from "../icons";
@@ -62,13 +63,13 @@ export function ChatPage() {
   };
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-background">
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
       <header
-        className="flex h-10 shrink-0 items-center border-b border-border/60 bg-background/80 px-3 backdrop-blur-md select-none"
+        className="flex h-14 shrink-0 items-center border-b border-border/50 bg-background/80 px-4 backdrop-blur-xl select-none"
         data-tauri-drag-region
       >
         <div className="flex min-w-0 flex-1 items-center justify-center gap-2 pl-24">
-          <span className="truncate text-xs font-medium text-foreground/80">
+          <span className="truncate text-[13px] font-semibold tracking-tight text-foreground">
             {t("chat.page_title")}
           </span>
           {isLoading && (
@@ -78,7 +79,7 @@ export function ChatPage() {
         <Button
           variant="ghost"
           size="sm"
-          className="h-7 text-xs text-muted-foreground"
+          className="h-8 rounded-lg border border-transparent text-xs text-muted-foreground transition-colors hover:border-border hover:bg-card hover:text-foreground"
           onClick={handleNewChat}
           title={t("chat.new_chat")}
           data-tauri-drag-region={false}
@@ -92,19 +93,19 @@ export function ChatPage() {
         {messages.length === 0 && !isLoading ? (
           <EmptyChat suggestions={suggestions} onSelect={handleSend} />
         ) : (
-          <div className="mx-auto w-full max-w-3xl space-y-8 px-6 py-8">
+          <div className="mx-auto w-full max-w-3xl space-y-6 px-6 py-8">
             {messages.map((message) =>
               message.role === "user" ? (
                 <div key={message.id} className="flex justify-end">
-                  <div className="max-w-[78%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-muted px-4 py-2.5 text-sm leading-6 text-foreground">
+                  <div className="max-w-[78%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-6 text-primary-foreground shadow-sm">
                     {message.content}
                   </div>
                 </div>
               ) : (
-                <article key={message.id} className="group flex gap-3 items-start">
-                  <AssistantAvatar size={40} className="mt-1 shrink-0" />
+                <article key={message.id} className="group flex items-start gap-3">
+                  <AssistantAvatar size={36} className="mt-0.5 shrink-0" />
                   <div className="min-w-0 flex-1">
-                    <div className="mb-1 text-xs font-medium text-muted-foreground">
+                    <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
                       {t("chat.ai_assistant")}
                     </div>
                     <AssistantMessage
@@ -121,9 +122,9 @@ export function ChatPage() {
         )}
       </main>
 
-      <div className="pointer-events-none shrink-0 bg-gradient-to-t from-background via-background to-transparent px-4 pb-4 pt-6">
+      <div className="pointer-events-none shrink-0 bg-background/95 px-4 pb-4 pt-3 dark:bg-background/75 dark:backdrop-blur-xl">
         <div className="pointer-events-auto mx-auto max-w-3xl">
-          <div className="rounded-2xl border border-border/80 bg-background p-2 shadow-[0_8px_30px_rgba(0,0,0,0.08)] transition-shadow focus-within:border-ring/50 focus-within:shadow-[0_8px_30px_rgba(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.28)]">
+          <div className="rounded-xl border border-input bg-white p-2 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.035)] transition-[border-color,box-shadow] duration-150 focus-within:border-neutral-400 focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.04),0_0_0_3px_rgba(0,0,0,0.04)] dark:bg-card dark:shadow-[0_10px_35px_rgba(0,0,0,0.28)] dark:focus-within:border-white/20 dark:focus-within:shadow-[0_10px_35px_rgba(0,0,0,0.28),0_0_0_3px_rgba(255,255,255,0.05)]">
             <Textarea
               ref={textareaRef}
               value={input}
@@ -135,20 +136,43 @@ export function ChatPage() {
                 }
               }}
               placeholder={t("chat.page_placeholder")}
-              className="max-h-40 min-h-12 resize-none border-0 bg-transparent px-2.5 py-2 shadow-none focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
+              className="max-h-40 min-h-12 resize-none border-0 bg-transparent px-2.5 py-2 text-[13px] text-foreground shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
               disabled={isLoading}
               rows={1}
               autoFocus
             />
-            <div className="flex items-center justify-between gap-3 px-1 pt-1">
-              <span className="truncate text-[11px] text-muted-foreground/70">
+            <div className="flex items-center gap-1 px-0.5 pb-0.5 pt-1">
+              <div className="flex items-center gap-0.5">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 rounded-lg border-0 bg-transparent text-muted-foreground shadow-none transition-colors hover:bg-muted hover:text-foreground dark:hover:bg-white/[0.06]"
+                  title={t("chat.context")}
+                  aria-label={t("chat.context")}
+                >
+                  <Plus className="size-4" strokeWidth={1.8} />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 rounded-lg border-0 bg-transparent text-muted-foreground shadow-none transition-colors hover:bg-muted hover:text-foreground dark:hover:bg-white/[0.06]"
+                  title={t("common.microphone")}
+                  aria-label={t("common.microphone")}
+                >
+                  <Mic className="size-4" strokeWidth={1.8} />
+                </Button>
+              </div>
+              <span className="ml-1 min-w-0 flex-1 truncate text-[11px] text-muted-foreground/55 dark:text-muted-foreground/65">
                 {isLoading ? t("chat.responding") : t("chat.input_hint")}
               </span>
               {isLoading ? (
                 <Button
+                  type="button"
                   size="icon"
                   variant="outline"
-                  className="size-8 rounded-full"
+                  className="size-8 rounded-lg border-border bg-background text-foreground shadow-none transition-colors hover:bg-muted"
                   onClick={stopStreaming}
                   title={t("chat.stop")}
                   aria-label={t("chat.stop")}
@@ -157,19 +181,20 @@ export function ChatPage() {
                 </Button>
               ) : (
                 <Button
+                  type="button"
                   size="icon"
-                  className="size-8 rounded-full"
+                  className="size-8 rounded-lg bg-foreground text-background shadow-[0_1px_2px_rgba(0,0,0,0.12)] transition-all hover:bg-foreground/85 hover:shadow-[0_2px_7px_rgba(0,0,0,0.12)] disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none dark:bg-primary dark:text-primary-foreground dark:hover:bg-primary/90"
                   onClick={() => handleSend()}
                   disabled={!input.trim()}
                   title={t("chat.send")}
                   aria-label={t("chat.send")}
                 >
-                  <ArrowUp className="size-4" />
+                  <ArrowUp className="size-4" strokeWidth={2} />
                 </Button>
               )}
             </div>
           </div>
-          <p className="mt-2 text-center text-[10px] text-muted-foreground/60">
+          <p className="mt-2 text-center text-[10px] text-muted-foreground/55 dark:text-muted-foreground/60">
             {t("chat.disclaimer")}
           </p>
         </div>
@@ -197,21 +222,21 @@ function EmptyChat({ suggestions, onSelect }: EmptyChatProps) {
   const { t } = useTranslation();
 
   return (
-    <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col items-center justify-center px-6 py-12 text-center">
-      <AssistantAvatar size={179} className="mb-5" />
-      <h1 className="text-xl font-semibold tracking-tight text-foreground">
+    <div className="relative mx-auto flex min-h-full w-full max-w-3xl flex-col items-center justify-center overflow-hidden px-6 py-12 text-center">
+      <AssistantAvatar size={148} className="relative mb-4" />
+      <h1 className="relative text-xl font-semibold tracking-tight text-foreground">
         {t("chat.welcome_title")}
       </h1>
-      <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
+      <p className="relative mt-2 max-w-md text-sm leading-6 text-muted-foreground">
         {t("chat.page_description")}
       </p>
-      <div className="mt-7 grid w-full max-w-xl gap-2 sm:grid-cols-3">
+      <div className="relative mt-7 grid w-full max-w-xl gap-2 sm:grid-cols-3">
         {suggestions.map((suggestion) => (
           <button
             key={suggestion}
             type="button"
             onClick={() => onSelect(suggestion)}
-            className="rounded-xl border border-border/70 bg-background px-3 py-3 text-left text-xs leading-5 text-foreground/80 transition-colors hover:border-border hover:bg-muted/60"
+            className="rounded-xl border border-border bg-card/80 px-3 py-3 text-left text-xs leading-5 text-foreground/80 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/35 hover:bg-card hover:text-foreground"
           >
             {suggestion}
           </button>
@@ -234,11 +259,11 @@ function AssistantMessage({ message, isStreaming, copied, onCopy }: AssistantMes
   return (
     <>
       {message.error ? (
-        <div className="rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-sm leading-6 text-destructive">
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm leading-6 text-destructive">
           {message.content}
         </div>
       ) : message.content ? (
-        <div className="text-sm leading-6 text-foreground">
+        <div className="rounded-2xl rounded-tl-md border border-border bg-card px-4 py-3.5 text-sm leading-6 text-foreground shadow-sm">
           <StreamingMarkdown content={message.content} isStreaming={isStreaming} mode="minimal" />
         </div>
       ) : message.status ? (
@@ -259,7 +284,7 @@ function AssistantMessage({ message, isStreaming, copied, onCopy }: AssistantMes
           {message.sources.map((source, index) => (
             <span
               key={`${source}-${index}`}
-              className="rounded-full border border-border/70 bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground"
+              className="rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] text-accent-brand-text"
             >
               {source}
             </span>
@@ -278,7 +303,7 @@ function AssistantMessage({ message, isStreaming, copied, onCopy }: AssistantMes
                 href={href}
                 target="_blank"
                 rel="noreferrer"
-                className="flex min-w-0 items-center gap-2 rounded-xl border border-border/70 bg-background px-3 py-2 text-xs text-foreground transition-colors hover:bg-muted/50"
+                className="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent"
               >
                 <FileText className="size-3.5 shrink-0 text-muted-foreground" />
                 <span className="truncate">{attachment.name || href}</span>

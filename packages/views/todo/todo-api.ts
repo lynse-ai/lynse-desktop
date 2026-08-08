@@ -1,19 +1,18 @@
 /**
  * Todo data layer.
  *
- * Todos are sourced from the Lynse backend (lynse.ai) — the same backend the
- * lynse-cli talks to. The CLI exposes three todo endpoints:
- *   POST /api/business/file/todo/listall   -> list all todos
- *   POST /api/business/file/todo/delete    -> delete by ids
- *   POST /api/business/file/todo/clear     -> clear completed
- * (there is no create/update endpoint — todos are generated from meetings)
+ * On the desktop the store of record is the Rust-backed local store exposed by
+ * the Tauri bridge (`desktopAPI.todo` → `todo_list` / `todo_save` /
+ * `todo_delete`, persisted under the `local-todos` key in the app data dir).
  *
- * Manual add / toggle-complete are kept as a *local* layer (localStorage) on
- * top of the backend list, so the page stays fully usable for quick notes
- * while the real (meeting-generated) todos come from the cloud.
+ * The UI used to talk to the lynse.ai cloud (`/api/business/file/todo/...`),
+ * which the desktop cannot reach without an account session — that made
+ * "refresh" and "clear completed" no-ops. We now source todos from the local
+ * store whenever the bridge is present, and fall back to localStorage-only on
+ * environments where the bridge is unavailable (e.g. plain web).
  */
 
-import { api, ApiError } from "@lynse/core/api/client";
+import { ApiError } from "@lynse/core/api/client";
 
 export interface TodoItem {
   id: string;
@@ -29,24 +28,88 @@ export interface TodoItem {
   calendarAddedAt?: string;
   calendarStartAt?: string;
   calendarEndAt?: string;
-  backend?: boolean; // true when sourced from lynse.ai
+  backend?: boolean; // true when sourced from lynse.ai (unused on desktop)
   [key: string]: unknown;
 }
 
-interface BackendTodo {
-  todoId?: string;
-  id?: string;
-  todoContent?: string;
-  content?: string;
-  isCompleted?: number | boolean;
-  expectedCompleteTime?: string;
-  createTime?: string;
-  updateTime?: string;
-  fileName?: string;
-  meetingName?: string;
-  source?: string;
-  [key: string]: unknown;
+// ── Desktop store bridge ──────────────────────────────────
+
+type TodoBridge = {
+  list: () => Promise<unknown[]>;
+  save: (todo: unknown) => Promise<unknown>;
+  delete: (id: string) => Promise<void>;
+};
+
+function getTodoBridge(): TodoBridge | null {
+  if (typeof window === "undefined") return null;
+  const bridge = (window as unknown as { desktopAPI?: { todo?: Partial<TodoBridge> } }).desktopAPI
+    ?.todo;
+  if (
+    bridge &&
+    typeof bridge.list === "function" &&
+    typeof bridge.save === "function" &&
+    typeof bridge.delete === "function"
+  ) {
+    return bridge as TodoBridge;
+  }
+  return null;
 }
+
+/** Coerce a stored JSON object into the app's TodoItem shape. */
+export function normalizeStored(raw: unknown): TodoItem {
+  const t = (raw ?? {}) as Record<string, unknown>;
+  return {
+    id: String(t.id ?? (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `todo-${Date.now()}`)),
+    title: String(t.title ?? "").trim() || "(无标题待办)",
+    completed: t.completed === true || t.completed === 1,
+    notes: t.notes ? String(t.notes) : undefined,
+    dueDate: t.dueDate ? String(t.dueDate) : undefined,
+    sourceTitle: t.sourceTitle ? String(t.sourceTitle) : undefined,
+    sourceMeetingTime: t.sourceMeetingTime ? String(t.sourceMeetingTime) : undefined,
+    createdAt: t.createdAt ? String(t.createdAt) : new Date().toISOString(),
+    updatedAt: t.updatedAt ? String(t.updatedAt) : new Date().toISOString(),
+    calendarEventId: t.calendarEventId ? String(t.calendarEventId) : undefined,
+    calendarAddedAt: t.calendarAddedAt ? String(t.calendarAddedAt) : undefined,
+    calendarStartAt: t.calendarStartAt ? String(t.calendarStartAt) : undefined,
+    calendarEndAt: t.calendarEndAt ? String(t.calendarEndAt) : undefined,
+    backend: false,
+  };
+}
+
+/** Fetch the full todo list (desktop store, or localStorage fallback). */
+export async function fetchTodos(): Promise<TodoItem[]> {
+  const bridge = getTodoBridge();
+  if (bridge) {
+    const raw = await bridge.list();
+    return (Array.isArray(raw) ? raw : []).map(normalizeStored);
+  }
+  return getLocalTodos();
+}
+
+/** Create or update a todo (upsert by id). */
+export async function saveTodo(todo: TodoItem): Promise<TodoItem> {
+  const bridge = getTodoBridge();
+  if (bridge) {
+    const saved = await bridge.save({ ...todo });
+    return normalizeStored(saved);
+  }
+  const next = getLocalTodos().filter((x) => x.id !== todo.id);
+  next.unshift(todo);
+  saveLocalTodos(next);
+  return todo;
+}
+
+/** Delete a single todo by id. */
+export async function deleteTodo(id: string): Promise<void> {
+  const bridge = getTodoBridge();
+  if (bridge) {
+    await bridge.delete(id);
+    return;
+  }
+  saveLocalTodos(getLocalTodos().filter((x) => x.id !== id));
+}
+
+// ── Local layer (fallback when no bridge) ─────────────────
 
 const LOCAL_KEY = "lynse.todos.local";
 const OVERRIDE_KEY = "lynse.todos.overrides";
@@ -68,47 +131,6 @@ function safeSet(key: string, value: unknown) {
   }
 }
 
-/** Map a backend todo object into the app's TodoItem shape. */
-export function mapBackendTodo(raw: BackendTodo): TodoItem {
-  const completed = raw.isCompleted === 1 || raw.isCompleted === true;
-  const id = String(raw.todoId ?? raw.id ?? crypto.randomUUID());
-  const createdAt = raw.createTime || new Date().toISOString();
-  const updatedAt = raw.updateTime || createdAt;
-  const sourceTitle = raw.fileName || raw.meetingName || raw.source;
-  return {
-    id,
-    title: (raw.todoContent ?? raw.content ?? "").toString().trim() || "(无标题待办)",
-    completed,
-    dueDate: raw.expectedCompleteTime || undefined,
-    sourceTitle: sourceTitle ? String(sourceTitle) : undefined,
-    createdAt,
-    updatedAt,
-    backend: true,
-  };
-}
-
-/** Fetch the full todo list from the Lynse backend. */
-export async function fetchBackendTodos(): Promise<TodoItem[]> {
-  const data = await api().post<BackendTodo[] | { data: BackendTodo[] }>(
-    "/api/business/file/todo/listall",
-    {},
-  );
-  const arr = Array.isArray(data) ? data : ((data as { data?: BackendTodo[] })?.data ?? []);
-  return arr.map(mapBackendTodo);
-}
-
-/** Delete a single todo on the backend. */
-export async function deleteBackendTodo(id: string): Promise<void> {
-  await api().post("/api/business/file/todo/delete", { todoIds: [id] });
-}
-
-/** Clear all completed todos on the backend. */
-export async function clearCompletedBackendTodos(): Promise<void> {
-  await api().post("/api/business/file/todo/clear", {});
-}
-
-// ── Local layer (manual add + completed overrides) ─────────
-
 export function getLocalTodos(): TodoItem[] {
   return (safeGet(LOCAL_KEY) as TodoItem[]) ?? [];
 }
@@ -129,8 +151,7 @@ export { ApiError };
 
 /**
  * Write a todo into the macOS system Calendar (desktop only).
- * Requires a *local* todo (the Rust bridge looks the todo up by id in the
- * local store), so this is only meaningful for locally-created todos.
+ * Requires the Rust bridge (it looks the todo up by id in the local store).
  */
 export async function addTodoToSystemCalendar(
   todo: TodoItem,

@@ -758,21 +758,28 @@ async fn websocket_loop(
             Ok((socket, _)) => {
                 emit_stream_state(&app, source, "connected", epoch);
                 let (mut writer, mut reader) = socket.split();
-                // For Qwen, configure the session (target language + optional
-                // source-language recognition) right after the handshake.
+                // For Qwen, configure translation and/or source-language ASR
+                // right after the handshake. `none` is Lynse's transcript-only
+                // mode: keep real-time ASR active without requesting translation.
                 if is_qwen {
                     let source_lang = session.source_language.clone();
                     let target_lang = session.target_language.clone();
+                    let transcript_only = target_lang == "none";
                     let mut session_cfg = json!({
                         "modalities": ["text"],
                         "input_audio_format": "pcm",
-                        "translation": { "language": target_lang },
                     });
-                    if source_lang != "auto" {
-                        session_cfg["input_audio_transcription"] = json!({
+                    if !transcript_only {
+                        session_cfg["translation"] = json!({ "language": target_lang });
+                    }
+                    if source_lang != "auto" || transcript_only {
+                        let mut transcription = json!({
                             "model": "qwen3-asr-flash-realtime",
-                            "language": source_lang,
                         });
+                        if source_lang != "auto" {
+                            transcription["language"] = json!(source_lang);
+                        }
+                        session_cfg["input_audio_transcription"] = transcription;
                     }
                     let update = json!({
                         "type": "session.update",

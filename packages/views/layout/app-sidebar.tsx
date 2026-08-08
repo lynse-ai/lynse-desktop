@@ -92,38 +92,42 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
   ];
 
   return (
-    <Sidebar variant="inset" className="border-r-0">
+    <Sidebar
+      variant="inset"
+      className="border-r-0 [&_[data-slot=sidebar-inner]]:border-r [&_[data-slot=sidebar-inner]]:border-sidebar-border/60 [&_[data-slot=sidebar-inner]]:bg-sidebar/90 [&_[data-slot=sidebar-inner]]:backdrop-blur-2xl"
+    >
       {topSlot}
 
       {/* ── Header: Create bar ─────────────────────────── */}
-      <SidebarHeader className={cn("gap-2 px-3 pt-3 pb-1", headerClassName)} style={headerStyle}>
-        {/* Search / Create bar */}
+      <SidebarHeader className={cn("gap-2 px-3 pt-3 pb-2", headerClassName)} style={headerStyle}>
         <button
-          className="flex w-full items-center gap-2 rounded-lg border border-border/60 bg-background px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted/60"
+          className="group flex w-full items-center gap-2 rounded-lg border border-sidebar-border bg-card/70 px-3 py-2 text-sm text-muted-foreground shadow-sm transition-all hover:border-primary/35 hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           onClick={() => setUploadOpen(true)}
         >
-          <Plus className="size-4 shrink-0" />
-          <span className="flex-1 text-left">{t("layout.new_recording")}</span>
-          <kbd className="pointer-events-none inline-flex h-5 items-center gap-0.5 rounded border border-border/50 bg-muted/60 px-1.5 text-[10px] font-medium text-muted-foreground">
+          <span className="flex size-6 items-center justify-center rounded-md bg-primary/[0.12] text-primary transition-colors group-hover:bg-primary/[0.18]">
+            <Plus className="size-3.5 shrink-0" />
+          </span>
+          <span className="flex-1 text-left text-[13px] font-medium">{t("layout.new_recording")}</span>
+          <kbd className="pointer-events-none inline-flex h-5 items-center gap-0.5 rounded border border-sidebar-border bg-background/60 px-1.5 text-[10px] font-medium text-muted-foreground">
             ⌘N
           </kbd>
         </button>
       </SidebarHeader>
 
       {/* ── Main Content ───────────────────────────────── */}
-      <SidebarContent className="gap-0 px-2">
+      <SidebarContent className="gap-0 px-2.5">
         {/* Workspace section */}
         <SidebarGroup className="py-1">
           {/* Section header */}
           <div className="flex items-center justify-between px-2 py-1.5">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
               {t("layout.workspace_group")}
             </span>
             <div className="flex items-center gap-0.5">
-              <button className="rounded p-1 text-muted-foreground/50 transition-colors hover:bg-muted hover:text-muted-foreground">
+              <button className="rounded-md p-1 text-muted-foreground/50 transition-colors hover:bg-white/[0.06] hover:text-muted-foreground">
                 <Grid3X3 className="size-3.5" />
               </button>
-              <button className="rounded p-1 text-muted-foreground/50 transition-colors hover:bg-muted hover:text-muted-foreground">
+              <button className="rounded-md p-1 text-muted-foreground/50 transition-colors hover:bg-white/[0.06] hover:text-muted-foreground">
                 <Plus className="size-3.5" />
               </button>
             </div>
@@ -138,10 +142,10 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                       isActive={isActive}
                       render={<AppLink href={item.path} />}
                       className={cn(
-                        "h-8 rounded-md px-2 text-[13px]",
+                        "relative h-8 rounded-lg px-2.5 text-[13px] transition-colors before:absolute before:left-0 before:top-1/2 before:h-4 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-transparent",
                         isActive
-                          ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                          : "text-muted-foreground hover:bg-sidebar-accent/50"
+                          ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground before:bg-primary"
+                          : "text-muted-foreground hover:bg-white/[0.06] hover:text-foreground"
                       )}
                     >
                       <item.icon className="size-4 shrink-0" />
@@ -158,13 +162,13 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
         <FolderTreeSection />
 
         {/* Template / Management section — above AI Assistant */}
-        <SidebarGroup className="border-t border-border/40 py-1 mt-1">
+        <SidebarGroup className="relative mt-2 pt-2 before:absolute before:left-3 before:right-8 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-sidebar-border/60 before:to-transparent">
           <SidebarGroupContent>
             <SidebarMenu className="gap-px">
               <SidebarMenuItem>
                 <SidebarMenuButton
                   onClick={() => setTemplateManagerOpen(true)}
-                  className="h-8 rounded-md px-2 text-[13px] text-muted-foreground hover:bg-sidebar-accent/50"
+                  className="h-8 rounded-lg px-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground"
                 >
                   <LayoutTemplate className="size-4 shrink-0" />
                   <span>{t("templates.title")}</span>
@@ -175,7 +179,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
         </SidebarGroup>
 
         {/* Todo section */}
-        <SidebarGroup className="border-t border-border/40 py-1 mt-1">
+        <SidebarGroup className="relative mt-2 pt-2 before:absolute before:left-3 before:right-8 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-sidebar-border/60 before:to-transparent">
           <SidebarGroupContent>
             <SidebarMenu className="gap-px">
               <SidebarMenuItem>
@@ -183,10 +187,10 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                   isActive={isNavActive(pathname, "/todo")}
                   render={<AppLink href="/todo" />}
                   className={cn(
-                    "h-8 rounded-md px-2 text-[13px]",
+                    "relative h-8 rounded-lg px-2.5 text-[13px] transition-colors before:absolute before:left-0 before:top-1/2 before:h-4 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-transparent",
                     isNavActive(pathname, "/todo")
-                      ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                      : "text-muted-foreground hover:bg-sidebar-accent/50"
+                      ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground before:bg-primary"
+                      : "text-muted-foreground hover:bg-white/[0.06] hover:text-foreground"
                   )}
                 >
                   <ListChecks className="size-4 shrink-0" />
@@ -201,7 +205,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
       </SidebarContent>
 
       {/* ── Footer: User profile + Credits icon + Settings icon ── */}
-      <SidebarFooter className="border-t border-border/40 p-2 gap-0">
+      <SidebarFooter className="relative gap-0 p-2 pt-3 before:absolute before:left-4 before:right-4 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-sidebar-border/60 before:to-transparent">
         <div className="flex items-center gap-1">
           <div className="flex-1 min-w-0">
             <UserProfileDropdown />
@@ -209,7 +213,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
           <CreditsPopover />
           <button
             onClick={() => setSettingsOpen(true)}
-            className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted/60"
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-white/[0.06]"
           >
             <Settings className="size-3.5 text-muted-foreground/50" />
           </button>
@@ -279,7 +283,7 @@ function CreditsPopover() {
   return (
     <Popover>
       <PopoverTrigger
-        className="flex size-8 shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted/60 cursor-pointer"
+        className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors hover:bg-white/[0.06]"
       >
         <Zap className="size-4 text-muted-foreground" />
       </PopoverTrigger>
@@ -354,13 +358,13 @@ function UserProfileDropdown() {
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
-          <button className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-muted/60">
-            <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
+          <button className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-white/[0.06]">
+            <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20">
               {initials}
             </div>
-            <div className="flex-1 text-left min-w-0">
+            <div className="min-w-0 flex-1 text-left">
               <p className="truncate text-[13px] font-medium leading-tight">{nickname}</p>
-              <p className="truncate text-[11px] text-muted-foreground/60">{plan}</p>
+              <p className="truncate text-[11px] text-muted-foreground/70">{plan}</p>
             </div>
           </button>
         }

@@ -620,9 +620,9 @@ export function ContentPanel() {
   }, [contentTab, deleteConclusion, selectedItemId, setContentTab, text, summaryTabFallback.deleteConfirm, visibleConclusionTexts.length]);
 
   return (
-    <div className="flex h-full flex-col min-w-0">
+    <div className="flex h-full min-w-0 flex-col bg-background">
       {/* Tab bar */}
-      <div className="flex shrink-0 items-center border-b border-stroke-secondary px-4" style={{ height: TAB_BAR_HEIGHT }}>
+      <div className="flex shrink-0 items-center border-b border-border/50 bg-background/80 px-4 backdrop-blur-xl" style={{ height: TAB_BAR_HEIGHT }}>
         <ScrollableTabs activeTab={contentTab}>
           <TabButton
             active={contentTab === "outline"}
@@ -1368,12 +1368,17 @@ function SourceView({ code, language }: { code: string; language: "html" | "mark
 function EmptyState() {
   const { t } = useTranslation();
   return (
-    <div className="flex h-full flex-col items-center justify-center">
-      <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full bg-muted">
-        <FileText className="size-5 text-muted-foreground" />
+    <div className="relative flex h-full flex-col items-center justify-center overflow-hidden px-6 text-center">
+      <div className="pointer-events-none absolute size-80 rounded-full bg-primary/[0.08] blur-3xl" />
+      <div className="relative mx-auto mb-5 flex size-16 items-center justify-center rounded-[20px] border border-primary/20 bg-gradient-to-br from-primary/20 via-primary/10 to-transparent text-accent-brand-text shadow-[0_0_40px_rgba(99,102,241,0.15)]">
+        <FileText className="size-7" strokeWidth={1.5} />
       </div>
-      <h3 className="text-sm font-medium">{t("workspace.no_file_selected")}</h3>
-      <p className="mt-1 text-xs text-muted-foreground">{t("workspace.select_file_hint")}</p>
+      <h3 className="relative text-base font-semibold tracking-tight text-foreground">
+        {t("workspace.no_file_selected")}
+      </h3>
+      <p className="relative mt-2 text-sm leading-6 text-muted-foreground">
+        {t("workspace.select_file_hint")}
+      </p>
     </div>
   );
 }

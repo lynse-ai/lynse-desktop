@@ -7,9 +7,18 @@ import { Badge } from "@lynse/ui/components/ui/badge";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
 import { Label } from "@lynse/ui/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@lynse/ui/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@lynse/ui/components/ui/command";
 import { Alert, AlertDescription, AlertTitle } from "@lynse/ui/components/ui/alert";
 import {
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Headphones,
@@ -95,6 +104,7 @@ const LANGUAGE_OPTIONS: { code: string; label: string }[] = [
 
 // Source language may also be auto-detected by iLiveData.
 const SOURCE_LANGUAGE_OPTIONS = [{ code: "auto", label: "自动识别" }, ...LANGUAGE_OPTIONS];
+const TARGET_LANGUAGE_OPTIONS = [{ code: "none", label: "不翻译" }, ...LANGUAGE_OPTIONS];
 
 export function LiveTranslationPage() {
   const { t } = useTranslation();
@@ -165,9 +175,13 @@ export function LiveTranslationPage() {
     };
   }, [api]);
 
+  const transcriptOnly = targetLanguage === "none";
   const visibleSegments = useMemo(
-    () => view.segments.filter((segment) => !segment.echoOf && (segment.recognizedText || segment.translatedText)),
-    [view.segments],
+    () =>
+      view.segments.filter(
+        (segment) => !segment.echoOf && (segment.recognizedText || (!transcriptOnly && segment.translatedText)),
+      ),
+    [transcriptOnly, view.segments],
   );
   const active = Boolean(view.sessionId) && view.state !== "idle";
   const directProviderReady = providerConfig.provider !== "ilivedata_direct"
@@ -185,7 +199,7 @@ export function LiveTranslationPage() {
     && permissions?.microphone === "granted"
     && (!permissions.systemAudioRequired || permissions.systemAudio === "granted")
     && !permissions.restartRequired
-    && sourceLanguage !== targetLanguage
+    && (transcriptOnly || sourceLanguage !== targetLanguage)
     && !active;
 
   async function selectProvider(provider: LiveTranslationProvider) {
@@ -567,10 +581,41 @@ export function LiveTranslationPage() {
 
           <section className="mt-6 space-y-3">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("live_translation.languages")}</h2>
-            <div className="flex items-center gap-2">
-              <LanguageSelect value={sourceLanguage} onChange={setSourceLanguage} disabled={active} options={SOURCE_LANGUAGE_OPTIONS} />
-              <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-              <LanguageSelect value={targetLanguage} onChange={setTargetLanguage} disabled={active} />
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-end">
+              <LanguageSelect
+                value={sourceLanguage}
+                onChange={setSourceLanguage}
+                disabled={active}
+                options={SOURCE_LANGUAGE_OPTIONS}
+                label={t("live_translation.source_language")}
+                searchPlaceholder={t("live_translation.search_language")}
+              />
+              <button
+                type="button"
+                className="mb-0.5 hidden size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex"
+                onClick={() => {
+                  if (targetLanguage !== "none" && sourceLanguage !== "auto") {
+                    const previousSource = sourceLanguage;
+                    setSourceLanguage(targetLanguage);
+                    setTargetLanguage(previousSource);
+                  }
+                }}
+                disabled={active || transcriptOnly || sourceLanguage === "auto"}
+                aria-label={t("live_translation.swap_languages")}
+                title={t("live_translation.swap_languages")}
+              >
+                <ChevronRight className="size-4 rotate-180" />
+                <ChevronRight className="-ml-2 size-4" />
+              </button>
+              <LanguageSelect
+                value={targetLanguage}
+                onChange={setTargetLanguage}
+                disabled={active}
+                options={TARGET_LANGUAGE_OPTIONS}
+                label={t("live_translation.target_language")}
+                searchPlaceholder={t("live_translation.search_language")}
+                emphasizedValue="none"
+              />
             </div>
           </section>
 
@@ -748,16 +793,83 @@ export function LiveTranslationPage() {
   );
 }
 
-function LanguageSelect({ value, onChange, disabled, options = LANGUAGE_OPTIONS }: { value: string; onChange: (value: string) => void; disabled: boolean; options?: { code: string; label: string }[] }) {
+function LanguageSelect({
+  label,
+  value,
+  onChange,
+  disabled,
+  options,
+  searchPlaceholder,
+  emphasizedValue,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  disabled: boolean;
+  options: readonly { code: string; label: string }[];
+  searchPlaceholder: string;
+  emphasizedValue?: string;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const selected = options.find((option) => option.code === value) ?? options[0];
+  const optionLabel = (option: { code: string; label: string }) => {
+    if (option.code === "auto") return t("live_translation.auto_detect");
+    if (option.code === "none") return t("live_translation.no_translation");
+    return option.label;
+  };
+
   return (
-    <select
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      disabled={disabled}
-      className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
-    >
-      {options.map((language) => <option key={language.code} value={language.code}>{language.label}</option>)}
-    </select>
+    <div className="space-y-1.5">
+      <Label className="text-[11px] text-muted-foreground">{label}</Label>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger
+          disabled={disabled}
+          className="flex h-10 w-full items-center gap-2 rounded-xl border border-border bg-background px-3 text-left shadow-sm transition-colors hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <span className={`flex size-6 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold uppercase ${value === emphasizedValue ? "bg-primary/15 text-accent-brand-text" : "bg-muted text-muted-foreground"}`}>
+            {value === "none" ? "—" : value === "auto" ? "A" : value.slice(0, 2)}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[13px] font-medium text-foreground">
+              {optionLabel(selected)}
+            </span>
+            {value === "none" && (
+              <span className="block truncate text-[10px] text-muted-foreground">
+                {t("live_translation.transcript_only_hint")}
+              </span>
+            )}
+          </span>
+          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+        </PopoverTrigger>
+        <PopoverContent align="start" sideOffset={6} className="w-[--anchor-width] min-w-56 p-0">
+          <Command>
+            <CommandInput placeholder={searchPlaceholder} />
+            <CommandList className="max-h-64">
+              <CommandEmpty>{t("live_translation.no_language_results")}</CommandEmpty>
+              {options.map((option) => (
+                <CommandItem
+                  key={option.code}
+                  value={`${optionLabel(option)} ${option.code}`}
+                  data-checked={option.code === value}
+                  onSelect={() => {
+                    onChange(option.code);
+                    setOpen(false);
+                  }}
+                  className={`mx-1 my-0.5 rounded-lg py-2 ${option.code === emphasizedValue ? "bg-primary/[0.06]" : ""}`}
+                >
+                  <span className="flex size-6 items-center justify-center rounded-md bg-muted text-[10px] font-semibold uppercase text-muted-foreground">
+                    {option.code === "none" ? "—" : option.code === "auto" ? "A" : option.code.slice(0, 2)}
+                  </span>
+                  <span className="flex-1 text-[13px]">{optionLabel(option)}</span>
+                  {option.code === value && <Check className="size-3.5 text-primary" />}
+                </CommandItem>
+              ))}
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+    </div>
   );
 }
 

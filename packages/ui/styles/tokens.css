@@ -89,7 +89,7 @@
     --card-foreground: oklch(0.141 0.005 285.823);
     --popover: oklch(1 0 0);
     --popover-foreground: oklch(0.141 0.005 285.823);
-    --primary: oklch(0.21 0.006 285.885);
+    --primary: oklch(0.585 0.233 277.117);
     --primary-foreground: oklch(0.985 0 0);
     --secondary: oklch(0.967 0.001 286.375);
     --secondary-foreground: oklch(0.21 0.006 285.885);
@@ -98,18 +98,17 @@
     --accent: oklch(0.967 0.001 286.375);
     --accent-foreground: oklch(0.21 0.006 285.885);
     --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.92 0.004 286.32);
+    --border: oklch(0.935 0.003 286.32);
     --input: oklch(0.92 0.004 286.32);
-    --ring: oklch(0.705 0.015 286.067);
+    --ring: oklch(0.585 0.233 277.117);
     /* Stroke hierarchy — descending strength */
     --stroke-primary: oklch(0.76 0.006 286.32);
     --stroke-secondary: oklch(0.86 0.005 286.32);
-    --stroke-tertiary: oklch(0.92 0.004 286.32);
+    --stroke-tertiary: oklch(0.935 0.003 286.32);
     --stroke-quaternary: oklch(0.96 0.003 286.32);
-    /* Brand seed — change this one value to retheme the entire palette */
-    --brand: oklch(0.55 0.16 255);
+    /* Vetta-style indigo seed — all branded accents derive from this value. */
+    --brand: oklch(0.585 0.233 277.117);
     --brand-foreground: oklch(0.985 0 0);
-    /* Brand-derived accent fills — auto-generated from --brand */
     --accent-brand: color-mix(in oklch, var(--brand) 10%, var(--background));
     --accent-brand-strong: color-mix(in oklch, var(--brand) 16%, var(--background));
     --accent-brand-text: color-mix(in oklch, var(--brand) 85%, var(--foreground));
@@ -118,20 +117,20 @@
        chart-2..5 step lighter + less saturated so a stacked bar reads
        "primary → secondary → tertiary" at a glance instead of fighting
        for attention as five equally-weighted greys. */
-    --chart-1: oklch(0.55 0.16 255);
-    --chart-2: oklch(0.66 0.13 255);
-    --chart-3: oklch(0.76 0.10 255);
-    --chart-4: oklch(0.85 0.06 255);
-    --chart-5: oklch(0.92 0.03 255);
+    --chart-1: oklch(0.585 0.233 277.117);
+    --chart-2: oklch(0.67 0.18 277.117);
+    --chart-3: oklch(0.75 0.13 277.117);
+    --chart-4: oklch(0.84 0.08 277.117);
+    --chart-5: oklch(0.92 0.04 277.117);
     --radius: 0.625rem;
     --sidebar: oklch(0.985 0 0);
     --sidebar-foreground: oklch(0.141 0.005 285.823);
-    --sidebar-primary: oklch(0.21 0.006 285.885);
+    --sidebar-primary: oklch(0.585 0.233 277.117);
     --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.95 0.002 286.375);
-    --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
-    --sidebar-border: oklch(0.92 0.004 286.32);
-    --sidebar-ring: oklch(0.705 0.015 286.067);
+    --sidebar-accent: color-mix(in oklch, var(--brand) 9%, var(--sidebar));
+    --sidebar-accent-foreground: color-mix(in oklch, var(--brand) 82%, var(--foreground));
+    --sidebar-border: oklch(0.94 0.003 286.32);
+    --sidebar-ring: oklch(0.585 0.233 277.117);
     --success: oklch(0.55 0.16 145);
     --warning: oklch(0.75 0.16 85);
     --info: oklch(0.55 0.18 250);
@@ -157,58 +156,54 @@
 }
 
 .dark {
-    --background: oklch(0.18 0.005 285.823);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.21 0.006 285.885);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.21 0.006 285.885);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.92 0.004 286.32);
-    --primary-foreground: oklch(0.21 0.006 285.885);
-    --secondary: oklch(0.274 0.006 286.033);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.274 0.006 286.033);
-    --muted-foreground: oklch(0.705 0.015 286.067);
-    --accent: oklch(0.274 0.006 286.033);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.552 0.016 285.938);
-    /* Stroke hierarchy — descending strength (dark mode) */
-    --stroke-primary: oklch(1 0 0 / 20%);
-    --stroke-secondary: oklch(1 0 0 / 14%);
-    --stroke-tertiary: oklch(1 0 0 / 10%);
-    --stroke-quaternary: oklch(1 0 0 / 6%);
-    /* Dark mode mirrors light mode's "primary → secondary" gradient on the
-       brand hue, but flips the lightness curve: the most important series
-       is the brightest (so it pops on the dark background) and trailing
-       series get progressively darker / less saturated. */
-    --chart-1: oklch(0.72 0.16 255);
-    --chart-2: oklch(0.62 0.13 255);
-    --chart-3: oklch(0.52 0.10 255);
-    --chart-4: oklch(0.42 0.06 255);
-    --chart-5: oklch(0.32 0.03 255);
-    --sidebar: oklch(0.21 0.006 285.885);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.274 0.006 286.033);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.552 0.016 285.938);
-    --brand: oklch(0.65 0.16 255);
-    --brand-foreground: oklch(0.985 0 0);
-    --accent-brand: color-mix(in oklch, var(--brand) 14%, var(--background));
-    --accent-brand-strong: color-mix(in oklch, var(--brand) 20%, var(--background));
-    --accent-brand-text: color-mix(in oklch, var(--brand) 90%, var(--foreground));
-    --success: oklch(0.65 0.15 145);
-    --warning: oklch(0.70 0.16 85);
-    --info: oklch(0.65 0.18 250);
-    --scrollbar-thumb: oklch(1 0 0 / 8%);
-    --scrollbar-thumb-hover: oklch(1 0 0 / 18%);
+    /* Vetta dark surface hierarchy: #14161e → #1a1c24 → #2a2d38. */
+    --background: #14161e;
+    --foreground: #dce0ea;
+    --card: #1a1c24;
+    --card-foreground: #dce0ea;
+    --popover: #1a1c24;
+    --popover-foreground: #dce0ea;
+    --primary: #6366f1;
+    --primary-foreground: #ffffff;
+    --secondary: #20232d;
+    --secondary-foreground: #dce0ea;
+    --muted: #20232d;
+    --muted-foreground: #8a90a0;
+    --accent: rgba(255, 255, 255, 0.06);
+    --accent-foreground: #dce0ea;
+    --destructive: #ff5b5b;
+    --border: rgb(255 255 255 / 7%);
+    --input: #343846;
+    --ring: #6366f1;
+    --stroke-primary: rgb(255 255 255 / 20%);
+    --stroke-secondary: rgb(255 255 255 / 14%);
+    --stroke-tertiary: rgb(255 255 255 / 7%);
+    --stroke-quaternary: rgb(255 255 255 / 6%);
+    --chart-1: #818cf8;
+    --chart-2: #6366f1;
+    --chart-3: #4f46e5;
+    --chart-4: #4338ca;
+    --chart-5: #312e81;
+    --sidebar: #14161e;
+    --sidebar-foreground: #dce0ea;
+    --sidebar-primary: #6366f1;
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: rgb(99 102 241 / 15%);
+    --sidebar-accent-foreground: #a5b4fc;
+    --sidebar-border: rgb(255 255 255 / 7%);
+    --sidebar-ring: #6366f1;
+    --brand: #6366f1;
+    --brand-foreground: #ffffff;
+    --accent-brand: rgb(99 102 241 / 14%);
+    --accent-brand-strong: rgb(99 102 241 / 20%);
+    --accent-brand-text: #a5b4fc;
+    --success: #34d399;
+    --warning: #fbbf24;
+    --info: #60a5fa;
+    --scrollbar-thumb: rgb(255 255 255 / 8%);
+    --scrollbar-thumb-hover: rgb(255 255 255 / 18%);
     --scrollbar-track: transparent;
-    --speaker-1: oklch(0.7 0.13 250);
+    --speaker-1: oklch(0.7 0.13 277);
     --speaker-2: oklch(0.72 0.14 155);
     --speaker-3: oklch(0.72 0.13 60);
     --speaker-4: oklch(0.65 0.14 300);

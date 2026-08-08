@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
-import { Plus, Calendar, Trash2, X } from "../icons";
+import { Plus, Calendar, Trash2, X, RefreshCw } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
   Dialog,
@@ -412,7 +412,8 @@ function CalendarConfirmDialog({
 
 export function TodoPage() {
   const { t } = useTranslation();
-  const { todos, loading, error, load, addLocal, toggle, remove, clearCompleted } = useTodos();
+  const { todos, loading, refreshing, clearing, error, load, addLocal, toggle, remove, clearCompleted } = useTodos();
+  const completedCount = todos.filter((x) => x.completed).length;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [pendingCalendarStart, setPendingCalendarStart] = useState("");
@@ -477,17 +478,26 @@ export function TodoPage() {
         <div className="flex items-center gap-1">
           <button
             onClick={() => load()}
-            className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50"
+            disabled={refreshing}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 disabled:opacity-50"
             title={t("todo.refresh")}
           >
+            <RefreshCw className={`size-3.5 ${refreshing ? "animate-spin" : ""}`} />
             {t("todo.refresh")}
           </button>
           <button
             onClick={() => clearCompleted()}
-            className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 disabled:opacity-40"
-            disabled={!todos.some((x) => x.completed)}
+            disabled={clearing || completedCount === 0}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 disabled:opacity-40"
+            title={t("todo.clear_completed")}
           >
-            {t("todo.clear_completed")}
+            <Trash2 className="size-3.5" />
+            {clearing ? t("todo.clearing") : t("todo.clear_completed")}
+            {completedCount > 0 && !clearing && (
+              <span className="ml-0.5 rounded-full bg-muted px-1.5 text-[10px] tabular-nums">
+                {completedCount}
+              </span>
+            )}
           </button>
         </div>
       </div>

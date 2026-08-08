@@ -60,12 +60,12 @@ export function TitleBar() {
 
   return (
     <div
-      className="flex shrink-0 items-center border-b border-border bg-background/80 backdrop-blur-sm select-none"
+      className="flex shrink-0 select-none items-center border-b border-border/50 bg-background/80 backdrop-blur-xl"
       style={{ height: TITLE_BAR_HEIGHT }}
       data-tauri-drag-region
     >
       {/* ── Draggable breadcrumb (left-aligned, no traffic lights here) ── */}
-      <div className="flex-1 flex items-center gap-1.5 min-w-0 px-4">
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 px-5">
         {folderName && (
           <>
             <span className="truncate text-xs text-muted-foreground">{folderName}</span>
@@ -88,7 +88,7 @@ export function TitleBar() {
 
       {/* ── Right: Action icons ── */}
       <div
-        className="flex items-center gap-0.5 shrink-0 px-2"
+        className="flex shrink-0 items-center gap-1 px-3"
         data-tauri-drag-region={false}
       >
         {/* Outline toggle — only visible when viewing outline tab with headings */}
@@ -96,7 +96,7 @@ export function TitleBar() {
           <button
             onClick={toggleOutlineSidebar}
             className={cn(
-              "flex items-center justify-center rounded-md p-1 transition-colors",
+              "flex size-7 items-center justify-center rounded-lg border border-transparent transition-colors",
               outlineSidebarVisible
                 ? "bg-accent text-accent-foreground"
                 : "text-muted-foreground hover:bg-accent/50",
@@ -112,7 +112,7 @@ export function TitleBar() {
           <button
             onClick={toggleSourceView}
             className={cn(
-              "flex items-center justify-center rounded-md p-1 transition-colors",
+              "flex size-7 items-center justify-center rounded-lg border border-transparent transition-colors",
               sourceViewVisible
                 ? "bg-accent text-accent-foreground"
                 : "text-muted-foreground hover:bg-accent/50",
@@ -127,10 +127,10 @@ export function TitleBar() {
         <button
           onClick={toggleChatPanel}
           className={cn(
-            "flex items-center gap-1 rounded-md px-2 py-1 text-[11px] transition-colors",
+            "flex h-7 items-center gap-1.5 rounded-lg border border-transparent px-2.5 text-[11px] font-medium transition-colors",
             chatPanelVisible
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:bg-accent/50",
+              ? "border-primary/30 bg-primary/15 text-accent-brand-text"
+              : "text-muted-foreground hover:border-border hover:bg-card hover:text-foreground",
           )}
           title={t("workspace.ask_ai")}
         >

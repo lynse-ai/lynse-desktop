@@ -427,6 +427,7 @@ const zh = {
     completed_toggle: "切换完成状态",
     refresh: "刷新",
     clear_completed: "清除已完成",
+    clearing: "清除中…",
     load_error: "待办加载失败，请检查登录状态或网络",
     retry: "重试",
   },

@@ -12,10 +12,9 @@ interface AssistantAvatarProps {
 }
 
 /**
- * The Lynse AI assistant IP image. Renders the currently selected mascot GIF
- * inside a circular, transparent-background frame. Clicking (when interactive)
- * cycles to the next appearance; the choice is persisted and shared across all
- * chat surfaces via {@link useAssistantAvatar}.
+ * The Lynse AI assistant IP image. It floats directly on the current surface
+ * without a shape container. Clicking it cycles to the next appearance and
+ * keeps the choice shared across all chat surfaces.
  */
 export function AssistantAvatar({ size = 28, className, interactive = true }: AssistantAvatarProps) {
   const { t } = useTranslation();
@@ -32,8 +31,8 @@ export function AssistantAvatar({ size = 28, className, interactive = true }: As
       aria-label={tip}
       draggable={false}
       className={[
-        "relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full",
-        interactive ? "cursor-pointer transition-transform hover:scale-105 hover:ring-2 hover:ring-primary/40 active:scale-95" : "cursor-default",
+        "relative inline-flex shrink-0 items-center justify-center bg-transparent drop-shadow-[0_12px_24px_rgba(0,0,0,0.28)] dark:brightness-[0.82] dark:contrast-[0.96] dark:saturate-[1.12]",
+        interactive ? "cursor-pointer transition-transform hover:-translate-y-0.5 hover:scale-105 active:scale-95" : "cursor-default",
         className ?? "",
       ].join(" ")}
       style={{ width: size, height: size }}
@@ -44,7 +43,7 @@ export function AssistantAvatar({ size = 28, className, interactive = true }: As
         src={avatar.src}
         alt={label}
         draggable={false}
-        className="size-full select-none object-cover animate-avatar-in"
+        className="size-full select-none object-contain animate-avatar-in"
       />
     </button>
   );

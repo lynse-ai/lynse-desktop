@@ -217,7 +217,7 @@ export function FileList() {
 
   return (
     <div
-      className="relative flex h-full shrink-0 flex-col border-r border-border bg-background"
+      className="relative flex h-full shrink-0 flex-col border-r border-border/50 bg-background/95"
       style={{ width: fileListWidth }}
     >
       {/* Left window-drag region — absolute overlay so it doesn't shrink the
@@ -253,20 +253,20 @@ export function FileList() {
       {/* Header — Folder name + Search + Sort */}
       {selectedFolderId && (
         <div
-          className="flex shrink-0 select-none flex-col border-b border-border"
+          className="flex shrink-0 select-none flex-col border-b border-border/50 bg-background/80 backdrop-blur-xl"
           data-tauri-drag-region
         >
           <div className="flex items-center gap-2 px-3 py-2">
             {folderColor ? (
               <span className="size-2.5 shrink-0 rounded-sm" style={{ backgroundColor: folderColor }} />
             ) : null}
-            <span className="truncate text-xs font-medium">{folderName}</span>
+            <span className="truncate text-[13px] font-semibold tracking-tight text-foreground">{folderName}</span>
             {multiMode ? (
               <>
                 <input
                   type="checkbox"
                   aria-label={t("workspace.select_all")}
-                  className="ml-1 size-3.5 shrink-0 cursor-pointer accent-violet-500"
+                  className="ml-1 size-3.5 shrink-0 cursor-pointer accent-primary"
                   checked={allSelected}
                   ref={(el) => {
                     if (el) el.indeterminate = someSelected && !allSelected;
@@ -281,7 +281,7 @@ export function FileList() {
                 <button
                   onClick={clearFileSelection}
                   title={t("workspace.cancel_selection")}
-                  className="ml-auto flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+                  className="ml-auto flex items-center gap-1 rounded-lg px-1.5 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground"
                   data-tauri-drag-region={false}
                 >
                   <X className="size-3" />
@@ -301,13 +301,13 @@ export function FileList() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder={t("workspace.search_files")}
-                className="h-7 pl-7 text-xs"
+                className="h-8 rounded-lg border-border bg-card pl-7 text-xs shadow-sm focus-visible:border-primary/50 focus-visible:ring-primary/15"
               />
             </div>
             <button
               onClick={toggleFileSortField}
               title={fileSortField === "createdAt" ? t("workspace.sort_by_created") : t("workspace.sort_by_generated")}
-              className="flex h-7 shrink-0 items-center justify-center gap-1 rounded-md px-2 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+              className="flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg border border-border bg-card px-2 text-[10px] font-medium text-muted-foreground shadow-sm transition-colors hover:border-primary/30 hover:bg-accent hover:text-foreground"
               data-tauri-drag-region={false}
             >
               <span>{fileSortField === "createdAt" ? t("workspace.sort_field_date") : t("workspace.sort_field_generated")}</span>
@@ -316,7 +316,7 @@ export function FileList() {
             <button
               onClick={toggleFileSortDir}
               title={fileSortDir === "desc" ? t("workspace.sort_desc") : t("workspace.sort_asc")}
-              className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+              className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:border-primary/30 hover:bg-accent hover:text-foreground"
               data-tauri-drag-region={false}
             >
               {fileSortDir === "desc" ? (
@@ -330,7 +330,7 @@ export function FileList() {
       )}
 
       {/* File list */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto px-2 py-2">
         {!selectedFolderId ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
             <FolderOpen className="size-6 text-muted-foreground/50" />
@@ -500,12 +500,12 @@ function DraggableFileRow({
       onPointerLeave={clearLongPress}
       onContextMenu={() => onContextMenu?.()}
       style={{ opacity: isDragging ? 0.4 : 1 }}
-      className={`group flex w-full items-center gap-1 px-3 py-2 text-left transition-colors border-b border-border/50 ${
+      className={`group flex w-full items-center gap-1 rounded-lg border px-2.5 py-2.5 text-left transition-all ${
         isSelected
-          ? "bg-accent text-accent-foreground"
+          ? "border-primary/30 bg-primary/15 text-accent-brand-text shadow-sm"
           : isChecked
-            ? "bg-accent/40"
-            : "text-foreground hover:bg-accent/30"
+            ? "border-primary/20 bg-primary/10"
+            : "border-transparent text-foreground hover:border-border hover:bg-white/[0.04]"
       }`}
     >
       {/* Leading slot: drag handle in normal mode, selection checkbox in
@@ -529,7 +529,7 @@ function DraggableFileRow({
             checked={isChecked}
             onChange={onToggleSelect}
             onClick={(e) => e.stopPropagation()}
-            className="size-3.5 cursor-pointer accent-violet-500"
+            className="size-3.5 cursor-pointer accent-primary"
           />
         </span>
       ) : (
@@ -551,7 +551,7 @@ function DraggableFileRow({
             className="h-6 text-xs"
           />
         ) : (
-          <span className={`truncate text-xs leading-snug ${isSelected ? "font-medium" : ""}`}>
+          <span className={`truncate text-[13px] leading-snug ${isSelected ? "font-medium" : ""}`}>
             {file.title}
           </span>
         )}

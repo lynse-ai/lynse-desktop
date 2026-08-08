@@ -54,17 +54,17 @@ export function WorkspaceLayout() {
   }, [setOnDragEnd, handleDragEnd]);
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden">
+    <div className="flex h-full min-h-0 overflow-hidden bg-background">
       {/* Left panel: file list (full height) */}
       <FileList />
       <ResizableHandle onResize={handleFileListResize} side="right" />
 
       {/* Right column: title bar + content panel + chat panel */}
-      <div className="flex flex-1 min-w-0 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col bg-background">
         <TitleBar />
-        <div className="flex flex-1 min-h-0">
+        <div className="flex min-h-0 flex-1">
           {/* Primary content panel */}
-          <div className="flex-1 min-w-0">
+          <div className="min-w-0 flex-1 bg-background">
             <ContentPanel />
           </div>
 
@@ -73,14 +73,14 @@ export function WorkspaceLayout() {
             {chatPanelVisible && (
               <motion.div
                 key="chat-panel"
-                className="flex shrink-0 overflow-hidden"
+                className="flex shrink-0 overflow-hidden border-l border-border/50 bg-card/95 shadow-[-12px_0_34px_rgba(0,0,0,0.14)] backdrop-blur-xl"
                 initial={{ width: 0, opacity: 0 }}
                 animate={{ width: chatPanelWidth, opacity: 1 }}
                 exit={{ width: 0, opacity: 0 }}
                 transition={
                   isChatResizing || reduceMotion
                     ? { duration: 0 }
-                    : { duration: 0.24, ease: [0.23, 1, 0.32, 1] }
+                    : { duration: 0.26, ease: [0.23, 1, 0.32, 1] }
                 }
               >
                 <ResizableHandle

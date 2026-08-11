@@ -89,6 +89,8 @@ export {
   MessageCircle,    // Feedback
   Bell,             // Update reminder
   Download,         // Download / update action
+  Palette,          // Appearance / theme visual
+  UserCircle,       // User profile / account
 
   // ── Audio Player ────────────────────────────────────
   Play,             // Play
@@ -96,11 +98,17 @@ export {
   SkipForward,      // Fast forward / skip
   Volume2,          // Volume on
   VolumeX,          // Volume off / mute
+  Captions,         // Live transcription toggle
 
   // ── Actions (extra) ──────────────────────────────────
   RefreshCw,        // Re-summarize / refresh
   Square,           // Stop streaming
   Cloud,            // Cloud assistant
+  Repeat,           // Swap / exchange
+  ArrowRight,       // Forward / CTA
+  Bookmark,         // Bookmark / save position
+  Save,             // Save / download recording
+  ListMusic,        // Recordings list / audio library
 } from "lucide-react";
 
 // ── Icon sizing tokens ────────────────────────────────────

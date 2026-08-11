@@ -7,7 +7,7 @@ import { useNavigation } from "@lynse/views/navigation";
 import { WorkspaceLayout } from "@lynse/views/workspace";
 import { ChatPage } from "@lynse/views/chat";
 import { TodoPage } from "@lynse/views/todo";
-import { LiveSubtitleOverlay, LiveTranslationPage } from "@lynse/views/live-translation";
+import { LiveSubtitleOverlay, LiveTranslationPage, TranscriptDetailPage } from "@lynse/views/live-translation";
 import { RESOURCES } from "@lynse/views/locales";
 import { DesktopNavigationProvider } from "./platform/navigation";
 import { secureStorage } from "./secure-storage";
@@ -17,6 +17,7 @@ function PageRouter() {
   const { pathname } = useNavigation();
   if (pathname.startsWith("/chat")) return <ChatPage />;
   if (pathname.startsWith("/todo")) return <TodoPage />;
+  if (pathname.startsWith("/recording")) return <TranscriptDetailPage />;
   if (pathname.startsWith("/live-translation")) return <LiveTranslationPage />;
   return <WorkspaceLayout />;
 }

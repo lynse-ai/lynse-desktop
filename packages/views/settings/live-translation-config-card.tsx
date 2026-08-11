@@ -63,6 +63,14 @@ export function LiveTranslationConfigCard() {
     setSaved(false);
   }
 
+  function updateVolc(
+    field: keyof LiveTranslationProviderConfig["volc"],
+    value: string,
+  ) {
+    setConfig((c) => (c ? { ...c, volc: { ...c.volc, [field]: value } } : c));
+    setSaved(false);
+  }
+
   function updateILiveData(
     field: keyof LiveTranslationProviderConfig["ilivedata"],
     value: string,
@@ -90,6 +98,7 @@ export function LiveTranslationConfigCard() {
 
   const isQwen = config.provider === "qwen";
   const isILiveData = config.provider === "ilivedata_direct";
+  const isVolc = config.provider === "volc";
 
   return (
     <Card>
@@ -116,8 +125,41 @@ export function LiveTranslationConfigCard() {
               {t("live_translation.provider_ilivedata_direct")}
             </option>
             <option value="qwen">{t("live_translation.provider_qwen")}</option>
+            <option value="volc">{t("live_translation.provider_volc")}</option>
           </select>
         </div>
+
+        {isVolc && (
+          <div className="space-y-2 rounded-lg border border-border bg-card p-3">
+            <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+              {t("live_translation.volc_hint")}
+            </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="lt-volc-key" className="text-[11px]">
+                {t("live_translation.provider_volc_api_key")}
+              </Label>
+              <Input
+                id="lt-volc-key"
+                type="password"
+                autoComplete="off"
+                value={config.volc.apiKey}
+                onChange={(e) => updateVolc("apiKey", e.target.value)}
+                className="h-8 text-xs"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="lt-volc-endpoint" className="text-[11px]">
+                {t("live_translation.provider_volc_endpoint")}
+              </Label>
+              <Input
+                id="lt-volc-endpoint"
+                value={config.volc.endpoint}
+                onChange={(e) => updateVolc("endpoint", e.target.value)}
+                className="h-8 text-xs"
+              />
+            </div>
+          </div>
+        )}
 
         {isQwen && (
           <div className="space-y-2 rounded-lg border border-border bg-card p-3">

@@ -1,4 +1,5 @@
 export { LiveTranslationPage } from "./live-translation-page";
+export { TranscriptDetailPage } from "./transcript-detail-page";
 export { LiveSubtitleOverlay } from "./subtitle-overlay";
 export type {
   CompletedLiveSession,
@@ -7,6 +8,7 @@ export type {
   LiveConnectionDescriptor,
   LivePermissionStatus,
   LiveResumeRequest,
+  LiveSetModeRequest,
   LiveRecoverySummary,
   LiveStartRequest,
   LiveTranslationEvent,

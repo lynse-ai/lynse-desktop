@@ -19,7 +19,7 @@ export function LiveSubtitleOverlay() {
   return (
     <div className="h-screen w-screen overflow-hidden bg-transparent p-2">
       <div
-        className="group relative h-full select-none bg-transparent px-5 py-3 text-slate-900"
+        className="group relative h-full select-none bg-transparent px-5 py-3 text-white"
         data-tauri-drag-region
       >
         <div
@@ -48,9 +48,12 @@ export function LiveSubtitleOverlay() {
           </button>
         </div>
 
-        <div className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-center gap-2 px-6 py-4 text-center">
+        <div
+          className="pointer-events-none absolute inset-0 z-10 flex flex-col justify-center gap-2 px-6 py-4 text-center"
+          style={{ textShadow: "0 1px 3px rgba(0,0,0,0.7), 0 0 6px rgba(0,0,0,0.45)" }}
+        >
           {active.length === 0 ? (
-            <p className="text-lg font-light text-slate-600">
+            <p className="text-lg font-light text-white/70">
               等待实时字幕…
             </p>
           ) : active.map((segment) => (
@@ -58,11 +61,11 @@ export function LiveSubtitleOverlay() {
               <div className="mb-1 text-[11px] font-normal uppercase leading-none tracking-wider text-slate-500">
                 {segment.source === "mic" ? "我" : "远端"}
               </div>
-              <p className="truncate text-2xl font-light leading-tight text-slate-900">
+              <p className="truncate text-2xl font-light leading-tight text-white">
                 {segment.recognizedText || segment.translatedText}
               </p>
               {segment.translatedText && segment.translatedText !== segment.recognizedText && (
-                <p className="mt-0.5 truncate text-base font-normal leading-tight text-slate-600">
+                <p className="mt-0.5 truncate text-base font-normal leading-tight text-white/80">
                   {segment.translatedText}
                 </p>
               )}

@@ -4,7 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { setApiTransportMode } from "@lynse/core/api/client";
-import { hydrateSecrets, secureStorage } from "./secure-storage";
+import { hydrateSecrets, refreshSecret, secureStorage } from "./secure-storage";
 import type { SttDownloadProgress, SttModelInfo, TranscribeConfig } from "@lynse/views/workspace";
 import type {
   CompletedLiveSession,
@@ -12,8 +12,10 @@ import type {
   LivePermissionStatus,
   LiveRecoverySummary,
   LiveResumeRequest,
+  LiveSetModeRequest,
   LiveStartRequest,
   LiveTranslationEvent,
+  LiveTranslationProvider,
   LiveTranslationProviderConfig,
   LiveTranslationSnapshot,
   LiveTranslationTrayAction,
@@ -76,8 +78,19 @@ const ILIVEDATA_PID_KEY = "lynse_live_translation_ilivedata_pid";
 const ILIVEDATA_SECRET_KEY = "lynse_live_translation_ilivedata_secret_key";
 const QWEN_ENDPOINT_KEY = "lynse_live_translation_qwen_endpoint";
 const QWEN_API_KEY = "lynse_live_translation_qwen_api_key";
+const VOLC_ENDPOINT_KEY = "lynse_live_translation_volc_endpoint";
+const VOLC_API_KEY = "lynse_live_translation_volc_api_key";
+/** Written by builds that still supported the legacy (App Key) console. */
+const LEGACY_VOLC_APP_KEY = "lynse_live_translation_volc_app_key";
 const DEFAULT_QWEN_ENDPOINT =
   "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-livetranslate-flash-realtime";
+const DEFAULT_VOLC_ENDPOINT =
+  "wss://openspeech.bytedance.com/api/v4/ast/v2/translate";
+const DIRECT_LIVE_TRANSLATION_PROVIDERS = new Set<LiveTranslationProvider>([
+  "ilivedata_direct",
+  "qwen",
+  "volc",
+]);
 const LEGACY_ILIVEDATA_RTVT_ENDPOINT =
   "wss://rtvt-bj-test.ilivedata.com/gate/websocket";
 const LIVE_TRANSLATION_TRAY_EVENT = "live-translation-tray-action";
@@ -87,12 +100,22 @@ const liveTranslationTrayListeners = new Set<
   (action: LiveTranslationTrayAction) => void
 >();
 
-function getLiveTranslationProviderConfig(): LiveTranslationProviderConfig {
+async function getLiveTranslationProviderConfig(): Promise<LiveTranslationProviderConfig> {
   const savedProvider = window.localStorage.getItem(LIVE_TRANSLATION_PROVIDER_KEY);
   const savedEndpoint = window.localStorage.getItem(ILIVEDATA_ENDPOINT_KEY);
   const savedQwenEndpoint = window.localStorage.getItem(QWEN_ENDPOINT_KEY);
+  const savedVolcEndpoint = window.localStorage.getItem(VOLC_ENDPOINT_KEY);
+  // Re-read secrets from the OS keychain on every fetch so a key changed
+  // outside the app (or after startup) takes effect without a restart.
+  await Promise.all([
+    refreshSecret(ILIVEDATA_SECRET_KEY),
+    refreshSecret(QWEN_API_KEY),
+    refreshSecret(VOLC_API_KEY),
+  ]);
   return {
-    provider: savedProvider === "ilivedata_direct" || savedProvider === "qwen"
+    provider: DIRECT_LIVE_TRANSLATION_PROVIDERS.has(
+      savedProvider as LiveTranslationProvider,
+    )
       ? (savedProvider as LiveTranslationProvider)
       : "lynse_backend",
     ilivedata: {
@@ -105,6 +128,10 @@ function getLiveTranslationProviderConfig(): LiveTranslationProviderConfig {
     qwen: {
       endpoint: savedQwenEndpoint?.trim() || DEFAULT_QWEN_ENDPOINT,
       apiKey: secureStorage.getItem(QWEN_API_KEY) ?? "",
+    },
+    volc: {
+      endpoint: savedVolcEndpoint?.trim() || DEFAULT_VOLC_ENDPOINT,
+      apiKey: secureStorage.getItem(VOLC_API_KEY) ?? "",
     },
   };
 }
@@ -123,6 +150,10 @@ function saveLiveTranslationProviderConfig(
       endpoint: config.qwen.endpoint.trim() || DEFAULT_QWEN_ENDPOINT,
       apiKey: config.qwen.apiKey.trim(),
     },
+    volc: {
+      endpoint: config.volc.endpoint.trim() || DEFAULT_VOLC_ENDPOINT,
+      apiKey: config.volc.apiKey.trim(),
+    },
   };
   window.localStorage.setItem(LIVE_TRANSLATION_PROVIDER_KEY, normalized.provider);
   window.localStorage.setItem(ILIVEDATA_ENDPOINT_KEY, normalized.ilivedata.endpoint);
@@ -137,6 +168,14 @@ function saveLiveTranslationProviderConfig(
     secureStorage.setItem(QWEN_API_KEY, normalized.qwen.apiKey);
   } else {
     secureStorage.removeItem(QWEN_API_KEY);
+  }
+  window.localStorage.setItem(VOLC_ENDPOINT_KEY, normalized.volc.endpoint);
+  // The legacy console is no longer supported; drop any App Key left behind.
+  window.localStorage.removeItem(LEGACY_VOLC_APP_KEY);
+  if (normalized.volc.apiKey) {
+    secureStorage.setItem(VOLC_API_KEY, normalized.volc.apiKey);
+  } else {
+    secureStorage.removeItem(VOLC_API_KEY);
   }
   return normalized;
 }
@@ -218,12 +257,14 @@ export async function installTauriBridge(): Promise<void> {
       start: (request: LiveStartRequest) => command<LiveTranslationSnapshot>("live_translation_start", { request }),
       pause: () => command<LiveTranslationSnapshot>("live_translation_pause"),
       resume: (request: LiveResumeRequest) => command<LiveTranslationSnapshot>("live_translation_resume", { request }),
+      setMode: (request: LiveSetModeRequest) => command<LiveTranslationSnapshot>("live_translation_set_mode", { request }),
       stop: () => command<CompletedLiveSession>("live_translation_stop"),
       getState: () => command<LiveTranslationSnapshot>("live_translation_state"),
       finalizeLocal: (sessionId, synced) => command<void>("live_translation_finalize_local", { sessionId, synced }),
       listRecoveries: () => command<LiveRecoverySummary[]>("live_translation_recoveries"),
       recover: (sessionId) => command<CompletedLiveSession>("live_translation_recover", { sessionId }),
       showSubtitles: (show) => command<void>("live_translation_show_subtitles", { show }),
+      updateTray: (payload) => command<void>("live_translation_update_tray", { payload }),
       minimizeToTray: () => getCurrentWindow().hide(),
       onTrayAction: async (callback) => {
         liveTranslationTrayListeners.add(callback);

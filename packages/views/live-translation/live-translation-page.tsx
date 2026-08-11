@@ -21,6 +21,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Globe,
   Headphones,
   Loader2,
   Mic,
@@ -28,97 +29,46 @@ import {
   Pause,
   Play,
   RefreshCw,
+  Repeat,
   Square,
   Volume2,
 } from "../icons";
-import { uploadFileToOSS } from "../workspace/hooks/use-files";
-import { completeRealtimeSession, requestRealtimeSession } from "./api";
+import { requestRealtimeSession } from "./api";
+import { useNavigation } from "../navigation";
 import { useLiveTranslation } from "./use-live-translation";
 import {
   DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
   DEFAULT_QWEN_ENDPOINT,
+  DEFAULT_VOLC_AST_ENDPOINT,
   type CompletedLiveSession,
   type LivePermissionStatus,
-  type LiveRecoverySummary,
   type LiveTranslationTrayAction,
   type LiveTranslationProvider,
   type LiveTranslationProviderConfig,
 } from "./types";
-
-// Languages follow the iLiveData ISO-639-1 code list
-// (https://docs.ilivedata.com/alt/techdoc/language/). 简体中文 keeps the
-// legacy `zh` code so the production `lynse_backend` path is unaffected; all
-// other entries use the documented iLiveData codes.
-const LANGUAGE_OPTIONS: { code: string; label: string }[] = [
-  { code: "zh", label: "中文（简体）" },
-  { code: "zh-TW", label: "中文（繁体）" },
-  { code: "zh-yue", label: "粤语" },
-  { code: "en", label: "English" },
-  { code: "ja", label: "日本語" },
-  { code: "ko", label: "한국어" },
-  { code: "fr", label: "Français" },
-  { code: "es", label: "Español" },
-  { code: "de", label: "Deutsch" },
-  { code: "ru", label: "Русский" },
-  { code: "pt", label: "Português" },
-  { code: "it", label: "Italiano" },
-  { code: "ar", label: "العربية" },
-  { code: "hi", label: "हिन्दी" },
-  { code: "vi", label: "Tiếng Việt" },
-  { code: "th", label: "ไทย" },
-  { code: "id", label: "Bahasa Indonesia" },
-  { code: "ms", label: "Bahasa Melayu" },
-  { code: "tr", label: "Türkçe" },
-  { code: "tl", label: "Tagalog" },
-  { code: "el", label: "Ελληνικά" },
-  { code: "fa", label: "فارسی" },
-  { code: "ur", label: "اردو" },
-  { code: "bn", label: "বাংলা" },
-  { code: "gu", label: "ગુજરાતી" },
-  { code: "mr", label: "मराठी" },
-  { code: "pa", label: "ਪੰਜਾਬੀ" },
-  { code: "ta", label: "தமிழ்" },
-  { code: "te", label: "తెలుగు" },
-  { code: "kn", label: "ಕನ್ನಡ" },
-  { code: "ml", label: "മലയാളം" },
-  { code: "my", label: "မြန်မာ" },
-  { code: "km", label: "ខ្មែរ" },
-  { code: "lo", label: "ລາວ" },
-  { code: "he", label: "עברית" },
-  { code: "ro", label: "Română" },
-  { code: "hu", label: "Magyar" },
-  { code: "cs", label: "Čeština" },
-  { code: "sk", label: "Slovenčina" },
-  { code: "hr", label: "Hrvatski" },
-  { code: "fi", label: "Suomi" },
-  { code: "da", label: "Dansk" },
-  { code: "bg", label: "Български" },
-  { code: "uk", label: "Українська" },
-  { code: "et", label: "Eesti" },
-  { code: "sq", label: "Shqip" },
-  { code: "no", label: "Norsk" },
-  { code: "nl", label: "Nederlands" },
-  { code: "sv", label: "Svenska" },
-  { code: "ps", label: "پښتو" },
-];
-
-// Source language may also be auto-detected by iLiveData.
-const SOURCE_LANGUAGE_OPTIONS = [{ code: "auto", label: "自动识别" }, ...LANGUAGE_OPTIONS];
-const TARGET_LANGUAGE_OPTIONS = [{ code: "none", label: "不翻译" }, ...LANGUAGE_OPTIONS];
+import {
+  SOURCE_LANGUAGE_OPTIONS,
+  TARGET_LANGUAGE_OPTIONS,
+  LANGUAGE_BY_CODE,
+  directionLabel,
+} from "./language-options";
 
 export function LiveTranslationPage() {
   const { t } = useTranslation();
   const { api, view } = useLiveTranslation();
+  const { pathname } = useNavigation();
   const [permissions, setPermissions] = useState<LivePermissionStatus | null>(null);
+  const [permissionError, setPermissionError] = useState<string | null>(null);
   const [sourceLanguage, setSourceLanguage] = useState("zh");
-  const [targetLanguage, setTargetLanguage] = useState("en");
+  // Entering via "/live-translation/transcribe" opens in transcription-only mode.
+  const [targetLanguage, setTargetLanguage] = useState(
+    pathname.endsWith("/transcribe") ? "none" : "en",
+  );
+  const [langOpen, setLangOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [subtitlesVisible, setSubtitlesVisible] = useState(false);
   const [settingsCollapsed, setSettingsCollapsed] = useState(false);
   const [completed, setCompleted] = useState<CompletedLiveSession | null>(null);
-  const [recoveries, setRecoveries] = useState<LiveRecoverySummary[]>([]);
-  const [syncing, setSyncing] = useState(false);
-  const [completedNeedsSync, setCompletedNeedsSync] = useState(false);
   const [providerConfig, setProviderConfig] = useState<LiveTranslationProviderConfig>({
     provider: "lynse_backend",
     ilivedata: {
@@ -128,6 +78,10 @@ export function LiveTranslationPage() {
     },
     qwen: {
       endpoint: DEFAULT_QWEN_ENDPOINT,
+      apiKey: "",
+    },
+    volc: {
+      endpoint: DEFAULT_VOLC_AST_ENDPOINT,
       apiKey: "",
     },
   });
@@ -140,8 +94,22 @@ export function LiveTranslationPage() {
   );
 
   useEffect(() => {
-    api?.permissions().then(setPermissions).catch(() => setPermissions(null));
-  }, [api]);
+    if (!api) {
+      setPermissionError(t("live_translation.start_hint_desktop"));
+      return;
+    }
+    setPermissionError(null);
+    api.permissions()
+      .then((status) => {
+        setPermissions(status);
+        setPermissionError(null);
+      })
+      .catch((error) => {
+        const message = String(error);
+        setPermissionError(message);
+        toast.error(t("live_translation.permission_check_failed"), { description: message });
+      });
+  }, [api, t]);
 
   useEffect(() => {
     if (!api) return;
@@ -150,11 +118,6 @@ export function LiveTranslationPage() {
       .catch((error) => toast.error(String(error)))
       .finally(() => setProviderConfigLoaded(true));
   }, [api]);
-
-  useEffect(() => {
-    if (!api || view.state !== "idle") return;
-    api.listRecoveries().then(setRecoveries).catch(() => setRecoveries([]));
-  }, [api, view.state]);
 
   useEffect(() => {
     transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
@@ -184,15 +147,25 @@ export function LiveTranslationPage() {
     [transcriptOnly, view.segments],
   );
   const active = Boolean(view.sessionId) && view.state !== "idle";
-  const directProviderReady = providerConfig.provider !== "ilivedata_direct"
-    && providerConfig.provider !== "qwen"
-    || (providerConfig.provider === "ilivedata_direct"
-      && Boolean(
-        providerConfig.ilivedata.endpoint.trim()
-        && providerConfig.ilivedata.pid.trim()
-        && providerConfig.ilivedata.secretKey.trim(),
-      ))
-    || (providerConfig.provider === "qwen" && Boolean(providerConfig.qwen.apiKey.trim()));
+  // Direct providers talk to the vendor from this machine, so their credentials
+  // must be complete before a session can start. The Lynse backend relay needs
+  // no local configuration.
+  const directProviderReady = ((): boolean => {
+    switch (providerConfig.provider) {
+      case "ilivedata_direct":
+        return Boolean(
+          providerConfig.ilivedata.endpoint.trim()
+          && providerConfig.ilivedata.pid.trim()
+          && providerConfig.ilivedata.secretKey.trim(),
+        );
+      case "qwen":
+        return Boolean(providerConfig.qwen.apiKey.trim());
+      case "volc":
+        return Boolean(providerConfig.volc.apiKey.trim());
+      default:
+        return true;
+    }
+  })();
   const canStart = !!api
     && providerConfigLoaded
     && directProviderReady
@@ -201,6 +174,27 @@ export function LiveTranslationPage() {
     && !permissions.restartRequired
     && (transcriptOnly || sourceLanguage !== targetLanguage)
     && !active;
+
+  // Human-readable reason the start button is disabled, so the user isn't left
+  // guessing why nothing is clickable.
+  const startBlockedReason = ((): string | null => {
+    if (active) return null;
+    if (!api) return t("live_translation.start_hint_desktop");
+    if (permissionError) return t("live_translation.start_hint_permission_error");
+    if (!providerConfigLoaded || permissions === null) {
+      return t("live_translation.start_hint_loading");
+    }
+    if (permissions.restartRequired) return t("live_translation.start_hint_restart");
+    if (permissions.microphone !== "granted") return t("live_translation.start_hint_mic");
+    if (permissions.systemAudioRequired && permissions.systemAudio !== "granted") {
+      return t("live_translation.start_hint_system_audio");
+    }
+    if (!directProviderReady) return t("live_translation.start_hint_provider");
+    if (!transcriptOnly && sourceLanguage === targetLanguage) {
+      return t("live_translation.start_hint_same_lang");
+    }
+    return null;
+  })();
 
   async function selectProvider(provider: LiveTranslationProvider) {
     if (!api) return;
@@ -246,6 +240,16 @@ export function LiveTranslationPage() {
     }));
   }
 
+  function updateVolcConfig(
+    field: keyof LiveTranslationProviderConfig["volc"],
+    value: string,
+  ) {
+    setProviderConfig((current) => ({
+      ...current,
+      volc: { ...current.volc, [field]: value },
+    }));
+  }
+
   async function requestPermission(kind: "microphone" | "systemAudio") {
     if (!api) return;
     setBusy(true);
@@ -260,11 +264,18 @@ export function LiveTranslationPage() {
   }
 
   async function start() {
-    if (!api) return;
+    if (!api) {
+      toast.error(t("live_translation.start_hint_desktop"));
+      return;
+    }
     setBusy(true);
     setCompleted(null);
     try {
-      const savedProviderConfig = await api.saveProviderConfig(providerConfig);
+      // Re-read credentials from the OS keychain so a key changed since the
+      // page mounted (or edited outside the app) takes effect without a restart.
+      const freshConfig = await api.getProviderConfig().catch(() => providerConfig);
+      setProviderConfig(freshConfig);
+      const savedProviderConfig = await api.saveProviderConfig(freshConfig);
       setProviderConfig(savedProviderConfig);
       const credentials = await requestRealtimeSession({
         sourceLanguage,
@@ -339,12 +350,14 @@ export function LiveTranslationPage() {
     setBusy(true);
     try {
       const epoch = view.epoch + 1;
+      const freshConfig = await api.getProviderConfig().catch(() => providerConfig);
+      setProviderConfig(freshConfig);
       const credentials = await requestRealtimeSession({
         sourceLanguage: view.sourceLanguage ?? sourceLanguage,
         targetLanguage: view.targetLanguage ?? targetLanguage,
         sessionId: view.sessionId,
         epoch,
-      }, providerConfig);
+      }, freshConfig);
       await api.resume({
         sessionId: view.sessionId,
         epoch: credentials.epoch,
@@ -373,57 +386,8 @@ export function LiveTranslationPage() {
 
   async function finishCompletedSession(result: CompletedLiveSession) {
     if (!api) return;
-    if (providerConfig.provider === "ilivedata_direct") {
-      await api.finalizeLocal(result.sessionId, true);
-      setCompletedNeedsSync(false);
-      setRecoveries((current) => current.filter((item) => item.sessionId !== result.sessionId));
-      toast.success(t("live_translation.direct_saved"));
-      return;
-    }
-    setCompletedNeedsSync(true);
-    await syncCompletedSession(result);
-  }
-
-  async function syncCompletedSession(result: CompletedLiveSession) {
-    if (!api) return;
-    setSyncing(true);
-    try {
-      const response = await fetch(result.playbackUrl);
-      if (!response.ok) throw new Error(`读取本地录音失败：${response.status}`);
-      const blob = await response.blob();
-      const file = new File([blob], `live-translation-${result.sessionId}.wav`, { type: "audio/wav" });
-      const fileId = await uploadFileToOSS(file);
-      await completeRealtimeSession({
-        sessionId: result.sessionId,
-        fileId,
-        durationMs: result.durationMs,
-        segments: result.segments,
-      });
-      await api.finalizeLocal(result.sessionId, true);
-      setCompletedNeedsSync(false);
-      setRecoveries((current) => current.filter((item) => item.sessionId !== result.sessionId));
-      toast.success(t("live_translation.saved"));
-    } catch (error) {
-      await api.finalizeLocal(result.sessionId, false).catch(() => undefined);
-      setCompletedNeedsSync(true);
-      toast.warning(t("live_translation.saved_locally"), { description: String(error) });
-    } finally {
-      setSyncing(false);
-    }
-  }
-
-  async function recoverLocal(sessionId: string) {
-    if (!api) return;
-    setBusy(true);
-    try {
-      const result = await api.recover(sessionId);
-      setCompleted(result);
-      await finishCompletedSession(result);
-    } catch (error) {
-      toast.error(t("live_translation.recovery_failed"), { description: String(error) });
-    } finally {
-      setBusy(false);
-    }
+    // End the session locally only — no cloud sync per product decision.
+    await api.finalizeLocal(result.sessionId, true).catch(() => undefined);
   }
 
   async function toggleSubtitles() {
@@ -474,6 +438,7 @@ export function LiveTranslationPage() {
               <option value="lynse_backend">{t("live_translation.provider_backend")}</option>
               <option value="ilivedata_direct">{t("live_translation.provider_ilivedata_direct")}</option>
               <option value="qwen">{t("live_translation.provider_qwen")}</option>
+              <option value="volc">{t("live_translation.provider_volc")}</option>
             </select>
             {providerConfig.provider === "ilivedata_direct" && (
               <div className="space-y-2 rounded-lg border border-border bg-card p-3">
@@ -577,46 +542,51 @@ export function LiveTranslationPage() {
                 </Button>
               </div>
             )}
-          </section>
-
-          <section className="mt-6 space-y-3">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("live_translation.languages")}</h2>
-            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] sm:items-end">
-              <LanguageSelect
-                value={sourceLanguage}
-                onChange={setSourceLanguage}
-                disabled={active}
-                options={SOURCE_LANGUAGE_OPTIONS}
-                label={t("live_translation.source_language")}
-                searchPlaceholder={t("live_translation.search_language")}
-              />
-              <button
-                type="button"
-                className="mb-0.5 hidden size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground sm:flex"
-                onClick={() => {
-                  if (targetLanguage !== "none" && sourceLanguage !== "auto") {
-                    const previousSource = sourceLanguage;
-                    setSourceLanguage(targetLanguage);
-                    setTargetLanguage(previousSource);
-                  }
-                }}
-                disabled={active || transcriptOnly || sourceLanguage === "auto"}
-                aria-label={t("live_translation.swap_languages")}
-                title={t("live_translation.swap_languages")}
-              >
-                <ChevronRight className="size-4 rotate-180" />
-                <ChevronRight className="-ml-2 size-4" />
-              </button>
-              <LanguageSelect
-                value={targetLanguage}
-                onChange={setTargetLanguage}
-                disabled={active}
-                options={TARGET_LANGUAGE_OPTIONS}
-                label={t("live_translation.target_language")}
-                searchPlaceholder={t("live_translation.search_language")}
-                emphasizedValue="none"
-              />
-            </div>
+            {providerConfig.provider === "volc" && (
+              <div className="space-y-2 rounded-lg border border-border bg-card p-3">
+                <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+                  {t("live_translation.volc_hint")}
+                </p>
+                <div className="space-y-1.5">
+                  <Label htmlFor="volc-api-key" className="text-[11px]">
+                    {t("live_translation.provider_volc_api_key")}
+                  </Label>
+                  <Input
+                    id="volc-api-key"
+                    type="password"
+                    value={providerConfig.volc.apiKey}
+                    onChange={(event) => updateVolcConfig("apiKey", event.target.value)}
+                    disabled={active}
+                    className="h-8 text-xs"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="volc-endpoint" className="text-[11px]">
+                    {t("live_translation.provider_volc_endpoint")}
+                  </Label>
+                  <Input
+                    id="volc-endpoint"
+                    value={providerConfig.volc.endpoint}
+                    onChange={(event) => updateVolcConfig("endpoint", event.target.value)}
+                    disabled={active}
+                    className="h-8 text-xs"
+                    placeholder={DEFAULT_VOLC_AST_ENDPOINT}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 w-full text-xs"
+                  onClick={saveProviderConfig}
+                  disabled={active || savingProviderConfig}
+                >
+                  {savingProviderConfig ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                  {t("live_translation.save_provider_config")}
+                </Button>
+              </div>
+            )}
           </section>
 
           <section className="mt-6 space-y-3">
@@ -667,34 +637,10 @@ export function LiveTranslationPage() {
           {completed && (
             <div className="mt-5 rounded-lg border border-border bg-muted/30 p-3 text-xs">
               <div className="flex items-center gap-2 font-medium">
-                {syncing ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5 text-emerald-500" />}
-                {syncing ? t("live_translation.syncing") : t("live_translation.local_complete")}
+                <Check className="size-3.5 text-emerald-500" />
+                {t("live_translation.local_complete")}
               </div>
-              {!syncing && completedNeedsSync && (
-                <button className="mt-2 text-primary hover:underline" onClick={() => syncCompletedSession(completed)}>
-                  {t("live_translation.retry_sync")}
-                </button>
-              )}
             </div>
-          )}
-          {!active && recoveries.some((item) => item.sessionId !== completed?.sessionId) && (
-            <section className="mt-5 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
-              <h2 className="text-xs font-semibold">{t("live_translation.recovery_title")}</h2>
-              <p className="mt-1 text-[11px] text-muted-foreground">{t("live_translation.recovery_hint")}</p>
-              <div className="mt-2 space-y-2">
-                {recoveries.filter((item) => item.sessionId !== completed?.sessionId).map((recovery) => (
-                  <div key={recovery.sessionId} className="flex items-center gap-2 rounded-md bg-background/70 p-2">
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-medium">{recovery.title}</p>
-                      <p className="text-[10px] text-muted-foreground">{new Date(recovery.startedAt).toLocaleString()}</p>
-                    </div>
-                    <Button size="sm" variant="outline" className="h-7 text-[10px]" disabled={busy} onClick={() => recoverLocal(recovery.sessionId)}>
-                      {t("live_translation.recover")}
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </section>
           )}
           </div>
         </aside>
@@ -714,8 +660,44 @@ export function LiveTranslationPage() {
 
         <section className="flex min-h-0 flex-col bg-muted/10">
           <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-5">
-            <span className="text-xs font-medium">{t("live_translation.live_transcript")}</span>
-            <span className="text-[11px] text-muted-foreground">{visibleSegments.length} {t("live_translation.segments")}</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium">{t("live_translation.live_transcript")}</span>
+              <span className="text-[11px] text-muted-foreground">
+                {visibleSegments.length} {t("live_translation.segments")}
+              </span>
+            </div>
+            <Popover open={langOpen} onOpenChange={setLangOpen}>
+              <PopoverTrigger
+                aria-label={t("live_translation.translation_direction")}
+                className="group flex h-7 items-center gap-1.5 rounded-full border border-border/60 bg-background/40 px-3 text-[11px] font-medium text-foreground shadow-sm backdrop-blur transition-colors hover:bg-background/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Globe className="size-3.5 text-primary" />
+                <span>{t("live_translation.record_title")}</span>
+                <span className="text-muted-foreground/70">·</span>
+                <span className="tabular-nums">{directionLabel(sourceLanguage, targetLanguage, t)}</span>
+                <ChevronDown className={`size-3 opacity-60 transition-transform ${langOpen ? "rotate-180" : ""}`} />
+              </PopoverTrigger>
+              <PopoverContent
+                align="end"
+                sideOffset={8}
+                className="w-72 overflow-hidden bg-popover/45 p-0 text-popover-foreground shadow-[var(--shadow-overlay)] backdrop-blur-2xl supports-[backdrop-filter]:backdrop-blur-2xl border border-white/15"
+              >
+                <LanguageDirectionMenu
+                  sourceLanguage={sourceLanguage}
+                  targetLanguage={targetLanguage}
+                  disabled={active}
+                  onSourceChange={(code) => setSourceLanguage(code)}
+                  onTargetChange={(code) => setTargetLanguage(code)}
+                  onSwap={() => {
+                    if (sourceLanguage !== "auto" && targetLanguage !== "none") {
+                      const current = sourceLanguage;
+                      setSourceLanguage(targetLanguage);
+                      setTargetLanguage(current);
+                    }
+                  }}
+                />
+              </PopoverContent>
+            </Popover>
           </div>
           <div ref={transcriptRef} className="flex-1 overflow-y-auto px-6 py-5">
             {visibleSegments.length === 0 ? (
@@ -728,12 +710,20 @@ export function LiveTranslationPage() {
               </div>
             ) : (
               <div className="mx-auto max-w-3xl space-y-3">
-                {visibleSegments.map((segment) => (
+                {visibleSegments.map((segment, index) => {
+                  const prevSpeaker = index > 0 ? visibleSegments[index - 1]?.speaker : undefined;
+                  const showSpeaker = segment.speaker != null && segment.speaker !== prevSpeaker;
+                  return (
                   <article key={segment.id} className="rounded-xl border border-border bg-background px-4 py-3 shadow-sm">
                     <div className="mb-2 flex items-center gap-2 text-[11px] text-muted-foreground">
                       <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
                         {segment.source === "mic" ? t("live_translation.me") : t("live_translation.remote")}
                       </Badge>
+                      {showSpeaker && (
+                        <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                          {t("live_translation.speaker")} {segment.speaker}
+                        </span>
+                      )}
                       <span className="tabular-nums">{formatTime(segment.startMs)}</span>
                       {!segment.isFinal && <span className="animate-pulse">{t("live_translation.recognizing")}</span>}
                     </div>
@@ -753,11 +743,18 @@ export function LiveTranslationPage() {
                       </div>
                     )}
                   </article>
-                ))}
+                );
+                })}
               </div>
             )}
           </div>
           <footer className="shrink-0 border-t border-border bg-background/95 px-5 py-3 backdrop-blur">
+            {startBlockedReason && !active && (
+              <p className="mb-2 flex items-center gap-1.5 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+                <span className="size-1.5 rounded-full bg-amber-500" />
+                {startBlockedReason}
+              </p>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               {view.state === "paused" ? (
                 <Button className="flex-1 sm:flex-none" onClick={resume} disabled={busy}>
@@ -769,7 +766,22 @@ export function LiveTranslationPage() {
                   <Pause /> {t("live_translation.pause")}
                 </Button>
               ) : (
-                <Button className="flex-1 sm:flex-none" onClick={start} disabled={!canStart || busy}>
+                <Button
+                  className="flex-1 sm:flex-none"
+                  onClick={() => {
+                    if (busy) return;
+                    if (!canStart) {
+                      toast.warning(t("live_translation.start_blocked_title"), {
+                        description:
+                          startBlockedReason ?? t("live_translation.start_hint_loading"),
+                      });
+                      return;
+                    }
+                    void start();
+                  }}
+                  disabled={busy}
+                  title={startBlockedReason ?? undefined}
+                >
                   {busy ? <Loader2 className="animate-spin" /> : <Play />}
                   {permissions?.systemAudioRequired || permissions?.systemAudio === "granted"
                     ? t("live_translation.start")
@@ -793,83 +805,117 @@ export function LiveTranslationPage() {
   );
 }
 
-function LanguageSelect({
-  label,
-  value,
-  onChange,
+// Single popover that exposes both the source and target language so the
+// user can set the full translation direction in one place.
+function LanguageDirectionMenu({
+  sourceLanguage,
+  targetLanguage,
   disabled,
-  options,
-  searchPlaceholder,
-  emphasizedValue,
+  onSourceChange,
+  onTargetChange,
+  onSwap,
 }: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
+  sourceLanguage: string;
+  targetLanguage: string;
   disabled: boolean;
-  options: readonly { code: string; label: string }[];
-  searchPlaceholder: string;
-  emphasizedValue?: string;
+  onSourceChange: (code: string) => void;
+  onTargetChange: (code: string) => void;
+  onSwap: () => void;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const selected = options.find((option) => option.code === value) ?? options[0];
-  const optionLabel = (option: { code: string; label: string }) => {
-    if (option.code === "auto") return t("live_translation.auto_detect");
-    if (option.code === "none") return t("live_translation.no_translation");
-    return option.label;
-  };
-
+  const canSwap = sourceLanguage !== "auto" && targetLanguage !== "none";
   return (
-    <div className="space-y-1.5">
-      <Label className="text-[11px] text-muted-foreground">{label}</Label>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger
+    <div className="flex flex-col">
+      <div className="px-3 pb-1 pt-3">
+        <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">{t("live_translation.source_language")}</div>
+        <LanguageList
+          value={sourceLanguage}
+          options={SOURCE_LANGUAGE_OPTIONS}
           disabled={disabled}
-          className="flex h-10 w-full items-center gap-2 rounded-xl border border-border bg-background px-3 text-left shadow-sm transition-colors hover:border-primary/30 disabled:cursor-not-allowed disabled:opacity-50"
+          onChange={onSourceChange}
+          placeholder={t("live_translation.search_language")}
+          t={t}
+        />
+      </div>
+      <div className="flex justify-center py-0.5">
+        <button
+          type="button"
+          onClick={onSwap}
+          disabled={disabled || !canSwap}
+          title={t("live_translation.swap_languages")}
+          aria-label={t("live_translation.swap_languages")}
+          className="flex size-6 items-center justify-center rounded-full border border-border/60 bg-background/60 text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
         >
-          <span className={`flex size-6 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold uppercase ${value === emphasizedValue ? "bg-primary/15 text-accent-brand-text" : "bg-muted text-muted-foreground"}`}>
-            {value === "none" ? "—" : value === "auto" ? "A" : value.slice(0, 2)}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[13px] font-medium text-foreground">
-              {optionLabel(selected)}
-            </span>
-            {value === "none" && (
-              <span className="block truncate text-[10px] text-muted-foreground">
-                {t("live_translation.transcript_only_hint")}
-              </span>
-            )}
-          </span>
-          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
-        </PopoverTrigger>
-        <PopoverContent align="start" sideOffset={6} className="w-[--anchor-width] min-w-56 p-0">
-          <Command>
-            <CommandInput placeholder={searchPlaceholder} />
-            <CommandList className="max-h-64">
-              <CommandEmpty>{t("live_translation.no_language_results")}</CommandEmpty>
-              {options.map((option) => (
-                <CommandItem
-                  key={option.code}
-                  value={`${optionLabel(option)} ${option.code}`}
-                  data-checked={option.code === value}
-                  onSelect={() => {
-                    onChange(option.code);
-                    setOpen(false);
-                  }}
-                  className={`mx-1 my-0.5 rounded-lg py-2 ${option.code === emphasizedValue ? "bg-primary/[0.06]" : ""}`}
-                >
-                  <span className="flex size-6 items-center justify-center rounded-md bg-muted text-[10px] font-semibold uppercase text-muted-foreground">
-                    {option.code === "none" ? "—" : option.code === "auto" ? "A" : option.code.slice(0, 2)}
-                  </span>
-                  <span className="flex-1 text-[13px]">{optionLabel(option)}</span>
-                  {option.code === value && <Check className="size-3.5 text-primary" />}
-                </CommandItem>
-              ))}
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
+          <Repeat className="size-3.5" />
+        </button>
+      </div>
+      <div className="px-3 pb-3 pt-0.5">
+        <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">{t("live_translation.target_language")}</div>
+        <LanguageList
+          value={targetLanguage}
+          options={TARGET_LANGUAGE_OPTIONS}
+          disabled={disabled}
+          onChange={onTargetChange}
+          placeholder={t("live_translation.search_language")}
+          t={t}
+        />
+        {targetLanguage === "none" && (
+          <p className="mt-1.5 px-1 text-[10px] leading-relaxed text-muted-foreground">
+            {t("live_translation.transcript_only_hint")}
+          </p>
+        )}
+      </div>
+      {disabled && (
+        <p className="border-t border-border/50 px-3 py-2 text-[10px] text-muted-foreground">
+          {t("live_translation.locked_while_recording")}
+        </p>
+      )}
     </div>
+  );
+}
+
+function LanguageList({
+  value,
+  options,
+  disabled,
+  onChange,
+  placeholder,
+  t,
+}: {
+  value: string;
+  options: readonly { code: string; label: string }[];
+  disabled: boolean;
+  onChange: (code: string) => void;
+  placeholder: string;
+  t: (key: string) => string;
+}) {
+  const labelOf = (code: string) => {
+    if (code === "auto") return t("live_translation.auto_detect");
+    if (code === "none") return t("live_translation.no_translation");
+    return LANGUAGE_BY_CODE[code]?.label ?? code;
+  };
+  return (
+    <Command className="!rounded-none bg-transparent p-0">
+      <CommandInput placeholder={placeholder} />
+      <CommandList className="max-h-40">
+        <CommandEmpty>{t("live_translation.no_language_results")}</CommandEmpty>
+        {options.map((option) => (
+          <CommandItem
+            key={option.code}
+            value={`${labelOf(option.code)} ${option.code}`}
+            disabled={disabled}
+            data-checked={option.code === value}
+            onSelect={() => onChange(option.code)}
+            className="mx-1 my-0.5 rounded-lg py-1.5 data-[checked=true]:bg-primary/[0.06]"
+          >
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-semibold uppercase text-muted-foreground">
+              {option.code === "none" ? "—" : option.code === "auto" ? "A" : option.code.slice(0, 2)}
+            </span>
+            <span className="flex-1 text-[13px]">{labelOf(option.code)}</span>
+          </CommandItem>
+        ))}
+      </CommandList>
+    </Command>
   );
 }
 

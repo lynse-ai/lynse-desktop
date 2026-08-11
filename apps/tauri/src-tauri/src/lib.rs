@@ -25,6 +25,14 @@ mod live_translation;
 mod live_translation;
 mod feishu_auth;
 mod stt;
+// Wire codec for the Volcengine AST provider used by `live_translation`. Kept
+// platform-independent so its golden-vector tests run everywhere, even where
+// live translation itself falls back to the stub.
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows")),
+    allow(dead_code)
+)]
+mod volc_ast;
 
 use live_translation::LiveTranslationManager;
 
@@ -1758,10 +1766,14 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
             }
             "show_subtitles" => {
+                let visible = app
+                    .get_webview_window("live-subtitles")
+                    .map(|window| window.is_visible().unwrap_or(false))
+                    .unwrap_or(false);
                 if let Err(error) =
-                    live_translation::live_translation_show_subtitles(app.clone(), true)
+                    live_translation::live_translation_show_subtitles(app.clone(), !visible)
                 {
-                    eprintln!("Failed to show live subtitles: {error}");
+                    eprintln!("Failed to toggle live subtitles: {error}");
                 }
             }
             "quit" => {
@@ -1817,7 +1829,9 @@ pub fn run() {
             live_translation::live_translation_finalize_local,
             live_translation::live_translation_recoveries,
             live_translation::live_translation_recover,
-            live_translation::live_translation_show_subtitles
+            live_translation::live_translation_show_subtitles,
+            live_translation::live_translation_update_tray,
+            live_translation::live_translation_set_mode,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Lynse Tauri application");

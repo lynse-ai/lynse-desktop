@@ -3,7 +3,11 @@ export type LiveAudioSource = "mic" | "system";
 export const DEFAULT_ILIVEDATA_RTVT_ENDPOINT =
   "wss://rtvt-cn-app.ilivedata.com/gate/websocket";
 
-export type LiveTranslationProvider = "lynse_backend" | "ilivedata_direct" | "qwen";
+export type LiveTranslationProvider =
+  | "lynse_backend"
+  | "ilivedata_direct"
+  | "qwen"
+  | "volc";
 
 export interface LiveTranslationProviderConfig {
   provider: LiveTranslationProvider;
@@ -16,10 +20,18 @@ export interface LiveTranslationProviderConfig {
     apiKey: string;
     endpoint: string;
   };
+  volc: {
+    /** 火山引擎控制台获取的 API Key，作为 X-Api-Key 发送。 */
+    apiKey: string;
+    endpoint: string;
+  };
 }
 
 export const DEFAULT_QWEN_ENDPOINT =
   "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-livetranslate-flash-realtime";
+
+export const DEFAULT_VOLC_AST_ENDPOINT =
+  "wss://openspeech.bytedance.com/api/v4/ast/v2/translate";
 
 export type LiveTranslationState =
   | "idle"
@@ -45,6 +57,8 @@ export interface LiveTranslationSegment {
   providerStreamId?: string;
   taskId?: string;
   echoOf?: string;
+  /** 1-based speaker index from Volcengine AST `spk_chg` (undefined for providers without diarization). */
+  speaker?: number;
 }
 
 export interface LiveTranslationSnapshot {
@@ -89,6 +103,16 @@ export interface LiveResumeRequest {
   connections: LiveConnectionDescriptor[];
 }
 
+/** Reconfigure a running session: switch between pure recording and live
+ * transcription/translation without interrupting the audio capture. */
+export interface LiveSetModeRequest {
+  sessionId: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  epoch: number;
+  connections: LiveConnectionDescriptor[];
+}
+
 export interface CompletedLiveSession {
   sessionId: string;
   recordId: string;
@@ -122,6 +146,7 @@ export interface DesktopLiveTranslationApi {
   start: (request: LiveStartRequest) => Promise<LiveTranslationSnapshot>;
   pause: () => Promise<LiveTranslationSnapshot>;
   resume: (request: LiveResumeRequest) => Promise<LiveTranslationSnapshot>;
+  setMode: (request: LiveSetModeRequest) => Promise<LiveTranslationSnapshot>;
   stop: () => Promise<CompletedLiveSession>;
   getState: () => Promise<LiveTranslationSnapshot>;
   finalizeLocal: (sessionId: string, synced: boolean) => Promise<void>;
@@ -129,6 +154,7 @@ export interface DesktopLiveTranslationApi {
   recover: (sessionId: string) => Promise<CompletedLiveSession>;
   showSubtitles: (show: boolean) => Promise<void>;
   minimizeToTray: () => Promise<void>;
+  updateTray: (payload: { recording: boolean; paused: boolean; elapsed_secs?: number }) => Promise<void>;
   onTrayAction: (callback: (action: LiveTranslationTrayAction) => void) => Promise<() => void>;
   onEvent: (callback: (event: LiveTranslationEvent) => void) => Promise<() => void>;
 }

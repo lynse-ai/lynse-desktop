@@ -5,7 +5,7 @@ import type {
   LiveTranslationProviderConfig,
   LiveTranslationSegment,
 } from "./types";
-import { DEFAULT_QWEN_ENDPOINT } from "./types";
+import { DEFAULT_QWEN_ENDPOINT, DEFAULT_VOLC_AST_ENDPOINT } from "./types";
 
 interface RealtimeSessionRequest {
   workspaceId?: string;
@@ -39,6 +39,9 @@ export async function requestRealtimeSession(
   }
   if (providerConfig?.provider === "qwen") {
     return requestQwenRealtimeSession(request, providerConfig);
+  }
+  if (providerConfig?.provider === "volc") {
+    return requestVolcRealtimeSession(request, providerConfig);
   }
   const response = await api().post<RawRealtimeSessionResponse>(
     "/api/business/translate/realtime/session",
@@ -106,6 +109,39 @@ async function requestQwenRealtimeSession(
       url: endpoint,
       provider: "qwen",
       apiKey: config.qwen.apiKey.trim(),
+    }),
+  );
+  return {
+    sessionId,
+    epoch: request.epoch,
+    connections,
+  };
+}
+
+/**
+ * Volcengine AST authenticates on the websocket upgrade headers, so there is no
+ * token to mint here — the credentials are handed to the Rust side, which
+ * attaches them to the handshake and speaks the protobuf protocol.
+ */
+async function requestVolcRealtimeSession(
+  request: RealtimeSessionRequest,
+  config: LiveTranslationProviderConfig,
+): Promise<RealtimeSessionCredentials> {
+  const sessionId = request.sessionId ?? crypto.randomUUID();
+  const endpoint = config.volc.endpoint.trim() || DEFAULT_VOLC_AST_ENDPOINT;
+  if (!endpoint.startsWith("wss://")) {
+    throw new Error("火山 WebSocket 地址必须使用 wss://");
+  }
+  const apiKey = config.volc.apiKey.trim();
+  if (!apiKey) {
+    throw new Error("火山同声传译需要填写 Access Key");
+  }
+  const connections: LiveConnectionDescriptor[] = (["mic", "system"] as const).map(
+    (source) => ({
+      source,
+      url: endpoint,
+      provider: "volc",
+      apiKey,
     }),
   );
   return {

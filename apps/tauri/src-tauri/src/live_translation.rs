@@ -1,3 +1,4 @@
+use crate::volc_ast;
 use crate::{app_data_dir, now, save_store_value, update_store_value, CommandResult};
 use futures_util::{SinkExt, StreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
@@ -14,6 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
+use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -106,6 +108,29 @@ pub struct ConnectionDescriptor {
     api_key: Option<String>,
 }
 
+/// Which on-the-wire protocol a translation connection speaks. All providers
+/// converge on the same `LiveSegment` model; only framing and auth differ.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LiveProvider {
+    /// iLiveData-style JSON with a `method` discriminator. Also used by the
+    /// Lynse backend relay, which mirrors that protocol.
+    Direct,
+    /// Qwen Live Translate (DashScope) JSON event stream.
+    Qwen,
+    /// Volcengine AST v4: protobuf over binary websocket frames.
+    Volc,
+}
+
+impl LiveProvider {
+    fn from_name(name: Option<&str>) -> Self {
+        match name {
+            Some("qwen") => Self::Qwen,
+            Some("volc") => Self::Volc,
+            _ => Self::Direct,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartRequest {
@@ -121,6 +146,18 @@ pub struct StartRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ResumeRequest {
     session_id: String,
+    epoch: u32,
+    connections: Vec<ConnectionDescriptor>,
+}
+
+/// Switch a running session between pure recording and live
+/// transcription/translation without interrupting the audio capture.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetModeRequest {
+    session_id: String,
+    source_language: String,
+    target_language: String,
     epoch: u32,
     connections: Vec<ConnectionDescriptor>,
 }
@@ -149,6 +186,9 @@ pub struct LiveSegment {
     provider_stream_id: Option<String>,
     task_id: Option<String>,
     echo_of: Option<String>,
+    /// 1-based speaker index derived from the Volcengine AST `spk_chg` marker.
+    /// `None` for providers without speaker-change detection (iLiveData, Qwen).
+    speaker: Option<u32>,
     #[serde(default, skip_serializing)]
     recognized_final: bool,
     #[serde(default, skip_serializing)]
@@ -220,8 +260,11 @@ impl Default for LiveTranslationManager {
 struct LiveSession {
     session_id: String,
     title: String,
-    source_language: String,
-    target_language: String,
+    /// Mutable so a running session can switch between pure recording and
+    /// live transcription/translation (`live_translation_set_mode`) without
+    /// interrupting the audio capture sidecar.
+    source_language: RwLock<String>,
+    target_language: RwLock<String>,
     started_at: String,
     state: Mutex<String>,
     epoch: AtomicU32,
@@ -231,6 +274,9 @@ struct LiveSession {
     system_level: AtomicU32,
     segments: Mutex<Vec<LiveSegment>>,
     routes: RwLock<HashMap<AudioSource, UnboundedSender<WsCommand>>>,
+    /// Handles of the spawned translation websocket loops, so they can be
+    /// aborted when the mode changes or the session stops.
+    handles: Mutex<HashMap<AudioSource, JoinHandle<()>>>,
     child: Mutex<Option<Child>>,
     capture_stop: Arc<AtomicBool>,
     directory: PathBuf,
@@ -247,8 +293,8 @@ impl LiveSession {
             state: self.state.lock().expect("live state lock").clone(),
             session_id: Some(self.session_id.clone()),
             epoch: self.epoch.load(Ordering::Relaxed),
-            source_language: Some(self.source_language.clone()),
-            target_language: Some(self.target_language.clone()),
+            source_language: Some(self.source_language.read().expect("live source language").clone()),
+            target_language: Some(self.target_language.read().expect("live target language").clone()),
             started_at: Some(self.started_at.clone()),
             elapsed_ms: self.last_elapsed_ms.load(Ordering::Relaxed),
             mic_level: f32::from_bits(self.mic_level.load(Ordering::Relaxed)),
@@ -423,9 +469,8 @@ pub async fn live_translation_start(
     {
         return Err("session id and language pair are required".to_owned());
     }
-    if request.connections.is_empty() {
-        return Err("at least one signed translation connection is required".to_owned());
-    }
+    // Pure recording mode (no translation connection) is allowed — it only
+    // captures audio locally without any cloud API key.
     validate_connections(&request.connections)?;
     #[cfg(target_os = "macos")]
     {
@@ -436,7 +481,9 @@ pub async fn live_translation_start(
                     .to_owned(),
             );
         }
-        if permissions.system_audio != "granted" {
+        // System-audio capture is only required when a translation connection
+        // is attached; pure recording works with the microphone alone.
+        if !request.connections.is_empty() && permissions.system_audio != "granted" {
             return Err(
                 "缺少“屏幕与系统音频录制”权限。请在 macOS 系统设置中允许 Lynse Audio Capture，然后重新启动 Lynse。"
                     .to_owned(),
@@ -467,8 +514,8 @@ pub async fn live_translation_start(
     let session = Arc::new(LiveSession {
         session_id: request.session_id.clone(),
         title: request.title.trim().to_owned(),
-        source_language: request.source_language.clone(),
-        target_language: request.target_language.clone(),
+        source_language: RwLock::new(request.source_language.clone()),
+        target_language: RwLock::new(request.target_language.clone()),
         started_at: now(),
         state: Mutex::new("connecting".to_owned()),
         epoch: AtomicU32::new(request.epoch),
@@ -478,6 +525,7 @@ pub async fn live_translation_start(
         system_level: AtomicU32::new(0.0f32.to_bits()),
         segments: Mutex::new(Vec::new()),
         routes: RwLock::new(HashMap::new()),
+        handles: Mutex::new(HashMap::new()),
         child: Mutex::new(None),
         capture_stop: Arc::new(AtomicBool::new(true)),
         directory,
@@ -495,8 +543,8 @@ pub async fn live_translation_start(
     let manifest = RecoveryManifest {
         session_id: session.session_id.clone(),
         title: session.title.clone(),
-        source_language: session.source_language.clone(),
-        target_language: session.target_language.clone(),
+        source_language: session.source_language.read().expect("live source language").clone(),
+        target_language: session.target_language.read().expect("live target language").clone(),
         started_at: session.started_at.clone(),
     };
     fs::write(
@@ -665,6 +713,26 @@ fn spawn_stderr_reader(app: AppHandle, stderr: impl Read + Send + 'static) {
     });
 }
 
+/// Abort any live translation websocket loops and drop their routes. Used
+/// before re-attaching connections (mode switch) and on session teardown so a
+/// stale loop never keeps receiving audio after the mode changed.
+fn clear_connections(session: &LiveSession) {
+    let mut handles = session
+        .handles
+        .lock()
+        .map_err(|_| "live handles lock is poisoned")
+        .expect("live handles lock");
+    for (_source, handle) in handles.drain() {
+        handle.abort();
+    }
+    session
+        .routes
+        .write()
+        .map_err(|_| "live routes lock is poisoned")
+        .expect("live routes lock")
+        .clear();
+}
+
 fn spawn_connections(
     app: &AppHandle,
     session: &Arc<LiveSession>,
@@ -672,18 +740,25 @@ fn spawn_connections(
     epoch_offset_ms: u64,
     connections: Vec<ConnectionDescriptor>,
 ) -> CommandResult<()> {
+    // Tear down any previous connections first so a mode switch never leaves
+    // orphaned loops or duplicate routes for the same audio source.
+    clear_connections(session);
     validate_connections(&connections)?;
     let mut routes = session
         .routes
         .write()
         .map_err(|_| "live routes lock is poisoned")?;
+    let mut handles = session
+        .handles
+        .lock()
+        .map_err(|_| "live handles lock is poisoned")?;
     for connection in connections {
         let (sender, receiver) = unbounded_channel();
         routes.insert(connection.source, sender);
         let app = app.clone();
         let session = session.clone();
-        let is_qwen = connection.provider.as_deref() == Some("qwen");
-        tauri::async_runtime::spawn(async move {
+        let provider = LiveProvider::from_name(connection.provider.as_deref());
+        let handle = tauri::async_runtime::spawn(async move {
             websocket_loop(
                 app,
                 session,
@@ -692,11 +767,12 @@ fn spawn_connections(
                 epoch_offset_ms,
                 connection.url,
                 receiver,
-                is_qwen,
+                provider,
                 connection.api_key.clone(),
             )
             .await;
         });
+        handles.insert(connection.source, handle);
     }
     Ok(())
 }
@@ -716,15 +792,38 @@ fn validate_connections(connections: &[ConnectionDescriptor]) -> CommandResult<(
         {
             return Err("translation connection must use wss://".to_owned());
         }
-        if connection.provider.as_deref() == Some("qwen")
-            && connection.api_key.as_ref().map(|key| key.trim()).unwrap_or("").is_empty()
-        {
-            return Err("Qwen 翻译引擎需要填写 DashScope API Key".to_owned());
+        let api_key = connection.api_key.as_deref().unwrap_or("").trim();
+        match LiveProvider::from_name(connection.provider.as_deref()) {
+            LiveProvider::Qwen if api_key.is_empty() => {
+                return Err("Qwen 翻译引擎需要填写 DashScope API Key".to_owned());
+            }
+            LiveProvider::Volc if api_key.is_empty() => {
+                return Err("火山同声传译需要填写 Access Key".to_owned());
+            }
+            _ => {}
         }
     }
     Ok(())
 }
 
+/// Resolve the language pair sent to Volcengine AST.
+///
+/// AST always translates, so Lynse's two special values need mapping:
+/// `auto` source switches on server-side language detection, and the
+/// transcript-only target (`none`) is satisfied by requesting *some* valid
+/// target and dropping the translation subtitles on arrival.
+fn volc_languages(source: &str, target: &str) -> (String, String, bool) {
+    let detect = source.is_empty() || source == "auto";
+    let source_language = if detect { String::new() } else { source.to_owned() };
+    let target_language = if target.is_empty() || target == "none" {
+        if source_language == "zh" { "en" } else { "zh" }.to_owned()
+    } else {
+        target.to_owned()
+    };
+    (source_language, target_language, detect)
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn websocket_loop(
     app: AppHandle,
     session: Arc<LiveSession>,
@@ -733,9 +832,21 @@ async fn websocket_loop(
     epoch_offset_ms: u64,
     url: String,
     mut receiver: UnboundedReceiver<WsCommand>,
-    is_qwen: bool,
+    provider: LiveProvider,
     api_key: Option<String>,
 ) {
+    let is_qwen = provider == LiveProvider::Qwen;
+    let is_volc = provider == LiveProvider::Volc;
+    // Volcengine bills translation per session and always emits a translation
+    // track; in transcript-only mode we still ask for one and simply drop the
+    // translation subtitles.
+    let volc_transcript_only = is_volc
+        && session
+            .target_language
+            .read()
+            .expect("live target language")
+            .as_str()
+            == "none";
     let mut attempt = 0u32;
     loop {
         attempt += 1;
@@ -754,6 +865,21 @@ async fn websocket_loop(
                 }
             }
         }
+        // Volcengine AST v4 authenticates on the websocket upgrade header. The
+        // new Volcengine console issues a single API Key sent as `X-Api-Key`.
+        if is_volc {
+            if let Some(key) = api_key.as_ref() {
+                if let Ok(value) = HeaderValue::from_str(key.trim()) {
+                    request.headers_mut().insert("x-api-key", value);
+                }
+            }
+            if let Ok(value) = HeaderValue::from_str(volc_ast::RESOURCE_ID) {
+                request.headers_mut().insert("x-api-resource-id", value);
+            }
+            if let Ok(value) = HeaderValue::from_str(&uuid::Uuid::new_v4().to_string()) {
+                request.headers_mut().insert("x-api-connect-id", value);
+            }
+        }
         match tokio_tungstenite::connect_async(request).await {
             Ok((socket, _)) => {
                 emit_stream_state(&app, source, "connected", epoch);
@@ -762,8 +888,16 @@ async fn websocket_loop(
                 // right after the handshake. `none` is Lynse's transcript-only
                 // mode: keep real-time ASR active without requesting translation.
                 if is_qwen {
-                    let source_lang = session.source_language.clone();
-                    let target_lang = session.target_language.clone();
+                    let source_lang = session
+                        .source_language
+                        .read()
+                        .expect("live source language")
+                        .clone();
+                    let target_lang = session
+                        .target_language
+                        .read()
+                        .expect("live target language")
+                        .clone();
                     let transcript_only = target_lang == "none";
                     let mut session_cfg = json!({
                         "modalities": ["text"],
@@ -792,6 +926,46 @@ async fn websocket_loop(
                         break;
                     }
                 }
+                // Volcengine AST opens a session with an explicit StartSession
+                // frame. Websocket ordering guarantees the server processes it
+                // before any audio, so we can stream straight away instead of
+                // blocking on the SessionStarted acknowledgement.
+                let volc_source_lang = session
+                    .source_language
+                    .read()
+                    .expect("live source language")
+                    .clone();
+                let volc_target_lang = session
+                    .target_language
+                    .read()
+                    .expect("live target language")
+                    .clone();
+                let (volc_source_language, volc_target_language, volc_detect) =
+                    volc_languages(&volc_source_lang, &volc_target_lang);
+                let volc_config = volc_ast::SessionConfig {
+                    session_id: uuid::Uuid::new_v4().to_string(),
+                    mode: "s2t".to_owned(),
+                    source_language: volc_source_language,
+                    target_language: volc_target_language,
+                    detect_source_language: volc_detect,
+                };
+                if is_volc {
+                    let frame = volc_ast::encode_start_session(&volc_config);
+                    if let Err(error) = writer.send(Message::Binary(frame.into())).await {
+                        emit_error(&app, Some(source), format!("开启火山翻译会话失败：{error}"));
+                        break;
+                    }
+                }
+                // Volcengine is paced in 100 ms chunks (matching the vendor
+                // reference client), so 20 ms capture frames are coalesced here.
+                let mut volc_pending: Vec<u8> = Vec::with_capacity(volc_ast::CHUNK_BYTES);
+                // `*SubtitleEnd` events may close an utterance without repeating
+                // its text, so remember the last streamed value per track.
+                let mut volc_last_source = String::new();
+                let mut volc_last_translation = String::new();
+                // 1-based speaker index for diarization, derived from the
+                // `spk_chg` marker on source subtitle Start events.
+                let mut volc_speaker_index: u32 = 1;
                 let mut finishing: Option<tokio::time::Instant> = None;
                 let mut qwen_finishing = false;
                 loop {
@@ -809,13 +983,41 @@ async fn websocket_loop(
                                             emit_error(&app, Some(source), format!("发送音频失败：{error}"));
                                             break;
                                         }
+                                    } else if is_volc {
+                                        volc_pending.extend_from_slice(&payload);
+                                        let mut failed = None;
+                                        while volc_pending.len() >= volc_ast::CHUNK_BYTES {
+                                            let rest = volc_pending.split_off(volc_ast::CHUNK_BYTES);
+                                            let chunk = std::mem::replace(&mut volc_pending, rest);
+                                            let frame = volc_ast::encode_task_request(&volc_config, &chunk);
+                                            if let Err(error) = writer.send(Message::Binary(frame.into())).await {
+                                                failed = Some(error);
+                                                break;
+                                            }
+                                        }
+                                        if let Some(error) = failed {
+                                            emit_error(&app, Some(source), format!("发送音频失败：{error}"));
+                                            break;
+                                        }
                                     } else if let Err(error) = writer.send(Message::Binary(payload.into())).await {
                                         emit_error(&app, Some(source), format!("发送音频失败：{error}"));
                                         break;
                                     }
                                 }
                                 Some(WsCommand::VoiceEnd) | None => {
-                                    if is_qwen {
+                                    if is_volc {
+                                        // Flush the tail of the capture buffer, then
+                                        // let the server drain and close the session.
+                                        if !volc_pending.is_empty() {
+                                            let chunk = std::mem::take(&mut volc_pending);
+                                            let frame = volc_ast::encode_task_request(&volc_config, &chunk);
+                                            let _ = writer.send(Message::Binary(frame.into())).await;
+                                        }
+                                        let frame = volc_ast::encode_finish_session(&volc_config);
+                                        let _ = writer.send(Message::Binary(frame.into())).await;
+                                        finishing =
+                                            Some(tokio::time::Instant::now() + Duration::from_secs(5));
+                                    } else if is_qwen {
                                         let _ = writer
                                             .send(Message::Text(
                                                 r#"{"type":"session.finish","event_id":"evt_finish"}"#.into(),
@@ -853,6 +1055,49 @@ async fn websocket_loop(
                                         text.as_ref(),
                                         is_qwen,
                                     );
+                                }
+                                Some(Ok(Message::Binary(frame))) if is_volc => {
+                                    match volc_ast::decode_response(&frame) {
+                                        Ok(response) => match response.event {
+                                            volc_ast::EVENT_SESSION_FINISHED => {
+                                                let _ = writer.close().await;
+                                                emit_stream_state(&app, source, "closed", epoch);
+                                                return;
+                                            }
+                                            volc_ast::EVENT_SESSION_FAILED
+                                            | volc_ast::EVENT_SESSION_CANCELED => {
+                                                let detail = if response.message.is_empty() {
+                                                    format!("状态码 {}", response.status_code)
+                                                } else {
+                                                    response.message.clone()
+                                                };
+                                                emit_error(
+                                                    &app,
+                                                    Some(source),
+                                                    format!(
+                                                        "火山翻译会话失败（{}）：{detail}",
+                                                        volc_ast::describe_event(response.event)
+                                                    ),
+                                                );
+                                                break;
+                                            }
+                                            _ => handle_volc_response(
+                                                &app,
+                                                &session,
+                                                source,
+                                                epoch,
+                                                epoch_offset_ms,
+                                                &response,
+                                                volc_transcript_only,
+                                                &mut volc_last_source,
+                                                &mut volc_last_translation,
+                                                &mut volc_speaker_index,
+                                            ),
+                                        },
+                                        Err(error) => {
+                                            eprintln!("volc-ast: 无法解析响应帧：{error}");
+                                        }
+                                    }
                                 }
                                 Some(Ok(Message::Close(_))) | None => {
                                     if finishing.is_some() {
@@ -932,6 +1177,10 @@ fn handle_provider_message(
     } else {
         apply_provider_message(session, source, epoch, epoch_offset_ms, text)
     };
+    emit_provider_emission(app, emission);
+}
+
+fn emit_provider_emission(app: &AppHandle, emission: Option<ProviderEmission>) {
     match emission {
         Some(ProviderEmission::Segment(segment)) => {
             let _ = app.emit(LIVE_EVENT, json!({ "type": "segment", "segment": segment }));
@@ -944,6 +1193,91 @@ fn handle_provider_message(
         }
         None => {}
     }
+}
+
+/// Route one Volcengine AST subtitle event onto the shared live-segment model.
+///
+/// AST publishes two parallel tracks per utterance — source recognition
+/// (`SourceSubtitle*`) and translation (`TranslationSubtitle*`) — which map
+/// directly onto Lynse's (recognized, translated) segment pair. The `*End`
+/// events close an utterance but do not always repeat its text, so the last
+/// streamed value for each track is carried forward.
+#[allow(clippy::too_many_arguments)]
+fn handle_volc_response(
+    app: &AppHandle,
+    session: &LiveSession,
+    source: AudioSource,
+    epoch: u32,
+    epoch_offset_ms: u64,
+    response: &volc_ast::Response,
+    transcript_only: bool,
+    last_source: &mut String,
+    last_translation: &mut String,
+    speaker_index: &mut u32,
+) {
+    // Volcengine AST flags a speaker change on the *source* subtitle Start
+    // event. Only the source track carries it (the translation Start repeats
+    // the same flag for the same utterance), so we count on the source track
+    // only to avoid double-incrementing the speaker index.
+    if response.event == volc_ast::EVENT_SOURCE_SUBTITLE_START && response.spk_chg {
+        *speaker_index += 1;
+    }
+    let Some(subtitle) = volc_ast::classify_subtitle(response.event) else {
+        return;
+    };
+    let (is_recognized, is_final) = match subtitle {
+        volc_ast::Subtitle::Source { is_final } => (true, is_final),
+        volc_ast::Subtitle::Translation { is_final } => {
+            if transcript_only {
+                return;
+            }
+            (false, is_final)
+        }
+    };
+    let carry = if is_recognized {
+        last_source
+    } else {
+        last_translation
+    };
+    let text = if response.text.is_empty() {
+        carry.clone()
+    } else {
+        response.text.clone()
+    };
+    if text.trim().is_empty() {
+        return;
+    }
+    if is_final {
+        carry.clear();
+    } else {
+        *carry = text.clone();
+    }
+
+    // AST reports utterance bounds in milliseconds from the start of the
+    // session; before the first timestamped event we fall back to the capture
+    // clock, the same approximation the Qwen provider uses.
+    let start_ms = if response.start_time > 0 {
+        epoch_offset_ms.saturating_add(response.start_time as u64)
+    } else {
+        epoch_offset_ms.saturating_add(session.last_elapsed_ms.load(Ordering::Relaxed))
+    };
+    let end_ms =
+        (response.end_time > 0).then(|| epoch_offset_ms.saturating_add(response.end_time as u64));
+
+    let emission = ingest_provider_text(
+        session,
+        source,
+        epoch,
+        None,
+        start_ms,
+        end_ms,
+        is_recognized,
+        is_final,
+        String::new(),
+        Some(*speaker_index),
+        &text,
+    );
+    emit_provider_emission(app, emission);
 }
 
 /// Apply the recognized/translated text from a provider message to a segment,
@@ -1017,6 +1351,7 @@ fn apply_provider_message(
         is_recognized,
         is_final_method,
         task_id,
+        None,
         &incoming,
     )
 }
@@ -1054,6 +1389,7 @@ fn apply_qwen_message(
         is_recognized,
         is_final,
         String::new(),
+        None,
         &content,
     )
 }
@@ -1112,6 +1448,7 @@ fn ingest_provider_text(
     is_recognized: bool,
     is_final: bool,
     task_id: String,
+    speaker: Option<u32>,
     text: &str,
 ) -> Option<ProviderEmission> {
     let mut segments = session.segments.lock().expect("live segments lock");
@@ -1182,6 +1519,7 @@ fn ingest_provider_text(
             provider_stream_id: stream_id.clone(),
             task_id: Some(task_id.clone()),
             echo_of: None,
+            speaker,
             recognized_final: false,
             translated_final: false,
         });
@@ -1195,6 +1533,7 @@ fn ingest_provider_text(
     }
     segment.provider_stream_id = stream_id.clone();
     segment.task_id = Some(task_id);
+    segment.speaker = speaker;
     let method = match (is_recognized, is_final) {
         (true, true) => "recognizedResult",
         (true, false) => "recognizedTempResult",
@@ -1411,6 +1750,60 @@ pub async fn live_translation_resume(
     Ok(session.snapshot())
 }
 
+/// Reconfigure a running live session: change the source/target language and
+/// attach or detach the cloud translation connections on the fly. The audio
+/// capture sidecar keeps running, so the recording itself is never
+/// interrupted — switching to transcription/translation (or back to pure
+/// recording) is instantaneous from the user's point of view.
+#[tauri::command]
+pub async fn live_translation_set_mode(
+    app: AppHandle,
+    state: State<'_, LiveTranslationManager>,
+    request: SetModeRequest,
+) -> CommandResult<LiveSnapshot> {
+    let session = state
+        .session
+        .lock()
+        .map_err(|_| "live session lock is poisoned")?
+        .clone()
+        .ok_or("no live translation session")?;
+    if session.session_id != request.session_id {
+        return Err("set_mode session id does not match".to_owned());
+    }
+    if session
+        .state
+        .lock()
+        .map_err(|_| "live state lock is poisoned")?
+        .as_str()
+        == "stopping"
+    {
+        return Err("session is stopping".to_owned());
+    }
+    if request.source_language.trim().is_empty() || request.target_language.trim().is_empty() {
+        return Err("language pair is required".to_owned());
+    }
+    validate_connections(&request.connections)?;
+    *session
+        .source_language
+        .write()
+        .map_err(|_| "live source language lock is poisoned")? = request.source_language.clone();
+    *session
+        .target_language
+        .write()
+        .map_err(|_| "live target language lock is poisoned")? = request.target_language.clone();
+    session.epoch.store(request.epoch, Ordering::Relaxed);
+    session.epoch_offset_ms.store(0, Ordering::Relaxed);
+    // Tear down any previous connections, then attach the new ones (if any).
+    // `spawn_connections` already calls `clear_connections` first, but we do
+    // it explicitly so a pure-recording switch drops the websocket handles.
+    clear_connections(&session);
+    if !request.connections.is_empty() {
+        spawn_connections(&app, &session, request.epoch, 0, request.connections)?;
+    }
+    emit_snapshot(&app, &session);
+    Ok(session.snapshot())
+}
+
 #[tauri::command]
 pub async fn live_translation_stop(
     app: AppHandle,
@@ -1498,8 +1891,8 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
         &transcript_path,
         serde_json::to_vec_pretty(&json!({
             "sessionId": session.session_id,
-            "sourceLanguage": session.source_language,
-            "targetLanguage": session.target_language,
+            "sourceLanguage": session.source_language.read().expect("live source language").clone(),
+            "targetLanguage": session.target_language.read().expect("live target language").clone(),
             "durationMs": duration_ms,
             "segments": segments,
         }))
@@ -1551,10 +1944,12 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
         "startMs": segment.start_ms,
         "endMs": segment.end_ms,
         "isFinal": segment.is_final,
-        "sourceLanguage": session.source_language,
-        "targetLanguage": session.target_language,
+        "sourceLanguage": session.source_language.read().expect("live source language").clone(),
+        "targetLanguage": session.target_language.read().expect("live target language").clone(),
     })).collect();
     let completed_at = now();
+    let source_language = session.source_language.read().expect("live source language").clone();
+    let target_language = session.target_language.read().expect("live target language").clone();
     save_store_value(
         app,
         "local-transcriptions",
@@ -1572,8 +1967,8 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
             "durationMs": duration_ms,
             "engine": "ilivedata_rtvt",
             "modelId": "ilivedata-rtvt",
-            "language": session.source_language,
-            "targetLanguage": session.target_language,
+            "language": source_language,
+            "targetLanguage": target_language,
             "liveSessionId": session.session_id,
             "syncStatus": "pending",
             "segments": local_segments,
@@ -1789,8 +2184,8 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
     let session = LiveSession {
         session_id: manifest.session_id,
         title: manifest.title,
-        source_language: manifest.source_language,
-        target_language: manifest.target_language,
+        source_language: RwLock::new(manifest.source_language),
+        target_language: RwLock::new(manifest.target_language),
         started_at: manifest.started_at,
         state: Mutex::new("stopping".to_owned()),
         epoch: AtomicU32::new(0),
@@ -1800,6 +2195,7 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
         system_level: AtomicU32::new(0),
         segments: Mutex::new(segments),
         routes: RwLock::new(HashMap::new()),
+        handles: Mutex::new(HashMap::new()),
         child: Mutex::new(None),
         directory,
         socket_path: PathBuf::new(),
@@ -1837,6 +2233,37 @@ pub fn live_translation_show_subtitles(app: AppHandle, show: bool) -> CommandRes
     .center()
     .build()
     .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+/// Update the system tray icon tooltip to reflect the current recording state.
+/// Called from the webview on every significant state change (start, stop,
+/// pause, resume) and periodically while recording so the tooltip timer stays
+/// in sync — this is the "Dynamic Island" for the menu bar / tray area.
+#[derive(Deserialize)]
+pub struct TrayUpdatePayload {
+    pub recording: bool,
+    pub paused: bool,
+    #[serde(default)]
+    pub elapsed_secs: u64,
+}
+
+#[tauri::command]
+pub fn live_translation_update_tray(app: AppHandle, payload: TrayUpdatePayload) -> CommandResult<()> {
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let tooltip = if payload.recording {
+            if payload.paused {
+                format!("Lynse — {:.0}s paused", payload.elapsed_secs)
+            } else {
+                let mins = payload.elapsed_secs / 60;
+                let secs = payload.elapsed_secs % 60;
+                format!("Lynse — \u{23FA} Recording  {mins}:{secs:02}")
+            }
+        } else {
+            "Lynse".to_string()
+        };
+        tray.set_tooltip(Some(tooltip)).map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -2008,8 +2435,8 @@ mod tests {
         LiveSession {
             session_id: "session".to_owned(),
             title: "test".to_owned(),
-            source_language: "zh".to_owned(),
-            target_language: "en".to_owned(),
+            source_language: RwLock::new("zh".to_owned()),
+            target_language: RwLock::new("en".to_owned()),
             started_at: now(),
             state: Mutex::new("recording".to_owned()),
             epoch: AtomicU32::new(0),
@@ -2019,6 +2446,7 @@ mod tests {
             system_level: AtomicU32::new(0),
             segments: Mutex::new(Vec::new()),
             routes: RwLock::new(HashMap::new()),
+            handles: Mutex::new(HashMap::new()),
             child: Mutex::new(None),
             capture_stop: Arc::new(AtomicBool::new(true)),
             directory: std::env::temp_dir(),
@@ -2040,6 +2468,7 @@ mod tests {
             provider_stream_id: None,
             task_id: None,
             echo_of: None,
+            speaker: None,
             recognized_final: true,
             translated_final: false,
         }
@@ -2127,6 +2556,52 @@ mod tests {
             api_key: Some("sk-test".to_owned()),
         }];
         assert!(validate_connections(&with_key).is_ok());
+    }
+
+    #[test]
+    fn requires_access_key_for_volc_connections() {
+        let missing_key = vec![ConnectionDescriptor {
+            source: AudioSource::Mic,
+            url: volc_ast::DEFAULT_ENDPOINT.to_owned(),
+            provider: Some("volc".to_owned()),
+            api_key: None,
+        }];
+        assert!(validate_connections(&missing_key).is_err());
+        let with_key = vec![ConnectionDescriptor {
+            source: AudioSource::Mic,
+            url: volc_ast::DEFAULT_ENDPOINT.to_owned(),
+            provider: Some("volc".to_owned()),
+            api_key: Some("access-test".to_owned()),
+        }];
+        assert!(validate_connections(&with_key).is_ok());
+    }
+
+    #[test]
+    fn maps_lynse_language_selection_to_volc_pair() {
+        // `auto` turns on server-side detection and leaves the source empty.
+        assert_eq!(
+            volc_languages("auto", "en"),
+            (String::new(), "en".to_owned(), true),
+        );
+        // Transcript-only still needs a valid target; pick one that differs
+        // from the source so AST never rejects the pair.
+        assert_eq!(
+            volc_languages("zh", "none"),
+            ("zh".to_owned(), "en".to_owned(), false),
+        );
+        assert_eq!(
+            volc_languages("en", "none"),
+            ("en".to_owned(), "zh".to_owned(), false),
+        );
+        // Auto + transcript-only: empty source is not `zh`, so target is `zh`.
+        assert_eq!(
+            volc_languages("auto", "none"),
+            (String::new(), "zh".to_owned(), true),
+        );
+        assert_eq!(
+            volc_languages("ja", "zh"),
+            ("ja".to_owned(), "zh".to_owned(), false),
+        );
     }
 
     #[test]

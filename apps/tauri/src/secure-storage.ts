@@ -11,6 +11,7 @@ const SECRET_KEYS = new Set([
   "lynse_token",
   "lynse_live_translation_ilivedata_secret_key",
   "lynse_live_translation_qwen_api_key",
+  "lynse_live_translation_volc_api_key",
 ]);
 
 const secretCache = new Map<string, string>();
@@ -42,6 +43,20 @@ async function secureDelete(account: string): Promise<void> {
  * builds into the keychain and removes them, so nothing sensitive is persisted
  * in clear text anymore.
  */
+/**
+ * Re-read a single secret from the OS keychain into the in-memory cache and
+ * return it. Used at connection time so a key changed in the Keychain takes
+ * effect immediately without restarting the app (the startup hydration only
+ * runs once and would otherwise keep serving a stale value).
+ */
+export async function refreshSecret(account: string): Promise<string | null> {
+  const fromKeychain = await secureGet(account);
+  if (fromKeychain != null) {
+    secretCache.set(account, fromKeychain);
+  }
+  return fromKeychain;
+}
+
 export async function hydrateSecrets(): Promise<void> {
   for (const key of SECRET_KEYS) {
     const fromKeychain = await secureGet(key);

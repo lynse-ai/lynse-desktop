@@ -1204,14 +1204,14 @@ const SH_COLORS = {
   punctuation: "#888888", // muted — brackets, angle brackets
   // Markdown
   keyword: "#ff7b72",     // red — bold markers, list markers
-  heading: "#79c0ff",     // cyan — markdown headings
+  heading: "#a5a9f5",     // indigo — markdown headings
   code: "#ffa657",        // orange — inline code
   link: "#d2a8ff",        // purple — links
   // CSS (inside <style>)
-  cssProp: "#61dafb",     // light blue — CSS property names
+  cssProp: "#a5a9f5",     // indigo — CSS property names
   cssValue: "#e5e5e7",    // light gray — CSS property values
   cssVar: "#888888",      // gray — CSS variable declarations
-  cssVarRef: "#00bfff",   // cyan — var(--xxx) references
+  cssVarRef: "#c7c9ff",   // light indigo — var(--xxx) references
   cssSelector: "#ff9500", // orange — CSS selectors
   // Shared
   plain: "#e5e5e7",       // default text
@@ -1369,8 +1369,7 @@ function EmptyState() {
   const { t } = useTranslation();
   return (
     <div className="relative flex h-full flex-col items-center justify-center overflow-hidden px-6 text-center">
-      <div className="pointer-events-none absolute size-80 rounded-full bg-primary/[0.08] blur-3xl" />
-      <div className="relative mx-auto mb-5 flex size-16 items-center justify-center rounded-[20px] border border-primary/20 bg-gradient-to-br from-primary/20 via-primary/10 to-transparent text-accent-brand-text shadow-[0_0_40px_rgba(99,102,241,0.15)]">
+      <div className="relative mx-auto mb-5 flex size-16 items-center justify-center rounded-[20px] border border-border bg-card text-primary shadow-sm">
         <FileText className="size-7" strokeWidth={1.5} />
       </div>
       <h3 className="relative text-base font-semibold tracking-tight text-foreground">

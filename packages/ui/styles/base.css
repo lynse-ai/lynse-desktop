@@ -182,11 +182,9 @@
     from var(--border-beam-angle),
     transparent 0deg,
     transparent 220deg,
-    #ffbe7b 245deg,
-    #ff777f 270deg,
-    #ff8ab4 295deg,
-    #a07cfe 320deg,
-    #5b9dff 345deg,
+    color-mix(in srgb, var(--brand) 45%, transparent) 250deg,
+    var(--brand) 300deg,
+    var(--accent-brand-text) 340deg,
     transparent 360deg
   );
   -webkit-mask:
@@ -203,11 +201,9 @@
     animation: none;
     background: linear-gradient(
       90deg,
-      #ffbe7b,
-      #ff777f,
-      #ff8ab4,
-      #a07cfe,
-      #5b9dff
+      color-mix(in srgb, var(--brand) 45%, transparent),
+      var(--brand),
+      var(--accent-brand-text)
     );
   }
 }

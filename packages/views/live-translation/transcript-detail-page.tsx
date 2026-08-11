@@ -348,8 +348,8 @@ export function TranscriptDetailPage() {
   );
 }
 
-// Icon-only toggle button. Active = cyan fill + white icon; inactive =
-// ghost outline + muted icon. A small label sits beside the icon for clarity.
+// Icon toggle button. Active uses the shared restrained brand tint; inactive
+// stays neutral. A small label sits beside the icon for clarity.
 function IconToggle({
   active,
   onClick,
@@ -373,7 +373,7 @@ function IconToggle({
       className={[
         "flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors",
         active
-          ? "bg-teal-500 text-white"
+          ? "border border-primary/25 bg-primary/10 text-accent-brand-text shadow-sm"
           : "border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
       ].join(" ")}
     >

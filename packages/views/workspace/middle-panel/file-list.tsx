@@ -242,14 +242,6 @@ export function FileList() {
         className="absolute inset-x-0 top-0 h-2 select-none"
         data-tauri-drag-region
       />
-      <style>
-        {`
-          @keyframes ai-file-text-shimmer {
-            0% { background-position: 0% 50%; }
-            100% { background-position: 240% 50%; }
-          }
-        `}
-      </style>
       {/* Header — Folder name + Search + Sort */}
       {selectedFolderId && (
         <div
@@ -587,8 +579,8 @@ function DraggableFileRow({
           <span className="flex items-center gap-1 text-[10px] text-muted-foreground tabular-nums">
             {isSummarizing ? (
               <>
-                <Loader2 className="size-2.5 animate-spin text-violet-400" />
-                <span className="bg-[linear-gradient(90deg,#38bdf8,#a78bfa,#34d399,#38bdf8)] bg-[length:240%_100%] bg-clip-text font-medium text-transparent animate-[ai-file-text-shimmer_1.8s_linear_infinite]">
+                <Loader2 className="size-2.5 animate-spin text-primary" />
+                <span className="font-medium text-primary">
                   {t("workspace.summarizing")}
                 </span>
               </>

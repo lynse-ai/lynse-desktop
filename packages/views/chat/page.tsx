@@ -194,7 +194,7 @@ export function ChatPage() {
               )}
             </div>
           </div>
-          <p className="mt-2 text-center text-[10px] text-muted-foreground/55 dark:text-muted-foreground/60">
+          <p className="mt-2 text-center text-[10px] text-muted-foreground">
             {t("chat.disclaimer")}
           </p>
         </div>
@@ -236,7 +236,7 @@ function EmptyChat({ suggestions, onSelect }: EmptyChatProps) {
             key={suggestion}
             type="button"
             onClick={() => onSelect(suggestion)}
-            className="rounded-xl border border-border bg-card/80 px-3 py-3 text-left text-xs leading-5 text-foreground/80 shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/35 hover:bg-card hover:text-foreground"
+            className="rounded-xl border border-border bg-card/80 px-3 py-3 text-left text-xs leading-5 text-foreground/80 shadow-sm transition-[border-color,background-color,color] hover:border-primary/25 hover:bg-accent/50 hover:text-foreground"
           >
             {suggestion}
           </button>

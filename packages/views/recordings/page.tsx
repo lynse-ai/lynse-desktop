@@ -46,11 +46,9 @@ export function RecordingsPage() {
       </PageHeader>
 
       <main className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-6 py-12">
-        <div className="pointer-events-none absolute left-1/2 top-1/2 size-[30rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/[0.08] blur-3xl" />
         <div className="relative flex w-full max-w-xl flex-col items-center text-center">
-          <div className="relative mb-6 flex size-20 items-center justify-center rounded-[24px] border border-primary/20 bg-gradient-to-br from-primary/20 via-primary/10 to-transparent text-accent-brand-text shadow-[0_0_48px_rgba(99,102,241,0.18)]">
+          <div className="relative mb-6 flex size-20 items-center justify-center rounded-[24px] border border-border bg-card text-primary shadow-sm">
             <Headphones className="size-9" strokeWidth={1.5} />
-            <span className="absolute -right-1 -top-1 size-3 rounded-full border-2 border-background bg-success shadow-[0_0_12px_rgba(52,211,153,0.55)]" />
           </div>
           <h2 className="text-xl font-semibold tracking-tight text-foreground">
             {t("recordings.empty")}
@@ -62,7 +60,7 @@ export function RecordingsPage() {
           <div className="mt-7 grid w-full grid-cols-2 gap-3">
             <button
               type="button"
-              className="group flex min-h-32 flex-col items-start justify-between rounded-xl border border-border bg-card p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-lg"
+              className="group flex min-h-32 flex-col items-start justify-between rounded-xl border border-border bg-card p-4 text-left shadow-sm transition-[border-color,background-color,box-shadow] hover:border-primary/25 hover:bg-accent/50 hover:shadow-md"
             >
               <span className="flex size-10 items-center justify-center rounded-xl bg-primary/15 text-accent-brand-text ring-1 ring-inset ring-primary/20 transition-colors group-hover:bg-primary/20">
                 <Plus className="size-[18px]" />
@@ -79,7 +77,7 @@ export function RecordingsPage() {
 
             <button
               type="button"
-              className="group flex min-h-32 flex-col items-start justify-between rounded-xl border border-border bg-card p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-lg"
+              className="group flex min-h-32 flex-col items-start justify-between rounded-xl border border-border bg-card p-4 text-left shadow-sm transition-[border-color,background-color,box-shadow] hover:border-primary/25 hover:bg-accent/50 hover:shadow-md"
             >
               <span className="flex size-10 items-center justify-center rounded-xl bg-white/[0.06] text-muted-foreground ring-1 ring-inset ring-white/[0.08] transition-colors group-hover:bg-primary/15 group-hover:text-accent-brand-text">
                 <Headphones className="size-[18px]" />

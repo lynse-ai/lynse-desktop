@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.23 (2026-08-12)
+
+### New Features
+
+- Add Volcengine AST v4 as a real-time transcription provider, with credentials stored in the operating system keychain and results normalized into the existing live-segment pipeline.
+- Unify recording and live transcription in one session page with pure recording, live transcription, and simultaneous translation modes, plus a real-time waveform and a completion dialog for saving the result.
+
+### Changed
+
+- Redesign the shared dark interface around an Apple-inspired graphite palette with one restrained indigo accent, removing cyan/teal controls, decorative colour glows, and idle waveform motion while improving text and border contrast.
+- Improve todo refresh and clear-completed feedback with visible progress states and automatic reconciliation with local storage.
+- Refine the sidebar, live-translation controls, workspace empty states, recording actions, and AI assistant surfaces for a clearer visual hierarchy.
+
 ## 0.1.22 (2026-07-31)
 
 ### New Features

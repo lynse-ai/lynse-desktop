@@ -18,11 +18,10 @@ interface AudioVisualizerProps {
  * horizontal centre line. A travelling sine ripple modulated by the live
  * microphone level makes the bars breathe organically; a soft bell envelope
  * keeps the centre fuller so it reads as a single waveform rather than a flat
- * equaliser. A left-to-right indigo→violet gradient (matching the app's
- * primary) gives it the ElevenLabs glow.
+ * equaliser. The waveform uses the app's single restrained brand colour.
  *
- * When idle the whole row settles into a gentle low-amplitude wave. Animation
- * runs at 60fps via requestAnimationFrame with per-bar eased smoothing.
+ * When idle the whole row settles into a static low-amplitude wave. Active
+ * animation runs via requestAnimationFrame with per-bar eased smoothing.
  */
 export function AudioVisualizer({ level, active, className }: AudioVisualizerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -36,6 +35,7 @@ export function AudioVisualizer({ level, active, className }: AudioVisualizerPro
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    const waveformColor = getComputedStyle(canvas).color;
 
     const BARS = 64;
     // Per-bar phase offset so neighbouring bars never move in lockstep.
@@ -67,18 +67,17 @@ export function AudioVisualizer({ level, active, className }: AudioVisualizerPro
       const barW = (w - gap * (BARS - 1)) / BARS;
       const radius = Math.max(1, barW / 2); // fully rounded pill
 
-      const gradient = ctx.createLinearGradient(0, 0, w, 0);
-      gradient.addColorStop(0, "rgba(99, 102, 241, 0.95)");
-      gradient.addColorStop(1, "rgba(168, 85, 247, 0.9)");
-      ctx.fillStyle = gradient;
+      ctx.fillStyle = waveformColor;
+      ctx.globalAlpha = isActive ? 0.9 : 0.3;
 
       bars.forEach((bar, i) => {
         const pos = i / (BARS - 1); // 0 … 1 left-to-right
         // Travelling ripple — neighbouring bars are slightly out of phase.
-        const wave = 0.5 + 0.5 * Math.sin(pos * Math.PI * 7 - t * 5 + bar.phase);
+        const waveTime = isActive ? t : 0;
+        const wave = 0.5 + 0.5 * Math.sin(pos * Math.PI * 7 - waveTime * 5 + bar.phase);
         // Soft bell envelope: centre bars fuller, edges taper off.
         const bell = 0.6 + 0.4 * (1 - Math.abs(pos - 0.5) * 2);
-        const amp = isActive ? 0.14 + target * 0.86 : 0.05 + 0.03 * (0.5 + 0.5 * Math.sin(t * 1.4));
+        const amp = isActive ? 0.14 + target * 0.86 : 0.06;
         const targetVal = amp * bell * (0.4 + 0.6 * wave);
         bar.value += (targetVal - bar.value) * 0.25;
         const barH = Math.max(3, bar.value * h);
@@ -93,7 +92,13 @@ export function AudioVisualizer({ level, active, className }: AudioVisualizerPro
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  return <canvas ref={canvasRef} className={className} />;
+  return (
+    <canvas
+      ref={canvasRef}
+      className={className}
+      style={{ color: "var(--waveform-active)" }}
+    />
+  );
 }
 
 function roundRect(

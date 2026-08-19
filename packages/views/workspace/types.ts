@@ -1,4 +1,5 @@
 export type ItemType = "recording" | "meeting" | "note" | "file";
+export type RecordingMode = "meeting" | "call" | "import";
 
 import type { SttProviderConfig } from "./local-transcription";
 
@@ -10,6 +11,10 @@ export interface WorkspaceItem {
   createdAt: string;
   folderId?: string;
   tags?: string[];
+  /** Recording source type from the backend file `mode` field. */
+  recordingMode?: RecordingMode;
+  /** Recording duration in seconds. */
+  durationSeconds?: number;
   /** MIME type from the backend (e.g. audio/mpeg, video/mp4). Used to detect recordings. */
   contentType?: string;
 }
@@ -287,7 +292,7 @@ export interface PreSignedUrlVO {
 
 export interface TransferFileReq {
   fileId: string;
-  templateId: string;
+  templateId?: string;
   modelId?: string;
   languageId?: string;
 }

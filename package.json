@@ -1,6 +1,6 @@
 {
   "name": "lynse-webapp",
-  "version": "0.1.24",
+  "version": "0.1.25",
   "private": true,
   "type": "module",
   "description": "Local-first meeting minutes tool — import audio/video, transcribe locally, generate structured notes.",

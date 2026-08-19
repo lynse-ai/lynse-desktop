@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useMemo, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -15,15 +15,13 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { Upload, Loader2, Check, FileAudio, Sparkles } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
 import {
-  useTemplateCategories,
   useTransferFile,
   waitForTranscriptionCompletion,
   uploadFileToOSS,
 } from "./hooks/use-files";
 import { useQueryClient } from "@tanstack/react-query";
-import type { PromptTemplate, UploadPhase } from "./types";
+import type { UploadPhase } from "./types";
 import type { LocalHotwordPackage } from "./types";
-import { TemplateSelector } from "./template-selector";
 import {
   getDesktopLocalTranscriptionApi,
   OFFLINE_TRANSCRIPTION_ENABLED_KEY,
@@ -52,7 +50,6 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
   // State
   const [file, setFile] = useState<File | null>(null);
   const [localAudioPath, setLocalAudioPath] = useState<string | null>(null);
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const [phase, setPhase] = useState<UploadPhase>("idle");
   const [uploadPct, setUploadPct] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
@@ -63,22 +60,8 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
   const [hotwordPackages, setHotwordPackages] = useState<LocalHotwordPackage[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { data: categories } = useTemplateCategories();
   const transferFile = useTransferFile();
 
-  // Flat list of all templates for selection
-  const allTemplates = useMemo(() => {
-    if (!categories) return [];
-    return categories.flatMap((c) => c.templates);
-  }, [categories]);
-
-  // Auto-select default template
-  const defaultTemplate = useMemo(() => {
-    return allTemplates.find((t) => t.isDefault === 1) ?? allTemplates[0];
-  }, [allTemplates]);
-
-  // Ensure a template is selected
-  const effectiveTemplateId = selectedTemplateId || defaultTemplate?.id || "";
   const localApi = getDesktopLocalTranscriptionApi();
   const useOfflineTranscription = offlineMode && !!localApi;
   const localAudioName = localAudioPath ? localAudioPath.split(/[\\/]/).pop() ?? localAudioPath : "";
@@ -98,7 +81,6 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
   const reset = useCallback(() => {
     setFile(null);
     setLocalAudioPath(null);
-    setSelectedTemplateId("");
     setPhase("idle");
     setUploadPct(0);
     setErrorMsg("");
@@ -142,7 +124,7 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
   // Main upload pipeline
   const handleStart = useCallback(async () => {
     if (!hasSelectedSource) return;
-    if (!useOfflineTranscription && (!file || !effectiveTemplateId)) return;
+    if (!useOfflineTranscription && !file) return;
     setErrorMsg("");
 
     try {
@@ -187,7 +169,6 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
       setPhase("transcribing");
       await transferFile.mutateAsync({
         fileId,
-        templateId: effectiveTemplateId,
       });
 
       setPhase("summarizing");
@@ -228,7 +209,7 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
         { description: isCreditsError ? undefined : msg },
       );
     }
-  }, [file, effectiveTemplateId, transferFile, qc, t, reset, onOpenChange, hasSelectedSource, localApi, localAudioPath, useOfflineTranscription, expectedSpeakers, selectedHotwordPackageId]);
+  }, [file, transferFile, qc, t, reset, onOpenChange, hasSelectedSource, localApi, localAudioPath, useOfflineTranscription, expectedSpeakers, selectedHotwordPackageId]);
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -246,8 +227,6 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
             phase={phase}
             errorMsg={errorMsg}
             dragOver={dragOver}
-            categories={categories ?? []}
-            selectedTemplateId={effectiveTemplateId}
             expectedSpeakers={expectedSpeakers}
             hotwordPackages={hotwordPackages}
             selectedHotwordPackageId={selectedHotwordPackageId}
@@ -255,7 +234,6 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
             onDrop={handleDrop}
             onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
-            onTemplateSelect={setSelectedTemplateId}
             onExpectedSpeakersChange={setExpectedSpeakers}
             onHotwordPackageSelect={setSelectedHotwordPackageId}
             onFileInputClick={handleFileInputClick}
@@ -283,7 +261,7 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
               </Button>
               <Button
                 onClick={handleStart}
-                disabled={!hasSelectedSource || (!useOfflineTranscription && !effectiveTemplateId) || phase === "error" && !hasSelectedSource}
+                disabled={!hasSelectedSource || phase === "error" && !hasSelectedSource}
               >
                 <Sparkles className="size-3.5 mr-1.5" />
                 {useOfflineTranscription ? t("upload.local_start") : t("upload.start")}
@@ -305,8 +283,6 @@ interface IdleContentProps {
   phase: UploadPhase;
   errorMsg: string;
   dragOver: boolean;
-  categories: { category: string; templates: PromptTemplate[] }[];
-  selectedTemplateId: string;
   expectedSpeakers: string;
   hotwordPackages: LocalHotwordPackage[];
   selectedHotwordPackageId: string;
@@ -314,7 +290,6 @@ interface IdleContentProps {
   onDrop: (e: React.DragEvent) => void;
   onDragOver: (e: React.DragEvent) => void;
   onDragLeave: () => void;
-  onTemplateSelect: (id: string) => void;
   onExpectedSpeakersChange: (value: string) => void;
   onHotwordPackageSelect: (id: string) => void;
   onFileInputClick: () => void | Promise<void>;
@@ -328,8 +303,6 @@ function IdleContent({
   phase,
   errorMsg,
   dragOver,
-  categories,
-  selectedTemplateId,
   expectedSpeakers,
   hotwordPackages,
   selectedHotwordPackageId,
@@ -337,7 +310,6 @@ function IdleContent({
   onDrop,
   onDragOver,
   onDragLeave,
-  onTemplateSelect,
   onExpectedSpeakersChange,
   onHotwordPackageSelect,
   onFileInputClick,
@@ -397,15 +369,6 @@ function IdleContent({
       {/* Error message */}
       {phase === "error" && errorMsg && (
         <p className="text-sm text-destructive">{errorMsg}</p>
-      )}
-
-      {!offlineMode && (
-        <TemplateSelector
-          categories={categories}
-          selectedId={selectedTemplateId}
-          onSelect={onTemplateSelect}
-          scrollHeight="h-56"
-        />
       )}
 
       {offlineMode && (

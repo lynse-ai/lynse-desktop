@@ -16,6 +16,7 @@ import type {
   AiTaskAddReq,
   AiTaskResultVO,
   LocalTranscriptionRecord,
+  RecordingMode,
 } from "../types";
 import {
   getDesktopLocalTranscriptionApi,
@@ -118,6 +119,28 @@ export function parseFileTags(file: Record<string, unknown>): string[] {
     ...normalizeTagValue(file.folderName),
   ];
   return Array.from(new Set(tags));
+}
+
+export function parseFileRecordingMode(file: Record<string, unknown>): RecordingMode | undefined {
+  if (typeof file.mode !== "string") return undefined;
+  switch (file.mode.trim().toUpperCase()) {
+    case "MEETING":
+      return "meeting";
+    case "CALL":
+      return "call";
+    case "IMPORT":
+      return "import";
+    default:
+      return undefined;
+  }
+}
+
+export function parseFileDurationSeconds(file: Record<string, unknown>): number | undefined {
+  const value = file.bizDuration;
+  if (typeof value !== "number" && typeof value !== "string") return undefined;
+  if (typeof value === "string" && value.trim() === "") return undefined;
+  const duration = Number(value);
+  return Number.isFinite(duration) && duration >= 0 ? duration : undefined;
 }
 
 export function buildFilesRequest(params: {
@@ -265,6 +288,8 @@ export function useNotes(params: {
           createdAt: String(raw.createTime ?? raw.recordStartTime ?? ""),
           folderId: raw.folderId as string | undefined,
           tags: parseFileTags(raw),
+          recordingMode: parseFileRecordingMode(raw),
+          durationSeconds: parseFileDurationSeconds(raw),
           contentType: typeof raw.contentType === "string" ? raw.contentType : undefined,
         };
       });

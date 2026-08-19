@@ -1,20 +1,17 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useWorkspaceStore } from "../workspace/store";
 import { ContentPanel } from "../workspace/content-panel";
 import { ChatPanel } from "../workspace/right-panel/chat-panel";
 import { ResizableHandle } from "../workspace/resizable-handle";
 import { TitleBar } from "../layout/title-bar";
-import { UploadDialog } from "../workspace/upload-dialog";
 import { useNotes } from "../workspace/hooks/use-files";
 import { useFolders } from "../workspace/hooks/use-folders";
 import { filterWorkspaceFilesByFolder } from "../workspace/middle-panel/file-list-filter";
-import { LOCAL_TRANSCRIPTION_FOLDER_ID, isLocalFileId } from "../workspace/local-transcription";
+import { LOCAL_TRANSCRIPTION_FOLDER_ID } from "../workspace/local-transcription";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { useNavigation } from "../navigation";
-import { Button } from "@lynse/ui/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,11 +21,7 @@ import {
 } from "@lynse/ui/components/ui/dropdown-menu";
 import {
   FolderOpen,
-  Upload,
-  Mic,
   FileAudio,
-  MoreHorizontal,
-  Link,
   Layers,
   Trash2,
   Circle,
@@ -37,15 +30,9 @@ import {
   List,
 } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
-import { useUserCredits } from "../layout/use-user-credits";
 import type { WorkspaceItem, FolderInfo } from "../workspace/types";
 
-type NotesTab = "all" | "recent" | "recordings";
 type ViewMode = "list" | "grid";
-
-const TAB_ALL: NotesTab = "all";
-const TAB_RECENT: NotesTab = "recent";
-const TAB_RECORDINGS: NotesTab = "recordings";
 
 /** Format a Date as the backend's `YYYY-MM-DDTHH:MM:SS` (no timezone suffix). */
 function toApiDateTime(d: Date): string {
@@ -57,11 +44,8 @@ function toApiDateTime(d: Date): string {
 
 export function NotesPage() {
   const { t } = useTranslation();
-  const { push } = useNavigation();
   const reduceMotion = useReducedMotion();
 
-  const [activeTab, setActiveTab] = useState<NotesTab>(TAB_ALL);
-  const [uploadOpen, setUploadOpen] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
 
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
@@ -70,7 +54,12 @@ export function NotesPage() {
   const selectItem = useWorkspaceStore((s) => s.selectItem);
   const chatPanelVisible = useWorkspaceStore((s) => s.chatPanelVisible);
   const chatPanelWidth = useWorkspaceStore((s) => s.chatPanelWidth);
+  const notesListWidth = useWorkspaceStore((s) => s.notesListWidth);
+  const setNotesListWidth = useWorkspaceStore((s) => s.setNotesListWidth);
   const handleChatPanelResize = useWorkspaceStore((s) => s.handleChatPanelResize);
+  const layoutRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [isListResizing, setIsListResizing] = useState(false);
 
   const { data: files } = useNotes({
     // Wide range → effectively "all my meetings" (recordings + their notes).
@@ -78,7 +67,6 @@ export function NotesPage() {
     endTime: toApiDateTime(new Date()),
   });
   const { data: folders } = useFolders();
-  const { data: user } = useUserCredits();
 
   const folderList: FolderInfo[] = Array.isArray(folders) ? folders : [];
 
@@ -93,35 +81,22 @@ export function NotesPage() {
 
   const filteredFiles = useMemo(() => {
     if (!Array.isArray(files)) return [];
-    let result = filterWorkspaceFilesByFolder(files, selectedFolderId);
-
-    if (activeTab === TAB_RECORDINGS) {
-      // Local transcriptions + any cloud file whose MIME type is audio/video.
-      result = result.filter(
-        (f) =>
-          isLocalFileId(f.id) ||
-          (f.contentType ? /^audio\/|video\//i.test(f.contentType) : false),
-      );
-    } else if (activeTab === TAB_RECENT) {
-      const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-      result = result.filter((f) => new Date(f.createdAt || 0).getTime() > cutoff);
-    }
-
-    return result;
-  }, [files, selectedFolderId, activeTab]);
+    return filterWorkspaceFilesByFolder(files, selectedFolderId);
+  }, [files, selectedFolderId]);
 
   const handleSelectFolder = (folderId: string | null) => {
     selectFolder(folderId);
   };
 
-  const tabs: { key: NotesTab; label: string }[] = [
-    { key: TAB_ALL, label: t("notes.tab_all_files") },
-    { key: TAB_RECENT, label: t("notes.tab_recent") },
-    { key: TAB_RECORDINGS, label: t("notes.tab_recordings") },
-  ];
-
-  const ownerName = (user?.nickname as string) || "Me";
-  const ownerInitials = ownerName.slice(0, 2).toUpperCase();
+  const handleNotesListResize = useCallback(
+    (delta: number) => {
+      const layoutWidth = layoutRef.current?.getBoundingClientRect().width ?? window.innerWidth;
+      const currentWidth = listRef.current?.getBoundingClientRect().width ?? notesListWidth;
+      const maxWidth = Math.max(300, Math.min(600, layoutWidth - 520));
+      setNotesListWidth(currentWidth + delta, maxWidth);
+    },
+    [notesListWidth, setNotesListWidth],
+  );
 
   const folderDropdownItems = (
     <DropdownMenuContent align="end" className="w-52">
@@ -160,57 +135,27 @@ export function NotesPage() {
   );
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden bg-background">
+    <div ref={layoutRef} className="flex h-full min-h-0 overflow-hidden bg-background">
       {/* Left: file list area */}
       <div
+        ref={listRef}
         className={cn(
-          "flex min-w-0 flex-col overflow-hidden transition-[width] duration-300",
-          selectedItemId ? "w-1/2 border-r border-border/50" : "flex-1"
+          "flex min-w-0 flex-col overflow-hidden",
+          selectedItemId ? "shrink-0" : "flex-1",
+          selectedItemId && !isListResizing ? "transition-[width] duration-300" : "",
         )}
+        style={
+          selectedItemId
+            ? { width: `clamp(300px, ${notesListWidth}px, calc(100% - 520px))` }
+            : undefined
+        }
       >
-        {/* Header: tabs + actions */}
+        {/* Header: actions */}
         <div
           className="flex shrink-0 select-none items-start justify-between border-b border-border/50 bg-background/80 px-4 py-3 backdrop-blur-xl"
           data-tauri-drag-region
         >
-          <div className="flex items-center gap-2 pt-1" data-tauri-drag-region={false}>
-            {tabs.map((tab) => (
-              <button
-                key={tab.key}
-                onClick={() => setActiveTab(tab.key)}
-                className={cn(
-                  "rounded-md px-3 py-1.5 text-[13px] font-medium transition-colors",
-                  activeTab === tab.key
-                    ? "bg-accent text-accent-foreground"
-                    : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
-                )}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
           <div className="flex flex-col items-end gap-2" data-tauri-drag-region={false}>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 gap-1.5 rounded-lg border-border bg-card text-xs text-foreground shadow-sm hover:bg-accent"
-                onClick={() => setUploadOpen(true)}
-              >
-                <Upload className="size-3.5" />
-                {t("notes.upload")}
-              </Button>
-              <Button
-                size="sm"
-                className="h-8 gap-1.5 rounded-lg bg-primary text-xs text-primary-foreground shadow-sm hover:bg-primary/90"
-                onClick={() => push("/recording")}
-              >
-                <Mic className="size-3.5" />
-                {t("notes.record")}
-              </Button>
-            </div>
-
             <div className="flex items-center gap-1">
               <DropdownMenu>
                 <DropdownMenuTrigger
@@ -261,13 +206,11 @@ export function NotesPage() {
           {filteredFiles.length === 0 ? (
             <EmptyState />
           ) : viewMode === "grid" ? (
-            <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-4">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3 p-4">
               {filteredFiles.map((file) => (
                 <GridCard
                   key={file.id}
                   file={file}
-                  ownerName={ownerName}
-                  ownerInitials={ownerInitials}
                   isSelected={selectedItemId === file.id}
                   onClick={() => selectItem(file.id, "file", file.title)}
                 />
@@ -279,8 +222,6 @@ export function NotesPage() {
                 <FileRow
                   key={file.id}
                   file={file}
-                  ownerName={ownerName}
-                  ownerInitials={ownerInitials}
                   isSelected={selectedItemId === file.id}
                   onClick={() => selectItem(file.id, "file", file.title)}
                 />
@@ -295,57 +236,62 @@ export function NotesPage() {
         {selectedItemId && (
           <motion.div
             key="detail-panel"
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: "50%", opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
             transition={reduceMotion ? { duration: 0 } : { duration: 0.26, ease: [0.23, 1, 0.32, 1] }}
-            className="flex min-w-0 flex-col bg-background"
+            className="flex min-w-0 flex-1 bg-background"
           >
-            <TitleBar />
-            <div className="flex min-h-0 flex-1">
-              <ContentPanel />
-              <AnimatePresence initial={false}>
-                {chatPanelVisible && (
-                  <motion.div
-                    key="chat-panel"
-                    initial={{ width: 0, opacity: 0 }}
-                    animate={{ width: chatPanelWidth, opacity: 1 }}
-                    exit={{ width: 0, opacity: 0 }}
-                    transition={reduceMotion ? { duration: 0 } : { duration: 0.26, ease: [0.23, 1, 0.32, 1] }}
-                    className="flex shrink-0 overflow-hidden border-l border-border/50 bg-card/95 shadow-[-12px_0_34px_rgba(0,0,0,0.14)] backdrop-blur-xl"
-                  >
-                    <ResizableHandle onResize={handleChatPanelResize} side="left" />
-                    <div className="h-full overflow-hidden" style={{ width: chatPanelWidth }}>
-                      <ChatPanel />
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+            <ResizableHandle
+              label={t("notes.resize_list")}
+              onResize={handleNotesListResize}
+              onResizeStart={() => setIsListResizing(true)}
+              onResizeEnd={() => setIsListResizing(false)}
+              side="right"
+            />
+            <div className="flex min-w-0 flex-1 flex-col">
+              <TitleBar />
+              <div className="flex min-h-0 flex-1">
+                <ContentPanel />
+                <AnimatePresence initial={false}>
+                  {chatPanelVisible && (
+                    <motion.div
+                      key="chat-panel"
+                      initial={{ width: 0, opacity: 0 }}
+                      animate={{ width: chatPanelWidth, opacity: 1 }}
+                      exit={{ width: 0, opacity: 0 }}
+                      transition={reduceMotion ? { duration: 0 } : { duration: 0.26, ease: [0.23, 1, 0.32, 1] }}
+                      className="flex shrink-0 overflow-hidden border-l border-border/50 bg-card/95 shadow-[-12px_0_34px_rgba(0,0,0,0.14)] backdrop-blur-xl"
+                    >
+                      <ResizableHandle
+                        label={t("workspace.resize_chat_panel")}
+                        onResize={handleChatPanelResize}
+                        side="left"
+                      />
+                      <div className="h-full overflow-hidden" style={{ width: chatPanelWidth }}>
+                        <ChatPanel />
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
-
-      <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
     </div>
   );
 }
 
 function FileRow({
   file,
-  ownerName,
-  ownerInitials,
   isSelected,
   onClick,
 }: {
   file: WorkspaceItem;
-  ownerName: string;
-  ownerInitials: string;
   isSelected: boolean;
   onClick: () => void;
 }) {
-  const { t } = useTranslation();
-
   return (
     <button
       onClick={onClick}
@@ -354,49 +300,10 @@ function FileRow({
         isSelected ? "bg-accent/60" : "hover:bg-accent/30"
       )}
     >
-      {/* Thumbnail */}
-      <div className="relative flex h-[72px] w-28 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br from-muted via-muted/60 to-primary/5">
-        <FileAudio className="size-8 text-muted-foreground/45 group-hover:text-primary/50" />
-      </div>
-
       {/* Info */}
       <div className="min-w-0 flex-1">
         <h3 className="truncate text-sm font-semibold text-foreground">{file.title}</h3>
-        <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-          <span>{t("notes.permission_private")}</span>
-        </div>
-      </div>
-
-      {/* Owner + actions */}
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-1.5">
-          <div className="flex size-6 items-center justify-center rounded-full bg-primary/10 text-[9px] font-medium text-accent-brand-text">
-            {ownerInitials}
-          </div>
-          <span className="max-w-[80px] truncate text-xs text-muted-foreground">{ownerName}</span>
-        </div>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            // Share action not yet implemented
-          }}
-          className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          title={t("notes.share")}
-        >
-          <Link className="size-4" />
-        </button>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            // More actions not yet implemented
-          }}
-          className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          title={t("notes.more")}
-        >
-          <MoreHorizontal className="size-4" />
-        </button>
+        <NoteMetadata file={file} />
       </div>
     </button>
   );
@@ -404,19 +311,13 @@ function FileRow({
 
 function GridCard({
   file,
-  ownerName,
-  ownerInitials,
   isSelected,
   onClick,
 }: {
   file: WorkspaceItem;
-  ownerName: string;
-  ownerInitials: string;
   isSelected: boolean;
   onClick: () => void;
 }) {
-  const { t } = useTranslation();
-
   return (
     <button
       onClick={onClick}
@@ -425,50 +326,68 @@ function GridCard({
         isSelected ? "border-primary/40 bg-accent/40 ring-1 ring-primary/30" : ""
       )}
     >
-      {/* Thumbnail */}
-      <div className="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-lg bg-gradient-to-br from-muted via-muted/60 to-primary/5">
-        <FileAudio className="size-10 text-muted-foreground/40 group-hover:text-primary/40" />
-      </div>
-
       {/* Title */}
-      <h3 className="mt-2.5 line-clamp-2 min-h-[2.5rem] text-sm font-semibold text-foreground">{file.title}</h3>
-
-      {/* Footer: owner + actions */}
-      <div className="mt-auto flex items-center justify-between pt-3">
-        <div className="flex items-center gap-1.5">
-          <div className="flex size-5 items-center justify-center rounded-full bg-primary/10 text-[8px] font-medium text-accent-brand-text">
-            {ownerInitials}
-          </div>
-          <span className="max-w-[70px] truncate text-xs text-muted-foreground">{ownerName}</span>
-        </div>
-
-        <div className="flex items-center">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              // Share action not yet implemented
-            }}
-            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            title={t("notes.share")}
-          >
-            <Link className="size-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              // More actions not yet implemented
-            }}
-            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            title={t("notes.more")}
-          >
-            <MoreHorizontal className="size-3.5" />
-          </button>
-        </div>
-      </div>
+      <h3 className="line-clamp-2 min-h-[2.5rem] text-sm font-semibold text-foreground">{file.title}</h3>
+      <NoteMetadata file={file} />
     </button>
   );
+}
+
+function NoteMetadata({ file }: { file: WorkspaceItem }) {
+  const { t } = useTranslation();
+  const date = formatNoteDate(file.createdAt);
+  const duration = formatRecordingDuration(file.durationSeconds);
+  const recordingType = file.recordingMode
+    ? t(`notes.recording_${file.recordingMode}`)
+    : null;
+  const tags = Array.from(new Set([...(recordingType ? [recordingType] : []), ...(file.tags ?? [])]));
+
+  return (
+    <>
+      {(date || duration) && (
+        <div className="mt-1 flex items-center gap-1.5 text-xs tabular-nums text-muted-foreground">
+          {date && <span>{date}</span>}
+          {date && duration && <span aria-hidden="true">·</span>}
+          {duration && <span>{duration}</span>}
+        </div>
+      )}
+      {tags.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {tags.map((tag) => (
+            <span
+              key={tag}
+              className="max-w-32 truncate rounded-md bg-muted px-1.5 py-0.5 text-[10px] leading-4 text-muted-foreground"
+              title={tag}
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+function formatNoteDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatRecordingDuration(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value) || value < 0) return "";
+  const totalSeconds = Math.floor(value);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const minuteLabel = String(minutes).padStart(2, "0");
+  const secondLabel = String(seconds).padStart(2, "0");
+  return hours > 0
+    ? `${String(hours).padStart(2, "0")}:${minuteLabel}:${secondLabel}`
+    : `${minuteLabel}:${secondLabel}`;
 }
 
 function EmptyState() {

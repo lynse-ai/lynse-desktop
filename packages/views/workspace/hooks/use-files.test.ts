@@ -3,6 +3,8 @@ import { ApiError } from "@lynse/core/api/client";
 import {
   createInfographicSummaryHtml,
   mergePendingSummaryTab,
+  parseFileDurationSeconds,
+  parseFileRecordingMode,
   parseFileTags,
   replaceSummaryTemplate,
   rerunSummaryPipeline,
@@ -354,6 +356,21 @@ describe("summary task polling", () => {
     expect(parseFileTags({ tagList: ["会议", "客户"] })).toEqual(["会议", "客户"]);
     expect(parseFileTags({ categoryName: "访谈" })).toEqual(["访谈"]);
     expect(parseFileTags({ folderName: "项目会议" })).toEqual(["项目会议"]);
+  });
+
+  it("maps the backend recording mode to the note recording type", () => {
+    expect(parseFileRecordingMode({ mode: "MEETING" })).toBe("meeting");
+    expect(parseFileRecordingMode({ mode: "call" })).toBe("call");
+    expect(parseFileRecordingMode({ mode: "IMPORT" })).toBe("import");
+    expect(parseFileRecordingMode({ mode: "unknown" })).toBeUndefined();
+    expect(parseFileRecordingMode({ mode: null })).toBeUndefined();
+  });
+
+  it("parses the recording duration from the meeting list field", () => {
+    expect(parseFileDurationSeconds({ bizDuration: 125 })).toBe(125);
+    expect(parseFileDurationSeconds({ bizDuration: "90" })).toBe(90);
+    expect(parseFileDurationSeconds({ bizDuration: "" })).toBeUndefined();
+    expect(parseFileDurationSeconds({ bizDuration: null })).toBeUndefined();
   });
 
   it("creates marked infographic summary html from generated text", () => {

@@ -23,6 +23,7 @@ const localRecord: LocalTranscriptionRecord = {
   updatedAt: "2026-07-04T08:05:00.000Z",
   transcriptText: "大家好，今天讨论离线转写。",
   status: "completed",
+  durationMs: 125000,
   engine: "funasr",
   segments: [
     {
@@ -53,6 +54,7 @@ describe("local transcription helpers", () => {
       updatedAt: "2026-07-04T08:05:00.000Z",
       folderId: "__local_transcriptions__",
       tags: ["本地转写", "已完成"],
+      durationSeconds: 125,
     });
   });
 

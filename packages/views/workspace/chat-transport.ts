@@ -23,6 +23,36 @@ export interface ChatTransport {
   cancel(): void;
 }
 
+export interface QoderChatConfig {
+  configured: boolean;
+  source: "environment" | "keychain" | null;
+  agentId: string;
+  environmentId: string;
+}
+
+export type QoderChatBridgeEvent = ChatStreamEvent & { requestId: string };
+
+export interface DesktopQoderChatApi {
+  getConfig(): Promise<QoderChatConfig>;
+  savePat(pat: string): Promise<QoderChatConfig>;
+  createSession(): Promise<string>;
+  sendMessage(
+    sessionId: string,
+    message: string,
+    requestId: string,
+    afterEventId?: string,
+  ): Promise<{ lastEventId?: string }>;
+  cancel(sessionId: string): Promise<void>;
+  onEvent(callback: (event: QoderChatBridgeEvent) => void): Promise<() => void>;
+}
+
+export function getDesktopQoderChatApi(): DesktopQoderChatApi | null {
+  if (typeof window === "undefined") return null;
+  return (
+    window as Window & { desktopAPI?: { qoderChat?: DesktopQoderChatApi } }
+  ).desktopAPI?.qoderChat ?? null;
+}
+
 const CHAT_STREAM_PATH = "/api/business/ai/chat/stream";
 
 /**
@@ -179,5 +209,56 @@ export class CloudChatTransport implements ChatTransport {
   cancel(): void {
     this.controller?.abort();
     this.controller = null;
+  }
+}
+
+export class QoderChatTransport implements ChatTransport {
+  readonly provider = "qoder" as const;
+  private sessionId: string | null = null;
+  private afterEventId: string | undefined;
+  private activeRequestId: string | null = null;
+  private activeUnlisten: (() => void) | null = null;
+
+  async send(opts: SendChatOptions): Promise<void> {
+    const api = getDesktopQoderChatApi();
+    if (!api) throw new Error("Qoder Cloud Agent is only available in the desktop app");
+
+    if (!this.sessionId) {
+      this.sessionId = await api.createSession();
+    }
+
+    const requestId = `qoder-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    this.activeRequestId = requestId;
+    const unlisten = await api.onEvent((event) => {
+      if (event.requestId !== requestId || this.activeRequestId !== requestId) return;
+      const { requestId: _requestId, ...chatEvent } = event;
+      opts.onEvent(chatEvent as ChatStreamEvent);
+    });
+    this.activeUnlisten = unlisten;
+
+    try {
+      const result = await api.sendMessage(
+        this.sessionId,
+        opts.query,
+        requestId,
+        this.afterEventId,
+      );
+      if (this.activeRequestId === requestId) {
+        this.afterEventId = result.lastEventId;
+      }
+    } finally {
+      unlisten();
+      if (this.activeUnlisten === unlisten) this.activeUnlisten = null;
+      if (this.activeRequestId === requestId) this.activeRequestId = null;
+    }
+  }
+
+  cancel(): void {
+    this.activeRequestId = null;
+    this.activeUnlisten?.();
+    this.activeUnlisten = null;
+    if (this.sessionId) {
+      void getDesktopQoderChatApi()?.cancel(this.sessionId).catch(() => undefined);
+    }
   }
 }

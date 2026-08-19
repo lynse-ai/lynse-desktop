@@ -230,6 +230,12 @@ const ja = {
   settings: {
     appearance: "外観",
     live_translation: "リアルタイム翻訳",
+    qoder_chat: "AI アシスタント · Qoder Cloud Agent（試験）",
+    qoder_chat_hint: "デスクトップ版 AI アシスタントは Qoder Session を直接作成して再利用します。PAT はシステムキーチェーンにのみ保存され、起動時の QODER_PAT でも指定できます。",
+    qoder_pat_configured: "PAT 設定済み",
+    qoder_save_pat: "PAT を保存",
+    qoder_saving: "保存中...",
+    qoder_pat_saved: "PAT を保存しました",
     api_config: "API 設定",
     api_base_url: "API ベース URL",
     api_key: "API キー",

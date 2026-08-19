@@ -231,6 +231,12 @@ const en = {
   settings: {
     appearance: "Appearance",
     live_translation: "Live Translation",
+    qoder_chat: "AI Assistant · Qoder Cloud Agent (Experimental)",
+    qoder_chat_hint: "The desktop AI assistant creates and reuses Qoder Sessions directly. The PAT is stored only in the system keychain, or supplied through QODER_PAT at launch.",
+    qoder_pat_configured: "PAT configured",
+    qoder_save_pat: "Save PAT",
+    qoder_saving: "Saving...",
+    qoder_pat_saved: "PAT saved",
     api_config: "API Configuration",
     api_base_url: "API Base URL",
     api_key: "API Key",

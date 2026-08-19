@@ -231,6 +231,12 @@ const zh = {
   settings: {
     appearance: "外观",
     live_translation: "实时翻译",
+    qoder_chat: "AI 助手 · Qoder Cloud Agent（试验）",
+    qoder_chat_hint: "桌面端 AI 助手将直接创建并复用 Qoder Session。PAT 只保存在系统钥匙串中，也可通过启动环境变量 QODER_PAT 提供。",
+    qoder_pat_configured: "PAT 已配置",
+    qoder_save_pat: "保存 PAT",
+    qoder_saving: "保存中...",
+    qoder_pat_saved: "PAT 已保存",
     api_config: "API 配置",
     api_base_url: "API 地址",
     api_key: "API 密钥",

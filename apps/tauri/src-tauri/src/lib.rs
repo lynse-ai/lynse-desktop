@@ -24,6 +24,7 @@ mod live_translation;
 #[path = "live_translation_stub.rs"]
 mod live_translation;
 mod stt;
+mod qoder_chat;
 // Wire codec for the Volcengine AST provider used by `live_translation`. Kept
 // platform-independent so its golden-vector tests run everywhere, even where
 // live translation itself falls back to the stub.
@@ -1814,6 +1815,11 @@ pub fn run() {
             local_transcription_update_voiceprint, local_transcription_delete_voiceprint,
             local_stt_config_get, local_stt_config_save,
             secure_set_secret, secure_get_secret, secure_delete_secret,
+            qoder_chat::qoder_chat_config,
+            qoder_chat::qoder_chat_save_pat,
+            qoder_chat::qoder_chat_create_session,
+            qoder_chat::qoder_chat_send_message,
+            qoder_chat::qoder_chat_cancel,
             get_app_info, check_app_update,
             live_translation::live_translation_permissions,
             live_translation::live_translation_request_permission,

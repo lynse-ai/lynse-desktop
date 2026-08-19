@@ -203,7 +203,7 @@ export interface ChatMessage {
 }
 
 /** Which backend serves a chat session. */
-export type ChatProvider = "cloud";
+export type ChatProvider = "cloud" | "qoder";
 
 export interface ChatAttachment {
   id?: string;

@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatMessage, ChatStreamEvent, ChatConfirm } from "../types";
-import { CloudChatTransport, extractConfirmFromText, type ChatTransport } from "../chat-transport";
+import {
+  CloudChatTransport,
+  QoderChatTransport,
+  extractConfirmFromText,
+  getDesktopQoderChatApi,
+  type ChatTransport,
+} from "../chat-transport";
 import { useAuthStore } from "@lynse/core/auth";
 import { redactMeetingIds } from "../meeting-id-redact";
 
@@ -34,7 +40,7 @@ export function useChat() {
   }, [messages]);
 
   const makeTransport = useCallback((): ChatTransport => {
-    return new CloudChatTransport();
+    return getDesktopQoderChatApi() ? new QoderChatTransport() : new CloudChatTransport();
   }, []);
 
   const handleEvent = useCallback((evt: ChatStreamEvent, assistantId: string) => {
@@ -128,7 +134,7 @@ export function useChat() {
       if (!sessionIdRef.current) sessionIdRef.current = makeId("session");
       const sessionId = sessionIdRef.current;
 
-      const transport = makeTransport();
+      const transport = transportRef.current ?? makeTransport();
       transportRef.current = transport;
       const controller = new AbortController();
       abortRef.current = controller;
@@ -145,9 +151,10 @@ export function useChat() {
           onEvent: (evt) => handleEvent(evt, assistantId),
         })
         .then(() => {
-          setIsLoading(false);
-          transportRef.current = null;
-          abortRef.current = null;
+          if (abortRef.current === controller) {
+            setIsLoading(false);
+            abortRef.current = null;
+          }
         })
         .catch((err: Error) => {
           setMessages((prev) =>
@@ -162,9 +169,10 @@ export function useChat() {
                 : m,
             ),
           );
-          setIsLoading(false);
-          transportRef.current = null;
-          abortRef.current = null;
+          if (abortRef.current === controller) {
+            setIsLoading(false);
+            abortRef.current = null;
+          }
         });
     },
     [userId, makeTransport, handleEvent],
@@ -198,7 +206,9 @@ export function useChat() {
 
   const stopStreaming = useCallback(() => {
     transportRef.current?.cancel();
+    transportRef.current = null;
     abortRef.current?.abort();
+    abortRef.current = null;
     setIsLoading(false);
   }, []);
 

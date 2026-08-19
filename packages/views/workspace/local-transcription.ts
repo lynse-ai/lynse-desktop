@@ -182,7 +182,11 @@ export function mergeCloudAndLocalFiles(
   localRecords: LocalTranscriptionRecord[],
 ): WorkspaceItem[] {
   return [
-    ...localRecords.map(localRecordToWorkspaceItem),
+    // Records already synced to the cloud are represented by their cloud
+    // counterpart — hide the local copy to avoid showing duplicates.
+    ...localRecords
+      .filter((record) => record.syncStatus !== "synced")
+      .map(localRecordToWorkspaceItem),
     ...cloudFiles,
   ];
 }

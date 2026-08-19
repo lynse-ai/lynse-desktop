@@ -9,7 +9,7 @@ export function DesktopNavigationProvider({
 }: {
   children: ReactNode;
 }) {
-  const [pathname, setPathname] = useState("/recordings");
+  const [pathname, setPathname] = useState("/notes");
 
   useEffect(() => {
     const openLiveTranslation = () => setPathname("/live-translation");

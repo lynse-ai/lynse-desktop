@@ -31,33 +31,8 @@ export type AppUpdateInfo = {
   publishedAt?: string | null;
 };
 
-type FeishuAccount = {
-  openId: string;
-  unionId: string;
-  userId?: string | null;
-  name: string;
-  enName?: string | null;
-  avatarUrl?: string | null;
-  email?: string | null;
-  enterpriseEmail?: string | null;
-  tenantKey?: string | null;
-};
-
-type FeishuAuthState = {
-  configured: boolean;
-  redirectUri: string;
-  authorized: boolean;
-  account?: FeishuAccount | null;
-  accessTokenExpiresAt?: string | null;
-};
-
 type DesktopApi = {
   openExternal: (url: string) => Promise<void>;
-  feishuAuth: {
-    getState: () => Promise<FeishuAuthState>;
-    authorize: () => Promise<FeishuAuthState>;
-    disconnect: () => Promise<FeishuAuthState>;
-  };
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
   liveTranslation: DesktopLiveTranslationApi;
   todo: Record<string, (...args: any[]) => Promise<unknown>>;
@@ -210,11 +185,6 @@ export async function installTauriBridge(): Promise<void> {
     openExternal: async (url) => {
       await openUrl(url);
     },
-    feishuAuth: {
-      getState: () => command<FeishuAuthState>("feishu_auth_state"),
-      authorize: () => command<FeishuAuthState>("feishu_auth_authorize"),
-      disconnect: () => command<FeishuAuthState>("feishu_auth_disconnect"),
-    },
     localTranscription: {
       pickAudioFile: async () => {
         const selected = await open({
@@ -264,6 +234,7 @@ export async function installTauriBridge(): Promise<void> {
       listRecoveries: () => command<LiveRecoverySummary[]>("live_translation_recoveries"),
       recover: (sessionId) => command<CompletedLiveSession>("live_translation_recover", { sessionId }),
       showSubtitles: (show) => command<void>("live_translation_show_subtitles", { show }),
+      showMainWindow: () => command<void>("live_translation_show_main"),
       updateTray: (payload) => command<void>("live_translation_update_tray", { payload }),
       minimizeToTray: () => getCurrentWindow().hide(),
       onTrayAction: async (callback) => {

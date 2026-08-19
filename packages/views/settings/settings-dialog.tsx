@@ -33,7 +33,6 @@ import {
 } from "../app-update";
 import type { LocalHotwordPackage, LocalVoiceprint } from "../workspace/types";
 import { SttConfigSection } from "./stt-config-section";
-import { FeishuAuthCard } from "./feishu-auth-card";
 import { LiveTranslationConfigCard } from "./live-translation-config-card";
 
 const DEFAULT_API_URL = "https://api.lynse.cn";
@@ -257,8 +256,6 @@ export function SettingsDialog({
               </div>
             </CardContent>
           </Card>
-
-          <FeishuAuthCard />
 
           <LiveTranslationConfigCard />
 

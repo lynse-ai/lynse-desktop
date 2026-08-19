@@ -211,6 +211,69 @@ export function useFiles(params: {
   });
 }
 
+/**
+ * Notes page data source.
+ *
+ * The "笔记" (Notes) page is meant to show the user's meetings — i.e. their
+ * recordings and the notes/conclusions attached to them. The backend does not
+ * expose a dedicated notes/recordings list endpoint; meetings are files under
+ * `/api/business/file/*`. The canonical listing the CLI uses for "my meetings"
+ * (`lynse meetings list`) is `GET /api/business/file/timeRange/list`, so we use
+ * that here instead of the generic all-files `/api/business/file/page`.
+ *
+ * A wide time range effectively returns "all my meetings". Folder and tab
+ * filtering is applied client-side (see the Notes page) because this endpoint
+ * does not accept a folderId and does not tag items with an explicit type.
+ */
+export function useNotes(params: {
+  startTime?: string;
+  endTime?: string;
+  enabled?: boolean;
+}) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+
+  return useQuery({
+    queryKey: ["notes", params, isAuthenticated],
+    queryFn: async () => {
+      const localApi = getDesktopLocalTranscriptionApi();
+      const localRecords = localApi ? await localApi.list() : [];
+
+      if (!isAuthenticated) return { cloudItems: [], localRecords };
+
+      const data = await api().getWithParams<FileListResponse | Record<string, unknown>>(
+        "/api/business/file/timeRange/list",
+        {
+          startTime: params.startTime,
+          endTime: params.endTime,
+        },
+      );
+      if (Array.isArray(data)) return { cloudItems: data, localRecords };
+      for (const key of ["list", "records", "data"]) {
+        const arr = (data as Record<string, unknown>)[key];
+        if (Array.isArray(arr)) return { cloudItems: arr, localRecords };
+      }
+      return { cloudItems: [], localRecords };
+    },
+    select: (result: FilesQueryResult): WorkspaceItem[] => {
+      const cloudItems = result.cloudItems.map((f) => {
+        const raw = f as Record<string, unknown>;
+        return {
+          id: String(raw.id ?? ""),
+          type: "file" as const,
+          title: String(raw.originalFilename ?? raw.name ?? raw.filename ?? ""),
+          updatedAt: String(raw.updateTime ?? ""),
+          createdAt: String(raw.createTime ?? raw.recordStartTime ?? ""),
+          folderId: raw.folderId as string | undefined,
+          tags: parseFileTags(raw),
+          contentType: typeof raw.contentType === "string" ? raw.contentType : undefined,
+        };
+      });
+      return mergeCloudAndLocalFiles(cloudItems, result.localRecords);
+    },
+    enabled: (isAuthenticated || !!getDesktopLocalTranscriptionApi()) && (params.enabled ?? true),
+  });
+}
+
 export function useFileDetail(fileId: string | null) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
@@ -305,15 +368,24 @@ export function useFileAudioUrl(fileId: string | null) {
   });
 }
 
-/** Update a conclusion's text content. */
+/** Update a conclusion's text content.
+ * Latest API: PUT /api/business/file/conclusion/{conclusionId} (editConclusion). */
 export function useUpdateConclusion() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ conclusionId, conclusionText }: { conclusionId: string; conclusionText: string }) =>
-      api().post<unknown>("/api/business/file/conclusion/update", {
-        id: conclusionId,
-        conclusionText,
-      }),
+    mutationFn: ({
+      conclusionId,
+      conclusionText,
+      version,
+    }: {
+      conclusionId: string;
+      conclusionText: string;
+      version?: number;
+    }) =>
+      api().put<unknown>(
+        `/api/business/file/conclusion/${encodeURIComponent(conclusionId)}`,
+        { conclusionText, version },
+      ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["file-conclusions"] });
     },

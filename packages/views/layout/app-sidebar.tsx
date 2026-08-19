@@ -34,9 +34,6 @@ import {
   SidebarGroup,
   SidebarGroupContent,
   SidebarHeader,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
   SidebarRail,
 } from "@lynse/ui/components/ui/sidebar";
 import {
@@ -104,16 +101,13 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
       <SidebarHeader className={cn("gap-2 px-3 pt-3 pb-2", headerClassName)} style={headerStyle}>
         <DropdownMenu>
           <DropdownMenuTrigger
-            className="group flex w-full items-center gap-2 rounded-lg border border-sidebar-border bg-card/70 px-3 py-2 text-sm text-muted-foreground shadow-sm transition-all hover:border-primary/35 hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            className="group flex w-full items-center gap-2 rounded-lg border border-sidebar-border bg-card/70 px-2.5 py-1.5 text-sm text-muted-foreground shadow-sm transition-all hover:border-primary/35 hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           >
-            <span className="flex size-6 items-center justify-center rounded-md bg-primary/[0.12] text-primary transition-colors group-hover:bg-primary/[0.18]">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/[0.12] text-primary transition-colors group-hover:bg-primary/[0.18]">
               <Plus className="size-3.5 shrink-0" />
             </span>
-            <span className="flex-1 text-left text-[13px] font-medium">{t("layout.new_recording")}</span>
-            <ChevronDown className="size-3.5 opacity-60" />
-            <kbd className="pointer-events-none inline-flex h-5 items-center gap-0.5 rounded border border-sidebar-border bg-background/60 px-1.5 text-[10px] font-medium text-muted-foreground">
-              ⌘N
-            </kbd>
+            <span className="min-w-0 flex-1 truncate text-left text-[13px] font-medium">{t("layout.new_recording")}</span>
+            <ChevronDown className="size-3.5 shrink-0 opacity-60" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" sideOffset={6} className="w-56">
             <DropdownMenuItem
@@ -132,11 +126,10 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
       </SidebarHeader>
 
       {/* ── Main Content ───────────────────────────────── */}
-      <SidebarContent className="gap-0 px-2.5">
-        {/* Workspace section */}
+      <SidebarContent className="gap-0 px-2">
+        {/* Compact icon-tile navigation — icon on top, label below */}
         <SidebarGroup className="py-1">
-          {/* Section header */}
-          <div className="flex items-center justify-between px-2 py-1.5">
+          <div className="flex items-center justify-between px-1.5 py-1.5">
             <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
               {t("layout.workspace_group")}
             </span>
@@ -150,75 +143,56 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
             </div>
           </div>
           <SidebarGroupContent>
-            <SidebarMenu className="gap-px">
+            <div className="grid grid-cols-3 gap-1 px-0.5 pb-1">
               {workspaceNav.map((item) => {
                 const isActive = isNavActive(pathname, item.path);
                 return (
-                  <SidebarMenuItem key={item.key}>
-                    <SidebarMenuButton
-                      isActive={isActive}
-                      render={<AppLink href={item.path} />}
-                      className={cn(
-                        "h-8 rounded-lg px-2.5 text-[13px] transition-colors",
-                        isActive
-                          ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-                          : "text-muted-foreground hover:bg-white/[0.06] hover:text-foreground"
-                      )}
-                    >
-                      <item.icon className="size-4 shrink-0" />
-                      <span>{item.label}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
+                  <AppLink
+                    key={item.key}
+                    href={item.path}
+                    title={item.label}
+                    className={cn(
+                      "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-[10px] font-medium leading-none transition-colors",
+                      isActive
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        : "text-muted-foreground hover:bg-white/[0.06] hover:text-foreground",
+                    )}
+                  >
+                    <item.icon className="size-4 shrink-0" />
+                    <span className="w-full truncate text-center">{item.label}</span>
+                  </AppLink>
                 );
               })}
-            </SidebarMenu>
+              {/* Todo */}
+              <AppLink
+                href="/todo"
+                title={t("nav.todo")}
+                className={cn(
+                  "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-[10px] font-medium leading-none transition-colors",
+                  isNavActive(pathname, "/todo")
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "text-muted-foreground hover:bg-white/[0.06] hover:text-foreground",
+                )}
+              >
+                <ListChecks className="size-4 shrink-0" />
+                <span className="w-full truncate text-center">{t("nav.todo")}</span>
+              </AppLink>
+              {/* Template manager — opens a dialog instead of navigating */}
+              <button
+                type="button"
+                onClick={() => setTemplateManagerOpen(true)}
+                title={t("templates.title")}
+                className="flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-[10px] font-medium leading-none text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground"
+              >
+                <LayoutTemplate className="size-4 shrink-0" />
+                <span className="w-full truncate text-center">{t("templates.title")}</span>
+              </button>
+            </div>
           </SidebarGroupContent>
         </SidebarGroup>
 
         {/* Folder tree — shown on workspace routes */}
         <FolderTreeSection />
-
-        {/* Template / Management section — above AI Assistant */}
-        <SidebarGroup className="relative mt-2 pt-2 before:absolute before:left-3 before:right-8 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-sidebar-border/60 before:to-transparent">
-          <SidebarGroupContent>
-            <SidebarMenu className="gap-px">
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  onClick={() => setTemplateManagerOpen(true)}
-                  className="h-8 rounded-lg px-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground"
-                >
-                  <LayoutTemplate className="size-4 shrink-0" />
-                  <span>{t("templates.title")}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        {/* Todo section */}
-        <SidebarGroup className="relative mt-2 pt-2 before:absolute before:left-3 before:right-8 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-sidebar-border/60 before:to-transparent">
-          <SidebarGroupContent>
-            <SidebarMenu className="gap-px">
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  isActive={isNavActive(pathname, "/todo")}
-                  render={<AppLink href="/todo" />}
-                  className={cn(
-                    "h-8 rounded-lg px-2.5 text-[13px] transition-colors",
-                    isNavActive(pathname, "/todo")
-                      ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-                      : "text-muted-foreground hover:bg-white/[0.06] hover:text-foreground"
-                  )}
-                >
-                  <ListChecks className="size-4 shrink-0" />
-                  <span>{t("nav.todo")}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        {/* Tools section */}
       </SidebarContent>
 
       {/* ── Footer: User profile + Credits icon ──────────── */}

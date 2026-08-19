@@ -3,7 +3,6 @@ import type {
   LiveAudioSource,
   LiveConnectionDescriptor,
   LiveTranslationProviderConfig,
-  LiveTranslationSegment,
 } from "./types";
 import { DEFAULT_QWEN_ENDPOINT, DEFAULT_VOLC_AST_ENDPOINT } from "./types";
 
@@ -247,20 +246,4 @@ function normalizeConnections(response: RawRealtimeSessionResponse): LiveConnect
     const url = typeof value === "string" ? value : value?.url;
     return url ? [{ source, url }] : [];
   });
-}
-
-export async function completeRealtimeSession(input: {
-  sessionId: string;
-  fileId: string;
-  durationMs: number;
-  segments: LiveTranslationSegment[];
-}) {
-  return api().post<unknown>(
-    `/api/business/translate/realtime/session/${encodeURIComponent(input.sessionId)}/complete`,
-    {
-      fileId: input.fileId,
-      durationMs: input.durationMs,
-      segments: input.segments,
-    },
-  );
 }

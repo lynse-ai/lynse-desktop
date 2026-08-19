@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
-import { Pause, Play, Square, X } from "../icons";
+import { Maximize2, Pause, Play, Square, X } from "../icons";
 import { useLiveTranslation } from "./use-live-translation";
 
 interface DynamicIslandProps {
@@ -13,6 +13,8 @@ interface DynamicIslandProps {
   onPause?: () => void;
   /** Called when user taps stop. */
   onStop?: () => void;
+  /** Called when user taps expand (restore the full recording window). */
+  onExpand?: () => void;
   className?: string;
 }
 
@@ -22,12 +24,13 @@ interface DynamicIslandProps {
  *
  * When recording is active this renders as an inline "live indicator" showing
  * elapsed time, a miniature mic-level bar, and one-tap pause/stop controls.
- * The same component can later be promoted into an always-on-top Tauri
- * window (mini-player) when the main window is minimized.
+ * Rendered both inline (main window) and inside the always-on-top
+ * "recording-island" Tauri window, where `onExpand` restores the full page
+ * once the main window has been hidden.
  *
  * Auto-syncs the system tray tooltip via `live_translation_update_tray`.
  */
-export function DynamicIsland({ onDismiss, onPause, onStop, className }: DynamicIslandProps) {
+export function DynamicIsland({ onDismiss, onPause, onStop, onExpand, className }: DynamicIslandProps) {
   const { t } = useTranslation();
   const { api, view } = useLiveTranslation();
   const recording = view.state === "recording";
@@ -89,6 +92,17 @@ export function DynamicIsland({ onDismiss, onPause, onStop, className }: Dynamic
 
       {/* Controls */}
       <div className="flex items-center gap-0.5">
+        {onExpand && (
+          <button
+            type="button"
+            onClick={onExpand}
+            aria-label={t("recording_mode.expand")}
+            title={t("recording_mode.expand")}
+            className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <Maximize2 className="size-3" />
+          </button>
+        )}
         <button
           type="button"
           onClick={onPause}

@@ -16,7 +16,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::async_runtime::JoinHandle;
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Emitter, LogicalPosition, Manager, State, WebviewUrl, WebviewWindowBuilder,
+};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
@@ -609,6 +611,7 @@ pub async fn live_translation_start(
         .lock()
         .map_err(|_| "live session lock is poisoned")? = Some(session.clone());
     emit_snapshot(&app, &session);
+    set_recording_island_visible(&app, true);
     Ok(session.snapshot())
 }
 
@@ -1850,6 +1853,7 @@ pub async fn live_translation_stop(
     tokio::time::sleep(Duration::from_millis(3_200)).await;
     let completed = persist_session(&app, &session)?;
     session.set_state("idle");
+    set_recording_island_visible(&app, false);
     let _ = app.emit(
         LIVE_EVENT,
         json!({ "type": "completed", "session": completed }),
@@ -2202,6 +2206,70 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
         capture_stop: Arc::new(AtomicBool::new(true)),
     };
     persist_session(app, &session)
+}
+
+/// Logical size of the recording-island mini window (compact pill shape).
+const RECORDING_ISLAND_WIDTH: f64 = 340.0;
+const RECORDING_ISLAND_HEIGHT: f64 = 52.0;
+
+/// Shows (creating on first use) or hides the floating "recording island" —
+/// the collapsed form of the recording page. While the main window is hidden
+/// the island keeps elapsed time, live mic level and pause/stop reachable,
+/// mirroring the macOS "dynamic island" interaction.
+pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
+    if let Some(window) = app.get_webview_window("recording-island") {
+        let _ = if visible { window.show() } else { window.hide() };
+        return;
+    }
+    if !visible {
+        return;
+    }
+    let builder = WebviewWindowBuilder::new(
+        app,
+        "recording-island",
+        WebviewUrl::App("index.html?window=recording-island".into()),
+    )
+    .title("Lynse Recording Island")
+    .inner_size(RECORDING_ISLAND_WIDTH, RECORDING_ISLAND_HEIGHT)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .resizable(false)
+    .skip_taskbar(true)
+    // The pill renders its own rounded shadow inside the transparent
+    // webview; the system window shadow would trace a rectangle around it.
+    .shadow(false);
+    let window = match builder.build() {
+        Ok(window) => window,
+        Err(error) => {
+            eprintln!("Failed to create recording island window: {error}");
+            return;
+        }
+    };
+    // Anchor the island horizontally centred at the top of the primary
+    // monitor. macOS clamps windows below the menu bar, so a small logical
+    // y-offset lands the pill directly beneath it.
+    if let Some(monitor) = app.primary_monitor().ok().flatten() {
+        let factor = monitor.scale_factor() as f64;
+        let monitor_width = monitor.size().width as f64;
+        let monitor_x = monitor.position().x as f64;
+        let monitor_y = monitor.position().y as f64;
+        let x = monitor_x / factor + (monitor_width / factor - RECORDING_ISLAND_WIDTH) / 2.0;
+        let y = monitor_y / factor + 4.0;
+        let _ = window.set_position(LogicalPosition::new(x, y));
+    }
+}
+
+/// Restores (shows + focuses) the main window — invoked from the recording
+/// island when the user expands the collapsed recording UI back to the full
+/// page.
+#[tauri::command]
+pub fn live_translation_show_main(app: AppHandle) -> CommandResult<()> {
+    if let Some(window) = app.get_webview_window("main") {
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

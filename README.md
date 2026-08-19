@@ -4,7 +4,7 @@
 
 Lynse 是一个跨平台桌面应用（同时提供 Web 端）。核心思路是 **“文件导入式”**：把已有的会议录音、视频或文档丢进来，由本地引擎做语音转写、可选说话人分离，再交给云端大模型生成纪要，全程可审计、可离线。
 
-> 当前稳定版：**v0.1.10**（Windows `.msi` + macOS `.dmg` 双平台发布）。
+> 当前稳定版：**v0.1.23**（Windows `.msi` + macOS `.dmg` 双平台发布）。
 
 ---
 
@@ -116,32 +116,6 @@ pnpm test         # 运行测试
 pnpm ui:add       # 通过 shadcn 添加组件
 ```
 
-## 本地飞书授权 MVP
-
-桌面端设置页提供“一键授权当前飞书账号”。Lynse 会打开系统浏览器完成飞书 OAuth，并通过本机地址接收回调：
-
-```text
-http://127.0.0.1:43927/auth/feishu/callback
-```
-
-开发调试前需要完成一次应用级配置，最终用户无需在 Lynse 界面填写 App ID 或 App Secret：
-
-1. 在飞书开放平台创建自建应用。
-2. 在“安全设置 → 重定向 URL”中添加上面的完整本机回调地址。
-3. 通过构建或启动环境注入应用凭证：
-
-```bash
-LYNSE_FEISHU_APP_ID=cli_xxx \
-LYNSE_FEISHU_APP_SECRET=xxx \
-pnpm dev:desktop
-```
-
-授权流程使用随机 `state` 与 PKCE 校验。取得的短期 `user_access_token` 存入操作系统 Keychain，账号展示信息保存在应用数据目录；解除本地授权时会一并清除。当前 MVP 不申请 `offline_access`，令牌过期后需要重新授权。
-
-> 这是仅供本地验证的实现。飞书最新 OAuth token 接口仍要求 App Secret，因此通过构建环境注入 Secret 的桌面包不适合公开分发。生产版本应把授权码交换与令牌刷新迁移到 Lynse 服务端。
-
----
-
 ## 本地转写（FunASR）配置
 
 本地转写在桌面端的 **设置 → Offline Transcription** 中开启：
@@ -163,6 +137,20 @@ pnpm dev:desktop
 
 - 应用启动时从 Keychain 拉入内存缓存，并自动迁移 / 清除历史 `localStorage` 明文。
 - 非敏感配置仍走本地存储，保持 `StorageAdapter` 同步契约，Web 端零改动。
+
+---
+
+## 数据流向（隐私）
+
+Lynse 是录音类应用，请务必了解数据去了哪里：
+
+| 功能 | 数据 | 去向 |
+| --- | --- | --- |
+| 本地转写（FunASR / whisper，默认关闭，需手动开启并下载模型） | 音频 | **全程留在本机**，不上传 |
+| 云端转写（默认路径） | 录音文件 | 上传至 Lynse 服务端（`api.lynse.cn`）处理 |
+| AI 纪要 / 摘要 | 转写文本 | 发送至云端大模型生成 |
+| 实时字幕 / 翻译 | 实时音频流 | 发送至**你自行配置**的第三方服务（火山引擎 / 通义 / iLiveData），凭证仅保存在本机 Keychain/本地配置 |
+| API Key / 登录令牌 | 凭证 | 仅存于操作系统 Keychain，不写明文文件 |
 
 ---
 

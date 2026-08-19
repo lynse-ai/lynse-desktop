@@ -45,7 +45,7 @@ function formatDuration(ms: number): string {
 }
 
 /** Derive a display filename from the completed session. */
-function deriveFilename(session: CompletedLiveSession): string {
+export function deriveFilename(session: CompletedLiveSession): string {
   // Use playbackPath basename or fall back to a timestamp-based name.
   if (session.playbackPath) {
     const parts = session.playbackPath.split(/[/\\]/);

@@ -87,9 +87,9 @@ All shared code uses `useNavigation().push()` or `<AppLink>` for navigation. Nev
 
 These are the areas that need implementation:
 
-1. **Markdown Editor** — integrate Tiptap (already listed as views dependency) for rich note editing
-2. **File Upload/Management** — connect to your backend's file API endpoints
-3. **AI Chat** — connect the chat page to your AI backend (streaming responses)
-4. **Recording Transcription** — add audio/video upload + transcription display
-5. **Real API Integration** — replace placeholder pages with real data fetching using TanStack Query
-6. **i18n** — the locale infrastructure is set up, expand translation strings as needed
+1. **File Upload/Management** — connect to your backend's file API endpoints
+2. **AI Chat** — connect the chat page to your AI backend (streaming responses)
+3. **Real API Integration** — replace placeholder pages with real data fetching using TanStack Query
+4. **i18n** — the locale infrastructure is set up, expand translation strings as needed
+
+Done and shipped: Markdown notes editing (Milkdown), audio/video upload + transcription display (cloud and local FunASR/whisper STT routing), live subtitles/translation (Volc/Qwen/iLiveData).

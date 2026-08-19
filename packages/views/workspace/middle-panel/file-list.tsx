@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
-import { Search, FolderOpen, GripVertical, ArrowUpDown, ArrowDown, ArrowUp, Loader2, X } from "../../icons";
+import { Search, FolderOpen, GripVertical, ArrowUpDown, ArrowDown, ArrowUp, Loader2, X, FileAudio } from "../../icons";
 import { Input } from "@lynse/ui/components/ui/input";
+import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useWorkspaceStore } from "../store";
 import {
@@ -335,7 +336,8 @@ export function FileList() {
             {t("workspace.no_files")}
           </p>
         ) : (
-          filteredFiles.map((file) => {
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-2">
+          {filteredFiles.map((file) => {
             const isChecked = selectedFileIds.has(file.id);
             const targetIds =
               isChecked && selectedFileIds.size > 0 ? Array.from(selectedFileIds) : [file.id];
@@ -352,7 +354,7 @@ export function FileList() {
                 onDelete={handleDelete}
                 onTranscribe={handleTranscribe}
               >
-                <DraggableFileRow
+                <DraggableFileCard
                   file={file}
                   isSelected={selectedItemId === file.id}
                   isSummarizing={summarizingFileIds.has(file.id)}
@@ -370,7 +372,8 @@ export function FileList() {
                 />
               </FileRowContextMenu>
             );
-          })
+          })}
+          </div>
         )}
       </div>
     </div>
@@ -392,8 +395,27 @@ function formatShortDate(dateStr: string): string {
   }
 }
 
-/* ── Draggable file row ── */
-function DraggableFileRow({
+/** Compact badge date for the card thumbnail corner: MM/DD HH:mm. */
+function formatBadgeDate(dateStr: string): string {
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return "";
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    const hour = String(d.getHours()).padStart(2, "0");
+    const min = String(d.getMinutes()).padStart(2, "0");
+    return `${month}/${day} ${hour}:${min}`;
+  } catch {
+    return "";
+  }
+}
+
+/* ── Draggable file card (reference-style grid card) ──
+   Thumbnail on top with a date badge at its corner, title + tags/date in the
+   body. Preserves every row interaction: click-to-open, long-press
+   multi-select, drag-to-move (handle appears on hover), inline rename and
+   the wrapped context menu. */
+function DraggableFileCard({
   file,
   isSelected,
   isSummarizing,
@@ -480,6 +502,7 @@ function DraggableFileRow({
   };
 
   const dateLabel = formatShortDate(file.createdAt);
+  const badgeDate = formatBadgeDate(file.createdAt);
   const visibleTags = file.tags?.slice(0, 2) ?? [];
   const hiddenTagCount = Math.max(0, (file.tags?.length ?? 0) - visibleTags.length);
 
@@ -492,42 +515,68 @@ function DraggableFileRow({
       onPointerLeave={clearLongPress}
       onContextMenu={() => onContextMenu?.()}
       style={{ opacity: isDragging ? 0.4 : 1 }}
-      className={`group flex w-full items-center gap-1 rounded-lg border px-2.5 py-2.5 text-left transition-all ${
+      className={cn(
+        "group relative flex h-full w-full flex-col overflow-hidden rounded-xl border text-left transition-all",
         isSelected
-          ? "border-primary/30 bg-primary/15 text-accent-brand-text shadow-sm"
+          ? "border-primary/40 bg-primary/10 shadow-md"
           : isChecked
-            ? "border-primary/20 bg-primary/10"
-            : "border-transparent text-foreground hover:border-border hover:bg-white/[0.04]"
-      }`}
-    >
-      {/* Leading slot: drag handle in normal mode, selection checkbox in
-          multi-select mode. Both occupy the same fixed w-4 slot so entering
-          multi-select neither shifts the row content nor indents the checkbox. */}
-      {!editing && !multiMode ? (
-        <span
-          {...listeners}
-          {...attributes}
-          onClick={(e) => e.stopPropagation()}
-          className="flex w-4 shrink-0 cursor-grab touch-none items-center justify-center rounded text-muted-foreground/60 transition-colors hover:bg-muted/60 hover:text-foreground active:cursor-grabbing"
-          title={t("workspace.drag_to_move")}
-        >
-          <GripVertical className="size-3.5" />
-        </span>
-      ) : multiMode ? (
-        <span className="flex w-4 shrink-0 items-center justify-center">
-          <input
-            type="checkbox"
-            aria-label={t("workspace.select_file", { name: file.title })}
-            checked={isChecked}
-            onChange={onToggleSelect}
-            onClick={(e) => e.stopPropagation()}
-            className="size-3.5 cursor-pointer accent-primary"
-          />
-        </span>
-      ) : (
-        <span className="w-4 shrink-0" />
+            ? "border-primary/25 bg-primary/5"
+            : "border-border/70 bg-card shadow-sm hover:border-primary/25 hover:shadow-md",
       )}
-      <div className="flex flex-1 flex-col gap-0.5 min-w-0">
+    >
+      {/* ── Thumbnail ── */}
+      <div
+        className={cn(
+          "relative flex aspect-[4/3] shrink-0 items-center justify-center",
+          isSelected
+            ? "bg-gradient-to-br from-primary/15 to-primary/5"
+            : "bg-gradient-to-br from-muted via-muted/60 to-primary/5",
+        )}
+      >
+        <FileAudio
+          className={cn(
+            "size-8 transition-colors",
+            isSelected ? "text-primary/70" : "text-muted-foreground/45 group-hover:text-primary/50",
+          )}
+        />
+
+        {/* Date badge — bottom-right of the thumbnail */}
+        {!editing && badgeDate && (
+          <span className="absolute bottom-1.5 right-1.5 rounded-md bg-black/50 px-1.5 py-0.5 text-[9px] font-medium tabular-nums text-white backdrop-blur-sm">
+            {badgeDate}
+          </span>
+        )}
+
+        {/* Drag handle — appears on hover (normal mode only) */}
+        {!editing && !multiMode ? (
+          <span
+            {...listeners}
+            {...attributes}
+            onClick={(e) => e.stopPropagation()}
+            className="absolute left-1 top-1 flex size-5 cursor-grab touch-none items-center justify-center rounded-md bg-black/35 text-white opacity-0 transition-opacity group-hover:opacity-100 active:cursor-grabbing"
+            title={t("workspace.drag_to_move")}
+          >
+            <GripVertical className="size-3" />
+          </span>
+        ) : null}
+
+        {/* Selection checkbox — multi-select mode */}
+        {multiMode ? (
+          <span className="absolute left-1.5 top-1.5 flex size-4 items-center justify-center">
+            <input
+              type="checkbox"
+              aria-label={t("workspace.select_file", { name: file.title })}
+              checked={isChecked}
+              onChange={onToggleSelect}
+              onClick={(e) => e.stopPropagation()}
+              className="size-3.5 cursor-pointer accent-primary"
+            />
+          </span>
+        ) : null}
+      </div>
+
+      {/* ── Body: title + tags/date ── */}
+      <div className="flex flex-1 flex-col gap-1.5 p-2.5">
         {editing ? (
           <Input
             autoFocus
@@ -543,49 +592,39 @@ function DraggableFileRow({
             className="h-6 text-xs"
           />
         ) : (
-          <span className={`truncate text-[13px] leading-snug ${isSelected ? "font-medium" : ""}`}>
+          <span
+            className={cn(
+              "line-clamp-2 min-h-[2em] text-xs font-medium leading-snug",
+              isSelected ? "text-accent-brand-text" : "text-foreground",
+            )}
+          >
             {file.title}
           </span>
         )}
-        {!editing && visibleTags.length > 0 ? (
-          <span className="flex min-w-0 flex-wrap items-center gap-1">
-            {visibleTags.map((tag) => (
-              <span
-                key={tag}
-                className={`max-w-[5.5rem] truncate rounded px-1.5 py-0.5 text-[9px] leading-none ${
-                  isSelected
-                    ? "bg-background/35 text-accent-foreground/75"
-                    : "bg-muted text-muted-foreground"
-                }`}
-                title={tag}
-              >
-                {tag}
-              </span>
-            ))}
-            {hiddenTagCount > 0 ? (
-              <span
-                className={`rounded px-1.5 py-0.5 text-[9px] leading-none ${
-                  isSelected
-                    ? "bg-background/35 text-accent-foreground/75"
-                    : "bg-muted text-muted-foreground"
-                }`}
-              >
-                +{hiddenTagCount}
-              </span>
-            ) : null}
-          </span>
-        ) : null}
         {!editing && (
-          <span className="flex items-center gap-1 text-[10px] text-muted-foreground tabular-nums">
+          <span className="mt-auto flex min-w-0 flex-wrap items-center gap-1 text-[10px] leading-none text-muted-foreground">
             {isSummarizing ? (
               <>
                 <Loader2 className="size-2.5 animate-spin text-primary" />
-                <span className="font-medium text-primary">
-                  {t("workspace.summarizing")}
-                </span>
+                <span className="font-medium text-primary">{t("workspace.summarizing")}</span>
+              </>
+            ) : visibleTags.length > 0 ? (
+              <>
+                {visibleTags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="max-w-[5.5rem] truncate rounded bg-muted px-1.5 py-0.5 text-[9px]"
+                    title={tag}
+                  >
+                    {tag}
+                  </span>
+                ))}
+                {hiddenTagCount > 0 ? (
+                  <span className="rounded bg-muted px-1.5 py-0.5 text-[9px]">+{hiddenTagCount}</span>
+                ) : null}
               </>
             ) : (
-              dateLabel
+              <span className="tabular-nums">{dateLabel}</span>
             )}
           </span>
         )}

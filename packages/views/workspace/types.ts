@@ -10,6 +10,8 @@ export interface WorkspaceItem {
   createdAt: string;
   folderId?: string;
   tags?: string[];
+  /** MIME type from the backend (e.g. audio/mpeg, video/mp4). Used to detect recordings. */
+  contentType?: string;
 }
 
 export interface FileItem {
@@ -104,6 +106,9 @@ export interface LocalTranscriptionRecord {
   providerConfig?: SttProviderConfig;
   segments: LocalTranscriptionSegment[];
   error?: string;
+  /** Set by the Rust side once the recording is uploaded ("synced") or
+   * marked for retry ("pending") — see live_translation_finalize_local. */
+  syncStatus?: string;
 }
 
 export interface LocalTranscriptionOptions {

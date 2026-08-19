@@ -1,8 +1,18 @@
 {
   "name": "lynse-webapp",
-  "version": "0.1.23",
+  "version": "0.1.24",
   "private": true,
   "type": "module",
+  "description": "Local-first meeting minutes tool — import audio/video, transcribe locally, generate structured notes.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lynse-ai/lynse-desktop.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lynse-ai/lynse-desktop/issues"
+  },
+  "homepage": "https://github.com/lynse-ai/lynse-desktop#readme",
   "scripts": {
     "dev:web": "turbo dev --filter=@lynse/web",
     "dev:desktop": "turbo dev --filter=@lynse/tauri",

@@ -33,7 +33,16 @@ pnpm-debug.log*
 .cache/
 coverage/
 .playwright-mcp/
+.playwright-cli/
 .token_cache
+
+# AI tooling local state (session skills / editor specs / lock files)
+.agents/
+.qoder/
+skills-lock.json
+
+# Local Python virtualenvs for STT bridges (FunASR / MLX)
+.venv-*/
 
 # Project operational data (WorkBuddy memory / notes) — not source
 .workbuddy/

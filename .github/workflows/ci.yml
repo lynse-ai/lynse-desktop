@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck / Lint / Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # TODO: add `pnpm lint` once ESLint is wired up in the workspace —
+      # current lint scripts reference an eslint binary that no package
+      # declares as a dependency (inherited from the Multica template).
+      - name: Test
+        run: pnpm test
+
+      # NOTE: `pnpm build` (turbo build → tauri build) needs the Rust toolchain
+      # and STT sidecars, which only exist in release.yml's environment. CI
+      # covers the frontend via typecheck/lint/test; desktop bundling is
+      # validated on tagged releases.

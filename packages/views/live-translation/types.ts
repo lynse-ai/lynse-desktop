@@ -154,6 +154,7 @@ export interface DesktopLiveTranslationApi {
   recover: (sessionId: string) => Promise<CompletedLiveSession>;
   showSubtitles: (show: boolean) => Promise<void>;
   minimizeToTray: () => Promise<void>;
+  showMainWindow: () => Promise<void>;
   updateTray: (payload: { recording: boolean; paused: boolean; elapsed_secs?: number }) => Promise<void>;
   onTrayAction: (callback: (action: LiveTranslationTrayAction) => void) => Promise<() => void>;
   onEvent: (callback: (event: LiveTranslationEvent) => void) => Promise<() => void>;

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.24 (2026-08-19)
+
+### New Features
+
+- Rename "记忆" (Memory) to "笔记" (Notes) across the sidebar, the zh/en/ja locales, and routing. The Notes page is the home for your meeting recordings and the notes attached to them.
+
+### Changed
+
+- Reconnect the Notes page to the correct backend listing. It now calls `GET /api/business/file/timeRange/list` (the same endpoint `lynse meetings list` uses) instead of the generic all-files endpoint, so it shows your recordings and notes rather than every uploaded file. The "Recordings" tab also matches cloud audio/video files by MIME type, not just local transcriptions.
+- Overhaul the live-translation transcript detail page and refine the floating dynamic-island and recording-complete dialog; remove the now-unused realtime-session completion call.
+- Refine the workspace file list, sidebar, and dashboard layout, plus small tweaks to the settings dialog and web settings page.
+- Remove the Feishu (飞书) account authorization feature — its OAuth flow, settings card, and the related Rust/permission wiring are gone.
+- Repo hygiene: ignore local Python virtualenvs, Playwright CLI state, and AI-tooling state; stop tracking those accidentally-committed artifacts.
+
 ## 0.1.23 (2026-08-12)
 
 ### New Features

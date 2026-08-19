@@ -22,6 +22,7 @@ export {
   Settings,         // Settings
   LogOut,           // Log out
   Grid3X3,          // Grid view toggle
+  LayoutGrid,       // Compact 2x2 grid view toggle
   Circle,           // Dot indicators
   Layers,           // All Files virtual folder
   Trash2,           // Trash virtual folder
@@ -91,6 +92,8 @@ export {
   Download,         // Download / update action
   Palette,          // Appearance / theme visual
   UserCircle,       // User profile / account
+  Link,             // Share / copy link
+  Share,            // Share action
 
   // ── Audio Player ────────────────────────────────────
   Play,             // Play
@@ -102,6 +105,8 @@ export {
 
   // ── Actions (extra) ──────────────────────────────────
   RefreshCw,        // Re-summarize / refresh
+  Maximize2,        // Expand island back to the full window
+  EyeOff,           // Hide main window into the recording island
   Square,           // Stop streaming
   Cloud,            // Cloud assistant
   Repeat,           // Swap / exchange

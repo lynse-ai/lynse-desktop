@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞
+    url: mailto:lynse@lynse.com
+    about: 安全问题请勿开公开 Issue，参见 SECURITY.md

@@ -5,7 +5,7 @@ import {
   ArrowUp,
   Check,
   Copy,
-  FileText,
+  Clock,
   Mic,
   Plus,
   Square,
@@ -17,14 +17,28 @@ import { AssistantAvatar } from "../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useChat } from "../workspace/hooks/use-chat";
 import { ConfirmDialog } from "../workspace/ConfirmDialog";
+import { ChatAttachments } from "./chat-attachments";
 
 export function ChatPage() {
   const [input, setInput] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { t } = useTranslation();
-  const { messages, isLoading, sendMessage, clearMessages, stopStreaming, pendingConfirm, answerConfirm, dismissConfirm } = useChat();
+  const {
+    messages,
+    isLoading,
+    conversations,
+    activeConversationId,
+    sendMessage,
+    clearMessages,
+    selectConversation,
+    stopStreaming,
+    pendingConfirm,
+    answerConfirm,
+    dismissConfirm,
+  } = useChat({ persistHistory: true });
   const streamingMessageId = isLoading ? messages[messages.length - 1]?.id : undefined;
   const suggestions = [
     t("chat.suggestion_summary"),
@@ -76,20 +90,48 @@ export function ChatPage() {
             <span className="size-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true" />
           )}
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 rounded-lg border border-transparent text-xs text-muted-foreground transition-colors hover:border-border hover:bg-card hover:text-foreground"
-          onClick={handleNewChat}
-          title={t("chat.new_chat")}
-          data-tauri-drag-region={false}
-        >
-          <Plus className="size-3.5" />
-          {t("chat.new_chat")}
-        </Button>
+        <div className="flex items-center gap-1" data-tauri-drag-region={false}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`size-8 rounded-lg border transition-colors ${
+              historyOpen
+                ? "border-border bg-card text-foreground"
+                : "border-transparent text-muted-foreground hover:border-border hover:bg-card hover:text-foreground"
+            }`}
+            onClick={() => setHistoryOpen((open) => !open)}
+            title={t("chat.history")}
+            aria-label={t("chat.history")}
+            aria-pressed={historyOpen}
+          >
+            <Clock className="size-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 rounded-lg border border-transparent text-xs text-muted-foreground transition-colors hover:border-border hover:bg-card hover:text-foreground"
+            onClick={handleNewChat}
+            title={t("chat.new_chat")}
+          >
+            <Plus className="size-3.5" />
+            {t("chat.new_chat")}
+          </Button>
+        </div>
       </header>
 
-      <main ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+      {historyOpen && (
+        <ChatHistorySidebar
+          conversations={conversations}
+          activeConversationId={activeConversationId}
+          disabled={isLoading}
+          onSelect={selectConversation}
+        />
+      )}
+
+      <main
+        ref={scrollRef}
+        className={`${historyOpen ? "ml-56" : "ml-0"} min-h-0 flex-1 overflow-y-auto transition-[margin] duration-150`}
+      >
         {messages.length === 0 && !isLoading ? (
           <EmptyChat suggestions={suggestions} onSelect={handleSend} />
         ) : (
@@ -122,7 +164,9 @@ export function ChatPage() {
         )}
       </main>
 
-      <div className="pointer-events-none shrink-0 bg-background/95 px-4 pb-4 pt-3 dark:bg-background/75 dark:backdrop-blur-xl">
+      <div
+        className={`${historyOpen ? "ml-56" : "ml-0"} pointer-events-none shrink-0 bg-background/95 px-4 pb-4 pt-3 transition-[margin] duration-150 dark:bg-background/75 dark:backdrop-blur-xl`}
+      >
         <div className="pointer-events-auto mx-auto max-w-3xl">
           <div className="rounded-xl border border-input bg-white p-2 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.035)] transition-[border-color,box-shadow] duration-150 focus-within:border-neutral-400 focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.04),0_0_0_3px_rgba(0,0,0,0.04)] dark:bg-card dark:shadow-[0_10px_35px_rgba(0,0,0,0.28)] dark:focus-within:border-white/20 dark:focus-within:shadow-[0_10px_35px_rgba(0,0,0,0.28),0_0_0_3px_rgba(255,255,255,0.05)]">
             <Textarea
@@ -213,6 +257,64 @@ export function ChatPage() {
   );
 }
 
+interface ChatHistorySidebarProps {
+  conversations: ReturnType<typeof useChat>["conversations"];
+  activeConversationId: string | null;
+  disabled: boolean;
+  onSelect: (conversationId: string) => void;
+}
+
+function ChatHistorySidebar({
+  conversations,
+  activeConversationId,
+  disabled,
+  onSelect,
+}: ChatHistorySidebarProps) {
+  const { t } = useTranslation();
+  const sortedConversations = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt);
+
+  return (
+    <aside className="absolute bottom-0 left-0 top-14 flex w-56 flex-col border-r border-border/60 bg-muted/20">
+      <div className="flex h-11 shrink-0 items-center gap-2 px-3 text-xs font-semibold text-muted-foreground">
+        <Clock className="size-3.5" />
+        <span>{t("chat.history")}</span>
+      </div>
+      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 pb-3">
+        {sortedConversations.length === 0 ? (
+          <p className="px-2 py-4 text-xs leading-5 text-muted-foreground/70">
+            {t("chat.history_empty")}
+          </p>
+        ) : (
+          sortedConversations.map((conversation) => (
+            <button
+              key={conversation.id}
+              type="button"
+              className={`w-full rounded-lg px-2.5 py-2 text-left transition-colors ${
+                conversation.id === activeConversationId
+                  ? "bg-card text-foreground shadow-sm ring-1 ring-border/70"
+                  : "text-muted-foreground hover:bg-card/70 hover:text-foreground"
+              }`}
+              onClick={() => onSelect(conversation.id)}
+              disabled={disabled}
+              aria-current={conversation.id === activeConversationId ? "page" : undefined}
+            >
+              <span className="block truncate text-xs font-medium">{conversation.title}</span>
+              <span className="mt-1 block text-[10px] text-muted-foreground/70">
+                {new Date(conversation.updatedAt).toLocaleString(undefined, {
+                  month: "2-digit",
+                  day: "2-digit",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </span>
+            </button>
+          ))
+        )}
+      </div>
+    </aside>
+  );
+}
+
 interface EmptyChatProps {
   suggestions: string[];
   onSelect: (suggestion: string) => void;
@@ -279,6 +381,13 @@ function AssistantMessage({ message, isStreaming, copied, onCopy }: AssistantMes
         </div>
       )}
 
+      {message.content && message.status && (
+        <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="size-1.5 animate-pulse rounded-full bg-current" />
+          <span>{message.status}</span>
+        </div>
+      )}
+
       {message.sources && message.sources.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {message.sources.map((source, index) => (
@@ -292,26 +401,7 @@ function AssistantMessage({ message, isStreaming, copied, onCopy }: AssistantMes
         </div>
       )}
 
-      {message.attachments && message.attachments.length > 0 && (
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {message.attachments.map((attachment, index) => {
-            const href = attachment.downloadUrl || attachment.url || attachment.thumbnailUrl;
-            if (!href) return null;
-            return (
-              <a
-                key={attachment.id || `${href}-${index}`}
-                href={href}
-                target="_blank"
-                rel="noreferrer"
-                className="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent"
-              >
-                <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate">{attachment.name || href}</span>
-              </a>
-            );
-          })}
-        </div>
-      )}
+      <ChatAttachments attachments={message.attachments} />
 
       {message.content && !message.error && (
         <div className="mt-2 flex items-center opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">

@@ -3,6 +3,7 @@ export type {
   DesktopQoderChatApi,
   QoderChatBridgeEvent,
   QoderChatConfig,
+  QoderSessionOptions,
 } from "./chat-transport";
 export type {
   SttDownloadProgress,

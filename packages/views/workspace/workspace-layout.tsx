@@ -8,12 +8,14 @@ import { ContentPanel } from "./content-panel";
 import { ChatPanel } from "./right-panel/chat-panel";
 import { ResizableHandle } from "./resizable-handle";
 import { TitleBar } from "../layout/title-bar";
+import { useTranslation } from "@lynse/core/i18n/react";
 import { useDndBridge } from "./dnd-provider";
 import { useMoveFiles } from "./hooks/use-folder-mutations";
 import type { WorkspaceItem } from "./types";
 import type { DragEndEvent } from "@dnd-kit/core";
 
 export function WorkspaceLayout() {
+  const { t } = useTranslation();
   const chatPanelVisible = useWorkspaceStore((s) => s.chatPanelVisible);
   const chatPanelWidth = useWorkspaceStore((s) => s.chatPanelWidth);
   const handleChatPanelResize = useWorkspaceStore((s) => s.handleChatPanelResize);
@@ -57,7 +59,11 @@ export function WorkspaceLayout() {
     <div className="flex h-full min-h-0 overflow-hidden bg-background">
       {/* Left panel: file list (full height) */}
       <FileList />
-      <ResizableHandle onResize={handleFileListResize} side="right" />
+      <ResizableHandle
+        label={t("workspace.resize_file_list")}
+        onResize={handleFileListResize}
+        side="right"
+      />
 
       {/* Right column: title bar + content panel + chat panel */}
       <div className="flex min-w-0 flex-1 flex-col bg-background">
@@ -84,6 +90,7 @@ export function WorkspaceLayout() {
                 }
               >
                 <ResizableHandle
+                  label={t("workspace.resize_chat_panel")}
                   onResize={handleChatPanelResize}
                   onResizeStart={() => setIsChatResizing(true)}
                   onResizeEnd={() => setIsChatResizing(false)}

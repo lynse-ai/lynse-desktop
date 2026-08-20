@@ -6,6 +6,14 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
 import { useUserCredits } from "./use-user-credits";
 import { SettingsDialog } from "../settings/settings-dialog";
+import { UploadDialog } from "../workspace/upload-dialog";
+import { UserProfileDropdown } from "./user-profile-dropdown";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@lynse/ui/components/ui/dropdown-menu";
 import {
   Lightbulb,
   ListChecks,
@@ -13,6 +21,9 @@ import {
   MessageSquare,
   Bell,
   Settings,
+  Plus,
+  Upload,
+  Mic,
 } from "../icons";
 
 interface NavItem {
@@ -33,6 +44,7 @@ export function TencentMeetingSidebar() {
   const { t } = useTranslation();
   const { data } = useUserCredits();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
 
   const nickname = (data?.nickname as string) || "User";
   const initials = nickname.slice(0, 2).toUpperCase();
@@ -55,15 +67,42 @@ export function TencentMeetingSidebar() {
         className="flex h-full w-[68px] shrink-0 flex-col items-center border-r border-border/50 bg-sidebar pb-2 pt-10"
         data-tauri-drag-region
       >
-      {/* User avatar at the top */}
-      <button
-        type="button"
-        title={nickname}
-        data-tauri-drag-region={false}
-        className="mb-2 flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20 transition-colors hover:bg-primary/20"
-      >
-        {initials}
-      </button>
+      {/* User avatar at the top — opens the profile menu */}
+      <UserProfileDropdown
+        onOpenSettings={() => setSettingsOpen(true)}
+        side="bottom"
+        trigger={
+          <button
+            type="button"
+            title={nickname}
+            data-tauri-drag-region={false}
+            className="mb-2 flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20 transition-colors hover:bg-primary/20"
+          >
+            {initials}
+          </button>
+        }
+      />
+
+      {/* Create: + opens import audio / start recording */}
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          title={t("layout.new_recording")}
+          data-tauri-drag-region={false}
+          className="mb-2 flex size-10 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        >
+          <Plus className="size-5" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" side="right" sideOffset={10} className="w-48">
+          <DropdownMenuItem onClick={() => setUploadOpen(true)}>
+            <Upload className="size-4" />
+            <span>{t("layout.new_recording_import")}</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => push("/recording")}>
+            <Mic className="size-4" />
+            <span>{t("layout.new_recording_start")}</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       <div className="flex w-full flex-1 flex-col items-center gap-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {topItems.map((item) => {
@@ -102,6 +141,7 @@ export function TencentMeetingSidebar() {
       </div>
     </aside>
     <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+    <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
     </>
   );
 }

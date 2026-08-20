@@ -15,11 +15,11 @@
       {
         "label": "main",
         "title": " ",
-        "width": 720,
-        "height": 480,
-    "minWidth": 720,
-    "minHeight": 480,
-    "titleBarStyle": "Overlay",
+        "width": 900,
+        "height": 600,
+        "minWidth": 900,
+        "minHeight": 600,
+        "titleBarStyle": "Overlay",
         "trafficLightPosition": { "x": 8, "y": 13 }
       }
     ],

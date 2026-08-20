@@ -1,4 +1,10 @@
-import type { ChatProvider, ChatStreamEvent, ChatConfirm, ChatConfirmOption } from "./types";
+import type {
+  ChatProvider,
+  ChatStreamEvent,
+  ChatConfirm,
+  ChatConfirmOption,
+  QoderChatSessionState,
+} from "./types";
 import { api } from "@lynse/core/api";
 
 export interface SendChatOptions {
@@ -25,9 +31,17 @@ export interface ChatTransport {
 
 export interface QoderChatConfig {
   configured: boolean;
-  source: "environment" | "keychain" | null;
+  source: "keychain" | null;
   agentId: string;
   environmentId: string;
+  lynseApiKeyConfigured: boolean;
+}
+
+export const QODER_SHARE_LYNSE_API_KEY_STORAGE_KEY = "lynse_qoder_share_lynse_api_key";
+
+export interface QoderSessionOptions {
+  shareLynseApiKey: boolean;
+  lynseApiHost: string;
 }
 
 export type QoderChatBridgeEvent = ChatStreamEvent & { requestId: string };
@@ -35,7 +49,7 @@ export type QoderChatBridgeEvent = ChatStreamEvent & { requestId: string };
 export interface DesktopQoderChatApi {
   getConfig(): Promise<QoderChatConfig>;
   savePat(pat: string): Promise<QoderChatConfig>;
-  createSession(): Promise<string>;
+  createSession(options: QoderSessionOptions): Promise<string>;
   sendMessage(
     sessionId: string,
     message: string,
@@ -218,13 +232,45 @@ export class QoderChatTransport implements ChatTransport {
   private afterEventId: string | undefined;
   private activeRequestId: string | null = null;
   private activeUnlisten: (() => void) | null = null;
+  private sessionOptionsKey: string | null = null;
+
+  constructor(
+    initialState?: QoderChatSessionState,
+    private readonly onSessionState?: (state: QoderChatSessionState) => void,
+  ) {
+    if (typeof initialState?.sessionId === "string" && initialState.sessionId.startsWith("sess_")) {
+      this.sessionId = initialState.sessionId;
+      this.afterEventId = initialState.afterEventId;
+      this.sessionOptionsKey = initialState.sessionOptionsKey;
+    }
+  }
+
+  private notifySessionState(): void {
+    if (!this.sessionId || !this.sessionOptionsKey) return;
+    this.onSessionState?.({
+      sessionId: this.sessionId,
+      afterEventId: this.afterEventId,
+      sessionOptionsKey: this.sessionOptionsKey,
+    });
+  }
 
   async send(opts: SendChatOptions): Promise<void> {
     const api = getDesktopQoderChatApi();
-    if (!api) throw new Error("Qoder Cloud Agent is only available in the desktop app");
+    if (!api) throw new Error("小灵助手仅可在桌面端使用");
 
-    if (!this.sessionId) {
-      this.sessionId = await api.createSession();
+    const sessionOptions: QoderSessionOptions = {
+      shareLynseApiKey:
+        window.localStorage.getItem(QODER_SHARE_LYNSE_API_KEY_STORAGE_KEY) === "1",
+      lynseApiHost:
+        window.localStorage.getItem("lynse_api_url")?.trim() || "https://api.lynse.cn",
+    };
+    const sessionOptionsKey = JSON.stringify(sessionOptions);
+    if (!this.sessionId || this.sessionOptionsKey !== sessionOptionsKey) {
+      opts.onEvent({ type: "status", text: "小灵助手 · 正在创建会话" });
+      this.sessionId = await api.createSession(sessionOptions);
+      this.afterEventId = undefined;
+      this.sessionOptionsKey = sessionOptionsKey;
+      this.notifySessionState();
     }
 
     const requestId = `qoder-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -237,14 +283,37 @@ export class QoderChatTransport implements ChatTransport {
     this.activeUnlisten = unlisten;
 
     try {
-      const result = await api.sendMessage(
-        this.sessionId,
-        opts.query,
-        requestId,
-        this.afterEventId,
-      );
+      let result: { lastEventId?: string };
+      try {
+        result = await api.sendMessage(
+          this.sessionId,
+          opts.query,
+          requestId,
+          this.afterEventId,
+        );
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes("HTTP 409 Conflict") || !message.includes("currently processing")) {
+          throw error;
+        }
+        opts.onEvent({
+          type: "status",
+          text: "小灵助手 · 上一轮仍在运行，正在切换到新会话",
+        });
+        this.sessionId = await api.createSession(sessionOptions);
+        this.afterEventId = undefined;
+        this.sessionOptionsKey = sessionOptionsKey;
+        this.notifySessionState();
+        result = await api.sendMessage(
+          this.sessionId,
+          opts.query,
+          requestId,
+          undefined,
+        );
+      }
       if (this.activeRequestId === requestId) {
         this.afterEventId = result.lastEventId;
+        this.notifySessionState();
       }
     } finally {
       unlisten();

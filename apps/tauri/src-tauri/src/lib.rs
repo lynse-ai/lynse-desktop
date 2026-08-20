@@ -1793,6 +1793,7 @@ pub fn run() {
         .manage(AppState { model_download_in_progress: Mutex::new(false) })
         .manage(LiveTranslationManager::default())
         .register_uri_scheme_protocol("local-media", media_response)
+        .register_uri_scheme_protocol("qoder-artifact", qoder_chat::qoder_artifact_response)
         .setup(|app| {
             if let Err(error) = migrate_electron_data(&app.handle()) {
                 eprintln!("Failed to migrate Electron local data: {error}");

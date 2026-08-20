@@ -5,17 +5,21 @@ const CHAT_PANEL_WIDTH_KEY = "lynse_chat_panel_width";
 // Bumped from "lynse_file_list_width": the file card-grid redesign resets
 // stored widths so everyone starts from the new, wider default once.
 const FILE_LIST_WIDTH_KEY = "lynse_file_list_width_v2";
+const NOTES_LIST_WIDTH_KEY = "lynse_notes_list_width";
 const FOLDER_TREE_WIDTH_KEY = "lynse_folder_tree_width";
 const NOTE_TABS_KEY = "lynse_note_tabs";
 
 const DEFAULT_CHAT_PANEL_WIDTH = 420;
 const DEFAULT_FILE_LIST_WIDTH = 480;
+const DEFAULT_NOTES_LIST_WIDTH = 400;
 const DEFAULT_FOLDER_TREE_WIDTH = 220;
 
 const MIN_CHAT_PANEL_WIDTH = 260;
 const MAX_CHAT_PANEL_WIDTH = 600;
 const MIN_FILE_LIST_WIDTH = 200;
 const MAX_FILE_LIST_WIDTH = 720;
+const MIN_NOTES_LIST_WIDTH = 300;
+const MAX_NOTES_LIST_WIDTH = 600;
 const MIN_FOLDER_TREE_WIDTH = 180;
 const MAX_FOLDER_TREE_WIDTH = 320;
 
@@ -63,6 +67,7 @@ interface WorkspaceState {
   chatPanelVisible: boolean;
   chatPanelWidth: number;
   fileListWidth: number;
+  notesListWidth: number;
   folderTreeWidth: number;
   contentTab: ContentTab;
   outlineSidebarVisible: boolean;
@@ -99,6 +104,7 @@ interface WorkspaceState {
   toggleFileSortField: () => void;
   toggleFileSortDir: () => void;
   setChatPanelWidth: (width: number) => void;
+  setNotesListWidth: (width: number, maxWidth?: number) => void;
   handleChatPanelResize: (delta: number) => void;
   handleFileListResize: (delta: number) => void;
   handleFolderTreeResize: (delta: number) => void;
@@ -138,6 +144,7 @@ function createWorkspaceStore() {
     summarizingFileIds: new Set<string>(),
     chatPanelWidth: loadNumber(CHAT_PANEL_WIDTH_KEY, DEFAULT_CHAT_PANEL_WIDTH),
     fileListWidth: loadNumber(FILE_LIST_WIDTH_KEY, DEFAULT_FILE_LIST_WIDTH),
+    notesListWidth: loadNumber(NOTES_LIST_WIDTH_KEY, DEFAULT_NOTES_LIST_WIDTH),
     folderTreeWidth: loadNumber(FOLDER_TREE_WIDTH_KEY, DEFAULT_FOLDER_TREE_WIDTH),
 
     // Sidebar directory state
@@ -244,6 +251,16 @@ function createWorkspaceStore() {
       const clamped = Math.max(MIN_CHAT_PANEL_WIDTH, Math.min(MAX_CHAT_PANEL_WIDTH, width));
       saveNumber(CHAT_PANEL_WIDTH_KEY, clamped);
       set({ chatPanelWidth: clamped });
+    },
+
+    setNotesListWidth: (width, maxWidth = MAX_NOTES_LIST_WIDTH) => {
+      const upperBound = Math.max(
+        MIN_NOTES_LIST_WIDTH,
+        Math.min(MAX_NOTES_LIST_WIDTH, maxWidth),
+      );
+      const clamped = Math.max(MIN_NOTES_LIST_WIDTH, Math.min(upperBound, width));
+      saveNumber(NOTES_LIST_WIDTH_KEY, clamped);
+      set({ notesListWidth: clamped });
     },
 
     handleChatPanelResize: (delta) => {

@@ -1,4 +1,5 @@
 export type ItemType = "recording" | "meeting" | "note" | "file";
+export type RecordingMode = "meeting" | "call" | "import";
 
 import type { SttProviderConfig } from "./local-transcription";
 
@@ -10,6 +11,10 @@ export interface WorkspaceItem {
   createdAt: string;
   folderId?: string;
   tags?: string[];
+  /** Recording source type from the backend file `mode` field. */
+  recordingMode?: RecordingMode;
+  /** Recording duration in seconds. */
+  durationSeconds?: number;
   /** MIME type from the backend (e.g. audio/mpeg, video/mp4). Used to detect recordings. */
   contentType?: string;
 }
@@ -205,6 +210,24 @@ export interface ChatMessage {
 /** Which backend serves a chat session. */
 export type ChatProvider = "cloud" | "qoder";
 
+/** Resume state for a persistent Qoder Cloud Agent conversation. */
+export interface QoderChatSessionState {
+  sessionId: string;
+  afterEventId?: string;
+  sessionOptionsKey: string;
+}
+
+/** A locally indexed conversation whose model context remains in its Qoder Session. */
+export interface ChatConversation {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  provider: ChatProvider;
+  createdAt: number;
+  updatedAt: number;
+  qoderSession?: QoderChatSessionState;
+}
+
 export interface ChatAttachment {
   id?: string;
   name?: string;
@@ -287,7 +310,7 @@ export interface PreSignedUrlVO {
 
 export interface TransferFileReq {
   fileId: string;
-  templateId: string;
+  templateId?: string;
   modelId?: string;
   languageId?: string;
 }

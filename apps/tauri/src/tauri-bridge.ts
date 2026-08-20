@@ -230,7 +230,8 @@ export async function installTauriBridge(): Promise<void> {
     qoderChat: {
       getConfig: () => command<QoderChatConfig>("qoder_chat_config"),
       savePat: (pat) => command<QoderChatConfig>("qoder_chat_save_pat", { pat }),
-      createSession: () => command<string>("qoder_chat_create_session"),
+      createSession: ({ shareLynseApiKey, lynseApiHost }) =>
+        command<string>("qoder_chat_create_session", { shareLynseApiKey, lynseApiHost }),
       sendMessage: (sessionId, message, requestId, afterEventId) =>
         command<{ lastEventId?: string }>("qoder_chat_send_message", {
           sessionId,

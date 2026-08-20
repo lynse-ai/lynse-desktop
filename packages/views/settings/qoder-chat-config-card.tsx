@@ -12,6 +12,7 @@ import {
   QODER_SHARE_LYNSE_API_KEY_STORAGE_KEY,
   type QoderChatConfig,
 } from "../workspace/chat-transport";
+import { useQoderEnabledStore } from "../workspace/qoder-enabled";
 
 export function QoderChatConfigCard() {
   const api = getDesktopQoderChatApi();
@@ -22,6 +23,8 @@ export function QoderChatConfigCard() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [shareLynseApiKey, setShareLynseApiKey] = useState(false);
+  const qoderEnabled = useQoderEnabledStore((s) => s.enabled);
+  const setQoderEnabled = useQoderEnabledStore((s) => s.setEnabled);
 
   useEffect(() => {
     if (!api) return;
@@ -69,6 +72,24 @@ export function QoderChatConfigCard() {
         <CardTitle className="text-xs">{t("settings.qoder_chat")}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <p className="text-xs font-medium">{t("settings.qoder_enabled_label")}</p>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              {qoderEnabled ? t("settings.qoder_enabled_on") : t("settings.qoder_enabled_off")}
+            </p>
+          </div>
+          <Switch
+            checked={qoderEnabled}
+            onCheckedChange={setQoderEnabled}
+            aria-label={t("settings.qoder_enabled_label")}
+          />
+        </div>
+        {qoderEnabled && !config.configured && (
+          <p className="text-[11px] leading-relaxed text-amber-600">
+            {t("settings.qoder_enabled_need_pat")}
+          </p>
+        )}
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           {t("settings.qoder_chat_hint")}
         </p>

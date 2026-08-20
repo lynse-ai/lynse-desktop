@@ -16,6 +16,7 @@ import {
 import { useAuthStore } from "@lynse/core/auth";
 import { redactMeetingIds } from "../meeting-id-redact";
 import { conversationTitle, loadChatHistory, saveChatHistory } from "../chat-history";
+import { isQoderEnabled, useQoderEnabledStore } from "../qoder-enabled";
 
 function makeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -117,12 +118,21 @@ export function useChat({ persistHistory = false }: UseChatOptions = {}) {
 
   const makeTransport = useCallback(
     (qoderSession?: QoderChatSessionState): ChatTransport => {
-      return getDesktopQoderChatApi()
+      return isQoderEnabled() && getDesktopQoderChatApi()
         ? new QoderChatTransport(qoderSession, handleQoderSessionState)
         : new CloudChatTransport();
     },
     [handleQoderSessionState],
   );
+
+  // Reset the cached transport whenever the Qoder channel toggle flips, so the
+  // next message is routed through the newly selected channel (Qoder vs cloud).
+  useEffect(() => {
+    const unsubscribe = useQoderEnabledStore.subscribe(() => {
+      transportRef.current = null;
+    });
+    return unsubscribe;
+  }, []);
 
   const handleEvent = useCallback((evt: ChatStreamEvent, assistantId: string) => {
     switch (evt.type) {
@@ -208,7 +218,7 @@ export function useChat({ persistHistory = false }: UseChatOptions = {}) {
       };
       if (persistHistory && !activeConversationIdRef.current) {
         const conversationId = makeId("conversation");
-        const provider = getDesktopQoderChatApi() ? "qoder" : "cloud";
+        const provider = isQoderEnabled() && getDesktopQoderChatApi() ? "qoder" : "cloud";
         const conversation: ChatConversation = {
           id: conversationId,
           title: conversationTitle(content),

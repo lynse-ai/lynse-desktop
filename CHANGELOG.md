@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.25 (2026-08-19)
+
+### New Features
+
+- Add date, recording duration, and recording type tags to the Notes list, including 会议录音 and 通话录音 labels.
+- Add a draggable divider between the note list and note content, with keyboard controls and persisted width.
+
+### Changed
+
+- Improve the Notes layout, startup window sizing, and metadata readability across desktop resolutions.
+
 ## 0.1.24 (2026-08-19)
 
 ### New Features

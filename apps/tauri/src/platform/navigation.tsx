@@ -12,7 +12,8 @@ export function DesktopNavigationProvider({
   const [pathname, setPathname] = useState("/notes");
 
   useEffect(() => {
-    const openLiveTranslation = () => setPathname("/live-translation");
+    // Tray actions surface the unified recording / live-translation page.
+    const openLiveTranslation = () => setPathname("/recording");
     window.addEventListener(
       "lynse:live-translation-tray-action",
       openLiveTranslation,

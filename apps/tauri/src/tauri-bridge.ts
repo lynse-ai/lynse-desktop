@@ -175,7 +175,7 @@ export async function installTauriBridge(): Promise<void> {
   await getCurrentWebview().listen<LiveTranslationTrayAction>(
     LIVE_TRANSLATION_TRAY_EVENT,
     (event) => {
-      if (event.payload !== "start" && event.payload !== "pause") return;
+      if (event.payload !== "start" && event.payload !== "pause" && event.payload !== "stop") return;
       if (liveTranslationTrayListeners.size === 0) {
         pendingLiveTranslationTrayActions.push(event.payload);
       } else {
@@ -261,6 +261,7 @@ export async function installTauriBridge(): Promise<void> {
       recover: (sessionId) => command<CompletedLiveSession>("live_translation_recover", { sessionId }),
       showSubtitles: (show) => command<void>("live_translation_show_subtitles", { show }),
       showMainWindow: () => command<void>("live_translation_show_main"),
+      hideIsland: () => command<void>("live_translation_hide_island"),
       updateTray: (payload) => command<void>("live_translation_update_tray", { payload }),
       minimizeToTray: () => getCurrentWindow().hide(),
       onTrayAction: async (callback) => {

@@ -40,6 +40,17 @@ const VOICEPRINT_MATCH_THRESHOLD: f64 = 0.31;
 
 struct AppState {
     model_download_in_progress: Mutex<bool>,
+    /// Mirror of the recording state used to rebuild the tray menu when it
+    /// changes (e.g. start, stop, pause). Mirrored here so the rebuild
+    /// function and the update command can share a single source of truth.
+    tray_ui: Mutex<TrayUiState>,
+}
+
+#[derive(Default, Clone, Copy)]
+struct TrayUiState {
+    recording: bool,
+    paused: bool,
+    elapsed_secs: u64,
 }
 
 pub(crate) type CommandResult<T> = Result<T, String>;
@@ -1717,31 +1728,96 @@ fn check_app_update(app: AppHandle) -> CommandResult<Value> {
     }))
 }
 
-/// Creates the menu-bar / notification-area tray icon and its menu so the
-/// app (and the live-translation floating window) can be minimized to and
-/// restored from the system status bar.
-fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
-    let start_live_recording =
-        MenuItemBuilder::with_id("start_live_recording", "▶  开启实时录音").build(app)?;
-    let pause_live_recording =
-        MenuItemBuilder::with_id("pause_live_recording", "⏸  暂停实时录音").build(app)?;
-    let show_main = MenuItemBuilder::with_id("show_main", "▣  显示主窗口").build(app)?;
-    let show_subtitles = MenuItemBuilder::with_id("show_subtitles", "▤  显示实时字幕").build(app)?;
-    let quit = MenuItemBuilder::with_id("quit", "⏻  退出 Lynse").build(app)?;
-    let menu = MenuBuilder::new(app)
-        .item(&start_live_recording)
-        .item(&pause_live_recording)
+const TRAY_ELAPSED_ID: &str = "tray_elapsed";
+const TRAY_START_ID: &str = "start_live_recording";
+const TRAY_PAUSE_ID: &str = "pause_live_recording";
+const TRAY_STOP_ID: &str = "stop_live_recording";
+const TRAY_SHOW_MAIN_ID: &str = "show_main";
+const TRAY_SHOW_SUBTITLES_ID: &str = "show_subtitles";
+const TRAY_QUIT_ID: &str = "quit";
+
+fn format_elapsed(total: u64) -> String {
+    let m = total / 60;
+    let s = total % 60;
+    format!("{:02}:{:02}", m, s)
+}
+
+/// Build the tray menu reflecting the given recording state. The menu
+/// mirrors the native "Dynamic Island" feel: a disabled header shows
+/// elapsed time / status, followed by recording transport controls whose
+/// enabled state tracks whether a session is active.
+fn build_tray_menu(
+    app: &AppHandle,
+    st: TrayUiState,
+) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    let elapsed_text = if st.recording {
+        let elapsed = format_elapsed(st.elapsed_secs);
+        if st.paused {
+            format!("⏸  已暂停  {elapsed}")
+        } else {
+            format!("🔴  录音中  {elapsed}")
+        }
+    } else {
+        "Lynse".to_string()
+    };
+    let elapsed = MenuItemBuilder::with_id(TRAY_ELAPSED_ID, elapsed_text)
+        .enabled(false)
+        .build(app)?;
+    let start = MenuItemBuilder::with_id(TRAY_START_ID, "▶  开启实时录音")
+        .enabled(!st.recording)
+        .build(app)?;
+    let pause_label = if st.paused { "▶  继续录音" } else { "⏸  暂停录音" };
+    let pause = MenuItemBuilder::with_id(TRAY_PAUSE_ID, pause_label)
+        .enabled(st.recording)
+        .build(app)?;
+    let stop = MenuItemBuilder::with_id(TRAY_STOP_ID, "⏹  停止并保存")
+        .enabled(st.recording)
+        .build(app)?;
+    let show_main = MenuItemBuilder::with_id(TRAY_SHOW_MAIN_ID, "▣  显示主窗口").build(app)?;
+    let show_subtitles =
+        MenuItemBuilder::with_id(TRAY_SHOW_SUBTITLES_ID, "▤  显示实时字幕").build(app)?;
+    let quit = MenuItemBuilder::with_id(TRAY_QUIT_ID, "⏻  退出 Lynse").build(app)?;
+    MenuBuilder::new(app)
+        .item(&elapsed)
+        .item(&start)
+        .separator()
+        .item(&pause)
+        .item(&stop)
         .separator()
         .item(&show_main)
         .item(&show_subtitles)
         .separator()
         .item(&quit)
-        .build()?;
+        .build()
+}
 
+/// Rebuild the tray menu from the current `AppState.tray_ui`. Called when
+/// the recording state changes (also cheap enough to call on every
+/// `update_tray` tick, which keeps the in-menu elapsed time fresh).
+fn rebuild_tray_menu(app: &AppHandle) -> CommandResult<()> {
+    let Some(tray) = app.tray_by_id("main-tray") else { return Ok(()); };
+    let st = *app
+        .state::<AppState>()
+        .tray_ui
+        .lock()
+        .map_err(|_| "tray_ui lock poisoned")?;
+    let menu = build_tray_menu(app, st).map_err(|e| e.to_string())?;
+    tray.set_menu(Some(menu)).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Creates the menu-bar / notification-area tray icon and its menu so the
+/// app (and the live-translation floating window) can be minimized to and
+/// restored from the system status bar.
+fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
+    // Use the app's own icon: a bare mic glyph in the menu bar is ambiguous
+    // (reads as a recording indicator / unrelated app).
     let Some(icon) = app.default_window_icon().cloned() else {
         eprintln!("No default window icon available for the tray");
         return Ok(());
     };
+
+    let menu = build_tray_menu(app, TrayUiState::default())?;
 
     TrayIconBuilder::with_id("main-tray")
         .icon(icon)
@@ -1757,6 +1833,11 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             "pause_live_recording" => {
                 if let Err(error) = app.emit("live-translation-tray-action", "pause") {
                     eprintln!("Failed to request live recording pause: {error}");
+                }
+            }
+            "stop_live_recording" => {
+                if let Err(error) = app.emit("live-translation-tray-action", "stop") {
+                    eprintln!("Failed to request live recording stop: {error}");
                 }
             }
             "show_main" => {
@@ -1790,7 +1871,10 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(AppState { model_download_in_progress: Mutex::new(false) })
+        .manage(AppState {
+            model_download_in_progress: Mutex::new(false),
+            tray_ui: Mutex::new(TrayUiState::default()),
+        })
         .manage(LiveTranslationManager::default())
         .register_uri_scheme_protocol("local-media", media_response)
         .register_uri_scheme_protocol("qoder-artifact", qoder_chat::qoder_artifact_response)
@@ -1834,6 +1918,7 @@ pub fn run() {
             live_translation::live_translation_recover,
             live_translation::live_translation_show_subtitles,
             live_translation::live_translation_show_main,
+            live_translation::live_translation_hide_island,
             live_translation::live_translation_update_tray,
             live_translation::live_translation_set_mode,
         ])

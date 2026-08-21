@@ -62,6 +62,7 @@ export function RecordingIslandWindow() {
       data-tauri-drag-region
     >
       <DynamicIsland
+        onDismiss={() => void api?.hideIsland()}
         onPause={() => void togglePause()}
         onStop={() => void api?.stop()}
         onExpand={() => void api?.showMainWindow()}

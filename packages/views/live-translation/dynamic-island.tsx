@@ -66,24 +66,31 @@ export function DynamicIsland({ onDismiss, onPause, onStop, onExpand, className 
 
   return (
     <div
+      data-tauri-drag-region
       className={cn(
         "group flex items-center gap-3 rounded-full border border-border/60 bg-background/95 px-3 py-1.5 shadow-lg backdrop-blur-md transition-all",
         className,
       )}
     >
       {/* Red pulse dot */}
-      <span className={cn(
-        "size-2 rounded-full",
-        paused ? "bg-amber-500" : "bg-red-500 animate-pulse",
-      )} />
+      <span
+        data-tauri-drag-region
+        className={cn(
+          "size-2 rounded-full",
+          paused ? "bg-amber-500" : "bg-red-500 animate-pulse",
+        )}
+      />
 
       {/* Timer */}
-      <span className="min-w-[3ch] text-center font-mono text-xs font-semibold tabular-nums">
+      <span
+        data-tauri-drag-region
+        className="min-w-[3ch] text-center font-mono text-xs font-semibold tabular-nums"
+      >
         {fmt(view.elapsedMs)}
       </span>
 
       {/* Mini level bar */}
-      <div className="h-1 w-12 overflow-hidden rounded-full bg-muted">
+      <div data-tauri-drag-region className="h-1 w-12 overflow-hidden rounded-full bg-muted">
         <div
           className="h-full rounded-full bg-primary transition-[width] duration-100"
           style={{ width: `${Math.min(100, Math.max(4, view.micLevel * 100))}%` }}

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useState, useMemo } from "react";
-import { X, Send, FileText, Plus, Square } from "../../icons";
+import { X, Send, FileText, Plus, Square, Clock } from "../../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
 import { StreamingMarkdown } from "@lynse/ui/markdown";
@@ -11,46 +11,28 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { useWorkspaceStore } from "../store";
 import { useChat } from "../hooks/use-chat";
 import { useFiles } from "../hooks/use-files";
-import type { ChatAttachment } from "../types";
 import { ConfirmDialog } from "../ConfirmDialog";
-
-function AttachmentView({ attachments }: { attachments?: ChatAttachment[] }) {
-  if (!attachments || attachments.length === 0) return null;
-  return (
-    <div className="mt-2 flex flex-col gap-1.5">
-      {attachments.map((att, i) => {
-        const href = att.downloadUrl || att.url || att.thumbnailUrl;
-        const isImage = (att.type || "").startsWith("image") || /\.(png|jpe?g|gif|webp)$/i.test(att.name || att.url || "");
-        if (isImage && (att.thumbnailUrl || att.url)) {
-          return (
-            <a key={i} href={href} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-md border border-border">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={att.thumbnailUrl || att.url} alt={att.name || "attachment"} className="max-h-48 w-full object-cover" />
-            </a>
-          );
-        }
-        return (
-          <a
-            key={i}
-            href={href}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-[11px] text-primary hover:underline"
-          >
-            <FileText className="size-3 shrink-0" />
-            <span className="truncate">{att.name || "附件"}</span>
-          </a>
-        );
-      })}
-    </div>
-  );
-}
+import { ChatAttachments } from "../../chat/chat-attachments";
+import { ChatHistorySidebar } from "../../chat/chat-history-sidebar";
 
 export function ChatPanel() {
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
   const selectedItemTitle = useWorkspaceStore((s) => s.selectedItemTitle);
   const toggleChatPanel = useWorkspaceStore((s) => s.toggleChatPanel);
-  const { messages, isLoading, sendMessage, clearMessages, stopStreaming, pendingConfirm, answerConfirm, dismissConfirm } = useChat();
+  const {
+    messages,
+    isLoading,
+    conversations,
+    activeConversationId,
+    sendMessage,
+    clearMessages,
+    selectConversation,
+    stopStreaming,
+    pendingConfirm,
+    answerConfirm,
+    dismissConfirm,
+  } = useChat({ persistHistory: true });
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
@@ -76,7 +58,7 @@ export function ChatPanel() {
   };
 
   return (
-    <aside className="flex h-full flex-col overflow-hidden border-l border-border bg-background">
+    <aside className="relative flex h-full flex-col overflow-hidden border-l border-border bg-background">
       {/* Header */}
       <div className="flex shrink-0 flex-col border-b border-border" style={{ padding: "8px 12px", gap: 6 }}>
         <div className="flex items-center gap-2">
@@ -85,6 +67,15 @@ export function ChatPanel() {
             <span className="text-xs font-semibold text-muted-foreground">{t("chat.ai_assistant")}</span>
             <span className="truncate text-[11px] text-muted-foreground/60">{t("chat.ready")}</span>
           </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`size-6 p-0 ${historyOpen ? "bg-card text-foreground" : ""}`}
+            onClick={() => setHistoryOpen((open) => !open)}
+            title={t("chat.history")}
+          >
+            <Clock className="size-3.5" />
+          </Button>
           <Button variant="ghost" size="icon" className="size-6 p-0" onClick={clearMessages} title={t("chat.new_chat")}>
             <Plus className="size-3.5" />
           </Button>
@@ -93,6 +84,21 @@ export function ChatPanel() {
           </Button>
         </div>
       </div>
+
+      {historyOpen && (
+        <aside className="absolute inset-y-0 left-0 z-20 flex w-56 flex-col border-r border-border/60 bg-background">
+          <ChatHistorySidebar
+            conversations={conversations}
+            activeConversationId={activeConversationId}
+            disabled={isLoading}
+            onSelect={(id) => {
+              selectConversation(id);
+              setHistoryOpen(false);
+            }}
+            onClose={() => setHistoryOpen(false)}
+          />
+        </aside>
+      )}
 
       {/* Context bar */}
       {selectedItemId && (
@@ -142,6 +148,12 @@ export function ChatPanel() {
                     <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:300ms]" />
                   </span>
                 )}
+                {msg.role === "assistant" && msg.content && msg.status && (
+                  <div className="mt-2 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                    <span className="size-1.5 animate-pulse rounded-full bg-current" />
+                    <span>{msg.status}</span>
+                  </div>
+                )}
                 {msg.sources && msg.sources.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1">
                     {msg.sources.map((s, i) => (
@@ -151,7 +163,7 @@ export function ChatPanel() {
                     ))}
                   </div>
                 )}
-                <AttachmentView attachments={msg.attachments} />
+                <ChatAttachments attachments={msg.attachments} compact />
               </div>
             </div>
           ))}

@@ -3,6 +3,8 @@
 import { useRef, useState, useEffect, useCallback, useImperativeHandle, forwardRef } from "react";
 import { Play, Pause, SkipForward, Volume2, VolumeX } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { useWaveformPeaks } from "./use-waveform-peaks";
+import { WaveformProgress } from "./waveform-progress";
 
 const SPEEDS = [1, 1.5, 2];
 
@@ -33,6 +35,8 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
     const [muted, setMuted] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(false);
+    // Real waveform peaks for the scrubber; empty while decoding / on failure.
+    const { peaks } = useWaveformPeaks(src);
     const { t } = useTranslation();
 
     // Expose seekTo to parent
@@ -129,6 +133,14 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
       setCurrentTime(ratio * duration);
     }, [duration]);
 
+    // Seek by a 0..1 ratio (from the waveform scrubber).
+    const seekToRatio = useCallback((ratio: number) => {
+      const audio = audioRef.current;
+      if (!audio || !duration) return;
+      audio.currentTime = ratio * duration;
+      setCurrentTime(ratio * duration);
+    }, [duration]);
+
     const skipForward = useCallback(() => {
       if (audioRef.current) {
         audioRef.current.currentTime = Math.min(
@@ -172,21 +184,31 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
           </div>
         ) : (
           <div className="flex flex-col gap-1.5">
-            {/* Progress bar */}
-            <div
-              className="group relative h-1.5 w-full cursor-pointer rounded-full bg-muted/60"
-              onClick={handleSeek}
-            >
-              <div
-                className="absolute inset-y-0 left-0 rounded-full bg-primary transition-[width] duration-100"
-                style={{ width: `${progress}%` }}
+            {/* Progress — waveform scrubber when peaks are available, plain bar otherwise */}
+            {peaks.length > 0 ? (
+              <WaveformProgress
+                peaks={peaks}
+                progress={progress / 100}
+                onSeek={seekToRatio}
+                height={40}
+                className="py-0.5"
               />
-              {/* Thumb */}
+            ) : (
               <div
-                className="absolute top-1/2 size-3 -translate-y-1/2 rounded-full border-2 border-primary bg-background opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
-                style={{ left: `calc(${progress}% - 6px)` }}
-              />
-            </div>
+                className="group relative h-1.5 w-full cursor-pointer rounded-full bg-muted/60"
+                onClick={handleSeek}
+              >
+                <div
+                  className="absolute inset-y-0 left-0 rounded-full bg-primary transition-[width] duration-100"
+                  style={{ width: `${progress}%` }}
+                />
+                {/* Thumb */}
+                <div
+                  className="absolute top-1/2 size-3 -translate-y-1/2 rounded-full border-2 border-primary bg-background opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
+                  style={{ left: `calc(${progress}% - 6px)` }}
+                />
+              </div>
+            )}
 
             {/* Controls row */}
             <div className="flex items-center gap-2">

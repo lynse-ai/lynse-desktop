@@ -16,7 +16,6 @@ import {
   Zap,
   Crown,
   ListChecks,
-  Headphones,
   Bell,
   X,
   Upload,
@@ -84,9 +83,6 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
   );
   const workspaceNav = [
     { key: "inspiration", label: t("nav.inspiration"), icon: Lightbulb, path: "/inspiration" },
-    ...(liveTranslationAvailable
-      ? [{ key: "live_translation", label: t("nav.live_translation"), icon: Headphones, path: "/live-translation" }]
-      : []),
     { key: "chat", label: t("nav.chat"), icon: MessageSquare, path: "/chat" },
   ];
 

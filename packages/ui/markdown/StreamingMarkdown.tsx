@@ -17,6 +17,59 @@ interface Block {
   isCodeBlock: boolean
 }
 
+function isPipeTableRow(line: string): boolean {
+  return line.trimStart().startsWith('|')
+}
+
+function isGfmTableSeparator(line: string): boolean {
+  return /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line)
+}
+
+function startsGfmTable(lines: string[], index: number): boolean {
+  return isPipeTableRow(lines[index] ?? '') && isGfmTableSeparator(lines[index + 1] ?? '')
+}
+
+function normalizeGfmTableBoundaries(content: string): string {
+  const lines = content.split('\n')
+  const normalizedLines: string[] = []
+  let inCodeBlock = false
+  let inMathBlock = false
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? ''
+
+    if (line.startsWith('```')) {
+      inCodeBlock = !inCodeBlock
+      normalizedLines.push(line)
+      continue
+    }
+
+    if (!inCodeBlock && line.trim() === '$$') {
+      inMathBlock = !inMathBlock
+      normalizedLines.push(line)
+      continue
+    }
+
+    if (!inCodeBlock && !inMathBlock && startsGfmTable(lines, i)) {
+      normalizedLines.push(line)
+      i += 1
+      while (i < lines.length && isPipeTableRow(lines[i] ?? '')) {
+        normalizedLines.push(lines[i] ?? '')
+        i += 1
+      }
+      if (i < lines.length && (lines[i] ?? '') !== '') {
+        normalizedLines.push('')
+      }
+      i -= 1
+      continue
+    }
+
+    normalizedLines.push(line)
+  }
+
+  return normalizedLines.join('\n')
+}
+
 /**
  * djb2 hash (XOR variant) by Daniel J. Bernstein.
  * Used to generate stable React keys for completed content blocks.
@@ -96,6 +149,22 @@ function splitIntoBlocks(content: string): Block[] {
     } else if (inMathBlock) {
       // Inside math block - append line (don't split on blank lines)
       currentBlock += line + '\n'
+    } else if (startsGfmTable(lines, i)) {
+      // Keep a complete GFM table in its own Markdown block. This matters
+      // while streaming: prose arriving immediately after the last row must
+      // never be reparsed as part of the still-active table block.
+      if (currentBlock.trim()) {
+        blocks.push({ content: currentBlock.trim(), isCodeBlock: false })
+        currentBlock = ''
+      }
+      const tableLines = [line]
+      i += 1
+      while (i < lines.length && isPipeTableRow(lines[i] ?? '')) {
+        tableLines.push(lines[i] ?? '')
+        i += 1
+      }
+      blocks.push({ content: tableLines.join('\n'), isCodeBlock: false })
+      i -= 1
     } else if (line === '') {
       // Empty line outside code block = paragraph boundary
       if (currentBlock.trim()) {
@@ -187,6 +256,11 @@ export function StreamingMarkdown({
   renderMention,
   cdnDomain
 }: StreamingMarkdownProps): React.JSX.Element {
+  const normalizedContent = React.useMemo(
+    () => normalizeGfmTableBoundaries(content),
+    [content]
+  )
+
   // Split into blocks - memoized to avoid recomputation
   // Must be called unconditionally to satisfy Rules of Hooks
   const blocks = React.useMemo(
@@ -198,7 +272,7 @@ export function StreamingMarkdown({
   if (!isStreaming) {
     return (
       <Markdown mode={mode} className={className} onUrlClick={onUrlClick} onFileClick={onFileClick} renderMention={renderMention} cdnDomain={cdnDomain}>
-        {content}
+        {normalizedContent}
       </Markdown>
     )
   }

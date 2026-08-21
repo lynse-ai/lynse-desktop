@@ -16,6 +16,12 @@ html.subtitle-window #root {
   background: transparent;
 }
 
+html.recording-island-window,
+html.recording-island-window body,
+html.recording-island-window #root {
+  background: transparent;
+}
+
 /* AI assistant IP image: entrance animation when switching appearances */
 @keyframes lynse-avatar-in {
   from {

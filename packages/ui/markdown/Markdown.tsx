@@ -119,6 +119,38 @@ function urlTransform(url: string): string {
 const FILE_PATH_REGEX =
   /^(?:\/|~\/|\.\/)[\w\-./@]+\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|yaml|yml|py|go|rs|css|scss|less|html|htm|txt|log|sh|bash|zsh|swift|kt|java|c|cpp|h|hpp|rb|php|xml|toml|ini|cfg|conf|env|sql|graphql|vue|svelte|astro|prisma)$/i
 
+function elementChildren(node: unknown): unknown[] {
+  if (!node || typeof node !== 'object') return []
+  const children = (node as { children?: unknown }).children
+  return Array.isArray(children) ? children : []
+}
+
+function findElementChild(node: unknown, tagName: string): unknown {
+  return elementChildren(node).find(
+    (child) =>
+      !!child &&
+      typeof child === 'object' &&
+      (child as { type?: unknown }).type === 'element' &&
+      (child as { tagName?: unknown }).tagName === tagName
+  )
+}
+
+function nodeText(node: unknown): string {
+  if (!node || typeof node !== 'object') return ''
+  if ((node as { type?: unknown }).type === 'text') {
+    const value = (node as { value?: unknown }).value
+    return typeof value === 'string' ? value : ''
+  }
+  return elementChildren(node).map(nodeText).join('')
+}
+
+function isIndexedMarkdownTable(node: unknown): boolean {
+  const thead = findElementChild(node, 'thead')
+  const headerRow = findElementChild(thead, 'tr')
+  const firstHeader = findElementChild(headerRow, 'th')
+  return nodeText(firstHeader).trim() === '#'
+}
+
 /**
  * Create custom components based on render mode
  */
@@ -286,11 +318,23 @@ function createComponents(
       // Clean tables — auto-layout with minimum column widths so short
       // columns (dates, owners) don't collapse, while long cells wrap
       // instead of truncating. Column borders make headers visually distinct.
-      table: ({ children }) => (
-        <div className="my-3 overflow-x-auto">
-          <table className="w-full border-collapse text-sm">{children}</table>
-        </div>
-      ),
+      table: ({ children, node }) => {
+        const isIndexedTable = isIndexedMarkdownTable(node)
+
+        return (
+          <div className="my-3 overflow-x-auto">
+            <table
+              className={cn(
+                'w-full border-collapse text-sm',
+                isIndexedTable &&
+                  'table-fixed [&_th]:min-w-0 [&_td]:min-w-0 [&_th:first-child]:w-14 [&_td:first-child]:w-14 [&_th:nth-child(2)]:w-32 [&_td:nth-child(2)]:w-32'
+              )}
+            >
+              {children}
+            </table>
+          </div>
+        )
+      },
       thead: ({ children }) => <thead className="border-b border-border">{children}</thead>,
       th: ({ children }) => (
         <th className="min-w-[100px] border-b border-r border-border/40 px-3 py-2 text-left font-semibold text-muted-foreground last:border-r-0">

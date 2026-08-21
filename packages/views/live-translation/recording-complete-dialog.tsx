@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
   Dialog,
@@ -10,14 +10,19 @@ import {
 import { Button } from "@lynse/ui/components/ui/button";
 import { Checkbox } from "@lynse/ui/components/ui/checkbox";
 import type { CompletedLiveSession } from "./types";
+import { Play, Pause } from "../icons";
+import { useWaveformPeaks } from "../workspace/use-waveform-peaks";
+import { WaveformProgress } from "../workspace/waveform-progress";
 
 // ───────────────────────────────────────────────────────────────
 // Recording Complete Dialog
 //
-// Modal shown after a recording session stops. Presents the user
-// with duration / filename info and offers "save locally" or
-// "dismiss" actions. Includes a "remember my choice" checkbox
-// that skips this dialog on future stops.
+// Modal shown after a recording session stops. The audio is ALWAYS
+// persisted locally by the Rust sidecar, so this dialog only asks
+// whether the user also wants to push it to the cloud — a "保存到云"
+// (save to cloud) checkbox, unchecked by default. When unchecked the
+// primary action just closes the dialog; when checked it triggers the
+// cloud upload + transcription/summary pipeline.
 // ───────────────────────────────────────────────────────────────
 
 interface RecordingCompleteDialogProps {
@@ -27,9 +32,9 @@ interface RecordingCompleteDialogProps {
   readonly open: boolean;
   /** Called when the dialog should close (user dismisses or acts). */
   readonly onOpenChange: (open: boolean) => void;
-  /** Called when the user taps "保存到本地". */
+  /** Called when the user confirms "保存到云" (checkbox checked + primary action). */
   readonly onSave?: (session: CompletedLiveSession) => void;
-  /** Called when the user taps "不需要". */
+  /** Called when the user taps "关闭". */
   readonly onDismiss?: () => void;
   /** Called when the "remember choice" checkbox value changes. */
   readonly onRememberChoiceChange?: (remember: boolean) => void;
@@ -74,6 +79,7 @@ export function RecordingCompleteDialog({
 }: RecordingCompleteDialogProps) {
   const { t } = useTranslation();
   const [remember, setRemember] = useState(false);
+  const [saveToCloud, setSaveToCloud] = useState(false);
 
   if (!completedSession || !open) return null;
 
@@ -81,8 +87,8 @@ export function RecordingCompleteDialog({
   const session = completedSession;
   const filename = deriveFilename(session);
 
-  function handleSave() {
-    onSave?.(session);
+  function handlePrimary() {
+    if (saveToCloud) onSave?.(session);
     onOpenChange(false);
   }
 
@@ -122,10 +128,24 @@ export function RecordingCompleteDialog({
             </div>
           </div>
 
+          {/* Instant preview — hear the recording right away (local playback) */}
+          {session.playbackUrl && <RecordingPreview src={session.playbackUrl} />}
+
           {/* Description */}
           <p className="text-[13px] leading-relaxed text-muted-foreground">
             {t("recording_mode.complete_description")}
           </p>
+
+          {/* Save-to-cloud checkbox — recording is already local; cloud is opt-in */}
+          <label className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5">
+            <Checkbox
+              checked={saveToCloud}
+              onCheckedChange={(checked) => setSaveToCloud(checked === true)}
+            />
+            <span className="text-[13px] font-medium text-foreground select-none">
+              {t("recording_mode.complete_save_to_cloud")}
+            </span>
+          </label>
 
           {/* Remember choice checkbox */}
           <label className="flex cursor-pointer items-center gap-2.5 self-center pb-1">
@@ -149,13 +169,103 @@ export function RecordingCompleteDialog({
             {t("recording_mode.complete_dismiss")}
           </Button>
           <Button
-            onClick={handleSave}
+            onClick={handlePrimary}
             className="min-w-[120px] bg-foreground text-background hover:bg-foreground/90"
           >
-            {t("recording_mode.complete_save")}
+            {saveToCloud
+              ? t("recording_mode.complete_save_cloud")
+              : t("recording_mode.complete_save")}
           </Button>
         </div>
       </DialogContent>
     </Dialog>
   );
+}
+
+// ───────────────────────────────────────────────────────────────
+// Compact playback preview for the completed recording.
+//
+// Plays the local WAV captured by the sidecar (`playbackUrl`) through a
+// hidden `<audio>` element and shows a waveform scrubber (ElevenLabs UI
+// style) with play/pause + elapsed time. Falls back to a plain time row
+// while peaks are being decoded or if the source isn't fetchable.
+// ───────────────────────────────────────────────────────────────
+function RecordingPreview({ src }: { src: string }) {
+  const { t } = useTranslation();
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const { peaks } = useWaveformPeaks(src);
+
+  const togglePlay = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playing) {
+      audio.pause();
+    } else {
+      void audio.play().catch(() => undefined);
+    }
+  };
+
+  const seekToRatio = (ratio: number) => {
+    const audio = audioRef.current;
+    if (!audio || !duration) return;
+    audio.currentTime = ratio * duration;
+    setCurrentTime(ratio * duration);
+  };
+
+  const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
+
+  return (
+    <div className="rounded-xl border border-border/60 bg-muted/30 px-3 py-2.5">
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={togglePlay}
+          aria-label={playing ? t("recording_mode.pause") : t("recording_mode.resume")}
+          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-colors hover:bg-foreground/90"
+        >
+          {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5 ml-0.5" />}
+        </button>
+
+        <div className="min-w-0 flex-1">
+          {peaks.length > 0 ? (
+            <WaveformProgress
+              peaks={peaks}
+              progress={progress}
+              onSeek={seekToRatio}
+              height={32}
+            />
+          ) : (
+            <div className="flex h-8 items-center text-[11px] text-muted-foreground">
+              {t("recording_mode.preview_loading")}
+            </div>
+          )}
+        </div>
+
+        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+          {formatClock(currentTime)} / {formatClock(duration)}
+        </span>
+      </div>
+
+      <audio
+        ref={audioRef}
+        src={src}
+        preload="metadata"
+        onTimeUpdate={() => audioRef.current && setCurrentTime(audioRef.current.currentTime)}
+        onLoadedMetadata={() => audioRef.current && setDuration(audioRef.current.duration)}
+        onPlaying={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+      />
+    </div>
+  );
+}
+
+function formatClock(seconds: number): string {
+  if (!isFinite(seconds) || isNaN(seconds)) return "0:00";
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }

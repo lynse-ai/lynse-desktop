@@ -4,6 +4,7 @@ import { PageHeader } from "../layout/page-header";
 import { Headphones, Plus, Search, Filter } from "../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
+import { ScrollingWaveform } from "@lynse/ui/components/ui/waveform";
 import { useTranslation } from "@lynse/core/i18n/react";
 
 export function RecordingsPage() {
@@ -47,6 +48,15 @@ export function RecordingsPage() {
 
       <main className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-6 py-12">
         <div className="relative flex w-full max-w-xl flex-col items-center text-center">
+          <ScrollingWaveform
+            height={80}
+            barWidth={3}
+            barGap={2}
+            speed={30}
+            fadeEdges={true}
+            barColor="gray"
+            className="mb-6 w-full max-w-md"
+          />
           <div className="relative mb-6 flex size-20 items-center justify-center rounded-[24px] border border-border bg-card text-primary shadow-sm">
             <Headphones className="size-9" strokeWidth={1.5} />
           </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useLiveTranslation } from "./use-live-translation";
@@ -13,7 +13,7 @@ import type {
   LiveTranslationSegment,
 } from "./types";
 
-export type RecordMode = "record" | "transcribe" | "translate";
+export type RecordMode = "record" | "live";
 
 /** Format elapsed ms into `HH:MM:SS` like iOS Voice Memos. */
 export function formatTimer(ms: number): string {
@@ -45,6 +45,8 @@ export interface UseRecordingSessionReturn {
   busy: boolean;
   blocked: string | null;
   bookmarked: boolean;
+  /** Whether live translation (target-language output) is enabled inside live mode. */
+  translationEnabled: boolean;
 
   // ── complete dialog state ──
   /** The most recently completed session (set when stop resolves). */
@@ -69,6 +71,8 @@ export interface UseRecordingSessionReturn {
   togglePause: () => Promise<void>;
   selectMode: (next: RecordMode) => Promise<void>;
   setBookmarked: (v: boolean) => void;
+  /** Turn live translation on/off. Applied live via `setMode` while a session runs. */
+  setTranslationEnabled: (enabled: boolean) => Promise<void>;
   /** Re-point the translation direction (source/target). Applies live via
    *  setMode when a session is running; otherwise stores the intent. */
   setDirection: (source: string, target: string) => Promise<boolean>;
@@ -86,7 +90,12 @@ export function useRecordingSession(): UseRecordingSessionReturn {
   const [completedSession, setCompletedSession] = useState<CompletedLiveSession | null>(null);
   const [showCompleteDialog, setShowCompleteDialog] = useState(false);
   const [sourceLanguage, setSourceLanguage] = useState(view.sourceLanguage ?? "zh");
-  const [targetLanguage, setTargetLanguage] = useState(view.targetLanguage ?? "none");
+  const [targetLanguage, setTargetLanguage] = useState(
+    view.targetLanguage && view.targetLanguage !== "none" ? view.targetLanguage : "en",
+  );
+  const [translationEnabled, setTranslationFlag] = useState(
+    Boolean(view.targetLanguage && view.targetLanguage !== "none"),
+  );
 
   // ── derived values ──
   const recording = view.state === "recording" || view.state === "paused";
@@ -95,8 +104,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
   const activeMode: RecordMode = useMemo(() => {
     if (!recording) return mode;
     if (view.targetLanguage === view.sourceLanguage) return "record";
-    if (view.targetLanguage === "none") return "transcribe";
-    return "translate";
+    return "live";
   }, [recording, mode, view.targetLanguage, view.sourceLanguage]);
 
   const formattedTime = useMemo(() => formatTimer(view.elapsedMs), [view.elapsedMs]);
@@ -128,18 +136,21 @@ export function useRecordingSession(): UseRecordingSessionReturn {
   }, [api]);
 
   // ── attach / detach transcription or translation live ------------
-  const switchMode = useCallback(async (next: RecordMode, sessionId?: string): Promise<boolean> => {
+  const switchMode = useCallback(async (
+    next: RecordMode,
+    opts?: { sessionId?: string; translation?: boolean },
+  ): Promise<boolean> => {
     if (!api) return false;
-    const sid = sessionId ?? view.sessionId;
+    const sid = opts?.sessionId ?? view.sessionId;
     if (!sid) return false;
-    const sourceLanguage = view.sourceLanguage ?? "zh";
+    const source = view.sourceLanguage ?? "zh";
 
     // Pure recording: detach any cloud connection.
     if (next === "record") {
       await api.setMode({
         sessionId: sid,
-        sourceLanguage,
-        targetLanguage: sourceLanguage,
+        sourceLanguage: source,
+        targetLanguage: source,
         epoch: (view.epoch ?? 0) + 1,
         connections: [],
       });
@@ -147,8 +158,9 @@ export function useRecordingSession(): UseRecordingSessionReturn {
       return true;
     }
 
-    // Transcribe / translate need a provider + credentials.
-    const targetLanguage = next === "transcribe" ? "none" : "en";
+    // Live mode: transcription is always attached; translation only when the
+    // switch is on (target = user-selected language, otherwise none).
+    const target = (opts?.translation ?? translationEnabled) ? targetLanguage : "none";
     try {
       const cfg = await api.getProviderConfig().catch(() => null);
       if (!cfg || !cfg.provider) {
@@ -156,23 +168,23 @@ export function useRecordingSession(): UseRecordingSessionReturn {
         return false;
       }
       const credentials = await requestRealtimeSession(
-        { sourceLanguage, targetLanguage, sessionId: sid, epoch: (view.epoch ?? 0) + 1 },
+        { sourceLanguage: source, targetLanguage: target, sessionId: sid, epoch: (view.epoch ?? 0) + 1 },
         cfg as LiveTranslationProviderConfig,
       );
       await api.setMode({
         sessionId: sid,
-        sourceLanguage,
-        targetLanguage,
+        sourceLanguage: source,
+        targetLanguage: target,
         epoch: credentials.epoch,
         connections: credentials.connections,
       });
-      setMode(next);
+      setMode("live");
       return true;
     } catch (error) {
       toast.warning(String(error));
       return false;
     }
-  }, [api, view.sessionId, view.sourceLanguage, view.epoch, t]);
+  }, [api, view.sessionId, view.sourceLanguage, view.epoch, translationEnabled, targetLanguage, t]);
 
   // ── toggle record / stop ----------------------------------------
   const toggleRecording = useCallback(async () => {
@@ -223,10 +235,10 @@ export function useRecordingSession(): UseRecordingSessionReturn {
         connections: [],
       });
 
-      // If the user picked transcribe/translate before starting, attempt to
-      // switch immediately; fall back to pure recording on failure.
+      // If the user picked live mode before starting, attempt to switch
+      // immediately; fall back to pure recording on failure.
       if (mode !== "record") {
-        const ok = await switchMode(mode, started.sessionId);
+        const ok = await switchMode(mode, { sessionId: started.sessionId });
         if (!ok) setMode("record");
       } else {
         setMode("record");
@@ -251,7 +263,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
         if (activeMode !== "record") {
           const cfg = await api.getProviderConfig().catch(() => null);
           if (cfg && cfg.provider) {
-            const target = activeMode === "translate" ? "en" : "none";
+            const target = translationEnabled ? targetLanguage : "none";
             connections =
               (await requestRealtimeSession(
                 {
@@ -273,7 +285,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     } finally {
       setBusy(false);
     }
-  }, [api, view.sessionId, view.state, view.epoch, view.sourceLanguage, activeMode]);
+  }, [api, view.sessionId, view.state, view.epoch, view.sourceLanguage, activeMode, translationEnabled, targetLanguage]);
 
   // ── mode selector -----------------------------------------------
   const selectMode = useCallback(async (next: RecordMode) => {
@@ -287,9 +299,10 @@ export function useRecordingSession(): UseRecordingSessionReturn {
   // ── translation direction ---------------------------------------
   const setDirection = useCallback(async (source: string, target: string): Promise<boolean> => {
     if (!api) return false;
+    setSourceLanguage(source);
+    setTargetLanguage(target);
+    setTranslationFlag(target !== "none");
     if (!recording) {
-      setSourceLanguage(source);
-      setTargetLanguage(target);
       return true;
     }
     const sid = view.sessionId;
@@ -311,8 +324,6 @@ export function useRecordingSession(): UseRecordingSessionReturn {
         epoch: credentials.epoch,
         connections: credentials.connections,
       });
-      setSourceLanguage(source);
-      setTargetLanguage(target);
       return true;
     } catch (error) {
       toast.warning(String(error));
@@ -320,10 +331,54 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     }
   }, [api, recording, view.sessionId, view.epoch, t]);
 
+  // ── translation switch ------------------------------------------
+  const setTranslationEnabled = useCallback(async (enabled: boolean): Promise<void> => {
+    setTranslationFlag(enabled);
+    // Re-apply live mode with the new target while a session runs; the flag
+    // override avoids reading a stale closure inside switchMode.
+    if (!recording || activeMode === "record") return;
+    await switchMode("live", { translation: enabled });
+  }, [recording, activeMode, switchMode]);
+
   // ── complete dialog ----------------------------------------------
   const dismissCompleteDialog = useCallback(() => {
     setShowCompleteDialog(false);
   }, []);
+
+  // ── menu-bar tray bridge ────────────────────────────────────────
+  // The native NSStatusItem menu emits `start` / `pause` / `stop`; map them
+  // onto the recording transport. We mirror `recording` and the transport
+  // callbacks into refs so a single subscription can stay mounted for the
+  // life of the page (e.g. while the main window is hidden behind the tray).
+  const recordingRef = useRef(recording);
+  recordingRef.current = recording;
+  const toggleRecordingRef = useRef(toggleRecording);
+  toggleRecordingRef.current = toggleRecording;
+  const togglePauseRef = useRef(togglePause);
+  togglePauseRef.current = togglePause;
+  useEffect(() => {
+    if (!api) return;
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    void api.onTrayAction((action) => {
+      if (action === "start") {
+        if (!recordingRef.current) void toggleRecordingRef.current();
+      } else if (action === "pause") {
+        void togglePauseRef.current();
+      } else if (action === "stop") {
+        if (recordingRef.current) void toggleRecordingRef.current();
+      }
+    }).then((unsub) => {
+      if (disposed) unsub();
+      else cleanup = unsub;
+    });
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+    // We deliberately subscribe once per `api` instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api]);
 
   return {
     recording,
@@ -334,6 +389,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     busy,
     blocked,
     bookmarked,
+    translationEnabled,
     completedSession,
     showCompleteDialog,
     sessionId: view.sessionId,
@@ -348,6 +404,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     togglePause,
     selectMode,
     setBookmarked,
+    setTranslationEnabled,
     setDirection,
     dismissCompleteDialog,
   };

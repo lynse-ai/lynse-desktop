@@ -13,7 +13,6 @@ import { NotificationsPage } from "@lynse/views/notifications";
 import { SettingsDialog } from "@lynse/views/settings";
 import {
   LiveSubtitleOverlay,
-  LiveTranslationPage,
   RecordingIslandWindow,
   TranscriptDetailPage,
 } from "@lynse/views/live-translation";
@@ -26,7 +25,6 @@ function PageRouter() {
   if (pathname.startsWith("/chat")) return <ChatPage />;
   if (pathname.startsWith("/todo")) return <TodoPage />;
   if (pathname.startsWith("/recording")) return <TranscriptDetailPage />;
-  if (pathname.startsWith("/live-translation")) return <LiveTranslationPage />;
   // Settings is shown in a popup dialog, not an inline page. Visiting the
   // /settings route pops the dialog (closing it navigates back to the workspace).
   if (pathname.startsWith("/settings")) {

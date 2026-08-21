@@ -5,7 +5,7 @@ import {
   ArrowUp,
   Check,
   Copy,
-  FileText,
+  Clock,
   Mic,
   Plus,
   Square,
@@ -17,14 +17,29 @@ import { AssistantAvatar } from "../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useChat } from "../workspace/hooks/use-chat";
 import { ConfirmDialog } from "../workspace/ConfirmDialog";
+import { ChatAttachments } from "./chat-attachments";
+import { ChatHistorySidebar } from "./chat-history-sidebar";
 
 export function ChatPage() {
   const [input, setInput] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { t } = useTranslation();
-  const { messages, isLoading, sendMessage, clearMessages, stopStreaming, pendingConfirm, answerConfirm, dismissConfirm } = useChat();
+  const {
+    messages,
+    isLoading,
+    conversations,
+    activeConversationId,
+    sendMessage,
+    clearMessages,
+    selectConversation,
+    stopStreaming,
+    pendingConfirm,
+    answerConfirm,
+    dismissConfirm,
+  } = useChat({ persistHistory: true });
   const streamingMessageId = isLoading ? messages[messages.length - 1]?.id : undefined;
   const suggestions = [
     t("chat.suggestion_summary"),
@@ -76,20 +91,51 @@ export function ChatPage() {
             <span className="size-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true" />
           )}
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-8 rounded-lg border border-transparent text-xs text-muted-foreground transition-colors hover:border-border hover:bg-card hover:text-foreground"
-          onClick={handleNewChat}
-          title={t("chat.new_chat")}
-          data-tauri-drag-region={false}
-        >
-          <Plus className="size-3.5" />
-          {t("chat.new_chat")}
-        </Button>
+        <div className="flex items-center gap-1" data-tauri-drag-region={false}>
+          <Button
+            variant="ghost"
+            size="icon"
+            className={`size-8 rounded-lg border transition-colors ${
+              historyOpen
+                ? "border-border bg-card text-foreground"
+                : "border-transparent text-muted-foreground hover:border-border hover:bg-card hover:text-foreground"
+            }`}
+            onClick={() => setHistoryOpen((open) => !open)}
+            title={t("chat.history")}
+            aria-label={t("chat.history")}
+            aria-pressed={historyOpen}
+          >
+            <Clock className="size-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 rounded-lg border border-transparent text-xs text-muted-foreground transition-colors hover:border-border hover:bg-card hover:text-foreground"
+            onClick={handleNewChat}
+            title={t("chat.new_chat")}
+          >
+            <Plus className="size-3.5" />
+            {t("chat.new_chat")}
+          </Button>
+        </div>
       </header>
 
-      <main ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
+      {historyOpen && (
+        <aside className="absolute bottom-0 left-0 top-14 flex w-56 flex-col border-r border-border/60">
+          <ChatHistorySidebar
+            conversations={conversations}
+            activeConversationId={activeConversationId}
+            disabled={isLoading}
+            onSelect={selectConversation}
+            onClose={() => setHistoryOpen(false)}
+          />
+        </aside>
+      )}
+
+      <main
+        ref={scrollRef}
+        className={`${historyOpen ? "ml-56" : "ml-0"} min-h-0 flex-1 overflow-y-auto transition-[margin] duration-150`}
+      >
         {messages.length === 0 && !isLoading ? (
           <EmptyChat suggestions={suggestions} onSelect={handleSend} />
         ) : (
@@ -122,7 +168,9 @@ export function ChatPage() {
         )}
       </main>
 
-      <div className="pointer-events-none shrink-0 bg-background/95 px-4 pb-4 pt-3 dark:bg-background/75 dark:backdrop-blur-xl">
+      <div
+        className={`${historyOpen ? "ml-56" : "ml-0"} pointer-events-none shrink-0 bg-background/95 px-4 pb-4 pt-3 transition-[margin] duration-150 dark:bg-background/75 dark:backdrop-blur-xl`}
+      >
         <div className="pointer-events-auto mx-auto max-w-3xl">
           <div className="rounded-xl border border-input bg-white p-2 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.035)] transition-[border-color,box-shadow] duration-150 focus-within:border-neutral-400 focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.04),0_0_0_3px_rgba(0,0,0,0.04)] dark:bg-card dark:shadow-[0_10px_35px_rgba(0,0,0,0.28)] dark:focus-within:border-white/20 dark:focus-within:shadow-[0_10px_35px_rgba(0,0,0,0.28),0_0_0_3px_rgba(255,255,255,0.05)]">
             <Textarea
@@ -279,6 +327,13 @@ function AssistantMessage({ message, isStreaming, copied, onCopy }: AssistantMes
         </div>
       )}
 
+      {message.content && message.status && (
+        <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <span className="size-1.5 animate-pulse rounded-full bg-current" />
+          <span>{message.status}</span>
+        </div>
+      )}
+
       {message.sources && message.sources.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {message.sources.map((source, index) => (
@@ -292,26 +347,7 @@ function AssistantMessage({ message, isStreaming, copied, onCopy }: AssistantMes
         </div>
       )}
 
-      {message.attachments && message.attachments.length > 0 && (
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {message.attachments.map((attachment, index) => {
-            const href = attachment.downloadUrl || attachment.url || attachment.thumbnailUrl;
-            if (!href) return null;
-            return (
-              <a
-                key={attachment.id || `${href}-${index}`}
-                href={href}
-                target="_blank"
-                rel="noreferrer"
-                className="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent"
-              >
-                <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-                <span className="truncate">{attachment.name || href}</span>
-              </a>
-            );
-          })}
-        </div>
-      )}
+      <ChatAttachments attachments={message.attachments} />
 
       {message.content && !message.error && (
         <div className="mt-2 flex items-center opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">

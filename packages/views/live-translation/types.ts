@@ -42,7 +42,7 @@ export type LiveTranslationState =
   | "stopping"
   | "failed";
 
-export type LiveTranslationTrayAction = "start" | "pause";
+export type LiveTranslationTrayAction = "start" | "pause" | "stop";
 
 export interface LiveTranslationSegment {
   id: string;
@@ -155,6 +155,8 @@ export interface DesktopLiveTranslationApi {
   showSubtitles: (show: boolean) => Promise<void>;
   minimizeToTray: () => Promise<void>;
   showMainWindow: () => Promise<void>;
+  /** Hide the recording-island mini window (recording keeps running). */
+  hideIsland: () => Promise<void>;
   updateTray: (payload: { recording: boolean; paused: boolean; elapsed_secs?: number }) => Promise<void>;
   onTrayAction: (callback: (action: LiveTranslationTrayAction) => void) => Promise<() => void>;
   onEvent: (callback: (event: LiveTranslationEvent) => void) => Promise<() => void>;

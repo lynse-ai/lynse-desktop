@@ -2212,13 +2212,63 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
 const RECORDING_ISLAND_WIDTH: f64 = 340.0;
 const RECORDING_ISLAND_HEIGHT: f64 = 52.0;
 
+/// Positions the island pill directly below the menu-bar tray icon (top-right
+/// of the screen) so it reads as a companion of the status item. Falls back
+/// to top-centre when the tray rect is unavailable.
+fn position_recording_island(app: &AppHandle, window: &tauri::WebviewWindow) {
+    let Some(monitor) = app.primary_monitor().ok().flatten() else {
+        return;
+    };
+    let factor = monitor.scale_factor() as f64;
+    let (mut x, mut y) = {
+        let tray_x = monitor.position().x as f64 / factor;
+        let tray_y = monitor.position().y as f64 / factor;
+        let w = monitor.size().width as f64 / factor;
+        (tray_x + (w - RECORDING_ISLAND_WIDTH) / 2.0, tray_y + 4.0)
+    };
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        if let Ok(Some(rect)) = tray.rect() {
+            // Tray rect comes back as a dpi enum; normalise both arms to
+            // logical pixels so the window position math stays consistent.
+            let tray_x = match &rect.position {
+                tauri::Position::Physical(p) => p.x as f64 / factor,
+                tauri::Position::Logical(l) => l.x,
+            };
+            let tray_y = match &rect.position {
+                tauri::Position::Physical(p) => p.y as f64 / factor,
+                tauri::Position::Logical(l) => l.y,
+            };
+            let tray_w = match &rect.size {
+                tauri::Size::Physical(s) => s.width as f64 / factor,
+                tauri::Size::Logical(s) => s.width,
+            };
+            let tray_h = match &rect.size {
+                tauri::Size::Physical(s) => s.height as f64 / factor,
+                tauri::Size::Logical(s) => s.height,
+            };
+            // Right-align the island under the status item; keep it on
+            // screen for edge-of-menu-bar placements.
+            x = (tray_x + tray_w - RECORDING_ISLAND_WIDTH).max(0.0);
+            y = tray_y + tray_h + 4.0;
+        }
+    }
+    let _ = window.set_position(LogicalPosition::new(x, y));
+}
+
 /// Shows (creating on first use) or hides the floating "recording island" —
 /// the collapsed form of the recording page. While the main window is hidden
 /// the island keeps elapsed time, live mic level and pause/stop reachable,
 /// mirroring the macOS "dynamic island" interaction.
 pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
     if let Some(window) = app.get_webview_window("recording-island") {
-        let _ = if visible { window.show() } else { window.hide() };
+        if visible {
+            // Snap back below the tray icon on every session start, even if
+            // the user dragged the pill elsewhere previously.
+            position_recording_island(app, &window);
+            let _ = window.show();
+        } else {
+            let _ = window.hide();
+        }
         return;
     }
     if !visible {
@@ -2246,18 +2296,15 @@ pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
             return;
         }
     };
-    // Anchor the island horizontally centred at the top of the primary
-    // monitor. macOS clamps windows below the menu bar, so a small logical
-    // y-offset lands the pill directly beneath it.
-    if let Some(monitor) = app.primary_monitor().ok().flatten() {
-        let factor = monitor.scale_factor() as f64;
-        let monitor_width = monitor.size().width as f64;
-        let monitor_x = monitor.position().x as f64;
-        let monitor_y = monitor.position().y as f64;
-        let x = monitor_x / factor + (monitor_width / factor - RECORDING_ISLAND_WIDTH) / 2.0;
-        let y = monitor_y / factor + 4.0;
-        let _ = window.set_position(LogicalPosition::new(x, y));
-    }
+    position_recording_island(app, &window);
+}
+
+/// Hides the recording-island mini window (user tapped its close button).
+/// Recording keeps running — the tray menu remains the control surface.
+#[tauri::command]
+pub fn live_translation_hide_island(app: AppHandle) -> CommandResult<()> {
+    set_recording_island_visible(&app, false);
+    Ok(())
 }
 
 /// Restores (shows + focuses) the main window — invoked from the recording
@@ -2318,19 +2365,40 @@ pub struct TrayUpdatePayload {
 
 #[tauri::command]
 pub fn live_translation_update_tray(app: AppHandle, payload: TrayUpdatePayload) -> CommandResult<()> {
-    if let Some(tray) = app.tray_by_id("main-tray") {
-        let tooltip = if payload.recording {
-            if payload.paused {
-                format!("Lynse — {:.0}s paused", payload.elapsed_secs)
-            } else {
-                let mins = payload.elapsed_secs / 60;
-                let secs = payload.elapsed_secs % 60;
-                format!("Lynse — \u{23FA} Recording  {mins}:{secs:02}")
-            }
+    let tooltip = if payload.recording {
+        if payload.paused {
+            format!("Lynse — {:.0}s paused", payload.elapsed_secs)
         } else {
-            "Lynse".to_string()
-        };
+            let mins = payload.elapsed_secs / 60;
+            let secs = payload.elapsed_secs % 60;
+            format!("Lynse — \u{23FA} Recording  {mins}:{secs:02}")
+        }
+    } else {
+        "Lynse".to_string()
+    };
+    if let Some(tray) = app.tray_by_id("main-tray") {
         tray.set_tooltip(Some(tooltip)).map_err(|e| e.to_string())?;
+    }
+    // Mirror the state so the menu builder can pick it up. The menu is only
+    // rebuilt when the (recording, paused) flags actually change — rebuilding
+    // on every 200 ms tick would replace the NSMenu while it is open, making
+    // it unclickable and collapsing it on any mouse movement. The tooltip is
+    // cheap and stays live via the tick above.
+    {
+        let state = app.state::<crate::AppState>();
+        let mut changed = false;
+        if let Ok(mut guard) = state.tray_ui.lock() {
+            changed =
+                guard.recording != payload.recording || guard.paused != payload.paused;
+            *guard = crate::TrayUiState {
+                recording: payload.recording,
+                paused: payload.paused,
+                elapsed_secs: payload.elapsed_secs,
+            };
+        }
+        if changed {
+            crate::rebuild_tray_menu(&app)?;
+        }
     }
     Ok(())
 }

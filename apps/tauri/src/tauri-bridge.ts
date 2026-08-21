@@ -5,7 +5,14 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { setApiTransportMode } from "@lynse/core/api/client";
 import { hydrateSecrets, refreshSecret, secureStorage } from "./secure-storage";
-import type { SttDownloadProgress, SttModelInfo, TranscribeConfig } from "@lynse/views/workspace";
+import type {
+  DesktopQoderChatApi,
+  QoderChatBridgeEvent,
+  QoderChatConfig,
+  SttDownloadProgress,
+  SttModelInfo,
+  TranscribeConfig,
+} from "@lynse/views/workspace";
 import type {
   CompletedLiveSession,
   DesktopLiveTranslationApi,
@@ -34,6 +41,7 @@ export type AppUpdateInfo = {
 type DesktopApi = {
   openExternal: (url: string) => Promise<void>;
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
+  qoderChat: DesktopQoderChatApi;
   liveTranslation: DesktopLiveTranslationApi;
   todo: Record<string, (...args: any[]) => Promise<unknown>>;
   appInfo: { version: string; platform: string };
@@ -167,7 +175,7 @@ export async function installTauriBridge(): Promise<void> {
   await getCurrentWebview().listen<LiveTranslationTrayAction>(
     LIVE_TRANSLATION_TRAY_EVENT,
     (event) => {
-      if (event.payload !== "start" && event.payload !== "pause") return;
+      if (event.payload !== "start" && event.payload !== "pause" && event.payload !== "stop") return;
       if (liveTranslationTrayListeners.size === 0) {
         pendingLiveTranslationTrayActions.push(event.payload);
       } else {
@@ -219,6 +227,24 @@ export async function installTauriBridge(): Promise<void> {
       getSttConfig: () => command<TranscribeConfig>("local_stt_config_get"),
       saveSttConfig: (config: TranscribeConfig) => command<TranscribeConfig>("local_stt_config_save", { config }),
     },
+    qoderChat: {
+      getConfig: () => command<QoderChatConfig>("qoder_chat_config"),
+      savePat: (pat) => command<QoderChatConfig>("qoder_chat_save_pat", { pat }),
+      createSession: ({ shareLynseApiKey, lynseApiHost }) =>
+        command<string>("qoder_chat_create_session", { shareLynseApiKey, lynseApiHost }),
+      sendMessage: (sessionId, message, requestId, afterEventId) =>
+        command<{ lastEventId?: string }>("qoder_chat_send_message", {
+          sessionId,
+          message,
+          requestId,
+          afterEventId,
+        }),
+      cancel: (sessionId) => command<void>("qoder_chat_cancel", { sessionId }),
+      onEvent: (callback) =>
+        getCurrentWebview().listen<QoderChatBridgeEvent>("qoder-chat-event", (event) =>
+          callback(event.payload),
+        ),
+    },
     liveTranslation: {
       getProviderConfig: async () => getLiveTranslationProviderConfig(),
       saveProviderConfig: async (config) => saveLiveTranslationProviderConfig(config),
@@ -235,6 +261,7 @@ export async function installTauriBridge(): Promise<void> {
       recover: (sessionId) => command<CompletedLiveSession>("live_translation_recover", { sessionId }),
       showSubtitles: (show) => command<void>("live_translation_show_subtitles", { show }),
       showMainWindow: () => command<void>("live_translation_show_main"),
+      hideIsland: () => command<void>("live_translation_hide_island"),
       updateTray: (payload) => command<void>("live_translation_update_tray", { payload }),
       minimizeToTray: () => getCurrentWindow().hide(),
       onTrayAction: async (callback) => {

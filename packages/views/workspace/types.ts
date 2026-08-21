@@ -208,7 +208,25 @@ export interface ChatMessage {
 }
 
 /** Which backend serves a chat session. */
-export type ChatProvider = "cloud";
+export type ChatProvider = "cloud" | "qoder";
+
+/** Resume state for a persistent Qoder Cloud Agent conversation. */
+export interface QoderChatSessionState {
+  sessionId: string;
+  afterEventId?: string;
+  sessionOptionsKey: string;
+}
+
+/** A locally indexed conversation whose model context remains in its Qoder Session. */
+export interface ChatConversation {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  provider: ChatProvider;
+  createdAt: number;
+  updatedAt: number;
+  qoderSession?: QoderChatSessionState;
+}
 
 export interface ChatAttachment {
   id?: string;

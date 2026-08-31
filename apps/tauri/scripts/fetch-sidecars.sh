@@ -62,7 +62,7 @@ build_vibeasr() {
     gen_args=(-G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM=mingw32-make)
   fi
   cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_SHARED_LIBS=OFF "${gen_args[@]}"
+    -DBUILD_SHARED_LIBS=OFF "${gen_args[@]+"${gen_args[@]}"}"
   cmake --build "$src/build" --config Release -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
   local bin
   # The streaming binary (src/asr_server.cpp, OUTPUT_NAME asr_stream_server) is

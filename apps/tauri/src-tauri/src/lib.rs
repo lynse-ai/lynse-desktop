@@ -2005,7 +2005,16 @@ fn migrate_electron_data(app: &AppHandle) -> CommandResult<()> {
 // ── Version / update checking ──────────────────────────────
 // GitHub repository that hosts the desktop releases. This must match the repo
 // the release workflow (`.github/workflows/release.yml`) publishes to.
-const UPDATE_REPO: &str = "lynse-ai/lynse-desktop";
+/// Public "latest version" endpoint. The desktop app cannot query the GitHub
+/// release API directly because `lynse-ai/lynse-desktop` is a private repo
+/// (anonymous requests return 404). Instead a public endpoint proxies the
+/// private release server-side with a GitHub token that never reaches the
+/// client. Override with `LYNSE_UPDATE_URL` (e.g. a local mock in dev).
+const DEFAULT_UPDATE_CHECK_URL: &str = "https://api.lynse.cn/v1/client/latest-version";
+
+fn update_check_url() -> String {
+    env::var("LYNSE_UPDATE_URL").unwrap_or_else(|_| DEFAULT_UPDATE_CHECK_URL.to_string())
+}
 
 /// Split a semver-ish string ("v0.1.12", "1.2.3-beta") into comparable numeric
 /// segments, ignoring non-digit separators and any pre-release/build suffix.
@@ -2046,7 +2055,7 @@ fn get_app_info(app: AppHandle) -> Value {
 #[tauri::command]
 fn check_app_update(app: AppHandle) -> CommandResult<Value> {
     let current_version = app.package_info().version.to_string();
-    let url = format!("https://api.github.com/repos/{UPDATE_REPO}/releases/latest");
+    let url = update_check_url();
 
     let output = Command::new("curl")
         .args([
@@ -2057,7 +2066,7 @@ fn check_app_update(app: AppHandle) -> CommandResult<Value> {
             "-H",
             "User-Agent: lynse-desktop",
             "-H",
-            "Accept: application/vnd.github+json",
+            "Accept: application/json",
             &url,
         ])
         .output()
@@ -2065,7 +2074,7 @@ fn check_app_update(app: AppHandle) -> CommandResult<Value> {
 
     if !output.status.success() {
         return Err(format!(
-            "GitHub request failed (exit code {})",
+            "update check request failed (exit code {})",
             output
                 .status
                 .code()
@@ -2075,24 +2084,31 @@ fn check_app_update(app: AppHandle) -> CommandResult<Value> {
     }
 
     let body = String::from_utf8_lossy(&output.stdout);
-    let release: Value = serde_json::from_str(&body)
-        .map_err(|error| format!("invalid GitHub release response: {error}"))?;
+    let payload: Value = serde_json::from_str(&body)
+        .map_err(|error| format!("invalid update-check response: {error}"))?;
 
-    let tag = release
-        .get("tag_name")
+    // Surface backend errors instead of silently treating a bad/empty payload
+    // as "already up to date".
+    if let Some(message) = payload.get("message").and_then(Value::as_str) {
+        return Err(format!("update check failed: {message}"));
+    }
+
+    let latest_version = payload
+        .get("version")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim_start_matches('v')
+        .to_string();
+    let has_update =
+        !latest_version.is_empty() && is_newer_version(&latest_version, &current_version);
+    let release_url = payload
+        .get("url")
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let latest_version = tag.trim_start_matches('v').to_string();
-    let has_update = !latest_version.is_empty() && is_newer_version(&latest_version, &current_version);
-    let release_url = release
-        .get("html_url")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let release_notes = release.get("body").and_then(Value::as_str).map(String::from);
-    let published_at = release
-        .get("published_at")
+    let release_notes = payload.get("notes").and_then(Value::as_str).map(String::from);
+    let published_at = payload
+        .get("publishedAt")
         .and_then(Value::as_str)
         .map(String::from);
 

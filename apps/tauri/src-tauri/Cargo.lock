@@ -2148,7 +2148,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lynse-tauri"
-version = "0.1.27"
+version = "0.1.28"
 dependencies = [
  "base64 0.22.1",
  "chrono",

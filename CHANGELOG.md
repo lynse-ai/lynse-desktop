@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.28 (2026-08-31)
+
+### Fixed
+- Restore the AI-assistant (chat) icon unread badge. In 0.1.27 chat unread was folded into the Bell only, forcing an extra step to learn the assistant had replied; the chat icon now shows the total unseen reply count again, while the Bell stays the unified notification center.
+
+### Changed
+- Version-update availability now also appears as an entry in the notification center (Bell drawer): an available update shows as a "New version available" item that opens the release page in your browser. The avatar upgrade-arrow cue is retained.
+
 ## 0.1.27 (2026-08-31)
 
 ### New Features

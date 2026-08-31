@@ -490,6 +490,7 @@ const zh = {
     chat_unread_untitled: "有 {{count}} 条未读回复",
     transcription_done: "录音已上传，云端转写中",
     sync_local: "录音已保存在本地（未同步到云端）",
+    update_available: "新版本 {{version}} 已发布",
   },
   audio: {
     loading: "加载音频中...",

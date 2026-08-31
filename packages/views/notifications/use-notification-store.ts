@@ -14,6 +14,8 @@ export interface NotificationItem {
   count?: number;
   /** Deep link opened when the item is clicked (e.g. `/chat`, `/notes`). */
   href?: string;
+  /** When true, `href` is an external URL opened in the system browser instead of an internal route. */
+  external?: boolean;
   createdAt: number;
   read: boolean;
 }

@@ -490,6 +490,7 @@ const en = {
     chat_unread_untitled: "{{count}} unread replies",
     transcription_done: "Recording uploaded, transcribing in the cloud",
     sync_local: "Recording saved locally (not synced to the cloud)",
+    update_available: "New version {{version}} available",
   },
   audio: {
     loading: "Loading audio...",

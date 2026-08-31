@@ -9,7 +9,7 @@ import { ChatPage } from "@lynse/views/chat";
 import { TodoPage } from "@lynse/views/todo";
 import { NotesPage } from "@lynse/views/notes";
 import { InspirationPage } from "@lynse/views/inspiration";
-import { NotificationsPage } from "@lynse/views/notifications";
+import { NotificationsPage, AppUpdateNotifier } from "@lynse/views/notifications";
 import { SettingsDialog } from "@lynse/views/settings";
 import {
   LiveSubtitleOverlay,
@@ -39,11 +39,12 @@ function PageRouter() {
 
 function AppContent() {
   return (
-    <DesktopNavigationProvider>
-      <DashboardLayout>
-        <PageRouter />
-      </DashboardLayout>
-    </DesktopNavigationProvider>
+      <DesktopNavigationProvider>
+        <DashboardLayout>
+          <PageRouter />
+        </DashboardLayout>
+        <AppUpdateNotifier />
+      </DesktopNavigationProvider>
   );
 }
 

@@ -490,6 +490,7 @@ const ja = {
     chat_unread_untitled: "{{count}}件の未読返信",
     transcription_done: "録音をアップロードし、クラウドで文字起こし中",
     sync_local: "録音はローカルに保存されました（クラウド未同期）",
+    update_available: "新バージョン {{version}} が利用可能",
   },
   audio: {
     loading: "オーディオ読み込み中...",

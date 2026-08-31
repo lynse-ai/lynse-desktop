@@ -33,7 +33,9 @@ export function NotificationList({
       case "sync":
         return t("notifications.sync_local");
       case "system":
-        return item.title;
+        return item.id === "system:app-update"
+          ? t("notifications.update_available", { version: item.title })
+          : item.title;
       default:
         return item.title;
     }

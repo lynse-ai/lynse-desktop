@@ -631,6 +631,10 @@ function saveChatHistoryNow(): void {
   saveChatHistory(userId, { activeConversationId, conversations });
 }
 
+/** Selector: total unseen assistant replies across every conversation (drives the chat-icon badge). */
+export const selectChatUnreadCount = (s: ChatStoreState): number =>
+  Object.values(s.unreadCounts).reduce((acc, n) => acc + (n || 0), 0);
+
 useChatStore.subscribe((state, prev) => {
   const messagesChanged = state.messages !== prev.messages;
   const activeChanged = state.activeConversationId !== prev.activeConversationId;

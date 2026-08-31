@@ -6,6 +6,8 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
 import { useUserCredits } from "./use-user-credits";
 import { useNotificationStore, selectUnreadCount } from "../notifications/use-notification-store";
+import { useChatStore, selectChatUnreadCount } from "../workspace/hooks/use-chat-store";
+import { openExternalUrl } from "../app-update";
 import { NotificationList } from "../notifications/notification-list";
 import { SettingsDialog } from "../settings/settings-dialog";
 import { UploadDialog } from "../workspace/upload-dialog";
@@ -46,6 +48,7 @@ export function LynseSidebar() {
   const { t } = useTranslation();
   const { data } = useUserCredits();
   const unreadCount = useNotificationStore(selectUnreadCount);
+  const chatUnreadCount = useChatStore(selectChatUnreadCount);
   const markAllRead = useNotificationStore((s) => s.markAllRead);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -113,7 +116,10 @@ export function LynseSidebar() {
         {topItems.map((item) => {
           const Icon = item.icon;
           const active = item.key === "settings" ? settingsOpen : isNavActive(pathname, item.path ?? "");
-          const badgeCount = 0;
+          // The AI-assistant (chat) icon carries its own unread badge so a new
+          // assistant reply is visible at a glance — the Bell stays the unified
+          // center, this is a direct shortcut back to the chat.
+          const badgeCount = item.key === "chat" ? chatUnreadCount : 0;
           return (
             <NavButton
               key={item.key}
@@ -170,7 +176,10 @@ export function LynseSidebar() {
                   <div className="max-h-[60vh] overflow-y-auto">
                     <NotificationList
                       onItemClick={(n) => {
-                        if (n.href) push(n.href);
+                        if (n.href) {
+                          if (n.external) openExternalUrl(n.href);
+                          else push(n.href);
+                        }
                         setNotifOpen(false);
                       }}
                     />

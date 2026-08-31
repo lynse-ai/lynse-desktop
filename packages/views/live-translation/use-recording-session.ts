@@ -98,7 +98,12 @@ export function useRecordingSession(): UseRecordingSessionReturn {
   );
 
   // ── derived values ──
-  const recording = view.state === "recording" || view.state === "paused";
+  // Treat any non-idle, non-stopping session as "recording" so the Start button
+  // never shows while a session is actually active (e.g. during the brief
+  // "connecting" window before the audio sidecar reports "ready"). Otherwise a
+  // second Start click would hit the Rust guard and fail with
+  // "a live translation session is already active".
+  const recording = view.sessionId != null && view.state !== "stopping";
   const paused = view.state === "paused";
 
   const activeMode: RecordMode = useMemo(() => {

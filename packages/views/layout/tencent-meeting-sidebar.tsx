@@ -4,6 +4,7 @@ import { useState } from "react";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
+import { useChatStore } from "../workspace/hooks/use-chat-store";
 import { useUserCredits } from "./use-user-credits";
 import { SettingsDialog } from "../settings/settings-dialog";
 import { UploadDialog } from "../workspace/upload-dialog";
@@ -43,6 +44,9 @@ export function TencentMeetingSidebar() {
   const { pathname, push } = useNavigation();
   const { t } = useTranslation();
   const { data } = useUserCredits();
+  const unreadCount = useChatStore((s) =>
+    Object.values(s.unreadCounts).reduce((sum, count) => sum + count, 0),
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
 
@@ -108,10 +112,12 @@ export function TencentMeetingSidebar() {
         {topItems.map((item) => {
           const Icon = item.icon;
           const active = item.key === "settings" ? settingsOpen : isNavActive(pathname, item.path ?? "");
+          const badgeCount = item.key === "chat" ? unreadCount : 0;
           return (
             <NavButton
               key={item.key}
               active={active}
+              badgeCount={badgeCount}
               onClick={() => (item.action ? item.action() : push(item.path ?? ""))}
               title={item.label}
             >
@@ -148,11 +154,14 @@ export function TencentMeetingSidebar() {
 
 function NavButton({
   active,
+  badgeCount,
   onClick,
   title,
   children,
 }: {
   active: boolean;
+  /** Unread count shown as a numeric badge (IM-style). 0/undefined hides it. */
+  badgeCount?: number;
   onClick: () => void;
   title: string;
   children: React.ReactNode;
@@ -164,12 +173,20 @@ function NavButton({
       title={title}
       data-tauri-drag-region={false}
       className={cn(
-        "flex w-[56px] flex-col items-center justify-center rounded-lg px-1 py-2 transition-colors",
+        "relative flex w-[56px] flex-col items-center justify-center rounded-lg px-1 py-2 transition-colors",
         active
           ? "bg-sidebar-accent text-sidebar-accent-foreground"
           : "text-muted-foreground hover:bg-white/[0.06] hover:text-foreground"
       )}
     >
+      {!!badgeCount && (
+        <span
+          aria-label={`AI 助手有 ${badgeCount} 条未读回复`}
+          className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-sidebar"
+        >
+          {badgeCount > 99 ? "99+" : badgeCount}
+        </span>
+      )}
       {children}
     </button>
   );

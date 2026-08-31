@@ -24,7 +24,6 @@ mod live_translation;
 #[path = "live_translation_stub.rs"]
 mod live_translation;
 mod stt;
-mod qoder_chat;
 // Wire codec for the Volcengine AST provider used by `live_translation`. Kept
 // platform-independent so its golden-vector tests run everywhere, even where
 // live translation itself falls back to the stub.
@@ -76,7 +75,7 @@ pub(crate) fn model_dir(app: &AppHandle) -> CommandResult<PathBuf> {
 }
 
 /// Directory holding a concrete engine/model's artifacts. FunASR keeps a
-/// single model bundle at the base; Whisper/MOSS use a per-model subfolder.
+/// single model bundle at the base; Whisper/VibeVoice use a per-model subfolder.
 pub(crate) fn engine_model_dir(app: &AppHandle, engine: &str, model_id: &str) -> CommandResult<PathBuf> {
     if engine == "funasr" {
         return model_dir(app);
@@ -426,18 +425,51 @@ fn active_hotword_terms(app: &AppHandle, package_id: Option<&str>) -> CommandRes
 
 // ── STT model catalog (multi-engine) ────────────────────
 
+/// One downloadable artifact within a model. Most models ship a single file;
+/// VibeVoice ships two GGUF weights (VAE encoder + LM decoder).
+pub struct SttModelFile {
+    pub file_name: &'static str,
+    pub size_bytes: u64,
+    /// Fixed-version download URL (mirrored to hf-mirror.com automatically).
+    pub download_url: &'static str,
+    /// Pinned SHA-256. Empty => verification skipped (fill before shipping).
+    pub sha256: &'static str,
+}
+
 /// A pinned, downloadable model for one engine.
 pub struct SttModelEntry {
     pub provider: &'static str,
     pub id: &'static str,
     pub label: &'static str,
     pub size_bytes: u64,
-    /// Fixed-version download URL. Empty for engines with a custom download.
+    /// Fixed-version download URL for single-artifact models. Empty for engines
+    /// with a custom download (FunASR, MLX) or multi-file models (see `files`).
     pub download_url: &'static str,
-    /// Pinned SHA-256 of the artifact. Empty => verification skipped (must be
-    /// filled with the pinned hash before shipping).
+    /// Pinned SHA-256 of the single artifact. Empty => verification skipped.
     pub sha256: &'static str,
+    /// Extra model files (e.g. VibeVoice's two GGUF weights). Engines with a
+    /// single artifact use `download_url`/`sha256` instead.
+    pub files: &'static [SttModelFile],
 }
+
+/// VibeVoice-ASR-BitNet weights (Microsoft, MIT): a VAE encoder GGUF plus an
+/// LM decoder GGUF, both required by the `vibeasr` sidecar.
+pub const VIBEVOICE_BITNET_FILES: &[SttModelFile] = &[
+    SttModelFile {
+        file_name: "vibeasr-vae-encoder-i8_s.gguf",
+        size_bytes: 0,
+        download_url:
+            "https://huggingface.co/microsoft/VibeVoice-ASR-BitNet/resolve/main/vibeasr-vae-encoder-i8_s.gguf",
+        sha256: "",
+    },
+    SttModelFile {
+        file_name: "vibeasr-lm-i2_s-embed-q6_k.gguf",
+        size_bytes: 0,
+        download_url:
+            "https://huggingface.co/microsoft/VibeVoice-ASR-BitNet/resolve/main/vibeasr-lm-i2_s-embed-q6_k.gguf",
+        sha256: "",
+    },
+];
 
 pub const STT_MODELS: &[SttModelEntry] = &[
     SttModelEntry {
@@ -447,6 +479,7 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         size_bytes: 0,
         download_url: "",
         sha256: "",
+        files: &[],
     },
     SttModelEntry {
         provider: "whisper",
@@ -455,6 +488,7 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         size_bytes: 199_229_824,
         download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
         sha256: "",
+        files: &[],
     },
     SttModelEntry {
         provider: "whisper",
@@ -463,6 +497,7 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         size_bytes: 565_165_670,
         download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin",
         sha256: "",
+        files: &[],
     },
     SttModelEntry {
         provider: "whisper",
@@ -471,15 +506,16 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         size_bytes: 601_882_112,
         download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
         sha256: "",
+        files: &[],
     },
     SttModelEntry {
-        provider: "moss_transcribe_diarize",
-        id: "moss-0.9b-q5",
-        label: "MOSS-Transcribe-Diarize 0.9B Q5 (~619 MiB)",
-        size_bytes: 649_061_580,
-        download_url:
-            "https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize/resolve/main/moss-transcribe-diarize-0.9b-q5_0.gguf",
+        provider: "vibeasr",
+        id: "vibeasr-bitnet-1.5b",
+        label: "VibeVoice-ASR-BitNet 1.5B（本地·CPU，中英法等 7 语种，~1.6 GiB）",
+        size_bytes: 0,
+        download_url: "",
         sha256: "",
+        files: VIBEVOICE_BITNET_FILES,
     },
     SttModelEntry {
         provider: "mlx",
@@ -488,6 +524,7 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         size_bytes: 0,
         download_url: "",
         sha256: "",
+        files: &[],
     },
 ];
 
@@ -498,26 +535,62 @@ fn stt_model_entry(provider: &str, model_id: &str) -> CommandResult<&'static Stt
         .ok_or_else(|| format!("未知的 STT 模型：{provider}/{model_id}"))
 }
 
-fn model_artifact_path(app: &AppHandle, provider: &str, model_id: &str) -> CommandResult<PathBuf> {
-    let directory = engine_model_dir(app, provider, model_id)?;
-    if let Some(file) = stt::model_file_name(provider, model_id) {
-        Ok(directory.join(file))
+/// Enumerate the on-disk files that make up a model: multi-file models (e.g.
+/// VibeVoice's two GGUF weights) list each `files` entry, single-artifact
+/// models use their `download_url`, and FunASR/MLX (custom Python download)
+/// return nothing here.
+fn model_download_targets(entry: &SttModelEntry) -> Vec<(String, String, String, u64)> {
+    if !entry.files.is_empty() {
+        entry
+            .files
+            .iter()
+            .map(|file| {
+                (
+                    file.file_name.to_owned(),
+                    file.download_url.to_owned(),
+                    file.sha256.to_owned(),
+                    file.size_bytes,
+                )
+            })
+            .collect()
+    } else if !entry.download_url.is_empty() {
+        let file_name = stt::model_file_name(entry.provider, entry.id)
+            .unwrap_or_else(|| entry.id.to_owned());
+        vec![(
+            file_name,
+            entry.download_url.to_owned(),
+            entry.sha256.to_owned(),
+            entry.size_bytes,
+        )]
     } else {
-        // FunASR marks readiness with a directory file rather than an artifact.
-        Ok(directory.join(".ready"))
+        Vec::new()
     }
 }
 
 fn model_is_installed(app: &AppHandle, provider: &str, model_id: &str) -> bool {
-    let path = match model_artifact_path(app, provider, model_id) {
-        Ok(path) => path,
+    let entry = match stt_model_entry(provider, model_id) {
+        Ok(entry) => entry,
         Err(_) => return false,
     };
-    if !path.exists() {
-        return false;
+    let directory = match engine_model_dir(app, provider, model_id) {
+        Ok(directory) => directory,
+        Err(_) => return false,
+    };
+    let targets = model_download_targets(entry);
+    if targets.is_empty() {
+        // FunASR/MLX mark readiness with a directory file rather than an artifact.
+        if !directory.join(".ready").exists() {
+            return false;
+        }
+    } else {
+        for (file_name, _, _, _) in &targets {
+            if !directory.join(file_name).exists() {
+                return false;
+            }
+        }
     }
-    // Whisper/MOSS also require the shared on-demand runtime
-    // (whisper, moss-transcribe, ffmpeg, ffprobe). FunASR and MLX do not:
+    // Whisper/VibeVoice also require the shared on-demand runtime
+    // (whisper, vibeasr, ffmpeg, ffprobe). FunASR and MLX do not:
     // FunASR ships its own bundle and MLX runs through a self-contained Python
     // venv with a vendored ffmpeg (imageio-ffmpeg).
     if provider != "funasr" && provider != "mlx" {
@@ -538,7 +611,11 @@ fn model_status_list(app: &AppHandle) -> CommandResult<Value> {
                 "provider": entry.provider,
                 "id": entry.id,
                 "label": entry.label,
-                "sizeBytes": entry.size_bytes,
+                "sizeBytes": if entry.files.is_empty() {
+                    entry.size_bytes
+                } else {
+                    entry.files.iter().map(|file| file.size_bytes).sum()
+                },
                 "status": if model_is_installed(app, entry.provider, entry.id) { "installed" } else { "not_installed" },
                 "modelDir": engine_model_dir(app, entry.provider, entry.id)
                     .map(|path| path.to_string_lossy().into_owned())
@@ -654,68 +731,179 @@ fn model_download_candidates(primary: &str) -> Vec<String> {
     }
 }
 
-fn download_stt_model_file(app: &AppHandle, entry: &SttModelEntry) -> CommandResult<()> {
-    if entry.download_url.is_empty() {
-        return Err(format!("模型 {} 需要通过专用流程下载", entry.id));
-    }
-    let directory = engine_model_dir(app, entry.provider, entry.id)?;
-    let file_name = stt::model_file_name(entry.provider, entry.id).ok_or("该模型没有可下载的单一文件")?;
-    let target = directory.join(&file_name);
-    let part = directory.join(format!("{file_name}.part"));
-    if target.exists() {
-        return Ok(());
-    }
-    // Announce the start. Entries with an unknown size (no `size_bytes`) report
-    // `None` progress so the UI shows an indeterminate bar; Whisper/MOSS report
-    // concrete byte progress.
-    emit_download_progress(app, entry.provider, entry.id, 0, entry.size_bytes, None, "downloading", None);
-    let candidates = model_download_candidates(entry.download_url);
-    let mut last_error = "模型下载失败".to_owned();
-    for url in &candidates {
-        // Spawn curl (instead of blocking on `.status()`) so we can poll the
-        // partial file's size while it downloads and stream progress to the UI.
-        let mut child = Command::new("curl")
-            .args([
-                "-fL",
-                "--retry",
-                "3",
-                "--connect-timeout",
-                "20",
-                "-o",
-                part.to_string_lossy().as_ref(),
-                url,
-            ])
-            .spawn()
-            .map_err(|error| format!("无法启动下载（curl）：{error}"))?;
-        let total = entry.size_bytes;
-        loop {
-            let received = fs::metadata(&part).map(|meta| meta.len()).unwrap_or(0);
-            let percent = if total > 0 {
-                Some(((received as f64 / total as f64) * 100.0).min(100.0) as u32)
-            } else {
-                None
-            };
-            emit_download_progress(app, entry.provider, entry.id, received, total, percent, "downloading", None);
-            match child.try_wait().map_err(|error| error.to_string())? {
-                Some(status) => {
-                    if status.success() {
-                        // Brief "verifying" phase before the atomic move.
-                        emit_download_progress(app, entry.provider, entry.id, total, total, Some(100), "verifying", None);
-                        return verify_and_install(&part, &target, &entry.sha256);
+/// Best-effort resolve of a download's total byte size via an HTTP HEAD request
+/// (following redirects). Returns the size, or 0 when it cannot be determined so
+/// callers fall back to an indeterminate progress bar. Tries each candidate URL.
+/// Used so unknown-size downloads (e.g. VibeVoice GGUF weights, the shared
+/// runtime archive) still render a determinate percentage instead of a sweep.
+///
+/// Timeouts are deliberately short: this runs on the download path before any
+/// progress can be shown, so a probe hanging for 30s reads as a frozen UI.
+fn resolve_content_length(candidates: &[String]) -> u64 {
+    for url in candidates {
+        match Command::new("curl")
+            .args(["-sIL", "--connect-timeout", "8", "--max-time", "10", url])
+            .output()
+        {
+            Ok(out) => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                // The final response (after redirects) carries the real file
+                // size; take the last `content-length` header we can find.
+                for line in text.lines().rev() {
+                    let trimmed = line.trim();
+                    if let Some(rest) = trimmed.to_ascii_lowercase().strip_prefix("content-length:") {
+                        if let Ok(n) = rest.trim().parse::<u64>() {
+                            if n > 0 {
+                                return n;
+                            }
+                        }
                     }
-                    // Failed attempt: drop the partial file and try the next
-                    // candidate (or bail out).
-                    let _ = fs::remove_file(&part);
-                    if candidates.len() > 1 {
-                        last_error = format!("通过 {url} 下载失败，正在尝试备用镜像");
-                    }
-                    break;
                 }
-                None => thread::sleep(Duration::from_millis(250)),
             }
+            Err(_) => continue,
         }
     }
-    Err(last_error)
+    0
+}
+
+fn download_stt_model_file(app: &AppHandle, entry: &SttModelEntry) -> CommandResult<()> {
+    let directory = engine_model_dir(app, entry.provider, entry.id)?;
+    let targets = model_download_targets(entry);
+    if targets.is_empty() {
+        return Err(format!("模型 {} 没有可下载的文件", entry.id));
+    }
+    // Files that are already installed are skipped, so a resumed download
+    // only accounts for what is actually left to fetch.
+    let pending: Vec<(String, String, String, u64)> = targets
+        .into_iter()
+        .filter(|(file_name, _, _, _)| !directory.join(file_name).exists())
+        .collect();
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    // Emit an immediate indeterminate signal so the UI reacts to the click
+    // instead of sitting still while we probe each file's real size below.
+    emit_download_progress(app, entry.provider, entry.id, 0, 0, None, "preparing", None);
+
+    // Resolve every pending file's size up front. Models like VibeVoice ship
+    // several GGUF weights whose catalog size is unknown; scoring progress
+    // per-file would restart the bar at 0% each time the next file begins.
+    // A resolved total yields a determinate bar; 0 keeps the sweep.
+    let sizes: Vec<u64> = pending
+        .iter()
+        .map(|(_, url, _, size)| {
+            if *size > 0 {
+                *size
+            } else {
+                resolve_content_length(&model_download_candidates(url))
+            }
+        })
+        .collect();
+    let grand_total: u64 = sizes.iter().sum();
+    let initial_percent = if grand_total > 0 { Some(0u32) } else { None };
+    emit_download_progress(
+        app,
+        entry.provider,
+        entry.id,
+        0,
+        grand_total,
+        initial_percent,
+        "downloading",
+        None,
+    );
+
+    // Bytes already accounted for by files that finished downloading, so the
+    // reported progress runs monotonically across the whole model.
+    let mut done_bytes: u64 = 0;
+
+    for ((file_name, url, sha256, _), &size) in pending.iter().zip(sizes.iter()) {
+        let target = directory.join(file_name);
+        let part = directory.join(format!("{file_name}.part"));
+        let candidates = model_download_candidates(url);
+        let mut last_error = "模型下载失败".to_owned();
+        let mut downloaded = false;
+        for candidate in &candidates {
+            // Spawn curl (instead of blocking on `.status()`) so we can poll the
+            // partial file's size while it downloads and stream progress to the UI.
+            let mut child = Command::new("curl")
+                .args([
+                    "-fL",
+                    "--retry",
+                    "3",
+                    "--connect-timeout",
+                    "20",
+                    "-o",
+                    part.to_string_lossy().as_ref(),
+                    candidate,
+                ])
+                .spawn()
+                .map_err(|error| format!("无法启动下载（curl）：{error}"))?;
+            loop {
+                let received = fs::metadata(&part).map(|meta| meta.len()).unwrap_or(0);
+                let overall = done_bytes + received;
+                let percent = if grand_total > 0 {
+                    Some(((overall as f64 / grand_total as f64) * 100.0).min(100.0) as u32)
+                } else {
+                    None
+                };
+                emit_download_progress(
+                    app,
+                    entry.provider,
+                    entry.id,
+                    overall,
+                    grand_total,
+                    percent,
+                    "downloading",
+                    None,
+                );
+                match child.try_wait().map_err(|error| error.to_string())? {
+                    Some(status) => {
+                        if status.success() {
+                            // Brief "verifying" phase before the atomic move.
+                            // Only the final file can report 100%.
+                            let file_done = done_bytes + size;
+                            let verify_percent = if grand_total > 0 {
+                                Some(((file_done as f64 / grand_total as f64) * 100.0).min(100.0) as u32)
+                            } else {
+                                None
+                            };
+                            emit_download_progress(
+                                app,
+                                entry.provider,
+                                entry.id,
+                                file_done,
+                                grand_total,
+                                verify_percent,
+                                "verifying",
+                                None,
+                            );
+                            verify_and_install(&part, &target, sha256)?;
+                            downloaded = true;
+                            break;
+                        }
+                        // Failed attempt: drop the partial file and try the next
+                        // candidate (or bail out).
+                        let _ = fs::remove_file(&part);
+                        if candidates.len() > 1 {
+                            last_error = format!("通过 {candidate} 下载失败，正在尝试备用镜像");
+                        }
+                        break;
+                    }
+                    None => thread::sleep(Duration::from_millis(250)),
+                }
+            }
+            if downloaded {
+                break;
+            }
+        }
+        if !downloaded {
+            return Err(last_error);
+        }
+        // This file counts toward the model's overall progress.
+        done_bytes += size;
+    }
+    Ok(())
 }
 
 /// Verify the downloaded `.part` file against the expected SHA-256 and
@@ -740,7 +928,7 @@ fn verify_and_install(part: &Path, target: &Path, expected_sha256: &str) -> Comm
 
 // ── On-demand shared STT runtime ─────────────────────────
 //
-// Whisper and MOSS rely on four binaries (whisper, moss-transcribe, ffmpeg,
+// Whisper and VibeVoice rely on four binaries (whisper, vibeasr, ffmpeg,
 // ffprobe) that are no longer bundled with the app. They are fetched once, on
 // first offline-model install, and shared across every offline engine. The
 // archive URL and its embedded SHA-256 are version-specific; the SHA is
@@ -828,8 +1016,14 @@ pub(crate) fn ensure_runtime_available(app: &AppHandle, provider: &str, model_id
 /// partial or promoted runtime behind. Progress is reported under the model
 /// card the user clicked, so the runtime + model phases read as one flow.
 fn download_runtime(app: &AppHandle, provider: &str, model_id: &str, version: &str, final_dir: &Path) -> CommandResult<()> {
-    let expected_sha = expected_runtime_sha()
-        .ok_or("离线转写组件校验信息缺失，无法安全下载（请升级客户端或联系支持）")?;
+    // In release builds the SHA is compiled in via CI and verification always
+    // runs. In local dev builds it is absent, so we install the runtime
+    // unverified (clearly warned) rather than refusing outright — this keeps the
+    // download path exercisable during development.
+    let expected_sha = expected_runtime_sha();
+    if expected_sha.is_none() {
+        eprintln!("[warn] 离线转写组件未做 SHA-256 校验（本地开发构建），仅用于本地测试，请勿分发。");
+    }
 
     let archive = runtime_archive_name();
     let base = app.path().app_data_dir().map_err(|error| error.to_string())?.join("stt-runtimes");
@@ -837,8 +1031,12 @@ fn download_runtime(app: &AppHandle, provider: &str, model_id: &str, version: &s
     fs::create_dir_all(&downloads).map_err(|error| error.to_string())?;
     let part = downloads.join(format!("{archive}.part"));
 
-    emit_download_progress(app, provider, model_id, 0, 0, None, "runtime_downloading", None);
     let candidates = runtime_download_candidates(&runtime_download_url(version));
+    // Resolve the archive size so the runtime download shows a determinate
+    // percentage bar; falls back to 0 → indeterminate sweep.
+    let total = resolve_content_length(&candidates);
+    let initial_percent = if total > 0 { Some(0u32) } else { None };
+    emit_download_progress(app, provider, model_id, 0, total, initial_percent, "runtime_downloading", None);
     let mut last_error = "离线转写组件下载失败".to_owned();
     for url in &candidates {
         let mut child = Command::new("curl")
@@ -846,6 +1044,13 @@ fn download_runtime(app: &AppHandle, provider: &str, model_id: &str, version: &s
             .spawn()
             .map_err(|error| format!("无法启动下载（curl）：{error}"))?;
         loop {
+            let received = fs::metadata(&part).map(|meta| meta.len()).unwrap_or(0);
+            let percent = if total > 0 {
+                Some(((received as f64 / total as f64) * 100.0).min(100.0) as u32)
+            } else {
+                None
+            };
+            emit_download_progress(app, provider, model_id, received, total, percent, "runtime_downloading", None);
             match child.try_wait().map_err(|error| error.to_string())? {
                 Some(status) => {
                     if !status.success() {
@@ -853,7 +1058,7 @@ fn download_runtime(app: &AppHandle, provider: &str, model_id: &str, version: &s
                         last_error = format!("通过 {url} 下载失败，正在尝试备用镜像");
                         break;
                     }
-                    emit_download_progress(app, provider, model_id, 0, 0, Some(100), "runtime_verifying", None);
+                    emit_download_progress(app, provider, model_id, total, total, Some(100), "runtime_verifying", None);
                     if let Err(error) = install_runtime_archive(&part, final_dir, expected_sha) {
                         let _ = fs::remove_file(&part);
                         return Err(error);
@@ -869,13 +1074,16 @@ fn download_runtime(app: &AppHandle, provider: &str, model_id: &str, version: &s
     Err(last_error)
 }
 
-/// Verify SHA-256, extract, confirm the four binaries, then atomically move the
-/// staging dir into the final runtime location. A failed install leaves nothing
-/// behind and never overwrites a working runtime.
-fn install_runtime_archive(part: &Path, final_dir: &Path, expected_sha: &str) -> CommandResult<()> {
-    let actual = sha256_of_file(part)?;
-    if actual != expected_sha {
-        return Err(format!("离线转写组件校验失败：期望 {expected_sha}，实际 {actual}"));
+/// Verify SHA-256 (when `expected_sha` is `Some`), extract, confirm the four
+/// binaries, then atomically move the staging dir into the final runtime
+/// location. A failed install leaves nothing behind and never overwrites a
+/// working runtime. A `None` expected SHA (local dev build) skips verification.
+fn install_runtime_archive(part: &Path, final_dir: &Path, expected_sha: Option<&str>) -> CommandResult<()> {
+    if let Some(expected) = expected_sha {
+        let actual = sha256_of_file(part)?;
+        if actual != expected {
+            return Err(format!("离线转写组件校验失败：期望 {expected}，实际 {actual}"));
+        }
     }
 
     // Stage inside the same parent dir so the final move is a same-filesystem
@@ -1053,7 +1261,7 @@ pub(crate) fn run_voiceprint_extraction(app: &AppHandle, audio_path: &str, candi
 
 fn apply_voiceprints(app: &AppHandle, audio_path: &str, segments: &mut [Value], directory: &Path) -> CommandResult<()> {
     // Voiceprint matching relies on the FunASR/CAM++ model. If it isn't
-    // installed, skip silently rather than failing a Whisper/MOSS job.
+    // installed, skip silently rather than failing a Whisper/VibeVoice job.
     if !directory.join(".ready").exists() {
         return Ok(());
     }
@@ -1099,7 +1307,7 @@ fn create_queued_record(app: &AppHandle, audio_path: &str, options: Option<&Valu
     let model_id = match &provider {
         stt::ProviderConfig::Funasr(_) => "funasr-paraformer",
         stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
-        stt::ProviderConfig::MossTranscribeDiarize(_) => "moss-0.9b-q5",
+        stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
         stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
     };
     Ok(json!({
@@ -1169,7 +1377,7 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
         let model_id = record.get("modelId").and_then(Value::as_str).unwrap_or_else(|| match &provider {
             stt::ProviderConfig::Funasr(_) => "funasr-paraformer",
             stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
-            stt::ProviderConfig::MossTranscribeDiarize(_) => "moss-0.9b-q5",
+            stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
             stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
         });
         ensure_model_installed(app, provider.engine(), model_id)?;
@@ -1299,7 +1507,7 @@ fn local_stt_download_model(
     }
     let result = (|| {
         let entry = stt_model_entry(&provider, &model_id)?;
-        if entry.download_url.is_empty() {
+        if provider == "funasr" || provider == "mlx" {
             // FunASR and MLX download through their Python helpers rather than a
             // fixed URL. Their size is unknown, so we only signal an
             // indeterminate download.
@@ -1333,8 +1541,8 @@ fn local_stt_download_model(
             }
             emit_download_progress(&app, &provider, &model_id, 0, 0, None, "done", None);
         } else {
-            // Whisper/MOSS require the shared on-demand runtime
-            // (whisper, moss-transcribe, ffmpeg, ffprobe). Download it first if
+            // Whisper/VibeVoice require the shared on-demand runtime
+            // (whisper, vibeasr, ffmpeg, ffprobe). Download it first if
             // missing; a previously-downloaded model skips the model download
             // but still ensures the runtime is present.
             if let Err(error) = ensure_runtime_available(&app, &provider, &model_id) {
@@ -1522,15 +1730,37 @@ fn local_stt_config_save(app: AppHandle, config: stt::TranscribeConfig) -> Comma
 
 const SECRET_SERVICE: &str = "app.lynse.desktop";
 
-#[tauri::command]
-fn secure_set_secret(account: String, value: String) -> CommandResult<()> {
-    let entry = keyring::Entry::new(SECRET_SERVICE, &account).map_err(|error| error.to_string())?;
-    entry.set_password(&value).map_err(|error| error.to_string())
-}
+/// Single keychain entry that holds every secret as a JSON map. Kept in sync
+/// with `VAULT_ACCOUNT` in `src/secure-storage.ts`.
+#[cfg(debug_assertions)]
+const SECRET_VAULT_ACCOUNT: &str = "lynse_secrets_v1";
 
-#[tauri::command]
-fn secure_get_secret(account: String) -> CommandResult<Option<String>> {
-    let entry = keyring::Entry::new(SECRET_SERVICE, &account).map_err(|error| error.to_string())?;
+/// Per-key entries written by builds that predate the single-vault layout. Only
+/// read during the one-time migration out of the keychain.
+#[cfg(debug_assertions)]
+const LEGACY_SECRET_ACCOUNTS: [&str; 6] = [
+    "lynse_api_key",
+    "lynse_token",
+    "lynse_live_translation_ilivedata_secret_key",
+    "lynse_live_translation_qwen_api_key",
+    "lynse_live_translation_volc_api_key",
+    "lynse_qoder_pat",
+];
+
+/// Debug builds keep secrets in a `0600` file next to the rest of the app data
+/// instead of in the OS keychain.
+///
+/// macOS attaches a keychain item's access control list to the code signature
+/// of the binary that touched it. A dev binary is relinked — and therefore
+/// re-signed ad hoc — on every `cargo build`, so the "Always Allow" grant made
+/// for yesterday's binary does not cover today's, and the user is asked for
+/// their login password on every launch, usually several times per session.
+/// Release builds carry a stable signature and keep using the real keychain.
+#[cfg(debug_assertions)]
+const DEV_SECRET_FILE: &str = "secrets.dev.json";
+
+fn keyring_get(account: &str) -> CommandResult<Option<String>> {
+    let entry = keyring::Entry::new(SECRET_SERVICE, account).map_err(|error| error.to_string())?;
     match entry.get_password() {
         Ok(value) => Ok(Some(value)),
         Err(keyring::Error::NoEntry) => Ok(None),
@@ -1538,14 +1768,162 @@ fn secure_get_secret(account: String) -> CommandResult<Option<String>> {
     }
 }
 
-#[tauri::command]
-fn secure_delete_secret(account: String) -> CommandResult<()> {
-    let entry = keyring::Entry::new(SECRET_SERVICE, &account).map_err(|error| error.to_string())?;
+#[cfg(not(debug_assertions))]
+fn keyring_set(account: &str, value: &str) -> CommandResult<()> {
+    let entry = keyring::Entry::new(SECRET_SERVICE, account).map_err(|error| error.to_string())?;
+    entry.set_password(value).map_err(|error| error.to_string())
+}
+
+#[cfg(not(debug_assertions))]
+fn keyring_delete(account: &str) -> CommandResult<()> {
+    let entry = keyring::Entry::new(SECRET_SERVICE, account).map_err(|error| error.to_string())?;
     match entry.delete_credential() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
         Err(error) => Err(error.to_string()),
     }
+}
+
+#[cfg(debug_assertions)]
+fn dev_secret_path(app: &AppHandle) -> CommandResult<PathBuf> {
+    Ok(app_data_dir(app)?.join(DEV_SECRET_FILE))
+}
+
+#[cfg(debug_assertions)]
+fn dev_secret_read_map(app: &AppHandle) -> HashMap<String, String> {
+    let Ok(path) = dev_secret_path(app) else {
+        return HashMap::new();
+    };
+    match fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str::<HashMap<String, String>>(&content).unwrap_or_default(),
+        Err(_) => HashMap::new(),
+    }
+}
+
+#[cfg(debug_assertions)]
+fn dev_secret_write_map(app: &AppHandle, map: &HashMap<String, String>) -> CommandResult<()> {
+    let path = dev_secret_path(app)?;
+    let content = serde_json::to_string(map).map_err(|error| error.to_string())?;
+    fs::write(&path, content).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+/// Copy whatever the release build left in the keychain into the dev store.
+///
+/// Runs at most once per process and only while the dev store file is missing,
+/// so a dev build touches the keychain exactly once over its lifetime — after
+/// the import it never reads or writes the keychain again, which is what stops
+/// the repeated password prompts. Accounts that are absent from the keychain
+/// are simply skipped; the file is still created so the next launch can tell
+/// that the import already happened.
+#[cfg(debug_assertions)]
+fn dev_secret_import_from_keychain(app: &AppHandle) {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let Ok(path) = dev_secret_path(app) else {
+            return;
+        };
+        if path.exists() {
+            return;
+        }
+
+        let mut vault: Map<String, Value> = match keyring_get(SECRET_VAULT_ACCOUNT) {
+            Ok(Some(raw)) => serde_json::from_str(&raw).unwrap_or_default(),
+            _ => Map::new(),
+        };
+        for account in LEGACY_SECRET_ACCOUNTS {
+            if vault.contains_key(account) {
+                continue;
+            }
+            if let Ok(Some(value)) = keyring_get(account) {
+                vault.insert((*account).to_owned(), Value::String(value));
+            }
+        }
+
+        let mut map = HashMap::new();
+        if !vault.is_empty() {
+            match serde_json::to_string(&vault) {
+                Ok(raw) => {
+                    map.insert(SECRET_VAULT_ACCOUNT.to_owned(), raw);
+                }
+                Err(error) => eprintln!("[secrets] could not serialize imported vault: {error}"),
+            }
+        }
+        if let Err(error) = dev_secret_write_map(app, &map) {
+            eprintln!("[secrets] dev store import failed: {error}");
+        }
+    });
+}
+
+pub(crate) fn secret_get(app: &AppHandle, account: &str) -> CommandResult<Option<String>> {
+    secret_get_impl(app, account)
+}
+
+pub(crate) fn secret_set(app: &AppHandle, account: &str, value: &str) -> CommandResult<()> {
+    secret_set_impl(app, account, value)
+}
+
+pub(crate) fn secret_delete(app: &AppHandle, account: &str) -> CommandResult<()> {
+    secret_delete_impl(app, account)
+}
+
+#[cfg(debug_assertions)]
+fn secret_get_impl(app: &AppHandle, account: &str) -> CommandResult<Option<String>> {
+    if dev_secret_path(app)?.exists() {
+        return Ok(dev_secret_read_map(app).get(account).cloned());
+    }
+    dev_secret_import_from_keychain(app);
+    Ok(dev_secret_read_map(app).get(account).cloned())
+}
+
+#[cfg(not(debug_assertions))]
+fn secret_get_impl(_app: &AppHandle, account: &str) -> CommandResult<Option<String>> {
+    keyring_get(account)
+}
+
+#[cfg(debug_assertions)]
+fn secret_set_impl(app: &AppHandle, account: &str, value: &str) -> CommandResult<()> {
+    let mut map = dev_secret_read_map(app);
+    map.insert(account.to_owned(), value.to_owned());
+    dev_secret_write_map(app, &map)
+}
+
+#[cfg(not(debug_assertions))]
+fn secret_set_impl(_app: &AppHandle, account: &str, value: &str) -> CommandResult<()> {
+    keyring_set(account, value)
+}
+
+#[cfg(debug_assertions)]
+fn secret_delete_impl(app: &AppHandle, account: &str) -> CommandResult<()> {
+    let mut map = dev_secret_read_map(app);
+    map.remove(account);
+    dev_secret_write_map(app, &map)
+}
+
+#[cfg(not(debug_assertions))]
+fn secret_delete_impl(_app: &AppHandle, account: &str) -> CommandResult<()> {
+    keyring_delete(account)
+}
+
+#[tauri::command]
+fn secure_set_secret(app: AppHandle, account: String, value: String) -> CommandResult<()> {
+    secret_set(&app, &account, &value)
+}
+
+#[tauri::command]
+fn secure_get_secret(app: AppHandle, account: String) -> CommandResult<Option<String>> {
+    secret_get(&app, &account)
+}
+
+#[tauri::command]
+fn secure_delete_secret(app: AppHandle, account: String) -> CommandResult<()> {
+    secret_delete(&app, &account)
 }
 
 fn media_response<R: Runtime>(context: UriSchemeContext<'_, R>, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
@@ -1877,7 +2255,6 @@ pub fn run() {
         })
         .manage(LiveTranslationManager::default())
         .register_uri_scheme_protocol("local-media", media_response)
-        .register_uri_scheme_protocol("qoder-artifact", qoder_chat::qoder_artifact_response)
         .setup(|app| {
             if let Err(error) = migrate_electron_data(&app.handle()) {
                 eprintln!("Failed to migrate Electron local data: {error}");
@@ -1900,11 +2277,6 @@ pub fn run() {
             local_transcription_update_voiceprint, local_transcription_delete_voiceprint,
             local_stt_config_get, local_stt_config_save,
             secure_set_secret, secure_get_secret, secure_delete_secret,
-            qoder_chat::qoder_chat_config,
-            qoder_chat::qoder_chat_save_pat,
-            qoder_chat::qoder_chat_create_session,
-            qoder_chat::qoder_chat_send_message,
-            qoder_chat::qoder_chat_cancel,
             get_app_info, check_app_update,
             live_translation::live_translation_permissions,
             live_translation::live_translation_request_permission,

@@ -8,7 +8,7 @@ import type {
   WorkspaceItem,
 } from "./types";
 
-export type SttEngine = "funasr" | "whisper" | "moss_transcribe_diarize" | "mlx";
+export type SttEngine = "funasr" | "whisper" | "vibeasr" | "mlx";
 
 export type WhisperModel = "small-q5_1" | "medium-q5_0" | "large-v3-turbo-q5_0";
 
@@ -19,7 +19,7 @@ export const WHISPER_MODEL_LABELS: Record<WhisperModel, string> = {
   "large-v3-turbo-q5_0": "Whisper large-v3-turbo (q5_0, ~574 MB)",
 };
 export const DEFAULT_WHISPER_MODEL: WhisperModel = "large-v3-turbo-q5_0";
-export const MOSS_MODEL_ID = "moss-0.9b-q5";
+export const VIBEVOICE_MODEL_ID = "vibeasr-bitnet-1.5b";
 export const FUNASR_MODEL_ID = "funasr-paraformer";
 
 export type SttProviderConfig =
@@ -31,7 +31,7 @@ export type SttProviderConfig =
       expected_speakers?: number | null;
       hotword_package_id?: string | null;
     }
-  | { provider: "moss_transcribe_diarize"; hotword_package_id?: string | null }
+  | { provider: "vibeasr"; hotword_package_id?: string | null }
   | { provider: "mlx"; model?: string; hotword_package_id?: string | null };
 
 export type TranscribeConfig = {
@@ -63,7 +63,17 @@ export interface SttDownloadProgress {
   totalBytes: number;
   /** 0–100, or null when the total size is unknown (e.g. FunASR). */
   percent: number | null;
-  phase: "downloading" | "verifying" | "done" | "error" | "runtime_downloading" | "runtime_verifying" | "runtime_installing";
+  /** `preparing` is emitted right after the click, before file sizes are
+   *  probed, so the UI never looks frozen during the HEAD requests. */
+  phase:
+    | "preparing"
+    | "downloading"
+    | "verifying"
+    | "done"
+    | "error"
+    | "runtime_downloading"
+    | "runtime_verifying"
+    | "runtime_installing";
   error?: string | null;
 }
 
@@ -209,9 +219,9 @@ export function migrateSttProviderConfig(value: unknown): SttProviderConfig | nu
       hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
     };
   }
-  if (provider === "moss_transcribe_diarize") {
+  if (provider === "vibeasr") {
     return {
-      provider: "moss_transcribe_diarize",
+      provider: "vibeasr",
       hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
     };
   }
@@ -259,8 +269,8 @@ export function providerModelId(config: SttProviderConfig): string {
       return FUNASR_MODEL_ID;
     case "whisper":
       return config.model ?? DEFAULT_WHISPER_MODEL;
-    case "moss_transcribe_diarize":
-      return MOSS_MODEL_ID;
+    case "vibeasr":
+      return VIBEVOICE_MODEL_ID;
     case "mlx":
       return config.model ?? "whisper-large-v3-turbo";
   }

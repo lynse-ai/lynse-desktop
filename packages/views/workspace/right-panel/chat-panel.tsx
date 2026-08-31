@@ -10,6 +10,7 @@ import { useTranslation } from "@lynse/core/i18n/react";
 
 import { useWorkspaceStore } from "../store";
 import { useChat } from "../hooks/use-chat";
+import { WaitingText } from "../hooks/waiting-text";
 import { useFiles } from "../hooks/use-files";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ChatAttachments } from "../../chat/chat-attachments";
@@ -24,6 +25,7 @@ export function ChatPanel() {
     isLoading,
     conversations,
     activeConversationId,
+    workingConversationIds,
     sendMessage,
     clearMessages,
     selectConversation,
@@ -90,7 +92,7 @@ export function ChatPanel() {
           <ChatHistorySidebar
             conversations={conversations}
             activeConversationId={activeConversationId}
-            disabled={isLoading}
+            workingConversationIds={workingConversationIds}
             onSelect={(id) => {
               selectConversation(id);
               setHistoryOpen(false);
@@ -140,7 +142,9 @@ export function ChatPanel() {
                 ) : msg.content ? (
                   <StreamingMarkdown content={msg.content} isStreaming={isLoading} mode="minimal" />
                 ) : msg.status ? (
-                  <span className="text-muted-foreground">{msg.status}</span>
+                  <span className="text-muted-foreground">
+                    <WaitingText status={msg.status} />
+                  </span>
                 ) : (
                   <span className="flex items-center gap-1.5">
                     <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:0ms]" />
@@ -151,7 +155,7 @@ export function ChatPanel() {
                 {msg.role === "assistant" && msg.content && msg.status && (
                   <div className="mt-2 flex items-center gap-1.5 text-[10px] text-muted-foreground">
                     <span className="size-1.5 animate-pulse rounded-full bg-current" />
-                    <span>{msg.status}</span>
+                    <WaitingText status={msg.status} />
                   </div>
                 )}
                 {msg.sources && msg.sources.length > 0 && (

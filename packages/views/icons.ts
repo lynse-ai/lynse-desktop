@@ -82,6 +82,7 @@ export {
   Monitor,          // System theme
   Globe,            // Language
   HelpCircle,       // Help docs
+  Info,             // About / version info
   FileClock,        // Changelog
   ArrowUpDown,      // Sort toggle
   ArrowDown,        // Sort descending

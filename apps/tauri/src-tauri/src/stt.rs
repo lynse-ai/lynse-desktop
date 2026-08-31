@@ -1,4 +1,4 @@
-//! Local STT engine abstraction (multi-engine: FunASR, Whisper, MOSS).
+//! Local STT engine abstraction (multi-engine: FunASR, Whisper, VibeVoice).
 //!
 //! Every engine implements [`BatchSttAdapter`] and returns a normalized
 //! [`SttOutput`] (`{ text, segments }`) so the storage path never has to parse
@@ -13,18 +13,10 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::Manager;
-
-/// Upper bound on a single MOSS transcription, in seconds (90 minutes).
-pub const MOSS_MAX_DURATION_SECONDS: f64 = 90.0 * 60.0;
-
-/// Returns `true` when an audio duration (seconds) exceeds MOSS's 90-minute
-/// hard limit. Exactly 90 minutes is allowed.
-pub(crate) fn moss_exceeds_max_duration(duration_seconds: f64) -> bool {
-    duration_seconds > MOSS_MAX_DURATION_SECONDS
-}
 
 /// A single transcription request handed to a [`BatchSttAdapter`].
 pub struct SttRequest {
@@ -103,7 +95,8 @@ impl WhisperModel {
 pub fn model_file_name(provider: &str, model_id: &str) -> Option<String> {
     match provider {
         "whisper" => WhisperModel::from_model_id(model_id).map(|model| model.file_name().to_owned()),
-        "moss_transcribe_diarize" => Some("model.gguf".to_owned()),
+        // VibeVoice ships two GGUF weights (VAE + LM); readiness is checked per-file.
+        "vibeasr" => None,
         // MLX keeps a directory of weights (marked ready with a `.ready` file),
         // so there is no single downloadable artifact to name.
         "mlx" => None,
@@ -132,9 +125,9 @@ pub struct WhisperProviderConfig {
     pub hotword_package_id: Option<String>,
 }
 
+/// VibeVoice-ASR-BitNet runs on CPU through Microsoft's VibeASR.cpp engine.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct MossProviderConfig {
-    /// MOSS uses a fixed 0.9B Q5 model with built-in speaker separation.
+pub struct VibeVoiceProviderConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hotword_package_id: Option<String>,
 }
@@ -156,7 +149,8 @@ pub struct MlxProviderConfig {
 pub enum ProviderConfig {
     Funasr(FunasrProviderConfig),
     Whisper(WhisperProviderConfig),
-    MossTranscribeDiarize(MossProviderConfig),
+    #[serde(rename = "vibeasr")]
+    VibeVoice(VibeVoiceProviderConfig),
     Mlx(MlxProviderConfig),
 }
 
@@ -171,7 +165,7 @@ impl ProviderConfig {
         match self {
             ProviderConfig::Funasr(_) => "funasr",
             ProviderConfig::Whisper(_) => "whisper",
-            ProviderConfig::MossTranscribeDiarize(_) => "moss_transcribe_diarize",
+            ProviderConfig::VibeVoice(_) => "vibeasr",
             ProviderConfig::Mlx(_) => "mlx",
         }
     }
@@ -180,7 +174,7 @@ impl ProviderConfig {
         match self {
             ProviderConfig::Funasr(config) => config.hotword_package_id.as_deref(),
             ProviderConfig::Whisper(config) => config.hotword_package_id.as_deref(),
-            ProviderConfig::MossTranscribeDiarize(config) => config.hotword_package_id.as_deref(),
+            ProviderConfig::VibeVoice(config) => config.hotword_package_id.as_deref(),
             ProviderConfig::Mlx(config) => config.hotword_package_id.as_deref(),
         }
     }
@@ -189,7 +183,7 @@ impl ProviderConfig {
         match self {
             ProviderConfig::Funasr(config) => config.expected_speakers,
             ProviderConfig::Whisper(config) => config.expected_speakers,
-            ProviderConfig::MossTranscribeDiarize(_) => None,
+            ProviderConfig::VibeVoice(_) => None,
             ProviderConfig::Mlx(_) => None,
         }
     }
@@ -198,7 +192,7 @@ impl ProviderConfig {
         match self {
             ProviderConfig::Funasr(_) => &FunasrAdapter,
             ProviderConfig::Whisper(_) => &WhisperAdapter,
-            ProviderConfig::MossTranscribeDiarize(_) => &MossAdapter,
+            ProviderConfig::VibeVoice(_) => &VibeVoiceAdapter,
             ProviderConfig::Mlx(_) => &MlxAdapter,
         }
     }
@@ -253,11 +247,24 @@ pub(crate) fn runtime_platform_dir() -> &'static str {
 }
 
 /// The four binaries that together make up a complete shared STT runtime.
-pub(crate) const RUNTIME_BINARIES: &[&str] = &["whisper", "moss-transcribe", "ffmpeg", "ffprobe"];
+pub(crate) const RUNTIME_BINARIES: &[&str] = &["whisper", "vibeasr", "ffmpeg", "ffprobe"];
 
 /// `true` only when every runtime binary exists in `dir` as a non-empty file.
 /// Prevents a half-downloaded runtime from being treated as installed.
 pub(crate) fn runtime_is_complete(dir: &Path) -> bool {
+    if binaries_present(dir) {
+        return true;
+    }
+    // Dev convenience: `tauri dev` resolves sidecars from `resources/sidecars`,
+    // so a complete set built there satisfies the runtime without an on-demand
+    // download. That directory is never bundled into release builds, so this
+    // branch is a no-op for shipped installs.
+    let dev = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/sidecars");
+    binaries_present(&dev)
+}
+
+/// True when every shared runtime binary exists in `dir` as a non-empty file.
+fn binaries_present(dir: &Path) -> bool {
     RUNTIME_BINARIES.iter().all(|base| {
         let path = dir.join(sidecar_binary_name_for(base, cfg!(target_os = "windows")));
         match std::fs::metadata(&path) {
@@ -276,7 +283,7 @@ pub(crate) fn runtime_dir(app: &tauri::AppHandle, version: &str) -> PathBuf {
     }
 }
 
-/// Locate a bundled sidecar (whisper, moss, ffmpeg, ffprobe). Resolution order:
+/// Locate a bundled sidecar (whisper, vibeasr, ffmpeg, ffprobe). Resolution order:
 /// 1. dev `resources/sidecars` (local development),
 /// 2. on-demand shared runtime in the app data dir (downloaded at model-install
 ///    time, shared across every offline engine),
@@ -317,6 +324,18 @@ pub(crate) fn sidecar_path(app: &tauri::AppHandle, base: &str) -> CommandResult<
 /// Convert any audio/video to 16 kHz mono 16-bit PCM WAV via the bundled
 /// LGPL FFmpeg build.
 pub(crate) fn convert_to_wav(app: &tauri::AppHandle, input: &str, output: &Path) -> CommandResult<()> {
+    convert_to_wav_sr(app, input, output, 16_000)
+}
+
+/// Convert any audio/video to `sample_rate` Hz mono 16-bit PCM WAV via the
+/// bundled LGPL FFmpeg build. VibeVoice consumes 24 kHz audio, so callers may
+/// request that rate directly.
+pub(crate) fn convert_to_wav_sr(
+    app: &tauri::AppHandle,
+    input: &str,
+    output: &Path,
+    sample_rate: u32,
+) -> CommandResult<()> {
     let ffmpeg = sidecar_path(app, "ffmpeg")?;
     let status = Command::new(&ffmpeg)
         .args([
@@ -324,7 +343,7 @@ pub(crate) fn convert_to_wav(app: &tauri::AppHandle, input: &str, output: &Path)
             "-i",
             input,
             "-ar",
-            "16000",
+            &sample_rate.to_string(),
             "-ac",
             "1",
             "-c:a",
@@ -337,67 +356,6 @@ pub(crate) fn convert_to_wav(app: &tauri::AppHandle, input: &str, output: &Path)
         return Err("FFmpeg 转换音频失败".to_owned());
     }
     Ok(())
-}
-
-/// Probe media duration in seconds via the bundled ffprobe. Returns `None`
-/// when the duration cannot be determined.
-pub(crate) fn media_duration_seconds(app: &tauri::AppHandle, input: &str) -> CommandResult<Option<f64>> {
-    let ffprobe = sidecar_path(app, "ffprobe")?;
-    let output = Command::new(&ffprobe)
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=nw=1:nk=1",
-            input,
-        ])
-        .output()
-        .map_err(|error| format!("无法启动 ffprobe：{error}"))?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    let parsed = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    Ok(parsed.parse::<f64>().ok())
-}
-
-fn normalize_moss_output(parsed: &Value) -> Vec<Value> {
-    let items = parsed
-        .get("segments")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    items
-        .iter()
-        .enumerate()
-        .filter_map(|(index, item)| {
-            let text = item.get("text").and_then(Value::as_str)?.trim().to_owned();
-            if text.is_empty() {
-                return None;
-            }
-            let start_ms = item.get("start").and_then(Value::as_f64).unwrap_or(0.0) as i64;
-            let end_ms = item.get("end").and_then(Value::as_f64).unwrap_or(0.0) as i64;
-            let raw_speaker = item
-                .get("speaker")
-                .and_then(Value::as_str)
-                .or_else(|| item.get("speaker_id").and_then(Value::as_str))
-                .map(str::to_owned);
-            let speaker_index = raw_speaker
-                .as_deref()
-                .and_then(|speaker| speaker.trim_start_matches('S').trim_start_matches('0').parse::<usize>().ok())
-                .unwrap_or(index + 1);
-            Some(json!({
-                "id": format!("seg-{}", index + 1),
-                "text": text,
-                "startMs": start_ms,
-                "endMs": end_ms,
-                "speakerId": format!("spk-{}", speaker_index),
-                "speakerName": format!("发言人{}", speaker_index),
-                "rawSpeaker": raw_speaker,
-            }))
-        })
-        .collect()
 }
 
 pub struct FunasrAdapter;
@@ -515,68 +473,115 @@ impl BatchSttAdapter for WhisperAdapter {
     }
 }
 
-pub struct MossAdapter;
+/// VibeVoice-ASR-BitNet (Microsoft, MIT) runs entirely on CPU through the
+/// official VibeASR.cpp engine (`vibeasr` sidecar). The engine is a streaming
+/// server: it prints `---READY---` after loading, reads audio **file paths from
+/// stdin** (one per line), prints the plain-text transcript, then `---END---`,
+/// and exits on stdin EOF. There is no `--audio` flag and no per-segment
+/// timestamps or speaker labels, so the result is reported as a single segment.
+pub struct VibeVoiceAdapter;
 
-impl BatchSttAdapter for MossAdapter {
+impl BatchSttAdapter for VibeVoiceAdapter {
     fn engine(&self) -> &'static str {
-        "moss_transcribe_diarize"
+        "vibeasr"
     }
 
     fn transcribe(&self, app: &tauri::AppHandle, request: &SttRequest) -> CommandResult<SttOutput> {
-        if let Some(duration) = media_duration_seconds(app, &request.audio_path)? {
-            if moss_exceeds_max_duration(duration) {
-                return Err(format!(
-                    "MOSS 暂不支持超过 90 分钟的音频（当前约 {:.0} 分钟），请改用 Whisper 或 FunASR。",
-                    duration / 60.0
-                ));
-            }
+        let vae = request.model_directory.join("vibeasr-vae-encoder-i8_s.gguf");
+        let lm = request.model_directory.join("vibeasr-lm-i2_s-embed-q6_k.gguf");
+        if !vae.exists() {
+            return Err(format!("VibeVoice 模型缺失：{}", vae.display()));
+        }
+        if !lm.exists() {
+            return Err(format!("VibeVoice 模型缺失：{}", lm.display()));
         }
 
-        let model_path = request.model_directory.join("model.gguf");
-        if !model_path.exists() {
-            return Err(format!("MOSS 模型缺失：{}", model_path.display()));
-        }
-
+        // VibeASR.cpp consumes 24 kHz mono PCM audio.
         let wav = request.model_directory.join("input.wav");
-        convert_to_wav(app, &request.audio_path, &wav)?;
+        convert_to_wav_sr(app, &request.audio_path, &wav, 24_000)?;
 
-        let sidecar = sidecar_path(app, "moss-transcribe")?;
-        let output_json = request.model_directory.join("moss-output.json");
-        let args = vec![
-            sidecar.to_string_lossy().into_owned(),
-            "--model".to_owned(),
-            model_path.to_string_lossy().into_owned(),
-            "--input".to_owned(),
-            wav.to_string_lossy().into_owned(),
-            "--output".to_owned(),
-            output_json.to_string_lossy().into_owned(),
-            "--json".to_owned(),
-        ];
-        let status = Command::new(&sidecar)
-            .args(&args)
-            .status()
-            .map_err(|error| format!("无法启动 MOSS：{error}"))?;
-        if !status.success() {
-            return Err("MOSS 转写失败".to_owned());
+        let sidecar = sidecar_path(app, "vibeasr")?;
+
+        let threads = std::thread::available_parallelism()
+            .map(|count| count.get().min(8).max(1))
+            .unwrap_or(4)
+            .to_string();
+
+        let mut command = Command::new(&sidecar);
+        command
+            .arg("--vae-model")
+            .arg(&vae)
+            .arg("--lm-model")
+            .arg(&lm)
+            .arg("-t")
+            .arg(&threads)
+            .arg("--max-tokens")
+            .arg("4096")
+            .arg("--greedy")
+            .arg("--no-token-stream")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if !request.hotword.is_empty() {
+            command.arg("--context").arg(&request.hotword);
         }
 
-        let parsed: Value = {
-            let content = std::fs::read_to_string(&output_json).map_err(|error| error.to_string())?;
-            serde_json::from_str(&content).map_err(|error| error.to_string())?
-        };
-        let segments = normalize_moss_output(&parsed);
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("无法启动 VibeVoice：{error}"))?;
 
-        // MOSS provides built-in speaker labels; map [S01] → 发言人1.
-        let text = segments
-            .iter()
-            .filter_map(|segment| segment.get("text").and_then(Value::as_str))
-            .collect::<String>();
-        Ok(SttOutput { text, segments })
+        // Feed the audio path, then drop stdin so the server processes the single
+        // chunk and exits on EOF.
+        {
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| "无法打开 VibeVoice 标准输入".to_owned())?;
+            writeln!(stdin, "{}", wav.to_string_lossy()).map_err(|error| error.to_string())?;
+        }
+
+        let output = child
+            .wait_with_output()
+            .map_err(|error| format!("VibeVoice 运行失败：{error}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("VibeVoice 转写失败：{}", stderr.trim()));
+        }
+
+        let raw = String::from_utf8_lossy(&output.stdout);
+        let mut text = String::new();
+        for line in raw.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty()
+                || trimmed == "---READY---"
+                || trimmed == "---END---"
+                || trimmed == "---ACK---"
+                || trimmed.starts_with("[ERROR]")
+            {
+                continue;
+            }
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(trimmed);
+        }
+
+        let segment = json!({
+            "text": text,
+            "speakerId": "spk-1",
+            "speakerName": "发言人1",
+            "startMs": 0,
+            "endMs": 0,
+        });
+        Ok(SttOutput {
+            text: text.clone(),
+            segments: vec![segment],
+        })
     }
 }
 
 /// MLX-Whisper on Apple Silicon. The whole pipeline runs locally via the
-/// `mlx_transcribe.py` bridge; no shared STT runtime (ffmpeg/whisper/moss) is
+/// `mlx_transcribe.py` bridge; no shared STT runtime (ffmpeg/whisper/vibeasr) is
 /// required. Execution is refused on non-Apple-Silicon platforms with a clear
 /// message so a user who somehow selects it from the UI gets actionable info.
 pub struct MlxAdapter;
@@ -751,8 +756,8 @@ mod tests {
             Some("ggml-large-v3-turbo-q5_0.bin".to_owned())
         );
         assert_eq!(
-            model_file_name("moss_transcribe_diarize", "moss-0.9b-q5"),
-            Some("model.gguf".to_owned())
+            model_file_name("vibeasr", "vibeasr-bitnet-1.5b"),
+            None
         );
         assert_eq!(model_file_name("funasr", "funasr-paraformer"), None);
     }
@@ -778,13 +783,13 @@ mod tests {
         .unwrap();
         assert_eq!(funasr.engine(), "funasr");
 
-        let moss: ProviderConfig = serde_json::from_value(json!({
-            "provider": "moss_transcribe_diarize",
+        let vibeasr: ProviderConfig = serde_json::from_value(json!({
+            "provider": "vibeasr",
             "hotword_package_id": "h3"
         }))
         .unwrap();
-        assert_eq!(moss.engine(), "moss_transcribe_diarize");
-        assert_eq!(moss.expected_speakers(), None);
+        assert_eq!(vibeasr.engine(), "vibeasr");
+        assert_eq!(vibeasr.expected_speakers(), None);
     }
 
     #[test]
@@ -827,31 +832,20 @@ mod tests {
     }
 
     #[test]
-    fn normalize_moss_output_maps_speaker_labels() {
-        let parsed = json!({
-            "segments": [
-                {"start": 0.0, "end": 1.0, "text": "first", "speaker": "S01"},
-                {"start": 1.0, "end": 2.0, "text": "second"}
-            ]
-        });
-        let segments = normalize_moss_output(&parsed);
-        assert_eq!(segments.len(), 2);
-        assert_eq!(segments[0]["speakerId"], "spk-1");
-        assert_eq!(segments[0]["speakerName"], "发言人1");
-        assert_eq!(segments[0]["rawSpeaker"], "S01");
-    }
-
-    #[test]
-    fn moss_duration_guard() {
-        assert!(!moss_exceeds_max_duration(0.0));
-        assert!(
-            !moss_exceeds_max_duration(MOSS_MAX_DURATION_SECONDS),
-            "exactly 90 minutes is allowed"
-        );
-        assert!(!moss_exceeds_max_duration(MOSS_MAX_DURATION_SECONDS - 1.0));
-        assert!(
-            moss_exceeds_max_duration(MOSS_MAX_DURATION_SECONDS + 1.0),
-            "over 90 minutes is blocked"
-        );
+    fn vibevoice_segment_is_single_speaker() {
+        // VibeASR.cpp emits plain text with no timestamps/speakers, so the
+        // adapter folds the whole transcript into one segment.
+        let output = SttOutput {
+            text: "hello world".to_owned(),
+            segments: vec![json!({
+                "text": "hello world",
+                "speakerId": "spk-1",
+                "speakerName": "发言人1",
+                "startMs": 0,
+                "endMs": 0,
+            })],
+        };
+        assert_eq!(output.segments.len(), 1);
+        assert_eq!(output.segments[0]["speakerId"], "spk-1");
     }
 }

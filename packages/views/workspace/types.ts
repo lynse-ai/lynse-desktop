@@ -106,7 +106,7 @@ export interface LocalTranscriptionRecord {
   durationMs?: number;
   expectedSpeakers?: number;
   hotwordPackageId?: string;
-  engine: "funasr" | "whisper" | "moss_transcribe_diarize" | "ilivedata_rtvt";
+  engine: "funasr" | "whisper" | "vibeasr" | "ilivedata_rtvt";
   modelId?: string;
   providerConfig?: SttProviderConfig;
   segments: LocalTranscriptionSegment[];
@@ -207,17 +207,21 @@ export interface ChatMessage {
   confirm?: ChatConfirm;
 }
 
-/** Which backend serves a chat session. */
+/**
+ * Which backend serves a chat session. `"qoder"` is legacy: conversations
+ * stored by the removed Qoder Cloud Agent channel keep the marker so old
+ * histories still load; everything now runs on the cloud channel.
+ */
 export type ChatProvider = "cloud" | "qoder";
 
-/** Resume state for a persistent Qoder Cloud Agent conversation. */
+/** Legacy resume state kept only so stored Qoder conversations still parse. */
 export interface QoderChatSessionState {
   sessionId: string;
   afterEventId?: string;
   sessionOptionsKey: string;
 }
 
-/** A locally indexed conversation whose model context remains in its Qoder Session. */
+/** A locally indexed conversation. */
 export interface ChatConversation {
   id: string;
   title: string;

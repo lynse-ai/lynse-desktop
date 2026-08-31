@@ -13,14 +13,14 @@ describe("ChatAttachments", () => {
             id: "file_image",
             name: "meeting-card.png",
             type: "image",
-            url: "qoder-artifact://localhost/file_image.png",
+            url: "https://files.example.com/file_image.png",
           },
         ]}
       />,
     );
 
     expect(screen.getByRole("img", { name: "meeting-card.png" }).getAttribute("src")).toBe(
-      "qoder-artifact://localhost/file_image.png",
+      "https://files.example.com/file_image.png",
     );
   });
 
@@ -32,19 +32,19 @@ describe("ChatAttachments", () => {
             id: "file_pdf",
             name: "monthly-report.pdf",
             type: "pdf",
-            url: "qoder-artifact://localhost/file_pdf.pdf",
-            downloadUrl: "qoder-artifact://localhost/file_pdf.pdf",
+            url: "https://files.example.com/file_pdf.pdf",
+            downloadUrl: "https://files.example.com/file_pdf.pdf",
           },
         ]}
       />,
     );
 
     expect(screen.getByTitle("monthly-report.pdf").getAttribute("src")).toBe(
-      "qoder-artifact://localhost/file_pdf.pdf",
+      "https://files.example.com/file_pdf.pdf",
     );
     expect(
       screen.getByRole("link", { name: /monthly-report\.pdf/i }).getAttribute("href"),
-    ).toBe("qoder-artifact://localhost/file_pdf.pdf");
+    ).toBe("https://files.example.com/file_pdf.pdf");
   });
 
   it("shows cached HTML reports with a sandboxed preview and attachment link", () => {
@@ -55,18 +55,18 @@ describe("ChatAttachments", () => {
             id: "file_html",
             name: "meeting-report.html",
             type: "html",
-            url: "qoder-artifact://localhost/file_html.html",
-            downloadUrl: "qoder-artifact://localhost/file_html.html",
+            url: "https://files.example.com/file_html.html",
+            downloadUrl: "https://files.example.com/file_html.html",
           },
         ]}
       />,
     );
 
     const preview = screen.getByTitle("meeting-report.html");
-    expect(preview.getAttribute("src")).toBe("qoder-artifact://localhost/file_html.html");
+    expect(preview.getAttribute("src")).toBe("https://files.example.com/file_html.html");
     expect(preview.getAttribute("sandbox")).toBe("");
     expect(
       screen.getByRole("link", { name: /meeting-report\.html/i }).getAttribute("href"),
-    ).toBe("qoder-artifact://localhost/file_html.html");
+    ).toBe("https://files.example.com/file_html.html");
   });
 });

@@ -163,7 +163,7 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
       // Phase 1: Upload to OSS
       setPhase("uploading");
       setUploadPct(0);
-      const fileId = await uploadFileToOSS(file, (pct) => setUploadPct(pct));
+      const fileId = await uploadFileToOSS(file, (pct) => setUploadPct(pct), "IMPORT");
 
       // Phase 2: Trigger transcription + summarization
       setPhase("transcribing");

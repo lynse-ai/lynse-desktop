@@ -10,7 +10,7 @@ reproduced at the bottom of this file.
 | --- | --- | --- | --- |
 | Humla | MIT | <https://github.com/michaelwilhelmsen/humla> | Parts of the macOS dual-stream recording architecture and audio-buffer handling are adapted from Humla. |
 | whisper.cpp | MIT | <https://github.com/ggerganov/whisper.cpp> | Offline STT sidecar; vendors ggml (MIT) as a submodule. Built by `apps/tauri/scripts/fetch-sidecars.sh`. |
-| moss-transcribe.cpp | MIT | <https://github.com/localai-org/moss-transcribe.cpp> | Offline STT / diarization sidecar; vendors ggml (MIT). The MOSS-Transcribe-Diarize model weights are Apache-2.0 (see the model card on Hugging Face). |
+| VibeASR.cpp | MIT | <https://github.com/microsoft/VibeASR.cpp> | Offline STT sidecar (CPU); vendors ggml/llama.cpp (MIT) as a submodule. The VibeVoice-ASR-BitNet model weights are MIT (see the model card on Hugging Face). |
 | FunASR | MIT | <https://github.com/modelscope/FunASR> | Python bridge for local transcription (Paraformer + FSMN VAD + CAM++). |
 
 ## Distributed binaries
@@ -24,7 +24,7 @@ The complete corresponding source code for FFmpeg is available from the
 upstream projects linked above. The LGPL license text can be obtained at
 <https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt>.
 
-Model weights (Paraformer / FSMN VAD / CAM++, whisper, MOSS) are downloaded at
+Model weights (Paraformer / FSMN VAD / CAM++, whisper, VibeVoice) are downloaded at
 runtime from their respective publishers; refer to each model card for its
 license terms.
 

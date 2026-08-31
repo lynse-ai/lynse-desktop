@@ -29,7 +29,7 @@ import type { FolderInfo } from "../types";
 
 export function FolderTreeSection() {
   const { t } = useTranslation();
-  const { push } = useNavigation();
+  const { pathname, push } = useNavigation();
   const { data: folders } = useFolders();
   const { data: counts } = useFolderCounts();
   const { data: allFiles } = useFiles({ pageNum: 1, pageSize: 200, folderId: "__all__" });
@@ -53,6 +53,7 @@ export function FolderTreeSection() {
   // between routes and make React throw "Rendered fewer hooks".)
 
   const foldersCollapsed = sidebarSectionsCollapsed.has("folders");
+  const folderSelectionActive = pathname === "/recordings" || pathname.startsWith("/recordings/");
 
   const folderList: FolderInfo[] = Array.isArray(folders) ? folders : [];
   const localTranscriptionCount = useMemo(
@@ -113,14 +114,14 @@ export function FolderTreeSection() {
           icon={Layers}
           label={t("layout.all_files")}
           count={counts?.all ?? 0}
-          active={selectedFolderId === "__all__"}
+          active={folderSelectionActive && selectedFolderId === "__all__"}
           onClick={() => handleSelectFolder("__all__")}
         />
         <VirtualItem
           icon={FileAudio}
           label={t("layout.local_transcriptions")}
           count={localTranscriptionCount}
-          active={selectedFolderId === LOCAL_TRANSCRIPTION_FOLDER_ID}
+          active={folderSelectionActive && selectedFolderId === LOCAL_TRANSCRIPTION_FOLDER_ID}
           onClick={() => handleSelectFolder(LOCAL_TRANSCRIPTION_FOLDER_ID)}
           iconClassName="opacity-70"
         />
@@ -128,7 +129,7 @@ export function FolderTreeSection() {
           icon={Circle}
           label={t("layout.uncategorized")}
           count={counts?.unclassified ?? 0}
-          active={selectedFolderId === "__uncategorized__"}
+          active={folderSelectionActive && selectedFolderId === "__uncategorized__"}
           onClick={() => handleSelectFolder("__uncategorized__")}
           iconClassName="opacity-40"
           droppableFolderId=""
@@ -197,7 +198,7 @@ export function FolderTreeSection() {
                 key={folder.id}
                 folder={folder}
                 count={countMap.get(folder.id) ?? 0}
-                active={selectedFolderId === folder.id}
+                active={folderSelectionActive && selectedFolderId === folder.id}
                 editing={editingFolderId === folder.id}
                 onEditDone={(newName) => handleEditFolder(folder, newName)}
                 onClick={() => handleSelectFolder(folder.id)}
@@ -213,7 +214,7 @@ export function FolderTreeSection() {
           icon={Trash2}
           label={t("layout.trash")}
           count={0}
-          active={selectedFolderId === "__trash__"}
+          active={folderSelectionActive && selectedFolderId === "__trash__"}
           onClick={() => handleSelectFolder("__trash__")}
         />
       </div>

@@ -16,9 +16,71 @@ import { StreamingMarkdown } from "@lynse/ui/markdown";
 import { AssistantAvatar } from "../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useChat } from "../workspace/hooks/use-chat";
+import { WaitingText } from "../workspace/hooks/waiting-text";
 import { ConfirmDialog } from "../workspace/ConfirmDialog";
 import { ChatAttachments } from "./chat-attachments";
 import { ChatHistorySidebar } from "./chat-history-sidebar";
+
+/**
+ * Rotating "what the assistant is doing right now" captions shown while the
+ * model is thinking. WorkBuddy-style: instead of a static spinner, the wait
+ * is made legible (and a little playful) by cycling through the steps a reply
+ * usually goes through. Picked by UI locale, falls back to zh.
+ */
+const THINKING_STEPS: Record<string, string[]> = {
+  zh: [
+    "正在理解你的问题…",
+    "检索相关资料…",
+    "梳理关键信息…",
+    "组织回答思路…",
+    "润色一下表述…",
+  ],
+  en: [
+    "Understanding your question…",
+    "Retrieving relevant material…",
+    "Highlighting key points…",
+    "Organizing the response…",
+    "Polishing the wording…",
+  ],
+  ja: [
+    "質問を理解しています…",
+    "関連資料を検索中…",
+    "重要なポイントを整理中…",
+    "回答を構成中…",
+    "表現を整えています…",
+  ],
+};
+
+function ThinkingIndicator() {
+  const { t, i18n } = useTranslation();
+  const steps: string[] =
+    THINKING_STEPS[i18n.language?.split("-")[0] ?? "zh"] ?? THINKING_STEPS.zh ?? [];
+  const [stepIndex, setStepIndex] = useState(0);
+
+  useEffect(() => {
+    setStepIndex(0);
+    const id = setInterval(() => {
+      setStepIndex((prev) => (prev + 1) % steps.length);
+    }, 1600);
+    return () => clearInterval(id);
+  }, [steps.length]);
+
+  return (
+    <div
+      className="flex h-6 items-center gap-2 text-muted-foreground"
+      aria-label={t("chat.thinking")}
+    >
+      <span className="flex items-center gap-1" aria-hidden="true">
+        <span className="size-1.5 animate-bounce rounded-full bg-primary [animation-delay:0ms]" />
+        <span className="size-1.5 animate-bounce rounded-full bg-primary [animation-delay:150ms]" />
+        <span className="size-1.5 animate-bounce rounded-full bg-primary [animation-delay:300ms]" />
+      </span>
+      <span key={stepIndex} className="text-[13px] animate-in fade-in duration-300">
+        {steps[stepIndex]}
+      </span>
+    </div>
+  );
+}
 
 export function ChatPage() {
   const [input, setInput] = useState("");
@@ -32,6 +94,7 @@ export function ChatPage() {
     isLoading,
     conversations,
     activeConversationId,
+    workingConversationIds,
     sendMessage,
     clearMessages,
     selectConversation,
@@ -125,7 +188,7 @@ export function ChatPage() {
           <ChatHistorySidebar
             conversations={conversations}
             activeConversationId={activeConversationId}
-            disabled={isLoading}
+            workingConversationIds={workingConversationIds}
             onSelect={selectConversation}
             onClose={() => setHistoryOpen(false)}
           />
@@ -317,20 +380,16 @@ function AssistantMessage({ message, isStreaming, copied, onCopy }: AssistantMes
       ) : message.status ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <span className="size-1.5 animate-pulse rounded-full bg-current" />
-          {message.status}
+          <WaitingText status={message.status} />
         </div>
       ) : (
-        <div className="flex h-6 items-center gap-1.5 text-muted-foreground" aria-label={t("chat.responding")}>
-          <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:0ms]" />
-          <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:150ms]" />
-          <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:300ms]" />
-        </div>
+        <ThinkingIndicator />
       )}
 
       {message.content && message.status && (
         <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
           <span className="size-1.5 animate-pulse rounded-full bg-current" />
-          <span>{message.status}</span>
+          <WaitingText status={message.status} />
         </div>
       )}
 

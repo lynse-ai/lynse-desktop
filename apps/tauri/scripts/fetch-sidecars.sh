@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 #
-# Fetch / build the offline STT sidecars (whisper.cpp, moss-transcribe.cpp,
+# Fetch / build the offline STT sidecars (whisper.cpp, VibeASR.cpp,
 # FFmpeg/ffprobe) and place them under
 # apps/tauri/src-tauri/resources/sidecars so `tauri build` can bundle them.
 #
 # This runs in CI before `tauri build`. Locally you can run it once to obtain
-# the binaries for development. The MOSS commit and FFmpeg artifact URLs are
+# the binaries for development. The VibeASR ref and FFmpeg artifact URLs are
 # pinned; bump them deliberately when upgrading.
 set -euo pipefail
 
 # Pinned upstream revisions (override via env if needed).
-MOSS_COMMIT="${MOSS_COMMIT:-master}"
+VIBEASR_REF="${VIBEASR_REF:-main}"
 WHISPER_REF="${WHISPER_REF:-master}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -51,31 +51,32 @@ build_whisper() {
   echo "    whisper -> $(basename "$target")"
 }
 
-build_moss() {
+build_vibeasr() {
   local src
   src="$(mktemp -d)"
-  # --recursive: moss-transcribe.cpp vendors ggml as a git submodule too.
-  git clone --depth 1 --branch "$MOSS_COMMIT" --recursive https://github.com/localai-org/moss-transcribe.cpp "$src"
-  local metal_opt
+  # --recursive: VibeASR.cpp vendors ggml as a git submodule (3rdparty/llama.cpp).
+  git clone --depth 1 --branch "$VIBEASR_REF" --recursive https://github.com/microsoft/VibeASR.cpp "$src"
+  local gen_args=()
   if [[ "$IS_WINDOWS" -eq 1 ]]; then
-    metal_opt="-DGGML_METAL=0"
-  else
-    metal_opt="-DGGML_METAL=on"
+    # MSVC is rejected by VibeASR.cpp; the build requires MinGW (GCC/Clang).
+    gen_args=(-G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM=mingw32-make)
   fi
   cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release \
-    -DBUILD_SHARED_LIBS=OFF $metal_opt
+    -DBUILD_SHARED_LIBS=OFF "${gen_args[@]}"
   cmake --build "$src/build" --config Release -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
   local bin
-  # The CLI target is `moss-transcribe-cli` but its OUTPUT_NAME is
-  # `moss-transcribe` (resp. `.exe` on Windows) — that's the file cmake emits.
-  bin="$(find "$src/build" -type f \( -name 'moss-transcribe' -o -name 'moss-transcribe.exe' \) | head -n1)"
+  # The streaming binary (src/asr_server.cpp, OUTPUT_NAME asr_stream_server) is
+  # the one our adapter talks to: it prints `---READY---`, reads one audio path
+  # per line on stdin, and with `--no-token-stream` emits the transcript then
+  # `---END---`, exiting on stdin EOF. Prefer it over the one-shot `asr_infer`.
+  bin="$(find "$src/build" -type f \( -name 'asr_stream_server' -o -name 'asr_stream_server.exe' -o -name 'asr_infer' -o -name 'asr_infer.exe' \) | head -n1)"
   local name
   name="$(basename "$bin")"
-  local target="$SIDECARS/moss-transcribe"
-  [[ "$name" == *.exe ]] && target="$SIDECARS/moss-transcribe.exe"
+  local target="$SIDECARS/vibeasr"
+  [[ "$name" == *.exe ]] && target="$SIDECARS/vibeasr.exe"
   cp "$bin" "$target"
   rm -rf "$src"
-  echo "    moss-transcribe -> $(basename "$target")"
+  echo "    vibeasr -> $(basename "$target")"
 }
 
 fetch_ffmpeg() {
@@ -109,7 +110,7 @@ fetch_ffmpeg() {
 }
 
 build_whisper
-build_moss
+build_vibeasr
 fetch_ffmpeg
 
 # Sidecars are no longer bundled into the app — they are fetched on demand at

@@ -1,4 +1,9 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useQuery,
+  useMutation,
+  useQueryClient,
+  keepPreviousData,
+} from "@tanstack/react-query";
 import { api, ApiError } from "@lynse/core/api/client";
 import { useAuthStore } from "@lynse/core/auth";
 import type {
@@ -256,7 +261,12 @@ export function useNotes(params: {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
   return useQuery({
-    queryKey: ["notes", params, isAuthenticated],
+    // Key off primitives only: the caller may rebuild `params` on every render,
+    // and an unstable object/Date in the key would create a new cache entry per
+    // render (data → undefined → blank list).
+    queryKey: ["notes", params.startTime, params.endTime, isAuthenticated],
+    // Keep the previous list visible while a refetch is in flight.
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       const localApi = getDesktopLocalTranscriptionApi();
       const localRecords = localApi ? await localApi.list() : [];
@@ -490,17 +500,32 @@ export function useTemplateCategories() {
 /**
  * Upload a file to OSS via presigned URL, then notify the backend.
  * Returns the fileId assigned by the server.
+ *
+ * `mode` maps to the backend `PreUploadReq.mode` (e.g. "IMPORT" for a file
+ * imported from local disk). Omit it to let the backend apply its default.
  */
 export async function uploadFileToOSS(
   file: File,
   onProgress?: (pct: number) => void,
+  mode?: string,
 ): Promise<string> {
-  // 1. Get presigned URL
+  // 1. Get presigned URL.
+  //    Backend expects `saveFilename` (NOT `originalFilename`) + `contentType`
+  //    on `PreUploadReq`. Sending the wrong key name made presign return an
+  //    unusable URL, so the upload never started.
   const presign = await api().post<PreSignedUrlVO>(
     "/api/business/file/presign/upload",
-    { originalFilename: file.name, fileSize: file.size },
+    {
+      saveFilename: file.name,
+      contentType: file.type || "application/octet-stream",
+      fileSize: file.size,
+      ...(mode ? { mode } : {}),
+    },
   );
   const { url, headers, fileId } = presign;
+  if (!url || !fileId) {
+    throw new Error("presign/upload 未返回有效的上传地址或 fileId");
+  }
 
   // 2. Upload file directly to OSS
   await new Promise<void>((resolve, reject) => {
@@ -510,16 +535,32 @@ export async function uploadFileToOSS(
     for (const [k, v] of Object.entries(headers ?? {})) {
       xhr.setRequestHeader(k, v);
     }
+    // If the backend didn't sign a Content-Type, fall back to the file's own
+    // type so the PUT body matches what OSS expects.
+    if (headers && !("content-type" in headers) && !("Content-Type" in headers)) {
+      xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    }
     if (onProgress) {
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
       };
     }
     xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else reject(new Error(`OSS upload failed: ${xhr.status}`));
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        const body =
+          typeof xhr.responseText === "string" ? xhr.responseText.slice(0, 800) : "";
+        reject(new Error(`OSS 上传失败 (HTTP ${xhr.status}): ${body}`));
+      }
     };
-    xhr.onerror = () => reject(new Error("OSS upload network error"));
+    xhr.ontimeout = () => reject(new Error("OSS 上传超时"));
+    xhr.onerror = () =>
+      reject(
+        new Error(
+          "OSS 上传网络错误（可能是 OSS 跨域 CORS 未放行该来源，或网络不可达）",
+        ),
+      );
     xhr.send(file);
   });
 

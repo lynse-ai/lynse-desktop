@@ -533,7 +533,19 @@ func startCapture(event: String = "ready") async {
         let stream = try await createCaptureStream()
         try await stream.startCapture()
         captureStream = stream
-        emit(["event": event, "microphone": microphonePermission() == "granted", "systemAudio": CGPreflightScreenCaptureAccess()])
+        var readyPayload: [String: Any] = [
+            "event": event,
+            "microphone": microphonePermission() == "granted",
+            "systemAudio": CGPreflightScreenCaptureAccess(),
+        ]
+        if let id = lastMicrophoneDeviceID, let device = AVCaptureDevice(uniqueID: id) {
+            readyPayload["microphoneCaptureDeviceID"] = id
+            readyPayload["microphoneCaptureDeviceName"] = device.localizedName
+        } else {
+            readyPayload["microphoneCaptureDeviceID"] = NSNull()
+            readyPayload["microphoneCaptureDeviceName"] = NSNull()
+        }
+        emit(readyPayload)
     } catch {
         if !CGPreflightScreenCaptureAccess() {
             emitError(systemAudioPermissionMessage)

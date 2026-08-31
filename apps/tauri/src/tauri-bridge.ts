@@ -6,9 +6,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { setApiTransportMode } from "@lynse/core/api/client";
 import { hydrateSecrets, refreshSecret, secureStorage } from "./secure-storage";
 import type {
-  DesktopQoderChatApi,
-  QoderChatBridgeEvent,
-  QoderChatConfig,
   SttDownloadProgress,
   SttModelInfo,
   TranscribeConfig,
@@ -41,7 +38,6 @@ export type AppUpdateInfo = {
 type DesktopApi = {
   openExternal: (url: string) => Promise<void>;
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
-  qoderChat: DesktopQoderChatApi;
   liveTranslation: DesktopLiveTranslationApi;
   todo: Record<string, (...args: any[]) => Promise<unknown>>;
   appInfo: { version: string; platform: string };
@@ -226,24 +222,6 @@ export async function installTauriBridge(): Promise<void> {
       deleteVoiceprint: (id: string) => command("local_transcription_delete_voiceprint", { id }),
       getSttConfig: () => command<TranscribeConfig>("local_stt_config_get"),
       saveSttConfig: (config: TranscribeConfig) => command<TranscribeConfig>("local_stt_config_save", { config }),
-    },
-    qoderChat: {
-      getConfig: () => command<QoderChatConfig>("qoder_chat_config"),
-      savePat: (pat) => command<QoderChatConfig>("qoder_chat_save_pat", { pat }),
-      createSession: ({ shareLynseApiKey, lynseApiHost }) =>
-        command<string>("qoder_chat_create_session", { shareLynseApiKey, lynseApiHost }),
-      sendMessage: (sessionId, message, requestId, afterEventId) =>
-        command<{ lastEventId?: string }>("qoder_chat_send_message", {
-          sessionId,
-          message,
-          requestId,
-          afterEventId,
-        }),
-      cancel: (sessionId) => command<void>("qoder_chat_cancel", { sessionId }),
-      onEvent: (callback) =>
-        getCurrentWebview().listen<QoderChatBridgeEvent>("qoder-chat-event", (event) =>
-          callback(event.payload),
-        ),
     },
     liveTranslation: {
       getProviderConfig: async () => getLiveTranslationProviderConfig(),

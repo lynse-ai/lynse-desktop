@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useWorkspaceStore } from "../workspace/store";
 import { ContentPanel } from "../workspace/content-panel";
@@ -12,6 +12,7 @@ import { useFolders } from "../workspace/hooks/use-folders";
 import { filterWorkspaceFilesByFolder } from "../workspace/middle-panel/file-list-filter";
 import { LOCAL_TRANSCRIPTION_FOLDER_ID } from "../workspace/local-transcription";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { useAuthStore } from "@lynse/core/auth";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -34,6 +35,35 @@ import type { WorkspaceItem, FolderInfo } from "../workspace/types";
 
 type ViewMode = "list" | "grid";
 
+/**
+ * Local cache of the notes list, so a refresh (or app reload) paints the last
+ * known list immediately instead of flashing an empty state while the first
+ * request is in flight. Best-effort only — never blocks rendering.
+ */
+const NOTES_CACHE_KEY = "lynse_notes_cache_v1";
+const NOTES_CACHE_LIMIT = 500;
+
+function loadNotesCache(): WorkspaceItem[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(NOTES_CACHE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as WorkspaceItem[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveNotesCache(items: WorkspaceItem[]) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(NOTES_CACHE_KEY, JSON.stringify(items.slice(0, NOTES_CACHE_LIMIT)));
+  } catch {
+    // Ignore quota / serialization errors: the cache is best-effort.
+  }
+}
+
 /** Format a Date as the backend's `YYYY-MM-DDTHH:MM:SS` (no timezone suffix). */
 function toApiDateTime(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -42,9 +72,123 @@ function toApiDateTime(d: Date): string {
   )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+type TimeBucket = "today" | "yesterday" | "thisWeek" | "thisMonth" | "lastMonth" | "month";
+
+interface TimeSection {
+  key: string;
+  label: string;
+  items: WorkspaceItem[];
+}
+
+/**
+ * Fallback labels (zh) used only when the i18n key is not yet loaded
+ * (e.g. a hot-reloaded session whose i18next instance predates the key).
+ * Prevents the raw key `notes.time_*` from ever reaching the UI.
+ */
+const TIME_LABEL_FALLBACK: Record<string, string> = {
+  today: "今天",
+  yesterday: "昨天",
+  thisWeek: "本周",
+  thisMonth: "本月",
+  lastMonth: "上个月",
+};
+
+function startOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function addDays(d: Date, n: number): Date {
+  const r = new Date(d);
+  r.setDate(r.getDate() + n);
+  return r;
+}
+
+/** Monday-based start of the current week. */
+function startOfWeekMonday(d: Date): Date {
+  const day = startOfDay(d);
+  const diff = (day.getDay() + 6) % 7; // 0 = Monday
+  return addDays(day, -diff);
+}
+
+/**
+ * Bucket workspace files into time-based sections (newest first):
+ * 今天 / 昨天 / 本周 / 本月 / 上个月, then older months labeled by YYYY年M月.
+ * Each file is assigned to the first matching bucket, so sections never overlap.
+ */
+function getTimeSections(
+  files: WorkspaceItem[],
+  t: (key: string) => string,
+  locale: string,
+): TimeSection[] {
+  const now = new Date();
+  const today = startOfDay(now);
+  const yesterday = addDays(today, -1);
+  const thisWeekStart = startOfWeekMonday(now);
+  const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+  const sorted = [...files].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+  );
+
+  const fixed: Record<Exclude<TimeBucket, "month">, WorkspaceItem[]> = {
+    today: [],
+    yesterday: [],
+    thisWeek: [],
+    thisMonth: [],
+    lastMonth: [],
+  };
+  const monthly = new Map<string, WorkspaceItem[]>();
+
+  for (const f of sorted) {
+    const d = new Date(f.createdAt);
+    if (Number.isNaN(d.getTime())) {
+      fixed.thisMonth.push(f);
+      continue;
+    }
+    if (d >= today) fixed.today.push(f);
+    else if (d >= yesterday) fixed.yesterday.push(f);
+    else if (d >= thisWeekStart) fixed.thisWeek.push(f);
+    else if (d >= thisMonthStart) fixed.thisMonth.push(f);
+    else if (d >= lastMonthStart) fixed.lastMonth.push(f);
+    else {
+      const monthKey = `${d.getFullYear()}-${d.getMonth()}`;
+      const arr = monthly.get(monthKey);
+      if (arr) arr.push(f);
+      else monthly.set(monthKey, [f]);
+    }
+  }
+
+  const monthFormatter = new Intl.DateTimeFormat(locale, { year: "numeric", month: "long" });
+  const sections: TimeSection[] = [];
+  const order: Exclude<TimeBucket, "month">[] = [
+    "today",
+    "yesterday",
+    "thisWeek",
+    "thisMonth",
+    "lastMonth",
+  ];
+  for (const key of order) {
+    if (fixed[key].length > 0) {
+      const i18nKey = `notes.time_${key}`;
+      const resolved = t(i18nKey);
+      const label = resolved === i18nKey ? (TIME_LABEL_FALLBACK[key] ?? key) : resolved;
+      sections.push({ key, label, items: fixed[key] });
+    }
+  }
+  const monthKeys = Array.from(monthly.keys()).sort((a, b) => b.localeCompare(a));
+  for (const k of monthKeys) {
+    const [yStr, mStr] = k.split("-");
+    const label = monthFormatter.format(new Date(Number(yStr), Number(mStr), 1));
+    sections.push({ key: k, label, items: monthly.get(k)! });
+  }
+  return sections;
+}
+
 export function NotesPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const reduceMotion = useReducedMotion();
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
   const [viewMode, setViewMode] = useState<ViewMode>("list");
 
@@ -61,12 +205,34 @@ export function NotesPage() {
   const listRef = useRef<HTMLDivElement>(null);
   const [isListResizing, setIsListResizing] = useState(false);
 
+  // Stable for the session: a bare `new Date()` here would change the query key
+  // on every render, miss the cache and blank the list.
+  const endTime = useMemo(() => {
+    const d = new Date();
+    d.setHours(23, 59, 59, 0);
+    return toApiDateTime(d);
+  }, []);
+
   const { data: files } = useNotes({
     // Wide range → effectively "all my meetings" (recordings + their notes).
     startTime: "2020-01-01T00:00:00",
-    endTime: toApiDateTime(new Date()),
+    endTime,
   });
   const { data: folders } = useFolders();
+
+  // Last known-good list, hydrated from localStorage on mount.
+  const [cachedFiles, setCachedFiles] = useState<WorkspaceItem[]>(() => loadNotesCache());
+  useEffect(() => {
+    if (!Array.isArray(files) || files.length === 0) return;
+    setCachedFiles(files);
+    saveNotesCache(files);
+  }, [files]);
+
+  // Render the cached list whenever the query has no data yet (initial load or
+  // refetch), so the panel never goes blank.
+  // Logged out → the notes query is disabled and `files` is undefined; never
+  // surface cached cloud data in that state.
+  const sourceFiles = files ?? (isAuthenticated ? cachedFiles : []);
 
   const folderList: FolderInfo[] = Array.isArray(folders) ? folders : [];
 
@@ -80,9 +246,14 @@ export function NotesPage() {
   }, [selectedFolderId, folderList, t]);
 
   const filteredFiles = useMemo(() => {
-    if (!Array.isArray(files)) return [];
-    return filterWorkspaceFilesByFolder(files, selectedFolderId);
-  }, [files, selectedFolderId]);
+    if (!Array.isArray(sourceFiles)) return [];
+    return filterWorkspaceFilesByFolder(sourceFiles, selectedFolderId);
+  }, [sourceFiles, selectedFolderId]);
+
+  const timeSections = useMemo(
+    () => getTimeSections(filteredFiles, t, i18n.language),
+    [filteredFiles, t, i18n.language],
+  );
 
   const handleSelectFolder = (folderId: string | null) => {
     selectFolder(folderId);
@@ -201,30 +372,44 @@ export function NotesPage() {
           </div>
         </div>
 
-        {/* File list / grid */}
+        {/* File list / grid, grouped by time */}
         <div className="flex-1 overflow-y-auto">
-          {filteredFiles.length === 0 ? (
+          {timeSections.length === 0 ? (
             <EmptyState />
           ) : viewMode === "grid" ? (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3 p-4">
-              {filteredFiles.map((file) => (
-                <GridCard
-                  key={file.id}
-                  file={file}
-                  isSelected={selectedItemId === file.id}
-                  onClick={() => selectItem(file.id, "file", file.title)}
-                />
+            <div className="pb-4">
+              {timeSections.map((section) => (
+                <div key={section.key} className="px-4 pt-3">
+                  <TimeSectionHeader label={section.label} count={section.items.length} />
+                  <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3 pb-1 pt-2">
+                    {section.items.map((file) => (
+                      <GridCard
+                        key={file.id}
+                        file={file}
+                        isSelected={selectedItemId === file.id}
+                        onClick={() => selectItem(file.id, "file", file.title)}
+                      />
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           ) : (
-            <div className="divide-y divide-border/40 px-4">
-              {filteredFiles.map((file) => (
-                <FileRow
-                  key={file.id}
-                  file={file}
-                  isSelected={selectedItemId === file.id}
-                  onClick={() => selectItem(file.id, "file", file.title)}
-                />
+            <div>
+              {timeSections.map((section) => (
+                <div key={section.key}>
+                  <TimeSectionHeader label={section.label} count={section.items.length} />
+                  <div className="divide-y divide-border/40 px-4">
+                    {section.items.map((file) => (
+                      <FileRow
+                        key={file.id}
+                        file={file}
+                        isSelected={selectedItemId === file.id}
+                        onClick={() => selectItem(file.id, "file", file.title)}
+                      />
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           )}
@@ -279,6 +464,16 @@ export function NotesPage() {
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function TimeSectionHeader({ label, count }: { label: string; count: number }) {
+  return (
+    <div className="sticky top-0 z-10 flex items-center gap-2 bg-background/90 px-4 py-2 backdrop-blur-sm">
+      <span className="text-xs font-semibold tracking-wide text-muted-foreground">{label}</span>
+      <span className="text-[11px] tabular-nums text-muted-foreground/70">{count}</span>
+      <div className="ml-1 h-px flex-1 bg-border/40" />
     </div>
   );
 }

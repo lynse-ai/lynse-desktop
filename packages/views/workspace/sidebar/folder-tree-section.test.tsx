@@ -6,6 +6,7 @@ import { FolderTreeSection } from "./folder-tree-section";
 
 const mocks = vi.hoisted(() => ({
   push: vi.fn(),
+  pathname: "/live-translation",
   selectFolder: vi.fn(),
   state: {
     selectedFolderId: null,
@@ -20,7 +21,7 @@ const mocks = vi.hoisted(() => ({
 mocks.state.selectFolder = mocks.selectFolder;
 
 vi.mock("../../navigation", () => ({
-  useNavigation: () => ({ push: mocks.push }),
+  useNavigation: () => ({ pathname: mocks.pathname, push: mocks.push }),
 }));
 
 vi.mock("@lynse/core/i18n/react", () => ({

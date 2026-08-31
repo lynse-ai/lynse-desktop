@@ -25,7 +25,7 @@ html.recording-island-window #root {
 /* AI assistant IP image: entrance animation when switching appearances */
 @keyframes lynse-avatar-in {
   from {
-    transform: scale(0.35);
+    transform: scale(0.95);
     opacity: 0;
   }
   to {
@@ -35,6 +35,12 @@ html.recording-island-window #root {
 }
 
 .animate-avatar-in {
-  animation: lynse-avatar-in 450ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: lynse-avatar-in 200ms var(--ease-out);
   transform-origin: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-avatar-in {
+    animation: none;
+  }
 }

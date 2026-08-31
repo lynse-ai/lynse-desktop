@@ -67,14 +67,28 @@ function vaultPersist(map: Record<string, string>): void {
   );
 }
 
-/** Rebuild the vault from the in-memory cache and write it to the keychain. */
-function persistCacheAsVault(): void {
-  const map: Record<string, string> = {};
-  for (const key of SECRET_KEYS) {
-    const value = secretCache.get(key);
-    if (value != null) map[key] = value;
-  }
-  vaultPersist(map);
+/**
+ * Serialized read-modify-write of the keychain vault. Every mutation goes
+ * through this promise chain so concurrent `setItem`/`removeItem` calls can't
+ * clobber each other, and — crucially — each write reloads the vault from the
+ * keychain first instead of trusting the in-memory cache. The cache is only
+ * fully populated after `hydrateSecrets()` finishes; a naive "serialize cache →
+ * overwrite vault" would destroy any secret still missing from the cache (e.g.
+ * a token written by login while hydration is still in flight).
+ *
+ * The mutator returns whether it actually changed anything. A no-op mutation
+ * skips the write entirely, because persisting an unchanged vault would touch
+ * the keychain on every launch and re-trigger macOS' authorization prompt.
+ */
+let vaultWriteChain: Promise<void> = Promise.resolve();
+function vaultMutate(mutator: (vault: Record<string, string>) => boolean): Promise<void> {
+  const run = vaultWriteChain.then(async () => {
+    const vault = await vaultLoad();
+    if (mutator(vault)) vaultPersist(vault);
+  });
+  // Keep the chain alive even if a write rejects, so later writes still run.
+  vaultWriteChain = run.catch(() => undefined);
+  return run;
 }
 
 /**
@@ -92,12 +106,14 @@ export async function hydrateSecrets(): Promise<void> {
   // If the vault already exists, skip the legacy per-key reads entirely —
   // those entries were migrated away, and reading them would only cost IPC.
   const vaultSeeded = Object.keys(vault).length > 0;
+  let changed = false;
 
   for (const key of SECRET_KEYS) {
     if (!vaultSeeded) {
       const legacyEntry = await secureGet(key);
       if (legacyEntry != null) {
         vault[key] = legacyEntry;
+        changed = true;
         await secureDelete(key).catch(() => undefined);
       }
     }
@@ -105,7 +121,10 @@ export async function hydrateSecrets(): Promise<void> {
     if (typeof window !== "undefined") {
       const legacy = window.localStorage.getItem(key);
       if (legacy) {
-        if (vault[key] == null) vault[key] = legacy;
+        if (vault[key] == null) {
+          vault[key] = legacy;
+          changed = true;
+        }
         window.localStorage.removeItem(key);
       }
     }
@@ -113,7 +132,18 @@ export async function hydrateSecrets(): Promise<void> {
     if (vault[key] != null) secretCache.set(key, vault[key]);
   }
 
-  if (Object.keys(vault).length > 0) await vaultPersist(vault);
+  if (changed) {
+    await vaultMutate((existing) => {
+      let dirty = false;
+      for (const [k, value] of Object.entries(vault)) {
+        if (existing[k] !== value) {
+          existing[k] = value;
+          dirty = true;
+        }
+      }
+      return dirty;
+    });
+  }
 }
 
 /**
@@ -148,7 +178,11 @@ export const secureStorage: StorageAdapter = {
       return;
     }
     secretCache.set(key, value);
-    persistCacheAsVault();
+    void vaultMutate((vault) => {
+      if (vault[key] === value) return false;
+      vault[key] = value;
+      return true;
+    }).catch((error) => console.error(`[secure-storage] failed to persist ${key}`, error));
     if (typeof window !== "undefined") window.localStorage.removeItem(key);
   },
   removeItem(key: string): void {
@@ -157,7 +191,11 @@ export const secureStorage: StorageAdapter = {
       return;
     }
     secretCache.delete(key);
-    persistCacheAsVault();
+    void vaultMutate((vault) => {
+      if (!(key in vault)) return false;
+      delete vault[key];
+      return true;
+    }).catch(() => undefined);
     if (typeof window !== "undefined") window.localStorage.removeItem(key);
   },
 };

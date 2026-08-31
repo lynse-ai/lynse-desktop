@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useEffect, useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
   Dialog,
@@ -49,9 +49,45 @@ function formatDuration(ms: number): string {
   return ss > 0 ? `${mm}分${ss}秒` : `${mm}分`;
 }
 
+// ── "Remember my choice" persistence ─────────────────────────────
+// The "保存到云" checkbox is opt-in per recording. When the user ticks
+// "记住选择", we remember both the flag and the chosen value in
+// localStorage so the next recording opens with the same selection.
+const REMEMBER_PREF_KEY = "lynse_rec_save_to_cloud_pref";
+
+interface RememberPref {
+  remember: boolean;
+  saveToCloud: boolean;
+}
+
+function loadRememberPref(): RememberPref {
+  if (typeof window === "undefined") return { remember: false, saveToCloud: false };
+  try {
+    const raw = window.localStorage.getItem(REMEMBER_PREF_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<RememberPref>;
+      return {
+        remember: parsed.remember === true,
+        saveToCloud: parsed.saveToCloud === true,
+      };
+    }
+  } catch {
+    /* ignore corrupt pref */
+  }
+  return { remember: false, saveToCloud: false };
+}
+
+function saveRememberPref(pref: RememberPref): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(REMEMBER_PREF_KEY, JSON.stringify(pref));
+  } catch {
+    /* ignore quota / private-mode errors */
+  }
+}
+
 /** Derive a display filename from the completed session. */
 export function deriveFilename(session: CompletedLiveSession): string {
-  // Use playbackPath basename or fall back to a timestamp-based name.
   if (session.playbackPath) {
     const parts = session.playbackPath.split(/[/\\]/);
     const last = parts[parts.length - 1];
@@ -81,6 +117,16 @@ export function RecordingCompleteDialog({
   const [remember, setRemember] = useState(false);
   const [saveToCloud, setSaveToCloud] = useState(false);
 
+  // Seed the checkboxes from the persisted preference each time the dialog
+  // opens. When "记住选择" was previously ticked, pre-check "保存到云" with the
+  // remembered value; otherwise start fresh.
+  useEffect(() => {
+    if (!open || !completedSession) return;
+    const pref = loadRememberPref();
+    setRemember(pref.remember);
+    setSaveToCloud(pref.remember ? pref.saveToCloud : false);
+  }, [open, completedSession]);
+
   if (!completedSession || !open) return null;
 
   // Narrow for closures — TS doesn't track early-return narrowing into handlers.
@@ -88,6 +134,7 @@ export function RecordingCompleteDialog({
   const filename = deriveFilename(session);
 
   function handlePrimary() {
+    if (remember) saveRememberPref({ remember: true, saveToCloud });
     if (saveToCloud) onSave?.(session);
     onOpenChange(false);
   }

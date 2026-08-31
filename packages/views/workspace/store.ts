@@ -127,7 +127,7 @@ function createWorkspaceStore() {
     selectedItemType: null,
     selectedItemTitle: null,
     selectedFileIds: new Set<string>(),
-    selectedFolderId: null,
+    selectedFolderId: "__all__",
     searchQuery: "",
     filterTags: [],
     filterDate: "all",

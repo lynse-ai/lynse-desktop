@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.26 (2026-08-31)
+
+### New Features
+
+- Add VibeVoice-ASR-BitNet (Microsoft, MIT) as a new local offline STT engine — a pure-CPU ggml engine supporting 7 languages (zh/en/fr/it/ko/pt/vi). It appears as "VibeVoice-ASR-BitNet（本地·CPU）" in the STT engine dropdown and downloads its two GGUF weights on first use.
+- Notes list is now grouped by time — 今天 / 昨天 / 本周 / 本月 / 上个月, then by month — so recent recordings and notes are easy to scan.
+- Add an "About" entry to the avatar dropdown that shows the current version at a glance; when a newer release is available, an upgrade-arrow badge appears on the avatar itself.
+- Integrate the Qoder Cloud Agent chat (cloud-hosted agent backend) alongside recording-first local capture, plus a native macOS menu bar, tray, and live waveform.
+
+### Changed
+
+- Remove the MOSS-Transcribe-Diarize offline engine: its hosted model weights (the `moss-transcribe-diarize-0.9b-q5_0.gguf` download URL) are no longer available, so the engine could not be installed. VibeVoice replaces it in the engine list and in the shared STT runtime (the `moss-transcribe` sidecar is replaced by `vibeasr`).
+- Notes list now shows ALL files on first entry (previously it only showed uncategorized files).
+- Notes list caches the last successful listing locally, eliminating the blank flash when you click refresh.
+- Fix: the notes time-section header sometimes rendered the raw i18n key (`notes.time_thisMonth`) instead of a readable label.
+
+## 0.1.25 (2026-08-19)
+
 ## 0.1.25 (2026-08-19)
 
 ### New Features

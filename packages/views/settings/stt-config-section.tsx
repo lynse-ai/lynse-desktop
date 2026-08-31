@@ -25,7 +25,7 @@ import type { LocalHotwordPackage } from "../workspace/types";
 const ENGINE_OPTIONS: { value: SttEngine; label: string }[] = [
   { value: "funasr", label: "FunASR（本地）" },
   { value: "whisper", label: "Whisper（本地）" },
-  { value: "moss_transcribe_diarize", label: "MOSS-Transcribe-Diarize（本地）" },
+  { value: "vibeasr", label: "VibeVoice-ASR-BitNet（本地·CPU）" },
   { value: "mlx", label: "MLX-Whisper（本地·Apple Silicon）" },
 ];
 
@@ -45,11 +45,10 @@ function providerForEngine(engine: SttEngine, prev?: SttProviderConfig): SttProv
         expected_speakers: prev?.provider === "whisper" ? prev.expected_speakers ?? null : null,
         hotword_package_id: prev?.provider === "whisper" ? prev.hotword_package_id ?? null : null,
       };
-    case "moss_transcribe_diarize":
+    case "vibeasr":
       return {
-        provider: "moss_transcribe_diarize",
-        hotword_package_id:
-          prev?.provider === "moss_transcribe_diarize" ? prev.hotword_package_id ?? null : null,
+        provider: "vibeasr",
+        hotword_package_id: prev?.provider === "vibeasr" ? prev.hotword_package_id ?? null : null,
       };
     case "mlx":
       return {
@@ -174,32 +173,45 @@ function ModelManager({
   );
 }
 
+/** Human-readable label for the current download phase. */
+function downloadPhaseLabel(phase: SttDownloadProgress["phase"]): string {
+  switch (phase) {
+    case "preparing":
+      return "正在准备…";
+    case "verifying":
+      return "校验中…";
+    case "runtime_downloading":
+      return "正在下载离线转写组件";
+    case "runtime_verifying":
+      return "正在校验离线转写组件";
+    case "runtime_installing":
+      return "正在安装离线转写组件";
+    default:
+      return "下载中…";
+  }
+}
+
 /** Live download progress for a single model. Shows a determinate bar with a
  *  percentage when the total size is known, or an indeterminate sweep for
  *  unknown-size downloads (e.g. FunASR). */
 function DownloadProgress({ progress }: { progress: SttDownloadProgress | null }) {
   if (!progress) return null;
   if (progress.percent === null) {
+    // Indeterminate: the sweep by itself reads as "working", and the label
+    // keeps the `preparing` phase from looking like a frozen click.
     return (
-      <div className="relative mt-2 h-1 w-full overflow-hidden rounded-full bg-muted">
-        <div className="absolute inset-y-0 left-0 h-full w-1/3 rounded-full bg-primary animate-[stt-download-sweep_1.4s_ease-in-out_infinite]" />
+      <div className="mt-2">
+        <div className="relative h-1 w-full overflow-hidden rounded-full bg-muted">
+          <div className="absolute inset-y-0 left-0 h-full w-1/3 rounded-full bg-primary animate-[stt-download-sweep_1.4s_ease-in-out_infinite]" />
+        </div>
+        <div className="mt-1 text-[11px] text-muted-foreground">{downloadPhaseLabel(progress.phase)}</div>
       </div>
     );
   }
   return (
     <Progress value={progress.percent} className="mt-2 flex-col items-stretch gap-1">
       <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-        <span>
-          {progress.phase === "verifying"
-            ? "校验中…"
-            : progress.phase === "runtime_downloading"
-              ? "正在下载离线转写组件"
-              : progress.phase === "runtime_verifying"
-                ? "正在校验离线转写组件"
-                : progress.phase === "runtime_installing"
-                  ? "正在安装离线转写组件"
-                  : "下载中…"}
-        </span>
+        <span>{downloadPhaseLabel(progress.phase)}</span>
         <ProgressValue className="text-[11px]" />
       </div>
     </Progress>
@@ -223,6 +235,11 @@ function EngineFields({
       {config.provider === "mlx" && (
         <p className="text-[11px] text-muted-foreground">
           仅支持 macOS（Apple Silicon）。首次使用会自动下载 MLX-Whisper 运行时与模型权重。
+        </p>
+      )}
+      {config.provider === "vibeasr" && (
+        <p className="text-[11px] text-muted-foreground">
+          纯 CPU 引擎，支持中/英/法/意/韩/葡/越 7 语种；首次下载约 1.6 GiB 权重，并需要离线转写组件。
         </p>
       )}
       {config.provider === "whisper" && (

@@ -34,8 +34,6 @@ import {
 import type { LocalHotwordPackage, LocalVoiceprint } from "../workspace/types";
 import { SttConfigSection } from "./stt-config-section";
 import { LiveTranslationConfigCard } from "./live-translation-config-card";
-import { QoderChatConfigCard } from "./qoder-chat-config-card";
-
 const DEFAULT_API_URL = "https://api.lynse.cn";
 export const SETTINGS_DIALOG_CONTENT_CLASS =
   "sm:max-w-2xl max-h-[min(90vh,760px)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0";
@@ -257,8 +255,6 @@ export function SettingsDialog({
               </div>
             </CardContent>
           </Card>
-
-          <QoderChatConfigCard />
 
           <LiveTranslationConfigCard />
 

@@ -428,9 +428,7 @@ pub fn live_translation_request_permission(
         "systemAudio" => {
             let status = run_permission_command(&app, "--request-system-audio")?;
             if status.system_audio != "granted" {
-                let _ = Command::new("open")
-                    .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
-                    .spawn();
+                open_macos_privacy_pane("screen");
             }
             return Ok(status);
         }
@@ -446,6 +444,22 @@ pub fn live_translation_request_permission(
             restart_required: false,
         });
     }
+}
+
+/// On macOS, jump straight to the relevant Privacy & Security pane so the user
+/// only has to flip the switch. Used when a recording attempt lacks the
+/// required TCC grant (microphone or screen & system-audio recording).
+#[cfg(target_os = "macos")]
+fn open_macos_privacy_pane(kind: &str) {
+    let anchor = match kind {
+        "microphone" => "Privacy_Microphone",
+        _ => "Privacy_ScreenCapture",
+    };
+    let _ = Command::new("open")
+        .arg(format!(
+            "x-apple.systempreferences:com.apple.preference.security?{anchor}"
+        ))
+        .spawn();
 }
 
 #[tauri::command]
@@ -476,18 +490,42 @@ pub async fn live_translation_start(
     validate_connections(&request.connections)?;
     #[cfg(target_os = "macos")]
     {
+        // First, surface the native TCC prompts so the OS dialog actually
+        // appears and a "Lynse Audio Capture" entry is created in System
+        // Settings. Without this the user is sent to the privacy pane where
+        // nothing is listed yet, leaving them with nothing to toggle — the
+        // entry only materialises after the OS prompt has fired at least once.
         let permissions = run_permission_command(&app, "--permission-status")?;
-        if permissions.microphone != "granted" {
+        let needs_mic = permissions.microphone != "granted";
+        let needs_screen = permissions.system_audio != "granted";
+        if needs_mic || needs_screen {
+            if needs_mic {
+                let _ = run_permission_command(&app, "--request-microphone");
+            }
+            if needs_screen {
+                let _ = run_permission_command(&app, "--request-system-audio");
+            }
+        }
+        // Re-read the actual grant state. Screen Recording only takes effect
+        // after a full app restart even once the user clicks Allow, so we still
+        // send the user to the pane and ask for a restart.
+        let after = run_permission_command(&app, "--permission-status")?;
+        if after.microphone != "granted" {
+            open_macos_privacy_pane("microphone");
             return Err(
-                "缺少麦克风权限。请在 macOS“系统设置 → 隐私与安全性 → 麦克风”中允许 Lynse。"
+                "缺少麦克风权限。请在系统弹出的对话框中点击「允许」（或在「隐私与安全性 → 麦克风」中允许 Lynse Audio Capture），然后重新启动 Lynse。"
                     .to_owned(),
             );
         }
-        // System-audio capture is only required when a translation connection
-        // is attached; pure recording works with the microphone alone.
-        if !request.connections.is_empty() && permissions.system_audio != "granted" {
+        // The audio-capture sidecar always pulls audio through ScreenCaptureKit
+        // (SCStream) — even for pure microphone recording — so the "Screen &
+        // System Audio Recording" TCC grant is required in every mode. Without
+        // it the sidecar exits immediately and no audio is ever captured, which
+        // would otherwise surface as a silent "recording" with no audio.
+        if after.system_audio != "granted" {
+            open_macos_privacy_pane("screen");
             return Err(
-                "缺少“屏幕与系统音频录制”权限。请在 macOS 系统设置中允许 Lynse Audio Capture，然后重新启动 Lynse。"
+                "缺少“屏幕与系统音频录制”权限。请在系统弹出的对话框中点击「允许」（或在「隐私与安全性 → 屏幕录制」中允许 Lynse Audio Capture），然后完全退出并重新启动 Lynse。"
                     .to_owned(),
             );
         }
@@ -497,8 +535,12 @@ pub async fn live_translation_start(
             .session
             .lock()
             .map_err(|_| "live session lock is poisoned")?;
-        if guard.is_some() {
-            return Err("a live translation session is already active".to_owned());
+        if let Some(existing) = guard.as_ref() {
+            // Idempotent start: a session is already running (often still in the
+            // transient "connecting" state right after the previous start). Return
+            // its snapshot so the UI can sync to the live session instead of
+            // erroring with "a live translation session is already active".
+            return Ok(existing.snapshot());
         }
     }
     let directory = recovery_root(&app)?.join(&request.session_id);

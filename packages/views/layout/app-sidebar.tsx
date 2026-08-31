@@ -25,6 +25,8 @@ import {
   Palette,
   UserCircle,
   Download,
+  Info,
+  ArrowUp,
 } from "../icons";
 import {
   Sidebar,
@@ -52,7 +54,7 @@ import {
 } from "@lynse/ui/components/ui/popover";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
-import { useAppUpdate, openExternalUrl } from "../app-update";
+import { useAppUpdate, openExternalUrl, getAppInfoSync } from "../app-update";
 import { useUserCredits, useMembership } from "./use-user-credits";
 import { FolderTreeSection } from "../workspace/sidebar/folder-tree-section";
 import { SettingsDialog } from "../settings/settings-dialog";
@@ -337,6 +339,13 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
   const plan = useLocalizedPlan(membership?.memberLevel || data?.benefitType);
   const initials = nickname.slice(0, 2).toUpperCase();
 
+  // Version for the About row + the upgrade badge. Prefer the version the host
+  // bridge injected at startup; fall back to the latest check's currentVersion.
+  const hasUpdate = Boolean(update?.hasUpdate);
+  const aboutVersion =
+    getAppInfoSync()?.version ?? update?.currentVersion ?? null;
+  const versionLabel = aboutVersion ? `v${aboutVersion}` : "—";
+
   const [copied, setCopied] = useState(false);
 
   const handleCopyName = () => {
@@ -351,8 +360,15 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
       <DropdownMenuTrigger
         render={
           <button className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-white/[0.06]">
-            <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20">
-              {initials}
+            <div className="relative shrink-0">
+              <div className="flex size-7 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20">
+                {initials}
+              </div>
+              {hasUpdate && (
+                <span className="absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-emerald-500 text-white ring-2 ring-background">
+                  <ArrowUp className="size-2.5" strokeWidth={3} />
+                </span>
+              )}
             </div>
             <div className="min-w-0 flex-1 text-left">
               <p className="truncate text-[13px] font-medium leading-tight">{nickname}</p>
@@ -444,6 +460,18 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
         <DropdownMenuItem>
           <HelpCircle className="size-4" />
           <span>{t("layout.user_help_feedback")}</span>
+        </DropdownMenuItem>
+
+        {/* ── About (version) ─────────────────────────── */}
+        <DropdownMenuItem onClick={onOpenSettings}>
+          <Info className="size-4" />
+          <span>{t("layout.about")}</span>
+          <span className="ml-auto flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground">
+            {hasUpdate && (
+              <ArrowUp className="size-3 text-emerald-500" strokeWidth={2.5} />
+            )}
+            {versionLabel}
+          </span>
         </DropdownMenuItem>
 
         {/* ── Check for Updates ────────────────────────── */}

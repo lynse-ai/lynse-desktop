@@ -1,13 +1,14 @@
 "use client";
 
-import { X } from "../icons";
+import { Loader2, X } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import type { ChatConversation } from "../workspace/types";
 
 interface ChatHistorySidebarProps {
   conversations: ChatConversation[];
   activeConversationId: string | null;
-  disabled: boolean;
+  /** Conversations streaming a reply right now — shown with a working marker. */
+  workingConversationIds?: readonly string[];
   onSelect: (conversationId: string) => void;
   onClose?: () => void;
 }
@@ -16,11 +17,13 @@ interface ChatHistorySidebarProps {
  * Conversation list used to switch between saved chats. Positioning is left to
  * the parent (absolute wrapper) so it works both as a full-height drawer in the
  * workspace chat panel and as a below-header drawer on the dedicated chat page.
+ * Switching is always allowed — conversations stream independently, so opening
+ * one never interrupts another.
  */
 export function ChatHistorySidebar({
   conversations,
   activeConversationId,
-  disabled,
+  workingConversationIds,
   onSelect,
   onClose,
 }: ChatHistorySidebarProps) {
@@ -49,30 +52,43 @@ export function ChatHistorySidebar({
             {t("chat.history_empty")}
           </p>
         ) : (
-          sortedConversations.map((conversation) => (
-            <button
-              key={conversation.id}
-              type="button"
-              className={`w-full rounded-lg px-2.5 py-2 text-left transition-colors ${
-                conversation.id === activeConversationId
-                  ? "bg-card text-foreground shadow-sm ring-1 ring-border/70"
-                  : "text-muted-foreground hover:bg-card/70 hover:text-foreground"
-              }`}
-              onClick={() => onSelect(conversation.id)}
-              disabled={disabled}
-              aria-current={conversation.id === activeConversationId ? "page" : undefined}
-            >
-              <span className="block truncate text-xs font-medium">{conversation.title}</span>
-              <span className="mt-1 block text-[10px] text-muted-foreground/70">
-                {new Date(conversation.updatedAt).toLocaleString(undefined, {
-                  month: "2-digit",
-                  day: "2-digit",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })}
-              </span>
-            </button>
-          ))
+          sortedConversations.map((conversation) => {
+            const working = workingConversationIds?.includes(conversation.id);
+            return (
+              <button
+                key={conversation.id}
+                type="button"
+                className={`w-full rounded-lg px-2.5 py-2 text-left transition-colors ${
+                  conversation.id === activeConversationId
+                    ? "bg-card text-foreground shadow-sm ring-1 ring-border/70"
+                    : "text-muted-foreground hover:bg-card/70 hover:text-foreground"
+                }`}
+                onClick={() => onSelect(conversation.id)}
+                aria-current={conversation.id === activeConversationId ? "page" : undefined}
+              >
+                <span className="flex items-center gap-1.5">
+                  {working && (
+                    <Loader2 className="size-3 shrink-0 animate-spin text-primary" aria-hidden="true" />
+                  )}
+                  <span className="truncate text-xs font-medium">{conversation.title}</span>
+                </span>
+                <span
+                  className={`mt-1 block text-[10px] ${
+                    working ? "text-primary/80" : "text-muted-foreground/70"
+                  }`}
+                >
+                  {working
+                    ? t("chat.working")
+                    : new Date(conversation.updatedAt).toLocaleString(undefined, {
+                        month: "2-digit",
+                        day: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                </span>
+              </button>
+            );
+          })
         )}
       </div>
     </div>

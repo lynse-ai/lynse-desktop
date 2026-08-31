@@ -297,18 +297,18 @@ export function SettingsDialog({
                     />
 
                     <div className="rounded-md border bg-muted/30 p-2.5">
-                      <p className="text-xs font-medium">本地热词包</p>
+                      <p className="text-xs font-medium">{t("settings.hotword_packages")}</p>
                       <div className="mt-2 space-y-2">
                         <Input
                           value={hotwordName}
                           onChange={(event) => setHotwordName(event.target.value)}
-                          placeholder="热词包名称"
+                          placeholder={t("settings.hotword_name_placeholder")}
                           className="h-8 text-xs"
                         />
                         <textarea
                           value={hotwordText}
                           onChange={(event) => setHotwordText(event.target.value)}
-                          placeholder={"每行一个热词，或 误识别=>替换"}
+                          placeholder={t("settings.hotword_text_placeholder")}
                           className="min-h-20 w-full rounded-md border border-border bg-background px-3 py-2 text-xs outline-none focus:border-primary"
                         />
                         <Button
@@ -318,13 +318,18 @@ export function SettingsDialog({
                           onClick={handleSaveHotwordPackage}
                           disabled={!hotwordName.trim()}
                         >
-                          保存热词包
+                          {t("settings.hotword_save")}
                         </Button>
                         {hotwordPackages.length > 0 && (
                           <div className="space-y-1">
                             {hotwordPackages.map((pkg) => (
                               <div key={pkg.id} className="flex items-center justify-between gap-2 rounded bg-background px-2 py-1 text-xs">
-                                <span className="truncate">{pkg.name} · {pkg.terms.length}词</span>
+                                <span className="truncate">
+                                  {t("settings.hotword_terms_count", {
+                                    name: pkg.name,
+                                    terms: pkg.terms.length,
+                                  })}
+                                </span>
                                 <Button
                                   type="button"
                                   size="sm"
@@ -332,7 +337,7 @@ export function SettingsDialog({
                                   className="h-6 px-2 text-xs"
                                   onClick={() => handleDeleteHotwordPackage(pkg.id)}
                                 >
-                                  删除
+                                  {t("settings.delete")}
                                 </Button>
                               </div>
                             ))}
@@ -342,10 +347,12 @@ export function SettingsDialog({
                     </div>
 
                     <div className="rounded-md border bg-muted/30 p-2.5">
-                      <p className="text-xs font-medium">本地声纹</p>
+                      <p className="text-xs font-medium">{t("settings.voiceprints")}</p>
                       <div className="mt-2 space-y-1">
                         {voiceprints.length === 0 ? (
-                          <p className="text-[11px] text-muted-foreground">暂无声纹，可在本地转写详情中从某个发言人保存。</p>
+                          <p className="text-[11px] text-muted-foreground">
+                            {t("settings.voiceprints_empty")}
+                          </p>
                         ) : voiceprints.map((voiceprint) => (
                           <div key={voiceprint.id} className="flex items-center justify-between gap-2 rounded bg-background px-2 py-1 text-xs">
                             <span className="truncate">{voiceprint.name}</span>
@@ -356,7 +363,7 @@ export function SettingsDialog({
                               className="h-6 px-2 text-xs"
                               onClick={() => handleDeleteVoiceprint(voiceprint.id)}
                             >
-                              删除
+                              {t("settings.delete")}
                             </Button>
                           </div>
                         ))}

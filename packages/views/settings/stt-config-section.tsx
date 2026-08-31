@@ -6,6 +6,7 @@ import { Input } from "@lynse/ui/components/ui/input";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Progress, ProgressValue } from "@lynse/ui/components/ui/progress";
 import { cn } from "@lynse/ui/lib/utils";
+import { useTranslation } from "@lynse/core/i18n/react";
 import { Loader2, Plus, Trash2 } from "../icons";
 import {
   type DesktopLocalTranscriptionApi,
@@ -22,11 +23,12 @@ import {
 } from "../workspace/local-transcription";
 import type { LocalHotwordPackage } from "../workspace/types";
 
-const ENGINE_OPTIONS: { value: SttEngine; label: string }[] = [
-  { value: "funasr", label: "FunASR（本地）" },
-  { value: "whisper", label: "Whisper（本地）" },
-  { value: "vibeasr", label: "VibeVoice-ASR-BitNet（本地·CPU）" },
-  { value: "mlx", label: "MLX-Whisper（本地·Apple Silicon）" },
+/** Engine id -> translation key, resolved at render time so the labels follow the UI locale. */
+const ENGINE_OPTIONS: { value: SttEngine; labelKey: string }[] = [
+  { value: "funasr", labelKey: "settings.stt_engine_funasr" },
+  { value: "whisper", labelKey: "settings.stt_engine_whisper" },
+  { value: "vibeasr", labelKey: "settings.stt_engine_vibeasr" },
+  { value: "mlx", labelKey: "settings.stt_engine_mlx" },
 ];
 
 function providerForEngine(engine: SttEngine, prev?: SttProviderConfig): SttProviderConfig {
@@ -68,16 +70,17 @@ function HotwordSelect({
   packages: LocalHotwordPackage[];
   onChange: (id: string | null) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <select
       value={value ?? ""}
       onChange={(event) => onChange(event.target.value || null)}
       className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
     >
-      <option value="">不使用</option>
+      <option value="">{t("settings.stt_hotword_none")}</option>
       {packages.map((pkg) => (
         <option key={pkg.id} value={pkg.id}>
-          {pkg.name}（{pkg.terms.length}词）
+          {t("settings.stt_hotword_terms", { name: pkg.name, terms: pkg.terms.length })}
         </option>
       ))}
     </select>
@@ -97,8 +100,9 @@ function ModelManager({
   onDownload: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useTranslation();
   if (!model) {
-    return <p className="text-[11px] text-muted-foreground">该引擎暂无可下载模型。</p>;
+    return <p className="text-[11px] text-muted-foreground">{t("settings.stt_no_models")}</p>;
   }
   const installed = model.status === "installed";
   const isThisDownloading =
@@ -109,20 +113,20 @@ function ModelManager({
   const isRuntimePhase =
     phase === "runtime_downloading" || phase === "runtime_verifying" || phase === "runtime_installing";
   const statusText = isError
-    ? "下载失败"
+    ? t("settings.stt_status_download_failed")
     : isThisDownloading
       ? isRuntimePhase
         ? phase === "runtime_downloading"
-          ? "正在下载离线转写组件"
+          ? t("settings.stt_status_runtime_downloading")
           : phase === "runtime_verifying"
-            ? "正在校验离线转写组件"
-            : "正在安装离线转写组件"
+            ? t("settings.stt_status_runtime_verifying")
+            : t("settings.stt_status_runtime_installing")
         : phase === "verifying"
-          ? "校验中…"
-          : "下载中…"
+          ? t("settings.stt_status_verifying")
+          : t("settings.stt_status_downloading")
       : installed
-        ? "已安装"
-        : "未安装";
+        ? t("settings.stt_status_installed")
+        : t("settings.stt_status_not_installed");
   return (
     <div className="mt-2 rounded bg-background p-2">
       <div className="flex items-center justify-between gap-2">
@@ -155,7 +159,7 @@ function ModelManager({
           disabled={busy || installed || isThisDownloading}
         >
           {busy && !isThisDownloading ? <Loader2 className="mr-1.5 size-3 animate-spin" /> : null}
-          下载模型
+          {t("settings.stt_download_model")}
         </Button>
         <Button
           type="button"
@@ -166,35 +170,31 @@ function ModelManager({
           disabled={busy || !installed || isThisDownloading}
         >
           <Trash2 className="mr-1.5 size-3" />
-          删除模型
+          {t("settings.stt_delete_model")}
         </Button>
       </div>
     </div>
   );
 }
 
-/** Human-readable label for the current download phase. */
-function downloadPhaseLabel(phase: SttDownloadProgress["phase"]): string {
-  switch (phase) {
-    case "preparing":
-      return "正在准备…";
-    case "verifying":
-      return "校验中…";
-    case "runtime_downloading":
-      return "正在下载离线转写组件";
-    case "runtime_verifying":
-      return "正在校验离线转写组件";
-    case "runtime_installing":
-      return "正在安装离线转写组件";
-    default:
-      return "下载中…";
-  }
+const DOWNLOAD_PHASE_KEYS: Partial<Record<SttDownloadProgress["phase"], string>> = {
+  preparing: "settings.stt_status_preparing",
+  verifying: "settings.stt_status_verifying",
+  runtime_downloading: "settings.stt_status_runtime_downloading",
+  runtime_verifying: "settings.stt_status_runtime_verifying",
+  runtime_installing: "settings.stt_status_runtime_installing",
+};
+
+/** Translation key for the current download phase. */
+function downloadPhaseKey(phase: SttDownloadProgress["phase"]): string {
+  return DOWNLOAD_PHASE_KEYS[phase] ?? "settings.stt_status_downloading";
 }
 
 /** Live download progress for a single model. Shows a determinate bar with a
  *  percentage when the total size is known, or an indeterminate sweep for
  *  unknown-size downloads (e.g. FunASR). */
 function DownloadProgress({ progress }: { progress: SttDownloadProgress | null }) {
+  const { t } = useTranslation();
   if (!progress) return null;
   if (progress.percent === null) {
     // Indeterminate: the sweep by itself reads as "working", and the label
@@ -204,14 +204,16 @@ function DownloadProgress({ progress }: { progress: SttDownloadProgress | null }
         <div className="relative h-1 w-full overflow-hidden rounded-full bg-muted">
           <div className="absolute inset-y-0 left-0 h-full w-1/3 rounded-full bg-primary animate-[stt-download-sweep_1.4s_ease-in-out_infinite]" />
         </div>
-        <div className="mt-1 text-[11px] text-muted-foreground">{downloadPhaseLabel(progress.phase)}</div>
+        <div className="mt-1 text-[11px] text-muted-foreground">
+          {t(downloadPhaseKey(progress.phase))}
+        </div>
       </div>
     );
   }
   return (
     <Progress value={progress.percent} className="mt-2 flex-col items-stretch gap-1">
       <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-        <span>{downloadPhaseLabel(progress.phase)}</span>
+        <span>{t(downloadPhaseKey(progress.phase))}</span>
         <ProgressValue className="text-[11px]" />
       </div>
     </Progress>
@@ -227,25 +229,22 @@ function EngineFields({
   hotwordPackages: LocalHotwordPackage[];
   onChange: (next: SttProviderConfig) => void;
 }) {
+  const { t } = useTranslation();
   const speakers = config.provider === "funasr" || config.provider === "whisper"
     ? config.expected_speakers ?? null
     : null;
   return (
     <div className="mt-2 space-y-2 rounded bg-background p-2">
       {config.provider === "mlx" && (
-        <p className="text-[11px] text-muted-foreground">
-          仅支持 macOS（Apple Silicon）。首次使用会自动下载 MLX-Whisper 运行时与模型权重。
-        </p>
+        <p className="text-[11px] text-muted-foreground">{t("settings.stt_mlx_hint")}</p>
       )}
       {config.provider === "vibeasr" && (
-        <p className="text-[11px] text-muted-foreground">
-          纯 CPU 引擎，支持中/英/法/意/韩/葡/越 7 语种；首次下载约 1.6 GiB 权重，并需要离线转写组件。
-        </p>
+        <p className="text-[11px] text-muted-foreground">{t("settings.stt_vibeasr_hint")}</p>
       )}
       {config.provider === "whisper" && (
         <>
           <div className="space-y-1">
-            <Label className="text-[11px]">Whisper 模型</Label>
+            <Label className="text-[11px]">{t("settings.stt_whisper_model")}</Label>
             <select
               value={config.model ?? DEFAULT_WHISPER_MODEL}
               onChange={(event) => onChange({ ...config, model: event.target.value as WhisperModel })}
@@ -264,13 +263,13 @@ function EngineFields({
               checked={config.campp_diarization ?? false}
               onChange={(event) => onChange({ ...config, campp_diarization: event.target.checked })}
             />
-            CAM++ 说话人分离
+            {t("settings.stt_campp_diarization")}
           </label>
         </>
       )}
       {(config.provider === "funasr" || config.provider === "whisper") && (
         <div className="space-y-1">
-          <Label className="text-[11px]">预期说话人数</Label>
+          <Label className="text-[11px]">{t("settings.stt_expected_speakers")}</Label>
           <Input
             type="number"
             min={0}
@@ -281,12 +280,12 @@ function EngineFields({
               onChange({ ...config, expected_speakers: num });
             }}
             className="h-8 text-xs"
-            placeholder="自动"
+            placeholder={t("settings.stt_auto")}
           />
         </div>
       )}
       <div className="space-y-1">
-        <Label className="text-[11px]">热词包</Label>
+        <Label className="text-[11px]">{t("settings.stt_hotword_package")}</Label>
         <HotwordSelect
           value={config.hotword_package_id}
           packages={hotwordPackages}
@@ -318,6 +317,7 @@ export function SttConfigSection({
   onDeleteModel: (provider: SttEngine, modelId: string) => void;
   hotwordPackages: LocalHotwordPackage[];
 }) {
+  const { t } = useTranslation();
   const [config, setConfig] = useState<TranscribeConfig | null>(null);
   const [langEntries, setLangEntries] = useState<LangEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -338,7 +338,7 @@ export function SttConfigSection({
         );
       })
       .catch((e: unknown) =>
-        active && setError(e instanceof Error ? e.message : "加载 STT 配置失败"),
+        active && setError(e instanceof Error ? e.message : t("settings.stt_load_failed")),
       );
     return () => {
       active = false;
@@ -361,7 +361,7 @@ export function SttConfigSection({
       await api.saveSttConfig(next);
       setConfig(next);
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "保存失败");
+      setError(e instanceof Error ? e.message : t("settings.stt_save_failed"));
     } finally {
       setSaving(false);
     }
@@ -370,7 +370,7 @@ export function SttConfigSection({
   if (!config) {
     return (
       <div className="rounded-md border bg-muted/30 p-2.5 text-[11px] text-muted-foreground">
-        正在加载 STT 路由配置…
+        {t("settings.stt_loading")}
       </div>
     );
   }
@@ -391,7 +391,7 @@ export function SttConfigSection({
     <div className="space-y-3">
       <style>{`@keyframes stt-download-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }`}</style>
       <div className="space-y-1">
-        <Label className="text-[11px]">默认离线引擎</Label>
+        <Label className="text-[11px]">{t("settings.stt_engine_default")}</Label>
         <select
           value={defaultConfig.provider}
           onChange={(event) => changeDefaultEngine(event.target.value as SttEngine)}
@@ -399,7 +399,7 @@ export function SttConfigSection({
         >
           {ENGINE_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
-              {option.label}
+              {t(option.labelKey)}
             </option>
           ))}
         </select>
@@ -415,7 +415,7 @@ export function SttConfigSection({
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <Label className="text-[11px]">按语言路由</Label>
+          <Label className="text-[11px]">{t("settings.stt_per_language")}</Label>
           <Button
             type="button"
             size="sm"
@@ -426,12 +426,14 @@ export function SttConfigSection({
             }
           >
             <Plus className="mr-1 size-3" />
-            添加语言
+            {t("settings.stt_add_language")}
           </Button>
         </div>
 
         {langEntries.length === 0 && (
-          <p className="text-[11px] text-muted-foreground">暂无按语言覆盖，全部使用默认引擎。</p>
+          <p className="text-[11px] text-muted-foreground">
+            {t("settings.stt_no_language_override")}
+          </p>
         )}
 
         {langEntries.map((entry, index) => {
@@ -447,7 +449,7 @@ export function SttConfigSection({
                       list.map((item, i) => (i === index ? { ...item, language: event.target.value } : item)),
                     )
                   }
-                  placeholder="语言代码，如 zh / en"
+                  placeholder={t("settings.stt_language_placeholder")}
                   className="h-8 text-xs"
                 />
                 <Button
@@ -458,7 +460,7 @@ export function SttConfigSection({
                   onClick={() => setLangEntries((list) => list.filter((_, i) => i !== index))}
                 >
                   <Trash2 className="mr-1 size-3" />
-                  删除
+                  {t("settings.delete")}
                 </Button>
               </div>
               <select
@@ -474,7 +476,7 @@ export function SttConfigSection({
               >
                 {ENGINE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
-                    {option.label}
+                    {t(option.labelKey)}
                   </option>
                 ))}
               </select>
@@ -502,7 +504,7 @@ export function SttConfigSection({
 
       <Button type="button" size="sm" className="mt-1 h-7 text-xs" onClick={handleSave} disabled={saving}>
         {saving ? <Loader2 className="mr-1.5 size-3 animate-spin" /> : null}
-        保存配置
+        {t("settings.stt_save_config")}
       </Button>
     </div>
   );

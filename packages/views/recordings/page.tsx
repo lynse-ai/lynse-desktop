@@ -1,7 +1,7 @@
 "use client";
 
 import { PageHeader } from "../layout/page-header";
-import { Headphones, Plus, Search, Filter } from "../icons";
+import { Headphones, Mic, Upload, Search, Filter } from "../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
 import { ScrollingWaveform } from "@lynse/ui/components/ui/waveform";
@@ -40,7 +40,7 @@ export function RecordingsPage() {
             {t("recordings.filter")}
           </Button>
           <Button size="sm" className="h-8 gap-1.5 rounded-lg bg-primary text-xs text-primary-foreground shadow-sm hover:bg-primary/90">
-            <Plus className="size-3.5" />
+            <Upload className="size-3.5" />
             {t("recordings.upload")}
           </Button>
         </div>
@@ -49,17 +49,18 @@ export function RecordingsPage() {
       <main className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-6 py-12">
         <div className="relative flex w-full max-w-xl flex-col items-center text-center">
           <ScrollingWaveform
-            height={80}
+            height={72}
             barWidth={3}
             barGap={2}
             speed={30}
             fadeEdges={true}
-            barColor="gray"
-            className="mb-6 w-full max-w-md"
+            barColor="var(--muted-foreground)"
+            className="mb-5 w-full max-w-md opacity-30"
           />
-          <div className="relative mb-6 flex size-20 items-center justify-center rounded-[24px] border border-border bg-card text-primary shadow-sm">
-            <Headphones className="size-9" strokeWidth={1.5} />
-          </div>
+          <Headphones
+            className="mb-5 size-11 text-primary/60"
+            strokeWidth={1.2}
+          />
           <h2 className="text-xl font-semibold tracking-tight text-foreground">
             {t("recordings.empty")}
           </h2>
@@ -72,9 +73,10 @@ export function RecordingsPage() {
               type="button"
               className="group flex min-h-32 flex-col items-start justify-between rounded-xl border border-border bg-card p-4 text-left shadow-sm transition-[border-color,background-color,box-shadow] hover:border-primary/25 hover:bg-accent/50 hover:shadow-md"
             >
-              <span className="flex size-10 items-center justify-center rounded-xl bg-primary/15 text-accent-brand-text ring-1 ring-inset ring-primary/20 transition-colors group-hover:bg-primary/20">
-                <Plus className="size-[18px]" />
-              </span>
+              <Upload
+                className="size-6 text-muted-foreground transition-colors group-hover:text-accent-brand-text"
+                strokeWidth={1.5}
+              />
               <span>
                 <span className="block text-[13px] font-medium text-foreground">
                   {t("recordings.upload_btn")}
@@ -89,15 +91,16 @@ export function RecordingsPage() {
               type="button"
               className="group flex min-h-32 flex-col items-start justify-between rounded-xl border border-border bg-card p-4 text-left shadow-sm transition-[border-color,background-color,box-shadow] hover:border-primary/25 hover:bg-accent/50 hover:shadow-md"
             >
-              <span className="flex size-10 items-center justify-center rounded-xl bg-white/[0.06] text-muted-foreground ring-1 ring-inset ring-white/[0.08] transition-colors group-hover:bg-primary/15 group-hover:text-accent-brand-text">
-                <Headphones className="size-[18px]" />
-              </span>
+              <Mic
+                className="size-6 text-muted-foreground transition-colors group-hover:text-accent-brand-text"
+                strokeWidth={1.5}
+              />
               <span>
                 <span className="block text-[13px] font-medium text-foreground">
-                  {t("recordings.title")}
+                  {t("recordings.record_btn")}
                 </span>
                 <span className="mt-1 block text-xs leading-5 text-muted-foreground">
-                  {t("recordings.empty_hint")}
+                  {t("recordings.record_hint")}
                 </span>
               </span>
             </button>

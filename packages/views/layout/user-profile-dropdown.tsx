@@ -104,7 +104,7 @@ export function UserProfileDropdown({
       <DropdownMenuTrigger
         render={
           trigger ?? (
-            <button className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-white/[0.06]">
+            <button className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-accent">
               <div className="relative shrink-0">
                 <div className="flex size-7 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20">
                   {initials}

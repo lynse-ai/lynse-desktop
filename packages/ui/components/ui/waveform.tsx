@@ -248,25 +248,15 @@ export function ScrollingWaveform({
     let lastTs = performance.now();
     let scrollAcc = 0;
 
-    const render = (ts: number) => {
-      const dt = Math.min(0.05, (ts - lastTs) / 1000);
-      lastTs = ts;
+    /** Paint a single frame from the current buffer, shifted by `offset` px. */
+    const paint = (offset: number) => {
+      resizeIfNeeded();
       const cssWidth = container.clientWidth;
       const cssHeight = cssHeightNum();
-      resizeIfNeeded();
-
-      scrollAcc += (speed * dt) / step;
-      while (scrollAcc >= 1) {
-        scrollAcc -= 1;
-        buffer.shift();
-        buffer.push(nextBar());
-      }
-
       ctx.clearRect(0, 0, cssWidth, cssHeight);
       const color = resolveColor(barColor);
       const centerY = cssHeight / 2;
       const pad = 6;
-      const offset = scrollAcc * step;
       const count = buffer.length;
 
       for (let i = 0; i < count; i++) {
@@ -284,17 +274,64 @@ export function ScrollingWaveform({
         ctx.fill();
       }
       ctx.globalAlpha = 1;
+    };
+
+    const render = (ts: number) => {
+      const dt = Math.min(0.05, (ts - lastTs) / 1000);
+      lastTs = ts;
+
+      scrollAcc += (speed * dt) / step;
+      while (scrollAcc >= 1) {
+        scrollAcc -= 1;
+        buffer.shift();
+        buffer.push(nextBar());
+      }
+
+      paint(scrollAcc * step);
       raf = requestAnimationFrame(render);
     };
 
+    const start = () => {
+      if (raf) return;
+      lastTs = performance.now();
+      raf = requestAnimationFrame(render);
+    };
+
+    const stop = () => {
+      if (!raf) return;
+      cancelAnimationFrame(raf);
+      raf = 0;
+    };
+
+    // A purely decorative loop should never burn CPU in the background, and
+    // users who asked for reduced motion get a static waveform instead.
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const syncMotion = () => {
+      if (reduceMotion.matches || document.visibilityState !== "visible") {
+        stop();
+        paint(scrollAcc * step);
+      } else {
+        start();
+      }
+    };
+
     resizeIfNeeded();
-    raf = requestAnimationFrame(render);
-    const ro = new ResizeObserver(resizeIfNeeded);
+    syncMotion();
+
+    const ro = new ResizeObserver(() => {
+      resizeIfNeeded();
+      if (!raf) paint(scrollAcc * step);
+    });
     ro.observe(container);
 
+    document.addEventListener("visibilitychange", syncMotion);
+    reduceMotion.addEventListener("change", syncMotion);
+
     return () => {
-      cancelAnimationFrame(raf);
+      stop();
       ro.disconnect();
+      document.removeEventListener("visibilitychange", syncMotion);
+      reduceMotion.removeEventListener("change", syncMotion);
     };
   }, [speed, barCount, barWidth, barGap, barRadius, barColor, fadeEdges, fadeWidth, height]);
 

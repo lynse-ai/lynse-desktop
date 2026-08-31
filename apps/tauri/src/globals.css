@@ -44,3 +44,22 @@ html.recording-island-window #root {
     animation: none;
   }
 }
+
+/* ── Maximized window: keep a comfortable reading column instead of stretching
+   content edge-to-edge on wide monitors. <html data-maximized> is set by the
+   useMaximized() hook in App.tsx. ── */
+html[data-maximized="true"] .content-preview {
+  padding-inline: clamp(1rem, 4vw, 3rem);
+}
+
+html[data-maximized="true"] .content-preview-inner {
+  max-width: 880px;
+  margin-inline: auto;
+}
+
+html[data-maximized="true"] .lyse-transcription-list {
+  max-width: 920px;
+  margin-inline: auto;
+  padding-inline: clamp(0.5rem, 2vw, 1.5rem);
+}
+

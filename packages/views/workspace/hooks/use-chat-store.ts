@@ -13,6 +13,7 @@ import {
 import { redactMeetingIds } from "../meeting-id-redact";
 import { conversationTitle, loadChatHistory, saveChatHistory } from "../chat-history";
 import { toast } from "sonner";
+import { useNotificationStore } from "../../notifications/use-notification-store";
 
 /**
  * Waiting-word pool for the assistant's tool calls. The backend sends a raw
@@ -335,6 +336,18 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
             },
           }));
           if (get().chatVisible === 0) toast.success("AI 助手已完成回复");
+          // Mirror into the unified notification center (drives the Bell badge).
+          const convTitle = get().conversations.find((c) => c.id === conversationId)?.title ?? "";
+          const unread = get().unreadCounts[conversationId] ?? 1;
+          useNotificationStore.getState().upsert({
+            id: `chat:${conversationId}`,
+            type: "chat",
+            title: convTitle,
+            count: unread,
+            href: "/chat",
+            read: false,
+            createdAt: Date.now(),
+          });
         }
         break;
       }
@@ -513,6 +526,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
             delete unreadCounts[id];
             return { unreadCounts };
           });
+          useNotificationStore.getState().markRead(`chat:${id}`);
         }
       }
     },
@@ -573,6 +587,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           isLoading: s.workingConversationIds.includes(conversationId),
         };
       });
+      useNotificationStore.getState().markRead(`chat:${conversationId}`);
     },
   };
 });

@@ -274,7 +274,7 @@ export function FileList() {
                 <button
                   onClick={clearFileSelection}
                   title={t("workspace.cancel_selection")}
-                  className="ml-auto flex items-center gap-1 rounded-lg px-1.5 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground"
+                  className="ml-auto flex items-center gap-1 rounded-lg px-1.5 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                   data-tauri-drag-region={false}
                 >
                   <X className="size-3" />

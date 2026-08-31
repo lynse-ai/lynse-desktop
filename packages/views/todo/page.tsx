@@ -158,6 +158,11 @@ function TodoItemRow({
       {dueText && (
         <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{dueText}</span>
       )}
+      {todo.owner && (
+        <span className="shrink-0 text-xs text-muted-foreground/70">
+          {todo.owner}
+        </span>
+      )}
       {todo.sourceTitle && (
         <span className="shrink-0 text-xs text-muted-foreground/70">
           来源：{todo.sourceTitle}
@@ -265,6 +270,13 @@ function DetailPanel({
               {formatSourceTime(Number(todo.sourceMeetingTime))}
             </p>
           )}
+        </div>
+      )}
+
+      {/* Owner */}
+      {todo.owner && (
+        <div className="px-4 pb-3">
+          <p className="text-xs text-muted-foreground">负责人：{todo.owner}</p>
         </div>
       )}
 

@@ -269,8 +269,8 @@ export function ChatPage() {
                   variant="ghost"
                   size="icon"
                   className="size-8 rounded-lg border-0 bg-transparent text-muted-foreground shadow-none transition-colors hover:bg-muted hover:text-foreground dark:hover:bg-white/[0.06]"
-                  title={t("common.microphone")}
-                  aria-label={t("common.microphone")}
+                  title={t("chat.microphone")}
+                  aria-label={t("chat.microphone")}
                 >
                   <Mic className="size-4" strokeWidth={1.8} />
                 </Button>

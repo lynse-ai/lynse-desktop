@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.27 (2026-08-31)
+
+### New Features
+
+- Unified notification center: the Bell icon now shows an unread count badge (capped 99+) and opens a notification drawer with a scrollable list, "mark all as read", and deep links back to the source (recording / chat). Chat unread replies are aggregated into this center instead of a separate chat badge.
+- Recording & transcription events (upload complete, saved locally) now persist as reviewable notifications instead of a toast that vanishes after a few seconds.
+- Cloud-backed Todo list: todos now sync with lynse.ai (list / update / delete / clear-completed) and fall back to local storage when signed out.
+- Maximized-window UX: double-click the title bar to maximize / restore; on very wide windows the reading column stays centered instead of stretching edge-to-edge.
+
+### Changed
+
+- Rename the main 68px sidebar component `TencentMeetingSidebar` → `LynseSidebar` (it was never Tencent-meeting-specific).
+- Recording-page empty state redesigned: lighter import / record cards with semantic icons and a calm animated waveform backdrop.
+- i18n: add a scripted audit (`pnpm i18n:check`); settings modules (STT config, settings dialog) fully localized; fixed several bare i18n keys; replaced dark-mode-only hover backgrounds (`bg-white/[0.06]`) with theme-aware `hover:bg-accent` across the sidebar, file list, and user menu.
+- CI: harden `fetch-sidecars.sh` for bash 3.2 on macOS (unblocks the release build).
+
 ## 0.1.26 (2026-08-31)
 
 ### New Features

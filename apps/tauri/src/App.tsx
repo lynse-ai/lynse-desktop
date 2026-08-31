@@ -17,6 +17,7 @@ import {
   TranscriptDetailPage,
 } from "@lynse/views/live-translation";
 import { RESOURCES } from "@lynse/views/locales";
+import { useMaximized } from "@lynse/views/layout";
 import { DesktopNavigationProvider } from "./platform/navigation";
 import { secureStorage } from "./secure-storage";
 
@@ -55,6 +56,10 @@ export default function App() {
       .desktopAPI?.appInfo;
     return { platform: "desktop" as const, version: appInfo?.version ?? "0.1.0" };
   }, []);
+
+  // Reflect the main window's maximized state on <html> so layout CSS can keep
+  // a comfortable reading column when the window is maximized.
+  useMaximized();
 
   return (
     <ThemeProvider>

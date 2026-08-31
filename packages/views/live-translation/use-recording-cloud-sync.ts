@@ -9,6 +9,7 @@ import { api } from "@lynse/core/api/client";
 import { uploadFileToOSS } from "../workspace/hooks/use-files";
 import { deriveFilename } from "./recording-complete-dialog";
 import { getDesktopLiveTranslationApi } from "./desktop-api";
+import { useNotificationStore } from "../notifications/use-notification-store";
 import type { CompletedLiveSession } from "./types";
 
 // ───────────────────────────────────────────────────────────────
@@ -55,9 +56,22 @@ export function useRecordingCloudSync() {
         await desktopApi.finalizeLocal(session.sessionId, true);
         await qc.invalidateQueries({ queryKey: ["files"] });
         toast.success(t("live_translation.saved"));
+        // Persist into the unified notification center (the toast is ephemeral).
+        useNotificationStore.getState().add({
+          id: `transcription:${session.sessionId}`,
+          type: "transcription",
+          title: "",
+          href: "/notes",
+        });
       } catch (error) {
         await desktopApi.finalizeLocal(session.sessionId, false).catch(() => undefined);
         toast.warning(t("live_translation.saved_locally"), { description: String(error) });
+        useNotificationStore.getState().add({
+          id: `sync:${session.sessionId}`,
+          type: "sync",
+          title: "",
+          href: "/notes",
+        });
       }
     },
     [isAuthenticated, qc, t],

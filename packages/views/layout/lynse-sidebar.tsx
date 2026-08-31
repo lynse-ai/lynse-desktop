@@ -4,8 +4,9 @@ import { useState } from "react";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
-import { useChatStore } from "../workspace/hooks/use-chat-store";
 import { useUserCredits } from "./use-user-credits";
+import { useNotificationStore, selectUnreadCount } from "../notifications/use-notification-store";
+import { NotificationList } from "../notifications/notification-list";
 import { SettingsDialog } from "../settings/settings-dialog";
 import { UploadDialog } from "../workspace/upload-dialog";
 import { UserProfileDropdown } from "./user-profile-dropdown";
@@ -40,15 +41,15 @@ function isNavActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(href + "/");
 }
 
-export function TencentMeetingSidebar() {
+export function LynseSidebar() {
   const { pathname, push } = useNavigation();
   const { t } = useTranslation();
   const { data } = useUserCredits();
-  const unreadCount = useChatStore((s) =>
-    Object.values(s.unreadCounts).reduce((sum, count) => sum + count, 0),
-  );
+  const unreadCount = useNotificationStore(selectUnreadCount);
+  const markAllRead = useNotificationStore((s) => s.markAllRead);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
 
   const nickname = (data?.nickname as string) || "User";
   const initials = nickname.slice(0, 2).toUpperCase();
@@ -92,7 +93,7 @@ export function TencentMeetingSidebar() {
         <DropdownMenuTrigger
           title={t("layout.new_recording")}
           data-tauri-drag-region={false}
-          className="mb-2 flex size-10 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          className="mb-2 flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
         >
           <Plus className="size-5" />
         </DropdownMenuTrigger>
@@ -112,7 +113,7 @@ export function TencentMeetingSidebar() {
         {topItems.map((item) => {
           const Icon = item.icon;
           const active = item.key === "settings" ? settingsOpen : isNavActive(pathname, item.path ?? "");
-          const badgeCount = item.key === "chat" ? unreadCount : 0;
+          const badgeCount = 0;
           return (
             <NavButton
               key={item.key}
@@ -132,6 +133,53 @@ export function TencentMeetingSidebar() {
         {bottomItems.map((item) => {
           const Icon = item.icon;
           const active = item.key === "settings" ? settingsOpen : isNavActive(pathname, item.path ?? "");
+
+          // Notifications open a slide-in drawer (the unified notification center),
+          // instead of navigating to the bare /notifications route.
+          if (item.key === "notifications") {
+            return (
+              <DropdownMenu key={item.key} open={notifOpen} onOpenChange={setNotifOpen}>
+                <DropdownMenuTrigger
+                  type="button"
+                  title={t("nav.notifications")}
+                  data-tauri-drag-region={false}
+                  className="relative flex w-[56px] flex-col items-center justify-center rounded-lg px-1 py-2 transition-colors text-muted-foreground hover:bg-accent hover:text-foreground"
+                >
+                  <Bell className="size-5" />
+                  <span className="mt-1 text-[10px] font-medium leading-none">{item.label}</span>
+                  {!!unreadCount && (
+                    <span
+                      aria-label={t("layout.unread_replies", { count: unreadCount })}
+                      className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-sidebar"
+                    >
+                      {unreadCount > 99 ? "99+" : unreadCount}
+                    </span>
+                  )}
+                </DropdownMenuTrigger>
+                <DropdownMenuContent side="right" align="start" sideOffset={10} className="w-80 p-0">
+                  <div className="flex items-center justify-between border-b border-border/50 px-3 py-2">
+                    <span className="text-sm font-medium text-foreground">{t("notifications.title")}</span>
+                    <button
+                      type="button"
+                      onClick={() => markAllRead()}
+                      className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      {t("notifications.mark_all_read")}
+                    </button>
+                  </div>
+                  <div className="max-h-[60vh] overflow-y-auto">
+                    <NotificationList
+                      onItemClick={(n) => {
+                        if (n.href) push(n.href);
+                        setNotifOpen(false);
+                      }}
+                    />
+                  </div>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            );
+          }
+
           return (
             <NavButton
               key={item.key}
@@ -166,6 +214,7 @@ function NavButton({
   title: string;
   children: React.ReactNode;
 }) {
+  const { t } = useTranslation();
   return (
     <button
       type="button"
@@ -176,12 +225,12 @@ function NavButton({
         "relative flex w-[56px] flex-col items-center justify-center rounded-lg px-1 py-2 transition-colors",
         active
           ? "bg-sidebar-accent text-sidebar-accent-foreground"
-          : "text-muted-foreground hover:bg-white/[0.06] hover:text-foreground"
+          : "text-muted-foreground hover:bg-accent hover:text-foreground"
       )}
     >
       {!!badgeCount && (
         <span
-          aria-label={`AI 助手有 ${badgeCount} 条未读回复`}
+          aria-label={t("layout.unread_replies", { count: badgeCount })}
           className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-sidebar"
         >
           {badgeCount > 99 ? "99+" : badgeCount}

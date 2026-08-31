@@ -21,6 +21,7 @@
     "typecheck": "turbo typecheck",
     "lint": "turbo lint",
     "test": "turbo test",
+    "i18n:check": "node scripts/i18n-audit.mjs",
     "ui:add": "cd packages/ui && npx shadcn@latest add"
   },
   "packageManager": "pnpm@10.28.2",

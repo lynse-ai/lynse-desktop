@@ -1,18 +1,19 @@
 /**
  * Todo data layer.
  *
- * On the desktop the store of record is the Rust-backed local store exposed by
- * the Tauri bridge (`desktopAPI.todo` → `todo_list` / `todo_save` /
- * `todo_delete`, persisted under the `local-todos` key in the app data dir).
+ * Primary source of truth is the lynse.ai cloud — the same backend the
+ * lynse-cli skill wraps (`/api/business/file/todo/...`, two-layer
+ * API-key + token auth handled by the shared ApiClient). Todos extracted
+ * from meetings live there, so the page shows them without any local setup.
  *
- * The UI used to talk to the lynse.ai cloud (`/api/business/file/todo/...`),
- * which the desktop cannot reach without an account session — that made
- * "refresh" and "clear completed" no-ops. We now source todos from the local
- * store whenever the bridge is present, and fall back to localStorage-only on
- * environments where the bridge is unavailable (e.g. plain web).
+ * A local Rust-backed store (`desktopAPI.todo` → `local-todos`) remains for
+ * manually added todos (and their calendar metadata). On every load the two
+ * sources are merged: cloud items carry `backend: true`, local ones do not.
+ * When the cloud is unreachable or the user is not signed in, we silently
+ * fall back to the local store only.
  */
 
-import { ApiError } from "@lynse/core/api/client";
+import { api, ApiError } from "@lynse/core/api/client";
 
 export interface TodoItem {
   id: string;
@@ -28,11 +29,80 @@ export interface TodoItem {
   calendarAddedAt?: string;
   calendarStartAt?: string;
   calendarEndAt?: string;
-  backend?: boolean; // true when sourced from lynse.ai (unused on desktop)
+  owner?: string; // cloud-only: team / person responsible
+  backend?: boolean; // true when sourced from the lynse.ai cloud
   [key: string]: unknown;
 }
 
-// ── Desktop store bridge ──────────────────────────────────
+// ── Cloud (lynse.ai) layer — same API as lynse-cli ────────
+
+interface CloudTodo {
+  id?: string | number;
+  todoContent?: string;
+  isCompleted?: number | boolean;
+  expectedCompleteTime?: string | null;
+  owner?: string | null;
+  fileId?: string | null;
+  createTime?: string | null;
+  updateTime?: string | null;
+  [key: string]: unknown;
+}
+
+/** The server returns "YYYY-MM-DD HH:mm:ss"; convert to an ISO-ish string
+ * that `new Date()` can parse in every engine (Safari rejects the space form). */
+function normalizeCloudDate(value: string | null | undefined): string | undefined {
+  const raw = value ? String(value).trim() : "";
+  if (!raw) return undefined;
+  const iso = raw.replace(" ", "T");
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? undefined : d.toISOString();
+}
+
+/** Coerce a cloud record into the app's TodoItem shape. */
+export function mapCloudTodo(raw: CloudTodo): TodoItem {
+  return {
+    id: String(raw.id ?? ""),
+    title: String(raw.todoContent ?? "").trim() || "(无标题待办)",
+    completed: raw.isCompleted === 1 || raw.isCompleted === true,
+    dueDate: normalizeCloudDate(raw.expectedCompleteTime),
+    owner: raw.owner ? String(raw.owner) : undefined,
+    sourceTitle: undefined,
+    createdAt: normalizeCloudDate(raw.createTime) ?? new Date().toISOString(),
+    updatedAt: normalizeCloudDate(raw.updateTime) ?? new Date().toISOString(),
+    backend: true,
+  };
+}
+
+/** Fetch all todos from the lynse.ai cloud. Throws on network/auth errors. */
+export async function fetchCloudTodos(): Promise<TodoItem[]> {
+  const data = await api().post<CloudTodo[] | null>("/api/business/file/todo/listall", {});
+  return (Array.isArray(data) ? data : []).map(mapCloudTodo);
+}
+
+/** Toggle a cloud todo's completed state (server-side update). */
+export async function updateCloudTodo(todo: TodoItem): Promise<void> {
+  await api().post("/api/business/file/todo/update", {
+    todoUpdateList: [
+      {
+        todoId: todo.id,
+        isCompleted: todo.completed ? 1 : 0,
+      },
+    ],
+  });
+}
+
+/** Delete cloud todos by ids (single request, comma-safe list). */
+export async function deleteCloudTodos(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await api().post("/api/business/file/todo/delete", { todoIds: ids });
+}
+
+/** Clear every completed todo on the server. */
+export async function clearCloudCompleted(): Promise<void> {
+  await api().post("/api/business/file/todo/clear", {});
+}
+
+// ── Desktop local store bridge ────────────────────────────
 
 type TodoBridge = {
   list: () => Promise<unknown[]>;
@@ -76,8 +146,7 @@ export function normalizeStored(raw: unknown): TodoItem {
   };
 }
 
-/** Fetch the full todo list (desktop store, or localStorage fallback). */
-export async function fetchTodos(): Promise<TodoItem[]> {
+async function fetchLocalTodos(): Promise<TodoItem[]> {
   const bridge = getTodoBridge();
   if (bridge) {
     const raw = await bridge.list();
@@ -86,8 +155,35 @@ export async function fetchTodos(): Promise<TodoItem[]> {
   return getLocalTodos();
 }
 
-/** Create or update a todo (upsert by id). */
+/**
+ * Fetch the full todo list: cloud items first (meetings-extracted), then
+ * locally-created ones. If the cloud is unavailable (signed out, offline,
+ * API client missing) we degrade to local-only without failing the load.
+ */
+export async function fetchTodos(): Promise<{ items: TodoItem[]; cloudFailed: boolean }> {
+  let cloud: TodoItem[] = [];
+  let cloudFailed = false;
+  try {
+    cloud = await fetchCloudTodos();
+  } catch {
+    cloudFailed = true;
+  }
+  let local: TodoItem[] = [];
+  try {
+    local = await fetchLocalTodos();
+  } catch {
+    local = getLocalTodos();
+  }
+  return { items: [...cloud, ...local], cloudFailed };
+}
+
+/** Create or update a todo. Cloud items are updated server-side; local ones
+ * go through the desktop bridge (upsert by id). */
 export async function saveTodo(todo: TodoItem): Promise<TodoItem> {
+  if (todo.backend) {
+    await updateCloudTodo(todo);
+    return todo;
+  }
   const bridge = getTodoBridge();
   if (bridge) {
     const saved = await bridge.save({ ...todo });
@@ -99,14 +195,18 @@ export async function saveTodo(todo: TodoItem): Promise<TodoItem> {
   return todo;
 }
 
-/** Delete a single todo by id. */
-export async function deleteTodo(id: string): Promise<void> {
-  const bridge = getTodoBridge();
-  if (bridge) {
-    await bridge.delete(id);
+/** Delete a single todo (cloud or local). */
+export async function deleteTodo(todo: TodoItem): Promise<void> {
+  if (todo.backend) {
+    await deleteCloudTodos([todo.id]);
     return;
   }
-  saveLocalTodos(getLocalTodos().filter((x) => x.id !== id));
+  const bridge = getTodoBridge();
+  if (bridge) {
+    await bridge.delete(todo.id);
+    return;
+  }
+  saveLocalTodos(getLocalTodos().filter((x) => x.id !== todo.id));
 }
 
 // ── Local layer (fallback when no bridge) ─────────────────

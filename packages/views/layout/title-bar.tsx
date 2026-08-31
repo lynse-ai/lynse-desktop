@@ -1,7 +1,9 @@
 "use client";
 
 import { useMemo } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cn } from "@lynse/ui/lib/utils";
+import { isTauri } from "./use-maximized";
 import { useWorkspaceStore } from "../workspace/store";
 import { useFiles } from "../workspace/hooks/use-files";
 import { useFolders } from "../workspace/hooks/use-folders";
@@ -40,6 +42,14 @@ export function TitleBar() {
   const sourceViewVisible = useWorkspaceStore((s) => s.sourceViewVisible);
   const toggleSourceView = useWorkspaceStore((s) => s.toggleSourceView);
   const { data: files } = useFiles({ pageNum: 1, pageSize: 200 });
+
+  // Double-clicking the title bar toggles maximize/restore (native macOS zoom
+  // style). Ignored when the double-click lands on an action button.
+  const handleTitleBarDoubleClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest("button")) return;
+    if (!isTauri) return;
+    getCurrentWindow().toggleMaximize().catch(() => {});
+  };
   const { data: folders } = useFolders();
 
   const folderName = useMemo(() => {
@@ -63,6 +73,7 @@ export function TitleBar() {
       className="flex shrink-0 select-none items-center border-b border-border/50 bg-background/80 backdrop-blur-xl"
       style={{ height: TITLE_BAR_HEIGHT }}
       data-tauri-drag-region
+      onDoubleClick={handleTitleBarDoubleClick}
     >
       {/* ── Draggable breadcrumb (left-aligned, no traffic lights here) ── */}
       <div className="flex min-w-0 flex-1 items-center gap-1.5 px-5">

@@ -840,7 +840,7 @@ export function ContentPanel() {
                         {localTranscriptionActive ? (
                           <LocalTranscriptionPendingState retrying={selectedLocalRetrying} />
                         ) : transSegments && transSegments.length > 0 ? (
-                          <div className="flex-1 min-h-0 overflow-y-auto space-y-1 text-sm leading-relaxed pb-4">
+                          <div className="lyse-transcription-list flex-1 min-h-0 overflow-y-auto space-y-1 text-sm leading-relaxed pb-4">
                             {transSegments.map((seg, i) => {
                               const color = getSpeakerColor(seg.speaker);
                               return (

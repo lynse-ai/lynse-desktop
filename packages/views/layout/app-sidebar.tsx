@@ -132,10 +132,10 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
               {t("layout.workspace_group")}
             </span>
             <div className="flex items-center gap-0.5">
-              <button className="rounded-md p-1 text-muted-foreground/50 transition-colors hover:bg-white/[0.06] hover:text-muted-foreground">
+              <button className="rounded-md p-1 text-muted-foreground/50 transition-colors hover:bg-accent hover:text-muted-foreground">
                 <Grid3X3 className="size-3.5" />
               </button>
-              <button className="rounded-md p-1 text-muted-foreground/50 transition-colors hover:bg-white/[0.06] hover:text-muted-foreground">
+              <button className="rounded-md p-1 text-muted-foreground/50 transition-colors hover:bg-accent hover:text-muted-foreground">
                 <Plus className="size-3.5" />
               </button>
             </div>
@@ -153,7 +153,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                       "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-[10px] font-medium leading-none transition-colors",
                       isActive
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                        : "text-muted-foreground hover:bg-white/[0.06] hover:text-foreground",
+                        : "text-muted-foreground hover:bg-accent hover:text-foreground",
                     )}
                   >
                     <item.icon className="size-4 shrink-0" />
@@ -169,7 +169,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                   "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-[10px] font-medium leading-none transition-colors",
                   isNavActive(pathname, "/todo")
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "text-muted-foreground hover:bg-white/[0.06] hover:text-foreground",
+                    : "text-muted-foreground hover:bg-accent hover:text-foreground",
                 )}
               >
                 <ListChecks className="size-4 shrink-0" />
@@ -180,7 +180,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                 type="button"
                 onClick={() => setTemplateManagerOpen(true)}
                 title={t("templates.title")}
-                className="flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-[10px] font-medium leading-none text-muted-foreground transition-colors hover:bg-white/[0.06] hover:text-foreground"
+                className="flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-[10px] font-medium leading-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
                 <LayoutTemplate className="size-4 shrink-0" />
                 <span className="w-full truncate text-center">{t("templates.title")}</span>
@@ -266,7 +266,7 @@ function CreditsPopover() {
   return (
     <Popover>
       <PopoverTrigger
-        className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors hover:bg-white/[0.06]"
+        className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg transition-colors hover:bg-accent"
       >
         <Zap className="size-4 text-muted-foreground" />
       </PopoverTrigger>
@@ -359,7 +359,7 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
-          <button className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-white/[0.06]">
+          <button className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2 transition-colors hover:bg-accent">
             <div className="relative shrink-0">
               <div className="flex size-7 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20">
                 {initials}

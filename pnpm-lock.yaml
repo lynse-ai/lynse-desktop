@@ -391,6 +391,9 @@ importers:
       '@tanstack/react-query':
         specifier: 'catalog:'
         version: 5.100.13(react@19.2.3)
+      '@tauri-apps/api':
+        specifier: ^2.0.0
+        version: 2.11.1
       i18next:
         specifier: 'catalog:'
         version: 26.2.0(typescript@5.9.3)

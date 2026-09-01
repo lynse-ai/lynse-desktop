@@ -17,6 +17,7 @@ import {
   isTranscriptionCompleted,
 } from "../hooks/use-files";
 import { useMoveFiles } from "../hooks/use-folder-mutations";
+import { useNotificationStore } from "../../notifications/use-notification-store";
 import { useFolders } from "../hooks/use-folders";
 import type { WorkspaceItem } from "../types";
 import { filterWorkspaceFilesByFolder } from "./file-list-filter";
@@ -194,6 +195,14 @@ export function FileList() {
       setFileSummarizing(id, true);
       try {
         await rerunMutation.mutateAsync({ fileId: id, templateId: defaultTemplateId });
+        // Batch pipelines run for minutes and the user has usually walked away —
+        // record each completion in the notification center as it lands.
+        useNotificationStore.getState().add({
+          id: `trans-complete:${id}:${Date.now()}`,
+          type: "transcription",
+          title: (filteredFiles.find((f) => f.id === id)?.title ?? "").trim(),
+          href: "/notes",
+        });
       } catch {
         // A single file's failure must not abort the rest of the batch. Its
         // spinner is cleared in `finally`; the failure surfaces via the rerun

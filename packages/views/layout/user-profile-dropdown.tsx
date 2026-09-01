@@ -23,7 +23,7 @@ import {
   Palette,
   Globe,
   HelpCircle,
-  Download,
+  Zap,
   LogOut,
   UserCircle,
   Info,
@@ -77,11 +77,17 @@ export function UserProfileDropdown({
   const { data } = useUserCredits();
   const { data: membership } = useMembership();
   const { theme, setTheme } = useTheme();
-  const { update, checking, checkForUpdate } = useAppUpdate();
+  const { update } = useAppUpdate();
 
   const nickname = (data?.nickname as string) || "User";
   const plan = useLocalizedPlan(membership?.memberLevel || data?.benefitType);
   const initials = nickname.slice(0, 2).toUpperCase();
+
+  // Remaining credits = total granted minus consumed (customer/current).
+  // Null while logged out / loading — the row then shows the plan only.
+  const pointsRemaining = data
+    ? Math.max(0, (data.pointsAmount ?? 0) - (data.usedPointsAmount ?? 0))
+    : null;
 
   // Version for the About row + the upgrade badge. Prefer the version the host
   // bridge injected at startup; fall back to the latest check's currentVersion.
@@ -148,6 +154,15 @@ export function UserProfileDropdown({
             <UserCircle className="size-4 text-muted-foreground" />
             <span className="text-sm">{plan}</span>
           </div>
+          {pointsRemaining !== null && (
+            <span
+              className="flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground"
+              title={t("layout.credits")}
+            >
+              <Zap className="size-3 text-amber-500" />
+              {pointsRemaining}
+            </span>
+          )}
         </div>
 
         <DropdownMenuSeparator />
@@ -219,16 +234,10 @@ export function UserProfileDropdown({
           </span>
         </DropdownMenuItem>
 
-        {/* ── Check for Updates ────────────────────────── */}
-        <DropdownMenuItem onClick={() => checkForUpdate()} disabled={checking}>
-          <Download className={cn("size-4", checking && "animate-spin")} />
-          <span>{checking ? t("layout.checking_update") : t("layout.check_update")}</span>
-          {update?.hasUpdate && (
-            <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-medium text-white">
-              !
-            </span>
-          )}
-        </DropdownMenuItem>
+        {/* ── Check for Updates ──────────────────────────
+            Deliberately not a menu row: the app auto-checks on startup and
+            surfaces updates in the notification center, and the settings
+            About tab keeps a manual button with the full update banner. */}
 
         <DropdownMenuSeparator />
 

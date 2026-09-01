@@ -43,6 +43,7 @@ import type { SummaryTabModel } from "./hooks/use-files";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ResummarizeDialog, type SummaryTemplateDialogMode } from "./resummarize-dialog";
+import { useNotificationStore } from "../notifications/use-notification-store";
 import {
   getDesktopLocalTranscriptionApi,
   isLocalFileId,
@@ -539,6 +540,17 @@ export function ContentPanel() {
   ) => {
     setFileSummarizing(fileId, false);
     setResummaryErrorFileId(success ? null : fileId);
+    if (success) {
+      // Generation can take minutes and the user may have navigated away — the
+      // toast alone is too easy to miss, so also record a notification-center
+      // entry (funnels every completion path: generate button, dialog add/replace/rerun).
+      useNotificationStore.getState().add({
+        id: `trans-complete:${fileId}:${Date.now()}`,
+        type: "transcription",
+        title: (displayTitle ?? "").trim(),
+        href: "/notes",
+      });
+    }
     if (mode === "add" && options?.pendingId) {
       setPendingSummaryTabsByFile((current) => {
         const tabs = current[fileId] ?? [];
@@ -557,7 +569,7 @@ export function ContentPanel() {
       });
       setContentTab("summary-0");
     }
-  }, [setContentTab, setFileSummarizing]);
+  }, [setContentTab, setFileSummarizing, displayTitle]);
 
   // One-click "auto generate": only available in the regenerate (重新生成)
   // context. Reruns the file with the default template, skipping the picker
@@ -620,7 +632,7 @@ export function ContentPanel() {
   }, [contentTab, deleteConclusion, selectedItemId, setContentTab, text, summaryTabFallback.deleteConfirm, visibleConclusionTexts.length]);
 
   return (
-    <div className="flex h-full min-w-0 flex-col bg-background">
+    <div className="flex h-full min-w-0 flex-1 flex-col bg-background">
       {/* Tab bar */}
       <div className="flex shrink-0 items-center border-b border-border/50 bg-background/80 px-4 backdrop-blur-xl" style={{ height: TAB_BAR_HEIGHT }}>
         <ScrollableTabs activeTab={contentTab}>
@@ -801,7 +813,7 @@ export function ContentPanel() {
                 </div>
               )}
 
-              <div ref={contentPreviewRef} className={`content-preview mt-2 flex-1 min-h-0 ${contentTab === "transcription" ? "flex flex-col flex-1 min-h-0" : ""}`}>
+              <div ref={contentPreviewRef} className={`content-preview mt-2 flex-1 min-h-0 ${contentTab === "transcription" ? "lyse-transcription-preview flex flex-col flex-1 min-h-0" : ""}`}>
                 {currentFileRerunning ? (
                   <ResummaryPendingState />
                 ) : currentFileResummaryError ? (
@@ -828,7 +840,7 @@ export function ContentPanel() {
                       <div className="flex flex-col flex-1 min-h-0 space-y-3">
                         {/* Audio player — always visible when audio URL exists */}
                         {audioUrl && (
-                          <div className="shrink-0">
+                          <div className="w-full shrink-0">
                             <AudioPlayer
                               ref={audioPlayerRef}
                               src={audioUrl as string}
@@ -1430,7 +1442,7 @@ function TranscriptionGeneratePrompt({
   disabled?: boolean;
 }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-5 py-10">
+    <div className="flex flex-1 w-full flex-col items-center justify-center gap-5 py-10">
       <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
         <MessageSquare className="size-6" />
       </div>

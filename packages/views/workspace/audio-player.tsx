@@ -163,7 +163,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
     const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
     return (
-      <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+      <div className="w-full rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
         {/* Hidden audio element */}
         <audio
           ref={audioRef}

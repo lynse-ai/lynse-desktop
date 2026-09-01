@@ -48,8 +48,21 @@ html.recording-island-window #root {
 /* ── Maximized window: keep a comfortable reading column instead of stretching
    content edge-to-edge on wide monitors. <html data-maximized> is set by the
    useMaximized() hook in App.tsx. ── */
+/* Only the transcript segment list gets the reading column. The audio player
+   and the no-transcription/empty states fill the panel width, so un-transcribed
+   recordings don't end up as a narrow column floating in empty space. */
+html[data-maximized="true"] .lyse-transcription-list {
+  max-width: 920px;
+  margin-inline: auto;
+  padding-inline: clamp(0.5rem, 2vw, 1.5rem);
+}
+
 html[data-maximized="true"] .content-preview {
   padding-inline: clamp(1rem, 4vw, 3rem);
+}
+
+html[data-maximized="true"] .content-preview.lyse-transcription-preview {
+  padding-inline: 0;
 }
 
 html[data-maximized="true"] .content-preview-inner {
@@ -57,9 +70,8 @@ html[data-maximized="true"] .content-preview-inner {
   margin-inline: auto;
 }
 
-html[data-maximized="true"] .lyse-transcription-list {
-  max-width: 920px;
-  margin-inline: auto;
-  padding-inline: clamp(0.5rem, 2vw, 1.5rem);
+/* AI assistant (chat) page: the default 3xl column feels cramped when the
+   window is maximized, so let it breathe up to a comfortable wide column. */
+html[data-maximized="true"] .lyse-chat-column {
+  max-width: min(72rem, 90vw);
 }
-

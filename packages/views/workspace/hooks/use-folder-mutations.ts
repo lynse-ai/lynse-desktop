@@ -76,6 +76,7 @@ export function useMoveFiles() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["files"] });
+      qc.invalidateQueries({ queryKey: ["notes"] });
       qc.invalidateQueries({ queryKey: ["folder-counts"] });
     },
   });

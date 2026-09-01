@@ -471,6 +471,7 @@ export function useReplaceSummaryTemplate() {
     onSuccess: (_data, req) => {
       qc.invalidateQueries({ queryKey: ["file-conclusions", req.fileId] });
       qc.invalidateQueries({ queryKey: ["files"] });
+      qc.invalidateQueries({ queryKey: ["notes"] });
     },
   });
 }
@@ -590,6 +591,7 @@ export function useDeleteFiles() {
       api().delete<unknown>(`/api/business/file/delete?fileIds=${fileIds.join(",")}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["files"] });
+      qc.invalidateQueries({ queryKey: ["notes"] });
       qc.invalidateQueries({ queryKey: ["folder-counts"] });
     },
   });
@@ -603,6 +605,7 @@ export function useRenameFile() {
       api().put<unknown>(`/api/business/file/${fileId}`, { newOriginalFilename }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["files"] });
+      qc.invalidateQueries({ queryKey: ["notes"] });
     },
   });
 }
@@ -919,6 +922,7 @@ export function useAddSummary() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["file-conclusions"] });
       qc.invalidateQueries({ queryKey: ["files"] });
+      qc.invalidateQueries({ queryKey: ["notes"] });
     },
   });
 }
@@ -970,6 +974,8 @@ export function useRerunSummary() {
     mutationFn: (req: TransferFileReq) => rerunSummaryPipeline({ req }),
     onSuccess: (data, req) => {
       qc.invalidateQueries({ queryKey: ["files"] });
+      // The pipeline may also rename the file (AI title) — refresh the notes list.
+      qc.invalidateQueries({ queryKey: ["notes"] });
       if (data.conclusion) {
         qc.setQueryData(["file-conclusions", req.fileId], [data.conclusion]);
       } else {

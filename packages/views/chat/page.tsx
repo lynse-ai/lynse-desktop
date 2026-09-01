@@ -202,7 +202,7 @@ export function ChatPage() {
         {messages.length === 0 && !isLoading ? (
           <EmptyChat suggestions={suggestions} onSelect={handleSend} />
         ) : (
-          <div className="mx-auto w-full max-w-3xl space-y-6 px-6 py-8">
+          <div className="lyse-chat-column mx-auto w-full max-w-3xl space-y-6 px-6 py-8">
             {messages.map((message) =>
               message.role === "user" ? (
                 <div key={message.id} className="flex justify-end">
@@ -234,7 +234,7 @@ export function ChatPage() {
       <div
         className={`${historyOpen ? "ml-56" : "ml-0"} pointer-events-none shrink-0 bg-background/95 px-4 pb-4 pt-3 transition-[margin] duration-150 dark:bg-background/75 dark:backdrop-blur-xl`}
       >
-        <div className="pointer-events-auto mx-auto max-w-3xl">
+        <div className="lyse-chat-column pointer-events-auto mx-auto max-w-3xl">
           <div className="rounded-xl border border-input bg-white p-2 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.035)] transition-[border-color,box-shadow] duration-150 focus-within:border-neutral-400 focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.04),0_0_0_3px_rgba(0,0,0,0.04)] dark:bg-card dark:shadow-[0_10px_35px_rgba(0,0,0,0.28)] dark:focus-within:border-white/20 dark:focus-within:shadow-[0_10px_35px_rgba(0,0,0,0.28),0_0_0_3px_rgba(255,255,255,0.05)]">
             <Textarea
               ref={textareaRef}

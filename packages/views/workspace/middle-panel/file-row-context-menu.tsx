@@ -19,13 +19,15 @@ interface FileRowContextMenuProps {
   /** Files the action applies to: the whole selection if `file` is selected, else just `file`. */
   targetIds: string[];
   folders: FolderInfo[] | undefined;
-  canTranscribe: boolean;
+  /** Rename / transcribe rows are optional — hosts without those flows (e.g. the
+   * notes page) simply don't pass the handler and the item is not rendered. */
+  canTranscribe?: boolean;
   /** Ids whose transcription has already completed — drives the "重新生成" vs "转写" label. */
-  transcribedIds: Set<string>;
-  onRename: (fileId: string, currentName: string) => void;
+  transcribedIds?: Set<string>;
+  onRename?: (fileId: string, currentName: string) => void;
   onMove: (targetIds: string[], newFolderId: string, oldFolderId: string) => void;
   onDelete: (targetIds: string[]) => void;
-  onTranscribe: (targetIds: string[]) => void;
+  onTranscribe?: (targetIds: string[]) => void;
   children: React.ReactNode;
 }
 
@@ -49,7 +51,7 @@ export function FileRowContextMenu({
   // Same underlying pipeline (rerun / trans) as the "生成" button in the content
   // panel. Label it as a re-run when every targeted file already has a completed
   // transcription; otherwise it's a first-time generation.
-  const alreadyTranscribed = targetIds.every((id) => transcribedIds.has(id));
+  const alreadyTranscribed = targetIds.every((id) => transcribedIds?.has(id));
   const transcribeLabel = multi
     ? alreadyTranscribed
       ? t("workspace.regenerate_selected")
@@ -62,10 +64,12 @@ export function FileRowContextMenu({
     <ContextMenu>
       <ContextMenuTrigger>{children}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-40">
-        <ContextMenuItem onClick={() => onRename(file.id, file.title)}>
-          <Pencil className="size-3.5" />
-          <span>{t("workspace.rename")}</span>
-        </ContextMenuItem>
+        {onRename && (
+          <ContextMenuItem onClick={() => onRename(file.id, file.title)}>
+            <Pencil className="size-3.5" />
+            <span>{t("workspace.rename")}</span>
+          </ContextMenuItem>
+        )}
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             <FolderOpen className="size-3.5" />
@@ -92,11 +96,15 @@ export function FileRowContextMenu({
           <Trash2 className="size-3.5" />
           <span>{multi ? t("workspace.delete_selected") : t("workspace.delete")}</span>
         </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => onTranscribe(targetIds)} disabled={!canTranscribe}>
-          <RefreshCw className="size-3.5" />
-          <span>{transcribeLabel}</span>
-        </ContextMenuItem>
+        {onTranscribe && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={() => onTranscribe(targetIds)} disabled={!canTranscribe}>
+              <RefreshCw className="size-3.5" />
+              <span>{transcribeLabel}</span>
+            </ContextMenuItem>
+          </>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );

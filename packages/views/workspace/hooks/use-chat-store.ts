@@ -337,7 +337,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           }));
           if (get().chatVisible === 0) toast.success("AI 助手已完成回复");
           // Mirror into the unified notification center (drives the Bell badge).
-          const convTitle = get().conversations.find((c) => c.id === conversationId)?.title ?? "";
+          const convTitle = (get().conversations.find((c) => c.id === conversationId)?.title ?? "").trim();
           const unread = get().unreadCounts[conversationId] ?? 1;
           useNotificationStore.getState().upsert({
             id: `chat:${conversationId}`,

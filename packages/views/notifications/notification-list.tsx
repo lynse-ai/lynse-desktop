@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { Bell, MessageSquare, FileAudio, Cloud, Info } from "../icons";
+import { AssistantAvatar } from "../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNotificationStore, type NotificationItem, type NotificationType } from "./use-notification-store";
 
@@ -25,11 +26,16 @@ export function NotificationList({
   const textFor = (item: NotificationItem): string => {
     switch (item.type) {
       case "chat":
-        return item.title
-          ? t("notifications.chat_unread", { name: item.title, count: item.count ?? 1 })
+        return item.title.trim()
+          ? t("notifications.chat_unread", { name: item.title.trim(), count: item.count ?? 1 })
           : t("notifications.chat_unread_untitled", { count: item.count ?? 1 });
       case "transcription":
-        return t("notifications.transcription_done");
+        // Titled rows are pipeline completions pushed by the workspace flows
+        // (they carry the file name); untitled ones are the legacy
+        // "uploaded, transcribing" events from live-recording sync.
+        return item.title.trim()
+          ? t("notifications.transcription_complete_named", { name: item.title.trim() })
+          : t("notifications.transcription_done");
       case "sync":
         return t("notifications.sync_local");
       case "system":
@@ -67,9 +73,16 @@ export function NotificationList({
               }}
               className="flex w-full items-start gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-accent"
             >
-              <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                <Icon className="size-4" />
-              </span>
+              {item.type === "chat" ? (
+                // AI-assistant rows carry the Lynse mascot itself, so they
+                // read as "a reply from the assistant" at a glance instead of
+                // a generic document-ish glyph.
+                <AssistantAvatar size={28} interactive={false} className="mt-0.5" />
+              ) : (
+                <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                  <Icon className="size-4" />
+                </span>
+              )}
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-2">
                   <span className={item.read ? "text-sm text-muted-foreground" : "text-sm font-medium text-foreground"}>

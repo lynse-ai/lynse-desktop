@@ -23,28 +23,45 @@ export function AssistantAvatar({ size = 28, className, interactive = true }: As
   const label = t(`chat.${avatar.i18nKey}`);
   const tip = `${t("chat.switch_avatar")} · ${label}`;
 
+  const frameClass = [
+    "relative inline-flex shrink-0 items-center justify-center bg-transparent drop-shadow-[0_12px_24px_rgba(0,0,0,0.28)] dark:brightness-[0.82] dark:contrast-[0.96] dark:saturate-[1.12]",
+    interactive ? "cursor-pointer transition-transform hover:-translate-y-0.5 hover:scale-105 active:scale-95" : "cursor-default",
+    className ?? "",
+  ].join(" ");
+
+  const image = (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      key={avatar.id}
+      src={avatar.src}
+      alt={label}
+      draggable={false}
+      className="size-full select-none object-contain animate-avatar-in"
+    />
+  );
+
+  // Non-interactive renders a plain <span> so the avatar can sit inside
+  // another button (e.g. notification rows) without nesting interactive
+  // elements.
+  if (!interactive) {
+    return (
+      <span className={frameClass} style={{ width: size, height: size }}>
+        {image}
+      </span>
+    );
+  }
+
   return (
     <button
       type="button"
-      onClick={interactive ? cycle : undefined}
+      onClick={cycle}
       title={tip}
       aria-label={tip}
       draggable={false}
-      className={[
-        "relative inline-flex shrink-0 items-center justify-center bg-transparent drop-shadow-[0_12px_24px_rgba(0,0,0,0.28)] dark:brightness-[0.82] dark:contrast-[0.96] dark:saturate-[1.12]",
-        interactive ? "cursor-pointer transition-transform hover:-translate-y-0.5 hover:scale-105 active:scale-95" : "cursor-default",
-        className ?? "",
-      ].join(" ")}
+      className={frameClass}
       style={{ width: size, height: size }}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        key={avatar.id}
-        src={avatar.src}
-        alt={label}
-        draggable={false}
-        className="size-full select-none object-contain animate-avatar-in"
-      />
+      {image}
     </button>
   );
 }

@@ -7,8 +7,10 @@ import { ContentPanel } from "../workspace/content-panel";
 import { ChatPanel } from "../workspace/right-panel/chat-panel";
 import { ResizableHandle } from "../workspace/resizable-handle";
 import { TitleBar } from "../layout/title-bar";
-import { useNotes } from "../workspace/hooks/use-files";
+import { useNotes, useDeleteFiles } from "../workspace/hooks/use-files";
+import { useMoveFiles } from "../workspace/hooks/use-folder-mutations";
 import { useFolders } from "../workspace/hooks/use-folders";
+import { FileRowContextMenu } from "../workspace/middle-panel/file-row-context-menu";
 import { filterWorkspaceFilesByFolder } from "../workspace/middle-panel/file-list-filter";
 import { LOCAL_TRANSCRIPTION_FOLDER_ID } from "../workspace/local-transcription";
 import { useTranslation } from "@lynse/core/i18n/react";
@@ -220,13 +222,40 @@ export function NotesPage() {
   });
   const { data: folders } = useFolders();
 
+  // Right-click actions on a note row: move to another group / soft-delete.
+  // Same mutations the workspace file list uses, so both views stay in sync
+  // (both invalidate the notes list on success).
+  const moveMutation = useMoveFiles();
+  const deleteMutation = useDeleteFiles();
+
+  const handleMoveFile = (targetIds: string[], newFolderId: string, oldFolderId: string) => {
+    moveMutation.mutate({ oldFolderId, newFolderId, fileIds: targetIds });
+  };
+
+  const handleDeleteFile = (targetIds: string[]) => {
+    if (window.confirm(t("workspace.delete_confirm"))) {
+      deleteMutation.mutate(targetIds, {
+        onSuccess: () => {
+          if (targetIds.includes(selectedItemId ?? "")) {
+            selectItem(null, null);
+          }
+        },
+      });
+    }
+  };
+
   // Last known-good list, hydrated from localStorage on mount.
   const [cachedFiles, setCachedFiles] = useState<WorkspaceItem[]>(() => loadNotesCache());
   useEffect(() => {
-    if (!Array.isArray(files) || files.length === 0) return;
+    if (!Array.isArray(files)) return;
+    // An empty authenticated list is real (e.g. every file was just deleted
+    // via the context menu) and must empty the cache too, or deleted rows
+    // would flash back on the next mount. Logged out the query is disabled
+    // and never resolves to [].
+    if (files.length === 0 && !isAuthenticated) return;
     setCachedFiles(files);
     saveNotesCache(files);
-  }, [files]);
+  }, [files, isAuthenticated]);
 
   // Render the cached list whenever the query has no data yet (initial load or
   // refetch), so the panel never goes blank.
@@ -245,10 +274,34 @@ export function NotesPage() {
     return found?.folderName ?? t("layout.all_files");
   }, [selectedFolderId, folderList, t]);
 
+  // Custom folders can carry a color; echoing its dot next to the header title
+  // ties the header back to the option picked in the filter dropdown.
+  const currentFolderColor = useMemo(
+    () => folderList.find((f) => String(f.id) === selectedFolderId)?.color,
+    [selectedFolderId, folderList],
+  );
+
   const filteredFiles = useMemo(() => {
     if (!Array.isArray(sourceFiles)) return [];
     return filterWorkspaceFilesByFolder(sourceFiles, selectedFolderId);
   }, [sourceFiles, selectedFolderId]);
+
+  // Per-group recording counts for the filter dropdown. Reuses the list's own
+  // filter so a number always matches what selecting that group shows. Trash
+  // is excluded — the notes query never returns trashed files.
+  const folderCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    const ids = [
+      "__all__",
+      LOCAL_TRANSCRIPTION_FOLDER_ID,
+      "__uncategorized__",
+      ...folderList.map((f) => String(f.id)),
+    ];
+    for (const id of ids) {
+      counts.set(id, filterWorkspaceFilesByFolder(sourceFiles, id).length);
+    }
+    return counts;
+  }, [sourceFiles, folderList]);
 
   const timeSections = useMemo(
     () => getTimeSections(filteredFiles, t, i18n.language),
@@ -273,15 +326,18 @@ export function NotesPage() {
     <DropdownMenuContent align="end" className="w-52">
       <DropdownMenuItem onClick={() => handleSelectFolder("__all__")}>
         <Layers className="mr-2 size-4" />
-        {t("layout.all_files")}
+        <span className="flex-1">{t("layout.all_files")}</span>
+        <FolderCount count={folderCounts.get("__all__")} />
       </DropdownMenuItem>
       <DropdownMenuItem onClick={() => handleSelectFolder(LOCAL_TRANSCRIPTION_FOLDER_ID)}>
         <FileAudio className="mr-2 size-4" />
-        {t("layout.local_transcriptions")}
+        <span className="flex-1">{t("layout.local_transcriptions")}</span>
+        <FolderCount count={folderCounts.get(LOCAL_TRANSCRIPTION_FOLDER_ID)} />
       </DropdownMenuItem>
       <DropdownMenuItem onClick={() => handleSelectFolder("__uncategorized__")}>
         <Circle className="mr-2 size-4" />
-        {t("layout.uncategorized")}
+        <span className="flex-1">{t("layout.uncategorized")}</span>
+        <FolderCount count={folderCounts.get("__uncategorized__")} />
       </DropdownMenuItem>
       <DropdownMenuSeparator />
       {folderList.length === 0 && (
@@ -294,7 +350,8 @@ export function NotesPage() {
           ) : (
             <Circle className="mr-2 size-4" />
           )}
-          {folder.folderName}
+          <span className="flex-1 truncate">{folder.folderName}</span>
+          <FolderCount count={folderCounts.get(String(folder.id))} />
         </DropdownMenuItem>
       ))}
       <DropdownMenuSeparator />
@@ -321,11 +378,25 @@ export function NotesPage() {
             : undefined
         }
       >
-        {/* Header: actions */}
+        {/* Header: current group title (left) + actions (right) */}
         <div
-          className="flex shrink-0 select-none items-start justify-between border-b border-border/50 bg-background/80 px-4 py-3 backdrop-blur-xl"
+          className="flex shrink-0 select-none items-center justify-between gap-3 border-b border-border/50 bg-background/80 px-4 py-3 backdrop-blur-xl"
           data-tauri-drag-region
         >
+          {/* Current filter group — the only persistent indicator of which
+              folder the list is scoped to (the funnel tooltip is hover-only). */}
+          <div className="flex min-w-0 items-baseline gap-1.5">
+            {currentFolderColor && (
+              <span
+                className="size-2.5 shrink-0 translate-y-[-1px] self-center rounded-full"
+                style={{ backgroundColor: currentFolderColor }}
+              />
+            )}
+            <h2 className="min-w-0 truncate text-sm font-semibold text-foreground">{currentFolderName}</h2>
+            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+              ({filteredFiles.length})
+            </span>
+          </div>
           <div className="flex flex-col items-end gap-2" data-tauri-drag-region={false}>
             <div className="flex items-center gap-1">
               <DropdownMenu>
@@ -383,12 +454,20 @@ export function NotesPage() {
                   <TimeSectionHeader label={section.label} count={section.items.length} />
                   <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3 pb-1 pt-2">
                     {section.items.map((file) => (
-                      <GridCard
+                      <FileRowContextMenu
                         key={file.id}
                         file={file}
-                        isSelected={selectedItemId === file.id}
-                        onClick={() => selectItem(file.id, "file", file.title)}
-                      />
+                        targetIds={[file.id]}
+                        folders={folderList}
+                        onMove={handleMoveFile}
+                        onDelete={handleDeleteFile}
+                      >
+                        <GridCard
+                          file={file}
+                          isSelected={selectedItemId === file.id}
+                          onClick={() => selectItem(file.id, "file", file.title)}
+                        />
+                      </FileRowContextMenu>
                     ))}
                   </div>
                 </div>
@@ -401,12 +480,20 @@ export function NotesPage() {
                   <TimeSectionHeader label={section.label} count={section.items.length} />
                   <div className="divide-y divide-border/40 px-4">
                     {section.items.map((file) => (
-                      <FileRow
+                      <FileRowContextMenu
                         key={file.id}
                         file={file}
-                        isSelected={selectedItemId === file.id}
-                        onClick={() => selectItem(file.id, "file", file.title)}
-                      />
+                        targetIds={[file.id]}
+                        folders={folderList}
+                        onMove={handleMoveFile}
+                        onDelete={handleDeleteFile}
+                      >
+                        <FileRow
+                          file={file}
+                          isSelected={selectedItemId === file.id}
+                          onClick={() => selectItem(file.id, "file", file.title)}
+                        />
+                      </FileRowContextMenu>
                     ))}
                   </div>
                 </div>
@@ -476,6 +563,12 @@ function TimeSectionHeader({ label, count }: { label: string; count: number }) {
       <div className="ml-1 h-px flex-1 bg-border/40" />
     </div>
   );
+}
+
+/** Right-aligned recording count in a filter-dropdown row; hidden when unknown. */
+function FolderCount({ count }: { count: number | undefined }) {
+  if (count === undefined) return null;
+  return <span className="text-[11px] tabular-nums text-muted-foreground">{count}</span>;
 }
 
 function FileRow({

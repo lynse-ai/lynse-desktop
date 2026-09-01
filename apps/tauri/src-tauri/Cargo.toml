@@ -1,6 +1,6 @@
 [package]
 name = "lynse-tauri"
-version = "0.1.28"
+version = "0.1.29"
 description = "Lynse macOS desktop shell"
 authors = ["Lynse"]
 edition = "2021"

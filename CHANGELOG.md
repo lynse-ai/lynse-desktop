@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.29 (2026-09-01)
+
+### New Features
+
+- Notes list: right-click a note (list or grid view) to delete it or move it to another group. The filter dropdown now shows each group's recording count, and the header keeps the current group's name and count visible while browsing.
+- Transcription/summary completion now leaves a "《name》转写完成" entry in the notification center (Bell), so finishing pipelines are no longer signaled only by a fleeting toast — this covers the generate button, the summary dialog flows, and batch transcription from the file list.
+
+### Fixed
+
+- Un-transcribed recordings once again fill the content panel width in the notes page; previously the audio player and generate button collapsed into a narrow left column with a large blank area on the right (the panel sized itself to its content instead of stretching).
+- The notes list now refreshes after generation, rename, delete, or move-to-group, so titles update instead of going stale until reload.
+- Chat notifications from the AI assistant now carry the assistant's mascot avatar instead of a generic message icon, and blank conversation titles no longer render empty 《》 brackets.
+
+### Changed
+
+- Profile dropdown: the membership row now shows remaining credits; removed the redundant "Check for Updates" item (startup auto-check, notification center, and the About tab already cover it).
+
 ## 0.1.28 (2026-08-31)
 
 ### Fixed

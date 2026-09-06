@@ -66,7 +66,7 @@ export function FolderTree() {
               <FolderOpen className="size-3.5 shrink-0" />
             )}
             <span className="flex-1 truncate text-left">{folder.name}</span>
-            <span className="text-[10px] tabular-nums">
+            <span className="text-3xs tabular-nums">
               {countsByFolder.map.get(folder.id) ?? 0}
             </span>
           </button>
@@ -83,11 +83,11 @@ export function FolderTree() {
         >
           <FolderOpen className="size-3.5 shrink-0" />
           <span className="flex-1 truncate text-left">Uncategorized</span>
-          <span className="text-[10px] tabular-nums">{countsByFolder.ungrouped}</span>
+          <span className="text-3xs tabular-nums">{countsByFolder.ungrouped}</span>
         </button>
 
         {folderItems.length === 0 && (
-          <p className="px-2 py-4 text-center text-[11px] text-muted-foreground">
+          <p className="px-2 py-4 text-center text-2xs text-muted-foreground">
             No folders yet
           </p>
         )}

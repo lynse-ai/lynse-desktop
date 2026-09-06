@@ -14,7 +14,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::async_runtime::JoinHandle;
 use tauri::{
     AppHandle, Emitter, LogicalPosition, Manager, State, WebviewUrl, WebviewWindowBuilder,
@@ -73,6 +73,45 @@ fn enqueue_audio(
     {
         let _ = sender.send(WsCommand::Audio(payload));
     }
+}
+
+/// The running live session, reachable from other modules (the recording-card
+/// audio feed). Kept in sync with the managed session at start/stop.
+static CARD_FEED_TARGET: Mutex<Option<Arc<LiveSession>>> = Mutex::new(None);
+
+fn set_card_feed_target(session: &Arc<LiveSession>) {
+    *CARD_FEED_TARGET.lock().expect("card feed lock") = Some(session.clone());
+}
+
+fn clear_card_feed_target() {
+    *CARD_FEED_TARGET.lock().expect("card feed lock") = None;
+}
+
+/// Route decoded recording-card PCM (16 kHz mono Int16) into the active live
+/// session as the mic ("我") source, chunked to the same 640-byte frame size
+/// the capture sidecar produces. Returns false when no session is running.
+pub fn feed_recording_card_pcm(pcm: &[i16], elapsed_ms: u64) -> bool {
+    let Some(session) = CARD_FEED_TARGET.lock().expect("card feed lock").clone() else {
+        return false;
+    };
+    for chunk in pcm.chunks(PCM_FRAME_BYTES / 2) {
+        if chunk.len() < PCM_FRAME_BYTES / 2 {
+            break;
+        }
+        let mut frame = Vec::with_capacity(PCM_FRAME_BYTES);
+        for sample in chunk {
+            frame.extend_from_slice(&sample.to_le_bytes());
+        }
+        enqueue_audio(&session, AudioSource::Mic, elapsed_ms, frame);
+    }
+    // Mirror the sidecar's mic-level behaviour so the UI meter reacts to the
+    // card audio even while the macOS capture sidecar is not feeding "我".
+    let sum: f64 = pcm.iter().map(|sample| (*sample as f64 / 32768.0).powi(2)).sum();
+    if !pcm.is_empty() {
+        let level = ((sum / pcm.len() as f64).sqrt()).min(1.0) as f32;
+        session.mic_level.store(level.to_bits(), Ordering::Relaxed);
+    }
+    true
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -142,6 +181,30 @@ pub struct StartRequest {
     target_language: String,
     epoch: u32,
     connections: Vec<ConnectionDescriptor>,
+    /// Which capture sources the sidecar should record: "mic" and/or
+    /// "system". Absent or empty means both.
+    #[serde(default)]
+    audio_sources: Vec<String>,
+}
+
+impl StartRequest {
+    fn wants_mic(&self) -> bool {
+        self.audio_sources.is_empty() || self.audio_sources.iter().any(|source| source == "mic")
+    }
+
+    /// Collapse the requested sources into the sidecar's `--sources` value.
+    fn sources_argument(&self) -> &'static str {
+        let mic = self.wants_mic();
+        let system = self
+            .audio_sources
+            .iter()
+            .any(|source| source == "system");
+        match (mic, system) {
+            (true, false) => "mic",
+            (false, true) => "system",
+            _ => "both",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -272,6 +335,10 @@ struct LiveSession {
     epoch: AtomicU32,
     epoch_offset_ms: AtomicU64,
     last_elapsed_ms: AtomicU64,
+    /// Wall-clock (Unix epoch ms) captured when the session started, used to
+    /// rebase providers that report utterance timestamps as absolute epoch ms
+    /// (iLiveData) onto the recording-relative timeline.
+    wall_start_ms: AtomicU64,
     mic_level: AtomicU32,
     system_level: AtomicU32,
     segments: Mutex<Vec<LiveSegment>>,
@@ -496,7 +563,9 @@ pub async fn live_translation_start(
         // nothing is listed yet, leaving them with nothing to toggle — the
         // entry only materialises after the OS prompt has fired at least once.
         let permissions = run_permission_command(&app, "--permission-status")?;
-        let needs_mic = permissions.microphone != "granted";
+        // In system-only mode the microphone is never captured, so its
+        // permission is neither requested nor required.
+        let needs_mic = request.wants_mic() && permissions.microphone != "granted";
         let needs_screen = permissions.system_audio != "granted";
         if needs_mic || needs_screen {
             if needs_mic {
@@ -510,7 +579,7 @@ pub async fn live_translation_start(
         // after a full app restart even once the user clicks Allow, so we still
         // send the user to the pane and ask for a restart.
         let after = run_permission_command(&app, "--permission-status")?;
-        if after.microphone != "granted" {
+        if request.wants_mic() && after.microphone != "granted" {
             open_macos_privacy_pane("microphone");
             return Err(
                 "缺少麦克风权限。请在系统弹出的对话框中点击「允许」（或在「隐私与安全性 → 麦克风」中允许 Lynse Audio Capture），然后重新启动 Lynse。"
@@ -565,6 +634,7 @@ pub async fn live_translation_start(
         epoch: AtomicU32::new(request.epoch),
         epoch_offset_ms: AtomicU64::new(0),
         last_elapsed_ms: AtomicU64::new(0),
+        wall_start_ms: AtomicU64::new(wall_clock_ms()),
         mic_level: AtomicU32::new(0.0f32.to_bits()),
         system_level: AtomicU32::new(0.0f32.to_bits()),
         segments: Mutex::new(Vec::new()),
@@ -597,6 +667,8 @@ pub async fn live_translation_start(
     )
     .map_err(|error| error.to_string())?;
 
+    // Computed before `request.connections` is moved into spawn_connections.
+    let sources_argument = request.sources_argument();
     spawn_connections(&app, &session, request.epoch, 0, request.connections)?;
 
     #[cfg(target_os = "macos")]
@@ -607,6 +679,8 @@ pub async fn live_translation_start(
             .arg(&macos_audio.0)
             .arg("--out")
             .arg(&session.directory)
+            .arg("--sources")
+            .arg(sources_argument)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = match command.spawn() {
@@ -652,6 +726,7 @@ pub async fn live_translation_start(
         .session
         .lock()
         .map_err(|_| "live session lock is poisoned")? = Some(session.clone());
+    set_card_feed_target(&session);
     emit_snapshot(&app, &session);
     set_recording_island_visible(&app, true);
     Ok(session.snapshot())
@@ -717,6 +792,10 @@ fn spawn_control_reader(
                         .get("elapsedMs")
                         .and_then(Value::as_u64)
                         .unwrap_or_default();
+                    let mic_suppressed = value
+                        .get("micSuppressed")
+                        .and_then(Value::as_bool)
+                        .unwrap_or_default();
                     session.mic_level.store(mic.to_bits(), Ordering::Relaxed);
                     session
                         .system_level
@@ -724,7 +803,7 @@ fn spawn_control_reader(
                     session
                         .last_elapsed_ms
                         .fetch_max(elapsed, Ordering::Relaxed);
-                    let _ = app.emit(LIVE_EVENT, json!({ "type": "levels", "mic": mic, "system": system, "elapsedMs": elapsed }));
+                    let _ = app.emit(LIVE_EVENT, json!({ "type": "levels", "mic": mic, "system": system, "elapsedMs": elapsed, "micSuppressed": mic_suppressed }));
                 }
                 Some("error") => emit_error(
                     &app,
@@ -1352,6 +1431,30 @@ fn apply_method_text(segment: &mut LiveSegment, method: &str, text: &str) {
     }
 }
 
+/// Timestamps at or above this bound cannot be session-relative offsets — as
+/// elapsed ms it would mean a recording over 11 days long — so they must be
+/// absolute Unix epoch ms (the 2001 era onward). iLiveData reports utterance
+/// `startTs`/`endTs` this way; other providers report ms since stream open.
+const ABSOLUTE_TIMESTAMP_MS: u64 = 1_000_000_000_000;
+
+fn wall_clock_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
+}
+
+/// Map a provider timestamp onto the recording-relative timeline. Absolute
+/// epoch ms are rebased against the session's wall-clock start; relative
+/// offsets keep the stream-attach anchor (`epoch_offset_ms`).
+fn rebase_provider_timestamp(raw: u64, wall_start_ms: u64, epoch_offset_ms: u64) -> u64 {
+    if raw >= ABSOLUTE_TIMESTAMP_MS {
+        raw.saturating_sub(wall_start_ms)
+    } else {
+        epoch_offset_ms.saturating_add(raw)
+    }
+}
+
 fn apply_provider_message(
     session: &LiveSession,
     source: AudioSource,
@@ -1374,9 +1477,15 @@ fn apply_provider_message(
     let is_recognized = matches!(method, "recognizedResult" | "recognizedTempResult");
     let is_final_method = matches!(method, "recognizedResult" | "translatedResult");
     let stream_id = value_string(&value, "streamId");
-    let start_ms = epoch_offset_ms.saturating_add(value_u64(&value, "startTs"));
+    let wall_start_ms = session.wall_start_ms.load(Ordering::Relaxed);
+    let start_ms = rebase_provider_timestamp(
+        value_u64(&value, "startTs"),
+        wall_start_ms,
+        epoch_offset_ms,
+    );
     let raw_end = value_u64(&value, "endTs");
-    let end_ms = (raw_end > 0).then(|| epoch_offset_ms.saturating_add(raw_end));
+    let end_ms =
+        (raw_end > 0).then(|| rebase_provider_timestamp(raw_end, wall_start_ms, epoch_offset_ms));
     let incoming = value_string(&value, if is_recognized { "asr" } else { "trans" })
         .unwrap_or_default();
     if incoming.is_empty() {
@@ -1386,6 +1495,15 @@ fn apply_provider_message(
     // timestamp (stable per utterance for most providers).
     let task_id = value_string(&value, "taskId")
         .unwrap_or_else(|| value_u64(&value, "startTs").to_string());
+    // iLiveData diarization: every result carries `SpeakerId` as a JSON number,
+    // with -1 meaning "not recognised" (diarization disabled, or the engine has
+    // not settled on a speaker yet). Normalise the provider's 0-based id onto
+    // the same 1-based speaker index the Volcengine path uses.
+    let speaker = value
+        .get("SpeakerId")
+        .and_then(Value::as_i64)
+        .filter(|id| *id >= 0)
+        .map(|id| (id as u32).saturating_add(1));
     ingest_provider_text(
         session,
         source,
@@ -1396,7 +1514,7 @@ fn apply_provider_message(
         is_recognized,
         is_final_method,
         task_id,
-        None,
+        speaker,
         &incoming,
     )
 }
@@ -1578,7 +1696,12 @@ fn ingest_provider_text(
     }
     segment.provider_stream_id = stream_id.clone();
     segment.task_id = Some(task_id);
-    segment.speaker = speaker;
+    // Only overwrite the speaker when the provider actually reported one.
+    // Interim results can arrive with -1 ("not recognised") and must not clear
+    // a speaker already resolved for this utterance.
+    if speaker.is_some() {
+        segment.speaker = speaker;
+    }
     let method = match (is_recognized, is_final) {
         (true, true) => "recognizedResult",
         (true, false) => "recognizedTempResult",
@@ -1860,6 +1983,7 @@ pub async fn live_translation_stop(
         .map_err(|_| "live session lock is poisoned")?
         .take()
         .ok_or("no live translation session")?;
+    clear_card_feed_target();
     session.set_state("stopping");
     emit_snapshot(&app, &session);
     session.capture_stop.store(false, Ordering::Relaxed);
@@ -2237,6 +2361,7 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
         epoch: AtomicU32::new(0),
         epoch_offset_ms: AtomicU64::new(0),
         last_elapsed_ms: AtomicU64::new(duration_ms),
+        wall_start_ms: AtomicU64::new(wall_clock_ms()),
         mic_level: AtomicU32::new(0),
         system_level: AtomicU32::new(0),
         segments: Mutex::new(segments),
@@ -2250,9 +2375,14 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
     persist_session(app, &session)
 }
 
-/// Logical size of the recording-island mini window (compact pill shape).
+/// Logical size of the recording-island window. The window hugs the pill
+/// exactly — native vibrancy (`window_effects::apply_island_effects`) paints
+/// the frosted capsule behind the webview. Toggling the live-transcript
+/// drawer grows the window downward to [`RECORDING_ISLAND_EXPANDED_HEIGHT`]
+/// via `live_translation_expand_island` (the frontend mirrors these values).
 const RECORDING_ISLAND_WIDTH: f64 = 340.0;
-const RECORDING_ISLAND_HEIGHT: f64 = 52.0;
+const RECORDING_ISLAND_HEIGHT: f64 = 44.0;
+const RECORDING_ISLAND_EXPANDED_HEIGHT: f64 = 480.0;
 
 /// Positions the island pill directly below the menu-bar tray icon (top-right
 /// of the screen) so it reads as a companion of the status item. Falls back
@@ -2338,7 +2468,32 @@ pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
             return;
         }
     };
+    // Native frosted glass behind the webview: the pill reads as a translucent
+    // capsule over whatever is on screen, not a solid card.
+    if let Err(error) =
+        crate::window_effects::apply_island_effects(&window, RECORDING_ISLAND_HEIGHT / 2.0)
+    {
+        eprintln!("Failed to apply recording island effects: {error}");
+    }
     position_recording_island(app, &window);
+}
+
+/// Grows or shrinks the recording-island window between the compact pill and
+/// the expanded live-transcript drawer. The window is top-anchored under the
+/// tray icon, so expanding always unfolds downward, dynamic-island style.
+#[tauri::command]
+pub fn live_translation_expand_island(app: AppHandle, expand: bool) -> CommandResult<()> {
+    let height = if expand {
+        RECORDING_ISLAND_EXPANDED_HEIGHT
+    } else {
+        RECORDING_ISLAND_HEIGHT
+    };
+    if let Some(window) = app.get_webview_window("recording-island") {
+        window
+            .set_size(tauri::LogicalSize::new(RECORDING_ISLAND_WIDTH, height))
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 /// Hides the recording-island mini window (user tapped its close button).
@@ -2620,6 +2775,7 @@ mod tests {
             epoch: AtomicU32::new(0),
             epoch_offset_ms: AtomicU64::new(0),
             last_elapsed_ms: AtomicU64::new(0),
+            wall_start_ms: AtomicU64::new(0),
             mic_level: AtomicU32::new(0),
             system_level: AtomicU32::new(0),
             segments: Mutex::new(Vec::new()),
@@ -2668,6 +2824,36 @@ mod tests {
     }
 
     #[test]
+    fn deduplicates_chinese_system_echo_from_microphone() {
+        let mut segments = vec![
+            segment(
+                "system",
+                AudioSource::System,
+                "我们明天上午发布新版本",
+                1_000,
+            ),
+            segment("mic", AudioSource::Mic, "我们明天上午发布新版本", 1_200),
+        ];
+        deduplicate_echoes(&mut segments);
+        assert_eq!(segments[1].echo_of.as_deref(), Some("system"));
+    }
+
+    #[test]
+    fn keeps_distinct_chinese_utterances() {
+        let mut segments = vec![
+            segment(
+                "system",
+                AudioSource::System,
+                "这个季度营收增长了百分之二十",
+                1_000,
+            ),
+            segment("mic", AudioSource::Mic, "我觉得下个月可以安排一次评审", 1_200),
+        ];
+        deduplicate_echoes(&mut segments);
+        assert_eq!(segments[1].echo_of, None);
+    }
+
+    #[test]
     fn decodes_little_endian_audio_ipc_header() {
         let mut header = [0u8; AUDIO_HEADER_BYTES];
         header[0] = 1;
@@ -2680,6 +2866,49 @@ mod tests {
         assert_eq!(sequence, 42);
         assert_eq!(elapsed_ms, 1_234);
         assert_eq!(length, PCM_FRAME_BYTES);
+    }
+
+    #[test]
+    fn rebases_absolute_provider_timestamps_onto_the_recording_timeline() {
+        let session = live_session();
+        session
+            .wall_start_ms
+            .store(1_788_000_000_000, Ordering::Relaxed);
+        let text = json!({
+            "method": "recognizedResult",
+            "asr": "你好",
+            "startTs": 1_788_000_006_500u64,
+            "endTs": 1_788_000_009_000u64,
+        })
+        .to_string();
+        let Some(ProviderEmission::Segments(segments)) =
+            apply_provider_message(&session, AudioSource::Mic, 0, 0, &text)
+        else {
+            panic!("expected a segments emission");
+        };
+        let segment = segments.first().expect("one ingested segment");
+        assert_eq!(segment.start_ms, 6_500);
+        assert_eq!(segment.end_ms, Some(9_000));
+    }
+
+    #[test]
+    fn keeps_relative_provider_timestamps_anchored_to_the_stream() {
+        let session = live_session();
+        let text = json!({
+            "method": "recognizedResult",
+            "asr": "hello",
+            "startTs": 1_500u64,
+            "endTs": 2_500u64,
+        })
+        .to_string();
+        let Some(ProviderEmission::Segments(segments)) =
+            apply_provider_message(&session, AudioSource::Mic, 0, 3_000, &text)
+        else {
+            panic!("expected a segments emission");
+        };
+        let segment = segments.first().expect("one ingested segment");
+        assert_eq!(segment.start_ms, 4_500);
+        assert_eq!(segment.end_ms, Some(5_500));
     }
 
     #[test]

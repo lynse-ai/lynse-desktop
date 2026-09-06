@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useState, useMemo } from "react";
-import { X, Send, FileText, Plus, Square, Clock } from "../../icons";
+import { X, Send, FileText, Plus, Square, Clock, Image as ImageIcon } from "../../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
 import { StreamingMarkdown } from "@lynse/ui/markdown";
@@ -67,7 +67,7 @@ export function ChatPanel() {
           <AssistantAvatar size={90} />
           <div className="flex flex-1 flex-col overflow-hidden">
             <span className="text-xs font-semibold text-muted-foreground">{t("chat.ai_assistant")}</span>
-            <span className="truncate text-[11px] text-muted-foreground/60">{t("chat.ready")}</span>
+            <span className="truncate text-2xs text-muted-foreground/60">{t("chat.ready")}</span>
           </div>
           <Button
             variant="ghost"
@@ -104,7 +104,7 @@ export function ChatPanel() {
 
       {/* Context bar */}
       {selectedItemId && (
-        <div className="flex shrink-0 items-center border-b border-border text-muted-foreground" style={{ padding: "6px 12px", gap: 6, fontSize: 11 }}>
+        <div className="text-2xs flex shrink-0 items-center border-b border-border text-muted-foreground" style={{ padding: "6px 12px", gap: 6 }}>
           <FileText className="size-3 shrink-0" />
           <span className="truncate font-medium">{selectedFileName || selectedItemId}</span>
         </div>
@@ -116,7 +116,7 @@ export function ChatPanel() {
             <div className="flex flex-col items-center justify-center pt-10 text-center text-muted-foreground">
             <AssistantAvatar size={179} className="mb-2 opacity-90" />
             <p className="text-xs">{t("chat.empty_prompt")}</p>
-            <p className="mt-1 text-[11px] opacity-60">{t("chat.empty_hint")}</p>
+            <p className="mt-1 text-2xs opacity-60">{t("chat.empty_hint")}</p>
           </div>
         )}
         <div className="space-y-3">
@@ -132,11 +132,31 @@ export function ChatPanel() {
                 }`}
               >
                 {msg.role === "user" ? (
-                  msg.content ? (
-                    <div className="whitespace-pre-wrap break-words">{msg.content}</div>
-                  ) : (
-                    <span className="text-muted-foreground">{msg.status || "…"}</span>
-                  )
+                  <>
+                    {(msg.attachments?.length ?? 0) > 0 && (
+                      <div className="mb-1.5 flex flex-wrap justify-end gap-1">
+                        {msg.attachments!.map((attachment, index) => (
+                          <span
+                            key={attachment.id ?? `${attachment.name}-${index}`}
+                            className="flex max-w-40 items-center gap-1 rounded-full border border-primary-foreground/20 bg-primary-foreground/10 px-1.5 py-0.5 text-3xs text-primary-foreground"
+                            title={attachment.name}
+                          >
+                            {attachment.type === "image" ? (
+                              <ImageIcon className="size-3 shrink-0" />
+                            ) : (
+                              <FileText className="size-3 shrink-0" />
+                            )}
+                            <span className="min-w-0 truncate">{attachment.name}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {msg.content ? (
+                      <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                    ) : (
+                      <span className="text-muted-foreground">{msg.status || "…"}</span>
+                    )}
+                  </>
                 ) : msg.error ? (
                   <div className="whitespace-pre-wrap break-words text-destructive">{msg.content}</div>
                 ) : msg.content ? (
@@ -153,7 +173,7 @@ export function ChatPanel() {
                   </span>
                 )}
                 {msg.role === "assistant" && msg.content && msg.status && (
-                  <div className="mt-2 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                  <div className="mt-2 flex items-center gap-1.5 text-3xs text-muted-foreground">
                     <span className="size-1.5 animate-pulse rounded-full bg-current" />
                     <WaitingText status={msg.status} />
                   </div>
@@ -161,7 +181,7 @@ export function ChatPanel() {
                 {msg.sources && msg.sources.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1">
                     {msg.sources.map((s, i) => (
-                      <span key={i} className="rounded-full bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      <span key={i} className="rounded-full bg-background/70 px-1.5 py-0.5 text-3xs text-muted-foreground">
                         {s}
                       </span>
                     ))}

@@ -21,3 +21,4 @@ export type {
   LiveTranslationTrayAction,
 } from "./types";
 export { DEFAULT_ILIVEDATA_RTVT_ENDPOINT } from "./types";
+export { normalizeMaxSpeakers } from "./api";

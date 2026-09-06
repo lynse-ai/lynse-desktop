@@ -3,6 +3,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import { setApiTransportMode } from "@lynse/core/api/client";
 import { hydrateSecrets, refreshSecret, secureStorage } from "./secure-storage";
 import type {
@@ -24,7 +26,14 @@ import type {
   LiveTranslationSnapshot,
   LiveTranslationTrayAction,
 } from "@lynse/views/live-translation";
-import { DEFAULT_ILIVEDATA_RTVT_ENDPOINT } from "@lynse/views/live-translation";
+import {
+  DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
+  normalizeMaxSpeakers,
+} from "@lynse/views/live-translation";
+import type {
+  DesktopRecordingCardApi,
+  RecordingCardEvent,
+} from "@lynse/views/devices";
 
 export type AppUpdateInfo = {
   currentVersion: string;
@@ -35,17 +44,35 @@ export type AppUpdateInfo = {
   publishedAt?: string | null;
 };
 
+/** Serializable download/install progress handed to the UI. */
+export type UpdateDownloadProgress = {
+  event: "started" | "progress" | "finished";
+  downloaded: number;
+  total: number;
+};
+
 type DesktopApi = {
   openExternal: (url: string) => Promise<void>;
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
   liveTranslation: DesktopLiveTranslationApi;
+  recordingCard: DesktopRecordingCardApi;
   todo: Record<string, (...args: any[]) => Promise<unknown>>;
   appInfo: { version: string; platform: string };
   app: {
     getInfo: () => Promise<{ version: string; platform: string }>;
     checkForUpdate: () => Promise<AppUpdateInfo>;
+    downloadAndInstallUpdate: (onProgress: (progress: UpdateDownloadProgress) => void) => Promise<void>;
+    relaunchApp: () => Promise<void>;
   };
 }
+
+/** Human-facing fallback link (release page) for "view release" affordances. */
+const RELEASES_PAGE_URL = "https://github.com/lynse-ai/lynse-desktop/releases/latest";
+
+// The Update object carries the download/install methods, so it can't cross
+// into the UI as a plain value. Keep it here; the UI only ever sees the
+// serializable AppUpdateInfo snapshot.
+let pendingUpdate: Update | null = null;
 
 function command<T>(name: string, payload?: Record<string, unknown>): Promise<T> {
   return invoke<T>(name, payload);
@@ -59,6 +86,20 @@ const QWEN_ENDPOINT_KEY = "lynse_live_translation_qwen_endpoint";
 const QWEN_API_KEY = "lynse_live_translation_qwen_api_key";
 const VOLC_ENDPOINT_KEY = "lynse_live_translation_volc_endpoint";
 const VOLC_API_KEY = "lynse_live_translation_volc_api_key";
+/** iLiveData 说话人识别的最大说话人数；"0" 表示关闭说话人识别。 */
+const ILIVEDATA_MAX_SPEAKERS_KEY = "lynse_live_translation_ilivedata_max_speakers";
+/** 默认开启说话人识别，上限 2 人（自己 + 对方）。设为 0 则关闭。 */
+const DEFAULT_ILIVEDATA_MAX_SPEAKERS = 2;
+/** 录音采集来源模式：both（默认双流）/ mic（仅麦克风）/ system（仅系统音频）。 */
+const AUDIO_SOURCE_KEY = "lynse_live_translation_audio_source";
+type AudioSourceMode = "both" | "mic" | "system";
+
+/** Read the persisted capture-source mode; anything unexpected falls back to
+ * the legacy dual-stream behaviour. */
+function readAudioSourceMode(): AudioSourceMode {
+  const saved = window.localStorage.getItem(AUDIO_SOURCE_KEY);
+  return saved === "mic" || saved === "system" ? saved : "both";
+}
 /** Written by builds that still supported the legacy (App Key) console. */
 const LEGACY_VOLC_APP_KEY = "lynse_live_translation_volc_app_key";
 const DEFAULT_QWEN_ENDPOINT =
@@ -79,6 +120,14 @@ const liveTranslationTrayListeners = new Set<
   (action: LiveTranslationTrayAction) => void
 >();
 
+/** Read the persisted max-speaker setting; absent or corrupt values fall back safely. */
+function readMaxSpeakers(): number {
+  const saved = window.localStorage.getItem(ILIVEDATA_MAX_SPEAKERS_KEY);
+  if (saved == null) return DEFAULT_ILIVEDATA_MAX_SPEAKERS;
+  const parsed = Number.parseInt(saved, 10);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
 async function getLiveTranslationProviderConfig(): Promise<LiveTranslationProviderConfig> {
   const savedProvider = window.localStorage.getItem(LIVE_TRANSLATION_PROVIDER_KEY);
   const savedEndpoint = window.localStorage.getItem(ILIVEDATA_ENDPOINT_KEY);
@@ -97,12 +146,14 @@ async function getLiveTranslationProviderConfig(): Promise<LiveTranslationProvid
     )
       ? (savedProvider as LiveTranslationProvider)
       : "lynse_backend",
+    audioSource: readAudioSourceMode(),
     ilivedata: {
       endpoint: savedEndpoint && savedEndpoint !== LEGACY_ILIVEDATA_RTVT_ENDPOINT
         ? savedEndpoint
         : DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
       pid: window.localStorage.getItem(ILIVEDATA_PID_KEY) ?? "",
       secretKey: secureStorage.getItem(ILIVEDATA_SECRET_KEY) ?? "",
+      maxSpeakers: normalizeMaxSpeakers(readMaxSpeakers()),
     },
     qwen: {
       endpoint: savedQwenEndpoint?.trim() || DEFAULT_QWEN_ENDPOINT,
@@ -120,10 +171,15 @@ function saveLiveTranslationProviderConfig(
 ): LiveTranslationProviderConfig {
   const normalized: LiveTranslationProviderConfig = {
     provider: config.provider,
+    audioSource:
+      config.audioSource === "mic" || config.audioSource === "system"
+        ? config.audioSource
+        : "both",
     ilivedata: {
       endpoint: config.ilivedata.endpoint.trim() || DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
       pid: config.ilivedata.pid.trim(),
       secretKey: config.ilivedata.secretKey.trim(),
+      maxSpeakers: normalizeMaxSpeakers(config.ilivedata.maxSpeakers),
     },
     qwen: {
       endpoint: config.qwen.endpoint.trim() || DEFAULT_QWEN_ENDPOINT,
@@ -135,8 +191,13 @@ function saveLiveTranslationProviderConfig(
     },
   };
   window.localStorage.setItem(LIVE_TRANSLATION_PROVIDER_KEY, normalized.provider);
+  window.localStorage.setItem(AUDIO_SOURCE_KEY, normalized.audioSource ?? "both");
   window.localStorage.setItem(ILIVEDATA_ENDPOINT_KEY, normalized.ilivedata.endpoint);
   window.localStorage.setItem(ILIVEDATA_PID_KEY, normalized.ilivedata.pid);
+  window.localStorage.setItem(
+    ILIVEDATA_MAX_SPEAKERS_KEY,
+    String(normalized.ilivedata.maxSpeakers ?? 0),
+  );
   if (normalized.ilivedata.secretKey) {
     secureStorage.setItem(ILIVEDATA_SECRET_KEY, normalized.ilivedata.secretKey);
   } else {
@@ -240,6 +301,7 @@ export async function installTauriBridge(): Promise<void> {
       showSubtitles: (show) => command<void>("live_translation_show_subtitles", { show }),
       showMainWindow: () => command<void>("live_translation_show_main"),
       hideIsland: () => command<void>("live_translation_hide_island"),
+      setIslandExpanded: (expanded) => command<void>("live_translation_expand_island", { expanded }),
       updateTray: (payload) => command<void>("live_translation_update_tray", { payload }),
       minimizeToTray: () => getCurrentWindow().hide(),
       onTrayAction: async (callback) => {
@@ -251,10 +313,88 @@ export async function installTauriBridge(): Promise<void> {
       onEvent: (callback: (event: LiveTranslationEvent) => void) =>
         getCurrentWebview().listen<LiveTranslationEvent>("live-translation-event", (event) => callback(event.payload)),
     },
+    recordingCard: {
+      state: () => command("recording_card_state"),
+      scanStart: () => command<void>("recording_card_scan_start"),
+      scanStop: () => command<void>("recording_card_scan_stop"),
+      setManufacturerCode: (code: string) =>
+        command<void>("recording_card_set_manufacturer_code", { code }),
+      setLiveFeed: (enabled: boolean) =>
+        command<void>("recording_card_set_live_feed", { enabled }),
+      connect: (device: unknown) =>
+        command("recording_card_connect", { device }),
+      disconnect: () => command<void>("recording_card_disconnect"),
+      query: (kind: "battery" | "version" | "memory") =>
+        command<void>("recording_card_query", { kind }),
+      record: (action: string, mode?: string) =>
+        command<void>("recording_card_record", { action, mode }),
+      listFiles: () => command("recording_card_list_files"),
+      download: (
+        file: { sn: number; name: string; size: number; frameBytes: number },
+        autoDelete: boolean,
+      ) => command<void>("recording_card_download", { ...file, autoDelete }),
+      cancelDownload: () => command<void>("recording_card_cancel_download"),
+      deleteFile: (sn: number, name: string) =>
+        command<void>("recording_card_delete_file", { sn, name }),
+      transcribeSource: (name: string, sn: number, frameBytes: number) =>
+        command<string>("recording_card_transcribe_source", { name, sn, frameBytes }),
+      onEvent: async (callback: (event: RecordingCardEvent) => void) => {
+        const unlisten = await getCurrentWebview().listen<RecordingCardEvent>(
+          "recording-card-event",
+          (event) => callback(event.payload),
+        );
+        return unlisten;
+      },
+    },
     appInfo: { version: "0.1.0", platform: "darwin" },
     app: {
       getInfo: () => command<{ version: string; platform: string }>("get_app_info"),
-      checkForUpdate: () => command<AppUpdateInfo>("check_app_update"),
+      // Talks to the tauri-plugin-updater, whose endpoints/pubkey live in
+      // tauri.conf.json; releases are published by release.yml. `check()`
+      // returns null when the running version is the latest.
+      checkForUpdate: async () => {
+        const update = await check();
+        pendingUpdate = update;
+        if (!update) {
+          return {
+            currentVersion: desktopAPI.appInfo.version,
+            latestVersion: desktopAPI.appInfo.version,
+            hasUpdate: false,
+            releaseUrl: RELEASES_PAGE_URL,
+            releaseNotes: null,
+            publishedAt: null,
+          };
+        }
+        return {
+          currentVersion: update.currentVersion,
+          latestVersion: update.version,
+          hasUpdate: true,
+          releaseUrl: RELEASES_PAGE_URL,
+          releaseNotes: update.body ?? null,
+          publishedAt: update.date ?? null,
+        };
+      },
+      // Downloads, verifies the minisign signature, and installs the update.
+      // On macOS the bundle is replaced in place; on Windows the installer
+      // runs (passive mode) — the app then relaunches into the new version.
+      downloadAndInstallUpdate: async (onProgress) => {
+        const update = pendingUpdate ?? (await check().then((next) => (pendingUpdate = next)));
+        if (!update) throw new Error("no update available");
+        let downloaded = 0;
+        let total = 0;
+        await update.downloadAndInstall((event) => {
+          if (event.event === "Started") {
+            total = event.data.contentLength ?? 0;
+            onProgress({ event: "started", downloaded: 0, total });
+          } else if (event.event === "Progress") {
+            downloaded += event.data.chunkLength;
+            onProgress({ event: "progress", downloaded, total });
+          } else {
+            onProgress({ event: "finished", downloaded, total });
+          }
+        });
+      },
+      relaunchApp: () => relaunch(),
     },
     todo: {
       list: () => command("todo_list"),

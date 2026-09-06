@@ -12,6 +12,8 @@
   <dict>
     <key>NSAllowsArbitraryLoads</key>
     <true/>
-  </dict>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>Lynse 使用蓝牙连接录音卡，同步录音、实时音频与文件。</string>
+</dict>
 </dict>
 </plist>

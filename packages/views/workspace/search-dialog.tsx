@@ -92,7 +92,7 @@ export function GlobalSearchDialog({
                   <FileText className="size-4 shrink-0 text-muted-foreground" />
                   <span className="flex-1 truncate">{item.title}</span>
                   {item.tags && item.tags.length > 0 && (
-                    <span className="shrink-0 truncate text-[10px] text-muted-foreground/60">
+                    <span className="shrink-0 truncate text-3xs text-muted-foreground/60">
                       {item.tags.slice(0, 2).join(", ")}
                     </span>
                   )}

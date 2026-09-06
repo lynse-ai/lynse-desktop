@@ -79,14 +79,14 @@ export function WorkspaceLayout() {
             {chatPanelVisible && (
               <motion.div
                 key="chat-panel"
-                className="flex shrink-0 overflow-hidden border-l border-border/50 bg-card/95 shadow-[-12px_0_34px_rgba(0,0,0,0.14)] backdrop-blur-xl"
+                className="flex shrink-0 overflow-hidden border-l border-border/50 bg-card/95 shadow-[var(--shadow-panel-left)] backdrop-blur-xl"
                 initial={{ width: 0, opacity: 0 }}
                 animate={{ width: chatPanelWidth, opacity: 1 }}
                 exit={{ width: 0, opacity: 0 }}
                 transition={
                   isChatResizing || reduceMotion
                     ? { duration: 0 }
-                    : { duration: 0.26, ease: [0.23, 1, 0.32, 1] }
+                    : { type: "spring", bounce: 0, duration: 0.3 }
                 }
               >
                 <ResizableHandle

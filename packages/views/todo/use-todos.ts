@@ -28,10 +28,14 @@ function nowIso(): string {
  * local Rust store (`desktopAPI.todo` → `local-todos`). Todo add / toggle /
  * delete / clear are persisted to their respective store, so "refresh"
  * re-reads the real stores and "clear completed" actually removes the items.
+ *
+ * `enabled: false` skips the initial load entirely — used by consumers that
+ * mount eagerly but should only fetch once they become visible (e.g. the
+ * profile dropdown's activity heatmap).
  */
-export function useTodos() {
+export function useTodos({ enabled = true }: { enabled?: boolean } = {}) {
   const [todos, setTodos] = useState<TodoItem[]>([]);
-  const [loading, setLoading] = useState(true); // initial mount skeleton
+  const [loading, setLoading] = useState(enabled); // initial mount skeleton
   const [refreshing, setRefreshing] = useState(false); // manual refresh / reconcile (button spinner)
   const [clearing, setClearing] = useState(false); // clearing completed (button busy)
   const [error, setError] = useState<string | null>(null);
@@ -66,8 +70,9 @@ export function useTodos() {
   }, [isAuthenticated]);
 
   useEffect(() => {
+    if (!enabled) return;
     load(true);
-  }, [load]);
+  }, [load, enabled]);
 
   const addLocal = useCallback(async (title: string) => {
     const t: TodoItem = {

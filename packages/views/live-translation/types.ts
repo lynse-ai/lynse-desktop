@@ -9,12 +9,26 @@ export type LiveTranslationProvider =
   | "qwen"
   | "volc";
 
+/** Which capture streams the sidecar records. "both" keeps the legacy
+ * dual-stream behaviour; "system" is the transcribe-a-playing-video case
+ * (the mic would only duplicate the video audio as echo). */
+export type LiveAudioSourceMode = "both" | "mic" | "system";
+
 export interface LiveTranslationProviderConfig {
   provider: LiveTranslationProvider;
+  /** Capture-source mode; persisted alongside the provider credentials so
+   * the start request and the connection builder read the same setting. */
+  audioSource?: LiveAudioSourceMode;
   ilivedata: {
     endpoint: string;
     pid: string;
     secretKey: string;
+    /**
+     * Maximum speaker count for iLiveData RTVT diarization.
+     * `0` (or undefined) disables speaker recognition entirely; when enabled
+     * the valid range is 2..5 (the API requires a value greater than 1).
+     */
+    maxSpeakers?: number;
   };
   qwen: {
     apiKey: string;
@@ -95,6 +109,8 @@ export interface LiveStartRequest {
   targetLanguage: string;
   epoch: number;
   connections: LiveConnectionDescriptor[];
+  /** Capture sources for the sidecar; omitted/empty means both. */
+  audioSources?: LiveAudioSource[];
 }
 
 export interface LiveResumeRequest {
@@ -133,7 +149,7 @@ export type LiveTranslationEvent =
   | { type: "state"; snapshot: LiveTranslationSnapshot }
   | { type: "segment"; segment: LiveTranslationSegment }
   | { type: "segments"; segments: LiveTranslationSegment[] }
-  | { type: "levels"; mic: number; system: number; elapsedMs: number }
+  | { type: "levels"; mic: number; system: number; elapsedMs: number; micSuppressed?: boolean }
   | { type: "streamState"; source: LiveAudioSource; state: string; epoch: number }
   | { type: "error"; source?: LiveAudioSource; message: string }
   | { type: "completed"; session: CompletedLiveSession };
@@ -157,6 +173,9 @@ export interface DesktopLiveTranslationApi {
   showMainWindow: () => Promise<void>;
   /** Hide the recording-island mini window (recording keeps running). */
   hideIsland: () => Promise<void>;
+  /** Toggle the recording-island window between the compact pill and the
+   * expanded live-transcript drawer. No-op outside the desktop app. */
+  setIslandExpanded: (expanded: boolean) => Promise<void>;
   updateTray: (payload: { recording: boolean; paused: boolean; elapsed_secs?: number }) => Promise<void>;
   onTrayAction: (callback: (action: LiveTranslationTrayAction) => void) => Promise<() => void>;
   onEvent: (callback: (event: LiveTranslationEvent) => void) => Promise<() => void>;

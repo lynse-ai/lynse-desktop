@@ -4,7 +4,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useLiveTranslation } from "./use-live-translation";
-import { requestRealtimeSession } from "./api";
+import { audioModeSources, requestRealtimeSession } from "./api";
 import type {
   CompletedLiveSession,
   LiveConnectionDescriptor,
@@ -215,8 +215,12 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     setBusy(true);
     setBlocked(null);
     try {
+      const cfg = await api.getProviderConfig().catch(() => null);
+      const audioSources = audioModeSources(cfg?.audioSource);
       const perms = await ensurePermissions();
-      if (!perms || perms.microphone !== "granted") {
+      // Microphone permission only matters when the mic is actually captured;
+      // a system-only session (transcribing a playing video) skips it.
+      if (!perms || (audioSources.includes("mic") && perms.microphone !== "granted")) {
         const msg = t("live_translation.start_hint_mic");
         setBlocked(msg);
         toast.warning(msg);
@@ -238,6 +242,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
         targetLanguage: sourceLanguage,
         epoch: 0,
         connections: [],
+        audioSources,
       });
 
       // If the user picked live mode before starting, attempt to switch

@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatPage } from "./page";
 
 const chat = vi.hoisted(() => ({
@@ -20,8 +20,26 @@ const chat = vi.hoisted(() => ({
   dismissConfirm: vi.fn(),
 }));
 
+const mentionData = vi.hoisted(() => ({
+  notes: [] as Array<Record<string, unknown>>,
+  folders: [] as Array<Record<string, unknown>>,
+}));
+
+const uploadMock = vi.hoisted(() => ({
+  uploadFileToOSS: vi.fn(),
+}));
+
 vi.mock("../workspace/hooks/use-chat", () => ({
   useChat: () => chat,
+}));
+
+vi.mock("../workspace/hooks/use-files", () => ({
+  useNotes: () => ({ data: mentionData.notes }),
+  uploadFileToOSS: uploadMock.uploadFileToOSS,
+}));
+
+vi.mock("../workspace/hooks/use-folders", () => ({
+  useFolders: () => ({ data: mentionData.folders }),
 }));
 
 vi.mock("@lynse/core/i18n/react", () => ({
@@ -41,6 +59,9 @@ afterEach(() => {
   chat.clearMessages.mockClear();
   chat.selectConversation.mockClear();
   chat.stopStreaming.mockClear();
+  mentionData.notes = [];
+  mentionData.folders = [];
+  uploadMock.uploadFileToOSS.mockReset();
 });
 
 describe("ChatPage", () => {
@@ -93,5 +114,111 @@ describe("ChatPage", () => {
 
     expect(chat.selectConversation).toHaveBeenCalledWith("conversation-1");
     chat.conversations = [];
+  });
+
+  it("references a note via @ and sends its id as fileIds", () => {
+    mentionData.notes = [
+      { id: "note-1", type: "file", title: "产品评审", createdAt: "2026-01-02", updatedAt: "" },
+      { id: "note-2", type: "file", title: "周会纪要", createdAt: "2026-01-01", updatedAt: "" },
+    ];
+    render(<ChatPage />);
+
+    const input = screen.getByPlaceholderText("chat.page_placeholder");
+    fireEvent.change(input, { target: { value: "总结 @产" } });
+
+    const option = screen.getByRole("option", { name: /产品评审/ });
+    fireEvent.click(option);
+
+    expect((input as HTMLTextAreaElement).value).toBe("总结 @产品评审 ");
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(chat.sendMessage).toHaveBeenCalledWith("总结 @产品评审", ["note-1"], true, undefined);
+    expect((input as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("references a group via # and sends the group's member note ids", () => {
+    mentionData.notes = [
+      { id: "n1", type: "file", title: "A", createdAt: "", folderId: "f1" },
+      { id: "n2", type: "file", title: "B", createdAt: "", folderId: "f1" },
+      { id: "n3", type: "file", title: "C", createdAt: "", folderId: "f2" },
+    ];
+    mentionData.folders = [{ id: "f1", folderName: "工作" }, { id: "f2", folderName: "生活" }];
+    render(<ChatPage />);
+
+    const input = screen.getByPlaceholderText("chat.page_placeholder");
+    fireEvent.change(input, { target: { value: "梳理 #工" } });
+
+    fireEvent.click(screen.getByRole("option", { name: /工作/ }));
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(chat.sendMessage).toHaveBeenCalledWith("梳理 #工作", ["n1", "n2"], true, undefined);
+  });
+
+  it("keyboard-navigates the @ list with arrow keys and picks with Enter", () => {
+    mentionData.notes = [
+      { id: "note-1", type: "file", title: "Alpha", createdAt: "", updatedAt: "" },
+      { id: "note-2", type: "file", title: "Beta", createdAt: "", updatedAt: "" },
+    ];
+    render(<ChatPage />);
+
+    const input = screen.getByPlaceholderText("chat.page_placeholder");
+    fireEvent.change(input, { target: { value: "@" } });
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect((input as HTMLTextAreaElement).value).toBe("@Beta ");
+    expect(chat.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("closes the @ picker with Escape and sends normally", () => {
+    mentionData.notes = [
+      { id: "note-1", type: "file", title: "Alpha", createdAt: "", updatedAt: "" },
+    ];
+    render(<ChatPage />);
+
+    const input = screen.getByPlaceholderText("chat.page_placeholder");
+    fireEvent.change(input, { target: { value: "@" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(screen.queryByRole("option")).toBeNull();
+    expect(chat.sendMessage).toHaveBeenCalledWith("@");
+  });
+
+  it("uploads a picked image attachment and sends its fileId with the message", async () => {
+    uploadMock.uploadFileToOSS.mockResolvedValue("file-123");
+    const { container } = render(<ChatPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "chat.attach_files" }));
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const image = new File(["img"], "chart.png", { type: "image/png" });
+    fireEvent.change(fileInput, { target: { files: [image] } });
+
+    // Draft appears immediately, then flips to uploaded.
+    await waitFor(() =>
+      expect(uploadMock.uploadFileToOSS).toHaveBeenCalledWith(expect.any(File), expect.any(Function)),
+    );
+    await screen.findByTitle("chart.png");
+
+    fireEvent.change(screen.getByPlaceholderText("chat.page_placeholder"), {
+      target: { value: "看看这张图" },
+    });
+    fireEvent.keyDown(screen.getByPlaceholderText("chat.page_placeholder"), { key: "Enter" });
+
+    expect(chat.sendMessage).toHaveBeenCalledWith("看看这张图", ["file-123"], true, [
+      { id: "file-123", name: "chart.png", type: "image" },
+    ]);
+  });
+
+  it("rejects unsupported attachment types without adding a draft", () => {
+    render(<ChatPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "chat.attach_files" }));
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [new File(["x"], "app.exe")] } });
+
+    expect(uploadMock.uploadFileToOSS).not.toHaveBeenCalled();
+    expect(screen.queryByTitle("app.exe")).toBeNull();
   });
 });

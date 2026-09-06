@@ -70,13 +70,13 @@ export function TitleBar() {
 
   return (
     <div
-      className="flex shrink-0 select-none items-center border-b border-border/50 bg-background/80 backdrop-blur-xl"
+      className="flex shrink-0 select-none items-center border-b border-border/50 bg-transparent"
       style={{ height: TITLE_BAR_HEIGHT }}
       data-tauri-drag-region
       onDoubleClick={handleTitleBarDoubleClick}
     >
       {/* ── Draggable breadcrumb (left-aligned, no traffic lights here) ── */}
-      <div className="flex min-w-0 flex-1 items-center gap-1.5 px-5">
+      <div className="flex min-w-0 flex-1 items-center gap-1.5 px-5" data-tauri-drag-region>
         {folderName && (
           <>
             <span className="truncate text-xs text-muted-foreground">{folderName}</span>
@@ -138,7 +138,7 @@ export function TitleBar() {
         <button
           onClick={toggleChatPanel}
           className={cn(
-            "flex h-7 items-center gap-1.5 rounded-lg border border-transparent px-2.5 text-[11px] font-medium transition-colors",
+            "flex h-7 items-center gap-1.5 rounded-lg border border-transparent px-2.5 text-2xs font-medium transition-colors",
             chatPanelVisible
               ? "border-primary/30 bg-primary/15 text-accent-brand-text"
               : "text-muted-foreground hover:border-border hover:bg-card hover:text-foreground",

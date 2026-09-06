@@ -15,10 +15,10 @@ export function RecordingsPage() {
       <PageHeader className="h-auto min-h-14 py-3">
         <div className="flex flex-1 items-center gap-4">
           <div className="min-w-0">
-            <h1 className="text-[15px] font-semibold tracking-tight text-foreground">
+            <h1 className="text-sm font-semibold tracking-tight text-foreground">
               {t("recordings.title")}
             </h1>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
+            <p className="mt-0.5 text-2xs text-muted-foreground">
               {t("recordings.empty_hint")}
             </p>
           </div>
@@ -78,7 +78,7 @@ export function RecordingsPage() {
                 strokeWidth={1.5}
               />
               <span>
-                <span className="block text-[13px] font-medium text-foreground">
+                <span className="block text-13 font-medium text-foreground">
                   {t("recordings.upload_btn")}
                 </span>
                 <span className="mt-1 block text-xs leading-5 text-muted-foreground">
@@ -96,7 +96,7 @@ export function RecordingsPage() {
                 strokeWidth={1.5}
               />
               <span>
-                <span className="block text-[13px] font-medium text-foreground">
+                <span className="block text-13 font-medium text-foreground">
                   {t("recordings.record_btn")}
                 </span>
                 <span className="mt-1 block text-xs leading-5 text-muted-foreground">

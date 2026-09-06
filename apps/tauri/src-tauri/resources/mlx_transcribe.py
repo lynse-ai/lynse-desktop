@@ -91,8 +91,11 @@ def main() -> int:
     wav = prepare_wav(args.audio_path)
     try:
         kwargs = {"path_or_hf": model, "verbose": False}
-        if args.prompt.strip():
-            kwargs["initial_prompt"] = args.prompt.strip()
+        # mlx-whisper takes a single initial_prompt: fold the hotword terms and
+        # the trailing prior context into it so both bias the transcription.
+        prompt_parts = [part for part in (args.hotword.strip(), args.prompt.strip()) if part]
+        if prompt_parts:
+            kwargs["initial_prompt"] = " ".join(prompt_parts)
         segments, _info = transcribe(wav, **kwargs)
     finally:
         try:

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Badge } from "@lynse/ui/components/ui/badge";
@@ -41,6 +42,7 @@ import {
   DEFAULT_QWEN_ENDPOINT,
   DEFAULT_VOLC_AST_ENDPOINT,
   type CompletedLiveSession,
+  type LiveAudioSourceMode,
   type LivePermissionStatus,
   type LiveTranslationTrayAction,
   type LiveTranslationProvider,
@@ -57,6 +59,7 @@ export function LiveTranslationPage() {
   const { t } = useTranslation();
   const { api, view } = useLiveTranslation();
   const { pathname } = useNavigation();
+  const reduceMotion = useReducedMotion();
   const [permissions, setPermissions] = useState<LivePermissionStatus | null>(null);
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [sourceLanguage, setSourceLanguage] = useState("zh");
@@ -119,8 +122,15 @@ export function LiveTranslationPage() {
       .finally(() => setProviderConfigLoaded(true));
   }, [api]);
 
+  // Follow the live transcript only while the user is already at the bottom —
+  // never yank the view back if they scrolled up to read. Partials arrive
+  // frequently during a session, so use an instant scroll: a smooth one would
+  // restart on every update and never settle.
   useEffect(() => {
-    transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
+    const el = transcriptRef.current;
+    if (!el) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight > 80) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "auto" });
   }, [view.segments]);
 
   useEffect(() => {
@@ -217,6 +227,19 @@ export function LiveTranslationPage() {
       toast.error(String(error));
     } finally {
       setSavingProviderConfig(false);
+    }
+  }
+
+  // The capture mode must be settled before recording starts (it is passed to
+  // the audio sidecar at spawn), so the selector is disabled while active.
+  async function selectAudioSource(mode: LiveAudioSourceMode) {
+    if (!api) return;
+    try {
+      setProviderConfig(
+        await api.saveProviderConfig({ ...providerConfig, audioSource: mode }),
+      );
+    } catch (error) {
+      toast.error(String(error));
     }
   }
 
@@ -406,15 +429,29 @@ export function LiveTranslationPage() {
           </span>
           <div>
             <h1 className="text-sm font-semibold">{t("live_translation.title")}</h1>
-            <p className="text-[11px] text-muted-foreground">{t("live_translation.subtitle")}</p>
+            <p className="text-2xs text-muted-foreground">{t("live_translation.subtitle")}</p>
           </div>
         </div>
         <StatusBadge state={view.state} elapsedMs={view.elapsedMs} />
+        {view.micSuppressed && (
+          <Badge variant="outline" className="gap-1.5 font-normal text-muted-foreground">
+            <Mic className="size-3 opacity-60" />
+            {t("live_translation.mic_suppressed")}
+          </Badge>
+        )}
       </header>
 
-      <main className={`relative grid min-h-0 flex-1 ${settingsCollapsed ? "grid-cols-1" : "grid-cols-[minmax(280px,360px)_1fr]"}`}>
+      <main className="relative flex min-h-0 flex-1">
+        <AnimatePresence initial={false}>
         {!settingsCollapsed && (
-        <aside className="relative border-r border-border">
+        <motion.aside
+          key="settings-rail"
+          initial={{ width: 0, opacity: 0 }}
+          animate={{ width: 320, opacity: 1 }}
+          exit={{ width: 0, opacity: 0 }}
+          transition={reduceMotion ? { duration: 0 } : { type: "spring", bounce: 0, duration: 0.3 }}
+          className="relative shrink-0 overflow-hidden border-r border-border"
+        >
           <button
             type="button"
             onClick={() => setSettingsCollapsed(true)}
@@ -424,7 +461,9 @@ export function LiveTranslationPage() {
           >
             <ChevronRight className="size-4" />
           </button>
-          <div className="h-full overflow-y-auto p-5">
+          {/* Fixed inner width: the collapsing rail clips it via overflow, so
+              the form contents never reflow while the panel animates. */}
+          <div className="h-full w-80 overflow-y-auto p-5">
           <section className="space-y-3">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t("live_translation.provider")}
@@ -442,11 +481,11 @@ export function LiveTranslationPage() {
             </select>
             {providerConfig.provider === "ilivedata_direct" && (
               <div className="space-y-2 rounded-lg border border-border bg-card p-3">
-                <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+                <p className="text-2xs leading-relaxed text-warning-text">
                   {t("live_translation.direct_test_hint")}
                 </p>
                 <div className="space-y-1.5">
-                  <Label htmlFor="ilivedata-pid" className="text-[11px]">
+                  <Label htmlFor="ilivedata-pid" className="text-2xs">
                     {t("live_translation.provider_pid")}
                   </Label>
                   <Input
@@ -459,7 +498,7 @@ export function LiveTranslationPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="ilivedata-secret-key" className="text-[11px]">
+                  <Label htmlFor="ilivedata-secret-key" className="text-2xs">
                     {t("live_translation.provider_secret_key")}
                   </Label>
                   <Input
@@ -473,7 +512,7 @@ export function LiveTranslationPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="ilivedata-endpoint" className="text-[11px]">
+                  <Label htmlFor="ilivedata-endpoint" className="text-2xs">
                     {t("live_translation.provider_websocket_endpoint")}
                   </Label>
                   <Input
@@ -499,11 +538,11 @@ export function LiveTranslationPage() {
             )}
             {providerConfig.provider === "qwen" && (
               <div className="space-y-2 rounded-lg border border-border bg-card p-3">
-                <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+                <p className="text-2xs leading-relaxed text-warning-text">
                   {t("live_translation.qwen_hint")}
                 </p>
                 <div className="space-y-1.5">
-                  <Label htmlFor="qwen-api-key" className="text-[11px]">
+                  <Label htmlFor="qwen-api-key" className="text-2xs">
                     {t("live_translation.provider_qwen_api_key")}
                   </Label>
                   <Input
@@ -518,7 +557,7 @@ export function LiveTranslationPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="qwen-endpoint" className="text-[11px]">
+                  <Label htmlFor="qwen-endpoint" className="text-2xs">
                     {t("live_translation.provider_qwen_endpoint")}
                   </Label>
                   <Input
@@ -544,11 +583,11 @@ export function LiveTranslationPage() {
             )}
             {providerConfig.provider === "volc" && (
               <div className="space-y-2 rounded-lg border border-border bg-card p-3">
-                <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+                <p className="text-2xs leading-relaxed text-warning-text">
                   {t("live_translation.volc_hint")}
                 </p>
                 <div className="space-y-1.5">
-                  <Label htmlFor="volc-api-key" className="text-[11px]">
+                  <Label htmlFor="volc-api-key" className="text-2xs">
                     {t("live_translation.provider_volc_api_key")}
                   </Label>
                   <Input
@@ -562,7 +601,7 @@ export function LiveTranslationPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="volc-endpoint" className="text-[11px]">
+                  <Label htmlFor="volc-endpoint" className="text-2xs">
                     {t("live_translation.provider_volc_endpoint")}
                   </Label>
                   <Input
@@ -591,6 +630,26 @@ export function LiveTranslationPage() {
 
           <section className="mt-6 space-y-3">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("live_translation.audio_sources")}</h2>
+            <div className="grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/40 p-1">
+              {(["both", "mic", "system"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  disabled={busy || active}
+                  onClick={() => selectAudioSource(mode)}
+                  className={
+                    (providerConfig.audioSource ?? "both") === mode
+                      ? "h-7 rounded-md bg-background text-xs font-medium shadow-sm"
+                      : "h-7 rounded-md text-xs text-muted-foreground transition-colors hover:text-foreground"
+                  }
+                >
+                  {t(`live_translation.audio_source_${mode}`)}
+                </button>
+              ))}
+            </div>
+            <p className="text-2xs leading-relaxed text-muted-foreground">
+              {t("live_translation.audio_source_hint")}
+            </p>
             <PermissionRow
               icon={<Mic className="size-4" />}
               title={t("live_translation.microphone")}
@@ -615,14 +674,14 @@ export function LiveTranslationPage() {
               </Alert>
             )}
             {permissions?.systemAudioRequired && permissions.systemAudio !== "granted" && (
-              <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+              <p className="rounded-md bg-warning/10 px-3 py-2 text-xs leading-relaxed text-warning-text">
                 {t("live_translation.system_audio_permission_hint")}
               </p>
             )}
             {permissions?.microphone === "granted"
               && !permissions.systemAudioRequired
               && permissions.systemAudio !== "granted" && (
-              <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              <p className="rounded-md bg-warning/10 px-3 py-2 text-xs text-warning-text">
                 {t("live_translation.mic_only_hint")}
               </p>
             )}
@@ -637,14 +696,15 @@ export function LiveTranslationPage() {
           {completed && (
             <div className="mt-5 rounded-lg border border-border bg-muted/30 p-3 text-xs">
               <div className="flex items-center gap-2 font-medium">
-                <Check className="size-3.5 text-emerald-500" />
+                <Check className="size-3.5 text-success" />
                 {t("live_translation.local_complete")}
               </div>
             </div>
           )}
           </div>
-        </aside>
+        </motion.aside>
         )}
+        </AnimatePresence>
 
         {settingsCollapsed && (
           <button
@@ -658,18 +718,18 @@ export function LiveTranslationPage() {
           </button>
         )}
 
-        <section className="flex min-h-0 flex-col bg-muted/10">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-muted/10">
           <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-5">
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium">{t("live_translation.live_transcript")}</span>
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-2xs text-muted-foreground">
                 {visibleSegments.length} {t("live_translation.segments")}
               </span>
             </div>
             <Popover open={langOpen} onOpenChange={setLangOpen}>
               <PopoverTrigger
                 aria-label={t("live_translation.translation_direction")}
-                className="group flex h-7 items-center gap-1.5 rounded-full border border-border/60 bg-background/40 px-3 text-[11px] font-medium text-foreground shadow-sm backdrop-blur transition-colors hover:bg-background/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="group flex h-7 items-center gap-1.5 rounded-full border border-border/60 bg-background/40 px-3 text-2xs font-medium text-foreground shadow-sm backdrop-blur transition-colors hover:bg-background/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <Globe className="size-3.5 text-primary" />
                 <span>{t("live_translation.record_title")}</span>
@@ -680,7 +740,7 @@ export function LiveTranslationPage() {
               <PopoverContent
                 align="end"
                 sideOffset={8}
-                className="w-72 overflow-hidden bg-popover/45 p-0 text-popover-foreground shadow-[var(--shadow-overlay)] backdrop-blur-2xl supports-[backdrop-filter]:backdrop-blur-2xl border border-white/15"
+                className="w-72 overflow-hidden p-0 text-popover-foreground border border-[var(--stroke-overlay)]"
               >
                 <LanguageDirectionMenu
                   sourceLanguage={sourceLanguage}
@@ -715,12 +775,12 @@ export function LiveTranslationPage() {
                   const showSpeaker = segment.speaker != null && segment.speaker !== prevSpeaker;
                   return (
                   <article key={segment.id} className="rounded-xl border border-border bg-background px-4 py-3 shadow-sm">
-                    <div className="mb-2 flex items-center gap-2 text-[11px] text-muted-foreground">
-                      <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+                    <div className="mb-2 flex items-center gap-2 text-2xs text-muted-foreground">
+                      <Badge variant="outline" className="h-5 px-1.5 text-3xs">
                         {segment.source === "mic" ? t("live_translation.me") : t("live_translation.remote")}
                       </Badge>
                       {showSpeaker && (
-                        <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                        <span className="rounded bg-primary/10 px-1.5 py-0.5 text-3xs font-medium text-primary">
                           {t("live_translation.speaker")} {segment.speaker}
                         </span>
                       )}
@@ -734,7 +794,7 @@ export function LiveTranslationPage() {
                     {/* Target language below, only when it adds something new */}
                     {segment.translatedText && segment.translatedText !== segment.recognizedText && (
                       <div className="mt-1.5 border-l-2 border-border pl-2.5">
-                        <span className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                        <span className="mb-0.5 block text-3xs font-medium uppercase tracking-wide text-muted-foreground/70">
                           {t("live_translation.translation")}
                         </span>
                         <p className="text-sm leading-relaxed text-muted-foreground">
@@ -750,8 +810,8 @@ export function LiveTranslationPage() {
           </div>
           <footer className="shrink-0 border-t border-border bg-background/95 px-5 py-3 backdrop-blur">
             {startBlockedReason && !active && (
-              <p className="mb-2 flex items-center gap-1.5 text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
-                <span className="size-1.5 rounded-full bg-amber-500" />
+              <p className="mb-2 flex items-center gap-1.5 text-2xs leading-relaxed text-warning-text">
+                <span className="size-1.5 rounded-full bg-warning" />
                 {startBlockedReason}
               </p>
             )}
@@ -827,7 +887,7 @@ function LanguageDirectionMenu({
   return (
     <div className="flex flex-col">
       <div className="px-3 pb-1 pt-3">
-        <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">{t("live_translation.source_language")}</div>
+        <div className="mb-1.5 text-2xs font-medium text-muted-foreground">{t("live_translation.source_language")}</div>
         <LanguageList
           value={sourceLanguage}
           options={SOURCE_LANGUAGE_OPTIONS}
@@ -850,7 +910,7 @@ function LanguageDirectionMenu({
         </button>
       </div>
       <div className="px-3 pb-3 pt-0.5">
-        <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">{t("live_translation.target_language")}</div>
+        <div className="mb-1.5 text-2xs font-medium text-muted-foreground">{t("live_translation.target_language")}</div>
         <LanguageList
           value={targetLanguage}
           options={TARGET_LANGUAGE_OPTIONS}
@@ -860,13 +920,13 @@ function LanguageDirectionMenu({
           t={t}
         />
         {targetLanguage === "none" && (
-          <p className="mt-1.5 px-1 text-[10px] leading-relaxed text-muted-foreground">
+          <p className="mt-1.5 px-1 text-3xs leading-relaxed text-muted-foreground">
             {t("live_translation.transcript_only_hint")}
           </p>
         )}
       </div>
       {disabled && (
-        <p className="border-t border-border/50 px-3 py-2 text-[10px] text-muted-foreground">
+        <p className="border-t border-border/50 px-3 py-2 text-3xs text-muted-foreground">
           {t("live_translation.locked_while_recording")}
         </p>
       )}
@@ -908,10 +968,10 @@ function LanguageList({
             onSelect={() => onChange(option.code)}
             className="mx-1 my-0.5 rounded-lg py-1.5 data-[checked=true]:bg-primary/[0.06]"
           >
-            <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-semibold uppercase text-muted-foreground">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-3xs font-semibold uppercase text-muted-foreground">
               {option.code === "none" ? "—" : option.code === "auto" ? "A" : option.code.slice(0, 2)}
             </span>
-            <span className="flex-1 text-[13px]">{labelOf(option.code)}</span>
+            <span className="flex-1 text-13">{labelOf(option.code)}</span>
           </CommandItem>
         ))}
       </CommandList>
@@ -935,15 +995,18 @@ function PermissionRow({ icon, title, status, level, disabled, onRequest }: {
         <span className="text-muted-foreground">{icon}</span>
         <span className="flex-1 text-xs font-medium">{title}</span>
         {granted ? (
-          <Badge variant="secondary" className="text-[10px] text-emerald-600"><Check className="size-3" />{t("live_translation.granted")}</Badge>
+          <Badge variant="secondary" className="text-3xs text-success"><Check className="size-3" />{t("live_translation.granted")}</Badge>
         ) : (
-          <Button variant="ghost" size="sm" className="h-6 px-2 text-[10px]" disabled={disabled} onClick={onRequest}>
+          <Button variant="ghost" size="sm" className="h-6 px-2 text-3xs" disabled={disabled} onClick={onRequest}>
             {t("live_translation.grant")}
           </Button>
         )}
       </div>
       <div className="mt-2 h-1 overflow-hidden rounded-full bg-muted">
-        <div className="h-full rounded-full bg-primary transition-[width] duration-100" style={{ width: `${Math.min(100, Math.max(2, level * 100))}%` }} />
+        <div
+          className="h-full w-full origin-left rounded-full bg-primary transition-transform duration-75 ease-out"
+          style={{ transform: `scaleX(${Math.min(1, Math.max(0.02, level))})` }}
+        />
       </div>
     </div>
   );
@@ -954,7 +1017,7 @@ function StatusBadge({ state, elapsedMs }: { state: string; elapsedMs: number })
   const recording = state === "recording";
   return (
     <Badge variant="outline" className="gap-2 font-normal">
-      <span className={`size-1.5 rounded-full ${recording ? "animate-pulse bg-red-500" : "bg-muted-foreground/50"}`} />
+      <span className={`size-1.5 rounded-full ${recording ? "animate-pulse bg-destructive" : "bg-muted-foreground/50"}`} />
       {t(`live_translation.state_${state}`)}
       {state !== "idle" && <span className="tabular-nums text-muted-foreground">{formatTime(elapsedMs)}</span>}
     </Badge>

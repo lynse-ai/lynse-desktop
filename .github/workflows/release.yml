@@ -97,6 +97,12 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Updater signing key (minisign). The matching pubkey lives in
+          # apps/tauri/src-tauri/tauri.conf.json. With the key present the
+          # action signs every bundle (.sig files) and generates + uploads
+          # latest.json — the endpoint the in-app updater polls.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: apps/tauri
           args: ${{ matrix.args }}
@@ -106,6 +112,7 @@ jobs:
           releaseDraft: false
           prerelease: false
           includeRelease: true
+          includeUpdater: true
 
       - name: Upload STT runtime archive
         shell: bash

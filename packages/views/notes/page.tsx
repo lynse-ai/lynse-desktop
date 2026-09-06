@@ -206,6 +206,9 @@ export function NotesPage() {
   const layoutRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [isListResizing, setIsListResizing] = useState(false);
+  // While the chat panel handle is dragged, its width animation is disabled so
+  // the panel tracks the pointer 1:1 (same gate as workspace-layout.tsx).
+  const [isChatPanelResizing, setIsChatPanelResizing] = useState(false);
 
   // Stable for the session: a bare `new Date()` here would change the query key
   // on every render, miss the cache and blank the list.
@@ -325,30 +328,30 @@ export function NotesPage() {
   const folderDropdownItems = (
     <DropdownMenuContent align="end" className="w-52">
       <DropdownMenuItem onClick={() => handleSelectFolder("__all__")}>
-        <Layers className="mr-2 size-4" />
+        <Layers className="mr-2 size-4 text-muted-foreground" strokeWidth={1.5} />
         <span className="flex-1">{t("layout.all_files")}</span>
         <FolderCount count={folderCounts.get("__all__")} />
       </DropdownMenuItem>
       <DropdownMenuItem onClick={() => handleSelectFolder(LOCAL_TRANSCRIPTION_FOLDER_ID)}>
-        <FileAudio className="mr-2 size-4" />
+        <FileAudio className="mr-2 size-4 text-muted-foreground" strokeWidth={1.5} />
         <span className="flex-1">{t("layout.local_transcriptions")}</span>
         <FolderCount count={folderCounts.get(LOCAL_TRANSCRIPTION_FOLDER_ID)} />
       </DropdownMenuItem>
       <DropdownMenuItem onClick={() => handleSelectFolder("__uncategorized__")}>
-        <Circle className="mr-2 size-4" />
+        <Circle className="mr-2 size-4 text-muted-foreground" strokeWidth={1.5} />
         <span className="flex-1">{t("layout.uncategorized")}</span>
         <FolderCount count={folderCounts.get("__uncategorized__")} />
       </DropdownMenuItem>
       <DropdownMenuSeparator />
       {folderList.length === 0 && (
-        <div className="px-2 py-1.5 text-[11px] text-muted-foreground">{t("layout.no_folders")}</div>
+        <div className="px-2 py-1.5 text-2xs text-muted-foreground">{t("layout.no_folders")}</div>
       )}
       {folderList.map((folder) => (
         <DropdownMenuItem key={folder.id} onClick={() => handleSelectFolder(String(folder.id))}>
           {folder.color ? (
             <span className="mr-2 size-2.5 rounded-full" style={{ backgroundColor: folder.color }} />
           ) : (
-            <Circle className="mr-2 size-4" />
+            <Circle className="mr-2 size-4 text-muted-foreground" strokeWidth={1.5} />
           )}
           <span className="flex-1 truncate">{folder.folderName}</span>
           <FolderCount count={folderCounts.get(String(folder.id))} />
@@ -356,7 +359,7 @@ export function NotesPage() {
       ))}
       <DropdownMenuSeparator />
       <DropdownMenuItem onClick={() => handleSelectFolder("__trash__")}>
-        <Trash2 className="mr-2 size-4" />
+        <Trash2 className="mr-2 size-4 text-muted-foreground" strokeWidth={1.5} />
         {t("layout.trash")}
       </DropdownMenuItem>
     </DropdownMenuContent>
@@ -532,12 +535,18 @@ export function NotesPage() {
                       initial={{ width: 0, opacity: 0 }}
                       animate={{ width: chatPanelWidth, opacity: 1 }}
                       exit={{ width: 0, opacity: 0 }}
-                      transition={reduceMotion ? { duration: 0 } : { duration: 0.26, ease: [0.23, 1, 0.32, 1] }}
-                      className="flex shrink-0 overflow-hidden border-l border-border/50 bg-card/95 shadow-[-12px_0_34px_rgba(0,0,0,0.14)] backdrop-blur-xl"
+                      transition={
+                        isChatPanelResizing || reduceMotion
+                          ? { duration: 0 }
+                          : { type: "spring", bounce: 0, duration: 0.3 }
+                      }
+                      className="flex shrink-0 overflow-hidden border-l border-border/50 bg-card/95 shadow-[var(--shadow-panel-left)] backdrop-blur-xl"
                     >
                       <ResizableHandle
                         label={t("workspace.resize_chat_panel")}
                         onResize={handleChatPanelResize}
+                        onResizeStart={() => setIsChatPanelResizing(true)}
+                        onResizeEnd={() => setIsChatPanelResizing(false)}
                         side="left"
                       />
                       <div className="h-full overflow-hidden" style={{ width: chatPanelWidth }}>
@@ -557,9 +566,9 @@ export function NotesPage() {
 
 function TimeSectionHeader({ label, count }: { label: string; count: number }) {
   return (
-    <div className="sticky top-0 z-10 flex items-center gap-2 bg-background/90 px-4 py-2 backdrop-blur-sm">
+    <div className="sticky top-0 z-10 flex items-center gap-2 bg-background/90 px-4 py-1.5 backdrop-blur-sm">
       <span className="text-xs font-semibold tracking-wide text-muted-foreground">{label}</span>
-      <span className="text-[11px] tabular-nums text-muted-foreground/70">{count}</span>
+      <span className="text-2xs tabular-nums text-muted-foreground/70">{count}</span>
       <div className="ml-1 h-px flex-1 bg-border/40" />
     </div>
   );
@@ -568,7 +577,7 @@ function TimeSectionHeader({ label, count }: { label: string; count: number }) {
 /** Right-aligned recording count in a filter-dropdown row; hidden when unknown. */
 function FolderCount({ count }: { count: number | undefined }) {
   if (count === undefined) return null;
-  return <span className="text-[11px] tabular-nums text-muted-foreground">{count}</span>;
+  return <span className="text-2xs tabular-nums text-muted-foreground">{count}</span>;
 }
 
 function FileRow({
@@ -584,7 +593,7 @@ function FileRow({
     <button
       onClick={onClick}
       className={cn(
-        "group flex w-full items-center gap-4 rounded-lg px-3 py-3 text-left transition-colors",
+        "group flex w-full items-center rounded-lg px-3 py-2 text-left transition-colors",
         isSelected ? "bg-accent/60" : "hover:bg-accent/30"
       )}
     >
@@ -610,12 +619,12 @@ function GridCard({
     <button
       onClick={onClick}
       className={cn(
-        "group flex flex-col rounded-xl border border-border/60 bg-card p-3 text-left transition-colors hover:border-primary/20 hover:bg-accent/30",
+        "group flex flex-col rounded-xl border border-border/60 bg-card p-2.5 text-left transition-colors hover:border-primary/20 hover:bg-accent/30",
         isSelected ? "border-primary/40 bg-accent/40 ring-1 ring-primary/30" : ""
       )}
     >
       {/* Title */}
-      <h3 className="line-clamp-2 min-h-[2.5rem] text-sm font-semibold text-foreground">{file.title}</h3>
+      <h3 className="line-clamp-2 min-h-[2.25rem] text-sm font-semibold leading-[1.125rem] text-foreground">{file.title}</h3>
       <NoteMetadata file={file} />
     </button>
   );
@@ -633,18 +642,18 @@ function NoteMetadata({ file }: { file: WorkspaceItem }) {
   return (
     <>
       {(date || duration) && (
-        <div className="mt-1 flex items-center gap-1.5 text-xs tabular-nums text-muted-foreground">
+        <div className="mt-0.5 flex items-center gap-1.5 text-xs tabular-nums text-muted-foreground">
           {date && <span>{date}</span>}
           {date && duration && <span aria-hidden="true">·</span>}
           {duration && <span>{duration}</span>}
         </div>
       )}
       {tags.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1">
+        <div className="mt-1.5 flex flex-wrap gap-1">
           {tags.map((tag) => (
             <span
               key={tag}
-              className="max-w-32 truncate rounded-md bg-muted px-1.5 py-0.5 text-[10px] leading-4 text-muted-foreground"
+              className="max-w-32 truncate rounded-md bg-muted px-1.5 py-0.5 text-3xs leading-4 text-muted-foreground"
               title={tag}
             >
               {tag}

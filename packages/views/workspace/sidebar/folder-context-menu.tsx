@@ -47,12 +47,12 @@ export function FolderContextMenu({ folder, children }: FolderContextMenuProps) 
       <ContextMenuTrigger>{children}</ContextMenuTrigger>
       <ContextMenuContent>
         <ContextMenuItem onClick={handleRename}>
-          <Pencil className="size-3.5" />
+          <Pencil className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.rename_folder")}</span>
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem variant="destructive" onClick={handleDelete}>
-          <Trash2 className="size-3.5" />
+          <Trash2 className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.delete_folder")}</span>
         </ContextMenuItem>
       </ContextMenuContent>

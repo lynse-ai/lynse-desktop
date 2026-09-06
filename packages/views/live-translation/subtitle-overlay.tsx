@@ -2,9 +2,11 @@
 
 import { useMemo } from "react";
 import { ChevronDown, X } from "../icons";
+import { useTranslation } from "@lynse/core/i18n/react";
 import { useLiveTranslation } from "./use-live-translation";
 
 export function LiveSubtitleOverlay() {
+  const { t } = useTranslation();
   const { api, view } = useLiveTranslation();
   const active = useMemo(() => {
     const visible = view.segments.filter(
@@ -27,11 +29,11 @@ export function LiveSubtitleOverlay() {
           data-tauri-drag-region
         />
 
-        <div className="absolute right-3 top-3 z-20 flex items-center gap-0.5 rounded-full bg-black/25 p-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+        <div className="absolute right-3 top-3 z-20 flex items-center gap-0.5 rounded-full bg-black/40 p-0.5 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
           <button
             type="button"
-            aria-label="最小化到状态栏"
-            title="最小化到状态栏"
+            aria-label={t("live_translation.overlay_minimize")}
+            title={t("live_translation.overlay_minimize")}
             onClick={() => api?.minimizeToTray()}
             className="rounded-full p-1.5 text-white/75 transition-colors hover:bg-white/15 hover:text-white"
           >
@@ -39,8 +41,8 @@ export function LiveSubtitleOverlay() {
           </button>
           <button
             type="button"
-            aria-label="关闭悬浮字幕"
-            title="关闭悬浮字幕"
+            aria-label={t("live_translation.overlay_close")}
+            title={t("live_translation.overlay_close")}
             onClick={() => api?.showSubtitles(false)}
             className="rounded-full p-1.5 text-white/75 transition-colors hover:bg-white/15 hover:text-white"
           >
@@ -54,23 +56,46 @@ export function LiveSubtitleOverlay() {
         >
           {active.length === 0 ? (
             <p className="text-lg font-light text-white/70">
-              等待实时字幕…
+              {t("live_translation.overlay_waiting")}
             </p>
-          ) : active.map((segment) => (
-            <div key={segment.id} className="min-w-0">
-              <div className="mb-1 text-[11px] font-normal uppercase leading-none tracking-wider text-slate-500">
-                {segment.source === "mic" ? "我" : "远端"}
+          ) : active.map((segment) => {
+            // Gate the translation line on the authoritative backend state:
+            // when translation is off the target language is "none", so a
+            // stale `translatedText` left on the segment must not be shown.
+            const translationOn =
+              view.targetLanguage != null && view.targetLanguage !== "none";
+            const showTranslation =
+              translationOn &&
+              segment.translatedText &&
+              segment.translatedText !== segment.recognizedText;
+            const displayOriginal =
+              segment.recognizedText || (translationOn ? segment.translatedText : "");
+            return (
+              <div key={segment.id} className="min-w-0">
+                <div className="mb-1 text-2xs font-normal uppercase leading-none tracking-wider text-slate-500">
+                  {segment.speaker != null
+                    ? `${t("live_translation.speaker")} ${segment.speaker}`
+                    : segment.source === "mic"
+                      ? t("live_translation.me")
+                      : t("live_translation.remote")}
+                </div>
+                {/* Fixed-height, bottom-anchored line blocks: while a sentence
+                    streams in, overflow clips at the TOP so the newest words
+                    stay visible (truncate would drop them), and the block's
+                    height never changes, so nothing reflows or re-centers. */}
+                {displayOriginal && (
+                  <div className="flex h-[5.625rem] flex-col justify-end overflow-hidden text-2xl font-light leading-tight tracking-tight text-white">
+                    <p>{displayOriginal}</p>
+                  </div>
+                )}
+                {showTranslation && (
+                  <div className="mt-0.5 flex h-10 flex-col justify-end overflow-hidden text-base font-normal leading-tight text-white/80">
+                    <p>{segment.translatedText}</p>
+                  </div>
+                )}
               </div>
-              <p className="truncate text-2xl font-light leading-tight text-white">
-                {segment.recognizedText || segment.translatedText}
-              </p>
-              {segment.translatedText && segment.translatedText !== segment.recognizedText && (
-                <p className="mt-0.5 truncate text-base font-normal leading-tight text-white/80">
-                  {segment.translatedText}
-                </p>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>

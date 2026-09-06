@@ -20,6 +20,14 @@ export {
   Lightbulb,        // Inspiration
   MessageSquare,    // AI Chat
   Settings,         // Settings
+  Bluetooth,        // Recording card / devices page
+  BatteryFull,      // Device battery (healthy)
+  BatteryLow,       // Device battery (low)
+  HardDrive,        // Device storage
+  Cpu,              // Device firmware
+  CircleDot,        // Live recording dot
+  Signal,           // RSSI / mark button
+  AlertCircle,      // Inline error banner
   LogOut,           // Log out
   Grid3X3,          // Grid view toggle
   LayoutGrid,       // Compact 2x2 grid view toggle
@@ -27,6 +35,7 @@ export {
   Layers,           // All Files virtual folder
   Trash2,           // Trash virtual folder
   FolderPlus,       // Add folder button
+  Hash,             // Note-group mention (# in chat composer)
 
   // ── Chevron / Disclosure ──────────────────────────────
   ChevronDown,

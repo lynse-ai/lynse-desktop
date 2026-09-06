@@ -66,18 +66,18 @@ export function FileRowContextMenu({
       <ContextMenuContent className="min-w-40">
         {onRename && (
           <ContextMenuItem onClick={() => onRename(file.id, file.title)}>
-            <Pencil className="size-3.5" />
+            <Pencil className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
             <span>{t("workspace.rename")}</span>
           </ContextMenuItem>
         )}
         <ContextMenuSub>
           <ContextMenuSubTrigger>
-            <FolderOpen className="size-3.5" />
+            <FolderOpen className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
             <span>{t("workspace.move_to")}</span>
           </ContextMenuSubTrigger>
           <ContextMenuSubContent className="max-h-64 overflow-y-auto">
             {moveFolders.length === 0 ? (
-              <span className="block px-2 py-1.5 text-[11px] text-muted-foreground">
+              <span className="block px-2 py-1.5 text-2xs text-muted-foreground">
                 {t("layout.no_folders")}
               </span>
             ) : (
@@ -93,14 +93,14 @@ export function FileRowContextMenu({
           </ContextMenuSubContent>
         </ContextMenuSub>
         <ContextMenuItem variant="destructive" onClick={() => onDelete(targetIds)}>
-          <Trash2 className="size-3.5" />
+          <Trash2 className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
           <span>{multi ? t("workspace.delete_selected") : t("workspace.delete")}</span>
         </ContextMenuItem>
         {onTranscribe && (
           <>
             <ContextMenuSeparator />
             <ContextMenuItem onClick={() => onTranscribe(targetIds)} disabled={!canTranscribe}>
-              <RefreshCw className="size-3.5" />
+              <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
               <span>{transcribeLabel}</span>
             </ContextMenuItem>
           </>

@@ -28,6 +28,10 @@
     --color-destructive: var(--destructive);
     --color-success: var(--success);
     --color-warning: var(--warning);
+    /* Text-safe warning variant (mirrors --accent-brand-text): --warning is
+       tuned for dots and fills and lacks contrast as glyph color on light
+       backgrounds, so text/icons use this darkened (light) / lightened (dark) step. */
+    --color-warning-text: var(--warning-text);
     --color-info: var(--info);
     --color-brand: var(--brand);
     --color-brand-foreground: var(--brand-foreground);
@@ -48,6 +52,12 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
+    /* Micro type scale — steps below/between Tailwind's named sizes for dense UI
+       (badges, metadata, sidebar labels). Rem-based so they follow user font-size
+       preferences; text-13 covers the 13px step between xs (12) and sm (14). */
+    --text-3xs: 0.625rem;
+    --text-2xs: 0.6875rem;
+    --text-13: 0.8125rem;
     --radius-sm: calc(var(--radius) * 0.6);
     --radius-md: calc(var(--radius) * 0.8);
     --radius-lg: var(--radius);
@@ -64,6 +74,10 @@
         0 2.25rem 3rem -1.75rem color-mix(in srgb, var(--foreground) 3%, transparent);
     /* Hairline stroke paired with shadow-overlay — currentColor, theme-adaptive */
     --stroke-overlay: color-mix(in srgb, currentColor 6%, transparent);
+    /* Directional shadow cast by a side panel (chat panel) onto the content
+       beside it. Black rather than foreground-mixed: a cast shadow must stay
+       dark in both themes. */
+    --shadow-panel-left: -0.75rem 0 2.125rem rgba(0, 0, 0, 0.14);
 }
 
 /* Motion tokens — easing curves (distilled from Emil Kowalski's motion philosophy).
@@ -77,10 +91,13 @@
 }
 
 :root {
-    /* System font stack — CJK-friendly (PingFang SC on macOS, Microsoft YaHei on Windows) */
-    --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-        "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC",
-        sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+    /* Bundled pairing — Inter for Latin, OPPO Sans 4.0 for CJK (@font-face in
+       fonts.css). System families below are pure fallback for environments
+       without the bundled fonts and for glyphs neither family covers. */
+    --font-sans: "Inter", "OPPO Sans", "OPPO Sans 4.0", ui-sans-serif, system-ui,
+        -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Microsoft YaHei", "Noto Sans CJK SC", sans-serif,
+        "Apple Color Emoji", "Segoe UI Emoji";
     --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
         "Liberation Mono", "Courier New", monospace;
     --background: oklch(1 0 0);
@@ -133,6 +150,7 @@
     --sidebar-ring: #5f67d8;
     --success: oklch(0.55 0.16 145);
     --warning: oklch(0.75 0.16 85);
+    --warning-text: oklch(0.55 0.163 85);
     --info: #5f67d8;
     --waveform-active: #5f67d8;
     --scrollbar-thumb: oklch(0 0 0 / 10%);
@@ -200,6 +218,7 @@
     --accent-brand-text: #f3d08a;
     --success: #30d158;
     --warning: #ff9f0a;
+    --warning-text: oklch(0.879 0.169 85);
     --info: #e0b15c;
     --waveform-active: #e0b15c;
     --scrollbar-thumb: rgb(255 255 255 / 8%);
@@ -213,4 +232,68 @@
     --speaker-6: oklch(0.7 0.1 335);
     --speaker-7: oklch(0.75 0.13 85);
     --speaker-8: oklch(0.65 0.12 250);
+}
+
+/* ── Frosted-glass overlay material (Apple-style) ──────────────────────────
+   Floating surfaces — menus, popovers, selects, comboboxes, pickers, dialogs
+   — read as translucent glass: the page behind them is diffused with a heavy
+   blur plus a saturation boost, a bright inner top edge catches light like a
+   physical material, and the component's own border/cast shadow keeps the
+   edge defined. Two weights follow the material hierarchy: `.glass-overlay`
+   for small floating surfaces (menus, popovers), `.glass-overlay-thick` for
+   modals and large sheets (denser coat, stronger blur, so bigger surfaces
+   read as thicker). Unlayered on purpose: this must win over Tailwind
+   utilities so every popup presents the same material. */
+.glass-overlay {
+    background: color-mix(in srgb, var(--popover) 70%, transparent);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    backdrop-filter: blur(24px) saturate(180%);
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 30%),
+        inset 0 0 0 1px rgb(255 255 255 / 5%);
+}
+
+.dark .glass-overlay {
+    background: color-mix(in srgb, var(--popover) 62%, transparent);
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 12%),
+        inset 0 0 0 1px rgb(255 255 255 / 5%);
+}
+
+.glass-overlay-thick {
+    background: color-mix(in srgb, var(--popover) 82%, transparent);
+    -webkit-backdrop-filter: blur(40px) saturate(200%);
+    backdrop-filter: blur(40px) saturate(200%);
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 35%),
+        inset 0 0 0 1px rgb(255 255 255 / 6%);
+}
+
+.dark .glass-overlay-thick {
+    background: color-mix(in srgb, var(--popover) 74%, transparent);
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 14%),
+        inset 0 0 0 1px rgb(255 255 255 / 6%);
+}
+
+/* System accessibility settings fall back to near-solid panels: keep the
+   shadow hierarchy, drop the blur and the translucency. */
+@media (prefers-reduced-transparency: reduce) {
+    .glass-overlay,
+    .glass-overlay-thick {
+        background: var(--popover);
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        box-shadow: none;
+    }
+}
+
+@media (prefers-contrast: more) {
+    .glass-overlay,
+    .glass-overlay-thick {
+        background: var(--popover);
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        box-shadow: none;
+    }
 }

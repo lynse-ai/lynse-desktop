@@ -28,6 +28,8 @@ describe("iLiveData direct authentication", () => {
     expect(url.searchParams.get("destLanguage")).toBe("en");
     expect(url.searchParams.get("asrTempResult")).toBe("true");
     expect(url.searchParams.get("codec")).toBe("0");
+    expect(url.searchParams.get("asrModel")).toBe("ViiTor");
+    expect(url.searchParams.get("digitalize")).toBe("true");
   });
 
   it("rejects malformed credentials and insecure endpoints", async () => {

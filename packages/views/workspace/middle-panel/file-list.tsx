@@ -262,7 +262,7 @@ export function FileList() {
             {folderColor ? (
               <span className="size-2.5 shrink-0 rounded-sm" style={{ backgroundColor: folderColor }} />
             ) : null}
-            <span className="truncate text-[13px] font-semibold tracking-tight text-foreground">{folderName}</span>
+            <span className="truncate text-13 font-semibold tracking-tight text-foreground">{folderName}</span>
             {multiMode ? (
               <>
                 <input
@@ -277,13 +277,13 @@ export function FileList() {
                   onClick={(e) => e.stopPropagation()}
                   data-tauri-drag-region={false}
                 />
-                <span className="text-[10px] tabular-nums text-muted-foreground">
+                <span className="text-3xs tabular-nums text-muted-foreground">
                   {t("workspace.selected_count", { count: selectedFileIds.size })}
                 </span>
                 <button
                   onClick={clearFileSelection}
                   title={t("workspace.cancel_selection")}
-                  className="ml-auto flex items-center gap-1 rounded-lg px-1.5 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  className="ml-auto flex items-center gap-1 rounded-lg px-1.5 py-1 text-3xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                   data-tauri-drag-region={false}
                 >
                   <X className="size-3" />
@@ -291,7 +291,7 @@ export function FileList() {
                 </button>
               </>
             ) : (
-              <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">
+              <span className="ml-auto text-3xs tabular-nums text-muted-foreground">
                 {filteredFiles.length}
               </span>
             )}
@@ -309,7 +309,7 @@ export function FileList() {
             <button
               onClick={toggleFileSortField}
               title={fileSortField === "createdAt" ? t("workspace.sort_by_created") : t("workspace.sort_by_generated")}
-              className="flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg border border-border bg-card px-2 text-[10px] font-medium text-muted-foreground shadow-sm transition-colors hover:border-primary/30 hover:bg-accent hover:text-foreground"
+              className="flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg border border-border bg-card px-2 text-3xs font-medium text-muted-foreground shadow-sm transition-colors hover:border-primary/30 hover:bg-accent hover:text-foreground"
               data-tauri-drag-region={false}
             >
               <span>{fileSortField === "createdAt" ? t("workspace.sort_field_date") : t("workspace.sort_field_generated")}</span>
@@ -336,12 +336,12 @@ export function FileList() {
         {!selectedFolderId ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
             <FolderOpen className="size-6 text-muted-foreground/50" />
-            <p className="mt-2 text-[11px] text-muted-foreground">
+            <p className="mt-2 text-2xs text-muted-foreground">
               {t("workspace.select_folder")}
             </p>
           </div>
         ) : filteredFiles.length === 0 ? (
-          <p className="px-2 py-6 text-center text-[11px] text-muted-foreground">
+          <p className="px-2 py-6 text-center text-2xs text-muted-foreground">
             {t("workspace.no_files")}
           </p>
         ) : (
@@ -551,7 +551,7 @@ function DraggableFileCard({
 
         {/* Date badge — bottom-right of the thumbnail */}
         {!editing && badgeDate && (
-          <span className="absolute bottom-1.5 right-1.5 rounded-md bg-black/50 px-1.5 py-0.5 text-[9px] font-medium tabular-nums text-white backdrop-blur-sm">
+          <span className="absolute bottom-1.5 right-1.5 rounded-md bg-black/50 px-1.5 py-0.5 text-3xs font-medium tabular-nums text-white backdrop-blur-sm">
             {badgeDate}
           </span>
         )}
@@ -611,7 +611,7 @@ function DraggableFileCard({
           </span>
         )}
         {!editing && (
-          <span className="mt-auto flex min-w-0 flex-wrap items-center gap-1 text-[10px] leading-none text-muted-foreground">
+          <span className="mt-auto flex min-w-0 flex-wrap items-center gap-1 text-3xs leading-none text-muted-foreground">
             {isSummarizing ? (
               <>
                 <Loader2 className="size-2.5 animate-spin text-primary" />
@@ -622,14 +622,14 @@ function DraggableFileCard({
                 {visibleTags.map((tag) => (
                   <span
                     key={tag}
-                    className="max-w-[5.5rem] truncate rounded bg-muted px-1.5 py-0.5 text-[9px]"
+                    className="max-w-[5.5rem] truncate rounded bg-muted px-1.5 py-0.5 text-3xs"
                     title={tag}
                   >
                     {tag}
                   </span>
                 ))}
                 {hiddenTagCount > 0 ? (
-                  <span className="rounded bg-muted px-1.5 py-0.5 text-[9px]">+{hiddenTagCount}</span>
+                  <span className="rounded bg-muted px-1.5 py-0.5 text-3xs">+{hiddenTagCount}</span>
                 ) : null}
               </>
             ) : (

@@ -10,6 +10,7 @@ import { TodoPage } from "@lynse/views/todo";
 import { NotesPage } from "@lynse/views/notes";
 import { InspirationPage } from "@lynse/views/inspiration";
 import { NotificationsPage, AppUpdateNotifier } from "@lynse/views/notifications";
+import { DevicesPage } from "@lynse/views/devices";
 import { SettingsDialog } from "@lynse/views/settings";
 import {
   LiveSubtitleOverlay,
@@ -17,6 +18,7 @@ import {
   TranscriptDetailPage,
 } from "@lynse/views/live-translation";
 import { RESOURCES } from "@lynse/views/locales";
+import { featureFlags } from "@lynse/views/feature-flags";
 import { useMaximized } from "@lynse/views/layout";
 import { DesktopNavigationProvider } from "./platform/navigation";
 import { secureStorage } from "./secure-storage";
@@ -31,8 +33,11 @@ function PageRouter() {
   if (pathname.startsWith("/settings")) {
     return <SettingsDialog open onOpenChange={() => push("/")} />;
   }
-  if (pathname.startsWith("/inspiration")) return <InspirationPage />;
+  // Flag-gated WIP features: with the flag off the path falls through to the
+  // workspace, so a stale link can't reach the unfinished page.
+  if (featureFlags.inspiration && pathname.startsWith("/inspiration")) return <InspirationPage />;
   if (pathname.startsWith("/notifications")) return <NotificationsPage />;
+  if (featureFlags.devices && pathname.startsWith("/devices")) return <DevicesPage />;
   if (pathname.startsWith("/notes")) return <NotesPage />;
   return <WorkspaceLayout />;
 }

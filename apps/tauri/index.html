@@ -4,6 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Lynse</title>
+    <script>
+      // Optimistically mark the sidebar transparent before Rust reports back, so
+      // it never flashes an opaque background on first paint. Rust corrects this
+      // via the `lynse://window-effects` event if the native material is absent.
+      if (/Mac/i.test(navigator.platform || navigator.userAgent)) {
+        document.documentElement.dataset.windowEffects = "vibrancy";
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -670,14 +670,14 @@ export function ContentPanel() {
                   }}
                   disabled={currentFileSummarizing || !block.id}
                 >
-                  <RefreshCw className="size-3.5" />
+                  <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
                   <span>{text("summary_tab.replace_template", summaryTabFallback.replaceTemplate)}</span>
                 </ContextMenuItem>
                 <ContextMenuItem
                   onClick={handleAutoRerun}
                   disabled={!selectedItemId || currentFileSummarizing || !defaultTemplateId}
                 >
-                  <RefreshCw className="size-3.5" />
+                  <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
                   <span>{t("resummarize.button")}</span>
                 </ContextMenuItem>
               </ContextMenuContent>
@@ -729,7 +729,7 @@ export function ContentPanel() {
                 }}
                 disabled={currentFileSummarizing || !activeSummary?.id}
               >
-                <RefreshCw className="size-3.5" />
+                <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
                 <span>{text("summary_tab.replace_template", summaryTabFallback.replaceTemplate)}</span>
               </DropdownMenuItem>
               <DropdownMenuItem
@@ -740,7 +740,7 @@ export function ContentPanel() {
                 }}
                 disabled={deleteConclusion.isPending || !activeSummary?.id}
               >
-                <Trash2 className="size-3.5" />
+                <Trash2 className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
                 <span>{text("summary_tab.delete", summaryTabFallback.delete)}</span>
               </DropdownMenuItem>
               <DropdownMenuSeparator />
@@ -748,7 +748,7 @@ export function ContentPanel() {
                 onClick={handleAutoRerun}
                 disabled={!selectedItemId || currentFileSummarizing || !defaultTemplateId}
               >
-                <RefreshCw className="size-3.5" />
+                <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
                 <span>{t("resummarize.button")}</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -801,14 +801,14 @@ export function ContentPanel() {
                     删除
                   </button>
                   {localRetryError && (
-                    <span className="basis-full text-[11px] text-destructive">
+                    <span className="basis-full text-2xs text-destructive">
                       {localRetryError}
                     </span>
                   )}
                 </div>
               )}
               {selectedCreatedAt && (
-                <div className="mt-1 text-[11px] text-muted-foreground shrink-0">
+                <div className="mt-1 text-2xs text-muted-foreground shrink-0">
                   {formatDate(selectedCreatedAt)}
                 </div>
               )}
@@ -868,7 +868,7 @@ export function ContentPanel() {
                                   } ${seg.beginTimeMs != null ? "cursor-pointer" : ""}`}
                                 >
                                   <div className="flex items-baseline gap-2">
-                                    <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{seg.time}</span>
+                                    <span className="shrink-0 text-2xs text-muted-foreground tabular-nums">{seg.time}</span>
                                     <span className="shrink-0 font-semibold text-xs" style={{ color }}>{seg.speaker}</span>
                                   </div>
                                   <p className="text-foreground mt-0.5">{seg.translatedText || seg.text}</p>
@@ -886,7 +886,7 @@ export function ContentPanel() {
                                               segmentId: seg.id,
                                               name: event.target.value,
                                             })}
-                                            className="h-6 w-28 rounded border border-border bg-background px-1.5 text-[10px] outline-none focus:border-primary"
+                                            className="h-6 w-28 rounded border border-border bg-background px-1.5 text-3xs outline-none focus:border-primary"
                                           />
                                           <button
                                             type="button"
@@ -894,7 +894,7 @@ export function ContentPanel() {
                                               event.stopPropagation();
                                               handleCreateVoiceprint(seg.id, voiceprintDraft.name);
                                             }}
-                                            className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                                            className="inline-flex rounded border border-border px-1.5 py-0.5 text-3xs text-muted-foreground hover:bg-muted hover:text-foreground"
                                           >
                                             保存
                                           </button>
@@ -904,7 +904,7 @@ export function ContentPanel() {
                                               event.stopPropagation();
                                               setVoiceprintDraft(null);
                                             }}
-                                            className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                                            className="inline-flex rounded border border-border px-1.5 py-0.5 text-3xs text-muted-foreground hover:bg-muted hover:text-foreground"
                                           >
                                             取消
                                           </button>
@@ -916,7 +916,7 @@ export function ContentPanel() {
                                             event.stopPropagation();
                                             setVoiceprintDraft({ segmentId: seg.id, name: seg.speaker || "发言人" });
                                           }}
-                                          className="inline-flex rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                                          className="inline-flex rounded border border-border px-1.5 py-0.5 text-3xs text-muted-foreground hover:bg-muted hover:text-foreground"
                                         >
                                           保存声纹
                                         </button>
@@ -927,7 +927,7 @@ export function ContentPanel() {
                               );
                             })}
                             <div className="mt-6 border-t border-border pt-3 text-center">
-                              <p className="text-[10px] text-muted-foreground/60">{t("workspace.ai_disclaimer")}</p>
+                              <p className="text-3xs text-muted-foreground/60">{t("workspace.ai_disclaimer")}</p>
                             </div>
                           </div>
                         ) : isLocalSelectedItem ? (
@@ -981,7 +981,7 @@ export function ContentPanel() {
 
               {contentTab !== "transcription" && (
                 <div className="mt-2 border-t border-stroke-quaternary pt-1.5 pb-1 text-center shrink-0">
-                  <p className="text-[10px] text-muted-foreground/60">{t("workspace.ai_disclaimer")}</p>
+                  <p className="text-3xs text-muted-foreground/60">{t("workspace.ai_disclaimer")}</p>
                 </div>
               )}
             </div>
@@ -992,7 +992,7 @@ export function ContentPanel() {
         {outlineSidebarVisible && contentTab === "outline" && selectedItemId && (
           <div className="w-52 shrink-0 border-l border-stroke-tertiary bg-background overflow-y-auto">
             <div className="flex items-center justify-between px-3 py-2 border-b border-stroke-tertiary">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{t("workspace.outline")}</span>
+              <span className="text-3xs font-semibold uppercase tracking-wider text-muted-foreground">{t("workspace.outline")}</span>
               <button onClick={toggleOutlineSidebar} className="text-muted-foreground hover:text-foreground">
                 <X className="size-3" />
               </button>
@@ -1002,7 +1002,7 @@ export function ContentPanel() {
                 <button
                   key={h.id}
                   onClick={() => scrollToHeading(h.id)}
-                  className={`block w-full text-left rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors ${
+                  className={`block w-full text-left rounded px-2 py-1 text-2xs text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors ${
                     h.tag === "H1" ? "font-semibold" : h.tag === "H2" ? "pl-3" : "pl-5"
                   }`}
                 >
@@ -1341,7 +1341,7 @@ function SourceView({ code, language }: { code: string; language: "html" | "mark
   return (
     <div className="rounded-md overflow-auto flex-1 min-h-0" style={{ backgroundColor: "#0d1117", border: "1px solid #30363d" }}>
       <div className="sticky top-0 flex items-center gap-2 px-3 py-1.5" style={{ backgroundColor: "#161b22", borderBottom: "1px solid #30363d" }}>
-        <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#8b949e" }}>
+        <span className="text-3xs font-semibold uppercase tracking-wider" style={{ color: "#8b949e" }}>
           {language}
         </span>
       </div>
@@ -1353,12 +1353,12 @@ function SourceView({ code, language }: { code: string; language: "html" | "mark
       {/* Base64 image previews */}
       {images.length > 0 && (
         <div className="border-t px-4 py-3 space-y-3" style={{ borderColor: "#30363d" }}>
-          <div className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "#8b949e" }}>
+          <div className="text-3xs font-semibold uppercase tracking-wider" style={{ color: "#8b949e" }}>
             Image Previews ({images.length})
           </div>
           {images.map((dataUri, i) => (
             <div key={i} className="rounded-md overflow-hidden" style={{ border: "1px solid #30363d" }}>
-              <div className="px-3 py-1 text-[10px]" style={{ backgroundColor: "#161b22", color: "#8b949e", borderBottom: "1px solid #30363d" }}>
+              <div className="px-3 py-1 text-3xs" style={{ backgroundColor: "#161b22", color: "#8b949e", borderBottom: "1px solid #30363d" }}>
                 Image {i + 1}
               </div>
               <div className="p-3 flex justify-center" style={{ backgroundColor: "#0d1117" }}>

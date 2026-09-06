@@ -9,9 +9,29 @@ export type AppUpdateInfo = {
   publishedAt?: string | null;
 };
 
+/** Serializable download/install progress reported by the desktop bridge. */
+export type UpdateDownloadProgress = {
+  event: "started" | "progress" | "finished";
+  downloaded: number;
+  total: number;
+};
+
+export type UpdateInstallPhase = "idle" | "downloading" | "installing" | "restarting" | "failed";
+
+export type UpdateInstallState = {
+  phase: UpdateInstallPhase;
+  /** Bytes downloaded so far (valid while downloading). */
+  downloaded: number;
+  /** Total bytes when known (may be 0 until the server reports it). */
+  total: number;
+  error: string | null;
+};
+
 type DesktopAppApi = {
   getInfo: () => Promise<{ version: string; platform: string }>;
   checkForUpdate: () => Promise<AppUpdateInfo>;
+  downloadAndInstallUpdate: (onProgress: (progress: UpdateDownloadProgress) => void) => Promise<void>;
+  relaunchApp: () => Promise<void>;
 };
 
 /** Access the desktop update API, or null when running outside the Tauri host. */
@@ -50,6 +70,8 @@ let sharedUpdate: AppUpdateInfo | null = null;
 let checking = false;
 let lastError: string | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
+let installState: UpdateInstallState = { phase: "idle", downloaded: 0, total: 0, error: null };
+let installing = false;
 const listeners = new Set<() => void>();
 
 async function runCheck(api: DesktopAppApi, showChecking: boolean): Promise<void> {
@@ -74,11 +96,51 @@ function ensurePolling(api: DesktopAppApi): void {
   timer = setInterval(() => void runCheck(api, false), CHECK_INTERVAL_MS);
 }
 
+/** Download → verify signature → install → relaunch, with shared progress. */
+async function runInstall(api: DesktopAppApi): Promise<void> {
+  if (installing) return;
+  installing = true;
+  installState = { phase: "downloading", downloaded: 0, total: 0, error: null };
+  listeners.forEach((listener) => listener());
+  try {
+    await api.downloadAndInstallUpdate((progress) => {
+      if (progress.event === "finished") {
+        installState = {
+          ...installState,
+          phase: "installing",
+          downloaded: progress.total,
+          total: progress.total,
+        };
+      } else {
+        installState = { ...installState, downloaded: progress.downloaded, total: progress.total };
+      }
+      listeners.forEach((listener) => listener());
+    });
+    // Give the UI one paint of the "restarting" state before the process
+    // exits — relaunch() never resolves once the new instance takes over.
+    installState = { ...installState, phase: "restarting" };
+    listeners.forEach((listener) => listener());
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await api.relaunchApp();
+  } catch (error) {
+    installState = {
+      phase: "failed",
+      downloaded: 0,
+      total: 0,
+      error: error instanceof Error ? error.message : "update install failed",
+    };
+    listeners.forEach((listener) => listener());
+  } finally {
+    installing = false;
+  }
+}
+
 export function useAppUpdate() {
   const api = getDesktopAppApi();
   const [update, setUpdate] = useState<AppUpdateInfo | null>(sharedUpdate);
   const [isChecking, setIsChecking] = useState(checking);
   const [error, setError] = useState<string | null>(lastError);
+  const [currentInstallState, setCurrentInstallState] = useState<UpdateInstallState>(installState);
 
   useEffect(() => {
     if (!api) return;
@@ -86,6 +148,7 @@ export function useAppUpdate() {
       setUpdate(sharedUpdate);
       setIsChecking(checking);
       setError(lastError);
+      setCurrentInstallState(installState);
     };
     listeners.add(sync);
     sync();
@@ -100,5 +163,17 @@ export function useAppUpdate() {
     void runCheck(api, true);
   };
 
-  return { update, checking: isChecking, error, checkForUpdate };
+  const install = () => {
+    if (!api) return;
+    void runInstall(api);
+  };
+
+  return {
+    update,
+    checking: isChecking,
+    error,
+    checkForUpdate,
+    install,
+    installState: currentInstallState,
+  };
 }

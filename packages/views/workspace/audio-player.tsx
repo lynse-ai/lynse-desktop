@@ -234,7 +234,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
               </button>
 
               {/* Time display */}
-              <span className="min-w-[80px] text-[11px] tabular-nums text-muted-foreground">
+              <span className="min-w-[80px] text-2xs tabular-nums text-muted-foreground">
                 {formatTime(currentTime)} / {formatTime(duration)}
               </span>
 
@@ -243,7 +243,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
               {/* Speed */}
               <button
                 onClick={cycleSpeed}
-                className="flex h-5 items-center rounded px-1.5 text-[11px] font-medium tabular-nums text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                className="flex h-5 items-center rounded px-1.5 text-2xs font-medium tabular-nums text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
                 {speed}x
               </button>

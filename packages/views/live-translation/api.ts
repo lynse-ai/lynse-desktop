@@ -1,10 +1,20 @@
 import { api } from "@lynse/core/api/client";
 import type {
   LiveAudioSource,
+  LiveAudioSourceMode,
   LiveConnectionDescriptor,
   LiveTranslationProviderConfig,
 } from "./types";
 import { DEFAULT_QWEN_ENDPOINT, DEFAULT_VOLC_AST_ENDPOINT } from "./types";
+
+/** Expand the capture-source mode into the connection source list. Unused
+ * sources get no websocket, so a "system"-only session pays for one stream
+ * instead of two. */
+export function audioModeSources(mode: LiveAudioSourceMode | undefined): LiveAudioSource[] {
+  if (mode === "mic") return ["mic"];
+  if (mode === "system") return ["system"];
+  return ["mic", "system"];
+}
 
 interface RealtimeSessionRequest {
   workspaceId?: string;
@@ -46,7 +56,9 @@ export async function requestRealtimeSession(
     "/api/business/translate/realtime/session",
     request,
   );
-  const connections = normalizeConnections(response);
+  const sources = audioModeSources(providerConfig?.audioSource);
+  const connections = normalizeConnections(response)
+    .filter((connection) => sources.includes(connection.source));
   if (!response.sessionId || connections.length === 0) {
     throw new Error("实时翻译服务未返回有效的双流连接");
   }
@@ -70,7 +82,7 @@ async function requestILiveDataRealtimeSession(
     config.ilivedata.secretKey,
   );
   const connections = await Promise.all(
-    (["mic", "system"] as const).map(async (source) => ({
+    audioModeSources(config.audioSource).map(async (source) => ({
       source,
       url: buildILiveDataWebSocketUrl({
         endpoint: config.ilivedata.endpoint,
@@ -80,6 +92,7 @@ async function requestILiveDataRealtimeSession(
         sourceLanguage: request.sourceLanguage,
         targetLanguage: request.targetLanguage,
         userId: createILiveDataUserId(sessionId, source, request.epoch),
+        maxSpeakers: config.ilivedata.maxSpeakers,
       }),
     })),
   );
@@ -102,14 +115,14 @@ async function requestQwenRealtimeSession(
   if (!config.qwen.apiKey.trim()) {
     throw new Error("Qwen 翻译引擎需要填写 DashScope API Key");
   }
-  const connections: LiveConnectionDescriptor[] = (["mic", "system"] as const).map(
-    (source) => ({
-      source,
-      url: endpoint,
-      provider: "qwen",
-      apiKey: config.qwen.apiKey.trim(),
-    }),
-  );
+  const connections: LiveConnectionDescriptor[] = audioModeSources(
+    config.audioSource,
+  ).map((source) => ({
+    source,
+    url: endpoint,
+    provider: "qwen",
+    apiKey: config.qwen.apiKey.trim(),
+  }));
   return {
     sessionId,
     epoch: request.epoch,
@@ -135,14 +148,14 @@ async function requestVolcRealtimeSession(
   if (!apiKey) {
     throw new Error("火山同声传译需要填写 Access Key");
   }
-  const connections: LiveConnectionDescriptor[] = (["mic", "system"] as const).map(
-    (source) => ({
-      source,
-      url: endpoint,
-      provider: "volc",
-      apiKey,
-    }),
-  );
+  const connections: LiveConnectionDescriptor[] = audioModeSources(
+    config.audioSource,
+  ).map((source) => ({
+    source,
+    url: endpoint,
+    provider: "volc",
+    apiKey,
+  }));
   return {
     sessionId,
     epoch: request.epoch,
@@ -187,6 +200,8 @@ export function buildILiveDataWebSocketUrl(input: {
   sourceLanguage: string;
   targetLanguage: string;
   userId: string;
+  /** Max speaker count for diarization; `0`/undefined disables it. */
+  maxSpeakers?: number;
 }): string {
   let url: URL;
   try {
@@ -209,8 +224,29 @@ export function buildILiveDataWebSocketUrl(input: {
   url.searchParams.set("ttsResult", "false");
   url.searchParams.set("codec", "0");
   url.searchParams.set("userId", input.userId);
-  url.searchParams.set("vadSilenceTime", "1000");
+  // 1500ms VAD silence: natural pauses are common in meetings; a slightly
+  // longer silence window keeps one sentence from being split into two.
+  url.searchParams.set("vadSilenceTime", "1500");
+  // ViiTor ASR 大模型：启用更高质量识别流程（空值或不传则保持默认识别）。
+  url.searchParams.set("asrModel", "ViiTor");
+  // digitalize：开启文本数字格式化（"100" → "一百" 等）。
+  url.searchParams.set("digitalize", "true");
+  // 说话人识别：maxSpeakers 仅在 speakerEnabled=true 时生效，
+  // 且 API 要求取值大于 1，因此 normalizeMaxSpeakers 会把 <2 收敛为关闭。
+  const maxSpeakers = normalizeMaxSpeakers(input.maxSpeakers);
+  url.searchParams.set("speakerEnabled", String(maxSpeakers > 0));
+  if (maxSpeakers > 0) {
+    url.searchParams.set("maxSpeakers", String(maxSpeakers));
+  }
   return url.toString();
+}
+
+/** Clamp the speaker-count setting to the documented range: 2..5, or 0 = off. */
+export function normalizeMaxSpeakers(value: number | undefined): number {
+  if (value == null || !Number.isFinite(value)) return 0;
+  const rounded = Math.trunc(value);
+  if (rounded < 2) return 0;
+  return Math.min(5, rounded);
 }
 
 function createILiveDataUserId(sessionId: string, source: LiveAudioSource, epoch: number): string {

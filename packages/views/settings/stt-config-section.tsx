@@ -102,7 +102,7 @@ function ModelManager({
 }) {
   const { t } = useTranslation();
   if (!model) {
-    return <p className="text-[11px] text-muted-foreground">{t("settings.stt_no_models")}</p>;
+    return <p className="text-2xs text-muted-foreground">{t("settings.stt_no_models")}</p>;
   }
   const installed = model.status === "installed";
   const isThisDownloading =
@@ -131,12 +131,12 @@ function ModelManager({
     <div className="mt-2 rounded bg-background p-2">
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
-          <p className="truncate text-[11px] font-medium">{model.label}</p>
-          <p className="truncate text-[11px] text-muted-foreground">{model.modelDir}</p>
+          <p className="truncate text-2xs font-medium">{model.label}</p>
+          <p className="truncate text-2xs text-muted-foreground">{model.modelDir}</p>
         </div>
         <span
           className={cn(
-            "shrink-0 rounded-full px-2 py-0.5 text-[11px]",
+            "shrink-0 rounded-full px-2 py-0.5 text-2xs",
             isError ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground",
           )}
         >
@@ -147,7 +147,7 @@ function ModelManager({
       {isThisDownloading && !isError && !isDone ? <DownloadProgress progress={progress} /> : null}
 
       {isError && progress?.error ? (
-        <p className="mt-2 text-[11px] text-destructive">{progress.error}</p>
+        <p className="mt-2 text-2xs text-destructive">{progress.error}</p>
       ) : null}
 
       <div className="mt-2 flex flex-wrap gap-2">
@@ -204,7 +204,7 @@ function DownloadProgress({ progress }: { progress: SttDownloadProgress | null }
         <div className="relative h-1 w-full overflow-hidden rounded-full bg-muted">
           <div className="absolute inset-y-0 left-0 h-full w-1/3 rounded-full bg-primary animate-[stt-download-sweep_1.4s_ease-in-out_infinite]" />
         </div>
-        <div className="mt-1 text-[11px] text-muted-foreground">
+        <div className="mt-1 text-2xs text-muted-foreground">
           {t(downloadPhaseKey(progress.phase))}
         </div>
       </div>
@@ -212,9 +212,9 @@ function DownloadProgress({ progress }: { progress: SttDownloadProgress | null }
   }
   return (
     <Progress value={progress.percent} className="mt-2 flex-col items-stretch gap-1">
-      <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+      <div className="flex items-center justify-between text-2xs text-muted-foreground">
         <span>{t(downloadPhaseKey(progress.phase))}</span>
-        <ProgressValue className="text-[11px]" />
+        <ProgressValue className="text-2xs" />
       </div>
     </Progress>
   );
@@ -236,15 +236,15 @@ function EngineFields({
   return (
     <div className="mt-2 space-y-2 rounded bg-background p-2">
       {config.provider === "mlx" && (
-        <p className="text-[11px] text-muted-foreground">{t("settings.stt_mlx_hint")}</p>
+        <p className="text-2xs text-muted-foreground">{t("settings.stt_mlx_hint")}</p>
       )}
       {config.provider === "vibeasr" && (
-        <p className="text-[11px] text-muted-foreground">{t("settings.stt_vibeasr_hint")}</p>
+        <p className="text-2xs text-muted-foreground">{t("settings.stt_vibeasr_hint")}</p>
       )}
       {config.provider === "whisper" && (
         <>
           <div className="space-y-1">
-            <Label className="text-[11px]">{t("settings.stt_whisper_model")}</Label>
+            <Label className="text-2xs">{t("settings.stt_whisper_model")}</Label>
             <select
               value={config.model ?? DEFAULT_WHISPER_MODEL}
               onChange={(event) => onChange({ ...config, model: event.target.value as WhisperModel })}
@@ -257,7 +257,7 @@ function EngineFields({
               ))}
             </select>
           </div>
-          <label className="flex items-center gap-2 text-[11px]">
+          <label className="flex items-center gap-2 text-2xs">
             <input
               type="checkbox"
               checked={config.campp_diarization ?? false}
@@ -269,15 +269,20 @@ function EngineFields({
       )}
       {(config.provider === "funasr" || config.provider === "whisper") && (
         <div className="space-y-1">
-          <Label className="text-[11px]">{t("settings.stt_expected_speakers")}</Label>
+          <Label className="text-2xs">{t("settings.stt_expected_speakers")}</Label>
           <Input
             type="number"
             min={0}
+            step={1}
             value={speakers ?? ""}
             onChange={(event) => {
+              // The Rust side stores this as u64: clamp negatives/fractions to
+              // null ("auto") so an out-of-range value can't invalidate the
+              // whole saved config.
               const raw = event.target.value.trim();
-              const num = raw === "" ? null : Number.isFinite(Number(raw)) ? Number(raw) : null;
-              onChange({ ...config, expected_speakers: num });
+              const num = raw === "" ? null : Number(raw);
+              const safe = num !== null && Number.isFinite(num) && num > 0 ? Math.floor(num) : null;
+              onChange({ ...config, expected_speakers: safe });
             }}
             className="h-8 text-xs"
             placeholder={t("settings.stt_auto")}
@@ -285,7 +290,7 @@ function EngineFields({
         </div>
       )}
       <div className="space-y-1">
-        <Label className="text-[11px]">{t("settings.stt_hotword_package")}</Label>
+        <Label className="text-2xs">{t("settings.stt_hotword_package")}</Label>
         <HotwordSelect
           value={config.hotword_package_id}
           packages={hotwordPackages}
@@ -369,7 +374,7 @@ export function SttConfigSection({
 
   if (!config) {
     return (
-      <div className="rounded-md border bg-muted/30 p-2.5 text-[11px] text-muted-foreground">
+      <div className="rounded-md border bg-muted/30 p-2.5 text-2xs text-muted-foreground">
         {t("settings.stt_loading")}
       </div>
     );
@@ -391,7 +396,7 @@ export function SttConfigSection({
     <div className="space-y-3">
       <style>{`@keyframes stt-download-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }`}</style>
       <div className="space-y-1">
-        <Label className="text-[11px]">{t("settings.stt_engine_default")}</Label>
+        <Label className="text-2xs">{t("settings.stt_engine_default")}</Label>
         <select
           value={defaultConfig.provider}
           onChange={(event) => changeDefaultEngine(event.target.value as SttEngine)}
@@ -415,7 +420,7 @@ export function SttConfigSection({
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <Label className="text-[11px]">{t("settings.stt_per_language")}</Label>
+          <Label className="text-2xs">{t("settings.stt_per_language")}</Label>
           <Button
             type="button"
             size="sm"
@@ -431,7 +436,7 @@ export function SttConfigSection({
         </div>
 
         {langEntries.length === 0 && (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             {t("settings.stt_no_language_override")}
           </p>
         )}
@@ -499,8 +504,8 @@ export function SttConfigSection({
         })}
       </div>
 
-      {modelError && <p className="text-[11px] text-destructive">{modelError}</p>}
-      {error && <p className="mt-2 text-[11px] text-destructive">{error}</p>}
+      {modelError && <p className="text-2xs text-destructive">{modelError}</p>}
+      {error && <p className="mt-2 text-2xs text-destructive">{error}</p>}
 
       <Button type="button" size="sm" className="mt-1 h-7 text-xs" onClick={handleSave} disabled={saving}>
         {saving ? <Loader2 className="mr-1.5 size-3 animate-spin" /> : null}

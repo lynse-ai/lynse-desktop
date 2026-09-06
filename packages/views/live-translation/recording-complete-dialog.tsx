@@ -165,11 +165,11 @@ export function RecordingCompleteDialog({
 
           {/* Info card */}
           <div className="rounded-xl bg-muted/60 px-4 py-3">
-            <div className="flex items-center justify-between gap-4 text-[13px]">
+            <div className="flex items-center justify-between gap-4 text-13">
               <span className="text-muted-foreground">{t("recording_mode.complete_duration")}</span>
               <span className="font-medium tabular-nums">{formatDuration(session.durationMs)}</span>
             </div>
-            <div className="mt-2 flex items-center justify-between gap-4 text-[13px]">
+            <div className="mt-2 flex items-center justify-between gap-4 text-13">
               <span className="text-muted-foreground">{t("recording_mode.complete_filename")}</span>
               <span className="truncate font-mono text-xs text-foreground/80 max-w-[55%]">{filename}</span>
             </div>
@@ -179,7 +179,7 @@ export function RecordingCompleteDialog({
           {session.playbackUrl && <RecordingPreview src={session.playbackUrl} />}
 
           {/* Description */}
-          <p className="text-[13px] leading-relaxed text-muted-foreground">
+          <p className="text-13 leading-relaxed text-muted-foreground">
             {t("recording_mode.complete_description")}
           </p>
 
@@ -189,7 +189,7 @@ export function RecordingCompleteDialog({
               checked={saveToCloud}
               onCheckedChange={(checked) => setSaveToCloud(checked === true)}
             />
-            <span className="text-[13px] font-medium text-foreground select-none">
+            <span className="text-13 font-medium text-foreground select-none">
               {t("recording_mode.complete_save_to_cloud")}
             </span>
           </label>
@@ -200,7 +200,7 @@ export function RecordingCompleteDialog({
               checked={remember}
               onCheckedChange={handleRememberChange}
             />
-            <span className="text-[13px] text-muted-foreground select-none">
+            <span className="text-13 text-muted-foreground select-none">
               {t("recording_mode.complete_remember")}
             </span>
           </label>
@@ -285,13 +285,13 @@ function RecordingPreview({ src }: { src: string }) {
               height={32}
             />
           ) : (
-            <div className="flex h-8 items-center text-[11px] text-muted-foreground">
+            <div className="flex h-8 items-center text-2xs text-muted-foreground">
               {t("recording_mode.preview_loading")}
             </div>
           )}
         </div>
 
-        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+        <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">
           {formatClock(currentTime)} / {formatClock(duration)}
         </span>
       </div>

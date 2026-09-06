@@ -103,18 +103,20 @@ function AddTodoInput({ onAdd }: { onAdd: (title: string) => void }) {
   );
 
   return (
-    <div className="flex items-center gap-2 border-b border-stroke-secondary px-4 py-3">
-      <Plus className="size-4 shrink-0 text-muted-foreground" />
-      <input
-        className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
-        placeholder={t("todo.add_placeholder")}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={onKeyDown}
-      />
-      <kbd className="pointer-events-none inline-flex h-5 items-center gap-0.5 rounded border border-border/50 bg-muted/60 px-1.5 text-[10px] font-medium text-muted-foreground">
-        ⌘↵
-      </kbd>
+    <div className="px-4 pb-2 pt-3">
+      <div className="flex h-9 items-center gap-2 rounded-full border border-border/60 bg-muted/40 px-3.5 transition-colors focus-within:border-ring/60 focus-within:bg-background focus-within:ring-3 focus-within:ring-ring/20">
+        <Plus className="size-4 shrink-0 text-muted-foreground" />
+        <input
+          className="h-full flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
+          placeholder={t("todo.add_placeholder")}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={onKeyDown}
+        />
+        <kbd className="pointer-events-none inline-flex h-5 items-center gap-0.5 rounded border border-border/50 bg-muted/60 px-1.5 text-3xs font-medium text-muted-foreground">
+          ⌘↵
+        </kbd>
+      </div>
     </div>
   );
 }
@@ -327,7 +329,7 @@ function DetailPanel({
               {t("todo.actions_join_calendar")}
             </Button>
           ) : (
-            <div className="flex items-center gap-2 text-xs text-green-600 dark:text-green-400 px-2 py-1.5 rounded bg-green-50 dark:bg-green-950/30">
+            <div className="flex items-center gap-2 text-xs text-success px-2 py-1.5 rounded bg-success/10">
               <Calendar className="size-3.5" />
               {t("todo.added_to_calendar")}
             </div>
@@ -485,7 +487,11 @@ export function TodoPage() {
   return (
     <div className="flex h-full flex-col min-w-0">
       {/* Header */}
-      <div className="flex shrink-0 items-center justify-between border-b border-stroke-secondary px-4" style={{ height: 44 }}>
+      <div
+        className="flex shrink-0 items-center justify-between border-b border-stroke-secondary px-4 select-none"
+        style={{ height: 44 }}
+        data-tauri-drag-region
+      >
         <h1 className="text-base font-semibold text-foreground">{t("todo.page_title")}</h1>
         <div className="flex items-center gap-1">
           <button
@@ -506,7 +512,7 @@ export function TodoPage() {
             <Trash2 className="size-3.5" />
             {clearing ? t("todo.clearing") : t("todo.clear_completed")}
             {completedCount > 0 && !clearing && (
-              <span className="ml-0.5 rounded-full bg-muted px-1.5 text-[10px] tabular-nums">
+              <span className="ml-0.5 rounded-full bg-muted px-1.5 text-3xs tabular-nums">
                 {completedCount}
               </span>
             )}

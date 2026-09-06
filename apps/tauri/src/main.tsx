@@ -2,6 +2,8 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./globals.css";
 import { installTauriBridge } from "./tauri-bridge";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 async function bootstrap() {
   const windowKind = new URLSearchParams(window.location.search).get("window");
@@ -15,7 +17,30 @@ async function bootstrap() {
   }
 
   await installTauriBridge();
+  syncWindowEffects();
   ReactDOM.createRoot(document.getElementById("root")!).render(<App />);
+}
+
+// Keep `data-window-effects` in sync with the material Rust actually installed
+// behind the webview, so the sidebar transparency matches reality (vibrancy
+// unavailable → opaque sidebar).
+function syncWindowEffects() {
+  if (!/Mac/i.test(navigator.platform || navigator.userAgent)) return;
+  let cancelled = false;
+  const win = getCurrentWindow();
+  win
+    .listen<string>("lynse://window-effects", (event) => {
+      document.documentElement.dataset.windowEffects = event.payload;
+    })
+    .catch(() => {});
+  invoke<string>("window_effects_mode")
+    .then((mode) => {
+      if (!cancelled) document.documentElement.dataset.windowEffects = mode;
+    })
+    .catch(() => {});
+  window.addEventListener("beforeunload", () => {
+    cancelled = true;
+  });
 }
 
 void bootstrap();

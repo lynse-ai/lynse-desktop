@@ -54,7 +54,7 @@ export function FilterPopover() {
           {active && (
             <button
               onClick={resetFilters}
-              className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+              className="text-2xs text-muted-foreground transition-colors hover:text-foreground"
             >
               {t("workspace.filter_reset")}
             </button>
@@ -64,11 +64,11 @@ export function FilterPopover() {
         <div className="space-y-3">
           {/* Tags */}
           <div>
-            <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+            <p className="mb-1.5 text-3xs font-medium uppercase tracking-wider text-muted-foreground/70">
               {t("workspace.filter_by_tag")}
             </p>
             {availableTags.length === 0 ? (
-              <p className="text-[11px] text-muted-foreground/60">{t("workspace.no_items")}</p>
+              <p className="text-2xs text-muted-foreground/60">{t("workspace.no_items")}</p>
             ) : (
               <div className="flex flex-wrap gap-1">
                 {availableTags.map((tag) => {
@@ -77,7 +77,7 @@ export function FilterPopover() {
                     <button
                       key={tag}
                       onClick={() => toggleTag(tag)}
-                      className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] transition-colors ${
+                      className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-2xs transition-colors ${
                         selected
                           ? "bg-primary text-primary-foreground"
                           : "bg-muted text-muted-foreground hover:bg-muted/70"
@@ -94,7 +94,7 @@ export function FilterPopover() {
 
           {/* Date */}
           <div>
-            <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+            <p className="mb-1.5 text-3xs font-medium uppercase tracking-wider text-muted-foreground/70">
               {t("workspace.filter_by_date")}
             </p>
             <div className="flex gap-1">
@@ -104,7 +104,7 @@ export function FilterPopover() {
                   <button
                     key={opt}
                     onClick={() => setFilterDate(opt)}
-                    className={`flex-1 rounded-md px-2 py-1 text-[11px] transition-colors ${
+                    className={`flex-1 rounded-md px-2 py-1 text-2xs transition-colors ${
                       selected
                         ? "bg-accent text-accent-foreground font-medium"
                         : "bg-muted text-muted-foreground hover:bg-muted/70"

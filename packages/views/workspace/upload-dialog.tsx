@@ -146,7 +146,9 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
           expectedSpeakers: Number.isFinite(expectedSpeakersValue) && expectedSpeakersValue > 0
             ? expectedSpeakersValue
             : undefined,
-          hotwordPackageId: selectedHotwordPackageId || undefined,
+          // `null` = explicit "none" for this task; `undefined` = fall back to
+          // the engine's configured hotword package.
+          hotwordPackageId: selectedHotwordPackageId || null,
         });
         setPhase("complete");
         toast.success(t("upload.local_success"));

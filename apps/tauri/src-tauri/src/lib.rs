@@ -23,6 +23,7 @@ mod live_translation;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[path = "live_translation_stub.rs"]
 mod live_translation;
+mod recording_card;
 mod stt;
 // Wire codec for the Volcengine AST provider used by `live_translation`. Kept
 // platform-independent so its golden-vector tests run everywhere, even where
@@ -32,6 +33,7 @@ mod stt;
     allow(dead_code)
 )]
 mod volc_ast;
+mod window_effects;
 
 use live_translation::LiveTranslationManager;
 
@@ -1296,6 +1298,30 @@ fn apply_voiceprints(app: &AppHandle, audio_path: &str, segments: &mut [Value], 
     Ok(())
 }
 
+/// Apply per-task overrides from the request options onto the resolved
+/// provider before it is frozen into the record, so the choices made in the
+/// upload dialog (expected speakers, hotword package) actually take effect:
+/// - `expectedSpeakers` > 0 overrides the config; absent/0 keeps the config.
+/// - `hotwordPackageId`: absent keeps the config, `null` means explicit
+///   "none" for this task, a string selects that package.
+fn apply_per_task_overrides(provider: &mut stt::ProviderConfig, options: Option<&Value>) {
+    let Some(options) = options else { return };
+    let expected = options
+        .get("expectedSpeakers")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0);
+    if let Some(expected) = expected {
+        provider.set_expected_speakers(Some(expected));
+    }
+    if let Some(package) = options.get("hotwordPackageId") {
+        if package.is_null() {
+            provider.set_hotword_package_id(None);
+        } else if let Some(package_id) = package.as_str() {
+            provider.set_hotword_package_id(Some(package_id.to_owned()));
+        }
+    }
+}
+
 fn create_queued_record(app: &AppHandle, audio_path: &str, options: Option<&Value>) -> CommandResult<Value> {
     let created_at = now();
     let language = options.and_then(|value| value.get("language")).and_then(Value::as_str);
@@ -1303,7 +1329,8 @@ fn create_queued_record(app: &AppHandle, audio_path: &str, options: Option<&Valu
         .and_then(|value| value.get("providerConfig"))
         .filter(|value| !value.is_null())
         .and_then(|value| serde_json::from_value::<stt::ProviderConfig>(value.clone()).ok());
-    let provider = resolve_provider(app, language, per_note.as_ref());
+    let mut provider = resolve_provider(app, language, per_note.as_ref());
+    apply_per_task_overrides(&mut provider, options);
     let model_id = match &provider {
         stt::ProviderConfig::Funasr(_) => "funasr-paraformer",
         stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
@@ -1354,6 +1381,31 @@ fn fail_interrupted_records(app: &AppHandle) -> CommandResult<()> {
     Ok(())
 }
 
+/// Best-effort audio duration probe via the bundled ffprobe. Returns `None`
+/// when the shared runtime isn't installed or the duration can't be parsed, so
+/// callers simply skip the field instead of storing a wrong value.
+fn probe_audio_duration_ms(app: &AppHandle, path: &str) -> Option<i64> {
+    let ffprobe = stt::sidecar_path(app, "ffprobe").ok()?;
+    let output = Command::new(&ffprobe)
+        .args([
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            path,
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let seconds: f64 = String::from_utf8_lossy(&output.stdout).trim().parse().ok()?;
+    let duration_ms = (seconds * 1000.0).round() as i64;
+    (duration_ms > 0).then_some(duration_ms)
+}
+
 fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
     let id = record.get("id").and_then(Value::as_str).ok_or("Record id is required")?.to_owned();
     let started_at = now();
@@ -1365,7 +1417,7 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
     started.insert("error".to_owned(), Value::Null);
     update_store_value(app, "local-transcriptions", &id, started)?;
 
-    let result: CommandResult<(String, Vec<Value>)> = (|| {
+    let result: CommandResult<(String, Vec<Value>, Option<i64>)> = (|| {
         let audio_path = record.get("sourcePath").and_then(Value::as_str).ok_or("Source path is required")?;
         // Use the frozen per-record provider config (set at creation time) so a
         // later change to the default routing never affects an in-flight task.
@@ -1408,11 +1460,11 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
             }
         }
         apply_voiceprints(app, audio_path, &mut segments, &funasr_dir)?;
-        Ok((transcript, segments))
+        Ok((transcript, segments, probe_audio_duration_ms(app, audio_path)))
     })();
 
     match result {
-        Ok((transcript, segments)) => {
+        Ok((transcript, segments, audio_duration_ms)) => {
             let completed_at = now();
             let duration = chrono::DateTime::parse_from_rfc3339(&completed_at).ok()
                 .zip(chrono::DateTime::parse_from_rfc3339(&started_at).ok())
@@ -1424,7 +1476,13 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
             patch.insert("progressPhase".to_owned(), json!("completed"));
             patch.insert("completedAt".to_owned(), json!(completed_at));
             patch.insert("updatedAt".to_owned(), json!(completed_at));
-            patch.insert("durationMs".to_owned(), json!(duration));
+            // `durationMs` is the recording's real length (surfaced as the file
+            // duration in the UI); the wall-clock time transcription took is
+            // stored separately as `elapsedMs`.
+            if let Some(audio_duration_ms) = audio_duration_ms {
+                patch.insert("durationMs".to_owned(), json!(audio_duration_ms));
+            }
+            patch.insert("elapsedMs".to_owned(), json!(duration));
             patch.insert("error".to_owned(), Value::Null);
             update_store_value(app, "local-transcriptions", &id, patch)?.ok_or("Local transcription record disappeared".to_owned())
         }
@@ -1493,7 +1551,9 @@ fn local_stt_model_status(app: AppHandle) -> CommandResult<Value> {
     model_status_list(&app)
 }
 
-#[tauri::command]
+/// Runs on the async thread pool (`command(async)`): a model download blocks
+/// for minutes, which would freeze the whole app if it ran on the main thread.
+#[tauri::command(async)]
 fn local_stt_download_model(
     app: AppHandle,
     state: tauri::State<AppState>,
@@ -1561,7 +1621,9 @@ fn local_stt_download_model(
     result
 }
 
-#[tauri::command]
+/// `command(async)`: directory deletion and status re-listing run off the main
+/// thread, so a large model dir can't freeze the UI.
+#[tauri::command(async)]
 fn local_stt_delete_model(
     app: AppHandle,
     state: tauri::State<AppState>,
@@ -1636,7 +1698,9 @@ fn local_transcription_update_voiceprint(app: AppHandle, mut voiceprint: Value) 
 #[tauri::command]
 fn local_transcription_delete_voiceprint(app: AppHandle, id: String) -> CommandResult<()> { remove_store_value(&app, "local-voiceprints", &id) }
 
-#[tauri::command]
+/// `command(async)`: voiceprint extraction spawns a Python process and loads
+/// the CAM++ model, blocking for seconds to minutes.
+#[tauri::command(async)]
 fn local_transcription_create_voiceprint(app: AppHandle, input: Value) -> CommandResult<Value> {
     let record_id = input.get("sampleRecordId").and_then(Value::as_str).ok_or("Sample record id is required")?;
     let name = input.get("name").and_then(Value::as_str).filter(|value| !value.trim().is_empty()).ok_or("Voiceprint name is required")?;
@@ -2003,42 +2067,9 @@ fn migrate_electron_data(app: &AppHandle) -> CommandResult<()> {
 }
 
 // ── Version / update checking ──────────────────────────────
-// GitHub repository that hosts the desktop releases. This must match the repo
-// the release workflow (`.github/workflows/release.yml`) publishes to.
-/// Public "latest version" endpoint. The desktop app cannot query the GitHub
-/// release API directly because `lynse-ai/lynse-desktop` is a private repo
-/// (anonymous requests return 404). Instead a public endpoint proxies the
-/// private release server-side with a GitHub token that never reaches the
-/// client. Override with `LYNSE_UPDATE_URL` (e.g. a local mock in dev).
-const DEFAULT_UPDATE_CHECK_URL: &str = "https://api.lynse.cn/v1/client/latest-version";
-
-fn update_check_url() -> String {
-    env::var("LYNSE_UPDATE_URL").unwrap_or_else(|_| DEFAULT_UPDATE_CHECK_URL.to_string())
-}
-
-/// Split a semver-ish string ("v0.1.12", "1.2.3-beta") into comparable numeric
-/// segments, ignoring non-digit separators and any pre-release/build suffix.
-fn parse_version_segments(version: &str) -> Vec<u32> {
-    version
-        .split(|character: char| !character.is_ascii_digit())
-        .filter_map(|segment| segment.parse::<u32>().ok())
-        .collect()
-}
-
-/// True only when `latest` is strictly newer than `current`.
-fn is_newer_version(latest: &str, current: &str) -> bool {
-    let latest_segments = parse_version_segments(latest);
-    let current_segments = parse_version_segments(current);
-    let length = latest_segments.len().max(current_segments.len());
-    for index in 0..length {
-        let left = *latest_segments.get(index).unwrap_or(&0);
-        let right = *current_segments.get(index).unwrap_or(&0);
-        if left != right {
-            return left > right;
-        }
-    }
-    false
-}
+// Update detection, download, and install are handled end-to-end by
+// tauri-plugin-updater (endpoints + pubkey live in tauri.conf.json), with
+// release assets published to GitHub Releases by `.github/workflows/release.yml`.
 
 #[tauri::command]
 fn get_app_info(app: AppHandle) -> Value {
@@ -2050,76 +2081,6 @@ fn get_app_info(app: AppHandle) -> Value {
         other => other,
     };
     json!({ "version": version, "platform": platform })
-}
-
-#[tauri::command]
-fn check_app_update(app: AppHandle) -> CommandResult<Value> {
-    let current_version = app.package_info().version.to_string();
-    let url = update_check_url();
-
-    let output = Command::new("curl")
-        .args([
-            "-sS",
-            "-L",
-            "--max-time",
-            "20",
-            "-H",
-            "User-Agent: lynse-desktop",
-            "-H",
-            "Accept: application/json",
-            &url,
-        ])
-        .output()
-        .map_err(|error| format!("failed to run curl: {error}"))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "update check request failed (exit code {})",
-            output
-                .status
-                .code()
-                .map(|code| code.to_string())
-                .unwrap_or_else(|| "unknown".to_string())
-        ));
-    }
-
-    let body = String::from_utf8_lossy(&output.stdout);
-    let payload: Value = serde_json::from_str(&body)
-        .map_err(|error| format!("invalid update-check response: {error}"))?;
-
-    // Surface backend errors instead of silently treating a bad/empty payload
-    // as "already up to date".
-    if let Some(message) = payload.get("message").and_then(Value::as_str) {
-        return Err(format!("update check failed: {message}"));
-    }
-
-    let latest_version = payload
-        .get("version")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim_start_matches('v')
-        .to_string();
-    let has_update =
-        !latest_version.is_empty() && is_newer_version(&latest_version, &current_version);
-    let release_url = payload
-        .get("url")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let release_notes = payload.get("notes").and_then(Value::as_str).map(String::from);
-    let published_at = payload
-        .get("publishedAt")
-        .and_then(Value::as_str)
-        .map(String::from);
-
-    Ok(json!({
-        "currentVersion": current_version,
-        "latestVersion": latest_version,
-        "hasUpdate": has_update,
-        "releaseUrl": release_url,
-        "releaseNotes": release_notes,
-        "publishedAt": published_at,
-    }))
 }
 
 const TRAY_ELAPSED_ID: &str = "tray_elapsed";
@@ -2265,6 +2226,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             model_download_in_progress: Mutex::new(false),
             tray_ui: Mutex::new(TrayUiState::default()),
@@ -2272,6 +2235,7 @@ pub fn run() {
         .manage(LiveTranslationManager::default())
         .register_uri_scheme_protocol("local-media", media_response)
         .setup(|app| {
+            app.manage(recording_card::RecordingCardManager::new(app.handle().clone()));
             if let Err(error) = migrate_electron_data(&app.handle()) {
                 eprintln!("Failed to migrate Electron local data: {error}");
             }
@@ -2281,7 +2245,23 @@ pub fn run() {
             if let Err(error) = setup_tray(&app.handle()) {
                 eprintln!("Failed to setup system tray: {error}");
             }
+            recording_card::spawn_reconnect_watcher(app.handle().clone());
+            if let Some(window) = app.get_webview_window("main") {
+                if let Err(error) = window_effects::apply_window_effects(&window) {
+                    eprintln!("Failed to apply native window effects: {error}");
+                }
+            }
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Resizes (and the fullscreen enter/exit behind them) can reset the
+            // traffic lights to the system layout; re-assert the tighter stride.
+            if !matches!(event, tauri::WindowEvent::Resized { .. }) || window.label() != "main" {
+                return;
+            }
+            if let Some(webview) = window.get_webview_window("main") {
+                window_effects::apply_traffic_light_spacing(&webview);
+            }
         })
         .invoke_handler(tauri::generate_handler![
             local_transcription_list, local_transcription_get, local_transcription_delete, local_transcription_audio_url,
@@ -2293,7 +2273,7 @@ pub fn run() {
             local_transcription_update_voiceprint, local_transcription_delete_voiceprint,
             local_stt_config_get, local_stt_config_save,
             secure_set_secret, secure_get_secret, secure_delete_secret,
-            get_app_info, check_app_update,
+            get_app_info,
             live_translation::live_translation_permissions,
             live_translation::live_translation_request_permission,
             live_translation::live_translation_state,
@@ -2307,8 +2287,24 @@ pub fn run() {
             live_translation::live_translation_show_subtitles,
             live_translation::live_translation_show_main,
             live_translation::live_translation_hide_island,
+            live_translation::live_translation_expand_island,
             live_translation::live_translation_update_tray,
             live_translation::live_translation_set_mode,
+            recording_card::recording_card_state,
+            recording_card::recording_card_scan_start,
+            recording_card::recording_card_scan_stop,
+            recording_card::recording_card_set_manufacturer_code,
+            recording_card::recording_card_set_live_feed,
+            recording_card::recording_card_connect,
+            recording_card::recording_card_disconnect,
+            recording_card::recording_card_query,
+            recording_card::recording_card_record,
+            recording_card::recording_card_list_files,
+            recording_card::recording_card_download,
+            recording_card::recording_card_cancel_download,
+            recording_card::recording_card_delete_file,
+            recording_card::recording_card_transcribe_source,
+            window_effects::window_effects_mode,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Lynse Tauri application");

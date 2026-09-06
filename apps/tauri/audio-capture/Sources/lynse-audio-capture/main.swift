@@ -87,11 +87,22 @@ guard let socketPath = argumentValue("--socket"), !socketPath.isEmpty,
     emitError("missing --socket or --out")
     exit(2)
 }
-guard microphonePermission() == "granted" else {
+// Capture-source mode: `--sources mic|system|both` (default both).
+// "system" is the transcribe-a-playing-video case — the mic would only
+// contribute a duplicate echo of the same audio.
+let sourcesMode = argumentValue("--sources") ?? "both"
+let captureMic: Bool
+let captureSystem: Bool
+switch sourcesMode {
+case "mic": (captureMic, captureSystem) = (true, false)
+case "system": (captureMic, captureSystem) = (false, true)
+default: (captureMic, captureSystem) = (true, true)
+}
+guard !captureMic || microphonePermission() == "granted" else {
     emitError(microphonePermissionMessage)
     exit(4)
 }
-guard CGPreflightScreenCaptureAccess() else {
+guard !captureSystem || CGPreflightScreenCaptureAccess() else {
     emitError(systemAudioPermissionMessage)
     exit(4)
 }
@@ -326,11 +337,26 @@ private final class FrameSink {
     private let wav: WavWriter
     private var assembler = PCMFrameAssembler()
     private let queue: DispatchQueue
+    /// Cross-stream echo-gate hooks, active only in dual-stream mode.
+    /// `observe` feeds the reference (system) stream into the gate; `admit`
+    /// decides whether mic frames reach the recognition socket. The WAV is
+    /// always written, so suppressed audio is never lost from the recording.
+    private let observe: (([Int16]) -> Void)?
+    private let admit: (([Int16]) -> Bool)?
 
-    init(source: UInt8, name: String, socket: LocalSocketWriter, wav: WavWriter) {
+    init(
+        source: UInt8,
+        name: String,
+        socket: LocalSocketWriter,
+        wav: WavWriter,
+        observe: (([Int16]) -> Void)? = nil,
+        admit: (([Int16]) -> Bool)? = nil
+    ) {
         self.source = source
         self.socket = socket
         self.wav = wav
+        self.observe = observe
+        self.admit = admit
         queue = DispatchQueue(label: "app.lynse.capture.\(name)")
     }
 
@@ -343,7 +369,11 @@ private final class FrameSink {
                 return Int16(max(-32_768, min(32_767, scaled)))
             }
             self.wav.write(samples, firstSampleElapsedMs: chunkStartMs)
-            self.send(self.assembler.append(samples: samples, chunkStartMs: chunkStartMs))
+            self.observe?(samples)
+            let frames = self.assembler.append(samples: samples, chunkStartMs: chunkStartMs)
+            if self.admit?(samples) ?? true {
+                self.send(frames)
+            }
         }
     }
 
@@ -485,10 +515,25 @@ do {
 
 private let clock = ActiveClock()
 private let levels = LevelState()
+/// Shared echo gate — active only in dual-stream mode, where speaker playback
+/// can feed the system audio back into the microphone as pure echo.
+private let echoGate: EchoGate? = (captureMic && captureSystem) ? EchoGate() : nil
 private let micWav = try WavWriter(path: outputDirectory.appendingPathComponent("mic.wav").path)
 private let systemWav = try WavWriter(path: outputDirectory.appendingPathComponent("system.wav").path)
-private let micSink = FrameSink(source: 0, name: "mic", socket: socketWriter, wav: micWav)
-private let systemSink = FrameSink(source: 1, name: "system", socket: socketWriter, wav: systemWav)
+private let micSink = FrameSink(
+    source: 0,
+    name: "mic",
+    socket: socketWriter,
+    wav: micWav,
+    admit: echoGate.map { gate in { gate.admitMic(samples: $0) } }
+)
+private let systemSink = FrameSink(
+    source: 1,
+    name: "system",
+    socket: socketWriter,
+    wav: systemWav,
+    observe: echoGate.map { gate in { gate.pushSystem(samples: $0) } }
+)
 private let micOutput = CaptureOutput(source: 0, sink: micSink, clock: clock, levels: levels)
 private let systemOutput = CaptureOutput(source: 1, sink: systemSink, clock: clock, levels: levels)
 private let videoOutput = NoopVideoOutput()
@@ -506,11 +551,11 @@ func createCaptureStream() async throws -> SCStream {
     guard let display = content.displays.first else { throw NSError(domain: "LynseCapture", code: 1, userInfo: [NSLocalizedDescriptionKey: "No display is available for audio capture."]) }
     let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
     let configuration = SCStreamConfiguration()
-    configuration.capturesAudio = true
+    configuration.capturesAudio = captureSystem
     configuration.excludesCurrentProcessAudio = true
     configuration.sampleRate = 48_000
     configuration.channelCount = 2
-    configuration.captureMicrophone = microphonePermission() == "granted"
+    configuration.captureMicrophone = captureMic && microphonePermission() == "granted"
     configuration.microphoneCaptureDeviceID = AVCaptureDevice.default(for: .audio)?.uniqueID
     configuration.width = 2
     configuration.height = 2
@@ -518,7 +563,9 @@ func createCaptureStream() async throws -> SCStream {
     configuration.queueDepth = 3
 
     let stream = SCStream(filter: filter, configuration: configuration, delegate: captureDelegate)
-    try stream.addStreamOutput(systemOutput, type: .audio, sampleHandlerQueue: DispatchQueue(label: "app.lynse.capture.system"))
+    if captureSystem {
+        try stream.addStreamOutput(systemOutput, type: .audio, sampleHandlerQueue: DispatchQueue(label: "app.lynse.capture.system"))
+    }
     if configuration.captureMicrophone {
         try stream.addStreamOutput(micOutput, type: .microphone, sampleHandlerQueue: DispatchQueue(label: "app.lynse.capture.mic"))
     }
@@ -562,6 +609,7 @@ func restartCapture(reason: String) {
     guard !paused, !shuttingDown, !restartingCapture else { return }
     restartingCapture = true
     emit(["event": "diagnostic", "message": reason])
+    echoGate?.reset()
     let stream = captureStream
     captureStream = nil
     Task {
@@ -608,7 +656,13 @@ let levelTimer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "app
 levelTimer.schedule(deadline: .now() + .milliseconds(200), repeating: .milliseconds(200))
 levelTimer.setEventHandler {
     let (mic, system) = levels.take()
-    emit(["event": "levels", "mic": mic, "system": system, "elapsedMs": clock.elapsedMs()])
+    emit([
+        "event": "levels",
+        "mic": mic,
+        "system": system,
+        "elapsedMs": clock.elapsedMs(),
+        "micSuppressed": echoGate?.isSuppressed ?? false,
+    ])
 }
 levelTimer.resume()
 

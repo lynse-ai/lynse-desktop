@@ -64,7 +64,7 @@ export function DndProvider({ children }: { children: ReactNode }) {
         {children}
         <DragOverlay>
           {activeFileTitle ? (
-            <div className="flex items-center gap-2 rounded-md border border-border bg-popover px-3 py-1.5 shadow-md">
+            <div className="flex items-center gap-2 rounded-md border border-border glass-overlay px-3 py-1.5 shadow-md">
               <span className="truncate text-xs font-medium">{activeFileTitle}</span>
             </div>
           ) : null}

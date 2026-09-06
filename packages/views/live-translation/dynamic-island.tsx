@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
-import { Maximize2, Pause, Play, Square, X } from "../icons";
+import { Captions, Maximize2, Pause, Play, Square, X } from "../icons";
 import { useLiveTranslation } from "./use-live-translation";
 
 interface DynamicIslandProps {
@@ -15,22 +15,38 @@ interface DynamicIslandProps {
   onStop?: () => void;
   /** Called when user taps expand (restore the full recording window). */
   onExpand?: () => void;
+  /** Whether the live-transcript drawer beneath the pill is expanded. */
+  drawerOpen?: boolean;
+  /** Called when user taps the transcript toggle. Absent hides the toggle. */
+  onToggleDrawer?: () => void;
+  /** Live-transcript drawer content rendered beneath the pill row. */
+  children?: ReactNode;
   className?: string;
 }
 
 /**
- * Dynamic Island — compact recording pill that mimics macOS menu-bar /
- * iOS Dynamic Island behavior.
+ * Dynamic Island — the always-on-top recording capsule, in the spirit of the
+ * iOS Dynamic Island.
  *
- * When recording is active this renders as an inline "live indicator" showing
- * elapsed time, a miniature mic-level bar, and one-tap pause/stop controls.
- * Rendered both inline (main window) and inside the always-on-top
- * "recording-island" Tauri window, where `onExpand` restores the full page
- * once the main window has been hidden.
+ * The pill row shows elapsed time, a miniature mic-level bar and one-tap
+ * pause/stop controls. When `onToggleDrawer` is provided a captions toggle
+ * appears; `RecordingIslandWindow` uses it to unfold a live-transcript drawer
+ * beneath the pill. The frosted look comes from native vibrancy behind the
+ * Tauri window (see `.island-surface` in the app's globals.css), so the pill
+ * reads as translucent glass over whatever is on screen.
  *
  * Auto-syncs the system tray tooltip via `live_translation_update_tray`.
  */
-export function DynamicIsland({ onDismiss, onPause, onStop, onExpand, className }: DynamicIslandProps) {
+export function DynamicIsland({
+  onDismiss,
+  onPause,
+  onStop,
+  onExpand,
+  drawerOpen,
+  onToggleDrawer,
+  children,
+  className,
+}: DynamicIslandProps) {
   const { t } = useTranslation();
   const { api, view } = useLiveTranslation();
   const recording = view.state === "recording";
@@ -66,79 +82,109 @@ export function DynamicIsland({ onDismiss, onPause, onStop, onExpand, className 
 
   return (
     <div
-      data-tauri-drag-region
       className={cn(
-        "group flex items-center gap-3 rounded-full border border-border/60 bg-background/95 px-3 py-1.5 shadow-lg backdrop-blur-md transition-all",
+        "island-surface flex h-full w-full flex-col overflow-hidden rounded-[22px] border border-border/50",
         className,
       )}
     >
-      {/* Red pulse dot */}
-      <span
+      {/* Pill row — the entire collapsed island */}
+      <div
         data-tauri-drag-region
-        className={cn(
-          "size-2 rounded-full",
-          paused ? "bg-amber-500" : "bg-red-500 animate-pulse",
-        )}
-      />
-
-      {/* Timer */}
-      <span
-        data-tauri-drag-region
-        className="min-w-[3ch] text-center font-mono text-xs font-semibold tabular-nums"
+        className="group flex h-11 shrink-0 items-center gap-2.5 px-3"
       >
-        {fmt(view.elapsedMs)}
-      </span>
-
-      {/* Mini level bar */}
-      <div data-tauri-drag-region className="h-1 w-12 overflow-hidden rounded-full bg-muted">
-        <div
-          className="h-full rounded-full bg-primary transition-[width] duration-100"
-          style={{ width: `${Math.min(100, Math.max(4, view.micLevel * 100))}%` }}
+        {/* Red pulse dot */}
+        <span
+          data-tauri-drag-region
+          className={cn(
+            "size-2 shrink-0 rounded-full",
+            paused ? "bg-warning" : "bg-destructive animate-pulse",
+          )}
         />
-      </div>
 
-      {/* Controls */}
-      <div className="flex items-center gap-0.5">
-        {onExpand && (
+        {/* Timer */}
+        <span
+          data-tauri-drag-region
+          className="min-w-[3ch] text-center font-mono text-xs font-semibold tabular-nums"
+        >
+          {fmt(view.elapsedMs)}
+        </span>
+
+        {/* Mini level bar */}
+        <div data-tauri-drag-region className="h-1 w-12 overflow-hidden rounded-full bg-muted">
+          <div
+            className="h-full rounded-full bg-primary transition-[width] duration-100"
+            style={{ width: `${Math.min(100, Math.max(4, view.micLevel * 100))}%` }}
+          />
+        </div>
+
+        {/* Controls */}
+        <div className="ml-auto flex items-center gap-0.5">
+          {onToggleDrawer && (
+            <button
+              type="button"
+              onClick={onToggleDrawer}
+              aria-label={
+                drawerOpen
+                  ? t("recording_mode.hide_transcript")
+                  : t("recording_mode.view_transcribe")
+              }
+              title={
+                drawerOpen
+                  ? t("recording_mode.hide_transcript")
+                  : t("recording_mode.view_transcribe")
+              }
+              className={cn(
+                "flex size-6 items-center justify-center rounded-full transition-colors hover:bg-muted hover:text-foreground",
+                drawerOpen ? "text-primary" : "text-muted-foreground",
+              )}
+            >
+              <Captions className="size-3.5" />
+            </button>
+          )}
+          {onExpand && (
+            <button
+              type="button"
+              onClick={onExpand}
+              aria-label={t("recording_mode.expand")}
+              title={t("recording_mode.expand")}
+              className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Maximize2 className="size-3" />
+            </button>
+          )}
           <button
             type="button"
-            onClick={onExpand}
-            aria-label={t("recording_mode.expand")}
-            title={t("recording_mode.expand")}
+            onClick={onPause}
+            aria-label={paused ? t("recording_mode.resume") : t("recording_mode.pause")}
             className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
-            <Maximize2 className="size-3" />
+            {paused ? <Play className="size-3" /> : <Pause className="size-3" />}
+          </button>
+          <button
+            type="button"
+            onClick={onStop}
+            aria-label={t("recording_mode.stop_recording")}
+            className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+          >
+            <Square className="size-3" />
+          </button>
+        </div>
+
+        {/* Dismiss (only if handler provided — e.g. mini-player mode) */}
+        {onDismiss && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            aria-label={t("recording_mode.close")}
+            className="flex size-5 items-center justify-center rounded-full text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
+          >
+            <X className="size-3" />
           </button>
         )}
-        <button
-          type="button"
-          onClick={onPause}
-          aria-label={paused ? t("recording_mode.resume") : t("recording_mode.pause")}
-          className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          {paused ? <Play className="size-3" /> : <Pause className="size-3" />}
-        </button>
-        <button
-          type="button"
-          onClick={onStop}
-          aria-label={t("recording_mode.stop_recording")}
-          className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-        >
-          <Square className="size-3" />
-        </button>
       </div>
 
-      {/* Dismiss (only if handler provided — e.g. mini-player mode) */}
-      {onDismiss && (
-        <button
-          type="button"
-          onClick={onDismiss}
-          aria-label={t("recording_mode.close")}
-          className="ml-0.5 flex size-5 items-center justify-center rounded-full text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
-        >
-          <X className="size-3" />
-        </button>
-      )}
+      {/* Live-transcript drawer (expanded state) */}
+      {children}
     </div>
   );
 }

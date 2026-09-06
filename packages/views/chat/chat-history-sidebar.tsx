@@ -73,7 +73,7 @@ export function ChatHistorySidebar({
                   <span className="truncate text-xs font-medium">{conversation.title}</span>
                 </span>
                 <span
-                  className={`mt-1 block text-[10px] ${
+                  className={`mt-1 block text-3xs ${
                     working ? "text-primary/80" : "text-muted-foreground/70"
                   }`}
                 >

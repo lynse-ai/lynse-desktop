@@ -4,6 +4,7 @@ import type {
   ChatStreamEvent,
   ChatConfirm,
   ChatConversation,
+  ChatAttachment,
 } from "../types";
 import {
   CloudChatTransport,
@@ -170,7 +171,12 @@ interface ChatStoreState {
   setUserId: (userId: string) => void;
   hydrate: () => void;
   setChatVisible: (visible: boolean) => void;
-  sendMessage: (content: string, fileId?: string, userSpecifiedFile?: boolean) => void;
+  sendMessage: (
+    content: string,
+    fileIds?: string | string[],
+    userSpecifiedFile?: boolean,
+    attachments?: ChatAttachment[],
+  ) => void;
   answerConfirm: (messageId: string, value: string) => void;
   dismissConfirm: (messageId: string) => void;
   stopStreaming: () => void;
@@ -366,9 +372,17 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     }
   };
 
-  const runSend = (content: string, fileId?: string, userSpecifiedFile = false) => {
+  const runSend = (
+    content: string,
+    fileIdsInput?: string | string[],
+    userSpecifiedFile = false,
+    attachments?: ChatAttachment[],
+  ) => {
     if (!content.trim()) return;
     const userId = get().userId;
+    const fileIds = Array.isArray(fileIdsInput) ? fileIdsInput : fileIdsInput ? [fileIdsInput] : [];
+    // Mentioned notes/groups scope retrieval just like a selected file does.
+    const hasContextFiles = userSpecifiedFile || fileIds.length > 0;
 
     let conversationId = get().activeConversationId;
     // One in-flight turn per conversation…
@@ -404,6 +418,9 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       role: "user",
       content,
       timestamp: Date.now(),
+      // Composer attachments (name/kind only — no hosted URL yet) so the sent
+      // bubble shows what was attached.
+      attachments: attachments?.length ? attachments : undefined,
     };
     const assistantMsg: ChatMessage = {
       id: assistantId,
@@ -455,8 +472,8 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         query: content,
         sessionId: conversationId,
         userId,
-        fileIds: fileId ? [fileId] : [],
-        userSpecifiedFile,
+        fileIds,
+        userSpecifiedFile: hasContextFiles,
         token: readLynseToken(),
         signal: controller.signal,
         onEvent: (evt) => {
@@ -531,9 +548,9 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       }
     },
 
-    sendMessage: (content, fileId, userSpecifiedFile) => {
+    sendMessage: (content, fileIds, userSpecifiedFile, attachments) => {
       if (!content.trim()) return;
-      runSend(content, fileId, userSpecifiedFile);
+      runSend(content, fileIds, userSpecifiedFile, attachments);
     },
 
     answerConfirm: (messageId, value) => {

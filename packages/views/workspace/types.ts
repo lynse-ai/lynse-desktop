@@ -103,7 +103,11 @@ export interface LocalTranscriptionRecord {
   progressPhase?: LocalTranscriptionStatus;
   startedAt?: string;
   completedAt?: string;
+  /** Real recording length in ms (probed from the audio); the live-translation
+   *  engine writes it directly. */
   durationMs?: number;
+  /** Wall-clock time the transcription took, in ms (batch engines only). */
+  elapsedMs?: number;
   expectedSpeakers?: number;
   hotwordPackageId?: string;
   engine: "funasr" | "whisper" | "vibeasr" | "ilivedata_rtvt";
@@ -118,7 +122,9 @@ export interface LocalTranscriptionRecord {
 
 export interface LocalTranscriptionOptions {
   expectedSpeakers?: number;
-  hotwordPackageId?: string;
+  /** `null` explicitly disables hotwords for this task; `undefined` falls back
+   *  to the engine's configured package. */
+  hotwordPackageId?: string | null;
   language?: string | null;
   providerConfig?: SttProviderConfig | null;
 }

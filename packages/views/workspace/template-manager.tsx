@@ -73,11 +73,11 @@ function CategorySection({
   return (
     <div>
       <div className="flex items-center gap-2 px-1 py-1.5">
-        <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
+        <span className="text-3xs font-semibold uppercase tracking-widest text-muted-foreground/50">
           {category}
         </span>
         <div className="flex-1 h-px bg-border/40" />
-        <span className="text-[10px] tabular-nums text-muted-foreground/40">
+        <span className="text-3xs tabular-nums text-muted-foreground/40">
           {templates.length}
         </span>
       </div>
@@ -133,7 +133,7 @@ function TemplateCard({ template }: { template: PromptTemplate }) {
         </div>
         {template.contentFormat && (
           <span className={cn(
-            "text-[9px] font-medium px-1.5 py-0.5 rounded-md",
+            "text-3xs font-medium px-1.5 py-0.5 rounded-md",
             isDefault
               ? "bg-primary/10 text-primary"
               : "bg-muted text-muted-foreground/70",
@@ -145,7 +145,7 @@ function TemplateCard({ template }: { template: PromptTemplate }) {
 
       {/* Name */}
       <p className={cn(
-        "text-[13px] leading-snug font-medium line-clamp-2",
+        "text-13 leading-snug font-medium line-clamp-2",
         isDefault ? "text-primary" : "text-foreground/90",
       )}>
         {template.name}
@@ -153,7 +153,7 @@ function TemplateCard({ template }: { template: PromptTemplate }) {
 
       {/* Alias */}
       {template.alias && template.alias !== template.name && (
-        <p className="text-[11px] leading-snug text-muted-foreground line-clamp-1">
+        <p className="text-2xs leading-snug text-muted-foreground line-clamp-1">
           {template.alias}
         </p>
       )}
@@ -165,7 +165,7 @@ function TemplateCard({ template }: { template: PromptTemplate }) {
             <span
               key={tag}
               className={cn(
-                "text-[9px] px-1.5 py-0.5 rounded-md leading-none",
+                "text-3xs px-1.5 py-0.5 rounded-md leading-none",
                 isDefault
                   ? "bg-primary/8 text-primary/80"
                   : "bg-muted/60 text-muted-foreground/60",

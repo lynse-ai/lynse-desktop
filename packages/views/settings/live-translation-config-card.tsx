@@ -14,6 +14,14 @@ import type {
 } from "../live-translation/types";
 
 /**
+ * Selectable max-speaker counts for iLiveData diarization. `0` (rendered as
+ * "off") disables speaker recognition entirely; the API requires a value
+ * greater than 1, so the enabled range starts at 2.
+ */
+const SPEAKER_COUNT_OPTIONS = [2, 3, 4, 5] as const;
+const SPEAKER_OFF = 0;
+
+/**
  * Settings card that lets the user pick the live-translation engine and store
  * its credentials. The Qwen (DashScope) API key is persisted to the OS
  * Keychain via the Tauri bridge; the endpoint and iLiveData secrets go through
@@ -81,6 +89,13 @@ export function LiveTranslationConfigCard() {
     setSaved(false);
   }
 
+  function updateILiveDataSpeakers(value: number) {
+    setConfig((c) =>
+      c ? { ...c, ilivedata: { ...c.ilivedata, maxSpeakers: value } } : c,
+    );
+    setSaved(false);
+  }
+
   async function save() {
     if (!api || !config) return;
     setSaving(true);
@@ -131,11 +146,11 @@ export function LiveTranslationConfigCard() {
 
         {isVolc && (
           <div className="space-y-2 rounded-lg border border-border bg-card p-3">
-            <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+            <p className="text-2xs leading-relaxed text-warning-text">
               {t("live_translation.volc_hint")}
             </p>
             <div className="space-y-1.5">
-              <Label htmlFor="lt-volc-key" className="text-[11px]">
+              <Label htmlFor="lt-volc-key" className="text-2xs">
                 {t("live_translation.provider_volc_api_key")}
               </Label>
               <Input
@@ -148,7 +163,7 @@ export function LiveTranslationConfigCard() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="lt-volc-endpoint" className="text-[11px]">
+              <Label htmlFor="lt-volc-endpoint" className="text-2xs">
                 {t("live_translation.provider_volc_endpoint")}
               </Label>
               <Input
@@ -163,11 +178,11 @@ export function LiveTranslationConfigCard() {
 
         {isQwen && (
           <div className="space-y-2 rounded-lg border border-border bg-card p-3">
-            <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+            <p className="text-2xs leading-relaxed text-warning-text">
               {t("live_translation.qwen_hint")}
             </p>
             <div className="space-y-1.5">
-              <Label htmlFor="lt-qwen-key" className="text-[11px]">
+              <Label htmlFor="lt-qwen-key" className="text-2xs">
                 {t("live_translation.provider_qwen_api_key")}
               </Label>
               <Input
@@ -181,7 +196,7 @@ export function LiveTranslationConfigCard() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="lt-qwen-endpoint" className="text-[11px]">
+              <Label htmlFor="lt-qwen-endpoint" className="text-2xs">
                 {t("live_translation.provider_qwen_endpoint")}
               </Label>
               <Input
@@ -196,11 +211,11 @@ export function LiveTranslationConfigCard() {
 
         {isILiveData && (
           <div className="space-y-2 rounded-lg border border-border bg-card p-3">
-            <p className="text-[11px] leading-relaxed text-amber-700 dark:text-amber-300">
+            <p className="text-2xs leading-relaxed text-warning-text">
               {t("live_translation.direct_test_hint")}
             </p>
             <div className="space-y-1.5">
-              <Label htmlFor="lt-ilivedata-endpoint" className="text-[11px]">
+              <Label htmlFor="lt-ilivedata-endpoint" className="text-2xs">
                 {t("live_translation.provider_websocket_endpoint")}
               </Label>
               <Input
@@ -211,7 +226,7 @@ export function LiveTranslationConfigCard() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="lt-ilivedata-pid" className="text-[11px]">
+              <Label htmlFor="lt-ilivedata-pid" className="text-2xs">
                 {t("live_translation.provider_pid")}
               </Label>
               <Input
@@ -222,7 +237,7 @@ export function LiveTranslationConfigCard() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="lt-ilivedata-secret" className="text-[11px]">
+              <Label htmlFor="lt-ilivedata-secret" className="text-2xs">
                 {t("live_translation.provider_secret_key")}
               </Label>
               <Input
@@ -233,6 +248,29 @@ export function LiveTranslationConfigCard() {
                 onChange={(e) => updateILiveData("secretKey", e.target.value)}
                 className="h-8 text-xs"
               />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="lt-ilivedata-speakers" className="text-2xs">
+                {t("live_translation.speaker_diarization")}
+              </Label>
+              <select
+                id="lt-ilivedata-speakers"
+                value={String(config.ilivedata.maxSpeakers ?? SPEAKER_OFF)}
+                onChange={(e) => updateILiveDataSpeakers(Number(e.target.value))}
+                className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-primary"
+              >
+                <option value={SPEAKER_OFF}>
+                  {t("live_translation.speaker_off")}
+                </option>
+                {SPEAKER_COUNT_OPTIONS.map((count) => (
+                  <option key={count} value={count}>
+                    {count}
+                  </option>
+                ))}
+              </select>
+              <p className="text-3xs leading-relaxed text-muted-foreground">
+                {t("live_translation.speaker_max_hint")}
+              </p>
             </div>
           </div>
         )}
@@ -249,8 +287,8 @@ export function LiveTranslationConfigCard() {
             {t("live_translation.save_provider_config")}
           </Button>
           {saved && (
-            <span className="inline-flex items-center gap-1.5 text-xs text-green-600">
-              <span className="size-1.5 rounded-full bg-green-500" />
+            <span className="inline-flex items-center gap-1.5 text-xs text-success">
+              <span className="size-1.5 rounded-full bg-success" />
               {t("live_translation.provider_config_saved")}
             </span>
           )}

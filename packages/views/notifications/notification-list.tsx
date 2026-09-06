@@ -88,7 +88,7 @@ export function NotificationList({
                   <span className={item.read ? "text-sm text-muted-foreground" : "text-sm font-medium text-foreground"}>
                     {textFor(item)}
                   </span>
-                  {!item.read && <span className="size-1.5 shrink-0 rounded-full bg-red-500" aria-label="unread" />}
+                  {!item.read && <span className="size-1.5 shrink-0 rounded-full bg-destructive" aria-label="unread" />}
                 </span>
                 <span className="mt-0.5 block text-xs text-muted-foreground">
                   {new Date(item.createdAt).toLocaleString()}

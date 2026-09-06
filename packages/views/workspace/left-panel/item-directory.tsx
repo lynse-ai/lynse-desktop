@@ -81,7 +81,7 @@ export function ItemDirectory() {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
         <p className="text-xs font-medium text-muted-foreground">Not connected</p>
-        <p className="text-[10px] text-muted-foreground">
+        <p className="text-3xs text-muted-foreground">
           Go to Settings to connect your API key
         </p>
       </div>
@@ -139,14 +139,14 @@ export function ItemDirectory() {
                     <FolderOpen className="size-3.5 shrink-0" />
                   )}
                   <span className="truncate">{label}</span>
-                  <span className="ml-auto text-[10px] tabular-nums shrink-0">
+                  <span className="ml-auto text-3xs tabular-nums shrink-0">
                     {groupItems.length}
                   </span>
                 </button>
                 {!isCollapsed && (
                   <div className="mt-0.5 space-y-0.5">
                     {groupItems.length === 0 ? (
-                      <p className="px-7 py-1.5 text-[10px] text-muted-foreground">
+                      <p className="px-7 py-1.5 text-3xs text-muted-foreground">
                         No items
                       </p>
                     ) : (

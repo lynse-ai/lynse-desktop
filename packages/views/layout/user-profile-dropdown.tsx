@@ -6,6 +6,7 @@ import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useAppUpdate, getAppInfoSync } from "../app-update";
 import { useUserCredits, useMembership } from "./use-user-credits";
+import { UserActivityHeatmap } from "./user-activity-heatmap";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -51,7 +52,7 @@ function LanguageItem({ code, label }: { code: string; label: string }) {
   return (
     <DropdownMenuItem onClick={() => changeLanguage(code)}>
       {isActive ? (
-        <Check className="size-3 text-green-500" />
+        <Check className="size-3 text-success" />
       ) : (
         <span className="w-3" />
       )}
@@ -97,6 +98,16 @@ export function UserProfileDropdown({
   const versionLabel = aboutVersion ? `v${aboutVersion}` : "—";
 
   const [copied, setCopied] = useState(false);
+  // `open` drives the menu; `hasOpened` latches on the first open and gates the
+  // heatmap's queries. Latching (rather than tracking `open` directly) keeps the
+  // data alive during the menu's close animation instead of flashing back to 0.
+  const [open, setOpen] = useState(false);
+  const [hasOpened, setHasOpened] = useState(false);
+
+  const handleOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (next) setHasOpened(true);
+  };
 
   const handleCopyName = () => {
     void navigator.clipboard.writeText(nickname).then(() => {
@@ -106,7 +117,7 @@ export function UserProfileDropdown({
   };
 
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={handleOpenChange}>
       <DropdownMenuTrigger
         render={
           trigger ?? (
@@ -116,14 +127,14 @@ export function UserProfileDropdown({
                   {initials}
                 </div>
                 {hasUpdate && (
-                  <span className="absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-emerald-500 text-white ring-2 ring-background">
+                  <span className="absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-success text-white ring-2 ring-background">
                     <ArrowUp className="size-2.5" strokeWidth={3} />
                   </span>
                 )}
               </div>
               <div className="min-w-0 flex-1 text-left">
-                <p className="truncate text-[13px] font-medium leading-tight">{nickname}</p>
-                <p className="truncate text-[11px] text-muted-foreground/70">{plan}</p>
+                <p className="truncate text-13 font-medium leading-tight">{nickname}</p>
+                <p className="truncate text-2xs text-muted-foreground/70">{plan}</p>
               </div>
             </button>
           )
@@ -140,7 +151,7 @@ export function UserProfileDropdown({
               title={copied ? t("layout.copied") : t("layout.copy_name")}
             >
               {copied ? (
-                <Check className="size-3 text-green-500" />
+                <Check className="size-3 text-success" />
               ) : (
                 <Copy className="size-3" />
               )}
@@ -156,26 +167,31 @@ export function UserProfileDropdown({
           </div>
           {pointsRemaining !== null && (
             <span
-              className="flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground"
+              className="flex items-center gap-1 text-2xs tabular-nums text-muted-foreground"
               title={t("layout.credits")}
             >
-              <Zap className="size-3 text-amber-500" />
+              <Zap className="size-3 text-warning" />
               {pointsRemaining}
             </span>
           )}
         </div>
 
+        {/* ── Notes activity heatmap ─────────────────────
+            Plain block (not a DropdownMenuItem) so it never steals
+            keyboard focus from the menu navigation. */}
+        <UserActivityHeatmap enabled={hasOpened} />
+
         <DropdownMenuSeparator />
 
         {/* ── Settings ─────────────────────────────────── */}
         <DropdownMenuItem onClick={onOpenSettings}>
-          <Settings className="size-4" />
+          <Settings className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_settings")}</span>
         </DropdownMenuItem>
 
         {/* ── Appearance: inline light/dark toggle ──────── */}
         <div className="flex items-center gap-2 px-2 py-1.5">
-          <Palette className="size-4 shrink-0 text-muted-foreground" />
+          <Palette className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.5} />
           <span className="text-sm">{t("layout.user_appearance")}</span>
           <div className="ml-auto flex items-center gap-0.5 rounded-lg border bg-muted/60 p-0.5">
             <button
@@ -206,7 +222,7 @@ export function UserProfileDropdown({
         {/* ── Language submenu ─────────────────────────── */}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
-            <Globe className="size-4" />
+            <Globe className="size-4 text-muted-foreground" strokeWidth={1.5} />
             <span>{t("layout.language")}</span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
@@ -218,17 +234,17 @@ export function UserProfileDropdown({
 
         {/* ── Help & Feedback ─────────────────────────── */}
         <DropdownMenuItem>
-          <HelpCircle className="size-4" />
+          <HelpCircle className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_help_feedback")}</span>
         </DropdownMenuItem>
 
         {/* ── About (version) ─────────────────────────── */}
         <DropdownMenuItem onClick={onOpenSettings}>
-          <Info className="size-4" />
+          <Info className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.about")}</span>
-          <span className="ml-auto flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground">
+          <span className="ml-auto flex items-center gap-1 text-2xs tabular-nums text-muted-foreground">
             {hasUpdate && (
-              <ArrowUp className="size-3 text-emerald-500" strokeWidth={2.5} />
+              <ArrowUp className="size-3 text-success" strokeWidth={2.5} />
             )}
             {versionLabel}
           </span>
@@ -243,7 +259,7 @@ export function UserProfileDropdown({
 
         {/* ── Log out ─────────────────────────────────── */}
         <DropdownMenuItem variant="destructive">
-          <LogOut className="size-4" />
+          <LogOut className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.log_out")}</span>
         </DropdownMenuItem>
       </DropdownMenuContent>

@@ -262,7 +262,7 @@ export function FloatingMarkdownToolbar({ editor }: FloatingMarkdownToolbarProps
       }}
       // Container-level focus guard (from Tolaria) — prevents editor blur on any click inside.
       onMouseDownCapture={handleToolbarMouseDownCapture}
-      className="floating-toolbar pointer-events-auto z-50 flex h-10 items-center gap-1 rounded-lg border border-border/30 bg-popover px-2 shadow-lg shadow-black/10"
+      className="floating-toolbar pointer-events-auto z-50 flex h-10 items-center gap-1 rounded-lg border border-border/30 glass-overlay px-2 shadow-lg shadow-black/10"
       style={{
         position: "fixed",
         top: pos.top,
@@ -326,7 +326,7 @@ export function FloatingMarkdownToolbar({ editor }: FloatingMarkdownToolbarProps
           <Image className="size-3.5" />
         </button>
         {imageOpen && (
-          <div className="absolute bottom-full left-0 mb-2 z-50 w-72 rounded-lg border border-border/30 bg-popover p-3 shadow-lg shadow-black/10">
+          <div className="absolute bottom-full left-0 mb-2 z-50 w-72 rounded-lg border border-border/30 glass-overlay p-3 shadow-lg shadow-black/10">
             <ImageForm
               onInsert={(url, alt) => run("image", { url, alt })}
               onCancel={() => setImageOpen(false)}
@@ -448,7 +448,7 @@ function useEditorComposing(editor: Editor | null): boolean {
 /** Floating submenu panel that appears above the toolbar. */
 function SubMenu({ children }: { children: React.ReactNode }) {
   return (
-    <div className="absolute bottom-full left-0 mb-2 z-50 flex items-center gap-1 rounded-lg border border-border/30 bg-popover p-1.5 shadow-lg shadow-black/10 whitespace-nowrap">
+    <div className="absolute bottom-full left-0 mb-2 z-50 flex items-center gap-1 rounded-lg border border-border/30 glass-overlay p-1.5 shadow-lg shadow-black/10 whitespace-nowrap">
       {children}
     </div>
   );

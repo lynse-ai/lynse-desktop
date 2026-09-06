@@ -140,7 +140,7 @@ export function FolderTreeSection() {
       <div className="flex items-center justify-between px-2 py-1">
         <button
           onClick={() => toggleSidebarSection("folders")}
-          className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 hover:text-muted-foreground transition-colors"
+          className="flex items-center gap-1 text-2xs font-semibold uppercase tracking-wider text-muted-foreground/70 hover:text-muted-foreground transition-colors"
         >
           {foldersCollapsed ? (
             <ChevronRight className="size-3" />
@@ -182,13 +182,13 @@ export function FolderTreeSection() {
                 }}
                 onBlur={handleCreateFolder}
                 placeholder={t("layout.folder_name_placeholder")}
-                className="w-full rounded-md border border-primary/50 bg-background px-2 py-1.5 text-[12px] outline-none"
+                className="w-full rounded-md border border-primary/50 bg-background px-2 py-1.5 text-xs outline-none"
               />
             )}
 
             {/* Folder items */}
             {folderList.length === 0 && !showNewFolderInput && (
-              <p className="px-2 py-2 text-[11px] text-muted-foreground/50">
+              <p className="px-2 py-2 text-2xs text-muted-foreground/50">
                 {t("layout.no_folders")}
               </p>
             )}
@@ -251,7 +251,7 @@ function VirtualItem({
       ref={setNodeRef}
       onClick={onClick}
       className={cn(
-        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors",
+        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-13 transition-colors",
         isOver && "ring-2 ring-primary/50 bg-primary/10",
         active
           ? "bg-sidebar-accent text-sidebar-accent-foreground"
@@ -260,7 +260,7 @@ function VirtualItem({
     >
       <Icon className={cn("size-3.5 shrink-0", iconClassName)} />
       <span className="flex-1 truncate text-left">{label}</span>
-      <span className="text-[10px] tabular-nums text-muted-foreground/50">
+      <span className="text-3xs tabular-nums text-muted-foreground/50">
         {count}
       </span>
     </button>
@@ -308,7 +308,7 @@ function FolderRow({
         getWorkspaceState().setEditingFolderId(folder.id);
       }}
       className={cn(
-        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] transition-colors",
+        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-13 transition-colors",
         isOver && "ring-2 ring-primary/50 bg-primary/10",
         active
           ? "bg-sidebar-accent text-sidebar-accent-foreground"
@@ -326,7 +326,7 @@ function FolderRow({
           }}
           onBlur={() => onEditDone(editValue)}
           onClick={(e) => e.stopPropagation()}
-          className="flex-1 rounded border border-primary/50 bg-background px-1 py-0.5 text-[12px] outline-none min-w-0"
+          className="flex-1 rounded border border-primary/50 bg-background px-1 py-0.5 text-xs outline-none min-w-0"
         />
       ) : (
         <>
@@ -339,7 +339,7 @@ function FolderRow({
             <Circle className="size-2 shrink-0 fill-current" />
           )}
           <span className="flex-1 truncate text-left">{folder.folderName}</span>
-          <span className="text-[10px] tabular-nums text-muted-foreground/50">
+          <span className="text-3xs tabular-nums text-muted-foreground/50">
             {count}
           </span>
         </>

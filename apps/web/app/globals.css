@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "../../../packages/ui/styles/shadcn.css";
+@import "../../../packages/ui/styles/fonts.css";
 @import "../../../packages/ui/styles/tokens.css";
 @import "../../../packages/ui/styles/base.css";
 

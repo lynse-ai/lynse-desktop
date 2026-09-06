@@ -8,6 +8,7 @@ import { useUserCredits } from "./use-user-credits";
 import { useNotificationStore, selectUnreadCount } from "../notifications/use-notification-store";
 import { useChatStore, selectChatUnreadCount } from "../workspace/hooks/use-chat-store";
 import { openExternalUrl } from "../app-update";
+import { featureFlags } from "../feature-flags";
 import { NotificationList } from "../notifications/notification-list";
 import { SettingsDialog } from "../settings/settings-dialog";
 import { UploadDialog } from "../workspace/upload-dialog";
@@ -28,6 +29,7 @@ import {
   Plus,
   Upload,
   Mic,
+  Bluetooth,
 } from "../icons";
 
 interface NavItem {
@@ -62,7 +64,12 @@ export function LynseSidebar() {
     { key: "todo", label: t("nav.todo"), icon: ListChecks, path: "/todo" },
     { key: "notes", label: t("nav.notes"), icon: FolderOpen, path: "/notes" },
     { key: "chat", label: t("nav.chat"), icon: MessageSquare, path: "/chat" },
-  ];
+    { key: "devices", label: t("nav.devices"), icon: Bluetooth, path: "/devices" },
+  ].filter((item) =>
+    item.key === "inspiration" ? featureFlags.inspiration
+    : item.key === "devices" ? featureFlags.devices
+    : true,
+  );
 
   const bottomItems: NavItem[] = [
     { key: "notifications", label: t("nav.notifications"), icon: Bell, path: "/notifications" },
@@ -71,8 +78,10 @@ export function LynseSidebar() {
 
   return (
     <>
+      {/* .lyse-sidebar: vibrancy CSS drops the divider — the inset content
+          card's own edge separates it from the frosted rail. */}
       <aside
-        className="flex h-full w-[68px] shrink-0 flex-col items-center border-r border-border/50 bg-sidebar pb-2 pt-10"
+        className="lyse-sidebar flex h-full w-[68px] shrink-0 flex-col items-center border-r border-border/50 bg-sidebar pb-2 pt-10"
         data-tauri-drag-region
       >
       {/* User avatar at the top — opens the profile menu */}
@@ -102,11 +111,11 @@ export function LynseSidebar() {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" side="right" sideOffset={10} className="w-48">
           <DropdownMenuItem onClick={() => setUploadOpen(true)}>
-            <Upload className="size-4" />
+            <Upload className="size-4 text-muted-foreground" strokeWidth={1.5} />
             <span>{t("layout.new_recording_import")}</span>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => push("/recording")}>
-            <Mic className="size-4" />
+            <Mic className="size-4 text-muted-foreground" strokeWidth={1.5} />
             <span>{t("layout.new_recording_start")}</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -129,7 +138,7 @@ export function LynseSidebar() {
               title={item.label}
             >
               <Icon className={cn("size-5", active ? "text-sidebar-accent-foreground" : "text-muted-foreground")} />
-              <span className="mt-1 text-[10px] font-medium leading-none">{item.label}</span>
+              <span className="mt-1 text-3xs font-medium leading-none">{item.label}</span>
             </NavButton>
           );
         })}
@@ -152,11 +161,11 @@ export function LynseSidebar() {
                   className="relative flex w-[56px] flex-col items-center justify-center rounded-lg px-1 py-2 transition-colors text-muted-foreground hover:bg-accent hover:text-foreground"
                 >
                   <Bell className="size-5" />
-                  <span className="mt-1 text-[10px] font-medium leading-none">{item.label}</span>
+                  <span className="mt-1 text-3xs font-medium leading-none">{item.label}</span>
                   {!!unreadCount && (
                     <span
                       aria-label={t("layout.unread_replies", { count: unreadCount })}
-                      className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-sidebar"
+                      className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-3xs font-semibold leading-none text-white ring-2 ring-card"
                     >
                       {unreadCount > 99 ? "99+" : unreadCount}
                     </span>
@@ -197,7 +206,7 @@ export function LynseSidebar() {
               title={item.label}
             >
               <Icon className={cn("size-5", active ? "text-sidebar-accent-foreground" : "text-muted-foreground")} />
-              <span className="mt-1 text-[10px] font-medium leading-none">{item.label}</span>
+              <span className="mt-1 text-3xs font-medium leading-none">{item.label}</span>
             </NavButton>
           );
         })}
@@ -240,7 +249,7 @@ function NavButton({
       {!!badgeCount && (
         <span
           aria-label={t("layout.unread_replies", { count: badgeCount })}
-          className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold leading-none text-white ring-2 ring-sidebar"
+          className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-3xs font-semibold leading-none text-white ring-2 ring-sidebar"
         >
           {badgeCount > 99 ? "99+" : badgeCount}
         </span>

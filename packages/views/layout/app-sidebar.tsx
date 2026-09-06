@@ -27,7 +27,7 @@ import {
   Download,
   Info,
   ArrowUp,
-} from "../icons";
+} from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -54,7 +54,8 @@ import {
 } from "@lynse/ui/components/ui/popover";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
-import { useAppUpdate, openExternalUrl, getAppInfoSync } from "../app-update";
+import { useAppUpdate, getAppInfoSync } from "../app-update";
+import { featureFlags } from "../feature-flags";
 import { useUserCredits, useMembership } from "./use-user-credits";
 import { FolderTreeSection } from "../workspace/sidebar/folder-tree-section";
 import { SettingsDialog } from "../settings/settings-dialog";
@@ -86,7 +87,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
   const workspaceNav = [
     { key: "inspiration", label: t("nav.inspiration"), icon: Lightbulb, path: "/inspiration" },
     { key: "chat", label: t("nav.chat"), icon: MessageSquare, path: "/chat" },
-  ];
+  ].filter((item) => (item.key === "inspiration" ? featureFlags.inspiration : true));
 
   return (
     <Sidebar
@@ -104,7 +105,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
             <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/[0.12] text-primary transition-colors group-hover:bg-primary/[0.18]">
               <Plus className="size-3.5 shrink-0" />
             </span>
-            <span className="min-w-0 flex-1 truncate text-left text-[13px] font-medium">{t("layout.new_recording")}</span>
+            <span className="min-w-0 flex-1 truncate text-left text-13 font-medium">{t("layout.new_recording")}</span>
             <ChevronDown className="size-3.5 shrink-0 opacity-60" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" sideOffset={6} className="w-56">
@@ -112,11 +113,11 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
               disabled={!liveTranslationAvailable}
               onClick={() => push("/recording")}
             >
-              <Mic className="size-4" />
+              <Mic className="size-4 text-muted-foreground" strokeWidth={1.5} />
               <span>{t("layout.new_recording_start")}</span>
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => setUploadOpen(true)}>
-              <Upload className="size-4" />
+              <Upload className="size-4 text-muted-foreground" strokeWidth={1.5} />
               <span>{t("layout.new_recording_import")}</span>
             </DropdownMenuItem>
           </DropdownMenuContent>
@@ -128,7 +129,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
         {/* Compact icon-tile navigation — icon on top, label below */}
         <SidebarGroup className="py-1">
           <div className="flex items-center justify-between px-1.5 py-1.5">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
+            <span className="text-3xs font-semibold uppercase tracking-[0.16em] text-muted-foreground/70">
               {t("layout.workspace_group")}
             </span>
             <div className="flex items-center gap-0.5">
@@ -150,7 +151,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                     href={item.path}
                     title={item.label}
                     className={cn(
-                      "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-[10px] font-medium leading-none transition-colors",
+                      "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-3xs font-medium leading-none transition-colors",
                       isActive
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                         : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -166,7 +167,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                 href="/todo"
                 title={t("nav.todo")}
                 className={cn(
-                  "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-[10px] font-medium leading-none transition-colors",
+                  "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-3xs font-medium leading-none transition-colors",
                   isNavActive(pathname, "/todo")
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -180,7 +181,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                 type="button"
                 onClick={() => setTemplateManagerOpen(true)}
                 title={t("templates.title")}
-                className="flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-[10px] font-medium leading-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-3xs font-medium leading-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
                 <LayoutTemplate className="size-4 shrink-0" />
                 <span className="w-full truncate text-center">{t("templates.title")}</span>
@@ -222,7 +223,7 @@ function LanguageItem({ code, label }: { code: string; label: string }) {
   return (
     <DropdownMenuItem onClick={() => changeLanguage(code)}>
       {isActive ? (
-        <Check className="size-3 text-green-500" />
+        <Check className="size-3 text-success" />
       ) : (
         <span className="w-3" />
       )}
@@ -274,7 +275,7 @@ function CreditsPopover() {
         <div className="flex flex-col gap-3 p-3">
           {/* Membership tier */}
           <div className="flex items-center gap-2">
-            <Crown className="size-4 text-amber-500" />
+            <Crown className="size-4 text-warning" />
             <span className="text-sm font-medium">{plan}</span>
           </div>
 
@@ -365,14 +366,14 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
                 {initials}
               </div>
               {hasUpdate && (
-                <span className="absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-emerald-500 text-white ring-2 ring-background">
+                <span className="absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-success text-white ring-2 ring-background">
                   <ArrowUp className="size-2.5" strokeWidth={3} />
                 </span>
               )}
             </div>
             <div className="min-w-0 flex-1 text-left">
-              <p className="truncate text-[13px] font-medium leading-tight">{nickname}</p>
-              <p className="truncate text-[11px] text-muted-foreground/70">{plan}</p>
+              <p className="truncate text-13 font-medium leading-tight">{nickname}</p>
+              <p className="truncate text-2xs text-muted-foreground/70">{plan}</p>
             </div>
           </button>
         }
@@ -389,7 +390,7 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
               title={copied ? t("layout.copied") : t("layout.copy_name")}
             >
               {copied ? (
-                <Check className="size-3 text-green-500" />
+                <Check className="size-3 text-success" />
               ) : (
                 <Copy className="size-3" />
               )}
@@ -409,13 +410,13 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
 
         {/* ── Settings ─────────────────────────────────── */}
         <DropdownMenuItem onClick={onOpenSettings}>
-          <Settings className="size-4" />
+          <Settings className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_settings")}</span>
         </DropdownMenuItem>
 
         {/* ── Appearance: inline light/dark toggle ──────── */}
         <div className="flex items-center gap-2 px-2 py-1.5">
-          <Palette className="size-4 shrink-0 text-muted-foreground" />
+          <Palette className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.5} />
           <span className="text-sm">{t("layout.user_appearance")}</span>
           <div className="ml-auto flex items-center gap-0.5 rounded-lg border bg-muted/60 p-0.5">
             <button
@@ -446,7 +447,7 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
         {/* ── Language submenu ─────────────────────────── */}
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
-            <Globe className="size-4" />
+            <Globe className="size-4 text-muted-foreground" strokeWidth={1.5} />
             <span>{t("layout.language")}</span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent>
@@ -458,17 +459,17 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
 
         {/* ── Help & Feedback ─────────────────────────── */}
         <DropdownMenuItem>
-          <HelpCircle className="size-4" />
+          <HelpCircle className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_help_feedback")}</span>
         </DropdownMenuItem>
 
         {/* ── About (version) ─────────────────────────── */}
         <DropdownMenuItem onClick={onOpenSettings}>
-          <Info className="size-4" />
+          <Info className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.about")}</span>
-          <span className="ml-auto flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground">
+          <span className="ml-auto flex items-center gap-1 text-2xs tabular-nums text-muted-foreground">
             {hasUpdate && (
-              <ArrowUp className="size-3 text-emerald-500" strokeWidth={2.5} />
+              <ArrowUp className="size-3 text-success" strokeWidth={2.5} />
             )}
             {versionLabel}
           </span>
@@ -476,10 +477,10 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
 
         {/* ── Check for Updates ────────────────────────── */}
         <DropdownMenuItem onClick={() => checkForUpdate()} disabled={checking}>
-          <Download className={cn("size-4", checking && "animate-spin")} />
+          <Download className={cn("size-4 text-muted-foreground", checking && "animate-spin")} strokeWidth={1.5} />
           <span>{checking ? t("layout.checking_update") : t("layout.check_update")}</span>
           {update?.hasUpdate && (
-            <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-medium text-white">
+            <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-3xs font-medium text-white">
               !
             </span>
           )}
@@ -489,7 +490,7 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
 
         {/* ── Log out ─────────────────────────────────── */}
         <DropdownMenuItem variant="destructive">
-          <LogOut className="size-4" />
+          <LogOut className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.log_out")}</span>
         </DropdownMenuItem>
       </DropdownMenuContent>
@@ -500,8 +501,15 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
 /* ── Update reminder card — shown below the user row when a newer release exists ── */
 function UpdateReminder() {
   const { t } = useTranslation();
-  const { update } = useAppUpdate();
+  const { update, install, installState } = useAppUpdate();
   const [dismissed, setDismissed] = useState<string | null>(null);
+
+  const installBusy =
+    installState.phase === "downloading" ||
+    installState.phase === "installing" ||
+    installState.phase === "restarting";
+  const percent =
+    installState.total > 0 ? Math.min(100, Math.round((installState.downloaded / installState.total) * 100)) : 0;
 
   // Nothing to show until a newer release is detected (startup check runs
   // automatically inside useAppUpdate). Hide if the user dismissed this version.
@@ -509,28 +517,52 @@ function UpdateReminder() {
   if (dismissed === update.latestVersion) return null;
 
   return (
-    <div className="mt-1.5 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2">
-      <Bell className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
+    <div className="mt-1.5 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-2">
+      <Bell className="mt-0.5 size-3.5 shrink-0 text-warning" />
       <div className="flex-1 min-w-0">
-        <p className="text-[12px] font-medium leading-tight text-amber-600 dark:text-amber-400">
+        <p className="text-xs font-medium leading-tight text-warning-text">
           {t("settings.update_available")}
         </p>
-        <div className="mt-1 flex items-center gap-1.5 text-[11px] tabular-nums">
+        <div className="mt-1 flex items-center gap-1.5 text-2xs tabular-nums">
           <span className="text-muted-foreground">v{update.currentVersion}</span>
           <span className="text-muted-foreground/50">→</span>
-          <span className="font-semibold text-amber-600 dark:text-amber-400">
+          <span className="font-semibold text-warning-text">
             v{update.latestVersion}
           </span>
         </div>
-        <p className="mt-1 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+        <p className="mt-1 line-clamp-2 text-2xs leading-snug text-muted-foreground">
           {t("settings.update_available_desc")}
         </p>
-        <button
-          onClick={() => openExternalUrl(update.releaseUrl)}
-          className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-amber-500 px-2 py-1 text-[11px] font-medium text-white transition-colors hover:bg-amber-600"
-        >
-          {t("settings.view_release")}
-        </button>
+        {installBusy ? (
+          <div className="mt-1.5 space-y-1">
+            <p className="text-2xs font-medium text-warning-text">
+              {installState.phase === "downloading"
+                ? t("settings.update_downloading", { percent })
+                : installState.phase === "installing"
+                  ? t("settings.update_installing")
+                  : t("settings.update_restarting")}
+            </p>
+            {installState.phase === "downloading" && installState.total > 0 && (
+              <div className="h-1 w-full overflow-hidden rounded-full bg-warning/20">
+                <div className="h-full rounded-full bg-warning transition-all" style={{ width: `${percent}%` }} />
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            <button
+              onClick={install}
+              className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-warning px-2 py-1 text-2xs font-medium text-white transition-colors hover:bg-warning/90"
+            >
+              {t("settings.install_update")}
+            </button>
+            {installState.phase === "failed" && (
+              <p className="mt-1 text-2xs leading-snug text-destructive">
+                {t("settings.update_install_failed", { error: installState.error ?? "" })}
+              </p>
+            )}
+          </>
+        )}
       </div>
       <button
         onClick={() => setDismissed(update.latestVersion)}

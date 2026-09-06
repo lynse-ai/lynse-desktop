@@ -1,6 +1,6 @@
 [package]
 name = "lynse-tauri"
-version = "0.1.29"
+version = "0.1.30"
 description = "Lynse macOS desktop shell"
 authors = ["Lynse"]
 edition = "2021"
@@ -17,11 +17,14 @@ strip = "none"
 
 [dependencies]
 base64 = "0.22"
+btleplug = "0.11"
+byteorder = "1"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 libc = "0.2"
 mime_guess = "2"
+opus = "0.3"
 percent-encoding = "2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "native-tls", "stream"] }
 serde = { version = "1", features = ["derive"] }
@@ -30,6 +33,8 @@ sha2 = "0.10"
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-process = "2"
+tauri-plugin-updater = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
@@ -39,6 +44,12 @@ uuid = { version = "1", features = ["v4"] }
 # macOS-only: EventKit bridge for system calendar integration.
 [target.'cfg(target_os = "macos")'.dependencies]
 highlandcows-eventkit = "0.5.8"
+# Native window materials. 0.8 is required for the Liquid Glass API
+# (`apply_liquid_glass`); Tauri itself still pins 0.6 internally, so cargo
+# keeps two copies — window-vibrancy 0.8 is explicitly built to tolerate that.
+window-vibrancy = "0.8"
+objc2 = "0.6"
+objc2-app-kit = "0.3"
 
 # Windows-only: microphone capture for live translation (stage 1).
 [target.'cfg(target_os = "windows")'.dependencies]

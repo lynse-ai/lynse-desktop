@@ -68,7 +68,13 @@ export function SettingsDialog({
   const hasLocalTranscription = !!localTranscriptionApi;
   const appApi = getDesktopAppApi();
   const appInfo = getAppInfoSync();
-  const { update, checking, error: updateError, checkForUpdate } = useAppUpdate();
+  const { update, checking, error: updateError, checkForUpdate, install, installState } = useAppUpdate();
+  const installBusy =
+    installState.phase === "downloading" ||
+    installState.phase === "installing" ||
+    installState.phase === "restarting";
+  const installPercent =
+    installState.total > 0 ? Math.min(100, Math.round((installState.downloaded / installState.total) * 100)) : 0;
   const [models, setModels] = useState<SttModelInfo[]>([]);
   const [modelBusy, setModelBusy] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
@@ -275,12 +281,12 @@ export function SettingsDialog({
                     onCheckedChange={handleOfflineTranscriptionChange}
                   />
                 </div>
-                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                <p className="text-2xs leading-relaxed text-muted-foreground">
                   {t("settings.offline_transcription_hint")}
                 </p>
 
                 {!offlineTranscription ? (
-                  <p className="rounded-md border bg-muted/30 p-2.5 text-[11px] text-muted-foreground">
+                  <p className="rounded-md border bg-muted/30 p-2.5 text-2xs text-muted-foreground">
                     {t("settings.offline_off_hint")}
                   </p>
                 ) : (
@@ -350,7 +356,7 @@ export function SettingsDialog({
                       <p className="text-xs font-medium">{t("settings.voiceprints")}</p>
                       <div className="mt-2 space-y-1">
                         {voiceprints.length === 0 ? (
-                          <p className="text-[11px] text-muted-foreground">
+                          <p className="text-2xs text-muted-foreground">
                             {t("settings.voiceprints_empty")}
                           </p>
                         ) : voiceprints.map((voiceprint) => (
@@ -411,8 +417,8 @@ export function SettingsDialog({
 
               {isAuthenticated ? (
                 <div className="flex items-center gap-3">
-                  <span className="inline-flex items-center gap-1.5 text-xs text-green-600">
-                    <span className="size-1.5 rounded-full bg-green-500" />
+                  <span className="inline-flex items-center gap-1.5 text-xs text-success">
+                    <span className="size-1.5 rounded-full bg-success" />
                     {t("settings.connected")}
                   </span>
                   <Button
@@ -447,7 +453,7 @@ export function SettingsDialog({
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-xs font-medium">{t("app_name")}</p>
-                    <p className="text-[11px] text-muted-foreground">
+                    <p className="text-2xs text-muted-foreground">
                       {t("settings.version")}: {appInfo?.version ?? "—"}
                     </p>
                   </div>
@@ -463,12 +469,12 @@ export function SettingsDialog({
                 </div>
 
                 {updateError && (
-                  <p className="text-[11px] text-destructive">{t("settings.update_check_failed")}</p>
+                  <p className="text-2xs text-destructive">{t("settings.update_check_failed")}</p>
                 )}
 
                 {update?.hasUpdate ? (
-                  <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2.5">
-                    <p className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                  <div className="rounded-md border border-warning/40 bg-warning/10 p-2.5">
+                    <p className="flex items-center gap-1.5 text-xs font-medium text-warning-text">
                       <Download className="size-3.5" />
                       {t("settings.update_available")}
                     </p>
@@ -477,25 +483,58 @@ export function SettingsDialog({
                         v{update.currentVersion}
                       </span>
                       <span className="text-muted-foreground/50">→</span>
-                      <span className="rounded bg-amber-500/15 px-1.5 py-0.5 font-semibold text-amber-600 dark:text-amber-400">
+                      <span className="rounded bg-warning/15 px-1.5 py-0.5 font-semibold text-warning-text">
                         v{update.latestVersion}
                       </span>
                     </div>
-                    <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                    <p className="mt-1 text-2xs leading-relaxed text-muted-foreground">
                       {t("settings.update_available_desc")}
                     </p>
-                    <Button
-                      size="sm"
-                      className="mt-2 h-7 text-xs"
-                      onClick={() => openExternalUrl(update.releaseUrl)}
-                    >
-                      <Download className="size-3.5" />
-                      {t("settings.view_release")}
-                    </Button>
+
+                    {installBusy ? (
+                      <div className="mt-2 space-y-1.5">
+                        <p className="text-2xs font-medium text-warning-text">
+                          {installState.phase === "downloading"
+                            ? t("settings.update_downloading", { percent: installPercent })
+                            : installState.phase === "installing"
+                              ? t("settings.update_installing")
+                              : t("settings.update_restarting")}
+                        </p>
+                        {installState.phase === "downloading" && installState.total > 0 && (
+                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-warning/15">
+                            <div
+                              className="h-full rounded-full bg-warning transition-all"
+                              style={{ width: `${installPercent}%` }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <>
+                        <div className="mt-2 flex items-center gap-2.5">
+                          <Button size="sm" className="h-7 text-xs" onClick={install}>
+                            <Download className="size-3.5" />
+                            {t("settings.install_update")}
+                          </Button>
+                          <button
+                            type="button"
+                            onClick={() => openExternalUrl(update.releaseUrl)}
+                            className="text-2xs text-muted-foreground transition-colors hover:text-foreground"
+                          >
+                            {t("settings.view_release")}
+                          </button>
+                        </div>
+                        {installState.phase === "failed" && (
+                          <p className="mt-1.5 text-2xs text-destructive">
+                            {t("settings.update_install_failed", { error: installState.error ?? "" })}
+                          </p>
+                        )}
+                      </>
+                    )}
                   </div>
                 ) : (
                   !updateError && (
-                    <p className="text-[11px] text-muted-foreground">{t("settings.up_to_date")}</p>
+                    <p className="text-2xs text-muted-foreground">{t("settings.up_to_date")}</p>
                   )
                 )}
               </CardContent>

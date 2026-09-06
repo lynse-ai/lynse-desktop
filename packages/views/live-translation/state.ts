@@ -10,6 +10,9 @@ export interface LiveTranslationViewState extends LiveTranslationSnapshot {
   lastErrorSource?: LiveAudioSource;
   completed?: CompletedLiveSession;
   streamStates: Partial<Record<LiveAudioSource, string>>;
+  /** True while the sidecar's echo gate is withholding the mic feed because
+   * it only contains a copy of the playing system audio. */
+  micSuppressed: boolean;
 }
 
 export function initialLiveTranslationState(): LiveTranslationViewState {
@@ -21,6 +24,7 @@ export function initialLiveTranslationState(): LiveTranslationViewState {
     systemLevel: 0,
     segments: [],
     streamStates: {},
+    micSuppressed: false,
   };
 }
 
@@ -44,6 +48,7 @@ export function reduceLiveTranslationEvent(
       micLevel: event.mic,
       systemLevel: event.system,
       elapsedMs: event.elapsedMs,
+      micSuppressed: event.micSuppressed ?? current.micSuppressed,
     };
   }
   if (event.type === "segment") {

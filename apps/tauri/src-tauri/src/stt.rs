@@ -188,6 +188,27 @@ impl ProviderConfig {
         }
     }
 
+    /// Override the expected-speaker count for a single transcription task.
+    /// Engines without speaker support ignore it.
+    pub fn set_expected_speakers(&mut self, expected: Option<u64>) {
+        match self {
+            ProviderConfig::Funasr(config) => config.expected_speakers = expected,
+            ProviderConfig::Whisper(config) => config.expected_speakers = expected,
+            ProviderConfig::VibeVoice(_) | ProviderConfig::Mlx(_) => {}
+        }
+    }
+
+    /// Override the hotword package for a single transcription task; `None`
+    /// clears it.
+    pub fn set_hotword_package_id(&mut self, package_id: Option<String>) {
+        match self {
+            ProviderConfig::Funasr(config) => config.hotword_package_id = package_id,
+            ProviderConfig::Whisper(config) => config.hotword_package_id = package_id,
+            ProviderConfig::VibeVoice(config) => config.hotword_package_id = package_id,
+            ProviderConfig::Mlx(config) => config.hotword_package_id = package_id,
+        }
+    }
+
     pub fn adapter(&self) -> &'static dyn BatchSttAdapter {
         match self {
             ProviderConfig::Funasr(_) => &FunasrAdapter,
@@ -418,6 +439,9 @@ impl BatchSttAdapter for WhisperAdapter {
         convert_to_wav(app, &request.audio_path, &wav)?;
 
         let sidecar = sidecar_path(app, "whisper")?;
+        // whisper.cpp appends the format extension to the `-of` value, so pass
+        // a bare base name here and read `<base>.json` below.
+        let output_base = request.model_directory.join("whisper-output");
         let output_json = request.model_directory.join("whisper-output.json");
         let mut args = vec![
             sidecar.to_string_lossy().into_owned(),
@@ -427,15 +451,23 @@ impl BatchSttAdapter for WhisperAdapter {
             wav.to_string_lossy().into_owned(),
             "-oj".to_owned(),
             "-of".to_owned(),
-            output_json.to_string_lossy().into_owned(),
-            "--output-format".to_owned(),
-            "json".to_owned(),
+            output_base.to_string_lossy().into_owned(),
         ];
+        // whisper.cpp accepts a single `--prompt` (the short `-p` selects the
+        // processor count on current builds), so fold the trailing context and
+        // the hotword terms into one prompt.
+        let mut prompt = String::new();
         if let Some(prior) = request.prior_context.as_deref().filter(|value| !value.trim().is_empty()) {
-            args.extend(["-p".to_owned(), prior.trim().to_owned()]);
+            prompt.push_str(prior.trim());
         }
         if !request.hotword.is_empty() {
-            args.extend(["-p".to_owned(), request.hotword.clone()]);
+            if !prompt.is_empty() {
+                prompt.push(' ');
+            }
+            prompt.push_str(&request.hotword);
+        }
+        if !prompt.is_empty() {
+            args.extend(["--prompt".to_owned(), prompt]);
         }
         let status = Command::new(&sidecar)
             .args(&args)
@@ -446,7 +478,8 @@ impl BatchSttAdapter for WhisperAdapter {
         }
 
         let parsed: Value = {
-            let content = std::fs::read_to_string(&output_json).map_err(|error| error.to_string())?;
+            let content = std::fs::read_to_string(&output_json)
+                .map_err(|error| format!("无法读取 Whisper 输出（{}）：{error}", output_json.display()))?;
             serde_json::from_str(&content).map_err(|error| error.to_string())?
         };
         let mut segments = normalize_whisper_output(&parsed);
@@ -515,8 +548,11 @@ impl BatchSttAdapter for VibeVoiceAdapter {
             .arg(&lm)
             .arg("-t")
             .arg(&threads)
+            // The whole file is fed as a single chunk, so keep the upstream
+            // default generation cap — a tighter limit would silently truncate
+            // longer recordings.
             .arg("--max-tokens")
-            .arg("4096")
+            .arg("16384")
             .arg("--greedy")
             .arg("--no-token-stream")
             .stdin(std::process::Stdio::piped())
@@ -640,12 +676,15 @@ impl BatchSttAdapter for MlxAdapter {
     }
 }
 
-/// Parse whisper.cpp JSON into normalized segments. whisper.cpp emits either a
-/// `segments` array (with `start`/`end`/`text`) or a `result` array.
+/// Parse whisper.cpp JSON into normalized segments. Current whisper.cpp emits
+/// a `transcription` array whose items carry `offsets.from`/`offsets.to` in
+/// milliseconds and no `start`/`end` fields; `segments`/`result` arrays with
+/// second-based `start`/`end` (e.g. the MLX bridge output) remain supported.
 fn normalize_whisper_output(parsed: &Value) -> Vec<Value> {
     let items = parsed
-        .get("segments")
+        .get("transcription")
         .and_then(Value::as_array)
+        .or_else(|| parsed.get("segments").and_then(Value::as_array))
         .or_else(|| parsed.get("result").and_then(Value::as_array))
         .cloned()
         .unwrap_or_default();
@@ -657,8 +696,8 @@ fn normalize_whisper_output(parsed: &Value) -> Vec<Value> {
             if text.is_empty() {
                 return None;
             }
-            let start_ms = (item.get("start").and_then(Value::as_f64).unwrap_or(0.0) * 1000.0) as i64;
-            let end_ms = (item.get("end").and_then(Value::as_f64).unwrap_or(0.0) * 1000.0) as i64;
+            let start_ms = offset_ms(item, "from", "startMs", "start").unwrap_or(0);
+            let end_ms = offset_ms(item, "to", "endMs", "end").unwrap_or(0);
             let raw_speaker = item.get("speaker").and_then(Value::as_str).map(str::to_owned);
             Some(json!({
                 "id": format!("seg-{}", index + 1),
@@ -671,6 +710,16 @@ fn normalize_whisper_output(parsed: &Value) -> Vec<Value> {
             }))
         })
         .collect()
+}
+
+/// Read a segment's timestamp in milliseconds: first the whisper.cpp
+/// `offsets.from`/`offsets.to` integers, then an explicit `*Ms` field, then a
+/// floating-point `start`/`end` in seconds.
+fn offset_ms(item: &Value, offset_key: &str, ms_key: &str, seconds_key: &str) -> Option<i64> {
+    item.pointer(&format!("/offsets/{offset_key}"))
+        .and_then(Value::as_i64)
+        .or_else(|| item.get(ms_key).and_then(Value::as_i64))
+        .or_else(|| item.get(seconds_key).and_then(Value::as_f64).map(|seconds| (seconds * 1000.0) as i64))
 }
 
 #[cfg(test)]
@@ -811,6 +860,52 @@ mod tests {
         assert_eq!(config.resolve(Some("en"), None).engine(), "funasr");
         // fall back to Funasr when config empty
         assert_eq!(TranscribeConfig::default().resolve(None, None).engine(), "funasr");
+    }
+
+    #[test]
+    fn per_task_overrides_apply_to_every_engine() {
+        let configs: Vec<ProviderConfig> = [
+            json!({"provider": "funasr", "expected_speakers": 3, "hotword_package_id": "pkg-a"}),
+            json!({"provider": "whisper", "model": "small-q5_1", "expected_speakers": 3, "hotword_package_id": "pkg-a"}),
+            json!({"provider": "vibeasr", "hotword_package_id": "pkg-a"}),
+            json!({"provider": "mlx", "hotword_package_id": "pkg-a"}),
+        ]
+        .iter()
+        .map(|value| serde_json::from_value(value.clone()).unwrap())
+        .collect();
+        for mut config in configs {
+            config.set_expected_speakers(Some(2));
+            config.set_hotword_package_id(Some("pkg-b".to_owned()));
+            assert_eq!(config.hotword_package_id(), Some("pkg-b"));
+            if config.engine() == "funasr" || config.engine() == "whisper" {
+                assert_eq!(config.expected_speakers(), Some(2));
+            } else {
+                assert_eq!(config.expected_speakers(), None);
+            }
+            // Clearing the package sticks too.
+            config.set_hotword_package_id(None);
+            assert_eq!(config.hotword_package_id(), None);
+        }
+    }
+
+    #[test]
+    fn normalize_whisper_output_parses_native_transcription_json() {
+        // Shape actually emitted by whisper.cpp `-oj`: a `transcription` array
+        // with millisecond `offsets` and no start/end fields.
+        let parsed = json!({
+            "transcription": [
+                {"timestamps": {"from": "00:00:00,500", "to": "00:00:01,200"}, "offsets": {"from": 500, "to": 1200}, "text": " hello "},
+                {"offsets": {"from": 2000, "to": 3000}, "text": "world", "speaker": "0"}
+            ]
+        });
+        let segments = normalize_whisper_output(&parsed);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0]["text"], "hello");
+        assert_eq!(segments[0]["startMs"], 500);
+        assert_eq!(segments[0]["endMs"], 1200);
+        assert_eq!(segments[1]["text"], "world");
+        assert_eq!(segments[1]["startMs"], 2000);
+        assert_eq!(segments[1]["speakerId"], "spk-0");
     }
 
     #[test]

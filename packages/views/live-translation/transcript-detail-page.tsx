@@ -80,12 +80,6 @@ export function TranscriptDetailPage() {
   const displayMode: RecordMode = recording ? session.activeMode : session.mode;
   const transcribing = displayMode !== "record";
 
-  const timestamp = useMemo(() => {
-    const d = new Date();
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  }, []);
-
   // Freeze the transcript snapshot when live transcription is toggled off.
   const visibleSegments = useMemo(() => {
     if (liveTranscribe) return session.segments;
@@ -125,7 +119,10 @@ export function TranscriptDetailPage() {
     <TooltipProvider delay={200}>
       <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
         {/* ═══ Header ═══ */}
-        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-5">
+        <header
+          className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-5 select-none"
+          data-tauri-drag-region
+        >
           <div className="flex min-w-0 items-center gap-2.5">
             <span className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
               <FileAudio className="size-4" />
@@ -134,7 +131,9 @@ export function TranscriptDetailPage() {
               <h1 className="truncate text-sm font-semibold leading-tight">
                 {t("transcript_detail.title")}
               </h1>
-              <p className="truncate text-[11px] leading-tight text-muted-foreground">{timestamp}</p>
+              <p className="truncate text-2xs leading-tight tabular-nums text-muted-foreground">
+                {session.formattedTime}
+              </p>
             </div>
           </div>
 
@@ -147,7 +146,7 @@ export function TranscriptDetailPage() {
                   type="button"
                   onClick={() => void session.selectMode(m)}
                   className={cn(
-                    "rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
+                    "rounded-full px-2.5 py-1 text-2xs font-medium transition-colors",
                     displayMode === m
                       ? "bg-primary/15 text-primary"
                       : "text-muted-foreground hover:text-foreground",
@@ -178,7 +177,7 @@ export function TranscriptDetailPage() {
                     aria-label={t("recording_mode.translation")}
                     className="scale-90"
                   />
-                  <span className="text-[11px] font-medium leading-none">
+                  <span className="text-2xs font-medium leading-none">
                     {t("recording_mode.translation")}
                   </span>
                 </label>
@@ -193,7 +192,7 @@ export function TranscriptDetailPage() {
                 >
                   <SelectTrigger
                     size="sm"
-                    className="h-7 w-24 border-border/60 bg-background/60 text-[11px]"
+                    className="h-7 w-24 border-border/60 bg-background/60 text-2xs"
                     aria-label={t("transcript_detail.language")}
                   >
                     <SelectValue />
@@ -218,7 +217,7 @@ export function TranscriptDetailPage() {
                     >
                       <SelectTrigger
                         size="sm"
-                        className="h-7 w-24 border-border/60 bg-background/60 text-[11px]"
+                        className="h-7 w-24 border-border/60 bg-background/60 text-2xs"
                         aria-label={t("transcript_detail.translation")}
                       >
                         <SelectValue />
@@ -278,6 +277,7 @@ export function TranscriptDetailPage() {
               segments={visibleSegments}
               showSource={showSource}
               liveTranscribe={liveTranscribe}
+              translationEnabled={session.translationEnabled}
               tab={transcriptTab}
               onTabChange={setTranscriptTab}
               onToggleLive={handleToggleLive}
@@ -332,6 +332,7 @@ function TranscriptFeed({
   segments,
   showSource,
   liveTranscribe,
+  translationEnabled,
   tab,
   onTabChange,
   onToggleLive,
@@ -340,6 +341,8 @@ function TranscriptFeed({
   segments: readonly LiveTranslationSegment[];
   showSource: boolean;
   liveTranscribe: boolean;
+  /** Whether live translation (target-language output) is currently active. */
+  translationEnabled: boolean;
   tab: TranscriptTab;
   onTabChange: (tab: TranscriptTab) => void;
   onToggleLive: () => void;
@@ -365,7 +368,7 @@ function TranscriptFeed({
             </TabsTrigger>
           </TabsList>
         </Tabs>
-        <span className="text-[11px] text-muted-foreground">
+        <span className="text-2xs text-muted-foreground">
           {segments.length} {t("live_translation.segments")}
         </span>
       </div>
@@ -375,7 +378,7 @@ function TranscriptFeed({
           <button
             type="button"
             onClick={onToggleLive}
-            className="mb-3 flex w-full items-center gap-2 rounded-md bg-amber-500/10 px-3 py-2 text-left text-xs text-amber-700 transition-colors hover:bg-amber-500/15 dark:text-amber-300"
+            className="mb-3 flex w-full items-center gap-2 rounded-md bg-warning/10 px-3 py-2 text-left text-xs text-warning-text transition-colors hover:bg-warning/15"
           >
             <Pause className="size-3.5" />
             {t("transcript_detail.transcribe_paused")}
@@ -392,16 +395,31 @@ function TranscriptFeed({
           </div>
         ) : tab === "transcript" ? (
           <div className="space-y-3">
-            {segments.map((segment) => {
+            {segments.map((segment, index) => {
+              // Only render the translation line when translation is actually
+              // enabled. Segments may retain a stale `translatedText` from
+              // before the switch was turned off, so we must gate on the flag
+              // rather than on the segment data alone.
               const hasTranslation =
-                segment.translatedText && segment.translatedText !== segment.recognizedText;
+                translationEnabled &&
+                segment.translatedText &&
+                segment.translatedText !== segment.recognizedText;
+              // Label the speaker on the first utterance of each speaker run
+              // instead of repeating it on every line.
+              const prevSpeaker = index > 0 ? segments[index - 1]?.speaker : undefined;
+              const showSpeaker = segment.speaker != null && segment.speaker !== prevSpeaker;
               return (
                 <article
                   key={segment.id}
                   className="rounded-xl border border-border bg-card px-4 py-3 shadow-sm"
                 >
-                  <div className="mb-1.5 flex items-center gap-2 text-[11px] text-muted-foreground">
+                  <div className="mb-1.5 flex items-center gap-2 text-2xs text-muted-foreground">
                     <span className="tabular-nums">{formatTime(segment.startMs)}</span>
+                    {showSpeaker && (
+                      <span className="rounded bg-primary/10 px-1.5 py-0.5 text-3xs font-medium text-primary">
+                        {t("live_translation.speaker")} {segment.speaker}
+                      </span>
+                    )}
                     {!segment.isFinal && (
                       <span className="animate-pulse">{t("transcript_detail.recognizing")}</span>
                     )}
@@ -413,7 +431,7 @@ function TranscriptFeed({
                   )}
                   {hasTranslation && (
                     <div className="mt-1.5 border-l-2 border-border pl-2.5">
-                      <span className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                      <span className="mb-0.5 block text-3xs font-medium uppercase tracking-wide text-muted-foreground/70">
                         {t("transcript_detail.translation")}
                       </span>
                       <p className="text-sm leading-relaxed text-muted-foreground">
@@ -429,11 +447,11 @@ function TranscriptFeed({
           <div className="space-y-2.5">
             {segments.map((segment) => (
               <div key={segment.id} className="flex items-start gap-3">
-                <span className="w-14 shrink-0 pt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+                <span className="w-14 shrink-0 pt-0.5 font-mono text-2xs tabular-nums text-muted-foreground">
                   {formatTime(segment.startMs).slice(3)}
                 </span>
                 <p className="min-w-0 flex-1 text-sm leading-relaxed text-foreground/90">
-                  {segment.recognizedText || segment.translatedText}
+                  {segment.recognizedText || (translationEnabled ? segment.translatedText : "")}
                 </p>
               </div>
             ))}
@@ -468,9 +486,9 @@ function RecordingStage({
           className={cn(
             "size-3 rounded-full",
             paused
-              ? "bg-amber-500"
+              ? "bg-warning"
               : recording
-                ? "animate-pulse bg-red-500"
+                ? "animate-pulse bg-destructive"
                 : "bg-muted-foreground/40",
           )}
         />

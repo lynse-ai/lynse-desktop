@@ -79,7 +79,7 @@ export function RecordingDock({
                   onClick={onStart}
                   disabled={busy}
                   aria-label={t("recording_mode.start_recording")}
-                  className="flex size-16 items-center justify-center rounded-full bg-red-500 text-white shadow-lg shadow-red-500/25 transition-all duration-200 hover:scale-105 hover:bg-red-400 active:scale-95 disabled:opacity-60 disabled:hover:scale-100"
+                  className="flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-all duration-200 hover:scale-105 hover:bg-destructive/90 active:scale-95 disabled:opacity-60 disabled:hover:scale-100"
                 >
                   {busy ? (
                     <Loader2 className="size-6 animate-spin" />
@@ -98,7 +98,7 @@ export function RecordingDock({
               <span
                 className={cn(
                   "size-2.5 rounded-full",
-                  paused ? "bg-amber-500" : "animate-pulse bg-red-500",
+                  paused ? "bg-warning" : "animate-pulse bg-destructive",
                 )}
               />
               <span className="font-mono text-sm font-semibold tabular-nums text-foreground">

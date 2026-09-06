@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.32 (2026-09-06)
+
+### New Features
+
+- Update dialog: a single in-place update dialog now opens from every entry point — notification center, profile menu ("Check for updates"), sidebar, and settings — instead of routing through Settings → About. It shows what's new, then downloads, signature-verifies, installs and relaunches without leaving the page, with Later / Close / Retry actions (en / ja / zh).
+
+### Performance
+
+- Recording waveform: the band scrolls at a continuous 62 px/s instead of jumping in 200 ms steps — a local clock extrapolates between the capture sidecar's updates (clamped, frozen while paused), the mic level is smoothed with a fast attack / slow release plus peak-hold, and canvas size, theme colours and the bar path are cached so no frame forces a layout read.
+- Elapsed timer: the `MM:SS.cs` readout now ticks at display refresh rate (`SmoothTimer` writes the interpolated value straight to the DOM) instead of stuttering five times a second.
+- Live transcript feed is memoized with stable callbacks, so the 5 Hz level/elapsed updates no longer re-render long transcripts.
+
 ## 0.1.31 (2026-09-06)
 
 ### New Features

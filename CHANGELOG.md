@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.31 (2026-09-06)
+
+### New Features
+
+- Recording page: the pure-recording stage is redesigned after the iOS Voice Memos / Huawei recorder UI — a time ruler over a full-width waveform band with a red centre playhead, a large `MM:SS.cs` centisecond timer, and a proper transport bar (bookmark · stop · pause) while recording. Bookmarks drop red markers on the waveform band floor and clear when the session ends; the waveform freezes while paused and truncates on restart.
+- Chat: opening Chat from the sidebar now lands on the conversation the unread badge points at (latest unread, else the most recent) instead of a blank new-chat view, and chat notifications deep-link straight into their conversation.
+
+### Changed
+
+- The notes audio player scrubber is restyled: neutral muted bars with a red playhead, replacing the previous primary-tinted look.
+
 ## 0.1.30 (2026-09-06)
 
 ### New Features

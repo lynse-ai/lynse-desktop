@@ -22,11 +22,23 @@ import {
 import { cn } from "@lynse/ui/lib/utils";
 import { useRecordingSession } from "./use-recording-session";
 import { useRecordingCloudSync } from "./use-recording-cloud-sync";
-import { AudioVisualizer } from "./audio-visualizer";
+import { RecordingWaveform } from "./recording-waveform";
 import { RecordingDock } from "./recording-dock";
 import { RecordingCompleteDialog } from "./recording-complete-dialog";
 import { getDesktopLiveTranslationApi } from "./desktop-api";
-import { ArrowRight, Captions, Eye, FileAudio, Pause, Volume2 } from "../icons";
+import {
+  ArrowRight,
+  Bookmark,
+  Captions,
+  Eye,
+  EyeOff,
+  FileAudio,
+  Loader2,
+  Mic,
+  Pause,
+  Play,
+  Volume2,
+} from "../icons";
 import {
   SOURCE_LANGUAGE_OPTIONS,
   TARGET_LANGUAGE_OPTIONS,
@@ -42,6 +54,15 @@ function formatTime(ms: number): string {
   const minutes = Math.floor((seconds % 3_600) / 60);
   const rest = seconds % 60;
   return [hours, minutes, rest].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
+/** Format elapsed ms as `MM:SS.cs` for the large stage timer. */
+function formatTimerCentis(ms: number): string {
+  const total = Math.max(0, ms);
+  const cs = Math.floor((total % 1000) / 10);
+  const ss = Math.floor(total / 1000) % 60;
+  const mm = Math.floor(total / 60_000);
+  return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -273,43 +294,51 @@ export function TranscriptDetailPage() {
         {/* ═══ Main — full-page live output ═══ */}
         <main className="relative min-h-0 flex-1 overflow-hidden">
           {showTranscript ? (
-            <TranscriptFeed
-              segments={visibleSegments}
-              showSource={showSource}
-              liveTranscribe={liveTranscribe}
-              translationEnabled={session.translationEnabled}
-              tab={transcriptTab}
-              onTabChange={setTranscriptTab}
-              onToggleLive={handleToggleLive}
-              t={t}
-            />
+            <>
+              <TranscriptFeed
+                segments={visibleSegments}
+                showSource={showSource}
+                liveTranscribe={liveTranscribe}
+                translationEnabled={session.translationEnabled}
+                tab={transcriptTab}
+                onTabChange={setTranscriptTab}
+                onToggleLive={handleToggleLive}
+                t={t}
+              />
+
+              {/* Floating glassmorphism dock (live-transcript view only — the
+                  pure-recording stage owns its own transport bar) */}
+              <div className="pointer-events-none absolute inset-x-0 bottom-5 flex justify-center px-4">
+                <RecordingDock
+                  recording={recording}
+                  paused={paused}
+                  busy={busy}
+                  formattedTime={session.formattedTime}
+                  micLevel={session.micLevel}
+                  bookmarked={session.bookmarked}
+                  onStart={() => void session.toggleRecording()}
+                  onTogglePause={() => void session.togglePause()}
+                  onStop={() => void session.toggleRecording()}
+                  onToggleBookmark={() => session.setBookmarked(!session.bookmarked)}
+                  onHide={() => void getDesktopLiveTranslationApi()?.minimizeToTray()}
+                />
+              </div>
+            </>
           ) : (
             <RecordingStage
               recording={recording}
               paused={paused}
-              formattedTime={session.formattedTime}
+              busy={busy}
+              elapsedMs={session.elapsedMs}
               micLevel={session.micLevel}
               statusLabel={stageStatus}
-              t={t}
-            />
-          )}
-
-          {/* Floating glassmorphism dock */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-5 flex justify-center px-4">
-            <RecordingDock
-              recording={recording}
-              paused={paused}
-              busy={busy}
-              formattedTime={session.formattedTime}
-              micLevel={session.micLevel}
-              bookmarked={session.bookmarked}
               onStart={() => void session.toggleRecording()}
               onTogglePause={() => void session.togglePause()}
               onStop={() => void session.toggleRecording()}
-              onToggleBookmark={() => session.setBookmarked(!session.bookmarked)}
               onHide={() => void getDesktopLiveTranslationApi()?.minimizeToTray()}
+              t={t}
             />
-          </div>
+          )}
         </main>
 
         {/* ═══ Completion dialog ═══ */}
@@ -462,50 +491,190 @@ function TranscriptFeed({
   );
 }
 
-// Recording-only stage: when no text stream is active the page shows just the
-// recording activity — a large timer plus a live waveform animation.
+// Recording-only stage, styled after the Voice-Memos / Huawei recorder UI:
+// a time ruler over a full-width waveform band with a red centre playhead,
+// a large `MM:SS.cs` timer beneath it, and a transport bar at the bottom
+// (bookmark · stop · pause) while recording. When idle only the big red
+// start button shows.
 function RecordingStage({
   recording,
   paused,
-  formattedTime,
+  busy,
+  elapsedMs,
   micLevel,
   statusLabel,
+  onStart,
+  onTogglePause,
+  onStop,
+  onHide,
   t,
 }: {
   recording: boolean;
   paused: boolean;
-  formattedTime: string;
+  busy: boolean;
+  elapsedMs: number;
   micLevel: number;
   statusLabel: string;
+  onStart: () => void;
+  onTogglePause: () => void;
+  onStop: () => void;
+  onHide: () => void;
   t: (key: string) => string;
 }) {
+  const [markers, setMarkers] = useState<number[]>([]);
+
+  // Markers belong to the running session; clear them once it stops.
+  useEffect(() => {
+    if (!recording) setMarkers([]);
+  }, [recording]);
+
+  const addMarker = () => {
+    setMarkers((prev) => [...prev, Math.max(0, elapsedMs) / 1000]);
+  };
+
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-7 px-6 text-center">
-      <div className="flex items-center gap-2.5">
-        <span
-          className={cn(
-            "size-3 rounded-full",
-            paused
-              ? "bg-warning"
-              : recording
-                ? "animate-pulse bg-destructive"
-                : "bg-muted-foreground/40",
-          )}
-        />
-        <span className="text-sm font-medium text-muted-foreground">{statusLabel}</span>
+    <div className="flex h-full min-h-0 flex-col">
+      {/* Time ruler + waveform band + centre playhead.
+          flex-[2] vs the spacer's flex-1 gives the band ~50% more height. */}
+      <RecordingWaveform
+        elapsedMs={elapsedMs}
+        micLevel={micLevel}
+        active={recording && !paused}
+        markers={markers}
+        className="min-h-0 w-full flex-[2]"
+      />
+
+      {/* Large centisecond timer + status */}
+      <div className="mt-6 shrink-0 text-center">
+        <div className="text-6xl font-medium tracking-tight tabular-nums text-foreground">
+          {formatTimerCentis(elapsedMs)}
+        </div>
+        <div className="mt-1.5 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+          <span
+            className={cn(
+              "size-2 rounded-full",
+              paused
+                ? "bg-warning"
+                : recording
+                  ? "animate-pulse bg-destructive"
+                  : "bg-muted-foreground/40",
+            )}
+          />
+          <span>{statusLabel}</span>
+        </div>
       </div>
 
-      <div className="font-mono text-6xl font-semibold tracking-tight tabular-nums text-foreground">
-        {formattedTime || "00:00:00"}
-      </div>
+      <div className="min-h-8 flex-1" />
 
-      <div className="h-32 w-full max-w-xl">
-        <AudioVisualizer level={micLevel} active={recording && !paused} className="h-full w-full" />
-      </div>
+      {/* Transport bar — start (idle) / bookmark · stop · pause (recording) */}
+      <div className="relative mx-auto mb-9 grid w-full max-w-[1100px] grid-cols-[1fr_auto_1fr] items-center px-10">
+        {recording ? (
+          <>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    onClick={addMarker}
+                    aria-label={t("recording_mode.bookmark")}
+                    className="mx-auto flex flex-col items-center gap-1.5 rounded-xl px-3 py-1.5 text-2xs text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    <Bookmark className="size-5 text-foreground/80" />
+                    <span>{t("recording_mode.bookmark")}</span>
+                  </button>
+                }
+              />
+              <TooltipContent>{t("recording_mode.bookmark")}</TooltipContent>
+            </Tooltip>
 
-      <p className="max-w-sm text-xs leading-relaxed text-muted-foreground">
-        {t("recording_mode.status_recording")}
-      </p>
+            {/* Stop — white circle with a red rounded square */}
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    onClick={onStop}
+                    disabled={busy}
+                    aria-label={t("recording_mode.stop_recording")}
+                    className="flex size-[78px] items-center justify-center rounded-full bg-background shadow-[0_6px_18px_rgba(0,0,0,0.12)] transition-transform duration-200 hover:scale-[1.03] active:scale-95 disabled:opacity-60 disabled:hover:scale-100 dark:shadow-[0_6px_18px_rgba(0,0,0,0.55)]"
+                  >
+                    {busy ? (
+                      <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                    ) : (
+                      <span className="size-[30px] rounded-lg bg-destructive" />
+                    )}
+                  </button>
+                }
+              />
+              <TooltipContent>{t("recording_mode.stop_recording")}</TooltipContent>
+            </Tooltip>
+
+            <div className="relative flex items-center justify-center">
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      onClick={onTogglePause}
+                      aria-label={paused ? t("recording_mode.resume") : t("recording_mode.pause")}
+                      className="flex flex-col items-center gap-1.5 rounded-xl px-3 py-1.5 text-2xs text-muted-foreground transition-colors hover:text-foreground"
+                    >
+                      {paused ? (
+                        <Play className="size-5 text-foreground/80" />
+                      ) : (
+                        <Pause className="size-5 text-foreground/80" />
+                      )}
+                      <span>{paused ? t("recording_mode.resume") : t("recording_mode.pause")}</span>
+                    </button>
+                  }
+                />
+                <TooltipContent>
+                  {paused ? t("recording_mode.resume") : t("recording_mode.pause")}
+                </TooltipContent>
+              </Tooltip>
+
+              {/* Hide main window — recording keeps running via the island */}
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      onClick={onHide}
+                      aria-label={t("recording_mode.hide_to_island")}
+                      className="absolute right-2 flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+                    >
+                      <EyeOff className="size-4.5" />
+                    </button>
+                  }
+                />
+                <TooltipContent>{t("recording_mode.hide_to_island")}</TooltipContent>
+              </Tooltip>
+            </div>
+          </>
+        ) : (
+          <>
+            <span />
+            {/* Idle — the big red record button */}
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    onClick={onStart}
+                    disabled={busy}
+                    aria-label={t("recording_mode.start_recording")}
+                    className="mx-auto flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-all duration-200 hover:scale-105 hover:bg-destructive/90 active:scale-95 disabled:opacity-60 disabled:hover:scale-100"
+                  >
+                    {busy ? <Loader2 className="size-6 animate-spin" /> : <Mic className="size-6" />}
+                  </button>
+                }
+              />
+              <TooltipContent>{t("recording_mode.start_recording")}</TooltipContent>
+            </Tooltip>
+            <span />
+          </>
+        )}
+      </div>
     </div>
   );
 }

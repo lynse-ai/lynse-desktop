@@ -182,6 +182,8 @@ interface ChatStoreState {
   stopStreaming: () => void;
   clearMessages: () => void;
   selectConversation: (conversationId: string) => void;
+  /** Jump to the conversation the badge points at: latest unread, else latest. */
+  openLatestUnread: (preferredConversationId?: string) => void;
 }
 
 /** One in-flight assistant turn, owned by a single conversation. */
@@ -605,6 +607,17 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         };
       });
       useNotificationStore.getState().markRead(`chat:${conversationId}`);
+    },
+
+    openLatestUnread: (preferredConversationId) => {
+      get().hydrate();
+      const { conversations, unreadCounts, selectConversation } = get();
+      const preferred = preferredConversationId
+        ? conversations.find((c) => c.id === preferredConversationId)
+        : undefined;
+      const byLatest = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt);
+      const target = preferred ?? byLatest.find((c) => unreadCounts[c.id]) ?? byLatest[0];
+      if (target) selectConversation(target.id);
     },
   };
 });

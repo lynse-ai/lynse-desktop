@@ -63,7 +63,19 @@ export function LynseSidebar() {
     { key: "inspiration", label: t("nav.inspiration"), icon: Lightbulb, path: "/inspiration" },
     { key: "todo", label: t("nav.todo"), icon: ListChecks, path: "/todo" },
     { key: "notes", label: t("nav.notes"), icon: FolderOpen, path: "/notes" },
-    { key: "chat", label: t("nav.chat"), icon: MessageSquare, path: "/chat" },
+    {
+      key: "chat",
+      label: t("nav.chat"),
+      icon: MessageSquare,
+      path: "/chat",
+      // Opening the chat from the sidebar lands on the conversation the
+      // unread badge points at (latest unread, else latest) — never a blank
+      // new-chat view.
+      action: () => {
+        useChatStore.getState().openLatestUnread();
+        push("/chat");
+      },
+    },
     { key: "devices", label: t("nav.devices"), icon: Bluetooth, path: "/devices" },
   ].filter((item) =>
     item.key === "inspiration" ? featureFlags.inspiration
@@ -185,6 +197,11 @@ export function LynseSidebar() {
                   <div className="max-h-[60vh] overflow-y-auto">
                     <NotificationList
                       onItemClick={(n) => {
+                        // Chat notifications carry their conversation id —
+                        // select it so the user lands in that conversation.
+                        if (n.id.startsWith("chat:")) {
+                          useChatStore.getState().openLatestUnread(n.id.slice("chat:".length));
+                        }
                         if (n.href) {
                           if (n.external) openExternalUrl(n.href);
                           else push(n.href);

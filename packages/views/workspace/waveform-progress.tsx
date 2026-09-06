@@ -68,20 +68,20 @@ export function WaveformProgress({
         barWidth={3}
         barGap={1.5}
         barRadius={1.5}
-        barColor="var(--primary)"
+        barColor="var(--muted-foreground)"
         fadeEdges={false}
-        className="absolute inset-0 opacity-35"
+        className="absolute inset-0 opacity-45"
       />
 
-      {/* Played portion tint */}
+      {/* Played portion — same bars, brought forward */}
       <div
         className="pointer-events-none absolute inset-y-0 left-0 rounded-[3px]"
-        style={{ width: `${ratio * 100}%`, background: "var(--primary)", opacity: 0.16 }}
+        style={{ width: `${ratio * 100}%`, background: "var(--muted-foreground)", opacity: 0.5 }}
       />
 
       {/* Playhead */}
       <div
-        className="pointer-events-none absolute inset-y-0 w-[2px] rounded-full bg-foreground/70"
+        className="pointer-events-none absolute inset-y-0 w-[2px] rounded-full bg-destructive"
         style={{ left: `calc(${ratio * 100}% - 1px)` }}
       />
     </div>

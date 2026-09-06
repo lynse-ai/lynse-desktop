@@ -110,6 +110,20 @@ jobs:
           # latest.json — the endpoint the in-app updater polls.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Apple Developer ID signing + notarization (macOS). tauri-bundler
+          # ad-hoc-signs when these are absent, and an ad-hoc signature pins
+          # the exact build hash — so every update looks like a *different*
+          # app to macOS TCC and users must re-grant Screen Recording /
+          # Microphone after each update. With a stable Developer ID identity
+          # the designated requirement is stable and TCC grants survive
+          # updates. Signing activates automatically once the secrets exist;
+          # local builds stay unsigned.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           projectPath: apps/tauri
           args: ${{ matrix.args }}

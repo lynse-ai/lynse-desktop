@@ -122,6 +122,7 @@ export function localRecordToWorkspaceItem(record: LocalTranscriptionRecord): Wo
     updatedAt: record.updatedAt,
     folderId: LOCAL_TRANSCRIPTION_FOLDER_ID,
     tags: [LOCAL_TRANSCRIPTION_TAG, localStatusLabel(record.status)],
+    transcriptionCompleted: record.status === "completed",
     ...(record.durationMs !== undefined ? { durationSeconds: record.durationMs / 1000 } : {}),
   };
 }

@@ -7,13 +7,20 @@ import { ContentPanel } from "../workspace/content-panel";
 import { ChatPanel } from "../workspace/right-panel/chat-panel";
 import { ResizableHandle } from "../workspace/resizable-handle";
 import { TitleBar } from "../layout/title-bar";
-import { useNotes, useDeleteFiles } from "../workspace/hooks/use-files";
+import {
+  useNotes,
+  useDeleteWorkspaceFiles,
+  useTranscriptionStatus,
+  isTranscriptionCompleted,
+} from "../workspace/hooks/use-files";
 import { useMoveFiles } from "../workspace/hooks/use-folder-mutations";
 import { useFolders } from "../workspace/hooks/use-folders";
 import { FileRowContextMenu } from "../workspace/middle-panel/file-row-context-menu";
 import { filterWorkspaceFilesByFolder } from "../workspace/middle-panel/file-list-filter";
-import { LOCAL_TRANSCRIPTION_FOLDER_ID } from "../workspace/local-transcription";
+import { LOCAL_TRANSCRIPTION_FOLDER_ID, isLocalFileId } from "../workspace/local-transcription";
+import { isNoteUnread, markNoteSeen, useSeenMap } from "./seen";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { toast } from "sonner";
 import { useAuthStore } from "@lynse/core/auth";
 import {
   DropdownMenu,
@@ -229,7 +236,7 @@ export function NotesPage() {
   // Same mutations the workspace file list uses, so both views stay in sync
   // (both invalidate the notes list on success).
   const moveMutation = useMoveFiles();
-  const deleteMutation = useDeleteFiles();
+  const deleteMutation = useDeleteWorkspaceFiles();
 
   const handleMoveFile = (targetIds: string[], newFolderId: string, oldFolderId: string) => {
     moveMutation.mutate({ oldFolderId, newFolderId, fileIds: targetIds });
@@ -242,6 +249,9 @@ export function NotesPage() {
           if (targetIds.includes(selectedItemId ?? "")) {
             selectItem(null, null);
           }
+        },
+        onError: (error) => {
+          toast.error(t("workspace.delete_failed", { error: error.message }));
         },
       });
     }
@@ -267,7 +277,6 @@ export function NotesPage() {
   const sourceFiles = files ?? (isAuthenticated ? cachedFiles : []);
 
   const folderList: FolderInfo[] = Array.isArray(folders) ? folders : [];
-
   const currentFolderName = useMemo(() => {
     if (selectedFolderId === "__all__") return t("layout.all_files");
     if (selectedFolderId === LOCAL_TRANSCRIPTION_FOLDER_ID) return t("layout.local_transcriptions");
@@ -288,6 +297,39 @@ export function NotesPage() {
     if (!Array.isArray(sourceFiles)) return [];
     return filterWorkspaceFilesByFolder(sourceFiles, selectedFolderId);
   }, [sourceFiles, selectedFolderId]);
+
+  // Unread dot: transcription finished but the note hasn't been opened since.
+  // Cloud completion comes from the trans-status endpoint; local ids are
+  // excluded from that query — they carry their own completed flag and would
+  // never go terminal on the backend, keeping the poll alive forever.
+  const cloudVisibleIds = useMemo(
+    () => filteredFiles.filter((f) => !isLocalFileId(f.id)).map((f) => f.id).sort(),
+    [filteredFiles],
+  );
+  const { data: transStatus } = useTranscriptionStatus(cloudVisibleIds);
+  const seenMap = useSeenMap();
+  const unreadIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const file of filteredFiles) {
+      const completed = isLocalFileId(file.id)
+        ? file.transcriptionCompleted === true
+        : isTranscriptionCompleted(transStatus?.[file.id]);
+      if (isNoteUnread(file, completed, seenMap)) set.add(file.id);
+    }
+    return set;
+  }, [filteredFiles, transStatus, seenMap]);
+
+  // A transcription that finishes while the note is already open counts as read.
+  useEffect(() => {
+    if (!selectedItemId || unreadIds.size === 0) return;
+    const current = filteredFiles.find((f) => f.id === selectedItemId);
+    if (current && unreadIds.has(current.id)) markNoteSeen(current.id, current.updatedAt);
+  }, [selectedItemId, unreadIds, filteredFiles]);
+
+  const handleOpenNote = (file: WorkspaceItem) => {
+    markNoteSeen(file.id, file.updatedAt);
+    selectItem(file.id, "file", file.title);
+  };
 
   // Per-group recording counts for the filter dropdown. Reuses the list's own
   // filter so a number always matches what selecting that group shows. Trash
@@ -468,7 +510,8 @@ export function NotesPage() {
                         <GridCard
                           file={file}
                           isSelected={selectedItemId === file.id}
-                          onClick={() => selectItem(file.id, "file", file.title)}
+                          unread={unreadIds.has(file.id)}
+                          onClick={() => handleOpenNote(file)}
                         />
                       </FileRowContextMenu>
                     ))}
@@ -494,7 +537,8 @@ export function NotesPage() {
                         <FileRow
                           file={file}
                           isSelected={selectedItemId === file.id}
-                          onClick={() => selectItem(file.id, "file", file.title)}
+                          unread={unreadIds.has(file.id)}
+                          onClick={() => handleOpenNote(file)}
                         />
                       </FileRowContextMenu>
                     ))}
@@ -583,12 +627,16 @@ function FolderCount({ count }: { count: number | undefined }) {
 function FileRow({
   file,
   isSelected,
+  unread,
   onClick,
 }: {
   file: WorkspaceItem;
   isSelected: boolean;
+  /** Transcription finished but the note hasn't been opened yet — shows the dot. */
+  unread: boolean;
   onClick: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <button
       onClick={onClick}
@@ -602,6 +650,12 @@ function FileRow({
         <h3 className="truncate text-sm font-semibold text-foreground">{file.title}</h3>
         <NoteMetadata file={file} />
       </div>
+      {unread && (
+        <span
+          className="ml-2 size-2 shrink-0 rounded-full bg-destructive"
+          title={t("notes.unread_hint")}
+        />
+      )}
     </button>
   );
 }
@@ -609,20 +663,30 @@ function FileRow({
 function GridCard({
   file,
   isSelected,
+  unread,
   onClick,
 }: {
   file: WorkspaceItem;
   isSelected: boolean;
+  /** Transcription finished but the note hasn't been opened yet — shows the dot. */
+  unread: boolean;
   onClick: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <button
       onClick={onClick}
       className={cn(
-        "group flex flex-col rounded-xl border border-border/60 bg-card p-2.5 text-left transition-colors hover:border-primary/20 hover:bg-accent/30",
+        "group relative flex flex-col rounded-xl border border-border/60 bg-card p-2.5 text-left transition-colors hover:border-primary/20 hover:bg-accent/30",
         isSelected ? "border-primary/40 bg-accent/40 ring-1 ring-primary/30" : ""
       )}
     >
+      {unread && (
+        <span
+          className="absolute right-2 top-2 size-2 rounded-full bg-destructive"
+          title={t("notes.unread_hint")}
+        />
+      )}
       {/* Title */}
       <h3 className="line-clamp-2 min-h-[2.25rem] text-sm font-semibold leading-[1.125rem] text-foreground">{file.title}</h3>
       <NoteMetadata file={file} />

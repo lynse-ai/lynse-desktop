@@ -597,6 +597,38 @@ export function useDeleteFiles() {
   });
 }
 
+/**
+ * Delete rows from the file lists (notes page + workspace middle panel).
+ * Cloud files soft-delete via the backend; local transcriptions (`local:` ids)
+ * are removed through the desktop bridge — the backend does not know local ids
+ * and the delete call would fail silently, reading as "delete does nothing".
+ */
+export function useDeleteWorkspaceFiles() {
+  const qc = useQueryClient();
+  const deleteCloud = useDeleteFiles();
+  return useMutation({
+    mutationFn: async (fileIds: string[]) => {
+      const localApi = getDesktopLocalTranscriptionApi();
+      const cloudIds: string[] = [];
+      for (const id of fileIds) {
+        if (isLocalFileId(id)) {
+          if (!localApi) throw new Error("local transcription bridge unavailable");
+          await localApi.delete(id);
+        } else {
+          cloudIds.push(id);
+        }
+      }
+      if (cloudIds.length > 0) await deleteCloud.mutateAsync(cloudIds);
+      return { deleted: fileIds.length };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["files"] });
+      qc.invalidateQueries({ queryKey: ["notes"] });
+      qc.invalidateQueries({ queryKey: ["folder-counts"] });
+    },
+  });
+}
+
 /** PUT /api/business/file/{fileId} — rename a file. */
 export function useRenameFile() {
   const qc = useQueryClient();

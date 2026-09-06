@@ -97,6 +97,10 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # audiopus_sys (opus codec) vendors a CMakeLists.txt with an old
+          # cmake_minimum_required, which CMake 4.x on the runners rejects.
+          # Re-allow the legacy policy so the codec builds.
+          CMAKE_POLICY_VERSION_MINIMUM: "3.5"
           # Updater signing key (minisign). The matching pubkey lives in
           # apps/tauri/src-tauri/tauri.conf.json. With the key present the
           # action signs every bundle (.sig files) and generates + uploads

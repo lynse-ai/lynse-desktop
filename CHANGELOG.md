@@ -4,8 +4,13 @@
 
 ### New Features
 
+- Notes list: recordings whose transcription has finished but that you have not opened yet now show a small red dot (list and grid view). Opening the note clears it.
 - In-app auto-update: the app now checks GitHub Releases for new versions and can download, signature-verify, install, and relaunch itself — no more manual download in the browser. Update prompts appear in the sidebar reminder card and the settings About tab, with live download progress. Clients on 0.1.29 or older still use the manual flow; from 0.1.30 on, upgrading is one click.
 - Releases are now minisign-signed and published with an update manifest (latest.json) by CI on every version tag.
+
+### Fixed
+
+- Right-click → Delete on a recording in the notes list now also removes local (on-device) transcriptions; previously those deletes were sent to the cloud API with a local id and silently failed, so the row never disappeared. Delete failures now surface as a toast instead of doing nothing.
 
 ### Changed
 

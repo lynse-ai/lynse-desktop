@@ -411,6 +411,7 @@ const en = {
     delete: "Delete",
     delete_selected: "Delete selected",
     delete_confirm: "Delete the selected file(s)? They will be moved to trash.",
+    delete_failed: "Delete failed: {{error}}",
     transcribe: "Transcribe",
     transcribe_selected: "Transcribe selected",
     regenerate: "Regenerate",
@@ -518,6 +519,7 @@ const en = {
     time_this_week: "This week",
     time_this_month: "This month",
     time_last_month: "Last month",
+    unread_hint: "Transcription ready — not viewed yet",
   },
   inspiration: {
     title: "Inspiration",

@@ -411,6 +411,7 @@ const ja = {
     delete: "削除",
     delete_selected: "選択を削除",
     delete_confirm: "選択したファイルを削除しますか？ゴミ箱に移動します。",
+    delete_failed: "削除に失敗しました：{{error}}",
     transcribe: "書き起こし",
     transcribe_selected: "選択を書き起こし",
     regenerate: "再生成",
@@ -518,6 +519,7 @@ const ja = {
     time_this_week: "今週",
     time_this_month: "今月",
     time_last_month: "先月",
+    unread_hint: "文字起こし完了 — 未読",
   },
   inspiration: {
     title: "インスピレーション",

@@ -17,6 +17,8 @@ export interface WorkspaceItem {
   durationSeconds?: number;
   /** MIME type from the backend (e.g. audio/mpeg, video/mp4). Used to detect recordings. */
   contentType?: string;
+  /** Local transcriptions only: whether the transcription pipeline has finished. */
+  transcriptionCompleted?: boolean;
 }
 
 export interface FileItem {

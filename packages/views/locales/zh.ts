@@ -411,6 +411,7 @@ const zh = {
     delete: "删除",
     delete_selected: "删除选中",
     delete_confirm: "删除选中的文件？文件将移至回收站。",
+    delete_failed: "删除失败：{{error}}",
     transcribe: "转写",
     transcribe_selected: "转写选中",
     regenerate: "重新生成",
@@ -518,6 +519,7 @@ const zh = {
     time_this_week: "本周",
     time_this_month: "本月",
     time_last_month: "上个月",
+    unread_hint: "转写已完成，点击查看",
   },
   inspiration: {
     title: "灵感",

@@ -54,6 +54,7 @@ describe("local transcription helpers", () => {
       updatedAt: "2026-07-04T08:05:00.000Z",
       folderId: "__local_transcriptions__",
       tags: ["本地转写", "已完成"],
+      transcriptionCompleted: true,
       durationSeconds: 125,
     });
   });

@@ -6,10 +6,11 @@ import { Search, FolderOpen, GripVertical, ArrowUpDown, ArrowDown, ArrowUp, Load
 import { Input } from "@lynse/ui/components/ui/input";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { toast } from "sonner";
 import { useWorkspaceStore } from "../store";
 import {
   useFiles,
-  useDeleteFiles,
+  useDeleteWorkspaceFiles,
   useRenameFile,
   useTemplateCategories,
   useRerunSummary,
@@ -71,7 +72,7 @@ export function FileList() {
     return all.find((tpl) => tpl.isDefault === 1)?.id ?? all[0]?.id ?? "";
   }, [templateCategories]);
 
-  const deleteMutation = useDeleteFiles();
+  const deleteMutation = useDeleteWorkspaceFiles();
   const renameMutation = useRenameFile();
   const moveMutation = useMoveFiles();
   const rerunMutation = useRerunSummary();
@@ -172,6 +173,9 @@ export function FileList() {
             selectItem(null, null);
           }
           clearFileSelection();
+        },
+        onError: (error) => {
+          toast.error(t("workspace.delete_failed", { error: error.message }));
         },
       });
     }

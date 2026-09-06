@@ -1,13 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { initI18n } from "@lynse/core/i18n";
+import { useTranslation } from "@lynse/core/i18n/react";
 import { DynamicIsland } from "./dynamic-island";
 import { IslandTranscriptDrawer } from "./island-transcript-drawer";
 import { requestRealtimeSession } from "./api";
 import { RESOURCES } from "../locales";
 import { useLiveTranslation } from "./use-live-translation";
-import type { LiveConnectionDescriptor } from "./types";
+import type { LiveConnectionDescriptor, LiveTranslationTrayAction } from "./types";
 
 /** How long the drawer's collapse animation runs before the window shrinks.
     Matches `animate-island-drawer-out` in globals.css. */
@@ -29,6 +31,7 @@ const DRAWER_CLOSE_ANIMATION_MS = 150;
  */
 export function RecordingIslandWindow() {
   const { api, view } = useLiveTranslation();
+  const { t } = useTranslation();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMounted, setDrawerMounted] = useState(false);
   const closeTimer = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
@@ -38,6 +41,40 @@ export function RecordingIslandWindow() {
   useEffect(() => {
     initI18n({ resources: RESOURCES });
   }, []);
+
+  // Point the running session's live cloud connections at `targetLanguage` —
+  // "none" attaches pure transcription, a language code attaches translation.
+  // Same flow as the recording page's switchMode; audio capture is untouched,
+  // so switching is seamless. Missing provider config surfaces a hint toast
+  // and the session keeps recording.
+  const applyLiveMode = useCallback(
+    async (targetLanguage: string) => {
+      if (!api || !view.sessionId) return;
+      const source = view.sourceLanguage ?? "zh";
+      try {
+        const cfg = await api.getProviderConfig().catch(() => null);
+        if (!cfg || !cfg.provider) {
+          toast.warning(t("recording_mode.switch_need_provider"));
+          return;
+        }
+        const epoch = (view.epoch ?? 0) + 1;
+        const credentials = await requestRealtimeSession(
+          { sourceLanguage: source, targetLanguage, sessionId: view.sessionId, epoch },
+          cfg,
+        );
+        await api.setMode({
+          sessionId: view.sessionId,
+          sourceLanguage: source,
+          targetLanguage,
+          epoch: credentials.epoch,
+          connections: credentials.connections,
+        });
+      } catch (error) {
+        toast.warning(String(error));
+      }
+    },
+    [api, view.sessionId, view.epoch, view.sourceLanguage, t],
+  );
 
   const collapseDrawer = useCallback(() => {
     setDrawerOpen(false);
@@ -58,7 +95,12 @@ export function RecordingIslandWindow() {
     void api?.setIslandExpanded(true).catch(() => {});
     setDrawerMounted(true);
     setDrawerOpen(true);
-  }, [api, drawerOpen, collapseDrawer]);
+    // Pulling the drawer down signals "I want to read the transcript": make
+    // sure the session is actually transcribing. Pure-recording sessions get
+    // switched into live transcription; already-live sessions stay as they
+    // are. A collapsed pill means the user just wants to record — no switch.
+    if (view.targetLanguage === view.sourceLanguage) void applyLiveMode("none");
+  }, [api, drawerOpen, collapseDrawer, view.targetLanguage, view.sourceLanguage, applyLiveMode]);
 
   // Fold the drawer back up when the session winds down.
   useEffect(() => {
@@ -107,6 +149,35 @@ export function RecordingIslandWindow() {
     }
   }, [api, view.sessionId, view.state, view.epoch, view.sourceLanguage, view.targetLanguage]);
 
+  // Tray transport bridge: the island webview is alive exactly as long as a
+  // session is, so it — not the main window's recording page — reliably
+  // receives tray pause/stop. (Tray start is handled natively in Rust.)
+  // `togglePause` is mirrored through a ref so a single subscription stays
+  // mounted for the life of the window while always acting on fresh state.
+  const trayActionRef = useRef<(action: LiveTranslationTrayAction) => void>(() => {});
+  trayActionRef.current = (action) => {
+    if (action === "pause") {
+      void togglePause();
+    } else if (action === "stop") {
+      void api?.stop();
+    }
+  };
+  useEffect(() => {
+    if (!api) return;
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    void api.onTrayAction((action) => trayActionRef.current(action)).then((unsub) => {
+      if (disposed) unsub();
+      else cleanup = unsub;
+    });
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+    // Deliberately subscribe once per `api` instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api]);
+
   return (
     <div className="flex h-screen w-screen items-stretch justify-center bg-transparent">
       <DynamicIsland
@@ -117,7 +188,12 @@ export function RecordingIslandWindow() {
         onStop={() => void api?.stop()}
         onExpand={() => void api?.showMainWindow()}
       >
-        {drawerMounted && <IslandTranscriptDrawer closing={!drawerOpen} />}
+        {drawerMounted && (
+          <IslandTranscriptDrawer
+            closing={!drawerOpen}
+            onSelectTargetLanguage={(code) => void applyLiveMode(code)}
+          />
+        )}
       </DynamicIsland>
     </div>
   );

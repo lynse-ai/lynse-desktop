@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useLiveTranslation } from "./use-live-translation";
@@ -58,6 +58,8 @@ export interface UseRecordingSessionReturn {
   sessionId: string | undefined;
   elapsedMs: number;
   micLevel: number;
+  /** When the current session started recording (undefined while idle). */
+  startedAt: string | undefined;
   segmentCount: number;
   recentSegments: readonly LiveTranslationSegment[];
   /** Full, de-duplicated transcript (echo segments removed) for the detail view. */
@@ -355,40 +357,9 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     setShowCompleteDialog(false);
   }, []);
 
-  // ── menu-bar tray bridge ────────────────────────────────────────
-  // The native NSStatusItem menu emits `start` / `pause` / `stop`; map them
-  // onto the recording transport. We mirror `recording` and the transport
-  // callbacks into refs so a single subscription can stay mounted for the
-  // life of the page (e.g. while the main window is hidden behind the tray).
-  const recordingRef = useRef(recording);
-  recordingRef.current = recording;
-  const toggleRecordingRef = useRef(toggleRecording);
-  toggleRecordingRef.current = toggleRecording;
-  const togglePauseRef = useRef(togglePause);
-  togglePauseRef.current = togglePause;
-  useEffect(() => {
-    if (!api) return;
-    let disposed = false;
-    let cleanup: (() => void) | undefined;
-    void api.onTrayAction((action) => {
-      if (action === "start") {
-        if (!recordingRef.current) void toggleRecordingRef.current();
-      } else if (action === "pause") {
-        void togglePauseRef.current();
-      } else if (action === "stop") {
-        if (recordingRef.current) void toggleRecordingRef.current();
-      }
-    }).then((unsub) => {
-      if (disposed) unsub();
-      else cleanup = unsub;
-    });
-    return () => {
-      disposed = true;
-      cleanup?.();
-    };
-    // We deliberately subscribe once per `api` instance.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api]);
+  // Tray transport (pause/stop) is consumed by the recording island window,
+  // which stays alive exactly as long as a session does — see
+  // `RecordingIslandWindow`. Tray start is handled natively in Rust.
 
   return {
     recording,
@@ -405,6 +376,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     sessionId: view.sessionId,
     elapsedMs: view.elapsedMs,
     micLevel: view.micLevel,
+    startedAt: view.startedAt,
     segmentCount: view.segments.filter((s) => !s.echoOf).length,
     recentSegments,
     segments,

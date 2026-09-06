@@ -26,8 +26,9 @@ interface AudioVisualizerProps {
  * PERFORMANCE — the sidecar publishes a level only every 200 ms, so the raw
  * value steps five times a second. Per-bar easing (frame-rate independent) and
  * the travelling ripple hide those steps, and the canvas is sized from a
- * ResizeObserver so no frame ever forces a layout read. All 64 bars are built
- * into a single path and filled once.
+ * ResizeObserver so no frame ever forces a layout read. All bars are built
+ * into a single path and filled once; the bar count adapts to the canvas
+ * width (capped at 64).
  */
 export function AudioVisualizer({ level, active, className }: AudioVisualizerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -43,18 +44,25 @@ export function AudioVisualizer({ level, active, className }: AudioVisualizerPro
     if (!ctx) return;
     const waveformColor = getComputedStyle(canvas).color;
 
-    const BARS = 64;
-    // Per-bar phase offset so neighbouring bars never move in lockstep.
-    const bars = Array.from({ length: BARS }, (_, i) => ({
-      phase: (i / BARS) * Math.PI * 4,
-      value: 0,
-    }));
+    const MAX_BARS = 64;
+    // Bars adapt to the canvas width: a fixed 64-bar row needs ~95px of gaps
+    // alone, which turns bar widths negative — and the whole waveform
+    // invisible — on small canvases like the island's mini wave. Keep the
+    // dense look on wide canvases, degrade gracefully below.
+    let bars: { phase: number; value: number }[] = [];
 
     let width = 0;
     let height = 0;
     const measure = () => {
       width = canvas.clientWidth;
       height = canvas.clientHeight;
+      const count = Math.max(8, Math.min(MAX_BARS, Math.floor(width / 4)));
+      if (count !== bars.length) {
+        bars = Array.from({ length: count }, (_, i) => ({
+          phase: (i / count) * Math.PI * 4,
+          value: 0,
+        }));
+      }
     };
     measure();
     const resizeObserver = new ResizeObserver(measure);
@@ -86,16 +94,16 @@ export function AudioVisualizer({ level, active, className }: AudioVisualizerPro
       const mid = height / 2;
 
       const gap = Math.max(1.5, width * 0.004);
-      const barW = (width - gap * (BARS - 1)) / BARS;
+      const barW = (width - gap * (bars.length - 1)) / bars.length;
       const radius = Math.max(1, barW / 2); // fully rounded pill
 
       ctx.fillStyle = waveformColor;
       ctx.globalAlpha = isActive ? 0.9 : 0.3;
       ctx.beginPath();
 
-      for (let i = 0; i < BARS; i++) {
+      for (let i = 0; i < bars.length; i++) {
         const bar = bars[i]!;
-        const pos = i / (BARS - 1); // 0 … 1 left-to-right
+        const pos = i / (bars.length - 1); // 0 … 1 left-to-right
         // Travelling ripple — neighbouring bars are slightly out of phase.
         const waveTime = isActive ? t : 0;
         const wave = 0.5 + 0.5 * Math.sin(pos * Math.PI * 7 - waveTime * 5 + bar.phase);

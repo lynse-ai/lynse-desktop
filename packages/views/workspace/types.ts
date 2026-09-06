@@ -19,6 +19,10 @@ export interface WorkspaceItem {
   contentType?: string;
   /** Local transcriptions only: whether the transcription pipeline has finished. */
   transcriptionCompleted?: boolean;
+  /** Local transcriptions only: pipeline status. Drives the detail-panel
+   *  progress pill and retry affordance — list cards show a local-recording
+   *  badge instead of encoding this in `tags`. */
+  localStatus?: LocalTranscriptionStatus;
 }
 
 export interface FileItem {

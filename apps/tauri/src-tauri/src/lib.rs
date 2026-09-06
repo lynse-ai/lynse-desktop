@@ -23,6 +23,7 @@ mod live_translation;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[path = "live_translation_stub.rs"]
 mod live_translation;
+mod inspiration_voice;
 mod recording_card;
 mod stt;
 // Wire codec for the Volcengine AST provider used by `live_translation`. Kept
@@ -32,7 +33,9 @@ mod stt;
     not(any(target_os = "macos", target_os = "windows")),
     allow(dead_code)
 )]
+mod vault;
 mod volc_ast;
+mod webdav;
 mod window_effects;
 
 use live_translation::LiveTranslationManager;
@@ -41,6 +44,9 @@ const VOICEPRINT_MATCH_THRESHOLD: f64 = 0.31;
 
 struct AppState {
     model_download_in_progress: Mutex<bool>,
+    /// Guards against two WebDAV syncs running at once (manual button + the
+    /// launch/interval auto-sync can overlap).
+    webdav_sync_in_progress: Mutex<bool>,
     /// Mirror of the recording state used to rebuild the tray menu when it
     /// changes (e.g. start, stop, pause). Mirrored here so the rebuild
     /// function and the update command can share a single source of truth.
@@ -62,7 +68,7 @@ fn app_data_dir(app: &AppHandle) -> CommandResult<PathBuf> {
     Ok(path)
 }
 
-fn local_store_path(app: &AppHandle, directory: &str) -> CommandResult<PathBuf> {
+pub(crate) fn local_store_path(app: &AppHandle, directory: &str) -> CommandResult<PathBuf> {
     let path = app_data_dir(app)?.join(directory).join("index.json");
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -90,7 +96,7 @@ pub(crate) fn engine_model_dir(app: &AppHandle, engine: &str, model_id: &str) ->
     Ok(path)
 }
 
-fn read_array(path: &Path) -> CommandResult<Vec<Value>> {
+pub(crate) fn read_array(path: &Path) -> CommandResult<Vec<Value>> {
     match fs::read_to_string(path) {
         Ok(content) => Ok(serde_json::from_str(&content).unwrap_or_default()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
@@ -98,14 +104,14 @@ fn read_array(path: &Path) -> CommandResult<Vec<Value>> {
     }
 }
 
-fn write_array(path: &Path, values: &[Value]) -> CommandResult<()> {
+pub(crate) fn write_array(path: &Path, values: &[Value]) -> CommandResult<()> {
     let temporary = path.with_extension("json.tmp");
     let content = serde_json::to_string_pretty(values).map_err(|error| error.to_string())?;
     fs::write(&temporary, content).map_err(|error| error.to_string())?;
     fs::rename(&temporary, path).map_err(|error| error.to_string())
 }
 
-fn list_store(app: &AppHandle, directory: &str) -> CommandResult<Vec<Value>> {
+pub(crate) fn list_store(app: &AppHandle, directory: &str) -> CommandResult<Vec<Value>> {
     let path = local_store_path(app, directory)?;
     let mut values = read_array(&path)?;
     values.sort_by(|left, right| {
@@ -1512,6 +1518,406 @@ fn todo_save(app: AppHandle, todo: Value) -> CommandResult<Value> { save_todo(&a
 #[tauri::command]
 fn todo_delete(app: AppHandle, id: String) -> CommandResult<()> { remove_store_value(&app, "local-todos", &id) }
 
+/// Persist an inspiration. Freshly captured attachments arrive as
+/// `pendingAudioPath` / `pendingImages` pointing at staging (or picked) files;
+/// they are adopted into the inspiration's durable directory
+/// (`inspirations/<uuid>/`) before the record is stored, so saved memos never
+/// reference temp locations.
+fn save_inspiration(app: &AppHandle, mut inspiration: Value) -> CommandResult<Value> {
+    let object = inspiration.as_object_mut().ok_or("Inspiration must be an object")?;
+    let text = object.get("text").and_then(Value::as_str).map(str::trim).unwrap_or_default();
+    let has_audio = object.get("audio").and_then(Value::as_object).is_some();
+    let pending_path = object.get("pendingAudioPath").and_then(Value::as_str).map(str::to_owned).filter(|value| !value.is_empty());
+    let pending_images = object.get("pendingImages").and_then(Value::as_array).cloned().unwrap_or_default();
+    if text.is_empty() && !has_audio && pending_path.is_none() && pending_images.is_empty() {
+        return Err("Inspiration text, image or audio is required".to_owned());
+    }
+    if object.get("id").and_then(Value::as_str).map(str::trim).unwrap_or_default().is_empty() {
+        object.insert("id".to_owned(), json!(format!("inspiration:{}", Uuid::new_v4())));
+    }
+    let id = object.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let uuid = id.strip_prefix("inspiration:").unwrap_or(&id).to_owned();
+    let timestamp = now();
+    object.entry("createdAt".to_owned()).or_insert_with(|| json!(timestamp));
+    object.insert("updatedAt".to_owned(), json!(timestamp));
+    object.entry("tags".to_owned()).or_insert_with(|| json!([]));
+
+    if pending_path.is_some() || !pending_images.is_empty() {
+        fs::create_dir_all(app_data_dir(app)?.join("inspirations").join(&uuid))
+            .map_err(|error| error.to_string())?;
+    }
+
+    if let Some(pending) = pending_path {
+        if !has_audio {
+            let directory = app_data_dir(app)?.join("inspirations").join(&uuid);
+            let destination = directory.join("audio.wav");
+            if !destination.exists() {
+                // Both paths live under app data, so rename stays on one
+                // volume; copy is only a cross-volume fallback.
+                if fs::rename(&pending, &destination).is_err() {
+                    fs::copy(&pending, &destination).map_err(|error| error.to_string())?;
+                    let _ = fs::remove_file(&pending);
+                }
+                // Best-effort cleanup of the now-empty capture directory.
+                if let Some(parent) = Path::new(&pending).parent() {
+                    if parent.file_name().and_then(|value| value.to_str()).unwrap_or_default().starts_with("capture-") {
+                        let _ = fs::remove_dir_all(parent);
+                    }
+                }
+            }
+            let duration = object.get("pendingAudioDurationMs").and_then(Value::as_i64).unwrap_or(0);
+            object.insert("audio".to_owned(), json!({ "file": "audio.wav", "durationMs": duration }));
+            if object.get("transcriptStatus").and_then(Value::as_str).is_none() {
+                object.insert("transcriptStatus".to_owned(), json!("none"));
+            }
+        }
+    }
+
+    if !pending_images.is_empty() && object.get("images").and_then(Value::as_array).map_or(true, |images| images.is_empty()) {
+        let staging_root = app_data_dir(app)?.join("inspirations").join("staging");
+        let directory = app_data_dir(app)?.join("inspirations").join(&uuid);
+        let mut images = Vec::new();
+        for (index, image) in pending_images.iter().enumerate() {
+            let Some(source) = image.get("sourcePath").and_then(Value::as_str).filter(|value| !value.is_empty()) else {
+                continue;
+            };
+            let source_path = Path::new(source);
+            let extension = source_path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(str::to_ascii_lowercase)
+                .filter(|value| is_safe_asset_file_name(value))
+                .unwrap_or_else(|| "img".to_owned());
+            let file_name = format!("img-{}.{}", index + 1, extension);
+            let destination = directory.join(&file_name);
+            if !destination.exists() {
+                // Staged pastes are ours to move; picked files stay put.
+                if source_path.starts_with(&staging_root) {
+                    fs::rename(source_path, &destination).map_err(|error| error.to_string())?;
+                } else {
+                    fs::copy(source_path, &destination).map_err(|error| error.to_string())?;
+                }
+            }
+            let mut entry = Map::new();
+            entry.insert("file".to_owned(), json!(file_name));
+            for key in ["width", "height"] {
+                if let Some(value) = image.get(key).and_then(Value::as_i64) {
+                    entry.insert(key.to_owned(), json!(value));
+                }
+            }
+            images.push(Value::Object(entry));
+        }
+        object.insert("images".to_owned(), json!(images));
+    }
+    object.remove("pendingImages");
+    object.remove("pendingAudioPath");
+    object.remove("pendingAudioDurationMs");
+    save_store_value(app, "local-inspirations", inspiration)
+}
+
+/// Transcribe an inspiration memo with the current default STT routing. Unlike
+/// `transcribe_record` this never touches `local-transcriptions`: the result is
+/// patched straight into the inspiration record. A missing model keeps the
+/// audio and marks the record `unavailable` so the UI can offer a retry after
+/// the model is installed.
+fn transcribe_inspiration(app: &AppHandle, mut record: Value, audio_path: PathBuf) -> CommandResult<Value> {
+    let id = record.get("id").and_then(Value::as_str).ok_or("Record id is required")?.to_owned();
+    let patch_status = |status: &str, error: Option<&str>| -> CommandResult<Value> {
+        let mut patch = Map::new();
+        patch.insert("transcriptStatus".to_owned(), json!(status));
+        patch.insert("transcriptError".to_owned(), json!(error));
+        patch.insert("updatedAt".to_owned(), json!(now()));
+        update_store_value(app, "local-inspirations", &id, patch)?
+            .ok_or_else(|| "Inspiration disappeared while transcribing".to_owned())
+    };
+    let provider = resolve_provider(app, None, None);
+    let model_id = match &provider {
+        stt::ProviderConfig::Funasr(_) => "funasr-paraformer",
+        stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
+        stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
+        stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
+    };
+    if !model_is_installed(app, provider.engine(), model_id) {
+        return patch_status("unavailable", Some("本地 ASR 模型未安装，请先在设置中下载语音识别模型"));
+    }
+    let result = (|| -> CommandResult<String> {
+        let directory = engine_model_dir(app, provider.engine(), model_id)?;
+        let hotword_package_id = provider.hotword_package_id().map(str::to_owned);
+        let terms = active_hotword_terms(app, hotword_package_id.as_deref())?;
+        let hotword = terms.iter().filter(|term| term.get("enabled").and_then(Value::as_bool) != Some(false))
+            .filter_map(|term| term.get("term").and_then(Value::as_str)).collect::<Vec<_>>().join(" ");
+        let request = stt::SttRequest {
+            audio_path: audio_path.to_string_lossy().into_owned(),
+            model_directory: directory,
+            provider: provider.clone(),
+            expected_speakers: provider.expected_speakers(),
+            hotword,
+            prior_context: None,
+        };
+        let output = provider.adapter().transcribe(app, &request)?;
+        Ok(apply_hotwords(output.text, &terms))
+    })();
+    match result {
+        Ok(transcript) => {
+            if let Some(object) = record.as_object_mut() {
+                object.insert("transcript".to_owned(), json!(transcript));
+            }
+            patch_status("completed", None)
+        }
+        Err(error) => {
+            let _ = patch_status("failed", Some(&error));
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+fn inspiration_list(app: AppHandle) -> CommandResult<Vec<Value>> { list_store(&app, "local-inspirations") }
+
+/// Async: adopting attachments copies multi-megabyte images on disk, which
+/// must not run on the main thread (sync commands are main-thread bound).
+#[tauri::command(async)]
+fn inspiration_save(app: AppHandle, inspiration: Value) -> CommandResult<Value> { save_inspiration(&app, inspiration) }
+
+/// Async: deleting removes the whole attachment directory from disk.
+#[tauri::command(async)]
+fn inspiration_delete(app: AppHandle, id: String) -> CommandResult<()> {
+    remove_store_value(&app, "local-inspirations", &id)?;
+    let uuid = id.strip_prefix("inspiration:").unwrap_or(&id);
+    let directory = app_data_dir(&app)?.join("inspirations").join(uuid);
+    if directory.exists() {
+        fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn inspiration_transcribe(app: AppHandle, id: String) -> CommandResult<Value> {
+    let record = get_store_value(&app, "local-inspirations", &id)?.ok_or("Inspiration not found")?;
+    let audio_file = record.get("audio")
+        .and_then(|audio| audio.get("file"))
+        .and_then(Value::as_str)
+        .ok_or("Inspiration has no audio")?
+        .to_owned();
+    let uuid = id.strip_prefix("inspiration:").unwrap_or(&id);
+    let audio_path = app_data_dir(&app)?.join("inspirations").join(uuid).join(audio_file);
+    if !audio_path.exists() {
+        return Err("灵感音频文件不存在".to_owned());
+    }
+    let mut record = record;
+    let object = record.as_object_mut().ok_or("Stored record must be an object")?;
+    object.insert("transcriptStatus".to_owned(), json!("pending"));
+    object.insert("updatedAt".to_owned(), json!(now()));
+    let record = save_store_value(&app, "local-inspirations", record)?;
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || transcribe_inspiration(&handle, record, audio_path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn inspiration_audio_url(app: AppHandle, id: String) -> CommandResult<Option<String>> {
+    Ok(get_store_value(&app, "local-inspirations", &id)?.map(|_| {
+        format!("local-media://localhost/{}", utf8_percent_encode(&id, NON_ALPHANUMERIC))
+    }))
+}
+
+/// Guard for asset file names served through `local-media`: anything outside
+/// this set is rejected so the handler can never be talked into traversal.
+fn is_safe_asset_file_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+/// Best-effort image format sniffing from the leading magic bytes; falls back
+/// to a generic extension (browsers sniff `<img>` content anyway).
+fn sniff_image_extension(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "jpg"
+    } else if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "png"
+    } else if bytes.starts_with(b"GIF8") {
+        "gif"
+    } else if bytes.starts_with(b"RIFF") && bytes.len() > 12 && &bytes[8..12] == b"WEBP" {
+        "webp"
+    } else if bytes.starts_with(b"BM") {
+        "bmp"
+    } else if bytes.len() > 12 && &bytes[4..8] == b"ftyp" {
+        "heic"
+    } else {
+        "img"
+    }
+}
+
+fn inspiration_staging_dir(app: &AppHandle) -> CommandResult<PathBuf> {
+    let directory = app_data_dir(app)?.join("inspirations").join("staging");
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    Ok(directory)
+}
+
+fn staged_image_response(path: &Path, file_name: &str) -> Value {
+    json!({
+        "path": path.to_string_lossy(),
+        "url": format!(
+            "local-media://localhost/{}",
+            utf8_percent_encode(&format!("staging:{file_name}"), NON_ALPHANUMERIC)
+        ),
+    })
+}
+
+fn write_staged_image(app: &AppHandle, bytes: Vec<u8>, prefix: &str, extension: &str) -> CommandResult<Value> {
+    if bytes.is_empty() {
+        return Err("Image payload is empty".to_owned());
+    }
+    let file_name = format!("{prefix}-{}.{extension}", Uuid::new_v4());
+    let path = inspiration_staging_dir(app)?.join(&file_name);
+    fs::write(&path, &bytes).map_err(|error| error.to_string())?;
+    Ok(staged_image_response(&path, &file_name))
+}
+
+/// Stage one pasted/captured image (raw bytes over the Tauri IPC) into
+/// `inspirations/staging/` and return its path plus a preview URL. The bytes
+/// are adopted into the inspiration's durable directory on save; the staging
+/// folder is wiped on the next launch, so nothing here is durable.
+///
+/// Kept sync on purpose (the borrowed `Request` cannot cross an async
+/// command) and therefore main-thread bound. macOS never uses this path —
+/// pushing multi-megabyte image bytes through the webview IPC froze the whole
+/// app; the capture sheet reads the pasteboard via
+/// [`inspiration_stage_image_from_clipboard`] instead. This is the fallback
+/// for platforms without that command.
+#[tauri::command]
+fn inspiration_stage_image(app: AppHandle, request: tauri::ipc::Request<'_>) -> CommandResult<Value> {
+    let bytes = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
+        tauri::ipc::InvokeBody::Json(_) => return Err("Image payload must be raw bytes".to_owned()),
+    };
+    let extension = sniff_image_extension(&bytes);
+    write_staged_image(&app, bytes, "paste", extension)
+}
+
+/// Same staging step for images picked from disk: copies the picked file into
+/// staging so previews and adoption flow through one uniform pipeline. Runs on
+/// the async thread pool — a multi-megabyte photo read+copied on the main
+/// thread froze the whole app (sync commands are main-thread bound).
+#[tauri::command(async)]
+fn inspiration_stage_image_from_path(app: AppHandle, path: String) -> CommandResult<Value> {
+    let bytes = fs::read(&path).map_err(|error| error.to_string())?;
+    if bytes.is_empty() {
+        return Err("Image file is empty".to_owned());
+    }
+    let extension = Path::new(&path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .filter(|value| is_safe_asset_file_name(value))
+        .unwrap_or_else(|| sniff_image_extension(&bytes).to_owned());
+    write_staged_image(&app, bytes, "pick", &extension)
+}
+
+/// Pull the clipboard image (PNG preferred, TIFF transcoded to PNG) from the
+/// system pasteboard. Must run on the main thread (AppKit). Returns the bytes
+/// plus their extension.
+#[cfg(target_os = "macos")]
+fn read_clipboard_image_bytes() -> CommandResult<(Vec<u8>, &'static str)> {
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSPasteboard};
+    use objc2_foundation::NSDictionary;
+
+    unsafe {
+        let pasteboard = NSPasteboard::generalPasteboard();
+        // Screenshots land as PNG; Continuity Camera photos land as TIFF.
+        if let Some(data) = pasteboard.dataForType(objc2_app_kit::NSPasteboardTypePNG) {
+            return Ok((data.to_vec(), "png"));
+        }
+        let Some(tiff) = pasteboard.dataForType(objc2_app_kit::NSPasteboardTypeTIFF) else {
+            return Err("剪贴板中没有图片".to_owned());
+        };
+        let Some(rep) = NSBitmapImageRep::imageRepWithData(&tiff) else {
+            return Err("剪贴板图片无法解析".to_owned());
+        };
+        let Some(png) = rep.representationUsingType_properties(
+            NSBitmapImageFileType::PNG,
+            &NSDictionary::dictionary(),
+        ) else {
+            return Err("剪贴板图片转码失败".to_owned());
+        };
+        Ok((png.to_vec(), "png"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn inspiration_stage_image_from_clipboard(app: AppHandle) -> CommandResult<Value> {
+    // Pasteboard access is AppKit — hop to the main thread, then do the disk
+    // write on the blocking pool.
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(read_clipboard_image_bytes());
+    })
+    .map_err(|error| error.to_string())?;
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (bytes, extension) = rx.recv().map_err(|_| "读取剪贴板失败".to_owned())??;
+        write_staged_image(&handle, bytes, "paste", extension)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+async fn inspiration_stage_image_from_clipboard(_app: AppHandle) -> CommandResult<Value> {
+    Err("剪贴板图片暂仅支持 macOS".to_owned())
+}
+
+/// Serve URL for one saved inspiration image (or the memo WAV when file is
+/// omitted — see [`inspiration_audio_url`]).
+#[tauri::command]
+fn inspiration_image_url(app: AppHandle, id: String, file: String) -> CommandResult<Option<String>> {
+    Ok(get_store_value(&app, "local-inspirations", &id)?.map(|_| {
+        format!(
+            "local-media://localhost/{}",
+            utf8_percent_encode(&format!("{id}/{file}"), NON_ALPHANUMERIC)
+        )
+    }))
+}
+
+/// Ask the responder chain to run the macOS Continuity Camera flow
+/// (`insertFromIPhoneOrIPad:`): the system opens the paired iPhone's camera
+/// and the photo lands in the focused webview element as a paste, which the
+/// capture sheet's paste handler attaches. Errors when no responder supports
+/// it so the UI can point at paste/file alternatives.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn inspiration_capture_from_iphone() -> CommandResult<()> {
+    use objc2::runtime::{AnyObject, Bool};
+    use std::ptr;
+
+    unsafe {
+        let app: *mut AnyObject = objc2::msg_send![objc2::class!(NSApplication), sharedApplication];
+        if app.is_null() {
+            return Err("NSApplication unavailable".to_owned());
+        }
+        let action = objc2::sel!(insertFromIPhoneOrIPad:);
+        let handled: Bool =
+            objc2::msg_send![app, sendAction:action, to:ptr::null_mut::<AnyObject>(), from:ptr::null_mut::<AnyObject>()];
+        if handled.as_bool() {
+            Ok(())
+        } else {
+            Err("当前窗口暂不支持 iPhone 相机，请使用截图粘贴或本地图片导入".to_owned())
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+fn inspiration_capture_from_iphone() -> CommandResult<()> {
+    Err("iPhone 相机仅支持 macOS".to_owned())
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn todo_add_to_calendar(app: AppHandle, todo_id: String, start_at: String, end_at: String, confirmed: bool) -> CommandResult<Value> {
@@ -1998,12 +2404,50 @@ fn media_response<R: Runtime>(context: UriSchemeContext<'_, R>, request: Request
         .map(|value| percent_decode_str(value).decode_utf8_lossy().into_owned());
     let result = (|| -> CommandResult<(PathBuf, u64, u64, bool)> {
         let id = id.ok_or("Missing local media id")?;
-        let index = context.app_handle().path().app_data_dir().map_err(|error| error.to_string())?
-            .join("local-transcriptions").join("index.json");
-        let record = read_array(&index)?.into_iter()
-            .find(|value| value.get("id").and_then(Value::as_str) == Some(id.as_str()))
-            .ok_or("Unknown local media id")?;
-        let path = PathBuf::from(record.get("sourcePath").and_then(Value::as_str).ok_or("Missing source path")?);
+        let data_dir = context.app_handle().path().app_data_dir().map_err(|error| error.to_string())?;
+        // Paths come in two shapes: `<id>` resolves the record's audio file,
+        // `<id>/<file>` picks a concrete asset (a saved inspiration image),
+        // and `staging:<file>` previews an attachment that is not saved yet.
+        let (id, asset_file) = match id.split_once('/') {
+            Some((id, file)) => (id.to_owned(), Some(file.to_owned())),
+            None => (id, None),
+        };
+        if let Some(file) = asset_file.as_deref() {
+            if !is_safe_asset_file_name(file) {
+                return Err("Unsafe local media asset name".to_owned());
+            }
+        }
+        let path = if let Some(file) = id.strip_prefix("staging:") {
+            if !is_safe_asset_file_name(file) {
+                return Err("Unsafe local media asset name".to_owned());
+            }
+            data_dir.join("inspirations").join("staging").join(file)
+        } else if let Some(inspiration_uuid) = id.strip_prefix("inspiration:") {
+            let file = match asset_file {
+                Some(file) => file,
+                None => {
+                    let index = data_dir.join("local-inspirations").join("index.json");
+                    let record = read_array(&index)?.into_iter()
+                        .find(|value| value.get("id").and_then(Value::as_str) == Some(id.as_str()))
+                        .ok_or("Unknown local media id")?;
+                    record.get("audio")
+                        .and_then(|audio| audio.get("file"))
+                        .and_then(Value::as_str)
+                        .ok_or("Missing audio file")?
+                        .to_owned()
+                }
+            };
+            if !is_safe_asset_file_name(&file) {
+                return Err("Unsafe local media asset name".to_owned());
+            }
+            data_dir.join("inspirations").join(inspiration_uuid).join(file)
+        } else {
+            let index = data_dir.join("local-transcriptions").join("index.json");
+            let record = read_array(&index)?.into_iter()
+                .find(|value| value.get("id").and_then(Value::as_str) == Some(id.as_str()))
+                .ok_or("Unknown local media id")?;
+            PathBuf::from(record.get("sourcePath").and_then(Value::as_str).ok_or("Missing source path")?)
+        };
         let length = fs::metadata(&path).map_err(|error| error.to_string())?.len();
         let range = request.headers().get(header::RANGE).and_then(|value| value.to_str().ok());
         let (start, end, partial) = parse_range(range, length);
@@ -2161,6 +2605,23 @@ fn rebuild_tray_menu(app: &AppHandle) -> CommandResult<()> {
     Ok(())
 }
 
+/// Bring the main window back on screen however it was stashed: hidden via
+/// `minimizeToTray`, minimized to the Dock, or hidden together with the whole
+/// app via Cmd-H — a bare `window.show()` is invisible while the
+/// NSApplication itself is hidden, and never deminiaturizes a Dock-minimized
+/// window.
+pub(crate) fn show_main_window(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    let _ = app.show();
+    if let Some(window) = app.get_webview_window("main") {
+        if window.is_minimized().unwrap_or(false) {
+            let _ = window.unminimize();
+        }
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 /// Creates the menu-bar / notification-area tray icon and its menu so the
 /// app (and the live-translation floating window) can be minimized to and
 /// restored from the system status bar.
@@ -2181,6 +2642,11 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "start_live_recording" => {
+                // Relay to the main window's always-mounted tray agent
+                // (`RecordingTrayAgent`): starting live transcription needs the
+                // provider config + connection negotiation that live in the
+                // webview layer, and the agent exists no matter which page is
+                // open or whether the window is hidden.
                 if let Err(error) = app.emit("live-translation-tray-action", "start") {
                     eprintln!("Failed to request live recording start: {error}");
                 }
@@ -2196,10 +2662,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
             }
             "show_main" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                show_main_window(app);
             }
             "show_subtitles" => {
                 let visible = app
@@ -2230,6 +2693,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             model_download_in_progress: Mutex::new(false),
+            webdav_sync_in_progress: Mutex::new(false),
             tray_ui: Mutex::new(TrayUiState::default()),
         })
         .manage(LiveTranslationManager::default())
@@ -2238,6 +2702,14 @@ pub fn run() {
             app.manage(recording_card::RecordingCardManager::new(app.handle().clone()));
             if let Err(error) = migrate_electron_data(&app.handle()) {
                 eprintln!("Failed to migrate Electron local data: {error}");
+            }
+            // Inspiration staging only holds in-flight paste/pick previews;
+            // anything left over belongs to a crashed session.
+            let staging = app.path().app_data_dir().map(|path| path.join("inspirations").join("staging"));
+            if let Ok(staging) = staging {
+                if staging.exists() {
+                    let _ = fs::remove_dir_all(&staging);
+                }
             }
             if let Err(error) = fail_interrupted_records(&app.handle()) {
                 eprintln!("Failed to recover interrupted local transcriptions: {error}");
@@ -2254,6 +2726,17 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // Closing the main window must not destroy it: the process stays
+            // alive in the tray, and a destroyed window can never be reopened
+            // from the tray menu or the Dock. Hide instead — the standard
+            // macOS tray-app pattern.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    return;
+                }
+            }
             // Resizes (and the fullscreen enter/exit behind them) can reset the
             // traffic lights to the system layout; re-assert the tighter stride.
             if !matches!(event, tauri::WindowEvent::Resized { .. }) || window.label() != "main" {
@@ -2266,12 +2749,22 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             local_transcription_list, local_transcription_get, local_transcription_delete, local_transcription_audio_url,
             todo_list, todo_save, todo_delete, todo_add_to_calendar,
+            inspiration_list, inspiration_save, inspiration_delete, inspiration_transcribe, inspiration_audio_url,
+            inspiration_image_url, inspiration_stage_image, inspiration_stage_image_from_path,
+            inspiration_stage_image_from_clipboard, inspiration_capture_from_iphone,
+            inspiration_voice::inspiration_voice_start, inspiration_voice::inspiration_voice_stop,
+            inspiration_voice::inspiration_voice_cancel, inspiration_voice::inspiration_voice_state,
             local_stt_model_status, local_stt_download_model, local_stt_delete_model,
             local_transcription_transcribe, local_transcription_retry, local_transcription_list_hotword_packages,
             local_transcription_save_hotword_package, local_transcription_delete_hotword_package,
             local_transcription_list_voiceprints, local_transcription_create_voiceprint,
             local_transcription_update_voiceprint, local_transcription_delete_voiceprint,
             local_stt_config_get, local_stt_config_save,
+            vault::vault_config_get, vault::vault_config_save, vault::vault_default_path,
+            vault::vault_write_note, vault::vault_write_notes, vault::vault_read_note,
+            vault::vault_remove_note,
+            webdav::webdav_config_get, webdav::webdav_config_save, webdav::webdav_set_password,
+            webdav::webdav_test_connection, webdav::webdav_sync_now, webdav::webdav_put_notes,
             secure_set_secret, secure_get_secret, secure_delete_secret,
             get_app_info,
             live_translation::live_translation_permissions,
@@ -2306,8 +2799,17 @@ pub fn run() {
             recording_card::recording_card_transcribe_source,
             window_effects::window_effects_mode,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Lynse Tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building Lynse Tauri application")
+        .run(|app, event| match event {
+            // Clicking the Dock icon (macOS reopen) brings the main window
+            // back, matching standard macOS behaviour for tray apps. macOS
+            // itself only re-activates the process; hidden/minimized windows
+            // stay out of sight without this handler.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => show_main_window(app),
+            _ => {}
+        });
 }
 
 #[cfg(test)]

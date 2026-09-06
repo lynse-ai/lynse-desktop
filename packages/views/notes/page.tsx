@@ -11,6 +11,8 @@ import {
   useNotes,
   useDeleteWorkspaceFiles,
   useTranscriptionStatus,
+  useRerunSummary,
+  useTemplateCategories,
   isTranscriptionCompleted,
 } from "../workspace/hooks/use-files";
 import { useMoveFiles } from "../workspace/hooks/use-folder-mutations";
@@ -18,10 +20,17 @@ import { useFolders } from "../workspace/hooks/use-folders";
 import { FileRowContextMenu } from "../workspace/middle-panel/file-row-context-menu";
 import { filterWorkspaceFilesByFolder } from "../workspace/middle-panel/file-list-filter";
 import { LOCAL_TRANSCRIPTION_FOLDER_ID, isLocalFileId } from "../workspace/local-transcription";
+import {
+  getDesktopVaultApi,
+  markVaultLastSync,
+  syncAllNotesToVault,
+  useVaultConfig,
+} from "../workspace/note-vault";
 import { isNoteUnread, markNoteSeen, useSeenMap } from "./seen";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
 import { useAuthStore } from "@lynse/core/auth";
+import { useNotificationStore } from "../notifications/use-notification-store";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -38,6 +47,11 @@ import {
   Filter,
   LayoutGrid,
   List,
+  X,
+  Loader2,
+  RefreshCw,
+  Monitor,
+  Save,
 } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
 import type { WorkspaceItem, FolderInfo } from "../workspace/types";
@@ -194,6 +208,72 @@ function getTimeSections(
   return sections;
 }
 
+/** Press-and-hold duration (ms) before a row enters multi-select mode. */
+const LONG_PRESS_MS = 400;
+
+/**
+ * Long-press a row to enter multi-select and select it. While multi-select is
+ * active a plain click toggles the row instead of opening it, and the click
+ * fired right after a long-press is suppressed. Same interactions as the
+ * recordings list cards.
+ */
+function useLongPressSelection({
+  multiMode,
+  onOpen,
+  onToggleSelect,
+  onLongPressSelect,
+}: {
+  multiMode: boolean;
+  onOpen: () => void;
+  onToggleSelect: () => void;
+  onLongPressSelect: () => void;
+}) {
+  const timer = useRef<number | null>(null);
+  const didLongPress = useRef(false);
+
+  const clearLongPress = useCallback(() => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+  }, []);
+
+  // Cancel a pending timer if the row unmounts mid-press.
+  useEffect(() => clearLongPress, [clearLongPress]);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      // Only the left button triggers long-press; right-click opens the context menu.
+      if (e.button !== 0) return;
+      didLongPress.current = false;
+      clearLongPress();
+      timer.current = window.setTimeout(() => {
+        didLongPress.current = true;
+        onLongPressSelect();
+      }, LONG_PRESS_MS);
+    },
+    [clearLongPress, onLongPressSelect],
+  );
+
+  const onClick = useCallback(() => {
+    clearLongPress();
+    // Suppress the synthetic click that follows a long-press.
+    if (didLongPress.current) {
+      didLongPress.current = false;
+      return;
+    }
+    if (multiMode) onToggleSelect();
+    else onOpen();
+  }, [clearLongPress, multiMode, onOpen, onToggleSelect]);
+
+  return {
+    onClick,
+    onPointerDown,
+    onPointerUp: clearLongPress,
+    onPointerLeave: clearLongPress,
+  };
+}
+
 export function NotesPage() {
   const { t, i18n } = useTranslation();
   const reduceMotion = useReducedMotion();
@@ -210,6 +290,12 @@ export function NotesPage() {
   const notesListWidth = useWorkspaceStore((s) => s.notesListWidth);
   const setNotesListWidth = useWorkspaceStore((s) => s.setNotesListWidth);
   const handleChatPanelResize = useWorkspaceStore((s) => s.handleChatPanelResize);
+  const selectedFileIds = useWorkspaceStore((s) => s.selectedFileIds);
+  const toggleFileSelected = useWorkspaceStore((s) => s.toggleFileSelected);
+  const selectAllFiles = useWorkspaceStore((s) => s.selectAllFiles);
+  const clearFileSelection = useWorkspaceStore((s) => s.clearFileSelection);
+  const summarizingFileIds = useWorkspaceStore((s) => s.summarizingFileIds);
+  const setFileSummarizing = useWorkspaceStore((s) => s.setFileSummarizing);
   const layoutRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [isListResizing, setIsListResizing] = useState(false);
@@ -237,9 +323,19 @@ export function NotesPage() {
   // (both invalidate the notes list on success).
   const moveMutation = useMoveFiles();
   const deleteMutation = useDeleteWorkspaceFiles();
+  const rerunMutation = useRerunSummary();
+  const { data: templateCategories } = useTemplateCategories();
+
+  // Batch transcription reuses the account-default template, same as the
+  // content panel's "生成" button.
+  const defaultTemplateId = useMemo(() => {
+    const all = templateCategories?.flatMap((c) => c.templates) ?? [];
+    return all.find((tpl) => tpl.isDefault === 1)?.id ?? all[0]?.id ?? "";
+  }, [templateCategories]);
 
   const handleMoveFile = (targetIds: string[], newFolderId: string, oldFolderId: string) => {
     moveMutation.mutate({ oldFolderId, newFolderId, fileIds: targetIds });
+    clearFileSelection();
   };
 
   const handleDeleteFile = (targetIds: string[]) => {
@@ -249,6 +345,7 @@ export function NotesPage() {
           if (targetIds.includes(selectedItemId ?? "")) {
             selectItem(null, null);
           }
+          clearFileSelection();
         },
         onError: (error) => {
           toast.error(t("workspace.delete_failed", { error: error.message }));
@@ -275,6 +372,41 @@ export function NotesPage() {
   // Logged out → the notes query is disabled and `files` is undefined; never
   // surface cached cloud data in that state.
   const sourceFiles = files ?? (isAuthenticated ? cachedFiles : []);
+
+  // One-click mirror of every cloud note into the local markdown vault.
+  const vaultApi = getDesktopVaultApi();
+  const { data: vaultConfig } = useVaultConfig();
+  const [vaultSyncing, setVaultSyncing] = useState(false);
+  const handleSyncVault = useCallback(async () => {
+    if (!vaultApi || vaultSyncing) return;
+    if (!vaultConfig?.enabled) {
+      toast.info(t("vault.sync_disabled_hint"));
+      return;
+    }
+    setVaultSyncing(true);
+    const loadingToastId = toast.loading(t("vault.sync_started"));
+    try {
+      const summary = await syncAllNotesToVault(sourceFiles, {
+        outline: t("vault.section_outline"),
+        summary: t("vault.section_summary"),
+      });
+      markVaultLastSync();
+      if (summary.failed > 0) {
+        toast.error(
+          t("vault.sync_partial", { written: summary.written, failed: summary.failed }),
+          { id: loadingToastId },
+        );
+      } else {
+        toast.success(t("vault.sync_done", { count: summary.written }), { id: loadingToastId });
+      }
+    } catch (error) {
+      toast.error(t("vault.sync_failed", { error: error instanceof Error ? error.message : "" }), {
+        id: loadingToastId,
+      });
+    } finally {
+      setVaultSyncing(false);
+    }
+  }, [vaultApi, vaultSyncing, vaultConfig?.enabled, sourceFiles, t]);
 
   const folderList: FolderInfo[] = Array.isArray(folders) ? folders : [];
   const currentFolderName = useMemo(() => {
@@ -330,6 +462,95 @@ export function NotesPage() {
     markNoteSeen(file.id, file.updatedAt);
     selectItem(file.id, "file", file.title);
   };
+
+  // ── Multi-select (same interactions as the recordings list) ──
+  // Long-press a row to enter multi-select; while active, clicks toggle the
+  // checkbox and the context menu targets the whole selection.
+  const multiMode = selectedFileIds.size > 0;
+  const allSelected =
+    filteredFiles.length > 0 && filteredFiles.every((f) => selectedFileIds.has(f.id));
+  const someSelected = filteredFiles.some((f) => selectedFileIds.has(f.id));
+
+  const handleLongPressSelect = (fileId: string) => {
+    if (!selectedFileIds.has(fileId)) toggleFileSelected(fileId);
+  };
+
+  const toggleSelectAll = () => {
+    if (allSelected) clearFileSelection();
+    else selectAllFiles(filteredFiles.map((f) => f.id));
+  };
+
+  // Navigating away must drop a pending selection: the recordings list reads
+  // the same store key and would otherwise show phantom checkboxes.
+  useEffect(() => () => clearFileSelection(), [clearFileSelection]);
+
+  // Which visible cloud files already have a completed transcription — drives
+  // the batch menu label ("转写选中" vs "重新生成选中").
+  const transcribedIds = useMemo(() => {
+    const set = new Set<string>();
+    if (transStatus) {
+      for (const id of cloudVisibleIds) {
+        if (isTranscriptionCompleted(transStatus[id])) set.add(id);
+      }
+    }
+    return set;
+  }, [transStatus, cloudVisibleIds]);
+
+  // Sequential batch transcription — the backend runs ONE pipeline per account
+  // at a time, so firing concurrently would hang the later files (see the
+  // recordings list for the full rationale).
+  const handleTranscribe = async (targetIds: string[]) => {
+    if (!defaultTemplateId) return;
+    // Local transcriptions never go through the cloud pipeline.
+    const ids = targetIds.filter((id) => !isLocalFileId(id));
+    if (ids.length === 0) {
+      clearFileSelection();
+      return;
+    }
+    for (const id of ids) {
+      setFileSummarizing(id, true);
+      try {
+        await rerunMutation.mutateAsync({ fileId: id, templateId: defaultTemplateId });
+        // Batch pipelines run for minutes and the user has usually walked away
+        // — record each completion in the notification center as it lands.
+        useNotificationStore.getState().add({
+          id: `trans-complete:${id}:${Date.now()}`,
+          type: "transcription",
+          title: (filteredFiles.find((f) => f.id === id)?.title ?? "").trim(),
+          href: "/notes",
+        });
+      } catch {
+        // One failed file must not abort the rest of the batch; the failure
+        // surfaces via the mutation's own error handling / cache invalidation.
+      } finally {
+        setFileSummarizing(id, false);
+      }
+    }
+    clearFileSelection();
+  };
+
+  // ── Floating batch action bar (visible only in multi-select) ──
+  const selectionIds = useMemo(() => Array.from(selectedFileIds), [selectedFileIds]);
+  const canBatchTranscribe =
+    !!defaultTemplateId && !selectionIds.some((id) => isLocalFileId(id));
+  const selectionTranscribing = selectionIds.some((id) => summarizingFileIds.has(id));
+  const batchTranscribeLabel = useMemo(() => {
+    const allTranscribed =
+      selectionIds.length > 0 && selectionIds.every((id) => transcribedIds.has(id));
+    return allTranscribed ? t("workspace.regenerate_selected") : t("workspace.transcribe_selected");
+  }, [selectionIds, transcribedIds, t]);
+  // The move API takes the folder the files move out of; a mixed-folder
+  // selection has no single origin, so fall back to "".
+  const selectionOldFolderId = useMemo(() => {
+    const items = filteredFiles.filter((f) => selectedFileIds.has(f.id));
+    if (items.length === 0) return "";
+    const first = items[0]?.folderId ?? "";
+    return items.every((f) => (f.folderId ?? "") === first) ? first : "";
+  }, [filteredFiles, selectedFileIds]);
+  const movableFolders = useMemo(
+    () => folderList.filter((f) => !String(f.id).startsWith("__")),
+    [folderList],
+  );
 
   // Per-group recording counts for the filter dropdown. Reuses the list's own
   // filter so a number always matches what selecting that group shows. Trash
@@ -413,7 +634,7 @@ export function NotesPage() {
       <div
         ref={listRef}
         className={cn(
-          "flex min-w-0 flex-col overflow-hidden",
+          "relative flex min-w-0 flex-col overflow-hidden",
           selectedItemId ? "shrink-0" : "flex-1",
           selectedItemId && !isListResizing ? "transition-[width] duration-300" : "",
         )}
@@ -443,53 +664,96 @@ export function NotesPage() {
             </span>
           </div>
           <div className="flex flex-col items-end gap-2" data-tauri-drag-region={false}>
-            <div className="flex items-center gap-1">
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  title={`${t("notes.filter")}: ${currentFolderName}`}
-                  className={cn(
-                    "flex size-8 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-                    selectedFolderId && selectedFolderId !== "__all__" ? "text-foreground" : ""
-                  )}
-                  data-tauri-drag-region={false}
+            {multiMode ? (
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  aria-label={t("workspace.select_all")}
+                  className="size-3.5 cursor-pointer accent-primary"
+                  checked={allSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someSelected && !allSelected;
+                  }}
+                  onChange={toggleSelectAll}
+                />
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {t("workspace.selected_count", { count: selectedFileIds.size })}
+                </span>
+                <button
+                  type="button"
+                  onClick={clearFileSelection}
+                  title={t("workspace.cancel_selection")}
+                  className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                 >
-                  <Filter className="size-4" />
-                </DropdownMenuTrigger>
-                {folderDropdownItems}
-              </DropdownMenu>
+                  <X className="size-4" />
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1">
+                {vaultApi && isAuthenticated && (
+                  <button
+                    type="button"
+                    onClick={handleSyncVault}
+                    disabled={vaultSyncing}
+                    title={t("vault.sync_all")}
+                    className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                    data-tauri-drag-region={false}
+                  >
+                    {vaultSyncing ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Save className="size-4" />
+                    )}
+                  </button>
+                )}
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    title={`${t("notes.filter")}: ${currentFolderName}`}
+                    className={cn(
+                      "flex size-8 items-center justify-center rounded-lg border border-transparent text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+                      selectedFolderId && selectedFolderId !== "__all__" ? "text-foreground" : ""
+                    )}
+                    data-tauri-drag-region={false}
+                  >
+                    <Filter className="size-4" />
+                  </DropdownMenuTrigger>
+                  {folderDropdownItems}
+                </DropdownMenu>
 
-              <button
-                type="button"
-                onClick={() => setViewMode("grid")}
-                title={t("notes.grid_view")}
-                className={cn(
-                  "flex size-8 items-center justify-center rounded-lg transition-colors",
-                  viewMode === "grid"
-                    ? "bg-muted text-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                )}
-              >
-                <LayoutGrid className="size-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setViewMode("list")}
-                title={t("notes.list_view")}
-                className={cn(
-                  "flex size-8 items-center justify-center rounded-lg transition-colors",
-                  viewMode === "list"
-                    ? "bg-muted text-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                )}
-              >
-                <List className="size-4" />
-              </button>
-            </div>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("grid")}
+                  title={t("notes.grid_view")}
+                  className={cn(
+                    "flex size-8 items-center justify-center rounded-lg transition-colors",
+                    viewMode === "grid"
+                      ? "bg-muted text-foreground"
+                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                  )}
+                >
+                  <LayoutGrid className="size-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode("list")}
+                  title={t("notes.list_view")}
+                  className={cn(
+                    "flex size-8 items-center justify-center rounded-lg transition-colors",
+                    viewMode === "list"
+                      ? "bg-muted text-foreground"
+                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                  )}
+                >
+                  <List className="size-4" />
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* File list / grid, grouped by time */}
-        <div className="flex-1 overflow-y-auto">
+        {/* File list / grid, grouped by time. Extra bottom padding while the
+            batch bar is up so the last rows aren't hidden behind it. */}
+        <div className={cn("flex-1 overflow-y-auto", multiMode && "pb-20")}>
           {timeSections.length === 0 ? (
             <EmptyState />
           ) : viewMode === "grid" ? (
@@ -498,23 +762,40 @@ export function NotesPage() {
                 <div key={section.key} className="px-4 pt-3">
                   <TimeSectionHeader label={section.label} count={section.items.length} />
                   <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3 pb-1 pt-2">
-                    {section.items.map((file) => (
-                      <FileRowContextMenu
-                        key={file.id}
-                        file={file}
-                        targetIds={[file.id]}
-                        folders={folderList}
-                        onMove={handleMoveFile}
-                        onDelete={handleDeleteFile}
-                      >
-                        <GridCard
+                    {section.items.map((file) => {
+                      const isChecked = selectedFileIds.has(file.id);
+                      const targetIds =
+                        isChecked && selectedFileIds.size > 0
+                          ? Array.from(selectedFileIds)
+                          : [file.id];
+                      return (
+                        <FileRowContextMenu
+                          key={file.id}
                           file={file}
-                          isSelected={selectedItemId === file.id}
-                          unread={unreadIds.has(file.id)}
-                          onClick={() => handleOpenNote(file)}
-                        />
-                      </FileRowContextMenu>
-                    ))}
+                          targetIds={targetIds}
+                          folders={folderList}
+                          canTranscribe={
+                            !!defaultTemplateId && !targetIds.some((id) => isLocalFileId(id))
+                          }
+                          transcribedIds={transcribedIds}
+                          onMove={handleMoveFile}
+                          onDelete={handleDeleteFile}
+                          onTranscribe={handleTranscribe}
+                        >
+                          <GridCard
+                            file={file}
+                            isSelected={selectedItemId === file.id}
+                            unread={unreadIds.has(file.id)}
+                            isSummarizing={summarizingFileIds.has(file.id)}
+                            isChecked={isChecked}
+                            multiMode={multiMode}
+                            onOpen={() => handleOpenNote(file)}
+                            onToggleSelect={() => toggleFileSelected(file.id)}
+                            onLongPressSelect={() => handleLongPressSelect(file.id)}
+                          />
+                        </FileRowContextMenu>
+                      );
+                    })}
                   </div>
                 </div>
               ))}
@@ -525,29 +806,131 @@ export function NotesPage() {
                 <div key={section.key}>
                   <TimeSectionHeader label={section.label} count={section.items.length} />
                   <div className="divide-y divide-border/40 px-4">
-                    {section.items.map((file) => (
-                      <FileRowContextMenu
-                        key={file.id}
-                        file={file}
-                        targetIds={[file.id]}
-                        folders={folderList}
-                        onMove={handleMoveFile}
-                        onDelete={handleDeleteFile}
-                      >
-                        <FileRow
+                    {section.items.map((file) => {
+                      const isChecked = selectedFileIds.has(file.id);
+                      const targetIds =
+                        isChecked && selectedFileIds.size > 0
+                          ? Array.from(selectedFileIds)
+                          : [file.id];
+                      return (
+                        <FileRowContextMenu
+                          key={file.id}
                           file={file}
-                          isSelected={selectedItemId === file.id}
-                          unread={unreadIds.has(file.id)}
-                          onClick={() => handleOpenNote(file)}
-                        />
-                      </FileRowContextMenu>
-                    ))}
+                          targetIds={targetIds}
+                          folders={folderList}
+                          canTranscribe={
+                            !!defaultTemplateId && !targetIds.some((id) => isLocalFileId(id))
+                          }
+                          transcribedIds={transcribedIds}
+                          onMove={handleMoveFile}
+                          onDelete={handleDeleteFile}
+                          onTranscribe={handleTranscribe}
+                        >
+                          <FileRow
+                            file={file}
+                            isSelected={selectedItemId === file.id}
+                            unread={unreadIds.has(file.id)}
+                            isSummarizing={summarizingFileIds.has(file.id)}
+                            isChecked={isChecked}
+                            multiMode={multiMode}
+                            onOpen={() => handleOpenNote(file)}
+                            onToggleSelect={() => toggleFileSelected(file.id)}
+                            onLongPressSelect={() => handleLongPressSelect(file.id)}
+                          />
+                        </FileRowContextMenu>
+                      );
+                    })}
                   </div>
                 </div>
               ))}
             </div>
           )}
         </div>
+
+        {/* Floating batch action bar — springs up while multi-select is active. */}
+        <AnimatePresence>
+          {multiMode && (
+            <motion.div
+              key="batch-action-bar"
+              initial={{ opacity: 0, y: 24, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 16, scale: 0.96 }}
+              transition={
+                reduceMotion
+                  ? { duration: 0 }
+                  : { type: "spring", bounce: 0, duration: 0.3 }
+              }
+              className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center pb-4"
+            >
+              <div className="pointer-events-auto flex items-center gap-1 rounded-2xl border border-border/60 bg-card/95 p-1.5 shadow-lg backdrop-blur-xl">
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    disabled={movableFolders.length === 0}
+                    title={t("workspace.move_to")}
+                    className="flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+                    data-tauri-drag-region={false}
+                  >
+                    <FolderOpen className="size-4 text-muted-foreground" strokeWidth={1.5} />
+                    {t("workspace.move_to")}
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent side="top" align="center" className="max-h-64 w-48 overflow-y-auto">
+                    {movableFolders.length === 0 ? (
+                      <div className="px-2 py-1.5 text-2xs text-muted-foreground">
+                        {t("layout.no_folders")}
+                      </div>
+                    ) : (
+                      movableFolders.map((folder) => (
+                        <DropdownMenuItem
+                          key={folder.id}
+                          onClick={() =>
+                            handleMoveFile(selectionIds, String(folder.id), selectionOldFolderId)
+                          }
+                        >
+                          {folder.color ? (
+                            <span
+                              className="mr-2 size-2.5 rounded-full"
+                              style={{ backgroundColor: folder.color }}
+                            />
+                          ) : (
+                            <Circle className="mr-2 size-4 text-muted-foreground" strokeWidth={1.5} />
+                          )}
+                          <span className="truncate">{folder.folderName}</span>
+                        </DropdownMenuItem>
+                      ))
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <div className="h-5 w-px bg-border/60" aria-hidden="true" />
+
+                <button
+                  type="button"
+                  disabled={!canBatchTranscribe || selectionTranscribing}
+                  onClick={() => handleTranscribe(selectionIds)}
+                  title={batchTranscribeLabel}
+                  className="flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+                  data-tauri-drag-region={false}
+                >
+                  <RefreshCw className="size-4 text-muted-foreground" strokeWidth={1.5} />
+                  {batchTranscribeLabel}
+                </button>
+
+                <div className="h-5 w-px bg-border/60" aria-hidden="true" />
+
+                <button
+                  type="button"
+                  onClick={() => handleDeleteFile(selectionIds)}
+                  title={t("workspace.delete_selected")}
+                  className="flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
+                  data-tauri-drag-region={false}
+                >
+                  <Trash2 className="size-4" strokeWidth={1.5} />
+                  {t("workspace.delete_selected")}
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Right: content + chat panels */}
@@ -628,34 +1011,60 @@ function FileRow({
   file,
   isSelected,
   unread,
-  onClick,
+  isSummarizing,
+  isChecked,
+  multiMode,
+  onOpen,
+  onToggleSelect,
+  onLongPressSelect,
 }: {
   file: WorkspaceItem;
   isSelected: boolean;
   /** Transcription finished but the note hasn't been opened yet — shows the dot. */
   unread: boolean;
-  onClick: () => void;
+  /** Batch transcription pipeline currently running for this note. */
+  isSummarizing: boolean;
+  isChecked: boolean;
+  multiMode: boolean;
+  onOpen: () => void;
+  onToggleSelect: () => void;
+  onLongPressSelect: () => void;
 }) {
   const { t } = useTranslation();
+  const press = useLongPressSelection({ multiMode, onOpen, onToggleSelect, onLongPressSelect });
   return (
     <button
-      onClick={onClick}
+      {...press}
       className={cn(
         "group flex w-full items-center rounded-lg px-3 py-2 text-left transition-colors",
-        isSelected ? "bg-accent/60" : "hover:bg-accent/30"
+        isChecked ? "bg-primary/10" : isSelected ? "bg-accent/60" : "hover:bg-accent/30"
       )}
     >
+      {multiMode && (
+        <input
+          type="checkbox"
+          aria-label={t("workspace.select_file", { name: file.title })}
+          checked={isChecked}
+          onChange={onToggleSelect}
+          onClick={(e) => e.stopPropagation()}
+          className="mr-2.5 size-3.5 shrink-0 cursor-pointer accent-primary"
+        />
+      )}
       {/* Info */}
       <div className="min-w-0 flex-1">
         <h3 className="truncate text-sm font-semibold text-foreground">{file.title}</h3>
         <NoteMetadata file={file} />
       </div>
-      {unread && (
+      {isSummarizing ? (
+        <span className="ml-2 shrink-0" title={t("workspace.summarizing")}>
+          <Loader2 className="size-3.5 animate-spin text-primary" />
+        </span>
+      ) : unread ? (
         <span
           className="ml-2 size-2 shrink-0 rounded-full bg-destructive"
           title={t("notes.unread_hint")}
         />
-      )}
+      ) : null}
     </button>
   );
 }
@@ -664,28 +1073,60 @@ function GridCard({
   file,
   isSelected,
   unread,
-  onClick,
+  isSummarizing,
+  isChecked,
+  multiMode,
+  onOpen,
+  onToggleSelect,
+  onLongPressSelect,
 }: {
   file: WorkspaceItem;
   isSelected: boolean;
   /** Transcription finished but the note hasn't been opened yet — shows the dot. */
   unread: boolean;
-  onClick: () => void;
+  /** Batch transcription pipeline currently running for this note. */
+  isSummarizing: boolean;
+  isChecked: boolean;
+  multiMode: boolean;
+  onOpen: () => void;
+  onToggleSelect: () => void;
+  onLongPressSelect: () => void;
 }) {
   const { t } = useTranslation();
+  const press = useLongPressSelection({ multiMode, onOpen, onToggleSelect, onLongPressSelect });
   return (
     <button
-      onClick={onClick}
+      {...press}
       className={cn(
-        "group relative flex flex-col rounded-xl border border-border/60 bg-card p-2.5 text-left transition-colors hover:border-primary/20 hover:bg-accent/30",
-        isSelected ? "border-primary/40 bg-accent/40 ring-1 ring-primary/30" : ""
+        "group relative flex flex-col rounded-xl border bg-card p-2.5 text-left transition-colors hover:border-primary/20 hover:bg-accent/30",
+        isChecked
+          ? "border-primary/40 bg-primary/5"
+          : isSelected
+            ? "border-primary/40 bg-accent/40 ring-1 ring-primary/30"
+            : "border-border/60"
       )}
     >
-      {unread && (
+      {isSummarizing ? (
+        <span className="absolute right-2 top-2" title={t("workspace.summarizing")}>
+          <Loader2 className="size-3.5 animate-spin text-primary" />
+        </span>
+      ) : unread ? (
         <span
           className="absolute right-2 top-2 size-2 rounded-full bg-destructive"
           title={t("notes.unread_hint")}
         />
+      ) : null}
+      {multiMode && (
+        <span className="absolute left-1.5 top-1.5 flex size-4 items-center justify-center">
+          <input
+            type="checkbox"
+            aria-label={t("workspace.select_file", { name: file.title })}
+            checked={isChecked}
+            onChange={onToggleSelect}
+            onClick={(e) => e.stopPropagation()}
+            className="size-3.5 cursor-pointer accent-primary"
+          />
+        </span>
       )}
       {/* Title */}
       <h3 className="line-clamp-2 min-h-[2.25rem] text-sm font-semibold leading-[1.125rem] text-foreground">{file.title}</h3>
@@ -702,11 +1143,20 @@ function NoteMetadata({ file }: { file: WorkspaceItem }) {
     ? t(`notes.recording_${file.recordingMode}`)
     : null;
   const tags = Array.from(new Set([...(recordingType ? [recordingType] : []), ...(file.tags ?? [])]));
+  const isLocal = isLocalFileId(file.id);
 
   return (
     <>
-      {(date || duration) && (
+      {(isLocal || date || duration) && (
         <div className="mt-0.5 flex items-center gap-1.5 text-xs tabular-nums text-muted-foreground">
+          {isLocal && (
+            <span
+              className="inline-flex shrink-0 items-center gap-1 rounded-md bg-primary/10 px-1 py-0.5 text-primary"
+              title={t("workspace.local_recording_hint")}
+            >
+              <Monitor className="size-3" strokeWidth={1.75} />
+            </span>
+          )}
           {date && <span>{date}</span>}
           {date && duration && <span aria-hidden="true">·</span>}
           {duration && <span>{duration}</span>}

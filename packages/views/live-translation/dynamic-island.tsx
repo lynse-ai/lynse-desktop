@@ -3,7 +3,8 @@
 import { useEffect, type ReactNode } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
-import { Captions, Maximize2, Pause, Play, Square, X } from "../icons";
+import { ChevronDown, Maximize2, Pause, Play, Square, X } from "../icons";
+import { AudioVisualizer } from "./audio-visualizer";
 import { useLiveTranslation } from "./use-live-translation";
 
 interface DynamicIslandProps {
@@ -28,10 +29,10 @@ interface DynamicIslandProps {
  * Dynamic Island — the always-on-top recording capsule, in the spirit of the
  * iOS Dynamic Island.
  *
- * The pill row shows elapsed time, a miniature mic-level bar and one-tap
- * pause/stop controls. When `onToggleDrawer` is provided a captions toggle
- * appears; `RecordingIslandWindow` uses it to unfold a live-transcript drawer
- * beneath the pill. The frosted look comes from native vibrancy behind the
+ * The pill row shows elapsed time, a miniature live waveform and one-tap
+ * pause/stop controls. When `onToggleDrawer` is provided a live-transcript
+ * toggle appears; `RecordingIslandWindow` uses it to unfold a
+ * live-transcript drawer beneath the pill. The frosted look comes from native vibrancy behind the
  * Tauri window (see `.island-surface` in the app's globals.css), so the pill
  * reads as translucent glass over whatever is on screen.
  *
@@ -90,7 +91,7 @@ export function DynamicIsland({
       {/* Pill row — the entire collapsed island */}
       <div
         data-tauri-drag-region
-        className="group flex h-11 shrink-0 items-center gap-2.5 px-3"
+        className="group flex h-11 shrink-0 items-center gap-2 px-3"
       >
         {/* Red pulse dot */}
         <span
@@ -109,11 +110,15 @@ export function DynamicIsland({
           {fmt(view.elapsedMs)}
         </span>
 
-        {/* Mini level bar */}
-        <div data-tauri-drag-region className="h-1 w-12 overflow-hidden rounded-full bg-muted">
-          <div
-            className="h-full rounded-full bg-primary transition-[width] duration-100"
-            style={{ width: `${Math.min(100, Math.max(4, view.micLevel * 100))}%` }}
+        {/* Mini live waveform — the same wave the expanded drawer shows in its
+            footer, shrunk to a sliver: just enough to read "recording" at a
+            glance. Flexes to absorb leftover pill width, so the row always
+            fits the narrow capsule. */}
+        <div data-tauri-drag-region className="h-3 min-w-8 flex-1">
+          <AudioVisualizer
+            level={view.micSuppressed ? view.systemLevel : Math.max(view.micLevel, view.systemLevel)}
+            active={recording && !paused}
+            className="h-full w-full"
           />
         </div>
 
@@ -138,7 +143,14 @@ export function DynamicIsland({
                 drawerOpen ? "text-primary" : "text-muted-foreground",
               )}
             >
-              <Captions className="size-3.5" />
+              {/* Disclosure arrow: points down while collapsed ("pull the
+                  transcript open"), flips up once the drawer is expanded. */}
+              <ChevronDown
+                className={cn(
+                  "size-4 transition-transform duration-200",
+                  drawerOpen && "rotate-180",
+                )}
+              />
             </button>
           )}
           {onExpand && (

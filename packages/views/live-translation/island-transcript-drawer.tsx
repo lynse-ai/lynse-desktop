@@ -1,15 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
 import { AudioVisualizer } from "./audio-visualizer";
-import { directionLabel } from "./language-options";
+import { directionLabel, TARGET_LANGUAGE_OPTIONS } from "./language-options";
+import { Check, ChevronDown, Languages } from "../icons";
 import { useLiveTranslation } from "./use-live-translation";
 
 interface IslandTranscriptDrawerProps {
   /** True while the drawer is animating out (collapse in progress). */
   closing?: boolean;
+  /** Re-point the running session's live connection at a target language
+   * ("none" = transcription-only). Drives the language picker. */
+  onSelectTargetLanguage?: (code: string) => void;
 }
 
 function formatTime(ms: number): string {
@@ -29,11 +33,15 @@ function formatTime(ms: number): string {
  * a live waveform footer. The Tauri window is resized by
  * `RecordingIslandWindow`, so this component just fills the space it gets.
  */
-export function IslandTranscriptDrawer({ closing }: IslandTranscriptDrawerProps) {
+export function IslandTranscriptDrawer({
+  closing,
+  onSelectTargetLanguage,
+}: IslandTranscriptDrawerProps) {
   const { t } = useTranslation();
   const { view } = useLiveTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const segments = useMemo(
     () =>
@@ -45,6 +53,10 @@ export function IslandTranscriptDrawer({ closing }: IslandTranscriptDrawerProps)
   );
   const translationOn =
     view.targetLanguage != null && view.targetLanguage !== "none";
+  // Actively translating to a *different* language — a pure-recording session
+  // (target == source) must still offer the translation switch.
+  const translating =
+    translationOn && view.targetLanguage !== view.sourceLanguage;
 
   // Follow the newest segment, unless the user scrolled up to re-read.
   useEffect(() => {
@@ -68,24 +80,72 @@ export function IslandTranscriptDrawer({ closing }: IslandTranscriptDrawerProps)
   return (
     <div
       className={cn(
-        "flex min-h-0 flex-1 flex-col",
+        "relative flex min-h-0 flex-1 flex-col",
         closing ? "animate-island-drawer-out" : "animate-island-drawer-in",
       )}
     >
       {/* Header */}
       <div
         data-tauri-drag-region
-        className="flex shrink-0 items-center justify-between border-t border-border/40 px-4 pb-1 pt-2"
+        className="flex shrink-0 items-center justify-between border-t border-border/40 pl-4 pr-2 pb-1 pt-2"
       >
         <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-          {t("recording_mode.transcribe")}
+          {translating ? t("recording_mode.translate") : t("recording_mode.transcribe")}
         </span>
-        {translationOn && (
-          <span className="text-[10px] tabular-nums text-muted-foreground/70">
+        {onSelectTargetLanguage && (
+          <button
+            type="button"
+            onClick={() => setPickerOpen((open) => !open)}
+            aria-label={t("live_translation.translation_direction")}
+            title={t("live_translation.translation_direction")}
+            className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
             {directionLabel(view.sourceLanguage ?? "auto", view.targetLanguage ?? "none", t)}
-          </span>
+            <ChevronDown
+              className={cn(
+                "size-3 transition-transform duration-200",
+                pickerOpen && "rotate-180",
+              )}
+            />
+          </button>
         )}
       </div>
+
+      {/* Target-language picker — anchored under the header chip, overlays the
+          transcript so the drawer never reflows. */}
+      {pickerOpen && onSelectTargetLanguage && (
+        <>
+          <button
+            type="button"
+            aria-hidden
+            tabIndex={-1}
+            onClick={() => setPickerOpen(false)}
+            className="fixed inset-0 z-10 cursor-default"
+          />
+          <div className="absolute right-2 top-9 z-20 max-h-72 w-44 overflow-y-auto rounded-xl border border-border/60 bg-background/95 p-1 shadow-lg backdrop-blur-xl">
+            {TARGET_LANGUAGE_OPTIONS.map((option) => {
+              const selected = view.targetLanguage === option.code;
+              return (
+                <button
+                  key={option.code}
+                  type="button"
+                  onClick={() => {
+                    setPickerOpen(false);
+                    if (!selected) onSelectTargetLanguage(option.code);
+                  }}
+                  className={cn(
+                    "flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors hover:bg-muted",
+                    selected && "text-primary",
+                  )}
+                >
+                  <span className="truncate">{option.label}</span>
+                  {selected && <Check className="size-3 shrink-0" />}
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {/* Transcript */}
       <div
@@ -152,13 +212,30 @@ export function IslandTranscriptDrawer({ closing }: IslandTranscriptDrawerProps)
         )}
       </div>
 
-      {/* Recording waveform footer */}
+      {/* Recording waveform footer; the languages icon opens the same
+          target-language picker as the header chip. */}
       <div className="shrink-0 border-t border-border/40 px-3 py-2">
-        <AudioVisualizer
-          level={level}
-          active={view.state === "recording"}
-          className="h-7 w-full"
-        />
+        <div className="flex items-center gap-2">
+          <AudioVisualizer
+            level={level}
+            active={view.state === "recording"}
+            className="h-7 min-w-0 flex-1"
+          />
+          {onSelectTargetLanguage && (
+            <button
+              type="button"
+              onClick={() => setPickerOpen((open) => !open)}
+              aria-label={t("live_translation.translation_direction")}
+              title={t("live_translation.translation_direction")}
+              className={cn(
+                "flex size-7 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-muted hover:text-foreground",
+                pickerOpen || translating ? "text-primary" : "text-muted-foreground",
+              )}
+            >
+              <Languages className="size-4" />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -49,7 +49,14 @@ import {
   isLocalFileId,
 } from "./local-transcription";
 import { retryLocalTranscription } from "./local-transcription-retry";
-import { isLocalTranscriptionActive } from "./local-transcription-status";
+import { isLocalTranscriptionActive, LOCAL_STATUS_LABEL } from "./local-transcription-status";
+import { MilkdownViewer } from "./milkdown-viewer";
+import {
+  getDesktopVaultApi,
+  stripVaultFrontmatter,
+  useNoteVaultSync,
+} from "./note-vault";
+import type { LocalTranscriptionStatus } from "./types";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -243,8 +250,12 @@ export function ContentPanel() {
   );
 
   const { data: files } = useFiles({ pageNum: 1, pageSize: 200 });
-  const { data: outline, isLoading: outlineLoading } = useFileOutline(selectedItemId);
-  const { data: conclusions, isLoading: conclusionsLoading } = useFileConclusions(selectedItemId);
+  const { data: outline, isLoading: outlineLoading, error: outlineError } = useFileOutline(selectedItemId);
+  const {
+    data: conclusions,
+    isLoading: conclusionsLoading,
+    error: conclusionsError,
+  } = useFileConclusions(selectedItemId);
   const { data: transcription, isLoading: transLoading } = useFileTranscription(selectedItemId);
   const { data: audioUrl } = useFileAudioUrl(selectedItemId);
   const updateConclusion = useUpdateConclusion();
@@ -284,11 +295,13 @@ export function ContentPanel() {
   }, [selectedItemId, files]);
 
   const isLocalSelectedItem = isLocalFileId(selectedItemId);
-  const localStatusTag = selectedFile?.tags?.find((tag) => ["排队中", "转写中", "失败", "已完成"].includes(tag));
+  const localStatus = selectedFile?.localStatus;
   const selectedLocalRetrying = !!selectedItemId && retryingLocalFileIds.has(selectedItemId);
-  const effectiveLocalStatusTag = selectedLocalRetrying ? "转写中" : localStatusTag;
+  const effectiveLocalStatus: LocalTranscriptionStatus | undefined = selectedLocalRetrying
+    ? "transcribing"
+    : localStatus;
   const localTranscriptionActive = isLocalTranscriptionActive({
-    statusTag: localStatusTag,
+    status: localStatus,
     retrying: selectedLocalRetrying,
   });
 
@@ -334,6 +347,40 @@ export function ContentPanel() {
     const { content, scopedStyles } = extractBody(raw);
     return { outlineBody: content, outlineStyles: scopedStyles, outlineRaw: raw };
   }, [outline]);
+
+  // Local vault mirror: once the note's content is loaded (or after an edit
+  // invalidates the queries), rewrite the note's markdown file on disk.
+  useNoteVaultSync({
+    fileId: selectedItemId,
+    title: displayTitle,
+    createdAt: selectedCreatedAt,
+    updatedAt: selectedFile?.updatedAt ?? null,
+    outlineText: outlineRaw,
+    conclusions: conclusionTexts,
+  });
+
+  // Offline fallback: when both content queries fail (e.g. no network), show
+  // the note's cached vault file instead of an empty panel.
+  const [offlineVaultMarkdown, setOfflineVaultMarkdown] = useState<string | null>(null);
+  useEffect(() => {
+    const offline = !outlineLoading && !conclusionsLoading && !!outlineError && !!conclusionsError;
+    if (!offline || !selectedItemId || isLocalFileId(selectedItemId)) {
+      setOfflineVaultMarkdown((current) => (current === null ? current : null));
+      return;
+    }
+    let cancelled = false;
+    getDesktopVaultApi()
+      ?.readNote(selectedItemId)
+      .then((markdown) => {
+        if (!cancelled) setOfflineVaultMarkdown(markdown?.trim() ? markdown : null);
+      })
+      .catch(() => {
+        if (!cancelled) setOfflineVaultMarkdown(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [outlineError, conclusionsError, outlineLoading, conclusionsLoading, selectedItemId]);
 
   // Transcription
   const transSegments = useMemo(() => {
@@ -761,6 +808,8 @@ export function ContentPanel() {
         <div className={`flex-1 min-w-0 ${contentTab === "transcription" ? "overflow-hidden" : "overflow-auto"}`}>
           {!selectedItemId ? (
             <EmptyState />
+          ) : offlineVaultMarkdown ? (
+            <OfflineVaultView markdown={offlineVaultMarkdown} />
           ) : isLoading ? (
             <LoadingState />
           ) : (
@@ -777,12 +826,12 @@ export function ContentPanel() {
               />
               {isLocalSelectedItem && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                  {effectiveLocalStatusTag && (
+                  {effectiveLocalStatus && effectiveLocalStatus !== "completed" && (
                     <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
-                      {effectiveLocalStatusTag}
+                      {LOCAL_STATUS_LABEL[effectiveLocalStatus]}
                     </span>
                   )}
-                  {localStatusTag === "失败" && !selectedLocalRetrying && (
+                  {localStatus === "failed" && !selectedLocalRetrying && (
                     <button
                       type="button"
                       onClick={handleRetryLocalTranscription}
@@ -1400,6 +1449,23 @@ function LoadingState() {
     <div className="flex h-full items-center justify-center gap-2">
       <Loader2 className="size-4 animate-spin text-muted-foreground" />
       <p className="text-xs text-muted-foreground">{t("workspace.loading")}</p>
+    </div>
+  );
+}
+
+/** Read-only rendering of the note's local vault file when the cloud content
+ *  queries fail offline. */
+function OfflineVaultView({ markdown }: { markdown: string }) {
+  const { t } = useTranslation();
+  return (
+    <div className="mx-auto w-full max-w-3xl px-6 py-6">
+      <div className="mb-4 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning-text">
+        <FileText className="size-3.5 shrink-0" />
+        <span>{t("vault.offline_banner")}</span>
+      </div>
+      <div className="min-w-0">
+        <MilkdownViewer content={stripVaultFrontmatter(markdown)} />
+      </div>
     </div>
   );
 }

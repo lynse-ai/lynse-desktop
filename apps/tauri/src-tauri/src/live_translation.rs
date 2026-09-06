@@ -36,10 +36,10 @@ use base64::Engine as _;
 use cpal::Sample;
 
 const LIVE_EVENT: &str = "live-translation-event";
-const PCM_FRAME_BYTES: usize = 640;
-const AUDIO_HEADER_BYTES: usize = 19;
+pub(crate) const PCM_FRAME_BYTES: usize = 640;
+pub(crate) const AUDIO_HEADER_BYTES: usize = 19;
 
-fn decode_audio_header(
+pub(crate) fn decode_audio_header(
     header: &[u8; AUDIO_HEADER_BYTES],
 ) -> CommandResult<(AudioSource, u64, u64, usize)> {
     let source = AudioSource::from_byte(header[0]).ok_or("invalid audio source")?;
@@ -231,8 +231,8 @@ pub struct SetModeRequest {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionStatus {
-    microphone: String,
-    system_audio: String,
+    pub(crate) microphone: String,
+    pub(crate) system_audio: String,
     system_audio_required: bool,
     restart_required: bool,
 }
@@ -320,6 +320,18 @@ impl Default for LiveTranslationManager {
         Self {
             session: Mutex::new(None),
         }
+    }
+}
+
+impl LiveTranslationManager {
+    /// True while a live translation/recording session exists (connecting,
+    /// recording or paused). The inspiration voice capture refuses to start so
+    /// the microphone is never driven by two features at once.
+    pub fn has_active_session(&self) -> bool {
+        self.session
+            .lock()
+            .map(|guard| guard.is_some())
+            .unwrap_or(false)
     }
 }
 
@@ -425,7 +437,7 @@ fn emit_stream_state(app: &AppHandle, source: AudioSource, state: &str, epoch: u
 }
 
 #[cfg(target_os = "macos")]
-fn sidecar_command(app: &AppHandle) -> CommandResult<Command> {
+pub(crate) fn sidecar_command(app: &AppHandle) -> CommandResult<Command> {
     let path = crate::stt::sidecar_path(app, "audio-capture")?;
     let mut command = Command::new(path);
     #[cfg(unix)]
@@ -440,7 +452,7 @@ fn sidecar_command(app: &AppHandle) -> CommandResult<Command> {
 }
 
 #[cfg(target_os = "macos")]
-fn run_permission_command(app: &AppHandle, argument: &str) -> CommandResult<PermissionStatus> {
+pub(crate) fn run_permission_command(app: &AppHandle, argument: &str) -> CommandResult<PermissionStatus> {
     let output = sidecar_command(app)?
         .arg(argument)
         .output()
@@ -518,7 +530,7 @@ pub fn live_translation_request_permission(
 /// only has to flip the switch. Used when a recording attempt lacks the
 /// required TCC grant (microphone or screen & system-audio recording).
 #[cfg(target_os = "macos")]
-fn open_macos_privacy_pane(kind: &str) {
+pub(crate) fn open_macos_privacy_pane(kind: &str) {
     let anchor = match kind {
         "microphone" => "Privacy_Microphone",
         _ => "Privacy_ScreenCapture",
@@ -1987,6 +1999,10 @@ pub async fn live_translation_stop(
     clear_card_feed_target();
     session.set_state("stopping");
     emit_snapshot(&app, &session);
+    // Drop the floating island immediately: the steps below (sidecar drain,
+    // trailing-segment grace, persistence) can take ten-plus seconds, and the
+    // capsule has nothing left to show once the user chose to stop.
+    set_recording_island_visible(&app, false);
     session.capture_stop.store(false, Ordering::Relaxed);
     let _ = signal_child(&session, SIGNAL_STOP);
 
@@ -2020,7 +2036,6 @@ pub async fn live_translation_stop(
     tokio::time::sleep(Duration::from_millis(3_200)).await;
     let completed = persist_session(&app, &session)?;
     session.set_state("idle");
-    set_recording_island_visible(&app, false);
     let _ = app.emit(
         LIVE_EVENT,
         json!({ "type": "completed", "session": completed }),
@@ -2198,7 +2213,7 @@ fn read_pcm16_wav(path: &Path) -> CommandResult<Vec<i16>> {
         .collect())
 }
 
-fn write_pcm16_wav(path: &Path, samples: &[i16]) -> CommandResult<()> {
+pub(crate) fn write_pcm16_wav(path: &Path, samples: &[i16]) -> CommandResult<()> {
     let data_bytes = u32::try_from(samples.len().saturating_mul(2))
         .map_err(|_| "recording is too large for WAV")?;
     let mut file = File::create(path).map_err(|error| error.to_string())?;
@@ -2381,7 +2396,7 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
 /// the frosted capsule behind the webview. Toggling the live-transcript
 /// drawer grows the window downward to [`RECORDING_ISLAND_EXPANDED_HEIGHT`]
 /// via `live_translation_expand_island` (the frontend mirrors these values).
-const RECORDING_ISLAND_WIDTH: f64 = 340.0;
+const RECORDING_ISLAND_WIDTH: f64 = 280.0;
 const RECORDING_ISLAND_HEIGHT: f64 = 44.0;
 const RECORDING_ISLAND_EXPANDED_HEIGHT: f64 = 480.0;
 
@@ -2571,10 +2586,7 @@ pub fn live_translation_hide_island(app: AppHandle) -> CommandResult<()> {
 /// page.
 #[tauri::command]
 pub fn live_translation_show_main(app: AppHandle) -> CommandResult<()> {
-    if let Some(window) = app.get_webview_window("main") {
-        window.show().map_err(|error| error.to_string())?;
-        window.set_focus().map_err(|error| error.to_string())?;
-    }
+    crate::show_main_window(&app);
     Ok(())
 }
 

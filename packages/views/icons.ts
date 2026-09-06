@@ -14,6 +14,7 @@ export {
   // ── Navigation / Sidebar ──────────────────────────────
   Headphones,       // Recordings
   Mic,              // Microphone input
+  Camera,           // iPhone photo capture (Continuity Camera)
   CalendarDays,     // Meetings
   BookOpen,         // Knowledge Base
   FolderOpen,       // Files / Folders
@@ -112,6 +113,7 @@ export {
   Volume2,          // Volume on
   VolumeX,          // Volume off / mute
   Captions,         // Live transcription toggle
+  Languages,        // Live translation switch (speech → translated text)
 
   // ── Actions (extra) ──────────────────────────────────
   RefreshCw,        // Re-summarize / refresh

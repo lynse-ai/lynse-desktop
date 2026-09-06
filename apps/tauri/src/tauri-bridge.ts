@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl, openPath } from "@tauri-apps/plugin-opener";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -11,6 +11,8 @@ import type {
   SttDownloadProgress,
   SttModelInfo,
   TranscribeConfig,
+  DesktopVaultApi,
+  VaultSyncProgress,
 } from "@lynse/views/workspace";
 import type {
   CompletedLiveSession,
@@ -26,6 +28,14 @@ import type {
   LiveTranslationSnapshot,
   LiveTranslationTrayAction,
 } from "@lynse/views/live-translation";
+import type {
+  DesktopInspirationApi,
+  InspirationVoiceEvent,
+} from "@lynse/views/inspiration";
+import type {
+  DesktopWebdavSyncApi,
+  WebdavSyncProgress,
+} from "@lynse/views/settings";
 import {
   DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
   normalizeMaxSpeakers,
@@ -56,7 +66,10 @@ type DesktopApi = {
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
   liveTranslation: DesktopLiveTranslationApi;
   recordingCard: DesktopRecordingCardApi;
+  vault: DesktopVaultApi;
   todo: Record<string, (...args: any[]) => Promise<unknown>>;
+  inspiration: DesktopInspirationApi;
+  webdavSync: DesktopWebdavSyncApi;
   appInfo: { version: string; platform: string };
   app: {
     getInfo: () => Promise<{ version: string; platform: string }>;
@@ -301,7 +314,9 @@ export async function installTauriBridge(): Promise<void> {
       showSubtitles: (show) => command<void>("live_translation_show_subtitles", { show }),
       showMainWindow: () => command<void>("live_translation_show_main"),
       hideIsland: () => command<void>("live_translation_hide_island"),
-      setIslandExpanded: (expanded) => command<void>("live_translation_expand_island", { expanded }),
+      // Payload key must match the Rust command's `expand` parameter exactly;
+      // a mismatch makes the invoke reject and the island silently never grows.
+      setIslandExpanded: (expanded) => command<void>("live_translation_expand_island", { expand: expanded }),
       updateTray: (payload) => command<void>("live_translation_update_tray", { payload }),
       minimizeToTray: () => getCurrentWindow().hide(),
       onTrayAction: async (callback) => {
@@ -396,12 +411,76 @@ export async function installTauriBridge(): Promise<void> {
       },
       relaunchApp: () => relaunch(),
     },
+    vault: {
+      getConfig: () => command("vault_config_get"),
+      saveConfig: (config) => command("vault_config_save", { config }),
+      getDefaultPath: () => command("vault_default_path"),
+      pickDirectory: async () => {
+        const selected = await open({ multiple: false, directory: true });
+        return typeof selected === "string" ? selected : null;
+      },
+      writeNote: (note) => command("vault_write_note", { note }),
+      writeNotes: (notes) => command("vault_write_notes", { notes }),
+      readNote: (fileId) => command("vault_read_note", { fileId }),
+      removeNote: (fileId) => command("vault_remove_note", { fileId }),
+      openVaultFolder: async (path) => {
+        await openPath(path);
+      },
+      onSyncProgress: (callback) =>
+        getCurrentWebview().listen<VaultSyncProgress>("vault-sync-progress", (event) =>
+          callback(event.payload),
+        ),
+    },
     todo: {
       list: () => command("todo_list"),
       save: (todo: unknown) => command("todo_save", { todo }),
       delete: (id: string) => command("todo_delete", { id }),
       addToCalendar: (id: string, startAt: string, endAt: string, confirmed: boolean) =>
         command("todo_add_to_calendar", { todo_id: id, start_at: startAt, end_at: endAt, confirmed }),
+    },
+    inspiration: {
+      list: () => command("inspiration_list"),
+      save: (inspiration: unknown) => command("inspiration_save", { inspiration }),
+      delete: (id: string) => command("inspiration_delete", { id }),
+      transcribe: (id: string) => command("inspiration_transcribe", { id }),
+      getAudioUrl: (id: string) => command("inspiration_audio_url", { id }),
+      getImageUrl: (id: string, file: string) => command("inspiration_image_url", { id, file }),
+      pickImages: async () => {
+        const selected = await open({
+          multiple: true,
+          directory: false,
+          filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "heic", "webp", "gif", "bmp", "tiff", "tif"] }],
+        });
+        return Array.isArray(selected) ? selected : [];
+      },
+      // Raw IPC: the Uint8Array is sent as the invoke body, not JSON.
+      stageImage: (data: Uint8Array) => invoke<{ path: string; url: string }>("inspiration_stage_image", data),
+      stageImageFromClipboard: () =>
+        command<{ path: string; url: string }>("inspiration_stage_image_from_clipboard"),
+      stageImageFromPath: (path: string) =>
+        command<{ path: string; url: string }>("inspiration_stage_image_from_path", { path }),
+      captureFromIPhone: () => command<void>("inspiration_capture_from_iphone"),
+      voiceStart: () => command("inspiration_voice_start"),
+      voiceStop: () => command("inspiration_voice_stop"),
+      voiceCancel: () => command("inspiration_voice_cancel"),
+      voiceState: () => command("inspiration_voice_state"),
+      onVoiceEvent: (callback: (event: InspirationVoiceEvent) => void) =>
+        getCurrentWebview().listen<InspirationVoiceEvent>("inspiration-voice-event", (event) =>
+          callback(event.payload),
+        ),
+    },
+    webdavSync: {
+      getConfig: () => command("webdav_config_get"),
+      saveConfig: (config) => command("webdav_config_save", { config }),
+      setPassword: (password: string) => command("webdav_set_password", { password }),
+      testConnection: (config, password) =>
+        command("webdav_test_connection", { config, password: password ?? null }),
+      syncNow: (settingsBundle) => command("webdav_sync_now", { settingsBundle }),
+      putNotes: (notes) => command("webdav_put_notes", { notes }),
+      onSyncProgress: (callback) =>
+        getCurrentWebview().listen<WebdavSyncProgress>("webdav-sync-progress", (event) =>
+          callback(event.payload),
+        ),
     },
   };
 

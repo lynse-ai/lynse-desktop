@@ -53,7 +53,7 @@ describe("local transcription helpers", () => {
       createdAt: "2026-07-04T08:00:00.000Z",
       updatedAt: "2026-07-04T08:05:00.000Z",
       folderId: "__local_transcriptions__",
-      tags: ["本地转写", "已完成"],
+      localStatus: "completed",
       transcriptionCompleted: true,
       durationSeconds: 125,
     });
@@ -83,13 +83,19 @@ describe("local transcription helpers", () => {
       ...localRecord,
       status: "failed",
       error: "model failed",
-    }).tags).toEqual(["本地转写", "失败"]);
+    }).localStatus).toBe("failed");
 
     expect(localRecordToWorkspaceItem({
       ...localRecord,
       status: "transcribing",
       progressPhase: "transcribing",
-    }).tags).toEqual(["本地转写", "转写中"]);
+    }).localStatus).toBe("transcribing");
+
+    // Local rows carry no display tags — the card badge is derived from the id.
+    expect(localRecordToWorkspaceItem({
+      ...localRecord,
+      status: "failed",
+    }).tags).toBeUndefined();
   });
 
   it("falls back to transcript text when FunASR returns no sentence segments", () => {

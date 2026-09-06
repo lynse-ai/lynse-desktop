@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDraggable } from "@dnd-kit/core";
-import { Search, FolderOpen, GripVertical, ArrowUpDown, ArrowDown, ArrowUp, Loader2, X, FileAudio } from "../../icons";
+import { Search, FolderOpen, GripVertical, ArrowUpDown, ArrowDown, ArrowUp, Loader2, X, FileAudio, Monitor } from "../../icons";
 import { Input } from "@lynse/ui/components/ui/input";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
@@ -22,7 +22,7 @@ import { useNotificationStore } from "../../notifications/use-notification-store
 import { useFolders } from "../hooks/use-folders";
 import type { WorkspaceItem } from "../types";
 import { filterWorkspaceFilesByFolder } from "./file-list-filter";
-import { LOCAL_TRANSCRIPTION_FOLDER_ID } from "../local-transcription";
+import { LOCAL_TRANSCRIPTION_FOLDER_ID, isLocalFileId } from "../local-transcription";
 import { FileRowContextMenu } from "./file-row-context-menu";
 
 /** Press-and-hold duration (ms) before a row enters multi-select mode. */
@@ -66,6 +66,10 @@ export function FileList() {
   // Multi-select mode is entered by long-pressing a row; checkboxes are only
   // visible while at least one file is selected.
   const multiMode = selectedFileIds.size > 0;
+
+  // Navigating away must drop a pending selection: the notes page reads the
+  // same store key and would otherwise show phantom checkboxes.
+  useEffect(() => () => clearFileSelection(), [clearFileSelection]);
 
   const defaultTemplateId = useMemo(() => {
     const all = templateCategories?.flatMap((c) => c.templates) ?? [];
@@ -557,6 +561,17 @@ function DraggableFileCard({
         {!editing && badgeDate && (
           <span className="absolute bottom-1.5 right-1.5 rounded-md bg-black/50 px-1.5 py-0.5 text-3xs font-medium tabular-nums text-white backdrop-blur-sm">
             {badgeDate}
+          </span>
+        )}
+
+        {/* Local-recording badge — this file was captured on the desktop and
+            lives in local storage, not in the cloud. */}
+        {isLocalFileId(file.id) && (
+          <span
+            className="absolute right-1.5 top-1.5 flex size-5 items-center justify-center rounded-md bg-primary/15 text-primary backdrop-blur-sm"
+            title={t("workspace.local_recording_hint")}
+          >
+            <Monitor className="size-3" strokeWidth={1.75} />
           </span>
         )}
 

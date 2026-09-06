@@ -14,26 +14,30 @@ import { createElapsedClock } from "./elapsed-clock";
 // band floor.
 //
 // Bars are appended from the capture sidecar's `levels` events: the buffer
-// is keyed to `elapsedMs` (~7 bars / second), so pausing freezes the
-// waveform, a restart truncates it, and the recorded history scrolls
-// leftwards through the centre playhead at 62 px / second. All colours are
-// read from the theme's CSS variables, so light / dark adapt automatically.
+// is keyed to `elapsedMs` (7 bars / second — a 2 px bar every 0.143 s), so
+// pausing freezes the waveform, a restart truncates it, and the recorded
+// history scrolls leftwards through the centre playhead at 44 px / second.
+// All colours are read from the theme's CSS variables, so light / dark adapt
+// automatically.
 //
 // PERFORMANCE — the sidecar only publishes `elapsedMs` every 200 ms, so the
-// raw value moves in ~12 px steps five times a second. Three things keep the
+// raw value moves in ~20 px steps five times a second. Four things keep the
 // band scrolling at a continuous 60 fps:
 //   · a local clock extrapolates between sidecar ticks (see elapsed-clock.ts),
-//   · the microphone level is smoothed frame-rate independently with a fast
-//     attack / slow release plus a peak-hold, so bars never pop,
+//   · the microphone level is linearly ramped between the sidecar's ~5 Hz
+//     updates, then smoothed frame-rate independently with a fast attack /
+//     slow release plus a peak-hold, so bars never pop,
 //   · canvas size, theme colours and the bar path are cached — every frame
 //     builds one path per colour and fills once instead of reading layout
 //     (clientWidth) or computed styles 60 times a second.
 // ───────────────────────────────────────────────────────────────
 
-const PX_PER_SEC = 62;
-const BAR_PITCH = 9;
-const BAR_WIDTH = 3.5;
-const BARS_PER_SEC = PX_PER_SEC / BAR_PITCH; // ≈ 6.9
+const PX_PER_SEC = 44;
+// 14 bars per 2 s of ruler (7 / s) — one bar every ~0.143 s. Pitch is
+// PX_PER_SEC / BARS_PER_SEC ≈ 6.29 px, i.e. a 2 px bar plus a ~4.29 px
+// gap, so bars and ticks stay on the same time axis.
+const BARS_PER_SEC = 7;
+const BAR_WIDTH = 2;
 const RULER_HEIGHT = 46;
 const MIN_BAR_HEIGHT = 3;
 // Playhead geometry: the line starts just above the ruler baseline and the
@@ -42,7 +46,9 @@ const PLAYHEAD_TOP = 26;
 const DOT_RADIUS = 6;
 const DOT_OVERHANG = 14;
 
-// Level smoothing time constants, in seconds.
+// Level display: a linear gain applied to the sidecar level before it
+// enters the bar history. Smoothing time constants, in seconds.
+const LEVEL_GAIN = 1.5;
 const ATTACK_TAU = 0.025;
 const RELEASE_TAU = 0.14;
 
@@ -82,13 +88,24 @@ export function RecordingWaveform({
 }: RecordingWaveformProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const elapsedRef = useRef(elapsedMs);
-  const levelRef = useRef(micLevel);
   const activeRef = useRef(active);
   const markersRef = useRef(markers);
   elapsedRef.current = elapsedMs;
-  levelRef.current = micLevel;
   activeRef.current = active;
   markersRef.current = markers;
+
+  // The sidecar publishes levels at ~5 Hz; remember when the value last
+  // changed so the render loop can ramp linearly between updates instead of
+  // stepping. `interval` is the measured cadence, clamped to sane bounds.
+  const levelRamp = useRef({ prev: micLevel, curr: micLevel, at: 0, interval: 200 });
+  if (micLevel !== levelRamp.current.curr) {
+    const nowMs = performance.now();
+    const interval =
+      levelRamp.current.at > 0
+        ? Math.min(500, Math.max(80, nowMs - levelRamp.current.at))
+        : 200;
+    levelRamp.current = { prev: levelRamp.current.curr, curr: micLevel, at: nowMs, interval };
+  }
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -143,10 +160,16 @@ export function RecordingWaveform({
       ctx.clearRect(0, 0, width, height);
 
       // Frame-rate independent smoothing: fast attack, slow release, plus a
-      // peak-hold so a transient between two bars is never swallowed.
+      // peak-hold so a transient between two bars is never swallowed. The
+      // level itself is linearly ramped between the sidecar's ~5 Hz updates
+      // so the smoothing traces a continuous curve instead of reacting to
+      // steps.
       const dt = lastFrameAt === 0 ? 1 / 60 : Math.min(0.1, (now - lastFrameAt) / 1000);
       lastFrameAt = now;
-      const raw = activeRef.current ? Math.min(1, Math.max(0, levelRef.current)) : 0;
+      const ramp = levelRamp.current;
+      const frac = Math.min(1, Math.max(0, (now - ramp.at) / ramp.interval));
+      const level = ramp.prev + (ramp.curr - ramp.prev) * frac;
+      const raw = activeRef.current ? Math.min(1, Math.max(0, level)) : 0;
       const tau = raw > smoothedLevel ? ATTACK_TAU : RELEASE_TAU;
       smoothedLevel += (raw - smoothedLevel) * (1 - Math.exp(-dt / tau));
       pendingPeak = Math.max(pendingPeak, raw);
@@ -157,15 +180,23 @@ export function RecordingWaveform({
       const elapsedSec = Math.max(0, clock.read(now)) / 1000;
       const targetBars = Math.floor(elapsedSec * BARS_PER_SEC);
       while (history.length < targetBars) {
-        history.push(Math.max(smoothedLevel, pendingPeak));
+        const target = Math.min(1, Math.max(smoothedLevel, pendingPeak) * LEVEL_GAIN);
         pendingPeak = 0;
+        // A stalled frame can owe several bars at once — spread the burst
+        // between the previous bar and the current level so it paints as a
+        // gradient, never as a run of identical bars.
+        const burst = targetBars - history.length;
+        const prev = history[history.length - 1] ?? target;
+        for (let j = 1; j <= burst; j++) {
+          history.push(prev + (target - prev) * (j / burst));
+        }
       }
       if (history.length > targetBars) history.length = targetBars;
 
       const bandH = Math.max(1, height - RULER_HEIGHT - DOT_OVERHANG);
       const bandBottom = RULER_HEIGHT + bandH;
       const mid = RULER_HEIGHT + bandH / 2;
-      const maxBarH = bandH * 0.37; // amplitude on one side of the mid line
+      const maxBarH = bandH * 0.46; // amplitude on one side of the mid line
       const viewT = elapsedSec; // playhead stays centred while recording
 
       // ── waveform band ──
@@ -293,7 +324,10 @@ function drawRuler(ctx: CanvasRenderingContext2D, w: number, viewT: number, colo
 
   if (labels.length > 0) {
     ctx.globalAlpha = 1;
-    ctx.font = "500 13px Inter, system-ui, sans-serif";
+    // Weight 100 (Inter Thin) at 11px — the ruler labels read as hairline
+    // captions. Inter ships as a variable font (100–900), so this is a real
+    // cut.
+    ctx.font = "100 11px Inter, system-ui, sans-serif";
     ctx.textAlign = "center";
     for (const label of labels) ctx.fillText(label.text, label.x, 15);
   }

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
+import { useInspirationCaptureStore, getDesktopInspirationApi } from "../inspiration";
 import { useUserCredits } from "./use-user-credits";
 import { useNotificationStore, selectUnreadCount } from "../notifications/use-notification-store";
 import { useChatStore, selectChatUnreadCount } from "../workspace/hooks/use-chat-store";
@@ -61,7 +62,17 @@ export function LynseSidebar() {
   const initials = nickname.slice(0, 2).toUpperCase();
 
   const topItems: NavItem[] = [
-    { key: "inspiration", label: t("nav.inspiration"), icon: Lightbulb, path: "/inspiration" },
+    {
+      key: "inspiration",
+      label: t("nav.inspiration"),
+      icon: Lightbulb,
+      path: "/inspiration",
+      // flomo-style: the rail icon pops the capture sheet over the current
+      // page instead of navigating; the full feed lives at /inspiration and
+      // is reached from the sheet's "view all" link. Web has no capture sheet
+      // (no desktop bridge), so the entry is hidden there entirely.
+      action: () => useInspirationCaptureStore.getState().openCapture(),
+    },
     { key: "todo", label: t("nav.todo"), icon: ListChecks, path: "/todo" },
     { key: "notes", label: t("nav.notes"), icon: FolderOpen, path: "/notes" },
     {
@@ -79,7 +90,7 @@ export function LynseSidebar() {
     },
     { key: "devices", label: t("nav.devices"), icon: Bluetooth, path: "/devices" },
   ].filter((item) =>
-    item.key === "inspiration" ? featureFlags.inspiration
+    item.key === "inspiration" ? featureFlags.inspiration && Boolean(getDesktopInspirationApi())
     : item.key === "devices" ? featureFlags.devices
     : true,
   );
@@ -113,12 +124,16 @@ export function LynseSidebar() {
         }
       />
 
-      {/* Create: + opens import audio / start recording */}
+      {/* Create: + opens import audio / start recording. Inverted
+          foreground/background — charcoal in light mode, warm ivory in dark —
+          so the rail stays monochrome with purple reserved for in-content
+          accents. 80% alpha keeps it the heaviest element on the rail without
+          reading as a black block. */}
       <DropdownMenu>
         <DropdownMenuTrigger
           title={t("layout.new_recording")}
           data-tauri-drag-region={false}
-          className="mb-2 flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          className="mb-2 flex size-10 shrink-0 items-center justify-center rounded-xl bg-foreground/80 text-background transition-colors hover:bg-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
         >
           <Plus className="size-5" />
         </DropdownMenuTrigger>

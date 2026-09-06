@@ -6,6 +6,13 @@ const UNSUPPORTED: &str = "live translation is currently supported on macOS only
 #[derive(Default)]
 pub struct LiveTranslationManager;
 
+impl LiveTranslationManager {
+    /// No live sessions exist on platforms using the stub.
+    pub fn has_active_session(&self) -> bool {
+        false
+    }
+}
+
 fn unsupported<T>() -> CommandResult<T> {
     Err(UNSUPPORTED.to_owned())
 }

@@ -6,8 +6,8 @@
  * a feature can be shipped or hidden by editing this file only.
  */
 export const featureFlags = {
-  /** Inspiration page (`/inspiration`) — hidden until the feature is complete. */
-  inspiration: false,
+  /** Inspiration page (`/inspiration`) — quick flomo-style capture + feed. */
+  inspiration: true,
   /** Devices page (`/devices`) — hidden until the feature is complete. */
   devices: false,
 } as const;

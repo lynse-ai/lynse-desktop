@@ -1,6 +1,13 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  AnimatePresence,
+  motion,
+  useReducedMotion,
+  type Transition,
+  type Variants,
+} from "motion/react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
   Select,
@@ -33,11 +40,11 @@ import {
   Captions,
   Eye,
   EyeOff,
-  FileAudio,
   Loader2,
   Mic,
   Pause,
   Play,
+  Square,
   Volume2,
 } from "../icons";
 import {
@@ -76,7 +83,7 @@ function formatTimerCentis(ms: number): string {
 // holds regardless of whether cloud sync is later chosen in the dialog.
 //
 // Layout:
-//   · Header — title, mode switch (纯录音 / 实时), translation switch,
+//   · Header — title, mode switch (录音 / 实时), translation switch,
 //     language pair, status chip, and the two view toggles.
 //   · Main   — the whole area shows the live transcript when a text stream is
 //              active; in pure-recording mode (or with live transcription
@@ -85,10 +92,39 @@ function formatTimerCentis(ms: number): string {
 //              Stop and animates while recording.
 // ───────────────────────────────────────────────────────────────
 
+// Stage swap choreography: the incoming pane slides in from the side of its
+// header-toggle position (录音 left / 实时 right) while the outgoing pane
+// leaves through the opposite side, so everything drifts one way.
+const stageVariants: Variants = {
+  enter: (direction: number) => ({
+    opacity: 0,
+    transform: `translateX(${24 * direction}px)`,
+  }),
+  center: { opacity: 1, transform: "translateX(0px)" },
+  exit: (direction: number) => ({
+    opacity: 0,
+    transform: `translateX(${-24 * direction}px)`,
+  }),
+};
+
+const stageSpringTransition: Transition = { type: "spring", bounce: 0, duration: 0.25 };
+
 export function TranscriptDetailPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const session = useRecordingSession();
   const { syncCompletedSession } = useRecordingCloudSync();
+  const reduceMotion = useReducedMotion();
+
+  // Recording date under the page title: the session's own start date once
+  // one exists, today otherwise. Long-form year/month/day per locale.
+  const recordingDate = useMemo(() => {
+    const d = session.startedAt ? new Date(session.startedAt) : new Date();
+    return new Intl.DateTimeFormat(i18n.language, {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    }).format(d);
+  }, [session.startedAt, i18n.language]);
 
   // ── view toggles ──
   const [showSource, setShowSource] = useState(true); // 显示原文
@@ -101,6 +137,12 @@ export function TranscriptDetailPage() {
   const busy = session.busy;
   const displayMode: RecordMode = recording ? session.activeMode : session.mode;
   const transcribing = displayMode !== "record";
+
+  // Panes enter from the side of their toggle position (录音 left / 实时 right).
+  const stageDirection = displayMode === "record" ? -1 : 1;
+  const stageTransition: Transition = reduceMotion
+    ? { duration: 0 }
+    : { duration: 0.2, ease: [0.23, 1, 0.32, 1] };
 
   // Freeze the transcript snapshot when live transcription is toggled off.
   const visibleSegments = useMemo(() => {
@@ -151,18 +193,13 @@ export function TranscriptDetailPage() {
           className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-5 select-none"
           data-tauri-drag-region
         >
-          <div className="flex min-w-0 items-center gap-2.5">
-            <span className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <FileAudio className="size-4" />
-            </span>
-            <div className="min-w-0">
-              <h1 className="truncate text-sm font-semibold leading-tight">
-                {t("transcript_detail.title")}
-              </h1>
-              <p className="truncate text-2xs leading-tight tabular-nums text-muted-foreground">
-                {session.formattedTime}
-              </p>
-            </div>
+          <div className="min-w-0">
+            <h1 className="truncate text-sm font-semibold leading-tight">
+              {t("transcript_detail.title")}
+            </h1>
+            <p className="truncate text-2xs leading-tight text-muted-foreground/60">
+              {recordingDate}
+            </p>
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
@@ -174,22 +211,36 @@ export function TranscriptDetailPage() {
                   type="button"
                   onClick={() => void session.selectMode(m)}
                   className={cn(
-                    "rounded-full px-2.5 py-1 text-2xs font-medium transition-colors",
+                    "relative rounded-full px-2.5 py-1 text-2xs font-medium transition-colors",
                     displayMode === m
-                      ? "bg-primary/15 text-primary"
+                      ? "text-primary"
                       : "text-muted-foreground hover:text-foreground",
                   )}
                 >
-                  {m === "record"
-                    ? t("recording_mode.record")
-                    : t("recording_mode.live_short")}
+                  {displayMode === m && (
+                    <motion.span
+                      layoutId="recording-mode-thumb"
+                      className="absolute inset-0 rounded-full bg-primary/15"
+                      transition={reduceMotion ? { duration: 0 } : stageSpringTransition}
+                    />
+                  )}
+                  <span className="relative">
+                    {m === "record"
+                      ? t("recording_mode.record")
+                      : t("recording_mode.live_short")}
+                  </span>
                 </button>
               ))}
             </div>
 
             {/* live mode controls — translation switch + language pair */}
             {transcribing && (
-              <div className="flex items-center gap-2">
+              <motion.div
+                initial={reduceMotion ? false : { opacity: 0, transform: "translateX(8px)" }}
+                animate={{ opacity: 1, transform: "translateX(0px)" }}
+                transition={{ duration: 0.15, ease: [0.23, 1, 0.32, 1] }}
+                className="flex items-center gap-2"
+              >
                 <label
                   className={cn(
                     "flex items-center gap-1.5 rounded-full border px-2.5 py-1",
@@ -258,7 +309,7 @@ export function TranscriptDetailPage() {
                     </Select>
                   </>
                 )}
-              </div>
+              </motion.div>
             )}
 
             <Separator orientation="vertical" className="data-[orientation=vertical]:h-5" />
@@ -300,52 +351,74 @@ export function TranscriptDetailPage() {
 
         {/* ═══ Main — full-page live output ═══ */}
         <main className="relative min-h-0 flex-1 overflow-hidden">
-          {showTranscript ? (
-            <>
-              <TranscriptFeed
-                segments={visibleSegments}
-                showSource={showSource}
-                liveTranscribe={liveTranscribe}
-                translationEnabled={session.translationEnabled}
-                tab={transcriptTab}
-                onTabChange={setTranscriptTab}
-                onToggleLive={handleToggleLive}
-                t={t}
-              />
+          <AnimatePresence initial={false} custom={stageDirection}>
+            {showTranscript ? (
+              <motion.div
+                key="live"
+                custom={stageDirection}
+                variants={stageVariants}
+                initial="enter"
+                animate="center"
+                exit="exit"
+                transition={stageTransition}
+                className="absolute inset-0"
+              >
+                <TranscriptFeed
+                  segments={visibleSegments}
+                  showSource={showSource}
+                  liveTranscribe={liveTranscribe}
+                  translationEnabled={session.translationEnabled}
+                  tab={transcriptTab}
+                  onTabChange={setTranscriptTab}
+                  onToggleLive={handleToggleLive}
+                  t={t}
+                />
 
-              {/* Floating glassmorphism dock (live-transcript view only — the
-                  pure-recording stage owns its own transport bar) */}
-              <div className="pointer-events-none absolute inset-x-0 bottom-5 flex justify-center px-4">
-                <RecordingDock
+                {/* Floating glassmorphism dock (live-transcript view only — the
+                    recording stage owns its own transport bar) */}
+                <div className="pointer-events-none absolute inset-x-0 bottom-5 flex justify-center px-4">
+                  <RecordingDock
+                    recording={recording}
+                    paused={paused}
+                    busy={busy}
+                    formattedTime={session.formattedTime}
+                    micLevel={session.micLevel}
+                    bookmarked={session.bookmarked}
+                    onStart={() => void session.toggleRecording()}
+                    onTogglePause={() => void session.togglePause()}
+                    onStop={() => void session.toggleRecording()}
+                    onToggleBookmark={() => session.setBookmarked(!session.bookmarked)}
+                    onHide={() => void getDesktopLiveTranslationApi()?.minimizeToTray()}
+                  />
+                </div>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="record"
+                custom={stageDirection}
+                variants={stageVariants}
+                initial="enter"
+                animate="center"
+                exit="exit"
+                transition={stageTransition}
+                className="absolute inset-0"
+              >
+                <RecordingStage
                   recording={recording}
                   paused={paused}
                   busy={busy}
-                  formattedTime={session.formattedTime}
+                  elapsedMs={session.elapsedMs}
                   micLevel={session.micLevel}
-                  bookmarked={session.bookmarked}
+                  statusLabel={stageStatus}
                   onStart={() => void session.toggleRecording()}
                   onTogglePause={() => void session.togglePause()}
                   onStop={() => void session.toggleRecording()}
-                  onToggleBookmark={() => session.setBookmarked(!session.bookmarked)}
                   onHide={() => void getDesktopLiveTranslationApi()?.minimizeToTray()}
+                  t={t}
                 />
-              </div>
-            </>
-          ) : (
-            <RecordingStage
-              recording={recording}
-              paused={paused}
-              busy={busy}
-              elapsedMs={session.elapsedMs}
-              micLevel={session.micLevel}
-              statusLabel={stageStatus}
-              onStart={() => void session.toggleRecording()}
-              onTogglePause={() => void session.togglePause()}
-              onStop={() => void session.toggleRecording()}
-              onHide={() => void getDesktopLiveTranslationApi()?.minimizeToTray()}
-              t={t}
-            />
-          )}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </main>
 
         {/* ═══ Completion dialog ═══ */}
@@ -499,7 +572,7 @@ const TranscriptFeed = memo(function TranscriptFeed({
 // Recording-only stage, styled after the Voice-Memos / Huawei recorder UI:
 // a time ruler over a full-width waveform band with a red centre playhead,
 // a large `MM:SS.cs` timer beneath it, and a transport bar at the bottom
-// (bookmark · stop · pause) while recording. When idle only the big red
+// (bookmark · pause · stop) while recording. When idle only the big red
 // start button shows.
 function RecordingStage({
   recording,
@@ -574,7 +647,9 @@ function RecordingStage({
 
       <div className="min-h-8 flex-1" />
 
-      {/* Transport bar — start (idle) / bookmark · stop · pause (recording) */}
+      {/* Transport bar — start (idle) / bookmark · stop · pause (recording):
+          the centre button owns the lifecycle (mic → stop square), pause /
+          resume lives on the black circle at the right. */}
       <div className="relative mx-auto mb-9 grid w-full max-w-[1100px] grid-cols-[1fr_auto_1fr] items-center px-10">
         {recording ? (
           <>
@@ -595,7 +670,7 @@ function RecordingStage({
               <TooltipContent>{t("recording_mode.bookmark")}</TooltipContent>
             </Tooltip>
 
-            {/* Stop — white circle with a red rounded square */}
+            {/* Stop — the record button turns into stop while recording */}
             <Tooltip>
               <TooltipTrigger
                 render={
@@ -604,12 +679,12 @@ function RecordingStage({
                     onClick={onStop}
                     disabled={busy}
                     aria-label={t("recording_mode.stop_recording")}
-                    className="flex size-[78px] items-center justify-center rounded-full bg-background shadow-[0_6px_18px_rgba(0,0,0,0.12)] transition-transform duration-200 hover:scale-[1.03] active:scale-95 disabled:opacity-60 disabled:hover:scale-100 dark:shadow-[0_6px_18px_rgba(0,0,0,0.55)]"
+                    className="mx-auto flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-all duration-200 hover:scale-105 hover:bg-destructive/90 active:scale-95 disabled:opacity-60 disabled:hover:scale-100"
                   >
                     {busy ? (
-                      <Loader2 className="size-6 animate-spin text-muted-foreground" />
+                      <Loader2 className="size-6 animate-spin" />
                     ) : (
-                      <span className="size-[30px] rounded-lg bg-destructive" />
+                      <Square className="size-5 fill-current" />
                     )}
                   </button>
                 }
@@ -617,6 +692,8 @@ function RecordingStage({
               <TooltipContent>{t("recording_mode.stop_recording")}</TooltipContent>
             </Tooltip>
 
+            {/* Pause / resume — bare icon + label, mirroring the bookmark
+                button's style so the two side controls read as one row */}
             <div className="relative flex items-center justify-center">
               <Tooltip>
                 <TooltipTrigger
@@ -625,12 +702,12 @@ function RecordingStage({
                       type="button"
                       onClick={onTogglePause}
                       aria-label={paused ? t("recording_mode.resume") : t("recording_mode.pause")}
-                      className="flex flex-col items-center gap-1.5 rounded-xl px-3 py-1.5 text-2xs text-muted-foreground transition-colors hover:text-foreground"
+                      className="mx-auto flex flex-col items-center gap-2 rounded-xl px-4 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
                     >
                       {paused ? (
-                        <Play className="size-5 text-foreground/80" />
+                        <Play className="size-6 fill-current text-foreground/80" />
                       ) : (
-                        <Pause className="size-5 text-foreground/80" />
+                        <Pause className="size-6 text-foreground/80" />
                       )}
                       <span>{paused ? t("recording_mode.resume") : t("recording_mode.pause")}</span>
                     </button>

@@ -36,10 +36,10 @@ html[data-window-effects="vibrancy"] {
    reads as a dirty halo in the strips around the inset content card. Instead
    of washing only the sidebar, lay one veil of the theme background across the
    whole shell — the rail and the strips around the card share a single
-   identical material. The desktop still shows through faintly; dark keeps the
-   raw frost. */
+   identical material. 90% paper keeps only a whisper of frost so the rail
+   reads near-white rather than grey; dark keeps the raw frost. */
 html[data-window-effects="vibrancy"]:not(.dark) .lyse-shell {
-  background: color-mix(in srgb, var(--background) 80%, transparent);
+  background: color-mix(in srgb, var(--background) 90%, transparent);
 }
 
 /* Codex-style inset content card: rounded on all four corners with a
@@ -177,6 +177,35 @@ html[data-window-effects="none"] .island-surface {
 @media (prefers-reduced-motion: reduce) {
   .animate-avatar-in {
     animation: none;
+  }
+}
+
+/* Top-level page switch: the incoming page fades in with a slight rise.
+   The router container is keyed by route (App.tsx PageRouter), so switching
+   sidebar destinations replays the entrance on the freshly mounted page.
+   Deliberately a CSS animation, not Motion: no styles persist after it ends,
+   so fixed-position layers never inherit a leftover transform/containing
+   block. */
+@keyframes lynse-page-in {
+  from {
+    transform: translateY(8px);
+    opacity: 0;
+  }
+}
+
+@keyframes lynse-page-in-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.animate-page-in {
+  animation: lynse-page-in 180ms var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-page-in {
+    animation: lynse-page-in-fade 120ms var(--ease-out);
   }
 }
 

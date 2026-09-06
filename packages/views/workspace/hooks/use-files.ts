@@ -29,6 +29,7 @@ import {
   localRecordToTranscription,
   mergeCloudAndLocalFiles,
 } from "../local-transcription";
+import { removeNotesFromVault } from "../note-vault";
 
 // Lynse API returns { code, data: [...files], total, msg }
 // ApiClient unwraps to the inner data field (the file array)
@@ -618,7 +619,12 @@ export function useDeleteWorkspaceFiles() {
           cloudIds.push(id);
         }
       }
-      if (cloudIds.length > 0) await deleteCloud.mutateAsync(cloudIds);
+      if (cloudIds.length > 0) {
+        await deleteCloud.mutateAsync(cloudIds);
+        // Best-effort cleanup of the local markdown vault mirror; the Rust
+        // side no-ops while the vault is disabled.
+        void removeNotesFromVault(cloudIds);
+      }
       return { deleted: fileIds.length };
     },
     onSuccess: () => {

@@ -41,7 +41,6 @@ export type TranscribeConfig = {
 
 export const LOCAL_FILE_ID_PREFIX = "local:";
 export const LOCAL_TRANSCRIPTION_FOLDER_ID = "__local_transcriptions__";
-export const LOCAL_TRANSCRIPTION_TAG = "本地转写";
 export const OFFLINE_TRANSCRIPTION_ENABLED_KEY = "lynse_offline_transcription_enabled";
 export const OFFLINE_TRANSCRIPTION_DEFAULT_OFF = true;
 
@@ -121,7 +120,9 @@ export function localRecordToWorkspaceItem(record: LocalTranscriptionRecord): Wo
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     folderId: LOCAL_TRANSCRIPTION_FOLDER_ID,
-    tags: [LOCAL_TRANSCRIPTION_TAG, localStatusLabel(record.status)],
+    // Cards identify local recordings via `isLocalFileId` (badge), not via a
+    // tag; the status lives here for the detail panel's progress pill.
+    localStatus: record.status,
     transcriptionCompleted: record.status === "completed",
     ...(record.durationMs !== undefined ? { durationSeconds: record.durationMs / 1000 } : {}),
   };
@@ -170,13 +171,6 @@ function normalizeLocalSpeakerName(speaker: string | undefined, rawSpeaker?: str
   if (match?.[1]) return `发言人${match[1]}`;
   if (speaker === rawSpeaker && rawSpeaker) return `发言人${rawSpeaker}`;
   return speaker;
-}
-
-function localStatusLabel(status: LocalTranscriptionRecord["status"]): string {
-  if (status === "queued") return "排队中";
-  if (status === "transcribing") return "转写中";
-  if (status === "failed") return "失败";
-  return "已完成";
 }
 
 function formatLocalTimestamp(ms: number): string {

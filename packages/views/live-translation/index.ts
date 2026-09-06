@@ -2,6 +2,7 @@ export { LiveTranslationPage } from "./live-translation-page";
 export { TranscriptDetailPage } from "./transcript-detail-page";
 export { LiveSubtitleOverlay } from "./subtitle-overlay";
 export { RecordingIslandWindow } from "./recording-island-window";
+export { RecordingTrayAgent } from "./recording-tray-agent";
 export type {
   CompletedLiveSession,
   DesktopLiveTranslationApi,

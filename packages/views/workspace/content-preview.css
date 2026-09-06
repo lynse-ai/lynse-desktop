@@ -1,15 +1,17 @@
 /* Lynse content preview — adapted from ColaMD base.css */
 
 .content-preview {
-  --lynse-bg: #ffffff;
-  --lynse-text: #24292f;
-  --lynse-text-muted: #656d76;
-  --lynse-border: #d0d7de;
+  /* Matches the light theme tokens: charcoal text (never pure black), a
+     violet-tinted grey ramp, purple reserved for links. */
+  --lynse-bg: #fcfaf6;
+  --lynse-text: #202023;
+  --lynse-text-muted: #74747b;
+  --lynse-border: #d8d8dc;
   --lynse-link: #5f67d8;
   --lynse-code-bg: rgba(175, 184, 193, 0.2);
-  --lynse-code-block-bg: #f6f8fa;
-  --lynse-blockquote-border: #d0d7de;
-  --lynse-table-header-bg: #f6f8fa;
+  --lynse-code-block-bg: #f3f3f5;
+  --lynse-blockquote-border: #d8d8dc;
+  --lynse-table-header-bg: #f3f3f5;
 }
 
 :is(.dark) .content-preview {

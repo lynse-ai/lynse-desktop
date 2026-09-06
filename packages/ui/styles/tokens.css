@@ -100,29 +100,38 @@
         "Apple Color Emoji", "Segoe UI Emoji";
     --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
         "Liberation Mono", "Courier New", monospace;
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.141 0.005 285.823);
+    /* Light theme: warm paper + charcoal. The canvas is a subtle warm white
+       (≈#fcfaf6) so pages read as paper rather than a glowing sheet, while
+       cards and popovers stay pure white so floating surfaces lift off it.
+       The remaining neutral ramp carries a faint violet cast (hue 285.8) so
+       greys and the brand purple read as one family. Purple (#5f67d8) is
+       reserved for a few accents — primary buttons, focus rings, links,
+       active states, info — never large surfaces. Text is a lifted charcoal
+       (≈#202023), deliberately not pure black, for a softer premium feel;
+       muted grey stays ≥ 4.5:1 on the paper canvas. */
+    --background: oklch(0.985 0.006 80);               /* ≈#fcfaf6 warm paper */
+    --foreground: oklch(0.245 0.006 285.8);            /* ≈#202023 */
     --card: oklch(1 0 0);
-    --card-foreground: oklch(0.141 0.005 285.823);
+    --card-foreground: oklch(0.245 0.006 285.8);
     --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.141 0.005 285.823);
+    --popover-foreground: oklch(0.245 0.006 285.8);
     --primary: #5f67d8;
     --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.967 0.001 286.375);
-    --secondary-foreground: oklch(0.21 0.006 285.885);
-    --muted: oklch(0.967 0.001 286.375);
-    --muted-foreground: oklch(0.552 0.016 285.938);
-    --accent: oklch(0.967 0.001 286.375);
-    --accent-foreground: oklch(0.21 0.006 285.885);
+    --secondary: oklch(0.966 0.002 285.8);             /* ≈#f3f3f5 */
+    --secondary-foreground: oklch(0.32 0.007 285.8);   /* ≈#323236 */
+    --muted: oklch(0.966 0.002 285.8);
+    --muted-foreground: oklch(0.545 0.012 285.8);      /* ≈#6f6f77, 4.8:1 on paper */
+    --accent: oklch(0.958 0.003 285.8);                /* ≈#f1f1f3 hover surface */
+    --accent-foreground: oklch(0.32 0.007 285.8);
     --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.935 0.003 286.32);
-    --input: oklch(0.92 0.004 286.32);
+    --border: oklch(0.929 0.003 285.8);                /* ≈#e7e7e9 */
+    --input: oklch(0.918 0.004 285.8);                 /* ≈#e3e3e6 */
     --ring: #5f67d8;
     /* Stroke hierarchy — descending strength */
-    --stroke-primary: oklch(0.76 0.006 286.32);
-    --stroke-secondary: oklch(0.86 0.005 286.32);
-    --stroke-tertiary: oklch(0.935 0.003 286.32);
-    --stroke-quaternary: oklch(0.96 0.003 286.32);
+    --stroke-primary: oklch(0.78 0.005 285.8);         /* ≈#b7b7ba */
+    --stroke-secondary: oklch(0.867 0.004 285.8);      /* ≈#d3d3d6 */
+    --stroke-tertiary: oklch(0.929 0.003 285.8);       /* matches --border */
+    --stroke-quaternary: oklch(0.962 0.002 285.8);     /* ≈#f2f2f4 */
     /* Restrained indigo seed — all branded accents derive from this value. */
     --brand: #5f67d8;
     --brand-foreground: oklch(0.985 0 0);
@@ -140,13 +149,13 @@
     --chart-4: #a7abed;
     --chart-5: #c7c9f3;
     --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.141 0.005 285.823);
+    --sidebar: oklch(0.992 0.003 80);                  /* ≈#fdfcfa, a step lighter than the canvas */
+    --sidebar-foreground: oklch(0.245 0.006 285.8);
     --sidebar-primary: #5f67d8;
     --sidebar-primary-foreground: oklch(0.985 0 0);
     --sidebar-accent: color-mix(in oklch, var(--brand) 9%, var(--sidebar));
     --sidebar-accent-foreground: color-mix(in oklch, var(--brand) 82%, var(--foreground));
-    --sidebar-border: oklch(0.94 0.003 286.32);
+    --sidebar-border: oklch(0.94 0.003 285.8);         /* ≈#ebebed */
     --sidebar-ring: #5f67d8;
     --success: oklch(0.55 0.16 145);
     --warning: oklch(0.75 0.16 85);

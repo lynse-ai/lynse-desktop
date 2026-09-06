@@ -19,7 +19,10 @@ jobs:
           - os: windows-latest
             args: --bundles msi
           - os: macos-latest
-            args: --bundles dmg
+            # `app` is required alongside dmg: the macOS updater artifact
+            # (.app.tar.gz + .sig) is produced from the app bundle — dmg-only
+            # builds leave latest.json without a darwin entry.
+            args: --bundles app,dmg
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout

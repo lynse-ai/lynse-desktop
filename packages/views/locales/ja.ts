@@ -341,6 +341,10 @@ const ja = {
     update_installing: "アップデートをインストール中…",
     update_restarting: "アップデート完了 — 再起動中…",
     update_install_failed: "アップデートに失敗しました：{{error}}",
+    update_release_notes: "更新内容",
+    update_later: "後で",
+    update_close: "閉じる",
+    update_retry: "再試行",
   },
   workspace: {
     search_files: "ファイルを検索...",

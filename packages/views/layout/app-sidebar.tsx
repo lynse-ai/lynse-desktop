@@ -54,13 +54,14 @@ import {
 } from "@lynse/ui/components/ui/popover";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
-import { useAppUpdate, getAppInfoSync } from "../app-update";
+import { useAppUpdate, getAppInfoSync, openAppUpdateDialog } from "../app-update";
 import { featureFlags } from "../feature-flags";
 import { useUserCredits, useMembership } from "./use-user-credits";
 import { FolderTreeSection } from "../workspace/sidebar/folder-tree-section";
 import { SettingsDialog } from "../settings/settings-dialog";
 import { UploadDialog } from "../workspace/upload-dialog";
 import { TemplateManager } from "../workspace/template-manager";
+import { AppUpdateDialog } from "../app-update-dialog";
 import { LayoutTemplate } from "lucide-react";
 
 function isNavActive(pathname: string, href: string): boolean {
@@ -211,6 +212,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
       <TemplateManager open={templateManagerOpen} onOpenChange={setTemplateManagerOpen} />
+      <AppUpdateDialog />
     </Sidebar>
   );
 }
@@ -334,7 +336,7 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
   const { data } = useUserCredits();
   const { data: membership } = useMembership();
   const { theme, setTheme } = useTheme();
-  const { update, checking, checkForUpdate } = useAppUpdate();
+  const { update, checking } = useAppUpdate();
 
   const nickname = (data?.nickname as string) || "User";
   const plan = useLocalizedPlan(membership?.memberLevel || data?.benefitType);
@@ -476,7 +478,10 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
         </DropdownMenuItem>
 
         {/* ── Check for Updates ────────────────────────── */}
-        <DropdownMenuItem onClick={() => checkForUpdate()} disabled={checking}>
+        <DropdownMenuItem
+          onClick={() => openAppUpdateDialog({ refresh: true })}
+          disabled={checking}
+        >
           <Download className={cn("size-4 text-muted-foreground", checking && "animate-spin")} strokeWidth={1.5} />
           <span>{checking ? t("layout.checking_update") : t("layout.check_update")}</span>
           {update?.hasUpdate && (
@@ -501,7 +506,7 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
 /* ── Update reminder card — shown below the user row when a newer release exists ── */
 function UpdateReminder() {
   const { t } = useTranslation();
-  const { update, install, installState } = useAppUpdate();
+  const { update, installState } = useAppUpdate();
   const [dismissed, setDismissed] = useState<string | null>(null);
 
   const installBusy =
@@ -551,7 +556,7 @@ function UpdateReminder() {
         ) : (
           <>
             <button
-              onClick={install}
+              onClick={() => openAppUpdateDialog()}
               className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-warning px-2 py-1 text-2xs font-medium text-white transition-colors hover:bg-warning/90"
             >
               {t("settings.install_update")}

@@ -2,6 +2,7 @@
 
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
+import { openAppUpdateDialog } from "../app-update";
 import { NotificationList } from "./notification-list";
 
 export function NotificationsPage() {
@@ -17,7 +18,17 @@ export function NotificationsPage() {
         <h2 className="text-sm font-medium text-foreground">{t("notifications.title")}</h2>
       </header>
       <div className="flex-1 overflow-y-auto">
-        <NotificationList onItemClick={(item) => item.href && push(item.href)} />
+        <NotificationList
+          onItemClick={(item) => {
+            // The app-update row opens the in-app update dialog rather than
+            // navigating to the release page.
+            if (item.id === "system:app-update") {
+              openAppUpdateDialog();
+              return;
+            }
+            if (item.href) push(item.href);
+          }}
+        />
       </div>
     </div>
   );

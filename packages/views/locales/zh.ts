@@ -341,6 +341,10 @@ const zh = {
     update_installing: "正在安装更新…",
     update_restarting: "更新完成，正在重启…",
     update_install_failed: "更新失败：{{error}}",
+    update_release_notes: "更新内容",
+    update_later: "稍后",
+    update_close: "关闭",
+    update_retry: "重试",
   },
   workspace: {
     search_files: "搜索文件...",

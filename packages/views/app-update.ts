@@ -62,6 +62,54 @@ export function openExternalUrl(url: string): void {
 // 30-minute interval (≈48/day) is comfortably within budget.
 const CHECK_INTERVAL_MS = 30 * 60 * 1000;
 
+// ── Shared update dialog ──────────────────────────────────────────────────
+// A single dialog instance is mounted near the app root. Every entry point
+// (notification center, profile menu, sidebar, settings) opens it through
+// this store, so users never have to dig into Settings → About first.
+let dialogOpen = false;
+const dialogListeners = new Set<() => void>();
+
+function setDialogOpen(open: boolean): void {
+  if (dialogOpen === open) return;
+  dialogOpen = open;
+  dialogListeners.forEach((listener) => listener());
+}
+
+/**
+ * Open the shared update dialog. Pass `refresh: true` to force a fresh
+ * version check first (used by "Check for updates" affordances).
+ */
+export function openAppUpdateDialog(options?: { refresh?: boolean }): void {
+  setDialogOpen(true);
+  if (options?.refresh) {
+    const api = getDesktopAppApi();
+    if (api) void runCheck(api, true);
+  }
+}
+
+export function closeAppUpdateDialog(): void {
+  setDialogOpen(false);
+}
+
+/** Subscribe the mounted dialog to the shared open state. */
+export function useAppUpdateDialog(): {
+  open: boolean;
+  setOpen: (open: boolean) => void;
+} {
+  const [open, setOpen] = useState(dialogOpen);
+
+  useEffect(() => {
+    const sync = () => setOpen(dialogOpen);
+    dialogListeners.add(sync);
+    sync();
+    return () => {
+      dialogListeners.delete(sync);
+    };
+  }, []);
+
+  return { open, setOpen: setDialogOpen };
+}
+
 // ── Shared singleton store ─────────────────────────────────────────────────
 // Several components subscribe to update state (title bar, settings). A single
 // polling loop and a single in-flight request back this store so we never fire

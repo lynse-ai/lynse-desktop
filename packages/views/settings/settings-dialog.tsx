@@ -30,6 +30,7 @@ import {
   getDesktopAppApi,
   getAppInfoSync,
   openExternalUrl,
+  openAppUpdateDialog,
 } from "../app-update";
 import type { LocalHotwordPackage, LocalVoiceprint } from "../workspace/types";
 import { SttConfigSection } from "./stt-config-section";
@@ -68,7 +69,7 @@ export function SettingsDialog({
   const hasLocalTranscription = !!localTranscriptionApi;
   const appApi = getDesktopAppApi();
   const appInfo = getAppInfoSync();
-  const { update, checking, error: updateError, checkForUpdate, install, installState } = useAppUpdate();
+  const { update, checking, error: updateError, installState } = useAppUpdate();
   const installBusy =
     installState.phase === "downloading" ||
     installState.phase === "installing" ||
@@ -461,7 +462,7 @@ export function SettingsDialog({
                     size="sm"
                     variant="outline"
                     className="h-7 shrink-0 text-xs"
-                    onClick={checkForUpdate}
+                    onClick={() => openAppUpdateDialog({ refresh: true })}
                     disabled={checking}
                   >
                     {checking ? t("settings.checking_update") : t("settings.check_update")}
@@ -512,7 +513,7 @@ export function SettingsDialog({
                     ) : (
                       <>
                         <div className="mt-2 flex items-center gap-2.5">
-                          <Button size="sm" className="h-7 text-xs" onClick={install}>
+                          <Button size="sm" className="h-7 text-xs" onClick={() => openAppUpdateDialog()}>
                             <Download className="size-3.5" />
                             {t("settings.install_update")}
                           </Button>

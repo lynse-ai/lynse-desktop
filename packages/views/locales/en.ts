@@ -341,6 +341,10 @@ const en = {
     update_installing: "Installing update…",
     update_restarting: "Update installed — restarting…",
     update_install_failed: "Update failed: {{error}}",
+    update_release_notes: "What's new",
+    update_later: "Later",
+    update_close: "Close",
+    update_retry: "Retry",
   },
   workspace: {
     search_files: "Search files...",

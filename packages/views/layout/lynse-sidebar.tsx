@@ -7,7 +7,8 @@ import { useNavigation } from "../navigation";
 import { useUserCredits } from "./use-user-credits";
 import { useNotificationStore, selectUnreadCount } from "../notifications/use-notification-store";
 import { useChatStore, selectChatUnreadCount } from "../workspace/hooks/use-chat-store";
-import { openExternalUrl } from "../app-update";
+import { openExternalUrl, openAppUpdateDialog } from "../app-update";
+import { AppUpdateDialog } from "../app-update-dialog";
 import { featureFlags } from "../feature-flags";
 import { NotificationList } from "../notifications/notification-list";
 import { SettingsDialog } from "../settings/settings-dialog";
@@ -197,6 +198,13 @@ export function LynseSidebar() {
                   <div className="max-h-[60vh] overflow-y-auto">
                     <NotificationList
                       onItemClick={(n) => {
+                        // The app-update row opens the in-app update dialog
+                        // instead of bouncing the user to the release page.
+                        if (n.id === "system:app-update") {
+                          setNotifOpen(false);
+                          openAppUpdateDialog();
+                          return;
+                        }
                         // Chat notifications carry their conversation id —
                         // select it so the user lands in that conversation.
                         if (n.id.startsWith("chat:")) {
@@ -231,6 +239,7 @@ export function LynseSidebar() {
     </aside>
     <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
+    <AppUpdateDialog />
     </>
   );
 }

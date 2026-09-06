@@ -4,7 +4,7 @@ import { useState, type ReactElement } from "react";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
-import { useAppUpdate, getAppInfoSync } from "../app-update";
+import { useAppUpdate, getAppInfoSync, openAppUpdateDialog } from "../app-update";
 import { useUserCredits, useMembership } from "./use-user-credits";
 import { UserActivityHeatmap } from "./user-activity-heatmap";
 import {
@@ -29,6 +29,7 @@ import {
   UserCircle,
   Info,
   ArrowUp,
+  Download,
 } from "../icons";
 
 /* ── Map API memberLevel to localized plan name ────────────── */
@@ -78,7 +79,7 @@ export function UserProfileDropdown({
   const { data } = useUserCredits();
   const { data: membership } = useMembership();
   const { theme, setTheme } = useTheme();
-  const { update } = useAppUpdate();
+  const { update, checking } = useAppUpdate();
 
   const nickname = (data?.nickname as string) || "User";
   const plan = useLocalizedPlan(membership?.memberLevel || data?.benefitType);
@@ -250,10 +251,31 @@ export function UserProfileDropdown({
           </span>
         </DropdownMenuItem>
 
-        {/* ── Check for Updates ──────────────────────────
-            Deliberately not a menu row: the app auto-checks on startup and
-            surfaces updates in the notification center, and the settings
-            About tab keeps a manual button with the full update banner. */}
+        {/* ── Update ─────────────────────────────────────
+            Opens the update dialog directly — one click from here to a
+            confirmed install, no detour through Settings → About. */}
+        <DropdownMenuItem
+          onClick={() => openAppUpdateDialog({ refresh: true })}
+          disabled={checking}
+        >
+          {hasUpdate ? (
+            <ArrowUp className="size-4 text-success" strokeWidth={2.5} />
+          ) : (
+            <Download className="size-4 text-muted-foreground" strokeWidth={1.5} />
+          )}
+          <span>
+            {hasUpdate
+              ? t("settings.install_update")
+              : checking
+                ? t("layout.checking_update")
+                : t("layout.check_update")}
+          </span>
+          {hasUpdate && (
+            <span className="ml-auto text-2xs tabular-nums text-muted-foreground">
+              v{update?.latestVersion}
+            </span>
+          )}
+        </DropdownMenuItem>
 
         <DropdownMenuSeparator />
 

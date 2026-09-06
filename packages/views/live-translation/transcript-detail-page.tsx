@@ -434,7 +434,7 @@ const TranscriptFeed = memo(function TranscriptFeed({
             <p className="mt-1 max-w-sm text-xs">{t("transcript_detail.empty_hint")}</p>
           </div>
         ) : tab === "transcript" ? (
-          <div className="space-y-3">
+          <div className="pb-2">
             {segments.map((segment, index) => {
               // Only render the translation line when translation is actually
               // enabled. Segments may retain a stale `translatedText` from
@@ -446,40 +446,34 @@ const TranscriptFeed = memo(function TranscriptFeed({
                 segment.translatedText !== segment.recognizedText;
               // Label the speaker on the first utterance of each speaker run
               // instead of repeating it on every line.
-              const prevSpeaker = index > 0 ? segments[index - 1]?.speaker : undefined;
-              const showSpeaker = segment.speaker != null && segment.speaker !== prevSpeaker;
+              const prev = index > 0 ? segments[index - 1] : undefined;
+              const showSpeaker = segment.speaker != null && segment.speaker !== prev?.speaker;
               return (
-                <article
-                  key={segment.id}
-                  className="rounded-xl border border-border bg-card px-4 py-3 shadow-sm"
-                >
-                  <div className="mb-1.5 flex items-center gap-2 text-2xs text-muted-foreground">
-                    <span className="tabular-nums">{formatTime(segment.startMs)}</span>
+                <div key={segment.id} className="flex items-start gap-4 py-2">
+                  <span className="w-14 shrink-0 pt-0.5 font-mono text-2xs tabular-nums text-muted-foreground/60">
+                    {formatTime(segment.startMs)}
+                  </span>
+                  <div className="min-w-0 flex-1">
                     {showSpeaker && (
-                      <span className="rounded bg-primary/10 px-1.5 py-0.5 text-3xs font-medium text-primary">
+                      <div className="mb-0.5 text-2xs font-medium text-primary/80">
                         {t("live_translation.speaker")} {segment.speaker}
-                      </span>
+                      </div>
                     )}
-                    {!segment.isFinal && (
-                      <span className="animate-pulse">{t("transcript_detail.recognizing")}</span>
+                    {showSource && (
+                      <p className="text-sm leading-relaxed text-foreground">
+                        {segment.recognizedText}
+                        {!segment.isFinal && (
+                          <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse rounded-full bg-primary align-[-2px]" />
+                        )}
+                      </p>
                     )}
-                  </div>
-                  {showSource && (
-                    <p className="text-base font-medium leading-relaxed text-foreground">
-                      {segment.recognizedText}
-                    </p>
-                  )}
-                  {hasTranslation && (
-                    <div className="mt-1.5 border-l-2 border-border pl-2.5">
-                      <span className="mb-0.5 block text-3xs font-medium uppercase tracking-wide text-muted-foreground/70">
-                        {t("transcript_detail.translation")}
-                      </span>
-                      <p className="text-sm leading-relaxed text-muted-foreground">
+                    {hasTranslation && (
+                      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                         {segment.translatedText}
                       </p>
-                    </div>
-                  )}
-                </article>
+                    )}
+                  </div>
+                </div>
               );
             })}
           </div>

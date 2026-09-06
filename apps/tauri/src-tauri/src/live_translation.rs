@@ -17,7 +17,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::async_runtime::JoinHandle;
 use tauri::{
-    AppHandle, Emitter, LogicalPosition, Manager, State, WebviewUrl, WebviewWindowBuilder,
+    AppHandle, Emitter, LogicalPosition, Manager, State, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -2384,6 +2385,63 @@ const RECORDING_ISLAND_WIDTH: f64 = 340.0;
 const RECORDING_ISLAND_HEIGHT: f64 = 44.0;
 const RECORDING_ISLAND_EXPANDED_HEIGHT: f64 = 480.0;
 
+/// Generation token for the island grow/shrink animation. Each new
+/// `live_translation_expand_island` call bumps it, so a rapid re-toggle makes
+/// the in-flight animation thread bail on its next frame.
+static ISLAND_ANIMATION_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Quintic ease-out — the "scroll snaps down" curve: a fast departure that
+/// settles silky-smooth into place.
+fn ease_out_quint(t: f64) -> f64 {
+    1.0 - (1.0 - t).powi(5)
+}
+
+/// Symmetric ease for the collapse, so the drawer folds back up gently.
+fn ease_in_out_cubic(t: f64) -> f64 {
+    if t < 0.5 {
+        4.0 * t * t * t
+    } else {
+        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+    }
+}
+
+/// Steps the island window height towards `target_height` with an eased curve,
+/// re-anchored to wherever the window currently is each frame. The webview
+/// reflows live under the native vibrancy, so the frosted surface and the
+/// transcript drawer unroll downward together.
+fn animate_island_height(
+    window: WebviewWindow,
+    target_height: f64,
+    expand: bool,
+    generation: u64,
+) {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let Ok(size) = window.inner_size() else {
+        return;
+    };
+    let from_height = size.height as f64 / scale;
+    if (target_height - from_height).abs() < 0.5 {
+        return;
+    }
+    let width = size.width as f64 / scale;
+    let duration_ms = if expand { 360.0 } else { 280.0 };
+    let start = Instant::now();
+    loop {
+        let linear = start.elapsed().as_secs_f64() * 1000.0 / duration_ms;
+        let eased = if expand {
+            ease_out_quint(linear.min(1.0))
+        } else {
+            ease_in_out_cubic(linear.min(1.0))
+        };
+        let height = from_height + (target_height - from_height) * eased;
+        let _ = window.set_size(tauri::LogicalSize::new(width, height));
+        if linear >= 1.0 || ISLAND_ANIMATION_GENERATION.load(Ordering::Relaxed) != generation {
+            return;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// Positions the island pill directly below the menu-bar tray icon (top-right
 /// of the screen) so it reads as a companion of the status item. Falls back
 /// to top-centre when the tray rect is unavailable.
@@ -2480,19 +2538,23 @@ pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
 
 /// Grows or shrinks the recording-island window between the compact pill and
 /// the expanded live-transcript drawer. The window is top-anchored under the
-/// tray icon, so expanding always unfolds downward, dynamic-island style.
+/// tray icon, so expanding always unfolds downward, dynamic-island style. The
+/// height change is eased over ~1/3 of a second (see `animate_island_height`)
+/// instead of snapping, so the drawer reads as a scroll unrolling.
 #[tauri::command]
 pub fn live_translation_expand_island(app: AppHandle, expand: bool) -> CommandResult<()> {
-    let height = if expand {
+    let Some(window) = app.get_webview_window("recording-island") else {
+        return Ok(());
+    };
+    let generation = ISLAND_ANIMATION_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    let target_height = if expand {
         RECORDING_ISLAND_EXPANDED_HEIGHT
     } else {
         RECORDING_ISLAND_HEIGHT
     };
-    if let Some(window) = app.get_webview_window("recording-island") {
-        window
-            .set_size(tauri::LogicalSize::new(RECORDING_ISLAND_WIDTH, height))
-            .map_err(|error| error.to_string())?;
-    }
+    // The animation runs off the command thread and returns immediately, so
+    // the frontend can mount the drawer while the window is still unrolling.
+    thread::spawn(move || animate_island_height(window, target_height, expand, generation));
     Ok(())
 }
 

@@ -12,6 +12,14 @@ interface IslandTranscriptDrawerProps {
   closing?: boolean;
 }
 
+function formatTime(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1_000));
+  const hours = Math.floor(seconds / 3_600);
+  const minutes = Math.floor((seconds % 3_600) / 60);
+  const rest = seconds % 60;
+  return [hours, minutes, rest].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
 /**
  * Live-transcript drawer inside the recording island.
  *
@@ -95,36 +103,48 @@ export function IslandTranscriptDrawer({ closing }: IslandTranscriptDrawerProps)
             </p>
           </div>
         ) : (
-          <div className="space-y-2.5">
-            {segments.map((segment) => {
+          <div className="space-y-2">
+            {segments.map((segment, index) => {
               const showTranslation =
                 translationOn &&
                 segment.translatedText &&
                 segment.translatedText !== segment.recognizedText;
+              // New speaker (or a new mic/system source) opens a new
+              // utterance; continuation lines stay bare for a clean read.
+              const prev = index > 0 ? segments[index - 1] : undefined;
               const speakerLabel =
                 segment.speaker != null
                   ? `${t("live_translation.speaker")} ${segment.speaker}`
                   : segment.source === "mic"
                     ? t("live_translation.me")
                     : t("live_translation.remote");
+              const newUtterance =
+                segment.speaker != null
+                  ? segment.speaker !== prev?.speaker
+                  : segment.source !== prev?.source;
               return (
-                <div key={segment.id} className="text-[13px] leading-relaxed">
-                  <div className="mb-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground/70">
-                    <span>{speakerLabel}</span>
-                    {!segment.isFinal && (
-                      <span className="animate-pulse">
-                        {t("live_translation.recognizing")}
-                      </span>
+                <div key={segment.id} className="flex items-start gap-2 text-[13px] leading-relaxed">
+                  <span className="w-10 shrink-0 pt-0.5 text-right font-mono text-[10px] tabular-nums text-muted-foreground/50">
+                    {formatTime(segment.startMs).slice(3)}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    {newUtterance && (
+                      <div className="mb-0.5 text-[10px] font-medium text-primary/80">
+                        {speakerLabel}
+                      </div>
+                    )}
+                    <p className={cn(!segment.isFinal && "text-foreground/70")}>
+                      {segment.recognizedText || segment.translatedText}
+                      {!segment.isFinal && (
+                        <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse rounded-full bg-primary align-[-1px]" />
+                      )}
+                    </p>
+                    {showTranslation && (
+                      <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                        {segment.translatedText}
+                      </p>
                     )}
                   </div>
-                  <p className={cn(!segment.isFinal && "text-foreground/70")}>
-                    {segment.recognizedText || segment.translatedText}
-                  </p>
-                  {showTranslation && (
-                    <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                      {segment.translatedText}
-                    </p>
-                  )}
                 </div>
               );
             })}

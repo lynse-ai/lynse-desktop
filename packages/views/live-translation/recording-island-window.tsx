@@ -9,8 +9,9 @@ import { RESOURCES } from "../locales";
 import { useLiveTranslation } from "./use-live-translation";
 import type { LiveConnectionDescriptor } from "./types";
 
-/** How long the drawer's collapse animation runs before the window shrinks. */
-const DRAWER_CLOSE_ANIMATION_MS = 160;
+/** How long the drawer's collapse animation runs before the window shrinks.
+    Matches `animate-island-drawer-out` in globals.css. */
+const DRAWER_CLOSE_ANIMATION_MS = 150;
 
 /**
  * Recording-island mini window — the collapsed form of the recording page.

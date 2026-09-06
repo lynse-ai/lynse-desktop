@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
   Select,
@@ -23,6 +23,7 @@ import { cn } from "@lynse/ui/lib/utils";
 import { useRecordingSession } from "./use-recording-session";
 import { useRecordingCloudSync } from "./use-recording-cloud-sync";
 import { RecordingWaveform } from "./recording-waveform";
+import { SmoothTimer } from "./smooth-timer";
 import { RecordingDock } from "./recording-dock";
 import { RecordingCompleteDialog } from "./recording-complete-dialog";
 import { getDesktopLiveTranslationApi } from "./desktop-api";
@@ -107,10 +108,16 @@ export function TranscriptDetailPage() {
     return frozenSegments.length ? frozenSegments : session.segments;
   }, [liveTranscribe, frozenSegments, session.segments]);
 
-  function handleToggleLive() {
-    if (liveTranscribe) setFrozenSegments(session.segments);
+  // Stable (reads through refs) so the memoized transcript feed does not
+  // re-render on the 5 Hz level/elapsed updates from the capture sidecar.
+  const liveTranscribeRef = useRef(liveTranscribe);
+  liveTranscribeRef.current = liveTranscribe;
+  const segmentsRef = useRef(session.segments);
+  segmentsRef.current = session.segments;
+  const handleToggleLive = useCallback(() => {
+    if (liveTranscribeRef.current) setFrozenSegments(segmentsRef.current);
     setLiveTranscribe((v) => !v);
-  }
+  }, []);
 
   // The whole page shows the transcript only while a text stream is active;
   // otherwise it shows just the recording activity (timer + animation).
@@ -357,7 +364,11 @@ export function TranscriptDetailPage() {
 }
 
 // Full-page live transcript. Auto-scrolls to the newest line as segments arrive.
-function TranscriptFeed({
+//
+// Memoized: the recording session pushes a level/elapsed update five times a
+// second, and re-reconciling a long transcript that often is pure waste — the
+// feed only changes when the segments (or a view toggle) actually change.
+const TranscriptFeed = memo(function TranscriptFeed({
   segments,
   showSource,
   liveTranscribe,
@@ -489,7 +500,7 @@ function TranscriptFeed({
       </div>
     </div>
   );
-}
+});
 
 // Recording-only stage, styled after the Voice-Memos / Huawei recorder UI:
 // a time ruler over a full-width waveform band with a red centre playhead,
@@ -546,9 +557,12 @@ function RecordingStage({
 
       {/* Large centisecond timer + status */}
       <div className="mt-6 shrink-0 text-center">
-        <div className="text-6xl font-medium tracking-tight tabular-nums text-foreground">
-          {formatTimerCentis(elapsedMs)}
-        </div>
+        <SmoothTimer
+          elapsedMs={elapsedMs}
+          running={recording && !paused}
+          format={formatTimerCentis}
+          className="block text-6xl font-medium tracking-tight tabular-nums text-foreground"
+        />
         <div className="mt-1.5 flex items-center justify-center gap-2 text-sm text-muted-foreground">
           <span
             className={cn(

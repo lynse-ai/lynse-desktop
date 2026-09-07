@@ -1030,7 +1030,7 @@ fn download_runtime(app: &AppHandle, provider: &str, model_id: &str, version: &s
     // download path exercisable during development.
     let expected_sha = expected_runtime_sha();
     if expected_sha.is_none() {
-        eprintln!("[warn] 离线转写组件未做 SHA-256 校验（本地开发构建），仅用于本地测试，请勿分发。");
+        log::warn!("离线转写组件未做 SHA-256 校验（本地开发构建），仅用于本地测试，请勿分发。");
     }
 
     let archive = runtime_archive_name();
@@ -1518,37 +1518,83 @@ fn todo_save(app: AppHandle, todo: Value) -> CommandResult<Value> { save_todo(&a
 #[tauri::command]
 fn todo_delete(app: AppHandle, id: String) -> CommandResult<()> { remove_store_value(&app, "local-todos", &id) }
 
-/// Persist an inspiration. Freshly captured attachments arrive as
-/// `pendingAudioPath` / `pendingImages` pointing at staging (or picked) files;
-/// they are adopted into the inspiration's durable directory
-/// (`inspirations/<uuid>/`) before the record is stored, so saved memos never
-/// reference temp locations.
-fn save_inspiration(app: &AppHandle, mut inspiration: Value) -> CommandResult<Value> {
-    let object = inspiration.as_object_mut().ok_or("Inspiration must be an object")?;
+/// Persist an inspiration (create or edit).
+///
+/// Create: fresh attachments arrive as `pendingAudioPath` / `pendingImages`
+/// pointing at staging (or picked) files; they are adopted into the
+/// inspiration's durable directory (`inspirations/<uuid>/`) before the record
+/// is stored.
+///
+/// Edit (`id` already exists): the renderer sends its full intent — `text`,
+/// `tags`, `images` (the keep-list of existing files) and `pendingImages` —
+/// and every field it does NOT send (createdAt, audio, transcript…) is merged
+/// from the stored record. Image files dropped from the keep-list are deleted
+/// from disk; `audio.wav` is never touched here.
+fn save_inspiration(app: &AppHandle, inspiration: Value) -> CommandResult<Value> {
+    let object = inspiration.as_object().ok_or("Inspiration must be an object")?;
     let text = object.get("text").and_then(Value::as_str).map(str::trim).unwrap_or_default();
-    let has_audio = object.get("audio").and_then(Value::as_object).is_some();
     let pending_path = object.get("pendingAudioPath").and_then(Value::as_str).map(str::to_owned).filter(|value| !value.is_empty());
     let pending_images = object.get("pendingImages").and_then(Value::as_array).cloned().unwrap_or_default();
-    if text.is_empty() && !has_audio && pending_path.is_none() && pending_images.is_empty() {
+    // An explicit `images` array expresses the keep-list for edits; an absent
+    // field means "not an image edit", so nothing on disk is touched.
+    let images_field_present = object.get("images").map(Value::is_array).unwrap_or(false);
+    let keep_images: Vec<String> = if images_field_present {
+        object.get("images").and_then(Value::as_array).map(|images| {
+            images.iter().filter_map(|image| image.get("file").and_then(Value::as_str).map(str::to_owned)).collect()
+        }).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    let requested_id = object.get("id").and_then(Value::as_str).map(str::trim).unwrap_or_default().to_owned();
+    let existing = if requested_id.is_empty() {
+        None
+    } else {
+        get_store_value(app, "local-inspirations", &requested_id)?
+    };
+    let has_attachments = pending_path.is_some() || !pending_images.is_empty() || !keep_images.is_empty();
+    if text.is_empty() && !has_attachments && existing.is_none() {
         return Err("Inspiration text, image or audio is required".to_owned());
     }
-    if object.get("id").and_then(Value::as_str).map(str::trim).unwrap_or_default().is_empty() {
-        object.insert("id".to_owned(), json!(format!("inspiration:{}", Uuid::new_v4())));
-    }
-    let id = object.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let id = if requested_id.is_empty() {
+        format!("inspiration:{}", Uuid::new_v4())
+    } else {
+        requested_id
+    };
     let uuid = id.strip_prefix("inspiration:").unwrap_or(&id).to_owned();
     let timestamp = now();
-    object.entry("createdAt".to_owned()).or_insert_with(|| json!(timestamp));
-    object.insert("updatedAt".to_owned(), json!(timestamp));
-    object.entry("tags".to_owned()).or_insert_with(|| json!([]));
+
+    // Merge onto the stored record for edits so unsent fields survive.
+    let mut record = match existing {
+        Some(mut existing) => {
+            let merged = existing.as_object_mut().ok_or("Stored record must be an object")?;
+            merged.insert("text".to_owned(), json!(text));
+            merged.insert("updatedAt".to_owned(), json!(timestamp));
+            if let Some(tags) = object.get("tags") {
+                merged.insert("tags".to_owned(), tags.clone());
+            }
+            existing
+        }
+        None => json!({
+            "id": id,
+            "text": text,
+            "tags": object.get("tags").cloned().unwrap_or_else(|| json!([])),
+            "createdAt": timestamp,
+            "updatedAt": timestamp,
+            "transcriptStatus": "none",
+        }),
+    };
+    let record_object = record.as_object_mut().ok_or("Record must be an object")?;
 
     if pending_path.is_some() || !pending_images.is_empty() {
         fs::create_dir_all(app_data_dir(app)?.join("inspirations").join(&uuid))
             .map_err(|error| error.to_string())?;
     }
 
+    // AUDIO: adopt a freshly captured memo (creation flow only — edits keep
+    // the existing WAV untouched).
     if let Some(pending) = pending_path {
-        if !has_audio {
+        if record_object.get("audio").and_then(Value::as_object).is_none() {
             let directory = app_data_dir(app)?.join("inspirations").join(&uuid);
             let destination = directory.join("audio.wav");
             if !destination.exists() {
@@ -1566,18 +1612,28 @@ fn save_inspiration(app: &AppHandle, mut inspiration: Value) -> CommandResult<Va
                 }
             }
             let duration = object.get("pendingAudioDurationMs").and_then(Value::as_i64).unwrap_or(0);
-            object.insert("audio".to_owned(), json!({ "file": "audio.wav", "durationMs": duration }));
-            if object.get("transcriptStatus").and_then(Value::as_str).is_none() {
-                object.insert("transcriptStatus".to_owned(), json!("none"));
-            }
+            record_object.insert("audio".to_owned(), json!({ "file": "audio.wav", "durationMs": duration }));
         }
     }
 
-    if !pending_images.is_empty() && object.get("images").and_then(Value::as_array).map_or(true, |images| images.is_empty()) {
-        let staging_root = app_data_dir(app)?.join("inspirations").join("staging");
+    // IMAGES: final list = keep-list + newly adopted staged/picked files,
+    // then prune files that fell out of the keep-list.
+    if images_field_present || !pending_images.is_empty() {
         let directory = app_data_dir(app)?.join("inspirations").join(&uuid);
-        let mut images = Vec::new();
-        for (index, image) in pending_images.iter().enumerate() {
+        if !pending_images.is_empty() {
+            fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+        }
+        let previous_images = record_object.get("images").and_then(Value::as_array).cloned().unwrap_or_default();
+        let mut final_images: Vec<Value> = Vec::new();
+        for file in &keep_images {
+            // Carry over the stored metadata (width/height) of kept images.
+            let previous = previous_images.iter().find(|image| {
+                image.get("file").and_then(Value::as_str) == Some(file.as_str())
+            });
+            final_images.push(previous.cloned().unwrap_or_else(|| json!({ "file": file })));
+        }
+        let staging_root = app_data_dir(app)?.join("inspirations").join("staging");
+        for image in &pending_images {
             let Some(source) = image.get("sourcePath").and_then(Value::as_str).filter(|value| !value.is_empty()) else {
                 continue;
             };
@@ -1588,7 +1644,7 @@ fn save_inspiration(app: &AppHandle, mut inspiration: Value) -> CommandResult<Va
                 .map(str::to_ascii_lowercase)
                 .filter(|value| is_safe_asset_file_name(value))
                 .unwrap_or_else(|| "img".to_owned());
-            let file_name = format!("img-{}.{}", index + 1, extension);
+            let file_name = format!("img-{}.{}", final_images.len() + 1, extension);
             let destination = directory.join(&file_name);
             if !destination.exists() {
                 // Staged pastes are ours to move; picked files stay put.
@@ -1605,14 +1661,25 @@ fn save_inspiration(app: &AppHandle, mut inspiration: Value) -> CommandResult<Va
                     entry.insert(key.to_owned(), json!(value));
                 }
             }
-            images.push(Value::Object(entry));
+            final_images.push(Value::Object(entry));
         }
-        object.insert("images".to_owned(), json!(images));
+        // Prune unreferenced image files (removed during an edit).
+        if images_field_present {
+            if let Ok(entries) = fs::read_dir(&directory) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    let referenced = final_images.iter().any(|image| {
+                        image.get("file").and_then(Value::as_str) == Some(name.as_str())
+                    });
+                    if name.starts_with("img-") && !referenced {
+                        let _ = fs::remove_file(entry.path());
+                    }
+                }
+            }
+        }
+        record_object.insert("images".to_owned(), json!(final_images));
     }
-    object.remove("pendingImages");
-    object.remove("pendingAudioPath");
-    object.remove("pendingAudioDurationMs");
-    save_store_value(app, "local-inspirations", inspiration)
+    save_store_value(app, "local-inspirations", record)
 }
 
 /// Transcribe an inspiration memo with the current default STT routing. Unlike
@@ -2322,11 +2389,11 @@ fn dev_secret_import_from_keychain(app: &AppHandle) {
                 Ok(raw) => {
                     map.insert(SECRET_VAULT_ACCOUNT.to_owned(), raw);
                 }
-                Err(error) => eprintln!("[secrets] could not serialize imported vault: {error}"),
+                Err(error) => log::error!("[secrets] could not serialize imported vault: {error}"),
             }
         }
         if let Err(error) = dev_secret_write_map(app, &map) {
-            eprintln!("[secrets] dev store import failed: {error}");
+            log::error!("[secrets] dev store import failed: {error}");
         }
     });
 }
@@ -2527,6 +2594,18 @@ fn get_app_info(app: AppHandle) -> Value {
     json!({ "version": version, "platform": platform })
 }
 
+/// Reveal the app log folder in the system file manager so users can attach
+/// logs to a bug report ("Settings → About → View logs").
+#[tauri::command]
+fn open_logs_folder(app: AppHandle) -> Result<(), String> {
+    let dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|error| format!("resolve log dir: {error}"))?;
+    fs::create_dir_all(&dir).map_err(|error| format!("create log dir: {error}"))?;
+    tauri_plugin_opener::reveal_item_in_dir(&dir).map_err(|error| error.to_string())
+}
+
 const TRAY_ELAPSED_ID: &str = "tray_elapsed";
 const TRAY_START_ID: &str = "start_live_recording";
 const TRAY_PAUSE_ID: &str = "pause_live_recording";
@@ -2629,7 +2708,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     // Use the app's own icon: a bare mic glyph in the menu bar is ambiguous
     // (reads as a recording indicator / unrelated app).
     let Some(icon) = app.default_window_icon().cloned() else {
-        eprintln!("No default window icon available for the tray");
+        log::warn!("No default window icon available for the tray");
         return Ok(());
     };
 
@@ -2648,17 +2727,17 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 // webview layer, and the agent exists no matter which page is
                 // open or whether the window is hidden.
                 if let Err(error) = app.emit("live-translation-tray-action", "start") {
-                    eprintln!("Failed to request live recording start: {error}");
+                    log::error!("Failed to request live recording start: {error}");
                 }
             }
             "pause_live_recording" => {
                 if let Err(error) = app.emit("live-translation-tray-action", "pause") {
-                    eprintln!("Failed to request live recording pause: {error}");
+                    log::error!("Failed to request live recording pause: {error}");
                 }
             }
             "stop_live_recording" => {
                 if let Err(error) = app.emit("live-translation-tray-action", "stop") {
-                    eprintln!("Failed to request live recording stop: {error}");
+                    log::error!("Failed to request live recording stop: {error}");
                 }
             }
             "show_main" => {
@@ -2672,7 +2751,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 if let Err(error) =
                     live_translation::live_translation_show_subtitles(app.clone(), !visible)
                 {
-                    eprintln!("Failed to toggle live subtitles: {error}");
+                    log::error!("Failed to toggle live subtitles: {error}");
                 }
             }
             "quit" => {
@@ -2686,7 +2765,45 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn run() {
+    // Persist panics to the log file: the default hook only writes to stderr,
+    // which is invisible for packaged (non-terminal) launches.
+    std::panic::set_hook(Box::new(|info| {
+        let location = info
+            .location()
+            .map(|location| {
+                format!("{}:{}:{}", location.file(), location.line(), location.column())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        let payload = info.payload();
+        let message = if let Some(text) = payload.downcast_ref::<&str>() {
+            (*text).to_string()
+        } else if let Some(text) = payload.downcast_ref::<String>() {
+            text.clone()
+        } else {
+            "non-string panic payload".to_string()
+        };
+        log::error!("panic at {location}: {message}");
+    }));
+
     tauri::Builder::default()
+        .plugin(
+            // Register first so logs emitted during later plugin/setup
+            // initialization are captured too. File logs live in the OS log
+            // dir (~/Library/Logs/<bundle-id> on macOS); rotated archives are
+            // kept so a crash history survives post-mortem diagnosis.
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
+                .max_file_size(2 * 1024 * 1024)
+                .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("lynse".into()),
+                    }),
+                ])
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
@@ -2701,7 +2818,7 @@ pub fn run() {
         .setup(|app| {
             app.manage(recording_card::RecordingCardManager::new(app.handle().clone()));
             if let Err(error) = migrate_electron_data(&app.handle()) {
-                eprintln!("Failed to migrate Electron local data: {error}");
+                log::error!("Failed to migrate Electron local data: {error}");
             }
             // Inspiration staging only holds in-flight paste/pick previews;
             // anything left over belongs to a crashed session.
@@ -2712,15 +2829,15 @@ pub fn run() {
                 }
             }
             if let Err(error) = fail_interrupted_records(&app.handle()) {
-                eprintln!("Failed to recover interrupted local transcriptions: {error}");
+                log::error!("Failed to recover interrupted local transcriptions: {error}");
             }
             if let Err(error) = setup_tray(&app.handle()) {
-                eprintln!("Failed to setup system tray: {error}");
+                log::error!("Failed to setup system tray: {error}");
             }
             recording_card::spawn_reconnect_watcher(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(error) = window_effects::apply_window_effects(&window) {
-                    eprintln!("Failed to apply native window effects: {error}");
+                    log::error!("Failed to apply native window effects: {error}");
                 }
             }
             Ok(())
@@ -2767,6 +2884,7 @@ pub fn run() {
             webdav::webdav_test_connection, webdav::webdav_sync_now, webdav::webdav_put_notes,
             secure_set_secret, secure_get_secret, secure_delete_secret,
             get_app_info,
+            open_logs_folder,
             live_translation::live_translation_permissions,
             live_translation::live_translation_request_permission,
             live_translation::live_translation_state,

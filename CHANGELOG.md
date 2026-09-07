@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.33 (2026-09-07)
+
+### New Features
+
+- Inspiration (灵感速记): saved cards are no longer read-only thumbnails — clicking one opens a detail sheet with the full text, tags, voice memo and every attachment, and from there you can **edit** the note: a Markdown editor for the text, tag chips, and a keep-list of images where you can delete existing ones (removed files are pruned from disk) or add new ones. **Delete** is available from the same sheet.
+- Inspiration images open in a lightbox: click an image on a card and it opens full-screen with left/right paging (← / →) and Esc to close, instead of the click falling through to navigating into the note.
+- Settings → About gained **Report an issue** and **View logs**. "Report an issue" opens GitHub with a pre-filled, structured bug report carrying the app version, platform, user agent and timestamp (the issue form itself moved from free-form Markdown to a required-field YAML template), so reports arrive reproducible; "View logs" reveals the log folder in Finder/Explorer for attaching evidence.
+
+### Changed
+
+- Diagnostics now land in one persistent file. Everything written to `console.error` / `console.warn`, plus uncaught exceptions and unhandled promise rejections in the webview — including third-party library noise — is forwarded through `tauri-plugin-log` into the same file the Rust side writes, so a bug report only ever needs one folder. The bridge swallows its own failures instead of rethrowing them, so logging can never turn into an unhandled-rejection feedback loop.
+- Rust panics are persisted too: the previous default hook wrote only to stderr, which is invisible for a packaged app launched from Finder. Log rotation keeps archived files so crash history survives post-mortem.
+- The inspiration page is split into focused modules (card list, detail/edit sheet, lightbox, voice player, date formatting) instead of one large file.
+
 ## 0.1.32 (2026-09-06)
 
 ### New Features

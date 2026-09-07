@@ -32,6 +32,7 @@ import {
   openExternalUrl,
   openAppUpdateDialog,
 } from "../app-update";
+import { openLogsFolder, reportIssue } from "../diagnostics";
 import type { LocalHotwordPackage, LocalVoiceprint } from "../workspace/types";
 import { SttConfigSection } from "./stt-config-section";
 import { LiveTranslationConfigCard } from "./live-translation-config-card";
@@ -474,6 +475,18 @@ export function SettingsDialog({
                     disabled={checking}
                   >
                     {checking ? t("settings.checking_update") : t("settings.check_update")}
+                  </Button>
+                </div>
+
+                <p className="text-2xs leading-relaxed text-muted-foreground">
+                  {t("settings.report_issue_hint")}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" className="h-7 text-xs" onClick={reportIssue}>
+                    {t("settings.report_issue")}
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={openLogsFolder}>
+                    {t("settings.open_logs_folder")}
                   </Button>
                 </div>
 

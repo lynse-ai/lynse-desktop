@@ -236,7 +236,7 @@ unsafe fn install_macos_material(
     match apply_vibrancy(window, material, state, radius) {
         Ok(()) => WindowEffects::Vibrancy,
         Err(error) => {
-            eprintln!("Window vibrancy unavailable: {error}");
+            log::warn!("Window vibrancy unavailable: {error}");
             WindowEffects::None
         }
     }

@@ -69,6 +69,11 @@ export type InspirationSaveInput = {
   /** Absolute path of a just-captured WAV to adopt into durable storage. */
   pendingAudioPath?: string;
   pendingAudioDurationMs?: number;
+  /**
+   * Keep-list of already-saved images for edits (files stay on disk); files
+   * missing from this list are deleted. Omit on creation.
+   */
+  images?: Array<{ file: string }>;
   /** Staged image attachments to adopt into durable storage. */
   pendingImages?: Array<{ sourcePath: string; width?: number; height?: number }>;
 };

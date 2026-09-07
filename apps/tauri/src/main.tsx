@@ -2,6 +2,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./globals.css";
 import { installTauriBridge } from "./tauri-bridge";
+import { installLogger } from "./logger";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -15,6 +16,11 @@ async function bootstrap() {
   if (windowKind === "recording-island") {
     document.documentElement.classList.add("recording-island-window");
   }
+
+  // Frontend failures (uncaught errors, rejections, console.error/warn) flow
+  // into the same log file the Rust side writes, so a bug report only ever
+  // needs one folder. Install before the bridge so bridge failures log too.
+  installLogger(windowKind ?? "main");
 
   await installTauriBridge();
   syncWindowEffects();

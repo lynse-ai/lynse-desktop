@@ -290,7 +290,7 @@ fn platform_start(app: &AppHandle) -> CommandResult<Value> {
 
     thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            eprintln!("audio-capture: {line}");
+            log::debug!("audio-capture: {line}");
         }
     });
 
@@ -407,7 +407,7 @@ fn platform_start(app: &AppHandle) -> CommandResult<Value> {
                 move |data: &[$sample_type], _| {
                     memo_feed_samples(data, channels, in_rate, &samples, &live_level, &sample_count);
                 },
-                move |error| eprintln!("inspiration voice stream error: {error}"),
+                move |error| log::error!("inspiration voice stream error: {error}"),
                 None,
             )
         }};

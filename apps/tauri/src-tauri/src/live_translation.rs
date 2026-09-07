@@ -844,7 +844,7 @@ fn spawn_stderr_reader(app: AppHandle, stderr: impl Read + Send + 'static) {
             if let Some(message) = line.strip_prefix("lynse-error: ") {
                 emit_error(&app, None, message);
             } else {
-                eprintln!("audio-capture: {line}");
+                log::debug!("audio-capture: {line}");
             }
         }
     });
@@ -1232,7 +1232,7 @@ async fn websocket_loop(
                                             ),
                                         },
                                         Err(error) => {
-                                            eprintln!("volc-ast: 无法解析响应帧：{error}");
+                                            log::warn!("volc-ast: 无法解析响应帧：{error}");
                                         }
                                     }
                                 }
@@ -2537,7 +2537,7 @@ pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
     let window = match builder.build() {
         Ok(window) => window,
         Err(error) => {
-            eprintln!("Failed to create recording island window: {error}");
+            log::error!("Failed to create recording island window: {error}");
             return;
         }
     };
@@ -2546,7 +2546,7 @@ pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
     if let Err(error) =
         crate::window_effects::apply_island_effects(&window, RECORDING_ISLAND_HEIGHT / 2.0)
     {
-        eprintln!("Failed to apply recording island effects: {error}");
+        log::error!("Failed to apply recording island effects: {error}");
     }
     position_recording_island(app, &window);
 }

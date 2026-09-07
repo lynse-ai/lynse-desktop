@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "motion/react";
 import { cn } from "@lynse/ui/lib/utils";
@@ -13,16 +13,18 @@ import {
   Lightbulb,
   List,
   Loader2,
-  Pause,
-  Play,
   Plus,
   RefreshCw,
   Trash2,
 } from "../icons";
 import { getDesktopInspirationApi } from "./desktop-api";
 import { useInspirationCaptureStore } from "./capture-store";
+import { useInspirationDetailStore } from "./detail-store";
 import { collectTags, splitByHashtags } from "./tags";
-import { formatVoiceDuration } from "./use-inspiration-voice";
+import { dayGroupLabel, formatCardDateTime } from "./format";
+import { InspirationAudioPlayer } from "./audio-player";
+import { InspirationLightbox, type LightboxSlide } from "./lightbox";
+import { InspirationDetailDialog } from "./detail-dialog";
 import type { InspirationImage, InspirationRecord } from "./types";
 
 const VIEW_STORAGE_KEY = "lynse_inspiration_view_v1";
@@ -31,40 +33,6 @@ type FeedView = "masonry" | "list";
 function readStoredView(): FeedView {
   if (typeof window === "undefined") return "masonry";
   return window.localStorage.getItem(VIEW_STORAGE_KEY) === "list" ? "list" : "masonry";
-}
-
-function formatCardDateTime(iso: string, language: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  const sameYear = date.getFullYear() === new Date().getFullYear();
-  return new Intl.DateTimeFormat(language, {
-    ...(sameYear ? {} : { year: "numeric" }),
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
-function dayKey(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
-}
-
-function dayGroupLabel(iso: string, language: string, t: (key: string) => string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  const key = dayKey(iso);
-  const now = new Date();
-  if (key === dayKey(now.toISOString())) return t("inspiration.group_today");
-  if (key === dayKey(new Date(now.getTime() - 86_400_000).toISOString())) return t("inspiration.group_yesterday");
-  const sameYear = date.getFullYear() === now.getFullYear();
-  return new Intl.DateTimeFormat(language, {
-    ...(sameYear ? {} : { year: "numeric" }),
-    month: "long",
-    day: "numeric",
-  }).format(date);
 }
 
 /** Number of masonry columns for the current viewport width. */
@@ -79,78 +47,58 @@ function useColumnCount(): number {
   return columns;
 }
 
+function imageKey(recordId: string, file: string): string {
+  return `${recordId}/${file}`;
+}
+
 /** One saved image served through `local-media://`, with skeleton while loading. */
 function RecordImage({
   record,
   image,
   className,
+  onResolved,
+  onClick,
+  title,
 }: {
   record: InspirationRecord;
   image: InspirationImage;
   className?: string;
+  onResolved?: (key: string, url: string) => void;
+  /** When set the image becomes a click target (lightbox), stopping card nav. */
+  onClick?: () => void;
+  title?: string;
 }) {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     void getDesktopInspirationApi()?.getImageUrl(record.id, image.file).then((next) => {
-      if (!cancelled) setUrl(next);
+      if (!cancelled && next) {
+        setUrl(next);
+        onResolved?.(imageKey(record.id, image.file), next);
+      }
     });
     return () => {
       cancelled = true;
     };
-  }, [record.id, image.file]);
+  }, [image.file, onResolved, record.id]);
+
   if (!url) return <div className={cn("animate-pulse bg-muted", className)} />;
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        title={title}
+        onClick={(event) => {
+          event.stopPropagation();
+          onClick();
+        }}
+        className={cn("block cursor-zoom-in", className)}
+      >
+        <img src={url} alt="" loading="lazy" className={cn("size-full", className?.includes("object-cover") ? "object-cover" : "object-contain")} />
+      </button>
+    );
+  }
   return <img src={url} alt="" loading="lazy" className={className} />;
-}
-
-/** Play/pause button for a memo's WAV served through `local-media://`. */
-function InspirationAudioPlayer({ record }: { record: InspirationRecord }) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [playing, setPlaying] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void getDesktopInspirationApi()?.getAudioUrl(record.id).then((next) => {
-      if (!cancelled) setUrl(next);
-    });
-    return () => {
-      cancelled = true;
-      audioRef.current?.pause();
-      audioRef.current = null;
-    };
-  }, [record.id]);
-
-  const toggle = () => {
-    if (!url) return;
-    if (!audioRef.current) {
-      audioRef.current = new Audio(url);
-      audioRef.current.onended = () => setPlaying(false);
-    }
-    if (playing) {
-      audioRef.current.pause();
-      setPlaying(false);
-    } else {
-      audioRef.current
-        .play()
-        .then(() => setPlaying(true))
-        .catch(() => setPlaying(false));
-    }
-  };
-
-  return (
-    <button
-      type="button"
-      onClick={toggle}
-      className="flex items-center gap-1.5 self-start rounded-full bg-muted/70 px-2.5 py-1 text-3xs text-muted-foreground transition-colors hover:bg-muted"
-      title={record.audio ? formatVoiceDuration(record.audio.durationMs) : undefined}
-    >
-      {playing ? <Pause className="size-3" /> : <Play className="size-3" />}
-      <span className="tabular-nums">
-        {record.audio ? formatVoiceDuration(record.audio.durationMs) : "--:--"}
-      </span>
-    </button>
-  );
 }
 
 /** Transcript block with its pending / failed / unavailable states. */
@@ -229,22 +177,33 @@ function HighlightedText({ text, className }: { text: string; className?: string
 }
 
 /** Xiaohongshu-style waterfall card: cover image, clamped text, meta row. */
-function MasonryCard({ record, dateTime }: { record: InspirationRecord; dateTime: string }) {
-  const { t } = useTranslation();
+function MasonryCard({ record, dateTime, cardCountLabel, onImageResolved, onOpen, onOpenImage }: {
+  record: InspirationRecord;
+  dateTime: string;
+  cardCountLabel: string | null;
+  onImageResolved: (key: string, url: string) => void;
+  onOpen: () => void;
+  onOpenImage: (index: number) => void;
+}) {
   const cover = record.images?.[0];
-  const extraCount = Math.max(0, (record.images?.length ?? 0) - 1);
   return (
-    <article className="overflow-hidden rounded-xl border border-border/50 bg-card/60 p-2.5 transition-shadow hover:shadow-md">
+    <article
+      className="cursor-pointer overflow-hidden rounded-xl border border-border/50 bg-card/60 p-2.5 transition-shadow hover:shadow-md"
+      onClick={onOpen}
+    >
       {cover && (
         <div className="relative mb-2 overflow-hidden rounded-lg">
           <RecordImage
             record={record}
             image={cover}
             className="w-full object-cover"
+            onResolved={onImageResolved}
+            onClick={() => onOpenImage(0)}
+            title={cardCountLabel ?? undefined}
           />
-          {extraCount > 0 && (
-            <span className="absolute bottom-1.5 right-1.5 rounded-full bg-black/50 px-2 py-0.5 text-3xs text-white">
-              {t("inspiration.images_count", { count: extraCount + 1 })}
+          {cardCountLabel && (
+            <span className="pointer-events-none absolute bottom-1.5 right-1.5 rounded-full bg-black/50 px-2 py-0.5 text-3xs text-white">
+              {cardCountLabel}
             </span>
           )}
         </div>
@@ -256,7 +215,11 @@ function MasonryCard({ record, dateTime }: { record: InspirationRecord; dateTime
         <TagChips record={record} />
         <div className="flex items-center justify-between">
           <span className="text-3xs text-muted-foreground/70">{dateTime}</span>
-          {record.audio && <InspirationAudioPlayer record={record} />}
+          {record.audio && (
+            <span onClick={(event) => event.stopPropagation()}>
+              <InspirationAudioPlayer record={record} />
+            </span>
+          )}
         </div>
       </div>
     </article>
@@ -264,24 +227,34 @@ function MasonryCard({ record, dateTime }: { record: InspirationRecord; dateTime
 }
 
 /** Detailed list card, grouped under day headers. */
-function ListCard({ record, dateTime, onRetry, retrying }: {
+function ListCard({ record, dateTime, cardCountLabel, onImageResolved, onOpen, onOpenImage, onRetry, retrying }: {
   record: InspirationRecord;
   dateTime: string;
+  cardCountLabel: string | null;
+  onImageResolved: (key: string, url: string) => void;
+  onOpen: () => void;
+  onOpenImage: (index: number) => void;
   onRetry: (id: string) => void;
   retrying: boolean;
 }) {
   return (
-    <article className="rounded-xl border border-border/50 bg-card/60 p-3.5">
+    <article
+      className="cursor-pointer rounded-xl border border-border/50 bg-card/60 p-3.5"
+      onClick={onOpen}
+    >
       <span className="text-3xs text-muted-foreground/70">{dateTime}</span>
       {record.text.trim() && <HighlightedText text={record.text} className="mt-1 text-sm" />}
       {record.images && record.images.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {record.images.slice(0, 3).map((image) => (
+          {record.images.slice(0, 3).map((image, index) => (
             <RecordImage
               key={image.file}
               record={record}
               image={image}
               className="h-20 w-20 rounded-lg object-cover"
+              onResolved={onImageResolved}
+              onClick={() => onOpenImage(index)}
+              title={cardCountLabel ?? undefined}
             />
           ))}
           {record.images.length > 3 && (
@@ -292,7 +265,11 @@ function ListCard({ record, dateTime, onRetry, retrying }: {
         </div>
       )}
       <div className="mt-2 flex flex-col items-start gap-2">
-        {record.audio && <InspirationAudioPlayer record={record} />}
+        {record.audio && (
+          <span onClick={(event) => event.stopPropagation()}>
+            <InspirationAudioPlayer record={record} />
+          </span>
+        )}
         <TagChips record={record} />
         <InspirationTranscript record={record} onRetry={onRetry} retrying={retrying} />
       </div>
@@ -305,10 +282,13 @@ export function InspirationPage() {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const openCapture = useInspirationCaptureStore((state) => state.openCapture);
+  const openDetail = useInspirationDetailStore((state) => state.openDetail);
   const [view, setView] = useState<FeedView>(readStoredView);
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
+  const [lightbox, setLightbox] = useState<{ record: InspirationRecord; index: number } | null>(null);
   const reduceMotion = useReducedMotion();
   const desktopApi = getDesktopInspirationApi();
   const columns = useColumnCount();
@@ -358,6 +338,16 @@ export function InspirationPage() {
     }
   };
 
+  const trackImageUrl = useCallback((key: string, url: string) => {
+    setImageUrls((prev) => (prev[key] === url ? prev : { ...prev, [key]: url }));
+  }, []);
+
+  /** Slides for the lightbox: every image of the record we have a URL for. */
+  const lightboxSlides = (record: InspirationRecord): LightboxSlide[] =>
+    (record.images ?? [])
+      .map((image) => ({ url: imageUrls[imageKey(record.id, image.file)] ?? "", label: image.file }))
+      .filter((slide) => slide.url);
+
   // List view groups the feed under sticky day headers (今天 / 昨天 / 日期).
   const listGroups = useMemo(() => {
     const groups: Array<{ label: string; records: InspirationRecord[] }> = [];
@@ -380,37 +370,47 @@ export function InspirationPage() {
     [columns, filtered],
   );
 
-  const renderCard = (record: InspirationRecord, index: number) => (
-    <motion.div
-      key={record.id}
-      initial={reduceMotion ? false : { opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={
-        reduceMotion
-          ? { duration: 0 }
-          : { type: "spring", bounce: 0, duration: 0.3, delay: Math.min(index * 0.03, 0.15) }
-      }
-      className="group relative"
-    >
-      <MasonryCard record={record} dateTime={formatCardDateTime(record.createdAt, i18n.language)} />
-      <button
-        type="button"
-        title={t("inspiration.delete")}
-        disabled={deletingId === record.id}
-        onClick={() => {
-          setDeletingId(record.id);
-          deleteMutation.mutate(record.id);
-        }}
-        className="absolute right-2 top-2 z-10 rounded-md bg-background/70 p-1 text-muted-foreground/60 opacity-0 backdrop-blur transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"
+  const renderCard = (record: InspirationRecord, index: number) => {
+    const extraCount = Math.max(0, (record.images?.length ?? 0) - 1);
+    return (
+      <motion.div
+        key={record.id}
+        initial={reduceMotion ? false : { opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={
+          reduceMotion
+            ? { duration: 0 }
+            : { type: "spring", bounce: 0, duration: 0.3, delay: Math.min(index * 0.03, 0.15) }
+        }
+        className="group relative"
       >
-        {deletingId === record.id ? (
-          <Loader2 className="size-3.5 animate-spin" />
-        ) : (
-          <Trash2 className="size-3.5" />
-        )}
-      </button>
-    </motion.div>
-  );
+        <MasonryCard
+          record={record}
+          dateTime={formatCardDateTime(record.createdAt, i18n.language)}
+          cardCountLabel={extraCount > 0 ? t("inspiration.images_count", { count: extraCount + 1 }) : null}
+          onImageResolved={trackImageUrl}
+          onOpen={() => openDetail(record.id)}
+          onOpenImage={(imageIndex) => setLightbox({ record, index: imageIndex })}
+        />
+        <button
+          type="button"
+          title={t("inspiration.delete")}
+          disabled={deletingId === record.id}
+          onClick={() => {
+            setDeletingId(record.id);
+            deleteMutation.mutate(record.id);
+          }}
+          className="absolute right-2 top-2 z-10 rounded-md bg-background/70 p-1 text-muted-foreground/60 opacity-0 backdrop-blur transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"
+        >
+          {deletingId === record.id ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <Trash2 className="size-3.5" />
+          )}
+        </button>
+      </motion.div>
+    );
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -529,35 +529,45 @@ export function InspirationPage() {
                       {group.label}
                     </div>
                     <div className="flex flex-col gap-3">
-                      {group.records.map((record) => (
-                        <div key={record.id} className="group relative">
-                          <ListCard
-                            record={record}
-                            dateTime={formatCardDateTime(record.createdAt, i18n.language)}
-                            retrying={retryingId === record.id}
-                            onRetry={(id) => {
-                              setRetryingId(id);
-                              retryMutation.mutate(id);
-                            }}
-                          />
-                          <button
-                            type="button"
-                            title={t("inspiration.delete")}
-                            disabled={deletingId === record.id}
-                            onClick={() => {
-                              setDeletingId(record.id);
-                              deleteMutation.mutate(record.id);
-                            }}
-                            className="absolute right-2 top-2 rounded-md p-1 text-muted-foreground/50 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"
-                          >
-                            {deletingId === record.id ? (
-                              <Loader2 className="size-3.5 animate-spin" />
-                            ) : (
-                              <Trash2 className="size-3.5" />
-                            )}
-                          </button>
-                        </div>
-                      ))}
+                      {group.records.map((record) => {
+                        return (
+                          <div key={record.id} className="group relative">
+                            <ListCard
+                              record={record}
+                              dateTime={formatCardDateTime(record.createdAt, i18n.language)}
+                              cardCountLabel={
+                                record.images && record.images.length > 3
+                                  ? t("inspiration.images_count", { count: record.images.length })
+                                  : null
+                              }
+                              onImageResolved={trackImageUrl}
+                              onOpen={() => openDetail(record.id)}
+                              onOpenImage={(imageIndex) => setLightbox({ record, index: imageIndex })}
+                              retrying={retryingId === record.id}
+                              onRetry={(id) => {
+                                setRetryingId(id);
+                                retryMutation.mutate(id);
+                              }}
+                            />
+                            <button
+                              type="button"
+                              title={t("inspiration.delete")}
+                              disabled={deletingId === record.id}
+                              onClick={() => {
+                                setDeletingId(record.id);
+                                deleteMutation.mutate(record.id);
+                              }}
+                              className="absolute right-2 top-2 rounded-md p-1 text-muted-foreground/50 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"
+                            >
+                              {deletingId === record.id ? (
+                                <Loader2 className="size-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="size-3.5" />
+                              )}
+                            </button>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 ))}
@@ -566,6 +576,15 @@ export function InspirationPage() {
           </div>
         </div>
       )}
+
+      <InspirationLightbox
+        slides={lightbox ? lightboxSlides(lightbox.record) : []}
+        index={lightbox ? lightbox.index : null}
+        onIndexChange={(index) => setLightbox((current) => (current ? { ...current, index } : current))}
+        onClose={() => setLightbox(null)}
+      />
+
+      <InspirationDetailDialog />
     </div>
   );
 }

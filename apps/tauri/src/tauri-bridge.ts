@@ -73,6 +73,7 @@ type DesktopApi = {
   appInfo: { version: string; platform: string };
   app: {
     getInfo: () => Promise<{ version: string; platform: string }>;
+    openLogsFolder: () => Promise<void>;
     checkForUpdate: () => Promise<AppUpdateInfo>;
     downloadAndInstallUpdate: (onProgress: (progress: UpdateDownloadProgress) => void) => Promise<void>;
     relaunchApp: () => Promise<void>;
@@ -364,6 +365,7 @@ export async function installTauriBridge(): Promise<void> {
     appInfo: { version: "0.1.0", platform: "darwin" },
     app: {
       getInfo: () => command<{ version: string; platform: string }>("get_app_info"),
+      openLogsFolder: () => command<void>("open_logs_folder"),
       // Talks to the tauri-plugin-updater, whose endpoints/pubkey live in
       // tauri.conf.json; releases are published by release.yml. `check()`
       // returns null when the running version is the latest.

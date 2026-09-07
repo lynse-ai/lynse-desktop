@@ -12,6 +12,7 @@ import { replaceAll } from "@milkdown/kit/utils";
 import remarkBreaks from "remark-breaks";
 
 import "@milkdown/kit/prose/view/style/prosemirror.css";
+import "../content-preview.css";
 
 interface MilkdownEditorProps {
   initialContent?: string;
@@ -62,7 +63,12 @@ export function MilkdownEditor({ initialContent, onChange, onEditorReady }: Milk
     };
   }, [initialContent]);
 
-  return <div ref={containerRef} className="milkdown-editor flex-1 overflow-auto px-6 py-4" />;
+  return (
+    <div className="milkdown-editor flex-1 overflow-auto px-6 py-4">
+      {/* Inner column carries the typography scope; the outer box keeps window-edge scrolling */}
+      <div ref={containerRef} className="content-preview-inner" />
+    </div>
+  );
 }
 
 /** Get the current active editor instance (may be null). */

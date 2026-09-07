@@ -96,10 +96,12 @@ export function EditorPanel() {
           </>
         )}
         {editorMode === "preview" && (
-          <div
-            className="prose prose-sm max-w-none overflow-auto px-6 py-4 h-full"
-            dangerouslySetInnerHTML={{ __html: previewHtml || getHTML() }}
-          />
+          <div className="overflow-auto px-6 py-4 h-full">
+            <div
+              className="content-preview-inner"
+              dangerouslySetInnerHTML={{ __html: previewHtml || getHTML() }}
+            />
+          </div>
         )}
         {editorMode === "split" && (
           <div className="flex h-full">
@@ -107,10 +109,12 @@ export function EditorPanel() {
               <MilkdownEditor onChange={handleEditorChange} onEditorReady={handleEditorReady} />
               <FloatingMarkdownToolbar editor={editor} />
             </div>
-            <div
-              className="flex-1 overflow-auto"
-              dangerouslySetInnerHTML={{ __html: previewHtml || getHTML() }}
-            />
+            <div className="flex-1 overflow-auto px-6 py-4">
+              <div
+                className="content-preview-inner"
+                dangerouslySetInnerHTML={{ __html: previewHtml || getHTML() }}
+              />
+            </div>
           </div>
         )}
       </div>

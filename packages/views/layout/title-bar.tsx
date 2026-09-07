@@ -8,6 +8,7 @@ import { useWorkspaceStore } from "../workspace/store";
 import { useFiles } from "../workspace/hooks/use-files";
 import { useFolders } from "../workspace/hooks/use-folders";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { EditorThemeSwitcher } from "../workspace/editor-theme-switcher";
 import {
   ChevronRight,
   FileText,
@@ -133,6 +134,9 @@ export function TitleBar() {
             <Code className="size-3.5" />
           </button>
         )}
+
+        {/* Editor typography theme switcher */}
+        <EditorThemeSwitcher />
 
         {/* Ask AI button */}
         <button

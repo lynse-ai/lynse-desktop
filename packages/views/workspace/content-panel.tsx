@@ -100,15 +100,16 @@ function extractBody(html: string): { content: string; scopedStyles: string } {
   }
 
   // Desktop override: neutralize mobile-first fixed widths from backend templates
-  // Also strip borders/backgrounds that leaked from body/html scoping
+  // Also strip borders/backgrounds that leaked from body/html scoping.
+  // Inline margins stay centered so the reading column cap in content-preview.css holds.
   const desktopOverride = `
 .content-preview-inner {
   border: none !important;
   background: transparent !important;
   padding: 0 !important;
-  margin: 0 !important;
+  margin-block: 0 !important;
+  margin-inline: auto !important;
 }
-.content-preview-inner,
 .content-preview-inner > *,
 .content-preview-inner * {
   max-width: 100% !important;
@@ -822,7 +823,7 @@ export function ContentPanel() {
                   setEditedTitle({ itemId: selectedItemId, title: e.target.value });
                 }}
                 placeholder={t("workspace.enter_filename")}
-                className="w-full border-none bg-transparent text-xl font-semibold leading-tight outline-none placeholder:text-muted-foreground/50 shrink-0"
+                className="w-full border-none bg-transparent text-[2rem] font-bold leading-[1.25] tracking-[-0.02em] outline-none placeholder:text-muted-foreground/50 shrink-0"
               />
               {isLocalSelectedItem && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">

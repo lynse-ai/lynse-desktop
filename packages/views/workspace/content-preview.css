@@ -1,103 +1,143 @@
-/* Lynse content preview — adapted from ColaMD base.css */
-
-.content-preview {
-  /* Matches the light theme tokens: charcoal text (never pure black), a
-     violet-tinted grey ramp, purple reserved for links. */
-  --lynse-bg: #fcfaf6;
-  --lynse-text: #202023;
-  --lynse-text-muted: #74747b;
-  --lynse-border: #d8d8dc;
-  --lynse-link: #5f67d8;
-  --lynse-code-bg: rgba(175, 184, 193, 0.2);
-  --lynse-code-block-bg: #f3f3f5;
-  --lynse-blockquote-border: #d8d8dc;
-  --lynse-table-header-bg: #f3f3f5;
-}
-
-:is(.dark) .content-preview {
-  --lynse-bg: transparent;
-  --lynse-text: #e6edf3;
-  --lynse-text-muted: #8b949e;
-  --lynse-border: #30363d;
-  --lynse-link: #9da2fa;
-  --lynse-code-bg: rgba(110, 118, 129, 0.3);
-  --lynse-code-block-bg: #161b22;
-  --lynse-blockquote-border: #30363d;
-  --lynse-table-header-bg: #161b22;
-}
+/* Lynse editorial typography — shared by read-only previews and Milkdown editors.
+   Scope: any element carrying .content-preview-inner is either the content column
+   itself (HTML preview) or the Milkdown mount root (editable editor). All colors
+   and radii come from packages/ui/styles/tokens.css and adapt to dark mode. */
 
 .content-preview-inner {
+  /* Editorial heading stack: Apple system fonts (SF Pro + PingFang SC), then OPPO Sans */
+  --content-font-heading: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC",
+    "OPPOSans", "OPPO Sans", "Segoe UI", "Microsoft YaHei", sans-serif;
+
+  /* Comfortable reading column: ~45 CJK characters per line */
   width: 100%;
-  font-size: 15px;
-  line-height: 1.75;
-  color: var(--lynse-text);
+  max-width: 45rem;
+  margin-inline: auto;
+
+  font-size: 1rem;
+  font-weight: 300;
+  line-height: 1.85;
+  color: var(--foreground);
   word-break: break-word;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* === Summary editor (editable ProseMirror) === */
+/* === Editable ProseMirror surface (Milkdown) === */
 
-.summary-editor .ProseMirror {
+.content-preview-inner .ProseMirror {
   outline: none;
   min-height: 60px;
   padding: 4px 0;
 }
 
-.summary-editor .ProseMirror:focus {
+.content-preview-inner .ProseMirror:focus {
   outline: none;
-}
-
-.summary-editor .ProseMirror > * + * {
-  margin-top: 0.75em;
 }
 
 .content-preview-inner > *:first-child {
   margin-top: 0 !important;
 }
 
-/* Typography */
-.content-preview-inner h1,
-.content-preview-inner h1 * {
-  font-size: 1.75em;
+/* === Headings — strong size contrast, no divider rules, asymmetric spacing ===
+   Font rules also target children because backend HTML may wrap heading text in
+   sized <span>/<font> tags; spacing stays on the heading element only. */
+
+.content-preview-inner :is(h1, h1 *),
+.content-preview-inner :is(h2, h2 *),
+.content-preview-inner :is(h3, h3 *),
+.content-preview-inner :is(h4, h4 *) {
+  font-family: var(--content-font-heading);
+}
+
+.content-preview-inner :is(h1, h1 *) {
+  font-size: 1.875rem;
   font-weight: 700;
-  margin-top: 1.5em;
-  margin-bottom: 0.5em;
-  line-height: 1.25;
-  padding-bottom: 0.3em;
-  border-bottom: 1px solid var(--lynse-border);
-}
-
-.content-preview-inner h2,
-.content-preview-inner h2 * {
-  font-size: 1.35em;
-  font-weight: 600;
-  margin-top: 1.25em;
-  margin-bottom: 0.5em;
   line-height: 1.3;
-  padding-bottom: 0.25em;
-  border-bottom: 1px solid var(--lynse-border);
+  letter-spacing: -0.015em;
+  text-wrap: balance;
 }
 
-.content-preview-inner h3,
-.content-preview-inner h3 * {
-  font-size: 1.15em;
-  font-weight: 600;
-  margin-top: 1em;
-  margin-bottom: 0.5em;
+.content-preview-inner h1 {
+  margin: 1.75em 0 0.5em;
 }
 
-.content-preview-inner h4,
-.content-preview-inner h4 *,
-.content-preview-inner h5,
-.content-preview-inner h5 *,
-.content-preview-inner h6,
-.content-preview-inner h6 * {
+.content-preview-inner :is(h2, h2 *) {
+  font-size: 1.375rem;
   font-weight: 600;
-  margin-top: 1em;
-  margin-bottom: 0.5em;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
 }
+
+.content-preview-inner h2 {
+  margin: 1.6em 0 0.45em;
+}
+
+/* Brand-colored accent bar gives h2 its visual identity.
+   Length/offset center the bar on the CJK ink box (PingFang ideographs hang
+   ~0.17em below the baseline, so a baseline-anchored bar rides high). */
+.content-preview-inner h2::before {
+  content: "";
+  display: inline-block;
+  width: 0.2em;
+  height: 0.62em;
+  border-radius: 999px;
+  background: var(--primary);
+  margin-right: 0.45em;
+  vertical-align: 0.05em;
+}
+
+.content-preview-inner :is(h3, h3 *) {
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.content-preview-inner h3 {
+  margin: 1.4em 0 0.4em;
+}
+
+.content-preview-inner :is(h4, h4 *) {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.content-preview-inner h4 {
+  margin: 1.2em 0 0.35em;
+}
+
+.content-preview-inner :is(h5, h5 *) {
+  font-size: 0.925rem;
+  font-weight: 600;
+}
+
+.content-preview-inner h5 {
+  margin: 1.2em 0 0.35em;
+}
+
+.content-preview-inner :is(h6, h6 *) {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--muted-foreground);
+}
+
+.content-preview-inner h6 {
+  margin: 1.2em 0 0.35em;
+}
+
+/* No top gap before the first heading of a document/section */
+.content-preview-inner :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
+}
+
+/* === Body text === */
 
 .content-preview-inner p {
-  margin: 0.5em 0;
+  margin: 0 0 0.95em;
+  text-wrap: pretty;
+}
+
+.content-preview-inner > :last-child {
+  margin-bottom: 0;
 }
 
 .content-preview-inner span,
@@ -106,101 +146,153 @@
   font-size: inherit;
 }
 
-.content-preview-inner a {
-  color: var(--lynse-link);
-  text-decoration: none;
-}
-
-.content-preview-inner a:hover {
-  text-decoration: underline;
-}
-
 .content-preview-inner strong,
 .content-preview-inner b {
   font-weight: 600;
 }
 
-/* Code */
+.content-preview-inner a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in oklab, var(--primary) 40%, transparent);
+}
+
+.content-preview-inner a:hover {
+  text-decoration-color: var(--primary);
+}
+
+/* === Code === */
+
 .content-preview-inner code {
-  background: var(--lynse-code-bg);
-  padding: 2px 6px;
-  border-radius: 3px;
-  font-size: 0.875em;
   font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--muted);
+  padding: 0.15em 0.4em;
+  border-radius: var(--radius-sm);
 }
 
 .content-preview-inner pre {
-  background: var(--lynse-code-block-bg);
-  color: var(--lynse-text);
-  padding: 16px;
-  border-radius: 6px;
+  background: var(--muted);
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  padding: 1em 1.25em;
+  border-radius: var(--radius-md);
   overflow-x: auto;
-  margin: 1em 0;
+  margin: 1.25em 0;
 }
 
 .content-preview-inner pre code {
   background: none;
   padding: 0;
   font-size: 0.875em;
-  line-height: 1.6;
+  line-height: 1.7;
 }
 
-/* Blockquote */
+/* === Blockquote — thin accent rule, muted text === */
+
 .content-preview-inner blockquote {
-  border-left: 4px solid var(--lynse-blockquote-border);
-  padding-left: 16px;
-  margin: 1em 0;
-  color: var(--lynse-text-muted);
+  margin: 1.5em 0;
+  padding: 0.25em 0 0.25em 1.25em;
+  border-left: 2px solid color-mix(in oklab, var(--primary) 55%, transparent);
+  color: var(--muted-foreground);
 }
 
-/* Lists */
+.content-preview-inner blockquote > p {
+  margin: 0.4em 0;
+}
+
+.content-preview-inner blockquote > p:first-child {
+  margin-top: 0;
+}
+
+.content-preview-inner blockquote > p:last-child {
+  margin-bottom: 0;
+}
+
+/* === Lists === */
+
+/* Tailwind preflight resets list-style globally — restore markers explicitly */
+.content-preview-inner ul {
+  list-style: disc;
+}
+
+.content-preview-inner ul ul {
+  list-style: circle;
+}
+
+.content-preview-inner ul ul ul {
+  list-style: square;
+}
+
+.content-preview-inner ol {
+  list-style: decimal;
+}
+
 .content-preview-inner ul,
 .content-preview-inner ol {
-  padding-left: 24px;
-  margin: 0.5em 0;
+  padding-left: 1.5em;
+  margin: 0.5em 0 0.95em;
 }
 
 .content-preview-inner li {
-  margin: 0.25em 0;
+  margin: 0.4em 0;
 }
 
 .content-preview-inner li > p {
   margin: 0;
 }
 
-/* Table */
+.content-preview-inner li::marker {
+  color: var(--muted-foreground);
+}
+
+/* GFM task items render their own checkbox — suppress the bullet for them */
+.content-preview-inner li[data-checked],
+.content-preview-inner li:has(> input[type="checkbox"]) {
+  list-style: none;
+}
+
+/* === Table === */
+
 .content-preview-inner table {
   border-collapse: collapse;
   width: 100%;
-  margin: 1em 0;
+  margin: 1.25em 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .content-preview-inner th,
 .content-preview-inner td {
-  border: 1px solid var(--lynse-border);
-  padding: 8px 12px;
+  border: 1px solid var(--border);
+  padding: 0.5em 0.75em;
   text-align: left;
 }
 
 .content-preview-inner th {
-  background: var(--lynse-table-header-bg);
+  background: var(--muted);
   font-weight: 600;
 }
 
-/* HR */
+/* === HR — short centered rule === */
+
 .content-preview-inner hr {
   border: none;
-  border-top: 2px solid var(--lynse-border);
-  margin: 2em 0;
+  border-top: 1px solid var(--border);
+  width: 4em;
+  margin: 2.5em auto;
 }
 
-/* Image */
+/* === Image === */
+
 .content-preview-inner img {
   max-width: 100%;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
-/* Source tag (colored label for outline sections) */
+/* === Source tag (colored label for outline sections) === */
+
 .content-preview-section-label {
   display: inline-block;
   font-size: 0.7rem;
@@ -208,10 +300,10 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   margin-bottom: 0.75em;
-  color: var(--lynse-link);
-  background: var(--lynse-code-bg);
+  color: var(--primary);
+  background: color-mix(in oklab, var(--primary) 12%, transparent);
 }
 
 /* HTML inline style resets — strip legacy HTML attributes that break layout */
@@ -285,4 +377,282 @@
   max-width: 100% !important;
   padding-left: 0 !important;
   padding-right: 0 !important;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   Editor typography themes — switched via <html data-editor-theme="…">
+   (see workspace/editor-theme.ts). Ported from Typora's default themes
+   (github.css / newsprint.css) and re-based onto design tokens so both
+   light and dark mode adapt automatically. CJK keeps the Apple/OPPO sans
+   stack in every theme — serif restyles Latin glyphs only.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── GitHub — Typora default look: dense doc rhythm, ruled h1/h2, zebra tables ── */
+
+:root[data-editor-theme="github"] .content-preview-inner {
+  max-width: 53.75rem;
+  font-weight: 400;
+  line-height: 1.7;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner h2::before {
+  display: none;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner :is(h1, h1 *) {
+  font-size: 2.25rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner h1 {
+  margin: 1.5em 0 0.5em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+
+:root[data-editor-theme="github"] .content-preview-inner :is(h2, h2 *) {
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1.225;
+  letter-spacing: 0;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner h2 {
+  margin: 1.4em 0 0.5em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+}
+
+:root[data-editor-theme="github"] .content-preview-inner :is(h3, h3 *) {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.43;
+  letter-spacing: 0;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner h3 {
+  margin: 1.2em 0 0.4em;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner :is(h4, h4 *) {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner h4 {
+  margin: 1.2em 0 0.4em;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner :is(h5, h5 *) {
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner h5 {
+  margin: 1.2em 0 0.4em;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner :is(h6, h6 *) {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--muted-foreground);
+}
+
+:root[data-editor-theme="github"] .content-preview-inner h6 {
+  margin: 1.2em 0 0.4em;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner p {
+  margin: 0.8em 0;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner blockquote {
+  margin: 0.8em 0;
+  padding: 0 1em;
+  border-left: 4px solid var(--border);
+  color: var(--muted-foreground);
+}
+
+:root[data-editor-theme="github"] .content-preview-inner ul,
+:root[data-editor-theme="github"] .content-preview-inner ol {
+  margin: 0.8em 0;
+  padding-left: 30px;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner li {
+  margin: 0.25em 0;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner code {
+  font-size: 0.9em;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner pre {
+  border-radius: var(--radius-sm);
+  margin: 1em 0;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner pre code {
+  border: none;
+  padding: 0;
+  line-height: 1.45;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner th,
+:root[data-editor-theme="github"] .content-preview-inner td {
+  padding: 6px 13px;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner tbody tr:nth-child(2n) {
+  background: var(--muted);
+}
+
+:root[data-editor-theme="github"] .content-preview-inner hr {
+  width: 100%;
+  height: 2px;
+  margin: 1em 0;
+  border: none;
+  background: var(--border);
+}
+
+:root[data-editor-theme="github"] .content-preview-inner a {
+  text-decoration: none;
+}
+
+:root[data-editor-theme="github"] .content-preview-inner a:hover {
+  text-decoration: underline;
+}
+
+/* ── Newsprint — serif Latin / sans CJK, narrow measure, bottom-only rhythm ── */
+
+:root[data-editor-theme="newsprint"] .content-preview-inner {
+  --content-font-heading: Georgia, "Times New Roman", "PingFang SC", "OPPOSans",
+    "OPPO Sans", "Microsoft YaHei", serif;
+  font-family: Georgia, "Times New Roman", "PingFang SC", "OPPOSans", "OPPO Sans",
+    "Microsoft YaHei", serif;
+  max-width: 40em;
+  font-weight: 400;
+  line-height: 1.75;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner h2::before {
+  display: none;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner :is(h1, h1 *) {
+  font-size: 1.875rem;
+  font-weight: 700;
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner h1 {
+  margin: 2em 0 0.8em;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid var(--border);
+}
+
+/* h2/h3 share one size and are told apart by weight — the newsprint trick */
+:root[data-editor-theme="newsprint"] .content-preview-inner :is(h2, h2 *),
+:root[data-editor-theme="newsprint"] .content-preview-inner :is(h3, h3 *) {
+  font-size: 1.3125rem;
+  line-height: 1.4;
+  letter-spacing: 0;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner h2 {
+  font-weight: 700;
+  margin: 2.2em 0 0.6em;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner h3 {
+  font-weight: 400;
+  margin: 2.2em 0 0.6em;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner :is(h4, h4 *) {
+  font-size: 1.125rem;
+  font-weight: 400;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner h4 {
+  margin: 1.8em 0 0.5em;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner :is(h5, h5 *) {
+  font-size: 1rem;
+  font-weight: 400;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner h5 {
+  margin: 1.5em 0 0.5em;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner h6 {
+  margin: 1.5em 0 0.5em;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner p {
+  margin: 0 0 1.5em;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner blockquote {
+  margin: 0 0 1.5em;
+  font-style: italic;
+  border-left: 3px solid var(--primary);
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner ul,
+:root[data-editor-theme="newsprint"] .content-preview-inner ol {
+  margin: 0 0 1.5em;
+  padding-left: 1.5em;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner li {
+  margin: 0.3em 0;
+}
+
+/* Booktabs table: no vertical lines, heavy rule under the header */
+:root[data-editor-theme="newsprint"] .content-preview-inner th,
+:root[data-editor-theme="newsprint"] .content-preview-inner td {
+  border: none;
+  border-top: 1px solid var(--border);
+  padding: 0.45em 0.5em;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner th {
+  background: transparent;
+  border-bottom: 2px solid var(--border);
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner hr {
+  width: 100%;
+  height: 1px;
+  margin: 2em 0;
+  border: none;
+  background: var(--border);
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner a {
+  text-decoration: none;
+}
+
+:root[data-editor-theme="newsprint"] .content-preview-inner a:hover {
+  text-decoration: underline;
 }

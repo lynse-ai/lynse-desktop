@@ -14,6 +14,10 @@
 - Rust panics are persisted too: the previous default hook wrote only to stderr, which is invisible for a packaged app launched from Finder. Log rotation keeps archived files so crash history survives post-mortem.
 - The inspiration page is split into focused modules (card list, detail/edit sheet, lightbox, voice player, date formatting) instead of one large file.
 
+### Fixed
+
+- Voice-memo capture now builds on Windows: the `cpal::Stream` (deliberately `!Send`) is constructed inside the capture thread instead of being moved into `thread::spawn`, `cpal::Sample` is imported where `f32::from_sample` is used, and the `MutexGuard` is dropped before `.await` in `inspiration_voice_cancel` so the command future stays `Send`. macOS was unaffected; the Windows MSI build was broken by these since the feature landed.
+
 ## 0.1.32 (2026-09-06)
 
 ### New Features

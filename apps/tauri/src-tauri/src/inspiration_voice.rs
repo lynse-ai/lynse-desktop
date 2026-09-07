@@ -397,33 +397,6 @@ fn platform_start(app: &AppHandle) -> CommandResult<Value> {
     let sample_count = Arc::new(AtomicU64::new(0));
     let (done_tx, done_rx) = std::sync::mpsc::channel();
 
-    macro_rules! build_input_stream {
-        ($sample_type:ty) => {{
-            let samples = samples.clone();
-            let live_level = live_level.clone();
-            let sample_count = sample_count.clone();
-            device.build_input_stream(
-                &stream_config,
-                move |data: &[$sample_type], _| {
-                    memo_feed_samples(data, channels, in_rate, &samples, &live_level, &sample_count);
-                },
-                move |error| log::error!("inspiration voice stream error: {error}"),
-                None,
-            )
-        }};
-    }
-
-    let stream = match sample_format {
-        cpal::SampleFormat::F32 => build_input_stream!(f32),
-        cpal::SampleFormat::I16 => build_input_stream!(i16),
-        cpal::SampleFormat::U16 => build_input_stream!(u16),
-        _ => return Err("不支持的麦克风采样格式".to_owned()),
-    }
-    .map_err(|error| format!("创建麦克风输入流失败：{error}"))?;
-    stream
-        .play()
-        .map_err(|error| format!("启动麦克风输入流失败：{error}"))?;
-
     let capture = Arc::new(VoiceCapture {
         capture_id,
         directory: directory.clone(),
@@ -437,10 +410,60 @@ fn platform_start(app: &AppHandle) -> CommandResult<Value> {
 
     // The capture thread keeps the cpal stream alive, mirrors level events to
     // the window at ~10 Hz, and finalizes the WAV once stop is requested.
+    //
+    // `cpal::Stream` is deliberately `!Send` on every platform (it wraps
+    // `NotSendSyncAcrossAllPlatforms` in its Windows pipeWire/WASAPI backends),
+    // so it is built *inside* this thread and never crosses a thread boundary.
+    // `cpal::Device` is `Send`, so handing it over instead is safe.
     let capture_app = app.clone();
     let capture_stop = capture.stop.clone();
     let capture_mirror = capture.clone();
     thread::spawn(move || {
+        macro_rules! build_input_stream {
+            ($sample_type:ty) => {{
+                let samples = samples.clone();
+                let live_level = live_level.clone();
+                let sample_count = sample_count.clone();
+                device.build_input_stream(
+                    &stream_config,
+                    move |data: &[$sample_type], _| {
+                        memo_feed_samples(data, channels, in_rate, &samples, &live_level, &sample_count);
+                    },
+                    move |error| log::error!("inspiration voice stream error: {error}"),
+                    None,
+                )
+            }};
+        }
+
+        // Stream construction happens here rather than before the spawn, so a
+        // failure can no longer be returned synchronously: report it through
+        // the same channels the successful path uses.
+        let started = match sample_format {
+            cpal::SampleFormat::F32 => build_input_stream!(f32),
+            cpal::SampleFormat::I16 => build_input_stream!(i16),
+            cpal::SampleFormat::U16 => build_input_stream!(u16),
+            _ => Err("不支持的麦克风采样格式".to_owned()),
+        }
+        // Both halves have to agree on the error type before `and_then`.
+        .map_err(|error| format!("创建麦克风输入流失败：{error}"))
+        .and_then(|stream| {
+            stream
+                .play()
+                .map(|()| stream)
+                .map_err(|error| format!("启动麦克风输入流失败：{error}"))
+        });
+
+        let stream = match started {
+            Ok(stream) => stream,
+            Err(error) => {
+                log::error!("inspiration voice capture failed: {error}");
+                set_state(&capture_mirror, "idle");
+                emit_error(&capture_app, error.clone());
+                let _ = done_tx.send(Err(error));
+                return;
+            }
+        };
+
         let mut last_emit = Instant::now();
         while capture_stop.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(100));
@@ -483,6 +506,10 @@ fn memo_feed_samples<T>(
     T: cpal::Sample,
     f32: cpal::FromSample<T>,
 {
+    // `Sample::from_sample` has to be in scope to be callable; macOS uses the
+    // `audio-capture` sidecar and never compiles this path.
+    use cpal::Sample;
+
     let mono: Vec<f32> = data
         .chunks(channels)
         .map(|frame| {
@@ -560,12 +587,16 @@ async fn platform_cancel(_app: &AppHandle) -> CommandResult<()> {
     let Some(capture) = take_capture() else { return Ok(()) };
     set_state(&capture, "stopping");
     capture.stop.store(false, Ordering::Relaxed);
-    if let Some(receiver) = capture
+    // Take the receiver in its own statement: an `if let` scrutinee keeps the
+    // temporary `MutexGuard` alive for the whole block, and a `std` guard is
+    // `!Send` — holding it across `.await` makes the command's future `!Send`,
+    // which Tauri rejects on Windows.
+    let receiver = capture
         .done
         .lock()
         .expect("inspiration voice done lock")
-        .take()
-    {
+        .take();
+    if let Some(receiver) = receiver {
         let _ = tauri::async_runtime::spawn_blocking(move || {
             let _ = receiver.recv_timeout(Duration::from_secs(8));
         })

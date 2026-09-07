@@ -438,13 +438,19 @@ fn platform_start(app: &AppHandle) -> CommandResult<Value> {
         // Stream construction happens here rather than before the spawn, so a
         // failure can no longer be returned synchronously: report it through
         // the same channels the successful path uses.
-        let started = match sample_format {
+        // The `_ =>` arm returns early (type `!`, unifies with the other
+        // arms), so `.map_err` only has to normalize `BuildStreamError`.
+        let started = (match sample_format {
             cpal::SampleFormat::F32 => build_input_stream!(f32),
             cpal::SampleFormat::I16 => build_input_stream!(i16),
             cpal::SampleFormat::U16 => build_input_stream!(u16),
-            _ => Err("不支持的麦克风采样格式".to_owned()),
-        }
-        // Both halves have to agree on the error type before `and_then`.
+            _ => {
+                set_state(&capture_mirror, "idle");
+                emit_error(&capture_app, "不支持的麦克风采样格式");
+                let _ = done_tx.send(Err("不支持的麦克风采样格式".to_owned()));
+                return;
+            }
+        })
         .map_err(|error| format!("创建麦克风输入流失败：{error}"))
         .and_then(|stream| {
             stream

@@ -178,15 +178,6 @@ export function ChatPanel() {
                     <WaitingText status={msg.status} />
                   </div>
                 )}
-                {msg.sources && msg.sources.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {msg.sources.map((s, i) => (
-                      <span key={i} className="rounded-full bg-background/70 px-1.5 py-0.5 text-3xs text-muted-foreground">
-                        {s}
-                      </span>
-                    ))}
-                  </div>
-                )}
                 <ChatAttachments attachments={msg.attachments} compact />
               </div>
             </div>

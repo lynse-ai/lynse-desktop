@@ -6,11 +6,13 @@ import {
   rootCtx,
   defaultValueCtx,
   editorViewOptionsCtx,
+  prosePluginsCtx,
 } from "@milkdown/kit/core";
 import { commonmark } from "@milkdown/kit/preset/commonmark";
 import { gfm } from "@milkdown/kit/preset/gfm";
 
 import "@milkdown/kit/prose/view/style/prosemirror.css";
+import { cjkSpacingPlugin } from "./cjk-spacing";
 
 interface MilkdownViewerProps {
   content: string;
@@ -32,6 +34,7 @@ export function MilkdownViewer({ content }: MilkdownViewerProps) {
           ...prev,
           editable: () => false,
         }));
+        ctx.update(prosePluginsCtx, (plugins) => [...plugins, cjkSpacingPlugin()]);
       })
       .use(commonmark)
       .use(gfm)

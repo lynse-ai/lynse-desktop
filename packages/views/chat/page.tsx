@@ -22,7 +22,6 @@ import {
 import { Button } from "@lynse/ui/components/ui/button";
 import { Textarea } from "@lynse/ui/components/ui/textarea";
 import { StreamingMarkdown } from "@lynse/ui/markdown";
-import { toast } from "sonner";
 import { AssistantAvatar } from "../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useChat } from "../workspace/hooks/use-chat";
@@ -31,15 +30,10 @@ import { useFolders } from "../workspace/hooks/use-folders";
 import { LOCAL_TRANSCRIPTION_FOLDER_ID } from "../workspace/local-transcription";
 import { WaitingText } from "../workspace/hooks/waiting-text";
 import { ConfirmDialog } from "../workspace/ConfirmDialog";
-import { ChatAttachmentTray, ChatAttachments } from "./chat-attachments";
+import { ChatAttachments } from "./chat-attachments";
+import { ThinkingBlock, ToolActivity } from "./chat-reasoning";
 import {
-  ATTACHMENT_ACCEPT_ATTR,
-  attachmentKind,
-  isAcceptedAttachment,
-  isAttachmentTooLarge,
-  makeLocalId,
   mergeContextFileIds,
-  uploadChatAttachment,
   type AttachmentDraft,
 } from "./chat-attachment-upload";
 import { ChatHistorySidebar } from "./chat-history-sidebar";
@@ -288,14 +282,9 @@ export function ChatPage() {
   };
 
   // ── "+" attachment uploads ──────────────────────────────
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Hidden from the UI until upload is implemented; handlers kept for reuse.
   const [attachmentDrafts, setAttachmentDrafts] = useState<AttachmentDraft[]>([]);
   const hasUploadingAttachments = attachmentDrafts.some((d) => d.status === "uploading");
-
-  const removeAttachmentDraft = (draft: AttachmentDraft) => {
-    if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
-    setAttachmentDrafts((prev) => prev.filter((d) => d.localId !== draft.localId));
-  };
 
   const clearAttachmentDrafts = () => {
     setAttachmentDrafts((prev) => {
@@ -304,56 +293,6 @@ export function ChatPage() {
       }
       return [];
     });
-  };
-
-  /** Validate picked files, start their uploads immediately and track progress. */
-  const handleFilesChosen = (files: FileList | null) => {
-    if (!files) return;
-    for (const file of Array.from(files)) {
-      if (!isAcceptedAttachment(file)) {
-        toast.error(t("chat.attachment_rejected"), { description: file.name });
-        continue;
-      }
-      if (isAttachmentTooLarge(file)) {
-        toast.error(t("chat.attachment_too_large"), { description: file.name });
-        continue;
-      }
-      const kind = attachmentKind(file.name, file.type);
-      const localId = makeLocalId();
-      const previewUrl =
-        kind === "image" && typeof URL.createObjectURL === "function"
-          ? URL.createObjectURL(file)
-          : undefined;
-      setAttachmentDrafts((prev) => [
-        ...prev,
-        {
-          localId,
-          file,
-          name: file.name,
-          size: file.size,
-          kind,
-          previewUrl,
-          status: "uploading",
-          progress: 0,
-        },
-      ]);
-      uploadChatAttachment(file, (pct) =>
-        setAttachmentDrafts((prev) =>
-          prev.map((d) => (d.localId === localId ? { ...d, progress: pct } : d)),
-        ),
-      )
-        .then((fileId) =>
-          setAttachmentDrafts((prev) =>
-            prev.map((d) => (d.localId === localId ? { ...d, status: "ready", fileId } : d)),
-          ),
-        )
-        .catch(() => {
-          setAttachmentDrafts((prev) =>
-            prev.map((d) => (d.localId === localId ? { ...d, status: "error" } : d)),
-          );
-          toast.error(t("chat.attachment_failed"), { description: file.name });
-        });
-    }
   };
 
   useEffect(() => {
@@ -549,19 +488,7 @@ export function ChatPage() {
               </div>
             )}
             <MentionChips mentions={activeChips} onRemove={removeMention} />
-            <ChatAttachmentTray drafts={attachmentDrafts} onRemove={removeAttachmentDraft} />
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept={ATTACHMENT_ACCEPT_ATTR}
-              className="hidden"
-              onChange={(event) => {
-                handleFilesChosen(event.target.files);
-                // Allow picking the same file again after a re-select.
-                event.target.value = "";
-              }}
-            />
+            {/* Attachment upload is not implemented yet; entry points hidden until it ships. */}
             <Textarea
               ref={textareaRef}
               value={input}
@@ -616,17 +543,7 @@ export function ChatPage() {
             />
             <div className="flex items-center gap-1 px-0.5 pb-0.5 pt-1">
               <div className="flex items-center gap-0.5">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-8 rounded-lg border-0 bg-transparent text-muted-foreground shadow-none transition-colors hover:bg-muted hover:text-foreground dark:hover:bg-white/[0.06]"
-                  title={t("chat.attach_files")}
-                  aria-label={t("chat.attach_files")}
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  <Plus className="size-4" strokeWidth={1.8} />
-                </Button>
+                {/* Attachment "+" button hidden: upload not implemented yet. */}
                 <Button
                   type="button"
                   variant="ghost"
@@ -761,6 +678,18 @@ function AssistantMessage({ message, isStreaming, copied, onCopy }: AssistantMes
 
   return (
     <>
+      {message.thinking && (
+        <div className="mb-2">
+          <ThinkingBlock text={message.thinking} active={message.thinkingActive} />
+        </div>
+      )}
+
+      {!!message.toolUses?.length && (
+        <div className="mb-2">
+          <ToolActivity tools={message.toolUses} />
+        </div>
+      )}
+
       {message.error ? (
         <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm leading-6 text-destructive">
           {message.content}
@@ -782,19 +711,6 @@ function AssistantMessage({ message, isStreaming, copied, onCopy }: AssistantMes
         <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
           <span className="size-1.5 animate-pulse rounded-full bg-current" />
           <WaitingText status={message.status} />
-        </div>
-      )}
-
-      {message.sources && message.sources.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5">
-          {message.sources.map((source, index) => (
-            <span
-              key={`${source}-${index}`}
-              className="rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-3xs text-accent-brand-text"
-            >
-              {source}
-            </span>
-          ))}
         </div>
       )}
 

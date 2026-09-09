@@ -141,7 +141,8 @@ fn idle_snapshot() -> Value {
 #[cfg(target_os = "macos")]
 fn platform_start(app: &AppHandle) -> CommandResult<Value> {
     use crate::live_translation::{
-        open_macos_privacy_pane, run_permission_command, sidecar_command,
+        open_macos_privacy_pane, read_permission_status, request_microphone_permission,
+        run_permission_command, sidecar_command,
     };
 
     if let Some(existing) = current_capture() {
@@ -151,9 +152,11 @@ fn platform_start(app: &AppHandle) -> CommandResult<Value> {
     }
     // The sidecar captures the microphone through ScreenCaptureKit even in
     // mic-only mode, so both TCC grants are required (same as live translation).
-    let mut permissions = run_permission_command(app, "--permission-status")?;
+    // The microphone is asked in-process — see `mic_permission` for why the
+    // grant has to be attributed to the Lynse bundle.
+    let mut permissions = read_permission_status(app)?;
     if permissions.microphone != "granted" {
-        permissions = run_permission_command(app, "--request-microphone")?;
+        permissions = request_microphone_permission(app)?;
     }
     if permissions.system_audio != "granted" {
         permissions = run_permission_command(app, "--request-system-audio")?;
@@ -161,14 +164,14 @@ fn platform_start(app: &AppHandle) -> CommandResult<Value> {
     if permissions.microphone != "granted" {
         open_macos_privacy_pane("microphone");
         return Err(
-            "缺少麦克风权限。请在系统弹出的对话框中点击「允许」（或在「隐私与安全性 → 麦克风」中允许 Lynse Audio Capture），然后重新启动 Lynse。"
+            "缺少麦克风权限。请在系统弹出的对话框中点击「允许」（或在「隐私与安全性 → 麦克风」中允许 Lynse），然后重新启动 Lynse。"
                 .to_owned(),
         );
     }
     if permissions.system_audio != "granted" {
         open_macos_privacy_pane("screen");
         return Err(
-            "缺少“屏幕与系统音频录制”权限。请在系统弹出的对话框中点击「允许」（或在「隐私与安全性 → 屏幕录制」中允许 Lynse Audio Capture），然后完全退出并重新启动 Lynse。"
+            "缺少“屏幕与系统音频录制”权限。请在系统弹出的对话框中点击「允许」（或在「隐私与安全性 → 屏幕录制」中允许 Lynse），然后完全退出并重新启动 Lynse。"
                 .to_owned(),
         );
     }

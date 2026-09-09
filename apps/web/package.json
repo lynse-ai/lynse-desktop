@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "next dev --port 3000",
+    "dev:testflight": "NEXT_PUBLIC_BUILD_CHANNEL=testflight next dev --port 3000",
     "build": "next build",
+    "build:github": "NEXT_PUBLIC_BUILD_CHANNEL=github next build",
+    "build:testflight": "NEXT_PUBLIC_BUILD_CHANNEL=testflight next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

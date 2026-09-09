@@ -5,6 +5,7 @@ import type {
   ChatConfirm,
   ChatConversation,
   ChatAttachment,
+  ChatToolUse,
 } from "../types";
 import {
   CloudChatTransport,
@@ -108,6 +109,44 @@ export function classifyStatus(raw: string): string | null {
   if (tool && WAITING_POOL[tool]) return tool;
   if (tool || /调用工具|calling tool|tool_call/i.test(raw)) return STATUS_FALLBACK;
   return null;
+}
+
+/**
+ * Fold a tool event into the running list. A newly announced call closes any
+ * still-spinning predecessor (the backend works sequentially), and done events
+ * close the matching entry — by id when present, else the last running call
+ * with the same name, else every running call.
+ */
+export function upsertToolUse(
+  uses: ChatToolUse[] | undefined,
+  name: string,
+  id: string | undefined,
+  state: "running" | "done",
+): ChatToolUse[] {
+  const list = uses ? [...uses] : [];
+  const key = id || name;
+  const index = list.findIndex((t) => t.id === key);
+
+  if (state === "running") {
+    const closed = list.map((t) => (t.state === "running" ? { ...t, state: "done" as const } : t));
+    if (index >= 0) closed[index] = { ...closed[index]!, name, state: "running" };
+    else closed.push({ id: key, name, state: "running" });
+    return closed;
+  }
+
+  if (index >= 0) {
+    list[index] = { ...list[index]!, state: "done" };
+    return list;
+  }
+  return list.map((t) =>
+    t.state === "running" && (!name || t.name === name) ? { ...t, state: "done" as const } : t,
+  );
+}
+
+/** Mark every running tool done (used when the answer or the turn completes). */
+export function closeRunningTools(uses: ChatToolUse[] | undefined): ChatToolUse[] | undefined {
+  if (!uses?.some((t) => t.state === "running")) return uses;
+  return uses.map((t) => (t.state === "running" ? { ...t, state: "done" as const } : t));
 }
 
 function makeId(prefix: string): string {
@@ -299,14 +338,40 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
             ?.messages.find((m) => m.id === assistantId);
 
     switch (evt.type) {
-      case "status":
-        writeMessage((m) => ({ ...m, status: classifyStatus(evt.text) ?? evt.text }));
+      case "status": {
+        // Status ticks double as tool announcements ("调用工具: search_meetings"),
+        // so a classified status also opens/refreshes a ZCode-style tool row.
+        const toolKey = classifyStatus(evt.text);
+        writeMessage((m) => ({
+          ...m,
+          status: toolKey ?? evt.text,
+          toolUses: toolKey ? upsertToolUse(m.toolUses, toolKey, undefined, "running") : m.toolUses,
+        }));
         break;
+      }
       case "content":
         writeMessage((m) => ({
           ...m,
           content: redactMeetingIds(m.content + evt.delta),
+          // The answer is streaming: reasoning is over and pending tools finished.
+          thinkingActive: false,
+          toolUses: closeRunningTools(m.toolUses),
         }));
+        break;
+      case "thinking":
+        writeMessage((m) => ({
+          ...m,
+          thinking: evt.delta ? (m.thinking ?? "") + evt.delta : m.thinking,
+          thinkingActive: evt.delta ? true : false,
+        }));
+        break;
+      case "tool":
+        if (evt.name) {
+          writeMessage((m) => ({
+            ...m,
+            toolUses: upsertToolUse(m.toolUses, evt.name, evt.id, evt.state ?? "running"),
+          }));
+        }
         break;
       case "meta":
         writeMessage((m) => ({
@@ -323,6 +388,8 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           ...m,
           content: redactMeetingIds(finalContent),
           status: undefined,
+          thinkingActive: false,
+          toolUses: closeRunningTools(m.toolUses),
           sources: evt.sources ? evt.sources.map(redactMeetingIds) : m.sources,
           attachments: evt.attachments ?? m.attachments,
           confirm: detected && !m.confirm ? detected : m.confirm,

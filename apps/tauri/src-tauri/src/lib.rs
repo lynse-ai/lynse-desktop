@@ -26,6 +26,8 @@ mod live_translation;
 mod inspiration_voice;
 mod recording_card;
 mod stt;
+// Microphone TCC prompt from the main app process (macOS); stubs elsewhere.
+mod mic_permission;
 // Wire codec for the Volcengine AST provider used by `live_translation`. Kept
 // platform-independent so its golden-vector tests run everywhere, even where
 // live translation itself falls back to the stub.
@@ -193,18 +195,36 @@ fn calendar_event_times(start_at: &str, end_at: &str) -> CommandResult<(DateTime
 }
 
 #[cfg(target_os = "macos")]
-fn add_todo_to_system_calendar(app: &AppHandle, todo_id: &str, start_at: &str, end_at: &str) -> CommandResult<Value> {
-    let todo = get_store_value(app, "local-todos", todo_id)?.ok_or("Todo not found")?;
-    let title = todo.get("title").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()).ok_or("Todo title is required")?;
+fn add_todo_to_system_calendar(
+    app: &AppHandle,
+    todo_id: &str,
+    title: &str,
+    source_title: Option<&str>,
+    start_at: &str,
+    end_at: &str,
+) -> CommandResult<Value> {
+    // Local todos are the source of truth for their own title/source; cloud
+    // todos (absent from the local store) bring theirs through the args.
+    let (event_title, source) = match get_store_value(app, "local-todos", todo_id)? {
+        Some(todo) => {
+            let stored_title = todo.get("title").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty()).ok_or("Todo title is required")?;
+            let stored_source = todo.get("sourceTitle").and_then(Value::as_str).filter(|value| !value.trim().is_empty());
+            (stored_title.to_owned(), stored_source.map(str::to_owned))
+        }
+        None => {
+            let title = Some(title.trim()).filter(|value| !value.is_empty()).ok_or("Todo title is required")?;
+            let source = source_title.map(str::trim).filter(|value| !value.is_empty());
+            (title.to_owned(), source.map(str::to_owned))
+        }
+    };
     let (start, end) = calendar_event_times(start_at, end_at)?;
-    let source = todo.get("sourceTitle").and_then(Value::as_str).filter(|value| !value.trim().is_empty());
     let notes = source.map(|value| format!("来自 Lynse 待办\n来源：{value}"));
 
     let store = CalendarStore::builder().connect().map_err(|error| error.to_string())?;
     let access = store.authorize_write_only().map_err(|error| error.to_string())?;
     let event_id = store.save(&CalendarEvent {
         identifier: None,
-        title: title.to_owned(),
+        title: event_title,
         notes,
         calendar_identifier: None,
         start_date: Some(start),
@@ -219,7 +239,17 @@ fn add_todo_to_system_calendar(app: &AppHandle, todo_id: &str, start_at: &str, e
     patch.insert("calendarStartAt".to_owned(), json!(start_at));
     patch.insert("calendarEndAt".to_owned(), json!(end_at));
     patch.insert("updatedAt".to_owned(), json!(now()));
-    update_store_value(app, "local-todos", todo_id, patch)?.ok_or("Todo disappeared while adding it to Calendar".to_owned())
+    match update_store_value(app, "local-todos", todo_id, patch.clone())? {
+        Some(updated) => Ok(updated),
+        // Cloud todos live server-side only — hand the calendar metadata back
+        // so the frontend can persist it alongside the cloud record.
+        None => {
+            let mut record = Map::new();
+            record.insert("id".to_owned(), json!(todo_id));
+            record.extend(patch);
+            Ok(Value::Object(record))
+        }
+    }
 }
 
 pub(crate) fn script_path(app: &AppHandle) -> CommandResult<PathBuf> {
@@ -1987,11 +2017,21 @@ fn inspiration_capture_from_iphone() -> CommandResult<()> {
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-async fn todo_add_to_calendar(app: AppHandle, todo_id: String, start_at: String, end_at: String, confirmed: bool) -> CommandResult<Value> {
+async fn todo_add_to_calendar(
+    app: AppHandle,
+    todo_id: String,
+    title: String,
+    source_title: Option<String>,
+    start_at: String,
+    end_at: String,
+    confirmed: bool,
+) -> CommandResult<Value> {
     if !confirmed { return Err("Calendar events can only be created after explicit confirmation".to_owned()) }
-    tauri::async_runtime::spawn_blocking(move || add_todo_to_system_calendar(&app, &todo_id, &start_at, &end_at))
-        .await
-        .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        add_todo_to_system_calendar(&app, &todo_id, &title, source_title.as_deref(), &start_at, &end_at)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1999,6 +2039,8 @@ async fn todo_add_to_calendar(app: AppHandle, todo_id: String, start_at: String,
 async fn todo_add_to_calendar(
     _app: AppHandle,
     _todo_id: String,
+    _title: String,
+    _source_title: Option<String>,
     _start_at: String,
     _end_at: String,
     _confirmed: bool,
@@ -2265,7 +2307,7 @@ fn local_stt_config_save(app: AppHandle, config: stt::TranscribeConfig) -> Comma
     save_transcribe_config(&app, config)
 }
 
-const SECRET_SERVICE: &str = "app.lynse.desktop";
+const SECRET_SERVICE: &str = "com.lynse.sparknote";
 
 /// Single keychain entry that holds every secret as a JSON map. Kept in sync
 /// with `VAULT_ACCOUNT` in `src/secure-storage.ts`.
@@ -2606,6 +2648,149 @@ fn open_logs_folder(app: AppHandle) -> Result<(), String> {
     tauri_plugin_opener::reveal_item_in_dir(&dir).map_err(|error| error.to_string())
 }
 
+/// Default combined log-tail budget for the bug report dialog. The tail also
+/// rides along in the prefilled GitHub issue URL, so it must stay small
+/// enough for browsers and the issue form (kept well under ~8k chars after
+/// the frontend clamps it again).
+const DIAGNOSTICS_LOG_TAIL_BYTES: usize = 16 * 1024;
+/// Hard cap for the same budget, so a caller passing a huge value can't
+/// balloon the report bundle or the IPC payload.
+const DIAGNOSTICS_LOG_TAIL_MAX_BYTES: usize = 64 * 1024;
+
+/// Log files written by tauri-plugin-log (`lynse.log` plus rotated archives
+/// under the OS log dir), newest first by modified time.
+fn diagnostics_log_files(log_dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = fs::read_dir(log_dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            (name.starts_with("lynse") && name.ends_with(".log")).then(|| entry.path())
+        })
+        .collect();
+    files.sort_by_key(|path| {
+        fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .map(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+            .ok()
+            .flatten()
+            .unwrap_or_default()
+    });
+    files.reverse();
+    files
+}
+
+/// Tail of the app's log files for the in-app bug report dialog. Newest files
+/// are read first so the result carries the most recent lines even when the
+/// tail spans rotated archives; `truncated` reports that older bytes were
+/// left out.
+#[tauri::command(async)]
+fn diagnostics_read_logs(app: AppHandle, max_bytes: Option<usize>) -> CommandResult<Value> {
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|error| format!("resolve log dir: {error}"))?;
+    let budget = max_bytes
+        .unwrap_or(DIAGNOSTICS_LOG_TAIL_BYTES)
+        .min(DIAGNOSTICS_LOG_TAIL_MAX_BYTES);
+    let files = diagnostics_log_files(&log_dir);
+    let total_bytes: u64 = files
+        .iter()
+        .filter_map(|path| fs::metadata(path).ok())
+        .map(|meta| meta.len())
+        .sum();
+
+    let mut remaining = budget;
+    // Collected newest-first; re-ordered oldest-first before returning so the
+    // tail reads chronologically.
+    let mut parts: Vec<String> = Vec::new();
+    for file in &files {
+        if remaining == 0 {
+            break;
+        }
+        let Ok(content) = fs::read_to_string(file) else {
+            continue;
+        };
+        let take = remaining.min(content.len());
+        // Nudge forward to a char boundary so the slice never splits a
+        // multi-byte character.
+        let mut start = content.len() - take;
+        while start < content.len() && !content.is_char_boundary(start) {
+            start += 1;
+        }
+        parts.push(content[start..].to_string());
+        remaining -= take;
+    }
+    parts.reverse();
+    Ok(json!({
+        "dir": log_dir.to_string_lossy(),
+        "tail": parts.join(""),
+        "truncated": total_bytes > budget as u64,
+        "files": files.len(),
+    }))
+}
+
+/// Assemble a bug-report bundle on disk: the user's composed markdown, the
+/// staged screenshots, and (optionally) copies of the raw log files. Only
+/// file names are accepted for attachments and they are re-resolved inside
+/// the inspiration staging dir, so a crafted path can't pull arbitrary files
+/// into the bundle. Returns the folder so the UI can reveal it in the system
+/// file manager for drag-and-drop onto the GitHub issue.
+#[tauri::command(async)]
+fn diagnostics_prepare_report(
+    app: AppHandle,
+    markdown: String,
+    attachments: Vec<String>,
+    include_logs: bool,
+) -> CommandResult<Value> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default();
+    let dir = app_data_dir(&app)?
+        .join("reports")
+        .join(format!("report-{stamp}"));
+    fs::create_dir_all(&dir).map_err(|error| format!("create report dir: {error}"))?;
+    fs::write(dir.join("report.md"), markdown)
+        .map_err(|error| format!("write report.md: {error}"))?;
+
+    let staging = inspiration_staging_dir(&app)?;
+    for attachment in &attachments {
+        let Some(name) = Path::new(attachment)
+            .file_name()
+            .and_then(|name| name.to_str())
+        else {
+            continue;
+        };
+        if !is_safe_asset_file_name(name) {
+            continue;
+        }
+        if let Ok(bytes) = fs::read(staging.join(name)) {
+            let _ = fs::write(dir.join(name), bytes);
+        }
+    }
+
+    if include_logs {
+        let log_dir = app
+            .path()
+            .app_log_dir()
+            .map_err(|error| format!("resolve log dir: {error}"))?;
+        let logs_dir = dir.join("logs");
+        fs::create_dir_all(&logs_dir).map_err(|error| format!("create logs dir: {error}"))?;
+        for file in diagnostics_log_files(&log_dir) {
+            let Some(name) = file.file_name() else {
+                continue;
+            };
+            if let Ok(bytes) = fs::read(&file) {
+                let _ = fs::write(logs_dir.join(name), bytes);
+            }
+        }
+    }
+
+    Ok(json!({ "dir": dir.to_string_lossy() }))
+}
+
 const TRAY_ELAPSED_ID: &str = "tray_elapsed";
 const TRAY_START_ID: &str = "start_live_recording";
 const TRAY_PAUSE_ID: &str = "pause_live_recording";
@@ -2699,6 +2884,10 @@ pub(crate) fn show_main_window(app: &AppHandle) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+    // The island only exists for when the main window is out of sight, so
+    // restoring the main window always retires it. Tray "显示主窗口", the
+    // island's expand button and the Dock reopen all funnel through here.
+    live_translation::set_recording_island_visible(app, false);
 }
 
 /// Creates the menu-bar / notification-area tray icon and its menu so the
@@ -2851,6 +3040,41 @@ pub fn run() {
                 if window.label() == "main" {
                     api.prevent_close();
                     let _ = window.hide();
+                    // Hidden to the tray mid-session: the island becomes the
+                    // on-screen control surface (capture keeps running in the
+                    // sidecar regardless).
+                    let app = window.app_handle();
+                    if app.state::<LiveTranslationManager>().has_active_session() {
+                        live_translation::set_recording_island_visible(app, true);
+                    }
+                    return;
+                }
+            }
+            // The island mirrors the "main window out of sight" state: a
+            // Dock-minimize (no CloseRequested fires) must surface it, and any
+            // refocus of the main window must retire it.
+            if let tauri::WindowEvent::Focused(focused) = event {
+                if window.label() == "main" {
+                    let app = window.app_handle().clone();
+                    if *focused {
+                        live_translation::set_recording_island_visible(&app, false);
+                    } else {
+                        // The genie/minimize animation settles after focus
+                        // drops; re-check once it does so that merely switching
+                        // to another app (window still visible) never pops the
+                        // island.
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            let Some(main) = app.get_webview_window("main") else {
+                                return;
+                            };
+                            if main.is_minimized().unwrap_or(false)
+                                && app.state::<LiveTranslationManager>().has_active_session()
+                            {
+                                live_translation::set_recording_island_visible(&app, true);
+                            }
+                        });
+                    }
                     return;
                 }
             }
@@ -2885,6 +3109,7 @@ pub fn run() {
             secure_set_secret, secure_get_secret, secure_delete_secret,
             get_app_info,
             open_logs_folder,
+            diagnostics_read_logs, diagnostics_prepare_report,
             live_translation::live_translation_permissions,
             live_translation::live_translation_request_permission,
             live_translation::live_translation_state,
@@ -2897,6 +3122,7 @@ pub fn run() {
             live_translation::live_translation_recover,
             live_translation::live_translation_show_subtitles,
             live_translation::live_translation_show_main,
+            live_translation::live_translation_hide_main,
             live_translation::live_translation_hide_island,
             live_translation::live_translation_expand_island,
             live_translation::live_translation_update_tray,

@@ -174,7 +174,15 @@ export async function fetchTodos(): Promise<{ items: TodoItem[]; cloudFailed: bo
   } catch {
     local = getLocalTodos();
   }
-  return { items: [...cloud, ...local], cloudFailed };
+  // Cloud todos have no local Rust store, so their calendar metadata
+  // (added when the user puts them on the system calendar) lives in
+  // localStorage overrides and is merged back in here.
+  const overrides = getOverrides();
+  const items = [...cloud, ...local].map((item) => {
+    const override = overrides[item.id];
+    return override ? { ...item, ...override } : item;
+  });
+  return { items, cloudFailed };
 }
 
 /** Create or update a todo. Cloud items are updated server-side; local ones
@@ -199,6 +207,7 @@ export async function saveTodo(todo: TodoItem): Promise<TodoItem> {
 export async function deleteTodo(todo: TodoItem): Promise<void> {
   if (todo.backend) {
     await deleteCloudTodos([todo.id]);
+    removeOverride(todo.id);
     return;
   }
   const bridge = getTodoBridge();
@@ -247,21 +256,71 @@ export function saveOverrides(overrides: Record<string, Partial<TodoItem>>) {
   safeSet(OVERRIDE_KEY, overrides);
 }
 
+function removeOverride(id: string) {
+  const overrides = getOverrides();
+  if (!overrides[id]) return;
+  delete overrides[id];
+  saveOverrides(overrides);
+}
+
 export { ApiError };
 
 /**
- * Write a todo into the macOS system Calendar (desktop only).
- * Requires the Rust bridge (it looks the todo up by id in the local store).
+ * Whether "add to system calendar" can be offered in this environment:
+ * desktop bridge present and running on macOS (the Rust command is a no-op
+ * stub elsewhere, so the affordance is hidden there).
+ */
+export function isCalendarAvailable(): boolean {
+  if (typeof window === "undefined") return false;
+  const desktop = (window as unknown as {
+    desktopAPI?: { todo?: { addToCalendar?: unknown }; appInfo?: { platform?: string } };
+  }).desktopAPI;
+  if (typeof desktop?.todo?.addToCalendar !== "function") return false;
+  const platform = desktop.appInfo?.platform;
+  return !platform || platform === "darwin";
+}
+
+/**
+ * Write a todo into the macOS system Calendar (desktop only). Works for both
+ * local todos (the Rust side reads title/source from the local store and
+ * persists the calendar metadata there) and cloud ones (title/source travel
+ * with the call; the returned metadata is remembered in localStorage
+ * overrides and merged back on load).
  */
 export async function addTodoToSystemCalendar(
   todo: TodoItem,
   startAt: string,
   endAt: string,
 ): Promise<TodoItem> {
-  if (typeof window === "undefined") throw new Error("not supported");
+  if (typeof window === "undefined") throw new Error("calendar not available");
   const raw = (window as unknown as { desktopAPI?: { todo?: Record<string, (...a: unknown[]) => Promise<unknown>> } })
     .desktopAPI?.todo;
   if (!raw?.addToCalendar) throw new Error("calendar not available");
-  const updated = (await raw.addToCalendar(todo.id, startAt, endAt, true)) as TodoItem;
-  return updated;
+  const updated = (await raw.addToCalendar(
+    todo.id,
+    todo.title,
+    todo.sourceTitle ?? null,
+    startAt,
+    endAt,
+    true,
+  )) as Record<string, unknown>;
+
+  const calendarFields = [
+    "calendarEventId",
+    "calendarAddedAt",
+    "calendarStartAt",
+    "calendarEndAt",
+    "updatedAt",
+  ] as const;
+  const patch: Partial<TodoItem> = {};
+  for (const key of calendarFields) {
+    const value = updated[key];
+    if (typeof value === "string" && value) patch[key] = value;
+  }
+  if (todo.backend) {
+    const overrides = getOverrides();
+    overrides[todo.id] = { ...overrides[todo.id], ...patch };
+    saveOverrides(overrides);
+  }
+  return { ...todo, ...patch };
 }

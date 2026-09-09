@@ -13,24 +13,21 @@ import { AppUpdateDialog } from "../app-update-dialog";
 import { featureFlags } from "../feature-flags";
 import { NotificationList } from "../notifications/notification-list";
 import { SettingsDialog } from "../settings/settings-dialog";
-import { UploadDialog } from "../workspace/upload-dialog";
 import { UserProfileDropdown } from "./user-profile-dropdown";
+import { isTauri } from "./use-maximized";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@lynse/ui/components/ui/dropdown-menu";
 import {
+  House,
   Lightbulb,
   ListChecks,
   FolderOpen,
-  MessageSquare,
+  Bot,
   Bell,
   Settings,
-  Plus,
-  Upload,
-  Mic,
   Bluetooth,
 } from "../icons";
 
@@ -40,10 +37,16 @@ interface NavItem {
   path?: string;
   icon: React.ComponentType<{ className?: string }>;
   action?: () => void;
+  /**
+   * Selected glyphs render solid via `fill-current`. Lucide icons whose
+   * strokes don't close into a sensible filled shape set this to false and
+   * stay outlined when selected.
+   */
+  solid?: boolean;
 }
 
 function isNavActive(pathname: string, href: string): boolean {
-  if (href === "/") return pathname === "/" || pathname === "/notes";
+  if (href === "/home") return pathname === "/" || pathname === "/home";
   return pathname === href || pathname.startsWith(href + "/");
 }
 
@@ -55,13 +58,13 @@ export function LynseSidebar() {
   const chatUnreadCount = useChatStore(selectChatUnreadCount);
   const markAllRead = useNotificationStore((s) => s.markAllRead);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [uploadOpen, setUploadOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
 
   const nickname = (data?.nickname as string) || "User";
   const initials = nickname.slice(0, 2).toUpperCase();
 
   const topItems: NavItem[] = [
+    { key: "home", label: t("nav.home"), icon: House, path: "/home" },
     {
       key: "inspiration",
       label: t("nav.inspiration"),
@@ -78,7 +81,7 @@ export function LynseSidebar() {
     {
       key: "chat",
       label: t("nav.chat"),
-      icon: MessageSquare,
+      icon: Bot,
       path: "/chat",
       // Opening the chat from the sidebar lands on the conversation the
       // unread badge points at (latest unread, else latest) — never a blank
@@ -88,7 +91,14 @@ export function LynseSidebar() {
         push("/chat");
       },
     },
-    { key: "devices", label: t("nav.devices"), icon: Bluetooth, path: "/devices" },
+    {
+      key: "devices",
+      label: t("nav.devices"),
+      icon: Bluetooth,
+      path: "/devices",
+      // Open stroke path — filling it closes into a solid blob.
+      solid: false,
+    },
   ].filter((item) =>
     item.key === "inspiration" ? featureFlags.inspiration && Boolean(getDesktopInspirationApi())
     : item.key === "devices" ? featureFlags.devices
@@ -105,7 +115,13 @@ export function LynseSidebar() {
       {/* .lyse-sidebar: vibrancy CSS drops the divider — the inset content
           card's own edge separates it from the frosted rail. */}
       <aside
-        className="lyse-sidebar flex h-full w-[68px] shrink-0 flex-col items-center border-r border-border/50 bg-sidebar pb-2 pt-10"
+        className={cn(
+          "lyse-sidebar flex h-full w-[68px] shrink-0 flex-col items-center border-r border-border/50 bg-sidebar pb-2",
+          // On desktop the macOS traffic lights overlay the window top (bottom
+          // edge ≈ 39px) — keep the avatar below with clear breathing room.
+          // Web has no lights and keeps the tighter padding.
+          isTauri ? "pt-[54px]" : "pt-10"
+        )}
         data-tauri-drag-region
       >
       {/* User avatar at the top — opens the profile menu */}
@@ -124,31 +140,6 @@ export function LynseSidebar() {
         }
       />
 
-      {/* Create: + opens import audio / start recording. Inverted
-          foreground/background — charcoal in light mode, warm ivory in dark —
-          so the rail stays monochrome with purple reserved for in-content
-          accents. 80% alpha keeps it the heaviest element on the rail without
-          reading as a black block. */}
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          title={t("layout.new_recording")}
-          data-tauri-drag-region={false}
-          className="mb-2 flex size-10 shrink-0 items-center justify-center rounded-xl bg-foreground/80 text-background transition-colors hover:bg-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-        >
-          <Plus className="size-5" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" side="right" sideOffset={10} className="w-48">
-          <DropdownMenuItem onClick={() => setUploadOpen(true)}>
-            <Upload className="size-4 text-muted-foreground" strokeWidth={1.5} />
-            <span>{t("layout.new_recording_import")}</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => push("/recording")}>
-            <Mic className="size-4 text-muted-foreground" strokeWidth={1.5} />
-            <span>{t("layout.new_recording_start")}</span>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
       <div className="flex w-full flex-1 flex-col items-center gap-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {topItems.map((item) => {
           const Icon = item.icon;
@@ -165,7 +156,7 @@ export function LynseSidebar() {
               onClick={() => (item.action ? item.action() : push(item.path ?? ""))}
               title={item.label}
             >
-              <Icon className={cn("size-5", active ? "text-sidebar-accent-foreground" : "text-muted-foreground")} />
+              <Icon className={cn("size-5", active && item.solid !== false && "fill-current")} />
               <span className="mt-1 text-3xs font-medium leading-none">{item.label}</span>
             </NavButton>
           );
@@ -245,7 +236,7 @@ export function LynseSidebar() {
               onClick={() => (item.action ? item.action() : push(item.path ?? ""))}
               title={item.label}
             >
-              <Icon className={cn("size-5", active ? "text-sidebar-accent-foreground" : "text-muted-foreground")} />
+              <Icon className={cn("size-5", active && item.solid !== false && "fill-current")} />
               <span className="mt-1 text-3xs font-medium leading-none">{item.label}</span>
             </NavButton>
           );
@@ -253,7 +244,6 @@ export function LynseSidebar() {
       </div>
     </aside>
     <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
-    <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
     <AppUpdateDialog />
     </>
   );
@@ -282,8 +272,10 @@ function NavButton({
       data-tauri-drag-region={false}
       className={cn(
         "relative flex w-[56px] flex-col items-center justify-center rounded-lg px-1 py-2 transition-colors",
+        // Selected = accent-colored icon+label, no pill behind them; the solid
+        // glyph alone carries the selected state.
         active
-          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+          ? "text-accent-brand-text"
           : "text-muted-foreground hover:bg-accent hover:text-foreground"
       )}
     >

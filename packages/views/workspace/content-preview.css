@@ -4,18 +4,18 @@
    and radii come from packages/ui/styles/tokens.css and adapt to dark mode. */
 
 .content-preview-inner {
-  /* Editorial heading stack: Apple system fonts (SF Pro + PingFang SC), then OPPO Sans */
-  --content-font-heading: system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC",
-    "OPPOSans", "OPPO Sans", "Segoe UI", "Microsoft YaHei", sans-serif;
+  /* Editorial heading stack matches the app pairing: Inter + OPPO Sans */
+  --content-font-heading: "Inter", "OPPO Sans 4.0", "OPPO Sans", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
 
-  /* Comfortable reading column: ~45 CJK characters per line */
+  /* Comfortable reading column: ~52 CJK characters per line */
   width: 100%;
-  max-width: 45rem;
+  max-width: 52em;
   margin-inline: auto;
 
   font-size: 1rem;
   font-weight: 300;
-  line-height: 1.85;
+  line-height: 1.65;
   color: var(--foreground);
   word-break: break-word;
   -webkit-font-smoothing: antialiased;
@@ -49,7 +49,7 @@
 }
 
 .content-preview-inner :is(h1, h1 *) {
-  font-size: 1.875rem;
+  font-size: 1.625rem;
   font-weight: 700;
   line-height: 1.3;
   letter-spacing: -0.015em;
@@ -61,7 +61,7 @@
 }
 
 .content-preview-inner :is(h2, h2 *) {
-  font-size: 1.375rem;
+  font-size: 1.25rem;
   font-weight: 600;
   line-height: 1.35;
   letter-spacing: -0.01em;
@@ -87,7 +87,7 @@
 }
 
 .content-preview-inner :is(h3, h3 *) {
-  font-size: 1.125rem;
+  font-size: 1.0625rem;
   font-weight: 600;
   line-height: 1.4;
 }
@@ -390,9 +390,7 @@
 /* ── GitHub — Typora default look: dense doc rhythm, ruled h1/h2, zebra tables ── */
 
 :root[data-editor-theme="github"] .content-preview-inner {
-  max-width: 53.75rem;
   font-weight: 400;
-  line-height: 1.7;
 }
 
 :root[data-editor-theme="github"] .content-preview-inner h2::before {
@@ -400,7 +398,7 @@
 }
 
 :root[data-editor-theme="github"] .content-preview-inner :is(h1, h1 *) {
-  font-size: 2.25rem;
+  font-size: 1.625rem;
   font-weight: 700;
   line-height: 1.2;
   letter-spacing: 0;
@@ -413,7 +411,7 @@
 }
 
 :root[data-editor-theme="github"] .content-preview-inner :is(h2, h2 *) {
-  font-size: 1.75rem;
+  font-size: 1.25rem;
   font-weight: 700;
   line-height: 1.225;
   letter-spacing: 0;
@@ -426,7 +424,7 @@
 }
 
 :root[data-editor-theme="github"] .content-preview-inner :is(h3, h3 *) {
-  font-size: 1.5rem;
+  font-size: 1.0625rem;
   font-weight: 700;
   line-height: 1.43;
   letter-spacing: 0;
@@ -437,7 +435,7 @@
 }
 
 :root[data-editor-theme="github"] .content-preview-inner :is(h4, h4 *) {
-  font-size: 1.25rem;
+  font-size: 0.9375rem;
   font-weight: 700;
 }
 
@@ -446,7 +444,7 @@
 }
 
 :root[data-editor-theme="github"] .content-preview-inner :is(h5, h5 *) {
-  font-size: 1rem;
+  font-size: 0.9375rem;
   font-weight: 700;
 }
 
@@ -535,13 +533,10 @@
 /* ── Newsprint — serif Latin / sans CJK, narrow measure, bottom-only rhythm ── */
 
 :root[data-editor-theme="newsprint"] .content-preview-inner {
-  --content-font-heading: Georgia, "Times New Roman", "PingFang SC", "OPPOSans",
-    "OPPO Sans", "Microsoft YaHei", serif;
-  font-family: Georgia, "Times New Roman", "PingFang SC", "OPPOSans", "OPPO Sans",
-    "Microsoft YaHei", serif;
-  max-width: 40em;
+  --content-font-heading: Georgia, "Noto Serif SC Variable", "Songti SC", serif;
+  font-family: "Inter", "Noto Sans SC Variable", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
   font-weight: 400;
-  line-height: 1.75;
 }
 
 :root[data-editor-theme="newsprint"] .content-preview-inner h2::before {
@@ -549,7 +544,7 @@
 }
 
 :root[data-editor-theme="newsprint"] .content-preview-inner :is(h1, h1 *) {
-  font-size: 1.875rem;
+  font-size: 1.625rem;
   font-weight: 700;
   line-height: 1.35;
   letter-spacing: 0;
@@ -564,7 +559,7 @@
 /* h2/h3 share one size and are told apart by weight — the newsprint trick */
 :root[data-editor-theme="newsprint"] .content-preview-inner :is(h2, h2 *),
 :root[data-editor-theme="newsprint"] .content-preview-inner :is(h3, h3 *) {
-  font-size: 1.3125rem;
+  font-size: 1.1875rem;
   line-height: 1.4;
   letter-spacing: 0;
 }
@@ -580,7 +575,7 @@
 }
 
 :root[data-editor-theme="newsprint"] .content-preview-inner :is(h4, h4 *) {
-  font-size: 1.125rem;
+  font-size: 1.0625rem;
   font-weight: 400;
 }
 
@@ -589,7 +584,7 @@
 }
 
 :root[data-editor-theme="newsprint"] .content-preview-inner :is(h5, h5 *) {
-  font-size: 1rem;
+  font-size: 1.0625rem;
   font-weight: 400;
 }
 
@@ -655,4 +650,321 @@
 
 :root[data-editor-theme="newsprint"] .content-preview-inner a:hover {
   text-decoration: underline;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   VMark theme family — ported from github.com/xiaolai/vmark (ISC license)
+   for visual parity with its editor typography: 18px base / 1.8 line
+   height / 50em measure, GitHub-style heading ladder, per-theme paper
+   backgrounds. Structural rules shared by all six themes; each theme
+   only authors its palette variables.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── Shared structure: typography, spacing, element styles ── */
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner {
+  /* Runtime-adjustable typography variables */
+  --vm-font-size: 1rem;
+  --vm-mono-size: 0.85em;
+  --vm-line-height: 1.65;
+  --vm-block-spacing: 1em;
+  --vm-content-width: 52em;
+  --vm-cjk-spacing: 0.05em;
+
+  font-size: var(--vm-font-size);
+  font-weight: 400;
+  line-height: var(--vm-line-height);
+  max-width: var(--vm-content-width);
+  color: var(--vm-text);
+  /* The paper themes paint the reading column with rounded corners */
+  background: var(--vm-bg);
+  padding: 2em;
+  border-radius: var(--radius-lg, 12px);
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner ::selection {
+  background: var(--vm-selection);
+}
+
+/* CJK letter-spacing — runs decorated by the cjk-spacing plugin (editor)
+   or wrapCjkSpacing() (read-only HTML). Disabled inside code where
+   spacing would break alignment. */
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner .cjk-spacing {
+  letter-spacing: var(--vm-cjk-spacing);
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner :is(pre, code) .cjk-spacing {
+  letter-spacing: 0;
+}
+
+/* Headings — GitHub-style asymmetric hierarchy (1.5em above / 0.75em below) */
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner :is(h1, h2, h3, h4, h5, h6) {
+  font-family: inherit;
+  margin: 1.5em 0 0.75em;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner h2::before {
+  display: none;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner :is(h1, h1 *) {
+  font-size: 1.625em;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner h1 {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--vm-border);
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner :is(h2, h2 *) {
+  font-size: 1.375em;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner :is(h3, h3 *) {
+  font-size: 1.25em;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner :is(h4, h4 *) {
+  font-size: 1.125em;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner :is(h5, h5 *) {
+  font-size: 1em;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner :is(h6, h6 *) {
+  font-size: 0.95em;
+  color: var(--vm-text3);
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
+}
+
+/* Body */
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner p {
+  margin: 0 0 var(--vm-block-spacing);
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner a {
+  color: var(--vm-accent);
+  text-decoration: none;
+  text-decoration-thickness: initial;
+  text-underline-offset: initial;
+  text-decoration-color: initial;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner a:hover {
+  text-decoration: underline;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner strong,
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner b {
+  font-weight: 700;
+  color: var(--vm-strong);
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner em {
+  color: var(--vm-emph);
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner del {
+  color: var(--vm-text3);
+}
+
+/* Code — GitHub style: no borders, secondary-surface background */
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner code {
+  font-size: var(--vm-mono-size);
+  background: var(--vm-bg2);
+  color: var(--vm-code);
+  border: none;
+  border-radius: 3px;
+  padding: 0.2em 0.4em;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner pre {
+  font-size: var(--vm-mono-size);
+  background: var(--vm-bg2);
+  color: var(--vm-code);
+  border: none;
+  padding: 18px;
+  border-radius: 5px;
+  margin: 0 0 var(--vm-block-spacing);
+  line-height: 1.45;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner pre code {
+  font-size: inherit;
+}
+
+/* Blockquote — thick hairline rule with rounded corners */
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner blockquote {
+  border-left: 4px solid var(--vm-border);
+  border-radius: 5px;
+  margin: 0 0 var(--vm-block-spacing);
+  padding: 0 1em;
+  color: var(--vm-quote);
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner blockquote > p {
+  margin-bottom: 0.5em;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner blockquote > p:first-child {
+  margin-top: 0;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner blockquote > p:last-child {
+  margin-bottom: 0;
+}
+
+/* Lists — line-height rhythm, no per-item margins */
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner ul,
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner ol {
+  margin: 0 0 var(--vm-block-spacing);
+  padding-left: 2em;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner li {
+  margin: 0;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner li::marker {
+  color: var(--vm-text);
+}
+
+/* Tables — bordered grid, header on secondary surface */
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner th,
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner td {
+  border: 1px solid var(--vm-border);
+  padding: 4px 10px;
+  min-width: 3em;
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner th {
+  background: var(--vm-bg2);
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner tbody tr:nth-child(2n) {
+  background: transparent;
+}
+
+/* HR — full-width 2px rule */
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner hr {
+  width: 100%;
+  height: 2px;
+  margin: 1em 0;
+  border: none;
+  background: var(--vm-border);
+}
+
+:root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner img {
+  border-radius: 3px;
+}
+
+/* ── Per-theme palettes (values from vmark src/theme/themes/*.ts) ── */
+
+:root[data-editor-theme="white"] .content-preview-inner {
+  /* white */
+  font-family: "Inter", "OPPO Sans 4.0", "OPPO Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --vm-bg: #ffffff;
+  --vm-bg2: #eeeeee;
+  --vm-text: #1a1a1a;
+  --vm-text2: #666666;
+  --vm-text3: #888888;
+  --vm-accent: #0065ca;
+  --vm-border: #eeeeee;
+  --vm-strong: #3f5663;
+  --vm-emph: #5b0411;
+  --vm-code: #1a1a1a;
+  --vm-quote: #666666;
+  --vm-selection: rgba(0, 102, 204, 0.2);
+}
+
+:root[data-editor-theme="paper"] .content-preview-inner {
+  /* paper */
+  font-family: "Noto Serif SC Variable", "Songti SC", "SimSun", serif;
+  --vm-bg: #eeeded;
+  --vm-bg2: #dedddd;
+  --vm-text: #1a1a1a;
+  --vm-text2: #5e5e5e;
+  --vm-text3: #7d7d7d;
+  --vm-accent: #005cb9;
+  --vm-border: #d5d4d4;
+  --vm-strong: #3f5663;
+  --vm-emph: #5b0411;
+  --vm-code: #1a1a1a;
+  --vm-quote: #5e5e5e;
+  --vm-selection: rgba(0, 102, 204, 0.2);
+}
+
+:root[data-editor-theme="mint"] .content-preview-inner {
+  /* mint */
+  font-family: "Inter", "Noto Sans SC Variable", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --vm-bg: #cce6d0;
+  --vm-bg2: #b8d9bd;
+  --vm-text: #2d3a35;
+  --vm-text2: #4f4f4f;
+  --vm-text3: #747474;
+  --vm-accent: #165a3e;
+  --vm-border: #a8c9ad;
+  --vm-strong: #195948;
+  --vm-emph: #6b4423;
+  --vm-code: #1a1a1a;
+  --vm-quote: #4f4f4f;
+  --vm-selection: rgba(26, 107, 74, 0.2);
+}
+
+:root[data-editor-theme="sepia"] .content-preview-inner {
+  /* sepia */
+  font-family: "Noto Serif SC Variable", "Songti SC", "SimSun", serif;
+  --vm-bg: #f9f0db;
+  --vm-bg2: #ebdfc2;
+  --vm-text: #5c4b37;
+  --vm-text2: #5c5c5c;
+  --vm-text3: #7f7f7f;
+  --vm-accent: #8b4513;
+  --vm-border: #e0d5bc;
+  --vm-strong: #4a3728;
+  --vm-emph: #8b3a2f;
+  --vm-code: #1a1a1a;
+  --vm-quote: #5c5c5c;
+  --vm-selection: rgba(139, 69, 19, 0.2);
+}
+
+:root[data-editor-theme="night"] .content-preview-inner {
+  /* night */
+  font-family: "Inter", "Noto Sans SC Variable", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --vm-bg: #23262b;
+  --vm-bg2: #2e323a;
+  --vm-text: #d6d9de;
+  --vm-text2: #a2a8ad;
+  --vm-text3: #777c83;
+  --vm-accent: #61abff;
+  --vm-border: #3a3f46;
+  --vm-strong: #6cb6ff;
+  --vm-emph: #d29c69;
+  --vm-code: #d1d5db;
+  --vm-quote: #a2a8ad;
+  --vm-selection: rgba(90, 168, 255, 0.22);
+}
+
+:root[data-editor-theme="solarized"] .content-preview-inner {
+  /* solarized */
+  font-family: "Inter", "Noto Sans SC Variable", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --vm-bg: #002b36;
+  --vm-bg2: #073642;
+  --vm-text: #93a1a1;
+  --vm-text2: #91a0a2;
+  --vm-text3: #6a7e84;
+  --vm-accent: #53a4de;
+  --vm-border: #0e4753;
+  --vm-strong: #72a2cb;
+  --vm-emph: #cb9b6e;
+  --vm-code: #93a1a1;
+  --vm-quote: #91a0a2;
+  --vm-selection: rgba(38, 139, 210, 0.16);
 }

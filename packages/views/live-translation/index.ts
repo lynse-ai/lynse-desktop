@@ -3,6 +3,8 @@ export { TranscriptDetailPage } from "./transcript-detail-page";
 export { LiveSubtitleOverlay } from "./subtitle-overlay";
 export { RecordingIslandWindow } from "./recording-island-window";
 export { RecordingTrayAgent } from "./recording-tray-agent";
+export { RecordingFloatDock } from "./recording-float-dock";
+export { useQuickRecording } from "./quick-recording";
 export type {
   CompletedLiveSession,
   DesktopLiveTranslationApi,

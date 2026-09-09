@@ -18,6 +18,9 @@ interface RecordingDockProps {
   paused: boolean;
   /** A transient action is in flight (disables the start button). */
   busy: boolean;
+  /** True while a stop is registered but its background finalization has not
+   *  landed (locks the idle start button). */
+  stopping?: boolean;
   /** Elapsed time formatted as HH:MM:SS. */
   formattedTime: string;
   /** Live microphone level in [0, 1] for the in-dock animation. */
@@ -48,6 +51,7 @@ export function RecordingDock({
   recording,
   paused,
   busy,
+  stopping = false,
   formattedTime,
   micLevel,
   bookmarked,
@@ -77,7 +81,7 @@ export function RecordingDock({
                 <button
                   type="button"
                   onClick={onStart}
-                  disabled={busy}
+                  disabled={busy || stopping}
                   aria-label={t("recording_mode.start_recording")}
                   className="flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-all duration-200 hover:scale-105 hover:bg-destructive/90 active:scale-95 disabled:opacity-60 disabled:hover:scale-100"
                 >

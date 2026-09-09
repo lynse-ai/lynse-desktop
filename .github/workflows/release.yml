@@ -96,10 +96,59 @@ jobs:
           echo "$SHA_ENV=$SHA" >> "$GITHUB_ENV"
           echo "Packaged $ARCHIVE (sha256=$SHA)"
 
+      - name: Detect Apple signing secrets (macOS)
+        # Developer ID signing + notarization is opt-in via six APPLE_*
+        # secrets (see README/secrets checklist). They must stay *absent*
+        # rather than empty when unset: tauri-action resolves a missing
+        # secret to "" and then runs `security import ""`, which fails the
+        # build. This step forwards them to later steps via GITHUB_ENV only
+        # when actually present, so a repo without the secrets still releases
+        # with ad-hoc signing (with a loud warning) instead of failing.
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          forwarded=""
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            val="${!name}"
+            if [[ -n "$val" ]]; then
+              echo "$name=$val" >> "$GITHUB_ENV"
+              forwarded="$forwarded $name"
+            fi
+          done
+          if [[ -z "$forwarded" ]]; then
+            echo "::warning::No APPLE_* secrets are set — the macOS bundle ships ad-hoc signed (no notarization; TCC permission grants do not survive updates and microphone prompts can be suppressed for returning users)."
+            exit 0
+          fi
+          echo "Apple signing/notarization env forwarded:$forwarded"
+
+      - name: Stamp build number from tag (macOS)
+        # Release tags follow the vA.B.C(N) convention: the parenthesized N is
+        # the patch/build counter. Stamp it as CFBundleVersion so the bundle
+        # follows the macOS short-version + build-number convention. Tags
+        # without the parenthesized counter keep Tauri's default (= version).
+        if: runner.os == 'macOS' && contains(github.ref_name, '(')
+        shell: bash
+        run: |
+          BUILD="${GITHUB_REF_NAME#*\(}"
+          BUILD="${BUILD%\)*}"
+          PLIST=apps/tauri/src-tauri/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $BUILD" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" "$PLIST"
+          echo "CFBundleVersion=$BUILD stamped from $GITHUB_REF_NAME"
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Public-release channel: API-key login only (no phone/WeChat).
+          VITE_BUILD_CHANNEL: github
           # audiopus_sys (opus codec) vendors a CMakeLists.txt with an old
           # cmake_minimum_required, which CMake 4.x on the runners rejects.
           # Re-allow the legacy policy so the codec builds.
@@ -110,21 +159,10 @@ jobs:
           # latest.json — the endpoint the in-app updater polls.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Apple Developer ID signing + notarization (macOS) is temporarily
-          # disabled: the APPLE_* secrets are unset in this repo, so this
-          # block is removed entirely. When a secret is *present but empty*
-          # (GitHub's `${{ secrets.X }}` resolution for a missing secret),
-          # tauri-action runs `security import ""` and fails; leaving the
-          # variables unset makes the bundler fall back to ad-hoc signing
-          # instead. Re-add these six lines (and the secrets) to restore
-          # a stable Developer ID identity so TCC grants survive updates.
-          #
-          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          # APPLE_ID: ${{ secrets.APPLE_ID }}
-          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # APPLE_* Developer ID signing secrets are forwarded by the
+          # "Detect Apple signing secrets" step above — do not reference
+          # ${{ secrets.APPLE_* }} directly here: a missing secret resolves
+          # to "" and tauri-action fails on `security import ""`.
         with:
           projectPath: apps/tauri
           args: ${{ matrix.args }}

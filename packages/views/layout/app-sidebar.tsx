@@ -5,7 +5,7 @@ import { cn } from "@lynse/ui/lib/utils";
 import { AppLink, useNavigation } from "../navigation";
 import {
   Lightbulb,
-  MessageSquare,
+  Bot,
   Settings,
   Plus,
   Grid3X3,
@@ -62,6 +62,8 @@ import { SettingsDialog } from "../settings/settings-dialog";
 import { UploadDialog } from "../workspace/upload-dialog";
 import { TemplateManager } from "../workspace/template-manager";
 import { AppUpdateDialog } from "../app-update-dialog";
+import { openReportProblemDialog } from "../diagnostics";
+import { ReportProblemDialog } from "../report-problem-dialog";
 import { LayoutTemplate } from "lucide-react";
 
 function isNavActive(pathname: string, href: string): boolean {
@@ -87,7 +89,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
   );
   const workspaceNav = [
     { key: "inspiration", label: t("nav.inspiration"), icon: Lightbulb, path: "/inspiration" },
-    { key: "chat", label: t("nav.chat"), icon: MessageSquare, path: "/chat" },
+    { key: "chat", label: t("nav.chat"), icon: Bot, path: "/chat" },
   ].filter((item) => (item.key === "inspiration" ? featureFlags.inspiration : true));
 
   return (
@@ -213,6 +215,8 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
       <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
       <TemplateManager open={templateManagerOpen} onOpenChange={setTemplateManagerOpen} />
       <AppUpdateDialog />
+      {/* In-app bug report dialog, opened from settings / help menus */}
+      <ReportProblemDialog />
     </Sidebar>
   );
 }
@@ -455,12 +459,14 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
           <DropdownMenuSubContent>
             <LanguageItem code="en" label={t("layout.lang_en")} />
             <LanguageItem code="zh-Hans" label={t("layout.lang_zh")} />
+            <LanguageItem code="zh-Hant" label={t("layout.lang_zh_hant")} />
             <LanguageItem code="ja" label={t("layout.lang_ja")} />
+            <LanguageItem code="ko" label={t("layout.lang_ko")} />
           </DropdownMenuSubContent>
         </DropdownMenuSub>
 
         {/* ── Help & Feedback ─────────────────────────── */}
-        <DropdownMenuItem>
+        <DropdownMenuItem onClick={openReportProblemDialog}>
           <HelpCircle className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_help_feedback")}</span>
         </DropdownMenuItem>

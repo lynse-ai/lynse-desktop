@@ -3,8 +3,10 @@
 import { useState, type ReactElement } from "react";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
+import { useAuthStore } from "@lynse/core/auth";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useAppUpdate, getAppInfoSync, openAppUpdateDialog } from "../app-update";
+import { openReportProblemDialog } from "../diagnostics";
 import { useUserCredits, useMembership } from "./use-user-credits";
 import { UserActivityHeatmap } from "./user-activity-heatmap";
 import {
@@ -76,6 +78,7 @@ export function UserProfileDropdown({
   side?: "top" | "bottom" | "right";
 }) {
   const { t } = useTranslation();
+  const logout = useAuthStore((s) => s.logout);
   const { data } = useUserCredits();
   const { data: membership } = useMembership();
   const { theme, setTheme } = useTheme();
@@ -229,12 +232,14 @@ export function UserProfileDropdown({
           <DropdownMenuSubContent>
             <LanguageItem code="en" label={t("layout.lang_en")} />
             <LanguageItem code="zh-Hans" label={t("layout.lang_zh")} />
+            <LanguageItem code="zh-Hant" label={t("layout.lang_zh_hant")} />
             <LanguageItem code="ja" label={t("layout.lang_ja")} />
+            <LanguageItem code="ko" label={t("layout.lang_ko")} />
           </DropdownMenuSubContent>
         </DropdownMenuSub>
 
         {/* ── Help & Feedback ─────────────────────────── */}
-        <DropdownMenuItem>
+        <DropdownMenuItem onClick={openReportProblemDialog}>
           <HelpCircle className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_help_feedback")}</span>
         </DropdownMenuItem>
@@ -280,7 +285,7 @@ export function UserProfileDropdown({
         <DropdownMenuSeparator />
 
         {/* ── Log out ─────────────────────────────────── */}
-        <DropdownMenuItem variant="destructive">
+        <DropdownMenuItem variant="destructive" onClick={() => logout()}>
           <LogOut className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.log_out")}</span>
         </DropdownMenuItem>

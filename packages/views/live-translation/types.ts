@@ -163,7 +163,10 @@ export interface DesktopLiveTranslationApi {
   pause: () => Promise<LiveTranslationSnapshot>;
   resume: (request: LiveResumeRequest) => Promise<LiveTranslationSnapshot>;
   setMode: (request: LiveSetModeRequest) => Promise<LiveTranslationSnapshot>;
-  stop: () => Promise<CompletedLiveSession>;
+  /** Acks as soon as the stop is registered; the finished session arrives
+   *  later via the `completed` event once the sidecar drain and local
+   *  persistence finish. */
+  stop: () => Promise<void>;
   getState: () => Promise<LiveTranslationSnapshot>;
   finalizeLocal: (sessionId: string, synced: boolean) => Promise<void>;
   listRecoveries: () => Promise<LiveRecoverySummary[]>;
@@ -171,8 +174,15 @@ export interface DesktopLiveTranslationApi {
   showSubtitles: (show: boolean) => Promise<void>;
   minimizeToTray: () => Promise<void>;
   showMainWindow: () => Promise<void>;
+  /** Hide the main window (close-to-tray); the recording island pops when a
+   * session is running. Distinct from `minimizeToTray`, which hides whichever
+   * webview window it is called from (the subtitle overlay uses it). */
+  hideMainWindow: () => Promise<void>;
   /** Hide the recording-island mini window (recording keeps running). */
   hideIsland: () => Promise<void>;
+  /** Show + focus the main window and open the recording page — the island's
+   * "expand" affordance. No-op outside the desktop app. */
+  openRecordingPage: () => Promise<void>;
   /** Toggle the recording-island window between the compact pill and the
    * expanded live-transcript drawer. No-op outside the desktop app. */
   setIslandExpanded: (expanded: boolean) => Promise<void>;

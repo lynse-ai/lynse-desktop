@@ -105,6 +105,28 @@ export function parseHashtags(text: string): string[] {
   return tags;
 }
 
+/** Remove `#tag` tokens (same lexical rules as `parseHashtags`) and collapse
+ * the leftover whitespace — used when a capture becomes a todo title, which
+ * has no tag concept. */
+export function stripHashtags(text: string): string {
+  let result = "";
+  let index = 0;
+  while (index < text.length) {
+    const char = text.charAt(index);
+    if (char !== "#" || !startsTag(text.charAt(index - 1))) {
+      result += char;
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (end < text.length && !TAG_STOP.has(text.charAt(end))) end += 1;
+    // A lone `#` with no tag body stays as plain text.
+    if (end === index + 1) result += char;
+    index = end;
+  }
+  return result.replace(/\s+/g, " ").trim();
+}
+
 /** Split text into plain/tag segments so the feed can highlight tags inline. */
 export function splitByHashtags(text: string): TextSegment[] {
   const segments: TextSegment[] = [];

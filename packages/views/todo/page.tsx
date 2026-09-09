@@ -11,7 +11,7 @@ import {
   DialogFooter,
 } from "@lynse/ui/components/ui/dialog";
 import { Button } from "@lynse/ui/components/ui/button";
-import { type TodoItem, addTodoToSystemCalendar } from "./todo-api";
+import { type TodoItem, addTodoToSystemCalendar, isCalendarAvailable } from "./todo-api";
 import { useTodos } from "./use-todos";
 
 // ── Helpers ────────────────────────────────────────────────
@@ -31,6 +31,18 @@ function isThisWeek(dateStr: string): boolean {
   const endOfWeek = new Date(startOfWeek);
   endOfWeek.setDate(startOfWeek.getDate() + 7);
   return d >= startOfWeek && d < endOfWeek;
+}
+
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+/** Local-time yyyy-MM-dd for <input type="date"> (ISO slicing would shift a day across timezones). */
+function toLocalDateInput(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+/** Local-time HH:mm for <input type="time"> / display. */
+function toLocalTimeInput(d: Date): string {
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
 function formatDueDisplay(todo: TodoItem): string {
@@ -202,11 +214,15 @@ function GroupSection({
 
 function DetailPanel({
   todo,
+  calendarAvailable,
+  calendarError,
   onClose,
   onDelete,
   onAddToCalendar,
 }: {
   todo: TodoItem;
+  calendarAvailable: boolean;
+  calendarError: string | null;
   onClose: () => void;
   onDelete: () => void;
   onAddToCalendar: (startAt: string, endAt: string) => void;
@@ -217,16 +233,17 @@ function DetailPanel({
     if (todo.calendarStartAt) {
       try {
         const d = new Date(todo.calendarStartAt);
-        if (isNaN(d.getTime())) return "";
-        return d.toISOString().slice(0, 16); // yyyy-MM-ddTHH:mm
-      } catch { return ""; }
+        if (!isNaN(d.getTime())) return toLocalDateInput(d);
+      } catch { /* fall through */ }
     }
+    // Date-only due dates are already yyyy-MM-dd; parse the full form in
+    // local time so the picked day matches what the user saw.
     if (todo.dueDate) {
+      if (todo.dueDate.length <= 10) return todo.dueDate;
       try {
         const d = new Date(todo.dueDate);
-        if (isNaN(d.getTime())) return "";
-        return d.toISOString().slice(0, 10); // yyyy-MM-dd
-      } catch { return ""; }
+        if (!isNaN(d.getTime())) return toLocalDateInput(d);
+      } catch { /* fall through */ }
     }
     return "";
   });
@@ -234,22 +251,21 @@ function DetailPanel({
     if (todo.calendarStartAt) {
       try {
         const d = new Date(todo.calendarStartAt);
-        if (isNaN(d.getTime())) return "14:00";
-        return d.toISOString().slice(11, 16);
-      } catch { return "14:00"; }
+        if (!isNaN(d.getTime())) return toLocalTimeInput(d);
+      } catch { /* fall through */ }
     }
     return "14:00";
   });
 
   const handleAddToCalendar = useCallback(() => {
-    const datePart = dateValue || new Date().toISOString().slice(0, 10);
+    const datePart = dateValue || toLocalDateInput(new Date());
     const timePart = timeValue || "14:00";
-    const startAt = `${datePart}T${timePart}:00`;
-    // Default 1-hour duration
-    const end = new Date(`${datePart}T${timePart}:00`);
-    end.setHours(end.getHours() + 1);
-    const endAt = end.toISOString();
-    onAddToCalendar(startAt, endAt);
+    const start = new Date(`${datePart}T${timePart}`); // local time per spec
+    if (isNaN(start.getTime())) return;
+    // Default 1-hour duration. Full ISO strings with offset so the Rust
+    // side can parse them as RFC 3339.
+    const end = new Date(start.getTime() + 60 * 60 * 1000);
+    onAddToCalendar(start.toISOString(), end.toISOString());
   }, [dateValue, timeValue, onAddToCalendar]);
 
   return (
@@ -317,8 +333,8 @@ function DetailPanel({
 
       {/* Actions */}
       <div className="mt-auto border-t border-border/40 px-4 py-3 space-y-2">
-        {!todo.backend && (
-          !todo.calendarEventId ? (
+        {calendarAvailable &&
+          (!todo.calendarEventId ? (
             <Button
               variant="default"
               size="sm"
@@ -333,7 +349,9 @@ function DetailPanel({
               <Calendar className="size-3.5" />
               {t("todo.added_to_calendar")}
             </div>
-          )
+          ))}
+        {calendarError && (
+          <p className="px-1 text-xs text-destructive">{calendarError}</p>
         )}
         <button
           onClick={onDelete}
@@ -376,7 +394,7 @@ function CalendarConfirmDialog({
     try {
       const d = new Date(startAt);
       if (isNaN(d.getTime())) return "14:00";
-      return d.toISOString().slice(11, 16);
+      return toLocalTimeInput(d);
     } catch { return "14:00"; }
   }, [startAt]);
 
@@ -431,6 +449,9 @@ export function TodoPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [pendingCalendarStart, setPendingCalendarStart] = useState("");
+  const [pendingCalendarEnd, setPendingCalendarEnd] = useState("");
+  const [calendarError, setCalendarError] = useState<string | null>(null);
+  const calendarAvailable = useMemo(() => isCalendarAvailable(), []);
 
   const handleAdd = useCallback(
     (title: string) => {
@@ -458,27 +479,33 @@ export function TodoPage() {
   );
 
   const handleAddToCalendar = useCallback(
-    (startAt: string) => {
+    (startAt: string, endAt: string) => {
       if (!selectedId) return;
       setPendingCalendarStart(startAt);
+      setPendingCalendarEnd(endAt);
+      setCalendarError(null);
       setCalendarOpen(true);
     },
     [selectedId],
   );
 
   const confirmAddToCalendar = useCallback(async () => {
-    if (!selectedId || !pendingCalendarStart) return;
+    if (!selectedId || !pendingCalendarStart || !pendingCalendarEnd) return;
     const todo = todos.find((x) => x.id === selectedId);
-    if (!todo || todo.backend) return; // system calendar only works for local todos
+    if (!todo) return;
+    setCalendarError(null);
     try {
-      const end = new Date(pendingCalendarStart);
-      end.setHours(end.getHours() + 1);
-      await addTodoToSystemCalendar(todo, pendingCalendarStart, end.toISOString());
-      load();
+      await addTodoToSystemCalendar(todo, pendingCalendarStart, pendingCalendarEnd);
+      await load();
     } catch (err) {
       console.error("[Todo] addToCalendar failed:", err);
+      setCalendarError(
+        err instanceof Error && err.message
+          ? `${t("todo.calendar_add_failed")}${err.message}`
+          : t("todo.calendar_add_failed"),
+      );
     }
-  }, [selectedId, pendingCalendarStart, todos, load]);
+  }, [selectedId, pendingCalendarStart, pendingCalendarEnd, todos, load, t]);
 
   const groups = useMemo(() => groupTodos(todos), [todos]);
   const selected = todos.find((x) => x.id === selectedId) ?? null;
@@ -591,6 +618,8 @@ export function TodoPage() {
       {selected && (
         <DetailPanel
           todo={selected}
+          calendarAvailable={calendarAvailable}
+          calendarError={calendarError}
           onClose={() => setSelectedId(null)}
           onDelete={() => handleDelete(selected.id)}
           onAddToCalendar={handleAddToCalendar}

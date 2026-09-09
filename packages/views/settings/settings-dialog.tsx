@@ -12,7 +12,6 @@ import { Label } from "@lynse/ui/components/ui/label";
 import { Input } from "@lynse/ui/components/ui/input";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Switch } from "@lynse/ui/components/ui/switch";
-import { useAuthStore } from "@lynse/core/auth";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Sun, Moon, Monitor, Download } from "../icons";
@@ -32,13 +31,12 @@ import {
   openExternalUrl,
   openAppUpdateDialog,
 } from "../app-update";
-import { openLogsFolder, reportIssue } from "../diagnostics";
+import { openLogsFolder, openReportProblemDialog } from "../diagnostics";
 import type { LocalHotwordPackage, LocalVoiceprint } from "../workspace/types";
 import { SttConfigSection } from "./stt-config-section";
 import { LiveTranslationConfigCard } from "./live-translation-config-card";
 import { VaultConfigCard } from "./vault-config-card";
 import { WebdavSyncConfigCard } from "./webdav-sync-config-card";
-const DEFAULT_API_URL = "https://api.lynse.cn";
 export const SETTINGS_DIALOG_CONTENT_CLASS =
   "sm:max-w-2xl max-h-[min(90vh,760px)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0";
 
@@ -51,9 +49,6 @@ export function SettingsDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-  const login = useAuthStore((s) => s.login);
-  const logout = useAuthStore((s) => s.logout);
   const { theme, setTheme } = useTheme();
   const { t } = useTranslation();
 
@@ -63,10 +58,6 @@ export function SettingsDialog({
     { value: "system", label: t("layout.theme_system"), icon: Monitor },
   ];
 
-  const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
-  const [apiKey, setApiKey] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [connecting, setConnecting] = useState(false);
   const [offlineTranscription, setOfflineTranscription] = useState(false);
   const localTranscriptionApi = getDesktopLocalTranscriptionApi();
   const hasLocalTranscription = !!localTranscriptionApi;
@@ -90,10 +81,6 @@ export function SettingsDialog({
 
   useEffect(() => {
     if (open) {
-      const savedUrl = localStorage.getItem("lynse_api_url");
-      if (savedUrl) setApiUrl(savedUrl);
-      const savedKey = localStorage.getItem("lynse_api_key");
-      if (savedKey) setApiKey(savedKey);
       setOfflineTranscription(localStorage.getItem(OFFLINE_TRANSCRIPTION_ENABLED_KEY) === "1");
       refreshModels();
       refreshLocalAssets();
@@ -117,25 +104,6 @@ export function SettingsDialog({
       unlisten?.();
     };
   }, [localTranscriptionApi]);
-
-  async function handleConnect() {
-    if (!apiKey.trim()) return;
-    setError(null);
-    setConnecting(true);
-    try {
-      await login(apiKey.trim(), apiUrl.trim());
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : t("settings.connection_failed");
-      setError(message);
-    } finally {
-      setConnecting(false);
-    }
-  }
-
-  function handleDisconnect() {
-    logout();
-    setApiKey("");
-  }
 
   function handleOfflineTranscriptionChange(enabled: boolean) {
     setOfflineTranscription(enabled);
@@ -391,68 +359,6 @@ export function SettingsDialog({
             </Card>
           )}
 
-          {/* ── API Configuration ──────────────────────── */}
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-xs">{t("settings.api_config")}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="dlg-api-url" className="text-xs">{t("settings.api_base_url")}</Label>
-                <Input
-                  id="dlg-api-url"
-                  placeholder={DEFAULT_API_URL}
-                  value={apiUrl}
-                  onChange={(e) => setApiUrl(e.target.value)}
-                  className="h-8 text-sm"
-                  disabled={isAuthenticated}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="dlg-api-key" className="text-xs">{t("settings.api_key")}</Label>
-                <Input
-                  id="dlg-api-key"
-                  type="password"
-                  placeholder="dk-..."
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  className="h-8 text-sm"
-                  disabled={isAuthenticated}
-                />
-              </div>
-
-              {error && (
-                <p className="text-xs text-destructive">{error}</p>
-              )}
-
-              {isAuthenticated ? (
-                <div className="flex items-center gap-3">
-                  <span className="inline-flex items-center gap-1.5 text-xs text-success">
-                    <span className="size-1.5 rounded-full bg-success" />
-                    {t("settings.connected")}
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 text-xs"
-                    onClick={handleDisconnect}
-                  >
-                    {t("settings.disconnect")}
-                  </Button>
-                </div>
-              ) : (
-                <Button
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={handleConnect}
-                  disabled={!apiKey.trim() || connecting}
-                >
-                  {connecting ? t("settings.connecting") : t("settings.connect")}
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-
           {/* ── About / Version ────────────────────────── */}
           {appApi && (
             <Card>
@@ -482,7 +388,7 @@ export function SettingsDialog({
                   {t("settings.report_issue_hint")}
                 </p>
                 <div className="flex items-center gap-2">
-                  <Button size="sm" className="h-7 text-xs" onClick={reportIssue}>
+                  <Button size="sm" className="h-7 text-xs" onClick={openReportProblemDialog}>
                     {t("settings.report_issue")}
                   </Button>
                   <Button size="sm" variant="outline" className="h-7 text-xs" onClick={openLogsFolder}>

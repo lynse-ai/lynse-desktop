@@ -29,6 +29,7 @@ import {
 import { cn } from "@lynse/ui/lib/utils";
 import { useRecordingSession } from "./use-recording-session";
 import { useRecordingCloudSync } from "./use-recording-cloud-sync";
+import { useRecordingCompleteStore } from "./recording-complete-store";
 import { RecordingWaveform } from "./recording-waveform";
 import { SmoothTimer } from "./smooth-timer";
 import { RecordingDock } from "./recording-dock";
@@ -114,6 +115,11 @@ export function TranscriptDetailPage() {
   const session = useRecordingSession();
   const { syncCompletedSession } = useRecordingCloudSync();
   const reduceMotion = useReducedMotion();
+  // Sessions stopped outside this page (float dock / tray / island) hand
+  // their result over via the store; this page then shows the same
+  // completion dialog for them.
+  const pendingComplete = useRecordingCompleteStore((s) => s.session);
+  const clearPendingComplete = useRecordingCompleteStore((s) => s.clear);
 
   // Recording date under the page title: the session's own start date once
   // one exists, today otherwise. Long-form year/month/day per locale.
@@ -135,6 +141,9 @@ export function TranscriptDetailPage() {
   const recording = session.recording;
   const paused = session.paused;
   const busy = session.busy;
+  // True from the stop click until the background finalization (sidecar
+  // drain + persistence) lands — the UI stays responsive throughout.
+  const stopping = session.stopping;
   const displayMode: RecordMode = recording ? session.activeMode : session.mode;
   const transcribing = displayMode !== "record";
 
@@ -166,13 +175,15 @@ export function TranscriptDetailPage() {
   const showTranscript = transcribing;
 
   // Status text for the recording-activity stage.
-  const stageStatus = recording
-    ? paused
-      ? t("transcript_detail.paused")
-      : transcribing
-        ? t("recording_mode.status_transcribing")
-        : t("recording_mode.status_recording")
-    : t("recording_mode.idle_status");
+  const stageStatus = stopping
+    ? t("recording_mode.status_stopping")
+    : recording
+      ? paused
+        ? t("transcript_detail.paused")
+        : transcribing
+          ? t("recording_mode.status_transcribing")
+          : t("recording_mode.status_recording")
+      : t("recording_mode.idle_status");
 
   // Completion dialog handlers. The recording is always persisted locally by
   // the Rust sidecar; `onSave` fires only when the user ticks "保存到云" in the
@@ -381,6 +392,7 @@ export function TranscriptDetailPage() {
                     recording={recording}
                     paused={paused}
                     busy={busy}
+                    stopping={stopping}
                     formattedTime={session.formattedTime}
                     micLevel={session.micLevel}
                     bookmarked={session.bookmarked}
@@ -388,7 +400,7 @@ export function TranscriptDetailPage() {
                     onTogglePause={() => void session.togglePause()}
                     onStop={() => void session.toggleRecording()}
                     onToggleBookmark={() => session.setBookmarked(!session.bookmarked)}
-                    onHide={() => void getDesktopLiveTranslationApi()?.minimizeToTray()}
+                    onHide={() => void getDesktopLiveTranslationApi()?.hideMainWindow()}
                   />
                 </div>
               </motion.div>
@@ -407,13 +419,14 @@ export function TranscriptDetailPage() {
                   recording={recording}
                   paused={paused}
                   busy={busy}
+                  stopping={stopping}
                   elapsedMs={session.elapsedMs}
                   micLevel={session.micLevel}
                   statusLabel={stageStatus}
                   onStart={() => void session.toggleRecording()}
                   onTogglePause={() => void session.togglePause()}
                   onStop={() => void session.toggleRecording()}
-                  onHide={() => void getDesktopLiveTranslationApi()?.minimizeToTray()}
+                  onHide={() => void getDesktopLiveTranslationApi()?.hideMainWindow()}
                   t={t}
                 />
               </motion.div>
@@ -423,10 +436,10 @@ export function TranscriptDetailPage() {
 
         {/* ═══ Completion dialog ═══ */}
         <RecordingCompleteDialog
-          completedSession={session.completedSession}
-          open={session.showCompleteDialog}
+          completedSession={pendingComplete}
+          open={!recording && !!pendingComplete}
           onOpenChange={(open) => {
-            if (!open) session.dismissCompleteDialog();
+            if (!open) clearPendingComplete();
           }}
           onSave={handleSave}
           onDismiss={() => undefined}
@@ -578,6 +591,7 @@ function RecordingStage({
   recording,
   paused,
   busy,
+  stopping,
   elapsedMs,
   micLevel,
   statusLabel,
@@ -590,6 +604,7 @@ function RecordingStage({
   recording: boolean;
   paused: boolean;
   busy: boolean;
+  stopping: boolean;
   elapsedMs: number;
   micLevel: number;
   statusLabel: string;
@@ -600,6 +615,7 @@ function RecordingStage({
   t: (key: string) => string;
 }) {
   const [markers, setMarkers] = useState<number[]>([]);
+  const reduceMotion = useReducedMotion();
 
   // Markers belong to the running session; clear them once it stops.
   useEffect(() => {
@@ -610,20 +626,34 @@ function RecordingStage({
     setMarkers((prev) => [...prev, Math.max(0, elapsedMs) / 1000]);
   };
 
+  // Landing choreography: the stage settles in as three staggered layers —
+  // waveform, timer, then the transport bar rising from the bottom edge —
+  // so landing here from the float dock (or the sidebar) reads as one
+  // continuous motion instead of a hard content swap. Mount-only.
+  const enter = (delay: number, y: number, duration = 0.32) => ({
+    initial: reduceMotion
+      ? false
+      : { opacity: 0, transform: `translateY(${y}px)` },
+    animate: { opacity: 1, transform: "translateY(0px)" },
+    transition: { duration, delay, ease: [0.22, 1, 0.36, 1] } as Transition,
+  });
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Time ruler + waveform band + centre playhead.
           flex-[2] vs the spacer's flex-1 gives the band ~50% more height. */}
-      <RecordingWaveform
-        elapsedMs={elapsedMs}
-        micLevel={micLevel}
-        active={recording && !paused}
-        markers={markers}
-        className="min-h-0 w-full flex-[2]"
-      />
+      <motion.div className="flex min-h-0 w-full flex-[2]" {...enter(0, 14)}>
+        <RecordingWaveform
+          elapsedMs={elapsedMs}
+          micLevel={micLevel}
+          active={recording && !paused}
+          markers={markers}
+          className="min-h-0 w-full flex-1"
+        />
+      </motion.div>
 
       {/* Large centisecond timer + status */}
-      <div className="mt-6 shrink-0 text-center">
+      <motion.div className="mt-6 shrink-0 text-center" {...enter(0.06, 10)}>
         <SmoothTimer
           elapsedMs={elapsedMs}
           running={recording && !paused}
@@ -643,14 +673,17 @@ function RecordingStage({
           />
           <span>{statusLabel}</span>
         </div>
-      </div>
+      </motion.div>
 
       <div className="min-h-8 flex-1" />
 
       {/* Transport bar — start (idle) / bookmark · stop · pause (recording):
           the centre button owns the lifecycle (mic → stop square), pause /
           resume lives on the black circle at the right. */}
-      <div className="relative mx-auto mb-9 grid w-full max-w-[1100px] grid-cols-[1fr_auto_1fr] items-center px-10">
+      <motion.div
+        className="relative mx-auto mb-9 grid w-full max-w-[1100px] grid-cols-[1fr_auto_1fr] items-center px-10"
+        {...enter(0.12, 18, 0.38)}
+      >
         {recording ? (
           <>
             <Tooltip>
@@ -739,14 +772,15 @@ function RecordingStage({
         ) : (
           <>
             <span />
-            {/* Idle — the big red record button */}
+            {/* Idle — the big red record button (locked while a stop is being
+                finalized in the background) */}
             <Tooltip>
               <TooltipTrigger
                 render={
                   <button
                     type="button"
                     onClick={onStart}
-                    disabled={busy}
+                    disabled={busy || stopping}
                     aria-label={t("recording_mode.start_recording")}
                     className="mx-auto flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-all duration-200 hover:scale-105 hover:bg-destructive/90 active:scale-95 disabled:opacity-60 disabled:hover:scale-100"
                   >
@@ -759,7 +793,7 @@ function RecordingStage({
             <span />
           </>
         )}
-      </div>
+      </motion.div>
     </div>
   );
 }

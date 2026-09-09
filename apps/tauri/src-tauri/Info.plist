@@ -2,18 +2,22 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>ITSAppUsesNonExemptEncryption</key>
+  <false/>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.productivity</string>
   <key>NSCalendarsWriteOnlyAccessUsageDescription</key>
   <string>Lynse 仅在你确认后将待办写入系统日历。</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Lynse 使用麦克风记录你的发言并生成实时双语字幕。</string>
   <key>NSAudioCaptureUsageDescription</key>
   <string>Lynse 捕获系统音频，以记录远端会议声音并生成实时双语字幕。</string>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>Lynse 使用蓝牙连接录音卡，同步录音、实时音频与文件。</string>
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsArbitraryLoads</key>
     <true/>
-    <key>NSBluetoothAlwaysUsageDescription</key>
-  <string>Lynse 使用蓝牙连接录音卡，同步录音、实时音频与文件。</string>
-</dict>
+  </dict>
 </dict>
 </plist>

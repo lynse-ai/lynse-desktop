@@ -26,7 +26,8 @@ import { WaveformProgress } from "../workspace/waveform-progress";
 // ───────────────────────────────────────────────────────────────
 
 interface RecordingCompleteDialogProps {
-  /** The completed session data returned by `api.stop()`. */
+  /** The completed session delivered by the `completed` event once the
+   *  background finalization of a stopped recording finishes. */
   readonly completedSession: CompletedLiveSession | null;
   /** Whether the dialog is currently open. */
   readonly open: boolean;

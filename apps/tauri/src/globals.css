@@ -183,6 +183,7 @@ html[data-window-effects="none"] .island-surface {
 /* Top-level page switch: the incoming page fades in with a slight rise.
    The router container is keyed by route (App.tsx PageRouter), so switching
    sidebar destinations replays the entrance on the freshly mounted page.
+   The /recording route uses the sheet choreography below instead.
    Deliberately a CSS animation, not Motion: no styles persist after it ends,
    so fixed-position layers never inherit a leftover transform/containing
    block. */
@@ -206,6 +207,54 @@ html[data-window-effects="none"] .island-surface {
 @media (prefers-reduced-motion: reduce) {
   .animate-page-in {
     animation: lynse-page-in-fade 120ms var(--ease-out);
+  }
+}
+
+/* Recording page sheet (PageRouter in App.tsx): the recording surface slides
+   in from the right edge over the static neighbouring page and slides back
+   out to the right when the user leaves it. The keyframed box-shadow gives
+   the sheet a soft leading edge only while it is displaced; like the fade-up
+   above, nothing persists after the animation ends. */
+@keyframes lynse-page-in-right {
+  from {
+    transform: translateX(100%);
+    box-shadow: -32px 0 48px rgba(0, 0, 0, 0.14);
+  }
+  to {
+    box-shadow: -32px 0 48px rgba(0, 0, 0, 0);
+  }
+}
+
+@keyframes lynse-page-out-right {
+  to {
+    transform: translateX(100%);
+    box-shadow: -32px 0 48px rgba(0, 0, 0, 0.14);
+  }
+}
+
+.animate-page-in-right {
+  animation: lynse-page-in-right 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* `both` keeps the sheet pinned off-screen right until React retires the
+   layer, so it never flashes back into view. */
+.animate-page-out-right {
+  animation: lynse-page-out-right 260ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@keyframes lynse-page-out-fade {
+  to {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-page-in-right {
+    animation: lynse-page-in-fade 120ms var(--ease-out);
+  }
+
+  .animate-page-out-right {
+    animation: lynse-page-out-fade 120ms var(--ease-out) both;
   }
 }
 

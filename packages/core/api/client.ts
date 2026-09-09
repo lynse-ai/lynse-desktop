@@ -88,7 +88,13 @@ export class ApiClient {
 
     if (json && typeof json === "object" && "code" in json && "data" in json) {
       if (json.code !== 200) {
-        throw new ApiError(json.code, json.msg || json.message || "API error");
+        // `data` may carry useful fields even on failure (e.g. `cooldown`
+        // alongside error.operation.too.frequent).
+        throw new ApiError(
+          json.code,
+          json.msg || json.message || "API error",
+          json.data,
+        );
       }
       return json.data as T;
     }
@@ -232,6 +238,7 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    public data?: unknown,
   ) {
     super(message);
     this.name = "ApiError";

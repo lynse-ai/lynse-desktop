@@ -1,6 +1,12 @@
 import { create } from "zustand";
 import { ApiClient } from "../api/client";
 import type { StorageAdapter } from "../types/storage";
+import { loginWithSmsCode, type AuthSession } from "./session";
+import {
+  buildWechatQrUrl,
+  createWechatState,
+  defaultWechatRedirectUri,
+} from "./wechat";
 
 interface User {
   id: string;
@@ -14,6 +20,19 @@ interface AuthState {
   isLoading: boolean;
   isAuthenticated: boolean;
   login: (apiKey: string, apiUrl?: string) => Promise<void>;
+  /** Phone + SMS verification code sign-in (TestFlight channel). */
+  loginWithSms: (phone: string, code: string) => Promise<void>;
+  /**
+   * Persist any pending API-base-URL change, mint a `state`, and return the
+   * WeChat QR-code authorize URL to navigate to (web: same-window redirect;
+   * desktop: open in the system browser).
+   */
+  startWechatLogin: (opts?: { apiUrl?: string; redirectUri?: string }) => {
+    authorizeUrl: string;
+    state: string;
+  };
+  /** Persist the session returned by the WeChat exchange/poll. */
+  completeLogin: (result: AuthSession, apiUrl?: string) => void;
   logout: () => void;
   setUser: (user: User | null) => void;
   restoreSession: () => Promise<void>;
@@ -30,7 +49,35 @@ type AuthOpts = {
 let authStoreInstance: ReturnType<typeof createAuthStore>;
 
 export function createAuthStore(opts: AuthOpts) {
-  return create<AuthState>()((set) => ({
+  return create<AuthState>()((set) => {
+    /**
+     * Shared tail of every login channel: persist credentials, flip the store
+     * to authenticated, notify listeners. `apiUrl` may refine the backend URL
+     * chosen at connect time (e.g. typed into the API-config page).
+     */
+    function persistSession(result: AuthSession, apiUrl?: string) {
+      if (apiUrl) {
+        opts.api.setBaseUrl(apiUrl);
+        opts.storage.setItem("lynse_api_url", apiUrl);
+      }
+      if (!opts.cookieAuth) {
+        if (result.apiKey) {
+          opts.api.setApiKey(result.apiKey);
+          opts.storage.setItem("lynse_api_key", result.apiKey);
+        }
+        opts.storage.setItem("lynse_token", result.accessToken);
+        opts.storage.removeItem("lynse_wechat_state");
+      }
+      opts.api.setToken(result.accessToken);
+      set({
+        user: result.user,
+        isAuthenticated: true,
+        isLoading: false,
+      });
+      opts.onLogin?.();
+    }
+
+    return {
     user: null,
     isLoading: true,
     isAuthenticated: false,
@@ -64,6 +111,31 @@ export function createAuthStore(opts: AuthOpts) {
       set({ isAuthenticated: true, isLoading: false });
       opts.onLogin?.();
     },
+
+    loginWithSms: async (phone: string, code: string) => {
+      const result = await loginWithSmsCode(phone, code);
+      persistSession(result);
+    },
+
+    startWechatLogin: (startOpts) => {
+      const apiUrl = startOpts?.apiUrl;
+      if (apiUrl) {
+        opts.api.setBaseUrl(apiUrl);
+        opts.storage.setItem("lynse_api_url", apiUrl);
+      }
+      const state = createWechatState();
+      // The callback page reads this back to reject forged redirects (the
+      // `state` query param must match what we generated).
+      opts.storage.setItem("lynse_wechat_state", state);
+      const authorizeUrl = buildWechatQrUrl(
+        startOpts?.redirectUri ?? defaultWechatRedirectUri(),
+        state,
+      );
+      return { authorizeUrl, state };
+    },
+
+    completeLogin: (result: AuthSession, apiUrl?: string) =>
+      persistSession(result, apiUrl),
 
     logout: () => {
       if (!opts.cookieAuth) {
@@ -102,11 +174,18 @@ export function createAuthStore(opts: AuthOpts) {
           opts.storage.removeItem("lynse_token");
           set({ isAuthenticated: false, isLoading: false });
         }
+      } else if (savedToken) {
+        // Sessions from phone/WeChat login may not carry an API key to mint a
+        // fresh token with; trust the saved access token until the backend
+        // rejects it (401 clears it via onUnauthorized).
+        opts.api.setToken(savedToken);
+        set({ isAuthenticated: true, isLoading: false });
       } else {
         set({ isLoading: false });
       }
     },
-  }));
+    };
+  });
 }
 
 export function registerAuthStore(store: ReturnType<typeof createAuthStore>) {

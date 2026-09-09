@@ -1,6 +1,6 @@
 [package]
 name = "lynse-tauri"
-version = "0.1.33"
+version = "0.1.37"
 description = "Lynse macOS desktop shell"
 authors = ["Lynse"]
 edition = "2021"
@@ -54,6 +54,11 @@ window-vibrancy = "0.8"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSBitmapImageRep", "NSImage", "NSPasteboard"] }
 objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSString"] }
+# Microphone TCC prompt from the main app process (see mic_permission.rs):
+# the grant must be attributed to the Lynse bundle, not the capture sidecar,
+# to survive App Store / TestFlight packaging.
+objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat"] }
+block2 = "0.6"
 
 # Windows-only: microphone capture for live translation (stage 1).
 [target.'cfg(target_os = "windows")'.dependencies]

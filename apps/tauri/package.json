@@ -1,12 +1,16 @@
 {
   "name": "@lynse/tauri",
   "productName": "Lynse",
-  "version": "0.1.33",
+  "version": "0.1.37",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
+    "dev:testflight": "VITE_BUILD_CHANNEL=testflight tauri dev",
     "build": "tauri build",
+    "build:github": "VITE_BUILD_CHANNEL=github tauri build",
+    "build:testflight": "VITE_BUILD_CHANNEL=testflight tauri build",
+    "ios:testflight": "VITE_BUILD_CHANNEL=testflight tauri ios build",
     "build:audio-capture": "bash ./scripts/build-audio-capture.sh",
     "test:audio-capture": "swift run --package-path audio-capture audio-capture-core-tests",
     "tauri": "tauri",

@@ -11,3 +11,33 @@ export const featureFlags = {
   /** Devices page (`/devices`) — hidden until the feature is complete. */
   devices: false,
 } as const;
+
+/**
+ * Build channel, selected at packaging time via an env var:
+ *
+ *   - "github"      — public release (default). Login page shows the API-key
+ *                     form only; no phone/WeChat login.
+ *   - "testflight"  — internal distribution. Login page adds phone + SMS code
+ *                     and WeChat QR-code sign-in.
+ *
+ * Each app shell calls `configureBuildChannel` at startup with its own env
+ * (`NEXT_PUBLIC_BUILD_CHANNEL` on web, `VITE_BUILD_CHANNEL` in Tauri), so the
+ * same source produces both channels — see the `build:github` /
+ * `build:testflight` scripts in apps/web and apps/tauri.
+ */
+export type BuildChannel = "github" | "testflight";
+
+let buildChannel: BuildChannel = "github";
+
+export function configureBuildChannel(channel: BuildChannel): void {
+  buildChannel = channel;
+}
+
+export function getBuildChannel(): BuildChannel {
+  return buildChannel;
+}
+
+/** Whether the build ships the passwordless channels (phone SMS + WeChat). */
+export function hasPasswordlessAuth(): boolean {
+  return buildChannel === "testflight";
+}

@@ -51,8 +51,10 @@ import {
   Loader2,
   RefreshCw,
   Monitor,
-  Save,
+  LayersArrowDown,
+  Upload,
 } from "../icons";
+import { UploadDialog } from "../workspace/upload-dialog";
 import { cn } from "@lynse/ui/lib/utils";
 import type { WorkspaceItem, FolderInfo } from "../workspace/types";
 
@@ -377,6 +379,9 @@ export function NotesPage() {
   const vaultApi = getDesktopVaultApi();
   const { data: vaultConfig } = useVaultConfig();
   const [vaultSyncing, setVaultSyncing] = useState(false);
+  // Import-audio entry (cloud upload + local transcription), housed in the
+  // notes header toolbar since the sidebar's dedicated import button left.
+  const [uploadOpen, setUploadOpen] = useState(false);
   const handleSyncVault = useCallback(async () => {
     if (!vaultApi || vaultSyncing) return;
     if (!vaultConfig?.enabled) {
@@ -690,6 +695,15 @@ export function NotesPage() {
               </div>
             ) : (
               <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setUploadOpen(true)}
+                  title={t("layout.new_recording_import")}
+                  className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  data-tauri-drag-region={false}
+                >
+                  <Upload className="size-4" />
+                </button>
                 {vaultApi && isAuthenticated && (
                   <button
                     type="button"
@@ -702,7 +716,7 @@ export function NotesPage() {
                     {vaultSyncing ? (
                       <Loader2 className="size-4 animate-spin" />
                     ) : (
-                      <Save className="size-4" />
+                      <LayersArrowDown className="size-4" />
                     )}
                   </button>
                 )}
@@ -987,6 +1001,7 @@ export function NotesPage() {
           </motion.div>
         )}
       </AnimatePresence>
+      <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
     </div>
   );
 }

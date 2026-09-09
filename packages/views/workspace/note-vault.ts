@@ -1,3 +1,5 @@
+"use client";
+
 import { useEffect, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@lynse/core/api/client";

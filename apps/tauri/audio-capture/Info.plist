@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key>
-  <string>app.lynse.desktop.audio-capture</string>
+  <string>com.lynse.sparknote.audio-capture</string>
   <key>CFBundleName</key>
   <string>Lynse Audio Capture</string>
   <key>CFBundlePackageType</key>

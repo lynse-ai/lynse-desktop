@@ -21,6 +21,12 @@ const THEME_LABEL_KEYS: Record<EditorThemeId, string> = {
   lynse: "workspace.theme_lynse",
   github: "workspace.theme_github",
   newsprint: "workspace.theme_newsprint",
+  white: "workspace.theme_white",
+  paper: "workspace.theme_paper",
+  mint: "workspace.theme_mint",
+  sepia: "workspace.theme_sepia",
+  night: "workspace.theme_night",
+  solarized: "workspace.theme_solarized",
 };
 
 /**

@@ -1,13 +1,13 @@
 "use client";
 
 import * as React from "react";
-import { Bell, MessageSquare, FileAudio, Cloud, Info } from "../icons";
+import { Bell, Bot, FileAudio, Cloud, Info } from "../icons";
 import { AssistantAvatar } from "../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNotificationStore, type NotificationItem, type NotificationType } from "./use-notification-store";
 
 const TYPE_ICON: Record<NotificationType, React.ComponentType<{ className?: string }>> = {
-  chat: MessageSquare,
+  chat: Bot,
   transcription: FileAudio,
   sync: Cloud,
   system: Info,

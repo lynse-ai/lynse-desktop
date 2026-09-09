@@ -122,6 +122,16 @@ export function LiveTranslationPage() {
       .finally(() => setProviderConfigLoaded(true));
   }, [api]);
 
+  // The stop command acks immediately; the finished session arrives via the
+  // `completed` event once the background sidecar drain + persistence finish.
+  // Ending locally only — no cloud sync per product decision.
+  const completedEventSession = view.completed;
+  useEffect(() => {
+    if (!api || !completedEventSession) return;
+    setCompleted(completedEventSession);
+    void api.finalizeLocal(completedEventSession.sessionId, true).catch(() => undefined);
+  }, [api, completedEventSession]);
+
   // Follow the live transcript only while the user is already at the bottom —
   // never yank the view back if they scrolled up to read. Partials arrive
   // frequently during a session, so use an instant scroll: a smooth one would
@@ -397,20 +407,15 @@ export function LiveTranslationPage() {
     if (!api) return;
     setBusy(true);
     try {
-      const result = await api.stop();
-      setCompleted(result);
-      await finishCompletedSession(result);
+      // Acks immediately: the Rust side drains the sidecar and persists the
+      // record in the background. The finished session lands via the
+      // `completed` event (handled below) once that finishes.
+      await api.stop();
     } catch (error) {
       toast.error(t("live_translation.stop_failed"), { description: String(error) });
     } finally {
       setBusy(false);
     }
-  }
-
-  async function finishCompletedSession(result: CompletedLiveSession) {
-    if (!api) return;
-    // End the session locally only — no cloud sync per product decision.
-    await api.finalizeLocal(result.sessionId, true).catch(() => undefined);
   }
 
   async function toggleSubtitles() {

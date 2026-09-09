@@ -45,6 +45,50 @@ export function parseChatChunk(payload: string): ChatStreamEvent | null {
   if (parsed == null || typeof parsed !== "object") return null;
   const p = parsed as Record<string, any>;
 
+  const firstString = (...values: unknown[]): string | null => {
+    for (const value of values) {
+      if (typeof value === "string" && value) return value;
+    }
+    return null;
+  };
+
+  // Chain-of-thought deltas. The cloud protocol uses {type:"thinking"},
+  // OpenAI-style relays use reasoning_content on the choice delta; both map
+  // onto the same event. {type:"thinking_end"} closes the trace (empty delta).
+  if (
+    p.type === "thinking" ||
+    p.type === "reasoning" ||
+    p.type === "thinking_end" ||
+    p.type === "reasoning_end"
+  ) {
+    const delta =
+      p.type === "thinking_end" || p.type === "reasoning_end"
+        ? ""
+        : firstString(p.content, p.text, p.delta) ?? "";
+    return { type: "thinking", delta };
+  }
+
+  // Tool activity: start/use announce a call; result/end/done close it.
+  if (p.type === "tool" || p.type === "tool_use" || p.type === "tool_start") {
+    const name = firstString(p.name, p.tool, p.tool_name);
+    if (name) {
+      return {
+        type: "tool",
+        name,
+        id: firstString(p.id, p.tool_call_id) ?? undefined,
+        state: p.state === "done" || p.state === "result" ? "done" : "running",
+      };
+    }
+  }
+  if (p.type === "tool_result" || p.type === "tool_end" || p.type === "tool_done") {
+    return {
+      type: "tool",
+      name: firstString(p.name, p.tool, p.tool_name) ?? "",
+      id: firstString(p.id, p.tool_call_id) ?? undefined,
+      state: "done",
+    };
+  }
+
   if (p.type === "content" && typeof p.content === "string") return { type: "content", delta: p.content };
   if (p.type === "round_start" && typeof p.content === "string") return { type: "status", text: p.content };
   if (p.type === "status" && typeof p.text === "string") return { type: "status", text: p.text };
@@ -60,8 +104,11 @@ export function parseChatChunk(payload: string): ChatStreamEvent | null {
   if (typeof p.content === "string") return { type: "content", delta: p.content };
   if (typeof p.text === "string") return { type: "content", delta: p.text };
   if (typeof p.delta === "string") return { type: "content", delta: p.delta };
-  const choice = p.choices?.[0]?.delta?.content;
-  if (typeof choice === "string") return { type: "content", delta: choice };
+  const choice = p.choices?.[0]?.delta;
+  if (typeof choice?.reasoning_content === "string" && choice.reasoning_content) {
+    return { type: "thinking", delta: choice.reasoning_content };
+  }
+  if (typeof choice?.content === "string") return { type: "content", delta: choice.content };
   return null;
 }
 

@@ -98,8 +98,11 @@ export function WebdavSyncConfigCard() {
   }
 
   async function handleToggle(enabled: boolean) {
-    if (enabled && (!form.url.trim() || !form.username.trim() || (!password && !form.hasPassword))) {
-      toast.error(t("webdav.missing_credentials"));
+    const hasCredentials = form.url.trim() && form.username.trim() && (password || form.hasPassword);
+    if (enabled && !hasCredentials) {
+      // Fields are hidden while sync is off; reveal the form so the user can
+      // fill them in. Persist the enabled state only once they are complete.
+      update({ enabled: true });
       return;
     }
     await persist({ enabled });
@@ -187,118 +190,126 @@ export function WebdavSyncConfigCard() {
         </div>
         <p className="text-2xs leading-relaxed text-muted-foreground">{t("webdav.hint")}</p>
 
-        <div className="space-y-2">
-          <Label htmlFor="webdav-url" className="text-xs">
-            {t("webdav.url")}
-          </Label>
-          <Input
-            id="webdav-url"
-            className="h-8 text-xs"
-            placeholder="https://dav.jianguoyun.com/dav/"
-            value={form.url}
-            onChange={(event) => update({ url: event.target.value })}
-            onBlur={() => persist()}
-            disabled={saving}
-          />
-        </div>
+        {form.enabled && (
+          <>
+            <div className="space-y-2">
+              <Label htmlFor="webdav-url" className="text-xs">
+                {t("webdav.url")}
+              </Label>
+              <Input
+                id="webdav-url"
+                className="h-8 text-xs"
+                placeholder="https://dav.jianguoyun.com/dav/"
+                value={form.url}
+                onChange={(event) => update({ url: event.target.value })}
+                onBlur={() => persist()}
+                disabled={saving}
+              />
+            </div>
 
-        <div className="grid grid-cols-2 gap-2">
-          <div className="space-y-2">
-            <Label htmlFor="webdav-username" className="text-xs">
-              {t("webdav.username")}
-            </Label>
-            <Input
-              id="webdav-username"
-              className="h-8 text-xs"
-              autoComplete="off"
-              value={form.username}
-              onChange={(event) => update({ username: event.target.value })}
-              onBlur={() => persist()}
-              disabled={saving}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="webdav-password" className="text-xs">
-              {t("webdav.password")}
-            </Label>
-            <Input
-              id="webdav-password"
-              className="h-8 text-xs"
-              type="password"
-              autoComplete="new-password"
-              placeholder={form.enabled ? t("webdav.password_stored") : ""}
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              onBlur={() => {
-                if (password) persist();
-              }}
-              disabled={saving}
-            />
-          </div>
-        </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-2">
+                <Label htmlFor="webdav-username" className="text-xs">
+                  {t("webdav.username")}
+                </Label>
+                <Input
+                  id="webdav-username"
+                  className="h-8 text-xs"
+                  autoComplete="off"
+                  value={form.username}
+                  onChange={(event) => update({ username: event.target.value })}
+                  onBlur={() => persist()}
+                  disabled={saving}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="webdav-password" className="text-xs">
+                  {t("webdav.password")}
+                </Label>
+                <Input
+                  id="webdav-password"
+                  className="h-8 text-xs"
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder={form.enabled ? t("webdav.password_stored") : ""}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  onBlur={() => {
+                    if (password) persist();
+                  }}
+                  disabled={saving}
+                />
+              </div>
+            </div>
 
-        <div className="grid grid-cols-2 items-end gap-2">
-          <div className="space-y-2">
-            <Label htmlFor="webdav-remote-path" className="text-xs">
-              {t("webdav.remote_path")}
-            </Label>
-            <Input
-              id="webdav-remote-path"
-              className="h-8 text-xs"
-              value={text(form.remotePath)}
-              onChange={(event) => update({ remotePath: event.target.value })}
-              onBlur={() => persist()}
-              disabled={saving}
-            />
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-8 text-xs"
-            onClick={handleTestConnection}
-            disabled={testing || !form.url.trim() || !form.username.trim()}
-          >
-            {testing && <Loader2 className="size-3.5 animate-spin" />}
-            {t("webdav.test_connection")}
-          </Button>
-        </div>
+            <div className="grid grid-cols-2 items-end gap-2">
+              <div className="space-y-2">
+                <Label htmlFor="webdav-remote-path" className="text-xs">
+                  {t("webdav.remote_path")}
+                </Label>
+                <Input
+                  id="webdav-remote-path"
+                  className="h-8 text-xs"
+                  value={text(form.remotePath)}
+                  onChange={(event) => update({ remotePath: event.target.value })}
+                  onBlur={() => persist()}
+                  disabled={saving}
+                />
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 text-xs"
+                onClick={handleTestConnection}
+                disabled={testing || !form.url.trim() || !form.username.trim()}
+              >
+                {testing && <Loader2 className="size-3.5 animate-spin" />}
+                {t("webdav.test_connection")}
+              </Button>
+            </div>
 
-        <div className="flex items-center justify-between gap-3">
-          <Label htmlFor="webdav-auto-sync" className="text-xs">
-            {t("webdav.auto_sync")}
-          </Label>
-          <Switch
-            id="webdav-auto-sync"
-            checked={form.autoSync}
-            onCheckedChange={(value) => persist({ autoSync: value })}
-            disabled={saving || !form.enabled}
-          />
-        </div>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="webdav-auto-sync" className="text-xs">
+                {t("webdav.auto_sync")}
+              </Label>
+              <Switch
+                id="webdav-auto-sync"
+                checked={form.autoSync}
+                onCheckedChange={(value) => persist({ autoSync: value })}
+                disabled={saving || !form.enabled}
+              />
+            </div>
 
-        <div className="flex items-center justify-between gap-3">
-          <Label htmlFor="webdav-self-signed" className="text-xs">
-            {t("webdav.allow_self_signed")}
-          </Label>
-          <Switch
-            id="webdav-self-signed"
-            checked={form.allowSelfSigned}
-            onCheckedChange={(value) => persist({ allowSelfSigned: value })}
-            disabled={saving || !form.enabled}
-          />
-        </div>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="webdav-self-signed" className="text-xs">
+                {t("webdav.allow_self_signed")}
+              </Label>
+              <Switch
+                id="webdav-self-signed"
+                checked={form.allowSelfSigned}
+                onCheckedChange={(value) => persist({ allowSelfSigned: value })}
+                disabled={saving || !form.enabled}
+              />
+            </div>
 
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-2xs text-muted-foreground">{lastSync}</span>
-          <Button
-            size="sm"
-            className="h-7 text-xs"
-            onClick={handleSyncNow}
-            disabled={syncing || !form.enabled}
-          >
-            {syncing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-            {t("webdav.sync_now")}
-          </Button>
-        </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-2xs text-muted-foreground">{lastSync}</span>
+              <Button
+                size="sm"
+                className="h-7 text-xs"
+                onClick={handleSyncNow}
+                disabled={syncing || !form.enabled}
+              >
+                {syncing ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-3.5" />
+                )}
+                {t("webdav.sync_now")}
+              </Button>
+            </div>
+          </>
+        )}
       </CardContent>
     </Card>
   );

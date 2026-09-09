@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- App Store validation requires every executable in the package to be sandboxed. -->
+  <key>com.apple.security.app-sandbox</key>
+  <true/>
+  <!-- Captures microphone (mic-only mode) and system audio via ScreenCaptureKit.
+       Talks to the main app over stdout/stderr pipes — no network entitlement needed. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+</dict>
+</plist>

@@ -6,9 +6,28 @@
  * localStorage and restored on startup by initEditorTheme().
  */
 
-export type EditorThemeId = "lynse" | "github" | "newsprint";
+export type EditorThemeId =
+  | "lynse"
+  | "github"
+  | "newsprint"
+  | "white"
+  | "paper"
+  | "mint"
+  | "sepia"
+  | "night"
+  | "solarized";
 
-export const EDITOR_THEMES: EditorThemeId[] = ["lynse", "github", "newsprint"];
+export const EDITOR_THEMES: EditorThemeId[] = [
+  "lynse",
+  "github",
+  "newsprint",
+  "white",
+  "paper",
+  "mint",
+  "sepia",
+  "night",
+  "solarized",
+];
 
 const STORAGE_KEY = "lynse-editor-theme";
 
@@ -19,7 +38,9 @@ function isEditorThemeId(value: string | null | undefined): value is EditorTheme
 export function getEditorTheme(): EditorThemeId {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
-    return isEditorThemeId(stored) ? stored : "lynse";
+    // Migrate pre-rename ids ("vmark-paper" → "paper")
+    const migrated = stored?.replace(/^vmark-/, "");
+    return isEditorThemeId(migrated) ? migrated : "lynse";
   } catch {
     return "lynse";
   }

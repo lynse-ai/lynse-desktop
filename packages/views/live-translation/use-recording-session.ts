@@ -6,7 +6,6 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { useLiveTranslation } from "./use-live-translation";
 import { audioModeSources, requestRealtimeSession } from "./api";
 import type {
-  CompletedLiveSession,
   LiveConnectionDescriptor,
   LivePermissionStatus,
   LiveTranslationProviderConfig,
@@ -39,6 +38,9 @@ export interface UseRecordingSessionReturn {
   readonly paused: boolean;
   readonly activeMode: RecordMode;
   readonly formattedTime: string;
+  /** True while a stop has been registered but the background finalization
+   *  (sidecar drain + persistence) has not landed yet. */
+  readonly stopping: boolean;
 
   // ── local UI state ──
   mode: RecordMode;
@@ -47,12 +49,6 @@ export interface UseRecordingSessionReturn {
   bookmarked: boolean;
   /** Whether live translation (target-language output) is enabled inside live mode. */
   translationEnabled: boolean;
-
-  // ── complete dialog state ──
-  /** The most recently completed session (set when stop resolves). */
-  completedSession: CompletedLiveSession | null;
-  /** Whether the recording-complete dialog is currently visible. */
-  showCompleteDialog: boolean;
 
   // ── view snapshot shortcuts ──
   sessionId: string | undefined;
@@ -78,7 +74,6 @@ export interface UseRecordingSessionReturn {
   /** Re-point the translation direction (source/target). Applies live via
    *  setMode when a session is running; otherwise stores the intent. */
   setDirection: (source: string, target: string) => Promise<boolean>;
-  dismissCompleteDialog: () => void;
 }
 
 export function useRecordingSession(): UseRecordingSessionReturn {
@@ -89,8 +84,6 @@ export function useRecordingSession(): UseRecordingSessionReturn {
   const [busy, setBusy] = useState(false);
   const [blocked, setBlocked] = useState<string | null>(null);
   const [bookmarked, setBookmarked] = useState(false);
-  const [completedSession, setCompletedSession] = useState<CompletedLiveSession | null>(null);
-  const [showCompleteDialog, setShowCompleteDialog] = useState(false);
   const [sourceLanguage, setSourceLanguage] = useState(view.sourceLanguage ?? "zh");
   const [targetLanguage, setTargetLanguage] = useState(
     view.targetLanguage && view.targetLanguage !== "none" ? view.targetLanguage : "en",
@@ -199,12 +192,18 @@ export function useRecordingSession(): UseRecordingSessionReturn {
       toast.error(t("live_translation.start_hint_desktop"));
       return;
     }
+    // A stop was registered but the background finalization has not landed —
+    // neither start nor a second stop makes sense until it does.
+    if (view.state === "stopping") return;
     if (recording) {
       setBusy(true);
       try {
-        const result = await api.stop();
-        setCompletedSession(result);
-        setShowCompleteDialog(true);
+        // Acks immediately: the Rust side drains the sidecar and persists the
+        // record in the background. The finished session reaches the
+        // completion dialog through the `completed` event (routed into the
+        // recording-complete store by the tray agent), so the UI never
+        // freezes on the stop click.
+        await api.stop();
       } catch (error) {
         toast.error(String(error));
       } finally {
@@ -262,7 +261,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     } finally {
       setBusy(false);
     }
-  }, [api, recording, ensurePermissions, mode, switchMode, t]);
+  }, [api, recording, ensurePermissions, mode, switchMode, t, view.state]);
 
   // ── pause / resume ----------------------------------------------
   const togglePause = useCallback(async () => {
@@ -352,11 +351,6 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     await switchMode("live", { translation: enabled });
   }, [recording, activeMode, switchMode]);
 
-  // ── complete dialog ----------------------------------------------
-  const dismissCompleteDialog = useCallback(() => {
-    setShowCompleteDialog(false);
-  }, []);
-
   // Tray transport (pause/stop) is consumed by the recording island window,
   // which stays alive exactly as long as a session does — see
   // `RecordingIslandWindow`. Tray start is handled natively in Rust.
@@ -366,13 +360,12 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     paused,
     activeMode,
     formattedTime,
+    stopping: view.state === "stopping",
     mode,
     busy,
     blocked,
     bookmarked,
     translationEnabled,
-    completedSession,
-    showCompleteDialog,
     sessionId: view.sessionId,
     elapsedMs: view.elapsedMs,
     micLevel: view.micLevel,
@@ -388,6 +381,5 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     setBookmarked,
     setTranslationEnabled,
     setDirection,
-    dismissCompleteDialog,
   };
 }

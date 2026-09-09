@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; font-family: -apple-system, "PingFang SC", sans-serif; }
+  body { background:#f4f4f5; padding:24px; }
+  .frame { width:1100px; margin:0 auto; background:#fff; border-radius:12px; overflow:hidden; display:flex; box-shadow:0 4px 24px rgba(0,0,0,.08); }
+  .rail { width:72px; background:#18181b; color:#d4d4d8; display:flex; flex-direction:column; align-items:center; padding:16px 0; gap:18px; font-size:10px; flex-shrink:0; }
+  .rail .logo { width:36px; height:36px; border-radius:10px; background:linear-gradient(135deg,#6366f1,#8b5cf6); margin-bottom:8px; }
+  .rail .item { display:flex; flex-direction:column; align-items:center; gap:4px; opacity:.75; }
+  .rail .item.active { opacity:1; color:#a5b4fc; }
+  .ic { width:20px; height:20px; border-radius:5px; background:currentColor; opacity:.85; }
+  .main { flex:1; padding:24px 32px; max-height:960px; overflow:hidden; }
+
+  .header { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+  .h1 { font-size:22px; font-weight:700; color:#18181b; }
+  .sub { font-size:12px; color:#71717a; margin-top:2px; }
+  .rec-btn { display:flex; align-items:center; gap:8px; background:#ef4444; color:#fff; border-radius:999px; padding:10px 20px; font-size:14px; font-weight:600; box-shadow:0 2px 10px rgba(239,68,68,.35); }
+  .rec-dot { width:10px; height:10px; border-radius:50%; background:#fff; }
+
+  /* 过滤器 */
+  .filters { display:flex; gap:8px; margin:14px 0 4px; }
+  .f { font-size:11px; padding:5px 12px; border-radius:999px; border:1px solid #e4e4e7; color:#52525b; background:#fff; }
+  .f.on { background:#18181b; color:#fff; border-color:#18181b; }
+
+  /* 信息流 */
+  .feed { position:relative; padding-left:8px; margin-top:10px; }
+  .day { display:flex; align-items:center; gap:10px; margin:16px 0 10px; }
+  .day b { font-size:13px; color:#18181b; }
+  .day span { font-size:11px; color:#a1a1aa; }
+  .day .line { flex:1; height:1px; background:#e4e4e7; }
+  .item { display:flex; gap:12px; padding:10px 12px; border-radius:10px; align-items:flex-start; cursor:pointer; }
+  .item:hover { background:#fafafa; }
+  .time { width:44px; font-size:11px; color:#a1a1aa; padding-top:3px; flex-shrink:0; }
+  .type { display:flex; flex-direction:column; align-items:center; gap:3px; flex-shrink:0; padding-top:2px; }
+  .type .dot { width:26px; height:26px; border-radius:8px; display:flex; align-items:center; justify-content:center; }
+  .type .dot i { display:block; width:12px; height:12px; border-radius:3px; background:#fff; }
+  .type em { font-style:normal; font-size:9px; color:#a1a1aa; }
+  .t-note { background:#6366f1; }  /* 笔记（录音/会议/纪要统一） */
+  .t-flash { background:#f59e0b; } /* 闪记（原灵感） */
+  .t-todo { background:#3b82f6; }  /* 待办 */
+  .body { flex:1; min-width:0; }
+  .body .title { font-size:13px; color:#27272a; font-weight:600; }
+  .body .desc { font-size:11px; color:#71717a; margin-top:2px; }
+  .right { display:flex; flex-direction:column; align-items:flex-end; gap:4px; flex-shrink:0; }
+  .badge { font-size:10px; border-radius:4px; padding:2px 7px; }
+  .b-done { background:#f0fdf4; color:#16a34a; }
+  .b-live { background:#fef2f2; color:#ef4444; }
+  .b-due  { background:#fff7ed; color:#ea580c; }
+  .b-wait { background:#eff6ff; color:#2563eb; }
+  .arrow { font-size:12px; color:#d4d4d8; }
+  .check { width:15px; height:15px; border:1.5px solid #d4d4d8; border-radius:5px; margin-top:2px; flex-shrink:0; }
+  .tags { margin-top:4px; }
+  .tag { display:inline-block; background:#fafaf9; border:1px solid #e7e5e4; color:#78716c; font-size:9px; border-radius:4px; padding:1px 6px; margin-right:4px; }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div class="rail">
+    <div class="logo"></div>
+    <div class="item active"><div class="ic"></div>Home</div>
+    <div class="item"><div class="ic"></div>灵感</div>
+    <div class="item"><div class="ic"></div>待办</div>
+    <div class="item"><div class="ic"></div>笔记</div>
+    <div class="item"><div class="ic"></div>AI</div>
+    <div class="item"><div class="ic"></div>会议</div>
+    <div class="item"><div class="ic"></div>文件</div>
+    <div class="item" style="margin-top:auto"><div class="ic"></div>通知</div>
+    <div class="item"><div class="ic"></div>设置</div>
+  </div>
+
+  <div class="main">
+    <div class="header">
+      <div>
+        <div class="h1">下午好，Lynse 👋</div>
+        <div class="sub">9月7日 周一 · 今天有 2 场会议 · 3 条待办即将到期</div>
+      </div>
+      <div class="rec-btn"><div class="rec-dot"></div>开始录音</div>
+    </div>
+
+    <!-- 类型过滤 -->
+    <div class="filters">
+      <div class="f on">全部</div>
+      <div class="f">笔记</div>
+      <div class="f">闪记</div>
+      <div class="f">待办</div>
+    </div>
+
+    <div class="feed">
+      <!-- 今天 -->
+      <div class="day"><b>今天</b><span>9月7日 · 6 条</span><div class="line"></div></div>
+
+      <div class="item">
+        <div class="time">14:00</div>
+        <div class="type"><div class="dot t-note"><i></i></div><em>笔记</em></div>
+        <div class="body">
+          <div class="title">产品周会</div>
+          <div class="desc">正在进行 · 已录制 23 分钟，实时转写中</div>
+        </div>
+        <div class="right"><span class="badge b-live">● 进行中</span><span class="arrow">›</span></div>
+      </div>
+
+      <div class="item">
+        <div class="time">13:40</div>
+        <div class="type"><div class="dot t-todo"><i></i></div><em>待办</em></div>
+        <div class="check"></div>
+        <div class="body">
+          <div class="title">回复星野科技报价邮件</div>
+          <div class="desc">来自昨天「客户访谈」提取的待办</div>
+        </div>
+        <div class="right"><span class="badge b-due">今天到期</span><span class="arrow">›</span></div>
+      </div>
+
+      <div class="item">
+        <div class="time">11:20</div>
+        <div class="type"><div class="dot t-flash"><i></i></div><em>闪记</em></div>
+        <div class="body">
+          <div class="title">语音备忘录的波形可做成可点击跳转</div>
+          <div class="tags"><span class="tag">#产品</span><span class="tag">#录音</span></div>
+        </div>
+        <div class="right"><span class="arrow">›</span></div>
+      </div>
+
+      <div class="item">
+        <div class="time">10:00</div>
+        <div class="type"><div class="dot t-note"><i></i></div><em>笔记</em></div>
+        <div class="body">
+          <div class="title">会议笔记 · 客户访谈 · 星野科技</div>
+          <div class="desc">1 小时 12 分 · 转写完成，纪要已生成</div>
+        </div>
+        <div class="right"><span class="badge b-done">已转写</span><span class="arrow">›</span></div>
+      </div>
+
+      <!-- 昨天 -->
+      <div class="day"><b>昨天</b><span>9月6日 · 3 条</span><div class="line"></div></div>
+
+      <div class="item">
+        <div class="time">17:30</div>
+        <div class="type"><div class="dot t-note"><i></i></div><em>笔记</em></div>
+        <div class="body">
+          <div class="title">编辑部选题会 · 会议笔记</div>
+          <div class="desc">AI 摘要：确定 9 月专题方向，新增 2 个待办…</div>
+        </div>
+        <div class="right"><span class="badge b-wait">待确认</span><span class="arrow">›</span></div>
+      </div>
+
+      <div class="item">
+        <div class="time">09:15</div>
+        <div class="type"><div class="dot t-todo"><i></i></div><em>待办</em></div>
+        <div class="check"></div>
+        <div class="body">
+          <div class="title">确认下周发布会场地</div>
+          <div class="desc">来自「会议笔记 · Q3 复盘」提取的待办</div>
+        </div>
+        <div class="right"><span class="badge b-due">逾期 1 天</span><span class="arrow">›</span></div>
+      </div>
+
+      <!-- 前天 -->
+      <div class="day"><b>前天</b><span>9月5日 · 2 条</span><div class="line"></div></div>
+
+      <div class="item">
+        <div class="time">16:00</div>
+        <div class="type"><div class="dot t-note"><i></i></div><em>笔记</em></div>
+        <div class="body">
+          <div class="title">会议笔记 · Q3 复盘</div>
+          <div class="desc">2 小时 05 分 · 转写完成，纪要已生成</div>
+        </div>
+        <div class="right"><span class="badge b-done">已转写</span><span class="arrow">›</span></div>
+      </div>
+
+      <div class="item">
+        <div class="time">08:40</div>
+        <div class="type"><div class="dot t-flash"><i></i></div><em>闪记</em></div>
+        <div class="body">
+          <div class="title">Home 页做成信息流聚合，点击即达</div>
+          <div class="tags"><span class="tag">#设计</span></div>
+        </div>
+        <div class="right"><span class="arrow">›</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

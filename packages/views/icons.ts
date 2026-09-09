@@ -12,6 +12,7 @@
  */
 export {
   // ── Navigation / Sidebar ──────────────────────────────
+  House,            // Home / 主页 feed
   Headphones,       // Recordings
   Mic,              // Microphone input
   Camera,           // iPhone photo capture (Continuity Camera)
@@ -19,7 +20,7 @@ export {
   BookOpen,         // Knowledge Base
   FolderOpen,       // Files / Folders
   Lightbulb,        // Inspiration
-  MessageSquare,    // AI Chat
+  MessageSquare,    // Generic message placeholder (transcription prompt)
   Settings,         // Settings
   Bluetooth,        // Recording card / devices page
   BatteryFull,      // Device battery (healthy)
@@ -65,7 +66,7 @@ export {
   Eye,              // Preview mode
   Columns2,         // Split mode
   PanelLeft,        // Collapse / expand left sidebar
-  Bot,              // AI assistant
+  Bot,              // AI Chat / AI assistant
 
   // ── Markdown Toolbar ─────────────────────────────────
   Bold,             // Bold mark
@@ -120,12 +121,23 @@ export {
   Maximize2,        // Expand island back to the full window
   EyeOff,           // Hide main window into the recording island
   Square,           // Stop streaming
+  Terminal,         // Terminal / shell tool activity
   Cloud,            // Cloud assistant
   Repeat,           // Swap / exchange
   ArrowRight,       // Forward / CTA
   Bookmark,         // Bookmark / save position
-  Save,             // Save / download recording
+  LayersArrowDown,  // Sync notes to vault
   ListMusic,        // Recordings list / audio library
+
+  // ── Weather (Home forecast) ──────────────────────────
+  MapPin,           // Detected location label
+  CloudSun,         // Partly cloudy
+  Cloudy,           // Overcast
+  CloudFog,         // Fog
+  CloudDrizzle,     // Drizzle
+  CloudRain,        // Rain / showers
+  CloudSnow,        // Snow
+  CloudLightning,   // Thunderstorm
 } from "lucide-react";
 
 // ── Icon sizing tokens ────────────────────────────────────

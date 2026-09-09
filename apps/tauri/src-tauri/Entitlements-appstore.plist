@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Must match the provisioning profile exactly, or TestFlight rejects the
+       build with error 90886 (missing application identifier). Keep in sync
+       with the team ID in the signing identity and tauri.conf.json identifier. -->
+  <key>com.apple.application-identifier</key>
+  <string>76HBB34PNK.com.lynse.sparknote</string>
+  <key>com.apple.developer.team-identifier</key>
+  <string>76HBB34PNK</string>
+  <!-- App Sandbox is mandatory for App Store / TestFlight distribution. -->
+  <key>com.apple.security.app-sandbox</key>
+  <true/>
+  <!-- API client, cloud sync, transcription service calls -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+  <!-- local-media:// streaming server -->
+  <key>com.apple.security.network.server</key>
+  <true/>
+  <!-- Microphone recording / live captions -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+  <!-- Bluetooth recording card (btleplug) -->
+  <key>com.apple.security.device.bluetooth</key>
+  <true/>
+  <!-- Calendar todo write-back (EventKit) -->
+  <key>com.apple.security.personal-information.calendars</key>
+  <true/>
+  <!-- Import / export recordings and notes via file pickers -->
+  <key>com.apple.security.files.user-selected.read-write</key>
+  <true/>
+  <!-- Default export destination -->
+  <key>com.apple.security.files.downloads.read-write</key>
+  <true/>
+</dict>
+</plist>

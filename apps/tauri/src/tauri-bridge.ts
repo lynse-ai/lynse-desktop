@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl, openPath } from "@tauri-apps/plugin-opener";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -74,6 +75,18 @@ type DesktopApi = {
   app: {
     getInfo: () => Promise<{ version: string; platform: string }>;
     openLogsFolder: () => Promise<void>;
+    // Tail of the app log files for the bug report dialog. `truncated` marks
+    // that older rotated archives were left out of the tail.
+    readLogs: (maxBytes?: number) =>
+      Promise<{ dir: string; tail: string; truncated: boolean; files: number }>;
+    // Assemble the on-disk report bundle (markdown + screenshots + log copies)
+    // and return its folder for reveal in the system file manager.
+    prepareReport: (report: {
+      markdown: string;
+      attachments: string[];
+      includeLogs: boolean;
+    }) => Promise<{ dir: string }>;
+    revealReportFolder: (path: string) => Promise<void>;
     checkForUpdate: () => Promise<AppUpdateInfo>;
     downloadAndInstallUpdate: (onProgress: (progress: UpdateDownloadProgress) => void) => Promise<void>;
     relaunchApp: () => Promise<void>;
@@ -307,13 +320,24 @@ export async function installTauriBridge(): Promise<void> {
       pause: () => command<LiveTranslationSnapshot>("live_translation_pause"),
       resume: (request: LiveResumeRequest) => command<LiveTranslationSnapshot>("live_translation_resume", { request }),
       setMode: (request: LiveSetModeRequest) => command<LiveTranslationSnapshot>("live_translation_set_mode", { request }),
-      stop: () => command<CompletedLiveSession>("live_translation_stop"),
+      stop: () => command<void>("live_translation_stop"),
       getState: () => command<LiveTranslationSnapshot>("live_translation_state"),
       finalizeLocal: (sessionId, synced) => command<void>("live_translation_finalize_local", { sessionId, synced }),
       listRecoveries: () => command<LiveRecoverySummary[]>("live_translation_recoveries"),
       recover: (sessionId) => command<CompletedLiveSession>("live_translation_recover", { sessionId }),
       showSubtitles: (show) => command<void>("live_translation_show_subtitles", { show }),
       showMainWindow: () => command<void>("live_translation_show_main"),
+      // Hide the main window (close-to-tray). Rust shows the recording island
+      // when a session is running, so the session stays reachable without the
+      // main window.
+      hideMainWindow: () => command<void>("live_translation_hide_main"),
+      // Focus the main window, then broadcast a plain Tauri event that the
+      // desktop navigation provider listens for — the island's "expand" must
+      // land the user on the recording page, not just un-minimize the window.
+      openRecordingPage: async () => {
+        await command<void>("live_translation_show_main");
+        await emit("lynse:open-recording-page");
+      },
       hideIsland: () => command<void>("live_translation_hide_island"),
       // Payload key must match the Rust command's `expand` parameter exactly;
       // a mismatch makes the invoke reject and the island silently never grows.
@@ -366,6 +390,24 @@ export async function installTauriBridge(): Promise<void> {
     app: {
       getInfo: () => command<{ version: string; platform: string }>("get_app_info"),
       openLogsFolder: () => command<void>("open_logs_folder"),
+      readLogs: (maxBytes?: number) =>
+        command<{ dir: string; tail: string; truncated: boolean; files: number }>(
+          "diagnostics_read_logs",
+          { maxBytes },
+        ),
+      // Assemble the on-disk report bundle (markdown + screenshots + log copies)
+      // and return its folder for reveal in the system file manager.
+      prepareReport: (report: {
+        markdown: string;
+        attachments: string[];
+        includeLogs: boolean;
+      }) =>
+        command<{ dir: string }>("diagnostics_prepare_report", {
+          markdown: report.markdown,
+          attachments: report.attachments,
+          includeLogs: report.includeLogs,
+        }),
+      revealReportFolder: (path: string) => openPath(path),
       // Talks to the tauri-plugin-updater, whose endpoints/pubkey live in
       // tauri.conf.json; releases are published by release.yml. `check()`
       // returns null when the running version is the latest.
@@ -437,8 +479,8 @@ export async function installTauriBridge(): Promise<void> {
       list: () => command("todo_list"),
       save: (todo: unknown) => command("todo_save", { todo }),
       delete: (id: string) => command("todo_delete", { id }),
-      addToCalendar: (id: string, startAt: string, endAt: string, confirmed: boolean) =>
-        command("todo_add_to_calendar", { todo_id: id, start_at: startAt, end_at: endAt, confirmed }),
+      addToCalendar: (id: string, title: string, sourceTitle: string | null, startAt: string, endAt: string, confirmed: boolean) =>
+        command("todo_add_to_calendar", { todo_id: id, title, source_title: sourceTitle, start_at: startAt, end_at: endAt, confirmed }),
     },
     inspiration: {
       list: () => command("inspiration_list"),

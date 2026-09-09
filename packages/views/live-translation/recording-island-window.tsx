@@ -186,7 +186,7 @@ export function RecordingIslandWindow() {
         onDismiss={() => void api?.hideIsland()}
         onPause={() => void togglePause()}
         onStop={() => void api?.stop()}
-        onExpand={() => void api?.showMainWindow()}
+        onExpand={() => void api?.openRecordingPage()}
       >
         {drawerMounted && (
           <IslandTranscriptDrawer

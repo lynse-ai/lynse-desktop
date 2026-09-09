@@ -3,8 +3,10 @@
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { useNavigation } from "../navigation";
 import { audioModeSources, requestRealtimeSession } from "./api";
 import { useLiveTranslation } from "./use-live-translation";
+import { useRecordingCompleteStore } from "./recording-complete-store";
 import type {
   DesktopLiveTranslationApi,
   LivePermissionStatus,
@@ -39,6 +41,7 @@ async function ensurePermissions(
 export function RecordingTrayAgent() {
   const { api } = useLiveTranslation();
   const { t } = useTranslation();
+  const { push } = useNavigation();
   const busyRef = useRef(false);
 
   useEffect(() => {
@@ -81,6 +84,10 @@ export function RecordingTrayAgent() {
         connections: [],
         audioSources,
       });
+      // Land on the recording page like every other start entry point. When
+      // the main window is hidden this is a no-op on screen (the webview
+      // navigates while hidden); restoring the window then shows the session.
+      push("/recording");
 
       // Attach live transcription. On failure the session keeps running as a
       // plain recording — the user can still switch modes from the page.
@@ -117,9 +124,37 @@ export function RecordingTrayAgent() {
       cleanup?.();
     };
     // Deliberately subscribe once per `api` instance; fresh provider config is
-    // read per invocation, not captured here.
+    // read per invocation, not captured here. `push` may be stale between
+    // renders but only wraps the stable pathname setter, so subscribe-once is
+    // still correct.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, t]);
+
+  // The stop command acks immediately and finalizes in the background, so a
+  // stop can originate anywhere (page, float dock, island, tray) while the
+  // user is on any page. This always-mounted listener is what turns the
+  // resulting `completed` event into the completion dialog: the session is
+  // parked in the hand-off store and the recording page picks it up (now or
+  // on its next visit).
+  useEffect(() => {
+    if (!api) return;
+    let disposed = false;
+    let cleanup: (() => void) | undefined;
+    void api
+      .onEvent((event) => {
+        if (event.type === "completed") {
+          useRecordingCompleteStore.getState().open(event.session);
+        }
+      })
+      .then((unsub) => {
+        if (disposed) unsub();
+        else cleanup = unsub;
+      });
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, [api]);
 
   return null;
 }

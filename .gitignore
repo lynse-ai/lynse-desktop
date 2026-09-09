@@ -55,3 +55,15 @@ apps/tauri/audio-capture/.build/
 # Python bytecode (MLX / FunASR bridge scripts)
 __pycache__/
 *.pyc
+
+# Signing / distribution keys — never commit these (TestFlight, App Store Connect, updater)
+*.p12
+*.p8
+*.pem
+*.cer
+*.mobileprovision
+*.keystore
+private_keys/
+
+# Local agent workspace state
+.zcode/

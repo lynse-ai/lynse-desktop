@@ -2,8 +2,24 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NotesPage } from "./page";
 import { getWorkspaceState } from "../workspace/store";
+
+/**
+ * The page mounts UploadDialog (whose hooks need the query context), so
+ * render through the same provider stack the app shell supplies.
+ */
+function renderNotesPage() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <NotesPage />
+    </QueryClientProvider>,
+  );
+}
 
 const testData = vi.hoisted(() => ({
   files: [
@@ -53,6 +69,10 @@ vi.mock("../workspace/hooks/use-files", () => ({
   useDeleteWorkspaceFiles: () => ({ mutate: testData.deleteMutate }),
   useTranscriptionStatus: () => ({ data: undefined }),
   useRerunSummary: () => ({ mutateAsync: testData.rerunMutate }),
+  // Used by the header's UploadDialog; never triggered by these tests.
+  useTransferFile: () => ({ mutate: vi.fn(), mutateAsync: vi.fn() }),
+  waitForTranscriptionCompletion: vi.fn(),
+  uploadFileToOSS: vi.fn(),
   // A default template so the batch-transcribe action is enabled.
   useTemplateCategories: () => ({
     data: [{ templates: [{ id: "tpl-1", isDefault: 1 }] }],
@@ -72,6 +92,11 @@ vi.mock("../workspace/local-transcription", () => ({
   LOCAL_TRANSCRIPTION_FOLDER_ID: "__local_transcriptions__",
   isLocalFileId: (id: string | null | undefined) =>
     typeof id === "string" && id.startsWith("local-"),
+  // UploadDialog dependency; the dialog never opens in these tests.
+  getDesktopLocalTranscriptionApi: () => null,
+  OFFLINE_TRANSCRIPTION_ENABLED_KEY: "lynse_offline_transcription_enabled",
+  resolveSttProvider: () => null,
+  findModelStatus: () => undefined,
 }));
 
 vi.mock("../workspace/note-vault", () => ({
@@ -153,7 +178,7 @@ afterEach(() => {
 
 describe("NotesPage multi-select", () => {
   it("enters multi-select after a long-press and toggles rows on click", () => {
-    render(<NotesPage />);
+    renderNotesPage();
 
     longPressRow("Note One");
 
@@ -171,7 +196,7 @@ describe("NotesPage multi-select", () => {
   });
 
   it("selects all visible rows from the header checkbox", () => {
-    render(<NotesPage />);
+    renderNotesPage();
 
     longPressRow("Note One");
 
@@ -186,7 +211,7 @@ describe("NotesPage multi-select", () => {
   });
 
   it("targets the whole selection with the row context menu", () => {
-    render(<NotesPage />);
+    renderNotesPage();
 
     longPressRow("Note One");
     fireEvent.click(screen.getByText("Note Two").closest("button")!);
@@ -202,7 +227,7 @@ describe("NotesPage multi-select", () => {
 
   it("batch-deletes the whole selection and exits multi-select on success", () => {
     window.confirm = vi.fn(() => true);
-    render(<NotesPage />);
+    renderNotesPage();
 
     longPressRow("Note One");
     fireEvent.click(screen.getByLabelText("workspace.select_all"));
@@ -229,7 +254,7 @@ describe("NotesPage multi-select", () => {
   });
 
   it("shows the floating batch bar with move/transcribe/delete in multi-select", () => {
-    render(<NotesPage />);
+    renderNotesPage();
 
     expect(screen.queryByTitle("workspace.delete_selected")).toBeNull();
 
@@ -242,7 +267,7 @@ describe("NotesPage multi-select", () => {
 
   it("batch-deletes from the floating bar", () => {
     window.confirm = vi.fn(() => true);
-    render(<NotesPage />);
+    renderNotesPage();
 
     longPressRow("Note One");
     fireEvent.click(screen.getByLabelText("workspace.select_all"));
@@ -255,7 +280,7 @@ describe("NotesPage multi-select", () => {
   });
 
   it("batch-transcribes the selection from the floating bar and clears it", async () => {
-    render(<NotesPage />);
+    renderNotesPage();
 
     longPressRow("Note One");
     fireEvent.click(screen.getByLabelText("workspace.select_all"));

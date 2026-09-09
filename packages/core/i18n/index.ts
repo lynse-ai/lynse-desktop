@@ -3,7 +3,7 @@ import { initReactI18next } from "react-i18next";
 import type { Resource } from "i18next";
 
 export const DEFAULT_LOCALE = "en";
-export const SUPPORTED_LOCALES = ["en", "zh-Hans", "ja"] as const;
+export const SUPPORTED_LOCALES = ["en", "zh-Hans", "zh-Hant", "ja", "ko"] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 const LOCALE_STORAGE_KEY = "lynse_locale";

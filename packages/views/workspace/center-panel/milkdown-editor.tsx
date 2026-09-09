@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Editor, rootCtx, defaultValueCtx, editorViewCtx, remarkPluginsCtx } from "@milkdown/kit/core";
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx, remarkPluginsCtx, prosePluginsCtx } from "@milkdown/kit/core";
 import { DOMSerializer } from "@milkdown/kit/prose/model";
 import { commonmark } from "@milkdown/kit/preset/commonmark";
 import { gfm } from "@milkdown/kit/preset/gfm";
@@ -12,6 +12,7 @@ import { replaceAll } from "@milkdown/kit/utils";
 import remarkBreaks from "remark-breaks";
 
 import "@milkdown/kit/prose/view/style/prosemirror.css";
+import { cjkSpacingPlugin } from "../cjk-spacing";
 import "../content-preview.css";
 
 interface MilkdownEditorProps {
@@ -39,6 +40,7 @@ export function MilkdownEditor({ initialContent, onChange, onEditorReady }: Milk
         ctx.set(rootCtx, root);
         ctx.set(defaultValueCtx, initialContent ?? "");
         ctx.set(remarkPluginsCtx, [{ plugin: remarkBreaks, options: undefined as unknown as Record<string, unknown> }]);
+        ctx.update(prosePluginsCtx, (plugins) => [...plugins, cjkSpacingPlugin()]);
         if (onChangeRef.current) {
           ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
             onChangeRef.current?.(markdown);

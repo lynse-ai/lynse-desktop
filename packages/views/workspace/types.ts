@@ -202,6 +202,16 @@ export interface FileCategoryCount {
   folderStats: FolderStatItem[];
 }
 
+/** One tool invocation announced during an assistant turn (ZCode-style
+ * activity row: icon + label + running/done state). */
+export interface ChatToolUse {
+  /** Backend tool-call id when provided; otherwise derived from the name. */
+  id: string;
+  /** Raw backend tool name, e.g. "search_meetings". */
+  name: string;
+  state: "running" | "done";
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -209,6 +219,12 @@ export interface ChatMessage {
   timestamp: number;
   /** Transient progress text shown while the assistant is "thinking"/running tools. */
   status?: string;
+  /** Chain-of-thought streamed before/around the answer (reasoning trace). */
+  thinking?: string;
+  /** True while reasoning deltas are still arriving (block shows live state). */
+  thinkingActive?: boolean;
+  /** Tool calls announced during the turn, in call order. */
+  toolUses?: ChatToolUse[];
   /** Sources (meeting titles / ids) referenced by the answer. */
   sources?: string[];
   /** Report / visual-card / image attachments. */
@@ -277,6 +293,10 @@ export interface ChatConfirm {
 export type ChatStreamEvent =
   | { type: "status"; text: string }
   | { type: "content"; delta: string }
+  /** Chain-of-thought delta; an empty delta closes the reasoning trace. */
+  | { type: "thinking"; delta: string }
+  /** Tool activity; `id` optional, `state` defaults to "running". */
+  | { type: "tool"; name: string; id?: string; state?: "running" | "done" }
   | { type: "meta"; sources: string[]; attachments: ChatAttachment[] }
   | { type: "done"; text?: string; sources?: string[]; attachments?: ChatAttachment[] }
   | { type: "error"; message: string }

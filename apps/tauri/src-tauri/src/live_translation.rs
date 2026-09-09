@@ -440,7 +440,12 @@ fn emit_stream_state(app: &AppHandle, source: AudioSource, state: &str, epoch: u
 pub(crate) fn sidecar_command(app: &AppHandle) -> CommandResult<Command> {
     let path = crate::stt::sidecar_path(app, "audio-capture")?;
     let mut command = Command::new(path);
-    #[cfg(unix)]
+    // Dev only: detach from the terminal's process group so Ctrl+C in the dev
+    // console doesn't kill the capture sidecar. Packaged builds must keep the
+    // sidecar a plain child of the app bundle — TCC attributes its capture to
+    // the (responsible) main app, which is what makes the microphone grant
+    // from `mic_permission` stick under App Store / TestFlight packaging.
+    #[cfg(all(unix, debug_assertions))]
     unsafe {
         use std::os::unix::process::CommandExt;
         command.pre_exec(|| {
@@ -484,10 +489,35 @@ pub(crate) fn run_permission_command(app: &AppHandle, argument: &str) -> Command
     })
 }
 
+/// Full permission snapshot with the microphone read in-process (see
+/// `mic_permission`): TCC must attribute the mic grant to the Lynse bundle,
+/// not to a detached sidecar binary, for App Store / TestFlight packaging.
+/// System-audio + restart-required still come from the sidecar, which owns
+/// the ScreenCaptureKit session.
+#[cfg(target_os = "macos")]
+pub(crate) fn read_permission_status(app: &AppHandle) -> CommandResult<PermissionStatus> {
+    let mut status = run_permission_command(app, "--permission-status")?;
+    status.microphone = crate::mic_permission::authorization_status()
+        .as_str()
+        .to_owned();
+    Ok(status)
+}
+
+/// Fires the native TCC microphone prompt in-process (attributed to the
+/// Lynse bundle, so the grant sticks under hardened runtime + sandbox) and
+/// returns the full permission snapshot afterwards.
+#[cfg(target_os = "macos")]
+pub(crate) fn request_microphone_permission(
+    app: &AppHandle,
+) -> CommandResult<PermissionStatus> {
+    let _ = crate::mic_permission::request_access();
+    read_permission_status(app)
+}
+
 #[tauri::command]
 pub fn live_translation_permissions(app: AppHandle) -> CommandResult<PermissionStatus> {
     #[cfg(target_os = "macos")]
-    return run_permission_command(&app, "--permission-status");
+    return read_permission_status(&app);
     #[cfg(target_os = "windows")]
     return Ok(PermissionStatus {
         microphone: "granted".to_owned(),
@@ -504,7 +534,7 @@ pub fn live_translation_request_permission(
 ) -> CommandResult<PermissionStatus> {
     #[cfg(target_os = "macos")]
     match kind.as_str() {
-        "microphone" => return run_permission_command(&app, "--request-microphone"),
+        "microphone" => return request_microphone_permission(&app),
         "systemAudio" => {
             let status = run_permission_command(&app, "--request-system-audio")?;
             if status.system_audio != "granted" {
@@ -571,18 +601,19 @@ pub async fn live_translation_start(
     #[cfg(target_os = "macos")]
     {
         // First, surface the native TCC prompts so the OS dialog actually
-        // appears and a "Lynse Audio Capture" entry is created in System
-        // Settings. Without this the user is sent to the privacy pane where
-        // nothing is listed yet, leaving them with nothing to toggle — the
-        // entry only materialises after the OS prompt has fired at least once.
-        let permissions = run_permission_command(&app, "--permission-status")?;
+        // appears and a "Lynse" entry is created in System Settings (the
+        // microphone one is asked in-process — see `mic_permission`). Without
+        // this the user is sent to the privacy pane where nothing is listed
+        // yet, leaving them with nothing to toggle — the entry only
+        // materialises after the OS prompt has fired at least once.
+        let permissions = read_permission_status(&app)?;
         // In system-only mode the microphone is never captured, so its
         // permission is neither requested nor required.
         let needs_mic = request.wants_mic() && permissions.microphone != "granted";
         let needs_screen = permissions.system_audio != "granted";
         if needs_mic || needs_screen {
             if needs_mic {
-                let _ = run_permission_command(&app, "--request-microphone");
+                let _ = crate::mic_permission::request_access();
             }
             if needs_screen {
                 let _ = run_permission_command(&app, "--request-system-audio");
@@ -591,11 +622,11 @@ pub async fn live_translation_start(
         // Re-read the actual grant state. Screen Recording only takes effect
         // after a full app restart even once the user clicks Allow, so we still
         // send the user to the pane and ask for a restart.
-        let after = run_permission_command(&app, "--permission-status")?;
+        let after = read_permission_status(&app)?;
         if request.wants_mic() && after.microphone != "granted" {
             open_macos_privacy_pane("microphone");
             return Err(
-                "缺少麦克风权限。请在系统弹出的对话框中点击「允许」（或在「隐私与安全性 → 麦克风」中允许 Lynse Audio Capture），然后重新启动 Lynse。"
+                "缺少麦克风权限。请在系统弹出的对话框中点击「允许」（或在「隐私与安全性 → 麦克风」中允许 Lynse），然后重新启动 Lynse。"
                     .to_owned(),
             );
         }
@@ -607,7 +638,7 @@ pub async fn live_translation_start(
         if after.system_audio != "granted" {
             open_macos_privacy_pane("screen");
             return Err(
-                "缺少“屏幕与系统音频录制”权限。请在系统弹出的对话框中点击「允许」（或在「隐私与安全性 → 屏幕录制」中允许 Lynse Audio Capture），然后完全退出并重新启动 Lynse。"
+                "缺少“屏幕与系统音频录制”权限。请在系统弹出的对话框中点击「允许」（或在「隐私与安全性 → 屏幕录制」中允许 Lynse），然后完全退出并重新启动 Lynse。"
                     .to_owned(),
             );
         }
@@ -741,7 +772,13 @@ pub async fn live_translation_start(
         .map_err(|_| "live session lock is poisoned")? = Some(session.clone());
     set_card_feed_target(&session);
     emit_snapshot(&app, &session);
-    set_recording_island_visible(&app, true);
+    // The island is the tray-side control surface: only pop it when the main
+    // window is out of sight (hidden to the tray or Dock-minimized). While the
+    // main window is on screen, the recording page and the in-app float dock
+    // own the controls, and the island would just duplicate them.
+    if !main_window_visible(&app) {
+        set_recording_island_visible(&app, true);
+    }
     Ok(session.snapshot())
 }
 
@@ -1989,7 +2026,7 @@ pub async fn live_translation_set_mode(
 pub async fn live_translation_stop(
     app: AppHandle,
     state: State<'_, LiveTranslationManager>,
-) -> CommandResult<CompletedSession> {
+) -> CommandResult<()> {
     let session = state
         .session
         .lock()
@@ -1999,20 +2036,31 @@ pub async fn live_translation_stop(
     clear_card_feed_target();
     session.set_state("stopping");
     emit_snapshot(&app, &session);
-    // Drop the floating island immediately: the steps below (sidecar drain,
-    // trailing-segment grace, persistence) can take ten-plus seconds, and the
-    // capsule has nothing left to show once the user chose to stop.
+    // Drop the floating island immediately: the capsule has nothing left to
+    // show once the user chose to stop.
     set_recording_island_visible(&app, false);
     session.capture_stop.store(false, Ordering::Relaxed);
     let _ = signal_child(&session, SIGNAL_STOP);
 
+    // Ack now — the UI must answer the stop click instantly. Everything slow
+    // (sidecar drain, trailing-segment grace, WAV mixdown, persistence) runs
+    // in the background and reaches the UI through the `completed` event.
+    tauri::async_runtime::spawn(async move {
+        finalize_session(app, session).await;
+    });
+    Ok(())
+}
+
+/// Drain the capture sidecar, persist the finished session and announce it.
+/// Runs in the background after `live_translation_stop` has acked.
+async fn finalize_session(app: AppHandle, session: Arc<LiveSession>) {
     let child = session
         .child
         .lock()
-        .map_err(|_| "live child lock is poisoned")?
-        .take();
+        .map(|mut guard| guard.take())
+        .unwrap_or(None);
     if let Some(mut child) = child {
-        tauri::async_runtime::spawn_blocking(move || {
+        let _ = tauri::async_runtime::spawn_blocking(move || {
             let deadline = Instant::now() + Duration::from_secs(8);
             loop {
                 match child.try_wait() {
@@ -2028,23 +2076,40 @@ pub async fn live_translation_stop(
                 }
             }
         })
-        .await
-        .map_err(|error| error.to_string())?;
+        .await;
     }
 
     voice_end(&session);
-    tokio::time::sleep(Duration::from_millis(3_200)).await;
-    let completed = persist_session(&app, &session)?;
+    // Trailing-segment grace: after VoiceEnd providers still stream their last
+    // final results over the websockets. They typically land well under a
+    // second, so a short grace keeps the transcript tail without making the
+    // completion dialog wait.
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let persist_result = tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        let session = session.clone();
+        move || persist_session(&app, &session)
+    })
+    .await;
     session.set_state("idle");
-    let _ = app.emit(
-        LIVE_EVENT,
-        json!({ "type": "completed", "session": completed }),
-    );
     let _ = app.emit(
         LIVE_EVENT,
         json!({ "type": "state", "snapshot": idle_snapshot() }),
     );
-    Ok(completed)
+    match persist_result {
+        Ok(Ok(completed)) => {
+            let _ = app.emit(
+                LIVE_EVENT,
+                json!({ "type": "completed", "session": completed }),
+            );
+        }
+        Ok(Err(error)) => {
+            emit_error(&app, None, format!("保存录音失败：{error}"));
+        }
+        Err(error) => {
+            emit_error(&app, None, format!("保存录音失败：{error}"));
+        }
+    }
 }
 
 fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<CompletedSession> {
@@ -2500,6 +2565,16 @@ fn position_recording_island(app: &AppHandle, window: &tauri::WebviewWindow) {
     let _ = window.set_position(LogicalPosition::new(x, y));
 }
 
+/// True when the main window is on screen: visible and not Dock-minimized.
+/// The recording island's visibility mirrors the inverse of this state.
+pub(crate) fn main_window_visible(app: &AppHandle) -> bool {
+    app.get_webview_window("main")
+        .map(|window| {
+            window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false)
+        })
+        .unwrap_or(false)
+}
+
 /// Shows (creating on first use) or hides the floating "recording island" —
 /// the collapsed form of the recording page. While the main window is hidden
 /// the island keeps elapsed time, live mic level and pause/stop reachable,
@@ -2507,10 +2582,7 @@ fn position_recording_island(app: &AppHandle, window: &tauri::WebviewWindow) {
 pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
     if let Some(window) = app.get_webview_window("recording-island") {
         if visible {
-            // Snap back below the tray icon on every session start, even if
-            // the user dragged the pill elsewhere previously.
-            position_recording_island(app, &window);
-            let _ = window.show();
+            reveal_recording_island(app, &window);
         } else {
             let _ = window.hide();
         }
@@ -2533,7 +2605,10 @@ pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
     .skip_taskbar(true)
     // The pill renders its own rounded shadow inside the transparent
     // webview; the system window shadow would trace a rectangle around it.
-    .shadow(false);
+    .shadow(false)
+    // Created hidden: `reveal_recording_island` below unrolls it under the
+    // tray icon instead of popping in at full size.
+    .visible(false);
     let window = match builder.build() {
         Ok(window) => window,
         Err(error) => {
@@ -2548,7 +2623,31 @@ pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
     {
         log::error!("Failed to apply recording island effects: {error}");
     }
-    position_recording_island(app, &window);
+    reveal_recording_island(app, &window);
+}
+
+/// The island's entrance: snap back below the tray icon (even if the user
+/// dragged the pill elsewhere previously), show as a thin sliver hugging the
+/// status bar, then unroll to full height with the drawer's quintic ease —
+/// the capsule reads as growing straight out of the status-bar icon, directly
+/// above which the window is anchored. Any in-flight drawer animation is
+/// superseded via the shared generation token.
+fn reveal_recording_island(app: &AppHandle, window: &tauri::WebviewWindow) {
+    position_recording_island(app, window);
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let Ok(size) = window.inner_size() else {
+        let _ = window.show();
+        return;
+    };
+    let width = size.width as f64 / scale;
+    // Re-showing while the transcript drawer is open unrolls back to the
+    // expanded height; normally this is the compact pill height.
+    let target_height = (size.height as f64 / scale).max(RECORDING_ISLAND_HEIGHT);
+    let generation = ISLAND_ANIMATION_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    let _ = window.set_size(tauri::LogicalSize::new(width, 12.0));
+    let _ = window.show();
+    let window = window.clone();
+    thread::spawn(move || animate_island_height(window, target_height, true, generation));
 }
 
 /// Grows or shrinks the recording-island window between the compact pill and
@@ -2587,6 +2686,24 @@ pub fn live_translation_hide_island(app: AppHandle) -> CommandResult<()> {
 #[tauri::command]
 pub fn live_translation_show_main(app: AppHandle) -> CommandResult<()> {
     crate::show_main_window(&app);
+    Ok(())
+}
+
+/// Hides the main window (the recording page's "collapse to tray" buttons).
+/// While a session runs, the recording island takes over as the on-screen
+/// control surface so the session stays reachable without the main window;
+/// when idle, hiding is just the plain tray-app hide.
+#[tauri::command]
+pub fn live_translation_hide_main(
+    app: AppHandle,
+    state: State<'_, LiveTranslationManager>,
+) -> CommandResult<()> {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+    if state.has_active_session() {
+        set_recording_island_visible(&app, true);
+    }
     Ok(())
 }
 

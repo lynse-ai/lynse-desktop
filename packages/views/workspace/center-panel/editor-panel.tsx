@@ -8,6 +8,7 @@ import { useWorkspaceStore } from "../store";
 import { useFileOutline, useFileConclusions } from "../hooks/use-files";
 import { useTranslation } from "@lynse/core/i18n/react";
 import type { Editor } from "@milkdown/kit/core";
+import { wrapCjkSpacing } from "../cjk-spacing";
 import type { EditorMode } from "../types";
 
 export function EditorPanel() {
@@ -99,7 +100,7 @@ export function EditorPanel() {
           <div className="overflow-auto px-6 py-4 h-full">
             <div
               className="content-preview-inner"
-              dangerouslySetInnerHTML={{ __html: previewHtml || getHTML() }}
+              dangerouslySetInnerHTML={{ __html: wrapCjkSpacing(previewHtml || getHTML()) }}
             />
           </div>
         )}
@@ -112,7 +113,7 @@ export function EditorPanel() {
             <div className="flex-1 overflow-auto px-6 py-4">
               <div
                 className="content-preview-inner"
-                dangerouslySetInnerHTML={{ __html: previewHtml || getHTML() }}
+                dangerouslySetInnerHTML={{ __html: wrapCjkSpacing(previewHtml || getHTML()) }}
               />
             </div>
           </div>

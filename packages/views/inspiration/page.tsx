@@ -445,7 +445,7 @@ export function InspirationPage() {
                 <List className="size-3.5" />
               </button>
             </div>
-            <Button size="sm" className="gap-1.5" onClick={openCapture}>
+            <Button size="sm" className="gap-1.5" onClick={() => openCapture()}>
               <Plus className="size-3.5" />
               {t("inspiration.new")}
             </Button>
@@ -508,7 +508,7 @@ export function InspirationPage() {
                 <p className="mt-1 max-w-xs text-xs text-muted-foreground">
                   {t("inspiration.empty_hint")}
                 </p>
-                <Button size="sm" className="mt-4 gap-1.5" onClick={openCapture}>
+                <Button size="sm" className="mt-4 gap-1.5" onClick={() => openCapture()}>
                   <Plus className="size-3.5" />
                   {t("inspiration.new")}
                 </Button>

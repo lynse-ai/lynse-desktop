@@ -50,6 +50,7 @@ import {
 } from "./local-transcription";
 import { retryLocalTranscription } from "./local-transcription-retry";
 import { isLocalTranscriptionActive, LOCAL_STATUS_LABEL } from "./local-transcription-status";
+import { wrapCjkSpacing } from "./cjk-spacing";
 import { MilkdownViewer } from "./milkdown-viewer";
 import {
   getDesktopVaultApi,
@@ -823,7 +824,7 @@ export function ContentPanel() {
                   setEditedTitle({ itemId: selectedItemId, title: e.target.value });
                 }}
                 placeholder={t("workspace.enter_filename")}
-                className="w-full border-none bg-transparent text-[2rem] font-bold leading-[1.25] tracking-[-0.02em] outline-none placeholder:text-muted-foreground/50 shrink-0"
+                className="w-full border-none bg-transparent text-[1.75rem] font-bold leading-[1.25] tracking-[-0.02em] outline-none placeholder:text-muted-foreground/50 shrink-0"
               />
               {isLocalSelectedItem && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
@@ -879,7 +880,7 @@ export function ContentPanel() {
                         sourceViewVisible ? (
                           <SourceView code={outlineRaw ?? outlineBody} language="html" />
                         ) : (
-                          <div className="content-preview-inner" dangerouslySetInnerHTML={{ __html: outlineBody }} />
+                          <div className="content-preview-inner" dangerouslySetInnerHTML={{ __html: wrapCjkSpacing(outlineBody) }} />
                         )
                       ) : (
                         <NoContentState label={t("workspace.no_outline")} />
@@ -1006,7 +1007,7 @@ export function ContentPanel() {
                         return (
                           <>
                             {scopedStyles && <style dangerouslySetInnerHTML={{ __html: scopedStyles }} />}
-                            <div className="content-preview-inner" dangerouslySetInnerHTML={{ __html: content }} />
+                            <div className="content-preview-inner" dangerouslySetInnerHTML={{ __html: wrapCjkSpacing(content) }} />
                           </>
                         );
                       })() : (

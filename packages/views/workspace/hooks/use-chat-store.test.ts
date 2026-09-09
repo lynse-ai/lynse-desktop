@@ -181,3 +181,67 @@ describe("concurrent chat conversations", () => {
     expect(store.getState().isLoading).toBe(false);
   });
 });
+
+describe("reasoning and tool activity", () => {
+  it("accumulates thinking deltas and closes the trace when content starts", () => {
+    const { sendMessage } = store.getState();
+    sendMessage("hello");
+    const stream = streams[0]!;
+
+    emit(stream, { type: "thinking", content: "先想想" });
+    emit(stream, { type: "thinking", content: "再想想" });
+    let message = store.getState().messages.at(-1)!;
+    expect(message.thinking).toBe("先想想再想想");
+    expect(message.thinkingActive).toBe(true);
+
+    emit(stream, { type: "thinking_end" });
+    message = store.getState().messages.at(-1)!;
+    expect(message.thinkingActive).toBe(false);
+
+    emit(stream, { type: "content", delta: "答案" });
+    message = store.getState().messages.at(-1)!;
+    expect(message.content).toBe("答案");
+    expect(message.thinking).toBe("先想想再想想");
+    expect(message.thinkingActive).toBe(false);
+  });
+
+  it("tracks tool calls from tool events and status ticks", () => {
+    const { sendMessage } = store.getState();
+    sendMessage("hello");
+    const stream = streams[0]!;
+
+    emit(stream, { type: "tool_use", name: "search_meetings", id: "t1" });
+    let message = store.getState().messages.at(-1)!;
+    expect(message.toolUses).toEqual([
+      { id: "t1", name: "search_meetings", state: "running" },
+    ]);
+
+    // A status tick announcing the next tool closes the previous one.
+    emit(stream, { type: "status", text: "调用工具: get_meeting" });
+    message = store.getState().messages.at(-1)!;
+    expect(message.toolUses).toEqual([
+      { id: "t1", name: "search_meetings", state: "done" },
+      { id: "get_meeting", name: "get_meeting", state: "running" },
+    ]);
+
+    emit(stream, { type: "tool_result", name: "get_meeting" });
+    message = store.getState().messages.at(-1)!;
+    expect(message.toolUses?.every((t) => t.state === "done")).toBe(true);
+  });
+
+  it("closes running tools when the turn completes", () => {
+    const { sendMessage } = store.getState();
+    sendMessage("hello");
+    const stream = streams[0]!;
+
+    emit(stream, { type: "status", text: "调用工具: search_notes" });
+    emit(stream, { type: "content", delta: "partial" });
+    emit(stream, { type: "done", text: "partial" });
+
+    const message = store.getState().messages.at(-1)!;
+    expect(message.content).toBe("partial");
+    expect(message.status).toBeUndefined();
+    expect(message.toolUses?.every((t) => t.state === "done")).toBe(true);
+    expect(message.thinkingActive).toBeFalsy();
+  });
+});

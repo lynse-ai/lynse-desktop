@@ -66,5 +66,7 @@ export function defaultJsonRoutes(): Record<string, unknown> {
     "/api/business/file/info": MOCK_FILES[0],
     "/api/business/translate/prompt/categories": [],
     "/api/auth/apikey/token": { accessToken: "e2e-access-token" },
+    "/api/auth/captcha/sms": { success: true, cooldown: 60 },
+    "/api/auth/login": { token: "e2e-access-token", customerId: MOCK_USER.id },
   };
 }

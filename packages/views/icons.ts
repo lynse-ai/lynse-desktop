@@ -138,6 +138,9 @@ export {
   CloudRain,        // Rain / showers
   CloudSnow,        // Snow
   CloudLightning,   // Thunderstorm
+
+  // ── Auth ─────────────────────────────────────────────
+  QrCode,           // App-scanned QR-code sign-in entry
 } from "lucide-react";
 
 // ── Icon sizing tokens ────────────────────────────────────

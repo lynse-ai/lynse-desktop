@@ -16,6 +16,7 @@
     "./auth": "./auth/index.ts",
     "./auth/qrcode": "./auth/qrcode.ts",
     "./auth/session": "./auth/session.ts",
+    "./auth/sms": "./auth/sms.ts",
     "./auth/wechat": "./auth/wechat.ts",
     "./config": "./config/index.ts",
     "./navigation": "./navigation/index.ts",

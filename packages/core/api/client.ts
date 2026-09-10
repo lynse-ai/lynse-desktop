@@ -90,7 +90,27 @@ export class ApiClient {
     }
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      throw new ApiError(res.status, body || res.statusText);
+      // Gateways often wrap failures in the same { code, msg } envelope even
+      // with a non-200 HTTP status — surface `msg` instead of the raw JSON.
+      let message = body || res.statusText;
+      let data: unknown;
+      try {
+        const json = JSON.parse(body) as {
+          msg?: unknown;
+          message?: unknown;
+          data?: unknown;
+        };
+        if (typeof json.msg === "string" && json.msg) {
+          message = json.msg;
+          data = json.data;
+        } else if (typeof json.message === "string" && json.message) {
+          message = json.message;
+          data = json.data;
+        }
+      } catch {
+        // Not JSON — keep the raw body as the message.
+      }
+      throw new ApiError(res.status, message, data);
     }
     if (res.status === 204) return undefined as T;
 

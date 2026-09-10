@@ -1,11 +1,14 @@
 "use client";
 
 /**
- * Home (主页) — the app's launch page: a reverse-chronological feed of the
- * last three days of notes (recordings / meetings), near-term todos, and
- * flash notes, grouped by day, with a greeting + summary header and a
- * rotating daily-quote line. Navigation lives in the sidebar; every feed
- * row deep-links to its own module.
+ * Home (主页) — the app's launch page, following the reference layout:
+ * a greeting header (date / greeting) with an inline weather line and a
+ * search entry on the right, a today-summary strip underneath that
+ * carousels the summary parts plus the nearest due todo, and the "recent
+ * records" feed grouped by day under text tabs. A floating Dynamic-Island
+ * capsule pins to the page bottom — plus (hover for import / paste-link),
+ * record, quick note. A rotating daily quote sits under the greeting; the
+ * footer carries "view all records".
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -14,18 +17,27 @@ import { cn } from "@lynse/ui/lib/utils";
 import { useNavigation } from "../navigation";
 import { getWorkspaceState } from "../workspace/store";
 import { getDesktopLocalTranscriptionApi } from "../workspace/local-transcription";
+import { UploadDialog } from "../workspace/upload-dialog";
 import { useUserCredits } from "../layout/use-user-credits";
 import { useTodos } from "../todo/use-todos";
+import { useQuickRecording } from "../live-translation/quick-recording";
 import type { TodoItem } from "../todo/todo-api";
 import type { WorkspaceItem } from "../workspace/types";
 import {
+  ArrowRight,
+  Clock,
   FileText,
-  Lightbulb,
+  Link,
   ListChecks,
+  Mic,
+  Search,
   Zap,
   ChevronRight,
   Loader2,
+  Pencil,
+  Plus,
   Quote,
+  Upload,
 } from "../icons";
 import { featureFlags } from "../feature-flags";
 import {
@@ -35,6 +47,8 @@ import {
 import { useHomeFeed, groupByDay, type DayGroup, type FeedEntry, type FeedKind } from "./feed";
 import { useDailyQuotes, QUOTE_ROTATE_MS } from "./daily-quote";
 import { WeatherStrip } from "./weather-card";
+import { GlobalSearchDialog } from "./global-search-dialog";
+import { PasteLinkDialog } from "./paste-link-dialog";
 
 type FeedFilter = "all" | FeedKind;
 
@@ -52,6 +66,11 @@ function greetingKey(hour: number): string {
   return "home.greeting_night";
 }
 
+/** The today-summary strip under the hero card rotates one item every 5s. */
+const SUMMARY_ROTATE_MS = 5_000;
+/** Crossfade length for the strip's enter/exit transition. */
+const SUMMARY_CROSSFADE_MS = 1_000;
+
 /** Web has no /notes route — its workspace lives under /recordings. */
 function useNotesPath(): string {
   return getDesktopLocalTranscriptionApi() ? "/notes" : "/recordings";
@@ -59,6 +78,7 @@ function useNotesPath(): string {
 
 export function HomePage() {
   const { t, i18n } = useTranslation();
+  const { push } = useNavigation();
   const { data: userInfo } = useUserCredits();
   const nickname = userInfo?.nickname;
   const { entries, summary, loading } = useHomeFeed();
@@ -67,6 +87,34 @@ export function HomePage() {
   const openCapture = useInspirationCaptureStore((state) => state.openCapture);
   // Same guard as the sidebar's inspiration entry — web has no capture sheet.
   const captureAvailable = featureFlags.inspiration && Boolean(getDesktopInspirationApi());
+  const quick = useQuickRecording();
+  const [startingRecord, setStartingRecord] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [pasteOpen, setPasteOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const notesPath = useNotesPath();
+
+  const startRecording = async () => {
+    if (startingRecord) return;
+    setStartingRecord(true);
+    try {
+      if (await quick.start()) push("/recording");
+    } finally {
+      setStartingRecord(false);
+    }
+  };
+
+  // ⌘K / Ctrl+K opens the global search palette from anywhere on the page.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const now = new Date();
   const dateLine = new Intl.DateTimeFormat(i18n.language, {
@@ -90,22 +138,110 @@ export function HomePage() {
     [visible, now.getDate()],
   );
 
+  // The nearest unfinished due todo powers the "due soon" banner.
+  const upcomingTodo = useMemo(() => {
+    const withDue = todosStore.todos
+      .filter((todo) => !todo.completed && todo.dueDate)
+      .sort(
+        (a, b) => new Date(a.dueDate!).getTime() - new Date(b.dueDate!).getTime(),
+      );
+    return withDue[0] ?? null;
+  }, [todosStore.todos]);
+
   const summaryParts = [
     summary.meetings > 0 ? t("home.summary_meetings", { count: summary.meetings }) : null,
     summary.todos > 0 ? t("home.summary_todos", { count: summary.todos }) : null,
     summary.flashes > 0 ? t("home.summary_flashes", { count: summary.flashes }) : null,
   ].filter(Boolean);
-  const summaryLine =
-    summaryParts.length > 0
-      ? `${dateLine} · ${summaryParts.join(" · ")}`
-      : `${dateLine} · ${t("home.summary_empty")}`;
+  // One strip under the hero card: the today-summary parts and the nearest
+  // due todo carousel through, one every SUMMARY_ROTATE_MS, and only when
+  // there is more than one item. Hovering pauses the rotation so the todo's
+  // checkbox and link stay reachable. Each step crossfades — the incoming
+  // item rises from below while the outgoing one fades up and away.
+  const rotateCount = summaryParts.length + (upcomingTodo ? 1 : 0);
+  const [strip, setStrip] = useState<{ current: number; leaving: number | null }>({
+    current: 0,
+    leaving: null,
+  });
+  const [stripPaused, setStripPaused] = useState(false);
+  useEffect(() => {
+    if (rotateCount <= 1 || stripPaused) return;
+    const timer = setInterval(() => {
+      setStrip((s) => ({ current: (s.current + 1) % rotateCount, leaving: s.current }));
+    }, SUMMARY_ROTATE_MS);
+    return () => clearInterval(timer);
+  }, [rotateCount, stripPaused]);
+  // Drop the outgoing layer once its exit animation has finished.
+  useEffect(() => {
+    if (strip.leaving === null) return;
+    const timer = setTimeout(
+      () => setStrip((s) => (s.leaving === strip.leaving ? { ...s, leaving: null } : s)),
+      SUMMARY_CROSSFADE_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [strip.leaving]);
+  const stripCurrent = rotateCount > 0 ? strip.current % rotateCount : 0;
+  const upcomingDueLabel = upcomingTodo ? dueTodoLabel(upcomingTodo, t, i18n.language) : "";
+
+  /** Content of one carousel slot: a summary text line or the due todo row. */
+  const renderStripItem = (index: number) => {
+    if (upcomingTodo && index >= summaryParts.length) {
+      return (
+        <>
+          <button
+            type="button"
+            aria-label={t("todo.completed_toggle")}
+            onClick={() => todosStore.toggle(upcomingTodo)}
+            className="flex size-[18px] shrink-0 items-center justify-center rounded-full border border-input transition-colors hover:border-primary"
+          />
+          <button
+            type="button"
+            disabled={!todoPageAvailable}
+            onClick={() => todoPageAvailable && push("/todo")}
+            className="min-w-0 flex-1 truncate text-left text-sm text-foreground transition-colors hover:text-primary disabled:cursor-default"
+          >
+            {upcomingTodo.title}
+          </button>
+          {upcomingDueLabel && (
+            <span className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-muted-foreground">
+              <Clock className="size-3" strokeWidth={1.8} />
+              {upcomingDueLabel}
+            </span>
+          )}
+          {todoPageAvailable && (
+            <ChevronRight className="size-4 shrink-0 text-muted-foreground/40" />
+          )}
+        </>
+      );
+    }
+    const text =
+      summaryParts.length > 0
+        ? summaryParts[index % summaryParts.length]!
+        : t("home.summary_empty");
+    return <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{text}</p>;
+  };
+
+  const todoPageAvailable = notesPath === "/notes";
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-3xl flex-col overflow-y-auto px-6 pb-10 pt-10">
-      {/* ── Header ─────────────────────────────────────── */}
-      <header className="mb-5 flex items-start justify-between gap-6">
-        <div className="min-w-0 flex-1">
-          <h1 className="text-xl font-semibold text-foreground">
+    <div className="mx-auto flex h-full w-full max-w-4xl flex-col overflow-y-auto px-6 pb-6">
+      {/* ── Header ───────────────────────────────────────
+          Doubles as the window drag region (same as the other pages' title
+          bars). Tauri only starts a drag when the exact mousedown target has
+          the attribute, so it is repeated on the greeting text elements;
+          the search button and weather stay interactive. */}
+      <header
+        className="-mx-6 mb-5 flex select-none items-start justify-between gap-6 px-6 pt-6"
+        data-tauri-drag-region
+      >
+        <div className="min-w-0 flex-1" data-tauri-drag-region>
+          <p className="text-xs text-muted-foreground" data-tauri-drag-region>
+            {dateLine}
+          </p>
+          <h1
+            className="mt-1.5 text-2xl font-semibold tracking-tight text-foreground"
+            data-tauri-drag-region
+          >
             {nickname
               ? t("home.greeting_named", {
                   name: nickname,
@@ -113,108 +249,279 @@ export function HomePage() {
                 })
               : t(greetingKey(now.getHours()))}
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">{summaryLine}</p>
           {quote && (
             <p
               key={quoteIndex}
               className="mt-3 flex animate-in fade-in items-start gap-1.5 text-xs italic text-muted-foreground/80 duration-700"
+              data-tauri-drag-region
             >
               <Quote className="mt-0.5 size-3 shrink-0" strokeWidth={1.5} />
-              <span className="font-serif">
+              <span className="font-serif" data-tauri-drag-region>
                 {quote.text}
                 {quote.source ? ` —— ${quote.source}` : ""}
               </span>
             </p>
           )}
         </div>
-        <WeatherStrip />
+        <div className="flex shrink-0 flex-col items-end gap-3">
+          <button
+            type="button"
+            aria-label={t("home.search_records")}
+            title={`${t("home.search_records")} (⌘K)`}
+            onClick={() => setSearchOpen(true)}
+            className="flex size-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            <Search className="size-4" strokeWidth={1.8} />
+          </button>
+          <WeatherStrip />
+        </div>
       </header>
 
-      {/* ── Quick capture bar ──────────────────────────── */}
-      {captureAvailable && (
-        <div
-          role="button"
-          tabIndex={0}
-          onClick={() => openCapture("note")}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              openCapture("note");
-            }
-          }}
-          className="mb-3 flex h-10 cursor-pointer items-center gap-2.5 rounded-xl border border-border/60 bg-muted/40 px-3.5 transition-colors hover:border-ring/50 hover:bg-accent/40"
-        >
-          <Lightbulb className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
-          <span className="flex-1 truncate text-sm text-muted-foreground/80">
-            {t("home.capture_placeholder")}
-          </span>
-          <button
-            type="button"
-            aria-label={t("inspiration.mode_todo")}
-            onClick={(event) => {
-              event.stopPropagation();
-              openCapture("todo");
-            }}
-            className="flex shrink-0 items-center gap-1 rounded-full border border-border/60 bg-background px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
-          >
-            <ListChecks className="size-3.5" />
-            {t("inspiration.mode_todo")}
-          </button>
+      {/* ── Today summary strip (carousel incl. due todo) ─ */}
+      <div
+        className="flex items-center gap-3 rounded-xl border border-border/50 bg-muted/20 px-4 py-2.5"
+        onMouseEnter={() => setStripPaused(true)}
+        onMouseLeave={() => setStripPaused(false)}
+      >
+        <span className="shrink-0 text-xs font-medium text-primary">
+          {t("home.summary_title")}
+        </span>
+        <span className="h-4 w-px shrink-0 bg-border/60" />
+        <div className="relative min-w-0 flex-1 overflow-hidden">
+          {rotateCount > 1 ? (
+            <>
+              {/* Incoming layer — rises from below while fading in. */}
+              <div
+                key={`in-${stripCurrent}`}
+                className="flex min-w-0 items-center gap-3 animate-in fade-in slide-in-from-bottom-4 duration-1000"
+              >
+                {renderStripItem(stripCurrent)}
+              </div>
+              {strip.leaving !== null && (
+                /* Outgoing layer — fades away while sliding up, clipped. */
+                <div
+                  key={`out-${strip.leaving}`}
+                  className="absolute inset-0 flex items-center gap-3 animate-out fade-out slide-out-to-top-4 fill-mode-forwards pointer-events-none duration-1000"
+                >
+                  {renderStripItem(strip.leaving)}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="flex min-w-0 items-center gap-3">
+              {renderStripItem(stripCurrent)}
+            </div>
+          )}
         </div>
-      )}
-
-      {/* ── Filter chips ───────────────────────────────── */}
-      <div className="mb-3 flex items-center gap-2">
-        {FILTERS.map((f) => (
-          <button
-            key={f.value}
-            type="button"
-            onClick={() => setFilter(f.value)}
-            className={cn(
-              "rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-              filter === f.value
-                ? "border-foreground bg-foreground text-background"
-                : "border-border text-muted-foreground hover:bg-accent hover:text-foreground",
-            )}
-          >
-            {t(f.labelKey)}
-          </button>
-        ))}
       </div>
 
-      {/* ── Feed ───────────────────────────────────────── */}
-      {loading ? (
-        <div className="flex flex-1 items-center justify-center text-muted-foreground">
-          <Loader2 className="size-5 animate-spin" />
+      {/* ── Recent records ─────────────────────────────── */}
+      <section className="mt-7">
+        <div className="flex items-center justify-between border-b border-border/60">
+          <h2 className="pb-2 text-lg font-semibold text-foreground">
+            {t("home.recent_title")}
+            {entries.length > 0 && (
+              <span className="ml-2 text-sm font-normal tabular-nums text-muted-foreground">
+                {entries.length}
+              </span>
+            )}
+          </h2>
+          <div className="flex items-center gap-0.5">
+            {FILTERS.map((f) => (
+              <button
+                key={f.value}
+                type="button"
+                onClick={() => setFilter(f.value)}
+                className={cn(
+                  "relative px-2 pb-2.5 text-sm transition-colors",
+                  filter === f.value
+                    ? "font-medium text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {t(f.labelKey)}
+                {filter === f.value && (
+                  <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-primary" />
+                )}
+              </button>
+            ))}
+          </div>
         </div>
-      ) : visible.length === 0 ? (
-        <EmptyState filter={filter} />
-      ) : (
-        <div>
-          {visibleGroups.map((group) => (
-            <section key={groupLabelKey(group)} className="mt-4">
-              <div className="mb-1 flex items-center gap-3">
-                <h2 className="text-sm font-semibold text-foreground">
-                  {groupTitle(group, t, i18n.language)}
-                </h2>
-                <span className="text-2xs text-muted-foreground">
-                  {t("home.item_count", { count: group.entries.length })}
-                </span>
-                <div className="h-px flex-1 bg-border/60" />
+
+        {/* ── Feed ─────────────────────────────────────── */}
+        {loading ? (
+          <div className="flex flex-1 items-center justify-center py-16 text-muted-foreground">
+            <Loader2 className="size-5 animate-spin" />
+          </div>
+        ) : visible.length === 0 ? (
+          <EmptyState filter={filter} />
+        ) : (
+          <div className="pb-2">
+            {visibleGroups.map((group) => (
+              <section key={groupLabelKey(group)} className="mt-4">
+                <div className="mb-1 flex items-center gap-3">
+                  <h3 className="text-sm font-semibold text-foreground">
+                    {groupTitle(group, t, i18n.language)}
+                  </h3>
+                  <span className="text-2xs text-muted-foreground">
+                    {t("home.item_count", { count: group.entries.length })}
+                  </span>
+                  <div className="h-px flex-1 bg-border/60" />
+                </div>
+                {group.entries.map((entry) => (
+                  <FeedRow
+                    key={entry.key}
+                    entry={entry}
+                    onToggleTodo={todosStore.toggle}
+                  />
+                ))}
+              </section>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ── Footer: view-all link ──────────────────────── */}
+      <footer className="mt-auto flex justify-center pb-20 pt-6">
+        <button
+          type="button"
+          onClick={() => push(notesPath)}
+          className="flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {t("home.view_all_records")}
+          <ArrowRight className="size-3.5" />
+        </button>
+      </footer>
+
+      {/* ── Floating capture capsule (Dynamic-Island style) ─
+          Pins to the bottom of the page: plus on the left (hover reveals
+          import / paste-link entries), record in the middle, quick note on
+          the right. */}
+      <div className="pointer-events-none sticky bottom-2 z-40 flex justify-center">
+        <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-border/40 bg-popover/60 p-1 shadow-md backdrop-blur-lg">
+          <div className="group relative flex">
+            <button
+              type="button"
+              aria-label={t("home.capture_more")}
+              className="flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Plus className="size-[18px]" strokeWidth={1.8} />
+            </button>
+            <div className="pointer-events-none absolute bottom-full left-0 z-50 translate-y-1 pb-2 opacity-0 transition-all duration-150 group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100">
+              <div className="w-48 rounded-xl border border-border/60 bg-popover p-1.5 shadow-lg">
+                <button
+                  type="button"
+                  onClick={() => setUploadOpen(true)}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-foreground transition-colors hover:bg-accent"
+                >
+                  <Upload className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+                  {t("home.import_audio")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPasteOpen(true)}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-foreground transition-colors hover:bg-accent"
+                >
+                  <Link className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+                  {t("home.paste_link")}
+                </button>
               </div>
-              {group.entries.map((entry) => (
-                <FeedRow
-                  key={entry.key}
-                  entry={entry}
-                  onToggleTodo={todosStore.toggle}
-                />
-              ))}
-            </section>
-          ))}
+            </div>
+          </div>
+          {quick.available && (
+            <RecordAction
+              starting={startingRecord}
+              recording={quick.recording}
+              onStart={() => void startRecording()}
+            />
+          )}
+          {captureAvailable && (
+            <button
+              type="button"
+              aria-label={t("home.quick_note")}
+              title={t("home.quick_note")}
+              onClick={() => openCapture("note")}
+              className="flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Pencil className="size-4" strokeWidth={1.6} />
+            </button>
+          )}
         </div>
-      )}
+      </div>
+
+      {/* ── Overlays ───────────────────────────────────── */}
+      <GlobalSearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
+      <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
+      <PasteLinkDialog open={pasteOpen} onOpenChange={setPasteOpen} />
     </div>
   );
+}
+
+/** The hero record button: the original red circle — click to start a session
+ *  and land on the recording page. Audio import lives in the card's right-side
+ *  circle action. */
+function RecordAction({
+  starting,
+  recording,
+  onStart,
+}: {
+  starting: boolean;
+  recording: boolean;
+  onStart: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <button
+      type="button"
+      disabled={starting}
+      onClick={onStart}
+      aria-label={t("recording_mode.start_recording")}
+      title={t("recording_mode.start_recording")}
+      className="relative flex size-10 shrink-0 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-all duration-200 hover:scale-105 hover:bg-destructive/90 active:scale-95 disabled:opacity-60"
+    >
+      {starting ? (
+        <Loader2 className="size-4 animate-spin" />
+      ) : (
+        <Mic className="size-[18px]" />
+      )}
+      {recording && (
+        <span className="absolute -right-0.5 -top-0.5 size-2.5 animate-pulse rounded-full border-2 border-background bg-destructive" />
+      )}
+    </button>
+  );
+}
+
+/** "今天 14:00"-style due label for the nearest due todo shown in the
+ *  today-summary strip carousel. */
+function dueTodoLabel(
+  todo: TodoItem,
+  t: (key: string, params?: Record<string, unknown>) => string,
+  language: string,
+): string {
+  const due = todo.calendarStartAt || todo.dueDate || "";
+  const dueDate = due ? new Date(due) : null;
+  if (!dueDate || Number.isNaN(dueDate.getTime())) return "";
+  const now = new Date();
+  const dayDiff = Math.round(
+    (new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate()).getTime() -
+      new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()) /
+      86_400_000,
+  );
+  const dayLabel =
+    dayDiff === 0
+      ? t("home.group_today")
+      : dayDiff === 1
+        ? t("home.group_tomorrow")
+        : new Intl.DateTimeFormat(language, { month: "short", day: "numeric" }).format(dueDate);
+  const timeLabel =
+    due.length > 10
+      ? new Intl.DateTimeFormat(language, {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }).format(dueDate)
+      : null;
+  return timeLabel ? `${dayLabel} ${timeLabel}` : dayLabel;
 }
 
 function groupLabelKey(group: DayGroup): string {
@@ -255,7 +562,7 @@ function EmptyState({ filter }: { filter: FeedFilter }) {
 
 const KIND_STYLE: Record<FeedKind, { icon: typeof FileText; chip: string }> = {
   note: { icon: FileText, chip: "bg-primary/10 text-primary" },
-  flash: { icon: Zap, chip: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
+  flash: { icon: Zap, chip: "bg-violet-500/15 text-violet-600 dark:text-violet-400" },
   todo: { icon: ListChecks, chip: "bg-sky-500/15 text-sky-600 dark:text-sky-400" },
 };
 
@@ -331,7 +638,9 @@ function FeedRow({
       </span>
       <span
         className={cn(
-          "flex size-7 shrink-0 flex-col items-center justify-center rounded-lg",
+          // -mt-1 centers the 28px chip on the 20px title line (rows are
+          // top-aligned so two-line entries keep the icon on the first line).
+          "-mt-1 flex size-7 shrink-0 flex-col items-center justify-center rounded-lg",
           kind.chip,
         )}
         title={t(`home.type_${entry.kind}`)}
@@ -369,7 +678,7 @@ function FeedRow({
         </span>
       )}
       {onClick && (
-        <ChevronRight className="mt-1 size-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
+        <ChevronRight className="size-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
       )}
     </div>
   );

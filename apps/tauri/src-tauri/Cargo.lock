@@ -2448,7 +2448,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lynse-tauri"
-version = "0.1.37"
+version = "1.0.3"
 dependencies = [
  "base64 0.22.1",
  "block2 0.6.2",
@@ -2486,6 +2486,7 @@ dependencies = [
  "url",
  "uuid",
  "window-vibrancy 0.8.0",
+ "windows 0.61.3",
 ]
 
 [[package]]

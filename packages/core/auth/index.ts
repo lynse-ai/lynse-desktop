@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { ApiClient } from "../api/client";
 import type { StorageAdapter } from "../types/storage";
-import { loginWithSmsCode, type AuthSession } from "./session";
+import type { AuthSession } from "./session";
 import {
   buildWechatQrUrl,
   createWechatState,
@@ -20,8 +20,6 @@ interface AuthState {
   isLoading: boolean;
   isAuthenticated: boolean;
   login: (apiKey: string, apiUrl?: string) => Promise<void>;
-  /** Phone + SMS verification code sign-in (TestFlight channel). */
-  loginWithSms: (phone: string, code: string) => Promise<void>;
   /**
    * Persist any pending API-base-URL change, mint a `state`, and return the
    * WeChat QR-code authorize URL to navigate to (web: same-window redirect;
@@ -46,7 +44,7 @@ type AuthOpts = {
   cookieAuth?: boolean;
 };
 
-let authStoreInstance: ReturnType<typeof createAuthStore>;
+let authStoreInstance: ReturnType<typeof createAuthStore> | undefined;
 
 export function createAuthStore(opts: AuthOpts) {
   return create<AuthState>()((set) => {
@@ -110,11 +108,6 @@ export function createAuthStore(opts: AuthOpts) {
       }
       set({ isAuthenticated: true, isLoading: false });
       opts.onLogin?.();
-    },
-
-    loginWithSms: async (phone: string, code: string) => {
-      const result = await loginWithSmsCode(phone, code);
-      persistSession(result);
     },
 
     startWechatLogin: (startOpts) => {
@@ -192,6 +185,12 @@ export function registerAuthStore(store: ReturnType<typeof createAuthStore>) {
   authStoreInstance = store;
 }
 
+/** Imperative access for non-React callers (e.g. the API client's
+ *  onUnauthorized handler); undefined until registerAuthStore runs. */
+export function getAuthStore() {
+  return authStoreInstance;
+}
+
 export function useAuthStore<T>(selector: (s: AuthState) => T): T {
-  return authStoreInstance(selector);
+  return authStoreInstance!(selector);
 }

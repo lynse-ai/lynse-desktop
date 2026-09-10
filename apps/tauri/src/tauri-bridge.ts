@@ -30,6 +30,12 @@ import type {
   LiveTranslationTrayAction,
 } from "@lynse/views/live-translation";
 import type {
+  DesktopMeetingDetectorApi,
+  DetectorConfigPayload,
+  DetectorStatus,
+  MeetingDetectorEvent,
+} from "@lynse/views/live-translation";
+import type {
   DesktopInspirationApi,
   InspirationVoiceEvent,
 } from "@lynse/views/inspiration";
@@ -66,6 +72,7 @@ type DesktopApi = {
   openExternal: (url: string) => Promise<void>;
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
   liveTranslation: DesktopLiveTranslationApi;
+  meetingDetector: DesktopMeetingDetectorApi;
   recordingCard: DesktopRecordingCardApi;
   vault: DesktopVaultApi;
   todo: Record<string, (...args: any[]) => Promise<unknown>>;
@@ -352,6 +359,15 @@ export async function installTauriBridge(): Promise<void> {
       },
       onEvent: (callback: (event: LiveTranslationEvent) => void) =>
         getCurrentWebview().listen<LiveTranslationEvent>("live-translation-event", (event) => callback(event.payload)),
+    },
+    meetingDetector: {
+      setConfig: (config: DetectorConfigPayload) =>
+        command<DetectorStatus>("meeting_detector_set_config", { config }),
+      getState: () => command<DetectorStatus>("meeting_detector_get_state"),
+      onEvent: (callback: (event: MeetingDetectorEvent) => void) =>
+        getCurrentWebview().listen<MeetingDetectorEvent>("meeting-detector-event", (event) =>
+          callback(event.payload),
+        ),
     },
     recordingCard: {
       state: () => command("recording_card_state"),

@@ -1,0 +1,32 @@
+{
+  "name": "topic-switch-bilingual",
+  "suite": "multiturn",
+  "locale": "en",
+  "description": "Mixed zh/en conversation across topics; checks context retention.",
+  "turns": [
+    {
+      "user": "帮我总结一下最近的会议",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["最近一次会议是 Q3 review：", "营收环比增长 12%，", "流失率降至 2.1%。"] }
+    },
+    {
+      "user": "换成英文再说一遍",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["Latest meeting was the Q3 review: ", "revenue +12% QoQ, churn down to 2.1%."] }
+    },
+    {
+      "user": "Switch topic — what files did I upload this week?",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["You uploaded two recordings: ", "Q3 review.m4a (Sep 1) and project kickoff.mp3 (Sep 3)."] }
+    },
+    {
+      "user": "第二个文件讲了什么？",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["project kickoff 定义了新项目范围、", "里程碑和三人分工。"], "sources": [{ "title": "project kickoff.mp3", "url": "https://mock.local/kickoff" }] }
+    },
+    {
+      "user": "Now go back — what was the churn number from the first question?",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["From the Q3 review we discussed at the start: churn was 2.1%."] }
+    },
+    {
+      "user": "谢谢，把这句话翻译成英文",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["Sure — in English: \"As discussed at the start, churn in Q3 was 2.1%.\""] }
+    }
+  ]
+}

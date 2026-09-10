@@ -10,6 +10,7 @@ import {
   Clock,
   FileText,
   Globe,
+  Headphones,
   Image,
   ListChecks,
   ListOrdered,
@@ -30,6 +31,7 @@ import { useFolders } from "../workspace/hooks/use-folders";
 import { LOCAL_TRANSCRIPTION_FOLDER_ID } from "../workspace/local-transcription";
 import { WaitingText } from "../workspace/hooks/waiting-text";
 import { ConfirmDialog } from "../workspace/ConfirmDialog";
+import { isFreshlyRevealed } from "../workspace/chat-reveal";
 import { ChatAttachments } from "./chat-attachments";
 import { ThinkingBlock, ToolActivity } from "./chat-reasoning";
 import {
@@ -358,7 +360,7 @@ export function ChatPage() {
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
       <header
-        className="flex h-14 shrink-0 items-center border-b border-border/50 bg-background/80 px-4 backdrop-blur-xl select-none"
+        className="flex h-14 shrink-0 items-center border-b border-border/50 bg-background/80 px-6 backdrop-blur-xl select-none"
         data-tauri-drag-region
       >
         <div className="flex min-w-0 flex-1 items-center justify-center gap-2 pl-24" data-tauri-drag-region>
@@ -417,7 +419,7 @@ export function ChatPage() {
         {messages.length === 0 && !isLoading ? (
           <EmptyChat />
         ) : (
-          <div className="lyse-chat-column mx-auto w-full max-w-3xl space-y-6 px-6 py-8">
+          <div className="lyse-chat-column mx-auto w-full max-w-4xl space-y-6 px-6 py-6">
             {messages.map((message) =>
               message.role === "user" ? (
                 <div key={message.id} className="flex justify-end">
@@ -467,9 +469,9 @@ export function ChatPage() {
       </main>
 
       <div
-        className={`${historyOpen ? "ml-56" : "ml-0"} pointer-events-none shrink-0 bg-background/95 px-4 pb-4 pt-3 transition-[margin] duration-150 dark:bg-background/75 dark:backdrop-blur-xl`}
+        className={`${historyOpen ? "ml-56" : "ml-0"} pointer-events-none shrink-0 bg-background/95 pb-3 pt-2 transition-[margin] duration-150 dark:bg-background/75 dark:backdrop-blur-xl`}
       >
-        <div className="lyse-chat-column pointer-events-auto mx-auto max-w-3xl">
+        <div className="lyse-chat-column pointer-events-auto mx-auto w-full max-w-4xl px-6">
           <QuickPromptStrip
             prompts={quickPrompts}
             onSelect={(prompt) => handleSend(prompt)}
@@ -654,8 +656,8 @@ function EmptyChat() {
   const { t } = useTranslation();
 
   return (
-    <div className="relative mx-auto flex min-h-full w-full max-w-3xl flex-col items-center justify-center overflow-hidden px-6 py-12 text-center">
-      <AssistantAvatar size={148} className="relative mb-4" />
+    <div className="relative mx-auto flex min-h-full w-full max-w-4xl flex-col items-center justify-center overflow-hidden px-6 py-8 text-center">
+      <AssistantAvatar size={112} className="relative mb-4" />
       <h1 className="relative text-xl font-semibold tracking-tight text-foreground">
         {t("chat.welcome_title")}
       </h1>
@@ -675,6 +677,9 @@ interface AssistantMessageProps {
 
 function AssistantMessage({ message, isStreaming, copied, onCopy }: AssistantMessageProps) {
   const { t } = useTranslation();
+  // The poll transport types the answer out itself; `revealedAt` only drives
+  // the staggered entrance of attachments / support link after the text lands.
+  const revealed = isFreshlyRevealed(message);
 
   return (
     <>
@@ -714,7 +719,42 @@ function AssistantMessage({ message, isStreaming, copied, onCopy }: AssistantMes
         </div>
       )}
 
-      <ChatAttachments attachments={message.attachments} />
+      <div
+        className={revealed ? "animate-in fade-in duration-300 delay-[350ms] fill-mode-backwards" : undefined}
+      >
+        {!!message.sources?.length && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <span className="text-2xs uppercase tracking-[0.08em] text-muted-foreground/70">
+              {t("chat.sources")}
+            </span>
+            {message.sources.map((source) => (
+              <span
+                key={source}
+                className="inline-flex max-w-52 items-center gap-1 rounded-full border border-border bg-muted/60 px-2 py-0.5 text-3xs text-foreground"
+                title={source}
+              >
+                <FileText className="size-3 shrink-0 text-primary/70" />
+                <span className="min-w-0 truncate">{source}</span>
+              </span>
+            ))}
+          </div>
+        )}
+        <ChatAttachments attachments={message.attachments} />
+      </div>
+
+      {message.humanSupportLink?.url && (
+        <a
+          href={message.humanSupportLink.url}
+          target="_blank"
+          rel="noreferrer"
+          className={`mt-2 inline-flex w-fit items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs text-foreground shadow-sm transition-colors hover:border-primary/30 hover:bg-accent ${
+            revealed ? "animate-in fade-in duration-300 delay-[350ms] fill-mode-backwards" : ""
+          }`}
+        >
+          <Headphones className="size-3.5 shrink-0 text-primary/70" />
+          {message.humanSupportLink.label?.trim() || t("chat.contact_support")}
+        </a>
+      )}
 
       {message.content && !message.error && (
         <div className="mt-2 flex items-center opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">

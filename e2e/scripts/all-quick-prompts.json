@@ -1,0 +1,97 @@
+{
+  "name": "all-quick-prompts",
+  "suite": "multiturn",
+  "locale": "en",
+  "description": "All 8 quick-prompt chips fired in sequence via clicks.",
+  "turns": [
+    {
+      "user": "Summarize my recent meetings",
+      "quickPrompt": "chat.suggestion_summary",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 40,
+        "chunks": [
+          "Summary: two meetings, Q3 highlights and kickoff scope."
+        ]
+      }
+    },
+    {
+      "user": "Turn it into meeting minutes",
+      "quickPrompt": "chat.quick_minutes",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 40,
+        "chunks": [
+          "## Minutes\n- Q3 numbers\n- kickoff scope"
+        ]
+      }
+    },
+    {
+      "user": "Find key decisions and action items",
+      "quickPrompt": "chat.suggestion_actions",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 40,
+        "chunks": [
+          "Decisions: ship Sept 12. Actions: send deck."
+        ]
+      }
+    },
+    {
+      "user": "Extract a to-do list",
+      "quickPrompt": "chat.quick_todos",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 40,
+        "chunks": [
+          "- Send deck\n",
+          "- Schedule retro\n"
+        ]
+      }
+    },
+    {
+      "user": "Review highlights from this week's notes",
+      "quickPrompt": "chat.suggestion_notes",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 40,
+        "chunks": [
+          "Highlights: churn milestone, early launch."
+        ]
+      }
+    },
+    {
+      "user": "Draft a next-step action plan",
+      "quickPrompt": "chat.quick_plan",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 40,
+        "chunks": [
+          "Plan: board deck Mon, retro Wed, Q4 scope Fri."
+        ]
+      }
+    },
+    {
+      "user": "Translate the key points into English",
+      "quickPrompt": "chat.quick_translate",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 40,
+        "chunks": [
+          "Key points: revenue up, churn down, launch early."
+        ]
+      }
+    },
+    {
+      "user": "Rewrite this more concisely",
+      "quickPrompt": "chat.quick_rewrite",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 40,
+        "chunks": [
+          "Q3 beat targets; app shipped early."
+        ]
+      }
+    }
+  ]
+}

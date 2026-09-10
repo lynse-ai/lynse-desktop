@@ -651,7 +651,7 @@ export function NotesPage() {
       >
         {/* Header: current group title (left) + actions (right) */}
         <div
-          className="flex shrink-0 select-none items-center justify-between gap-3 border-b border-border/50 bg-background/80 px-4 py-3 backdrop-blur-xl"
+          className="flex shrink-0 select-none items-center justify-between gap-3 border-b border-border/50 bg-background/80 px-6 py-3 backdrop-blur-xl"
           data-tauri-drag-region
         >
           {/* Current filter group — the only persistent indicator of which

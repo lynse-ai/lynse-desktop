@@ -3,7 +3,7 @@ export { TranscriptDetailPage } from "./transcript-detail-page";
 export { LiveSubtitleOverlay } from "./subtitle-overlay";
 export { RecordingIslandWindow } from "./recording-island-window";
 export { RecordingTrayAgent } from "./recording-tray-agent";
-export { RecordingFloatDock } from "./recording-float-dock";
+export { MeetingAutoRecordAgent } from "./meeting-auto-record-agent";
 export { useQuickRecording } from "./quick-recording";
 export type {
   CompletedLiveSession,
@@ -25,3 +25,23 @@ export type {
 } from "./types";
 export { DEFAULT_ILIVEDATA_RTVT_ENDPOINT } from "./types";
 export { normalizeMaxSpeakers } from "./api";
+export {
+  DEFAULT_END_GRACE_SECS,
+  DEFAULT_START_DEBOUNCE_SECS,
+  KNOWN_MEETING_APPS,
+  MEETING_AUTO_RECORD_CONFIG_KEY,
+  defaultMeetingAutoRecordConfig,
+  getDesktopMeetingDetectorApi,
+  loadMeetingAutoRecordConfig,
+  parseMeetingAutoRecordConfig,
+  saveMeetingAutoRecordConfig,
+  toDetectorConfigPayload,
+} from "./meeting-auto-record";
+export type {
+  DetectorConfigPayload,
+  DetectorStatus,
+  DesktopMeetingDetectorApi,
+  MeetingAppEntry,
+  MeetingAutoRecordConfig,
+  MeetingDetectorEvent,
+} from "./meeting-auto-record";

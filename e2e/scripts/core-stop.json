@@ -1,0 +1,31 @@
+{
+  "name": "core-stop",
+  "suite": "core",
+  "locale": "en",
+  "description": "Slow never-ending stream used to exercise the Stop button.",
+  "turns": [
+    {
+      "user": "Write a very long essay about mountains",
+      "response": {
+        "type": "stream-abort",
+        "chunkDelayMs": 300,
+        "chunks": [
+          "Mountains are formed by tectonic forces. ",
+          "Part one discusses uplift. ",
+          "Part two discusses erosion. ",
+          "Part three discusses climate. ",
+          "Part four discusses ecology. ",
+          "Part five discusses human history. "
+        ]
+      }
+    },
+    {
+      "user": "Actually, just give me one sentence",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 40,
+        "chunks": ["Mountains rise where tectonic plates collide."]
+      }
+    }
+  ]
+}

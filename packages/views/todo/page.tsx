@@ -11,6 +11,9 @@ import {
   DialogFooter,
 } from "@lynse/ui/components/ui/dialog";
 import { Button } from "@lynse/ui/components/ui/button";
+import { featureFlags } from "../feature-flags";
+import { getDesktopInspirationApi } from "../inspiration/desktop-api";
+import { useInspirationCaptureStore } from "../inspiration/capture-store";
 import { type TodoItem, addTodoToSystemCalendar, isCalendarAvailable } from "./todo-api";
 import { useTodos } from "./use-todos";
 
@@ -115,7 +118,7 @@ function AddTodoInput({ onAdd }: { onAdd: (title: string) => void }) {
   );
 
   return (
-    <div className="px-4 pb-2 pt-3">
+    <div className="px-6 pb-2 pt-3">
       <div className="flex h-9 items-center gap-2 rounded-full border border-border/60 bg-muted/40 px-3.5 transition-colors focus-within:border-ring/60 focus-within:bg-background focus-within:ring-3 focus-within:ring-ring/20">
         <Plus className="size-4 shrink-0 text-muted-foreground" />
         <input
@@ -128,6 +131,37 @@ function AddTodoInput({ onAdd }: { onAdd: (title: string) => void }) {
         <kbd className="pointer-events-none inline-flex h-5 items-center gap-0.5 rounded border border-border/50 bg-muted/60 px-1.5 text-3xs font-medium text-muted-foreground">
           ⌘↵
         </kbd>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Desktop add bar: clicking it pops the shared capture sheet (the same
+ * bottom-up panel the journal uses) pre-set to todo mode, so creating a
+ * todo feels identical to writing a journal entry. Web (no capture sheet)
+ * falls back to the inline input above.
+ */
+function AddTodoTrigger({ onOpen }: { onOpen: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <div className="px-6 pb-2 pt-3">
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onOpen}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpen();
+          }
+        }}
+        className="flex h-9 cursor-pointer items-center gap-2 rounded-full border border-border/60 bg-muted/40 px-3.5 transition-colors hover:border-ring/50 hover:bg-accent/40"
+      >
+        <Plus className="size-4 shrink-0 text-muted-foreground" />
+        <span className="flex-1 truncate text-sm text-muted-foreground/80">
+          {t("inspiration.todo_placeholder")}
+        </span>
       </div>
     </div>
   );
@@ -150,7 +184,7 @@ function TodoItemRow({
   return (
     <button
       onClick={onSelect}
-      className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
+      className={`flex w-full items-center gap-3 rounded-lg px-6 py-2.5 text-left transition-colors ${
         active ? "bg-accent/60" : "hover:bg-accent/30"
       }`}
     >
@@ -201,7 +235,7 @@ function GroupSection({
 }) {
   return (
     <div className="py-2">
-      <div className="flex items-center gap-2 px-4 pb-1 pt-1">
+      <div className="flex items-center gap-2 px-6 pb-1 pt-1">
         <span className="text-sm font-medium text-foreground">{label}</span>
         <span className="text-xs text-muted-foreground tabular-nums">{count}</span>
       </div>
@@ -445,6 +479,9 @@ function CalendarConfirmDialog({
 export function TodoPage() {
   const { t } = useTranslation();
   const { todos, loading, refreshing, clearing, error, load, addLocal, toggle, remove, clearCompleted } = useTodos();
+  const openCapture = useInspirationCaptureStore((state) => state.openCapture);
+  // The capture sheet needs the desktop bridge; web keeps the inline input.
+  const sheetAvailable = featureFlags.inspiration && Boolean(getDesktopInspirationApi());
   const completedCount = todos.filter((x) => x.completed).length;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [calendarOpen, setCalendarOpen] = useState(false);
@@ -515,7 +552,7 @@ export function TodoPage() {
     <div className="flex h-full flex-col min-w-0">
       {/* Header */}
       <div
-        className="flex shrink-0 items-center justify-between border-b border-stroke-secondary px-4 select-none"
+        className="flex shrink-0 items-center justify-between border-b border-stroke-secondary px-6 select-none"
         style={{ height: 44 }}
         data-tauri-drag-region
       >
@@ -549,7 +586,7 @@ export function TodoPage() {
 
       {/* Error banner */}
       {error && (
-        <div className="flex items-center justify-between gap-2 border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">
+        <div className="flex items-center justify-between gap-2 border-b border-destructive/30 bg-destructive/10 px-6 py-2 text-xs text-destructive">
           <span>{t("todo.load_error")}</span>
           <button onClick={() => load()} className="underline">
             {t("todo.retry")}
@@ -557,8 +594,9 @@ export function TodoPage() {
         </div>
       )}
 
-      {/* Add input */}
-      <AddTodoInput onAdd={handleAdd} />
+      {/* Add input — desktop pops the shared capture sheet (todo mode);
+          web falls back to the inline input. */}
+      {sheetAvailable ? <AddTodoTrigger onOpen={() => openCapture("todo")} /> : <AddTodoInput onAdd={handleAdd} />}
 
       {/* List */}
       <div className="flex-1 min-h-0 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">

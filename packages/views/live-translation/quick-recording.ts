@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * One-click recording control for the in-app float dock
- * (`RecordingFloatDock`, the circular button / runway bar over content pages).
+ * One-click recording control for compact recording entries outside the
+ * recording page (the home page's record button, tray menus).
  *
  * Mirrors the recording page's start flow: pure recording first — no provider
  * or API key required — with live transcription attachable later. Recording

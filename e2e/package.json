@@ -1,0 +1,16 @@
+{
+  "name": "@lynse/e2e",
+  "private": true,
+  "description": "Automated UI test system for Lynse (Playwright). Fully isolated from the workspace packages.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:chat": "playwright test 01-chat 02-chat 03-chat 04-chat",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.3"
+  }
+}

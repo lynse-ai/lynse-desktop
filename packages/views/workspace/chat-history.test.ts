@@ -29,6 +29,7 @@ describe("AI chat history", () => {
               content: "共 14 条",
               timestamp: 2,
               status: "正在运行",
+              revealedAt: 999,
             },
             { id: "assistant-2", role: "assistant", content: "", timestamp: 3, status: "处理中" },
           ],
@@ -44,7 +45,10 @@ describe("AI chat history", () => {
           qoderSession: expect.objectContaining({ sessionId: "sess_1", afterEventId: "evt_2" }),
           messages: [
             expect.objectContaining({ role: "user", content: "查看 8 月会议" }),
-            expect.not.objectContaining({ status: expect.anything() }),
+            expect.not.objectContaining({
+              status: expect.anything(),
+              revealedAt: expect.anything(),
+            }),
           ],
         }),
       ],

@@ -67,3 +67,12 @@ private_keys/
 
 # Local agent workspace state
 .zcode/
+
+# Local TestFlight build-number counter (see apps/tauri/scripts/build-appstore.sh)
+apps/tauri/.build-number
+
+# Local-only working directories
+GIF/
+research/
+*.vetd
+*.vetd.d/

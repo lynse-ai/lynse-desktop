@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { api } from "@lynse/core/api";
 import type {
   ChatMessage,
   ChatStreamEvent,
@@ -8,7 +9,7 @@ import type {
   ChatToolUse,
 } from "../types";
 import {
-  CloudChatTransport,
+  PollChatTransport,
   extractConfirmFromText,
   type ChatTransport,
 } from "../chat-transport";
@@ -84,6 +85,24 @@ export const WAITING_POOL: Record<string, { zh: string; en: string; ja: string }
     { zh: "把长话短说…", en: "Condensing the long bits…", ja: "長い話を短くしています…" },
     { zh: "提炼成要点…", en: "Distilling into bullets…", ja: "箇条書きに絞り込んでいます…" },
   ],
+  // Pending-stage captions emitted by the poll transport while a turn runs
+  // (CHAT_PENDING_STAGE_KEYS in chat-transport.ts). Poll carries no per-tool
+  // progress, so these elapsed-time stages stand in for the old tool pools.
+  thinking: [
+    { zh: "正在思考你的问题…", en: "Thinking about your question…", ja: "質問について考えています…" },
+    { zh: "理一理思路…", en: "Getting thoughts in order…", ja: "思考を整理しています…" },
+    { zh: "答案马上就来…", en: "Answer coming right up…", ja: "もうすぐ回答します…" },
+  ],
+  researching: [
+    { zh: "翻翻你的会议和笔记…", en: "Digging through meetings and notes…", ja: "会議とノートを調べています…" },
+    { zh: "把相关内容捞出来…", en: "Pulling up relevant content…", ja: "関連する内容を探しています…" },
+    { zh: "比对几份资料…", en: "Cross-checking the material…", ja: "資料を照らし合わせています…" },
+  ],
+  composing: [
+    { zh: "把答案组织成一段话…", en: "Putting the answer into words…", ja: "回答をまとめています…" },
+    { zh: "润色一下表述…", en: "Polishing the wording…", ja: "表現を整えています…" },
+    { zh: "这就来…", en: "Almost there…", ja: "もう少しです…" },
+  ],
   // Unknown tool, or a generic "calling tool" status without a known name.
   __unknown__: [
     { zh: "搬个小工具帮你查查…", en: "Using a little tool to look it up…", ja: "小さなツールで調べています…" },
@@ -154,6 +173,14 @@ function makeId(prefix: string): string {
 }
 
 function readLynseToken(): string | null {
+  // The shared client holds the live session token — on desktop the token
+  // lives in the OS keychain, so localStorage is only a web fallback.
+  try {
+    const token = api().getToken();
+    if (token) return token;
+  } catch {
+    /* client not initialized yet */
+  }
   try {
     if (typeof localStorage !== "undefined") return localStorage.getItem("lynse_token");
   } catch {
@@ -392,7 +419,11 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           toolUses: closeRunningTools(m.toolUses),
           sources: evt.sources ? evt.sources.map(redactMeetingIds) : m.sources,
           attachments: evt.attachments ?? m.attachments,
+          humanSupportLink: evt.humanSupportLink,
           confirm: detected && !m.confirm ? detected : m.confirm,
+          // Poll delivers the whole answer at once — let the UI play its
+          // two-phase reveal (text first, attachments/cards after).
+          revealedAt: Date.now(),
         }));
         // Confirm dialogs only pop for the conversation on screen; a
         // background conversation's choice menu stays as plain text until
@@ -446,6 +477,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     fileIdsInput?: string | string[],
     userSpecifiedFile = false,
     attachments?: ChatAttachment[],
+    confirmToken?: string | null,
   ) => {
     if (!content.trim()) return;
     const userId = get().userId;
@@ -500,7 +532,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
     set({ isLoading: true });
 
-    const transport = new CloudChatTransport();
+    const transport = new PollChatTransport();
     const controller = new AbortController();
     runs.set(conversationId, { conversationId, assistantId, transport, controller });
     syncRunState();
@@ -544,6 +576,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         fileIds,
         userSpecifiedFile: hasContextFiles,
         token: readLynseToken(),
+        confirmToken,
         signal: controller.signal,
         onEvent: (evt) => {
           if (timing.firstEventAt == null) timing.firstEventAt = performance.now();
@@ -560,6 +593,19 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       .then(() => {
         // A turn that resolves without `done` was aborted or cut short.
         recordPerf(timing.completed);
+        // Poll has no partial content: a stopped turn leaves an empty
+        // placeholder bubble that would otherwise spin "thinking" forever —
+        // drop it (keep it when anything, e.g. an error text, was written).
+        const emptyPlaceholder = (m: ChatMessage) =>
+          m.id === assistantId && m.role === "assistant" && !m.content;
+        setMessages((prev) => prev.filter((m) => !emptyPlaceholder(m)));
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === conversationId
+              ? { ...c, messages: c.messages.filter((m) => !emptyPlaceholder(m)) }
+              : c,
+          ),
+        );
         if (runs.get(conversationId)?.controller === controller) {
           runs.delete(conversationId);
           syncRunState();
@@ -623,9 +669,13 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     },
 
     answerConfirm: (messageId, value) => {
+      // The card's confirmToken must ride along as `confirm_token`, or the
+      // backend treats the tap as a fresh question instead of a card answer.
+      const confirmToken =
+        get().messages.find((m) => m.id === messageId)?.confirm?.confirmToken ?? null;
       setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, confirm: undefined } : m)));
       set({ pendingConfirm: null });
-      runSend(value);
+      runSend(value, undefined, false, undefined, confirmToken);
     },
 
     dismissConfirm: (messageId) => {

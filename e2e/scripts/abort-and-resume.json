@@ -1,0 +1,40 @@
+{
+  "name": "abort-and-resume",
+  "suite": "multiturn",
+  "locale": "en",
+  "description": "User stops mid-stream twice and keeps chatting afterwards.",
+  "turns": [
+    {
+      "user": "Tell me everything about the Q3 review",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["Q3 review covered revenue, churn, and the app launch. "] }
+    },
+    {
+      "user": "Now write a long report about churn",
+      "response": {
+        "type": "stream-abort",
+        "chunkDelayMs": 300,
+        "chunks": ["Churn analysis part one: cohort overview. ", "Churn analysis part two: drivers. ", "Churn analysis part three: outlook. "]
+      }
+    },
+    {
+      "user": "Stop — that's enough, just the headline",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["Churn fell to 2.1% on annual-plan migration."] }
+    },
+    {
+      "user": "Another long one: describe the app launch timeline",
+      "response": {
+        "type": "stream-abort",
+        "chunkDelayMs": 300,
+        "chunks": ["Timeline phase 1: beta in July. ", "Timeline phase 2: rollout in August. ", "Timeline phase 3: GA in September. "]
+      }
+    },
+    {
+      "user": "OK just the launch date",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["GA launch: September 12, two weeks early."] }
+    },
+    {
+      "user": "Summarize everything so far in one line",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["Q3: revenue +12%, churn 2.1%, app launched Sept 12."] }
+    }
+  ]
+}

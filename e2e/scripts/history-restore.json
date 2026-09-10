@@ -1,0 +1,14 @@
+{
+  "name": "history-restore",
+  "suite": "multiturn",
+  "locale": "en",
+  "description": "Five turns, then the spec reloads the page and continues with turn six.",
+  "turns": [
+    { "user": "Let's start a working session on Q3", "response": { "type": "stream", "chunkDelayMs": 40, "chunks": ["Working session on Q3 started. What first?"] } },
+    { "user": "Revenue?", "response": { "type": "stream", "chunkDelayMs": 40, "chunks": ["Revenue: +12% QoQ."] } },
+    { "user": "Churn?", "response": { "type": "stream", "chunkDelayMs": 40, "chunks": ["Churn: 2.1%, down from 3.4%."] } },
+    { "user": "Launch?", "response": { "type": "stream", "chunkDelayMs": 40, "chunks": ["Mobile app launched Sept 12, early."] } },
+    { "user": "Risks?", "response": { "type": "stream", "chunkDelayMs": 40, "chunks": ["Risks: supply delay, hiring shortfall."] } },
+    { "user": "After reload: recap everything", "response": { "type": "stream", "chunkDelayMs": 40, "chunks": ["Q3: revenue +12%, churn 2.1%, app early; risks supply & hiring."] } }
+  ]
+}

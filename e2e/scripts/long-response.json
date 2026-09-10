@@ -1,0 +1,71 @@
+{
+  "name": "long-response",
+  "suite": "multiturn",
+  "locale": "en",
+  "description": "Rich Markdown each turn: headings, lists, code block, table, quote.",
+  "turns": [
+    {
+      "user": "Give me a structured Q3 report",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 40,
+        "chunks": [
+          "# Q3 Report\n\n",
+          "## Highlights\n",
+          "- Revenue +12%\n",
+          "- Churn 2.1%\n",
+          "- App shipped early\n"
+        ]
+      }
+    },
+    {
+      "user": "Show the code snippet the team demoed",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 40,
+        "chunks": [
+          "```ts\n",
+          "const churn = await getChurn('2026-Q3');\n",
+          "console.log(churn); // 0.021\n",
+          "```"
+        ]
+      }
+    },
+    {
+      "user": "Compare Q2 and Q3 in a table",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 40,
+        "chunks": [
+          "| Metric | Q2 | Q3 |\n",
+          "|---|---|---|\n",
+          "| Revenue | +4% | +12% |\n",
+          "| Churn | 3.4% | 2.1% |\n"
+        ]
+      }
+    },
+    {
+      "user": "Quote the CEO's closing line",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 40,
+        "chunks": [
+          "> \"Best quarter since launch.\" — CEO, closing remarks"
+        ]
+      }
+    },
+    {
+      "user": "Numbered next steps",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 40,
+        "chunks": [
+          "- Board deck\n",
+          "- Churn deep-dive\n",
+          "- Launch retro\n",
+          "- Q4 scope\n"
+        ]
+      }
+    }
+  ]
+}

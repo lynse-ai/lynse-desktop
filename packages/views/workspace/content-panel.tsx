@@ -815,7 +815,7 @@ export function ContentPanel() {
           ) : isLoading ? (
             <LoadingState />
           ) : (
-            <div className={`px-6 py-6 ${contentTab === "transcription" ? "flex flex-col h-full" : "min-h-full flex flex-col"}`}>
+            <div className={`px-3 py-6 ${contentTab === "transcription" ? "flex flex-col h-full" : "min-h-full flex flex-col"}`}>
               <input
                 type="text"
                 value={displayTitle ?? ""}

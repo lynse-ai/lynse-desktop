@@ -1,93 +1,69 @@
 "use client";
 
 /**
- * Weather strip (天气条) — the Home header's top-right corner. Three
- * same-sized day tiles laid out side by side, today first, each showing
- * the day label, a condition icon, the condition text and the high/low
- * temperatures. Renders nothing while loading or when no provider
- * answers, so the header text keeps the full width on failure.
+ * Weather block (天气) — the Home header's two-line forecast taken from
+ * the daily forecast's first day: a large Apple-style condition icon on
+ * the left spans both rows, the day's high temperature sits on top with
+ * the city and condition label underneath (the low temperature rides on
+ * the temp's tooltip). While the request runs, a same-sized skeleton
+ * keeps the header stable so nothing jumps when the weather lands; a
+ * background refresh shows a tiny spinner badge on the icon's corner;
+ * only a definitive failure (no provider / offline) hides the block
+ * entirely.
  */
 
 import { useTranslation } from "@lynse/core/i18n/react";
-import { cn } from "@lynse/ui/lib/utils";
-import {
-  Cloudy,
-  CloudSun,
-  CloudFog,
-  CloudDrizzle,
-  CloudRain,
-  CloudSnow,
-  CloudLightning,
-  Sun,
-  MapPin,
-} from "../icons";
+import { Loader2 } from "../icons";
 import { useWeather, weatherConditionKey, type WeatherDay } from "./weather";
-
-const DAY_LABEL_KEYS = [
-  "home.weather_day_today",
-  "home.weather_day_tomorrow",
-  "home.weather_day_after",
-] as const;
-
-function conditionIcon(code: number): typeof Sun {
-  if (code === 0) return Sun;
-  if (code === 1 || code === 2) return CloudSun;
-  if (code === 45 || code === 48) return CloudFog;
-  if (code >= 51 && code <= 57) return CloudDrizzle;
-  if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return CloudRain;
-  if ((code >= 71 && code <= 77) || code === 85 || code === 86) return CloudSnow;
-  if (code >= 95) return CloudLightning;
-  return Cloudy;
-}
-
-function conditionTint(code: number): string {
-  if (code <= 2) return "text-amber-500 dark:text-amber-400";
-  if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82))
-    return "text-sky-500 dark:text-sky-400";
-  if ((code >= 71 && code <= 77) || code === 85 || code === 86)
-    return "text-sky-300 dark:text-sky-200";
-  if (code >= 95) return "text-violet-500 dark:text-violet-400";
-  return "text-muted-foreground";
-}
-
-function DayTile({ day, index }: { day: WeatherDay; index: number }) {
-  const { t } = useTranslation();
-  const Icon = conditionIcon(day.code);
-  const conditionKey = weatherConditionKey(day.code);
-  const condition = conditionKey ? t(conditionKey) : "—";
-  return (
-    <div className="flex w-20 shrink-0 flex-col items-center gap-1 rounded-xl border border-border/60 bg-muted/30 px-1.5 py-2">
-      <span className="text-2xs font-medium text-muted-foreground">
-        {t(DAY_LABEL_KEYS[index]!)}
-      </span>
-      <Icon className={cn("size-5", conditionTint(day.code))} strokeWidth={1.5} />
-      <span title={condition} className="max-w-full truncate text-2xs text-foreground">
-        {condition}
-      </span>
-      <span className="text-2xs tabular-nums text-muted-foreground">
-        {Math.round(day.maxC)}°
-        <span className="text-muted-foreground/60"> / {Math.round(day.minC)}°</span>
-      </span>
-    </div>
-  );
-}
+import { WxCloudIcon, appleWeatherIcon } from "./weather-icons";
 
 export function WeatherStrip() {
-  const { data } = useWeather();
-  if (!data || data.days.length === 0) return null;
+  const { t } = useTranslation();
+  const { data, isLoading, isFetching } = useWeather();
+  // Definitive failure: hide the block so the header keeps a clean corner.
+  // While loading, the skeleton holds the space so nothing below jumps.
+  if (!isLoading && (!data || data.days.length === 0)) return null;
+  const today: WeatherDay | undefined = data?.days[0];
+  const Icon = today ? appleWeatherIcon(today.code) : WxCloudIcon;
+  const conditionKey = today ? weatherConditionKey(today.code) : null;
+  const city = data?.location?.city;
+
   return (
-    <div className="flex shrink-0 flex-col items-end gap-1">
-      {data.location?.city && (
-        <span className="flex max-w-full items-center gap-1 text-2xs text-muted-foreground">
-          <MapPin className="size-3 shrink-0" strokeWidth={1.5} />
-          <span className="max-w-[10rem] truncate">{data.location.city}</span>
-        </span>
+    <div className="flex items-center gap-2">
+      {isLoading || !today ? (
+        <>
+          <span className="size-11 shrink-0 animate-pulse rounded-full bg-muted-foreground/10" />
+          <div className="flex flex-col gap-1.5">
+            <span className="h-6 w-14 animate-pulse rounded bg-muted-foreground/10" />
+            <span className="h-4 w-24 animate-pulse rounded bg-muted-foreground/10" />
+          </div>
+        </>
+      ) : (
+        <>
+          <span className="relative shrink-0">
+            <Icon className="size-11" />
+            {isFetching && (
+              <Loader2
+                className="absolute -right-1 -top-1 size-3.5 animate-spin text-muted-foreground"
+                strokeWidth={1.5}
+              />
+            )}
+          </span>
+          <div className="flex min-w-0 flex-col">
+            <span
+              className="text-2xl font-semibold leading-none tracking-tight tabular-nums text-foreground"
+              title={`${Math.round(today.minC)}° – ${Math.round(today.maxC)}°`}
+            >
+              {Math.round(today.maxC)}°
+            </span>
+            <span className="mt-1.5 truncate text-xs text-muted-foreground">
+              {city}
+              {city && conditionKey ? " · " : ""}
+              {conditionKey ? t(conditionKey) : ""}
+            </span>
+          </div>
+        </>
       )}
-      <div className="flex items-stretch gap-1.5">
-        {data.days.slice(0, 3).map((day, index) => (
-          <DayTile key={day.date} day={day} index={index} />
-        ))}
-      </div>
     </div>
   );
 }

@@ -10,6 +10,10 @@ export const featureFlags = {
   inspiration: true,
   /** Devices page (`/devices`) — hidden until the feature is complete. */
   devices: false,
+  /** Auto-record detected meetings (desktop only; user opts in from Settings).
+   * The headless agent and the settings card gate on this so the feature can
+   * be shipped or hidden from here alone. */
+  autoRecord: true,
 } as const;
 
 /**

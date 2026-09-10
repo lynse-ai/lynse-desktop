@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { ChatPage } from "./page";
 
 const chat = vi.hoisted(() => ({
@@ -186,39 +186,12 @@ describe("ChatPage", () => {
     expect(chat.sendMessage).toHaveBeenCalledWith("@");
   });
 
-  it("uploads a picked image attachment and sends its fileId with the message", async () => {
-    uploadMock.uploadFileToOSS.mockResolvedValue("file-123");
-    const { container } = render(<ChatPage />);
-
-    fireEvent.click(screen.getByRole("button", { name: "chat.attach_files" }));
-    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
-    const image = new File(["img"], "chart.png", { type: "image/png" });
-    fireEvent.change(fileInput, { target: { files: [image] } });
-
-    // Draft appears immediately, then flips to uploaded.
-    await waitFor(() =>
-      expect(uploadMock.uploadFileToOSS).toHaveBeenCalledWith(expect.any(File), expect.any(Function)),
-    );
-    await screen.findByTitle("chart.png");
-
-    fireEvent.change(screen.getByPlaceholderText("chat.page_placeholder"), {
-      target: { value: "看看这张图" },
-    });
-    fireEvent.keyDown(screen.getByPlaceholderText("chat.page_placeholder"), { key: "Enter" });
-
-    expect(chat.sendMessage).toHaveBeenCalledWith("看看这张图", ["file-123"], true, [
-      { id: "file-123", name: "chart.png", type: "image" },
-    ]);
-  });
-
-  it("rejects unsupported attachment types without adding a draft", () => {
+  it("hides the attachment entry (upload not implemented yet) and offers the mic placeholder", () => {
     render(<ChatPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: "chat.attach_files" }));
-    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
-    fireEvent.change(fileInput, { target: { files: [new File(["x"], "app.exe")] } });
-
-    expect(uploadMock.uploadFileToOSS).not.toHaveBeenCalled();
-    expect(screen.queryByTitle("app.exe")).toBeNull();
+    // The "+" upload button is deliberately hidden until upload ships; the
+    // composer shows only the mic placeholder next to it.
+    expect(screen.queryByRole("button", { name: "chat.attach_files" })).toBeNull();
+    expect(screen.getByRole("button", { name: "chat.microphone" })).toBeTruthy();
   });
 });

@@ -1,0 +1,28 @@
+{
+  "name": "error-recovery",
+  "suite": "multiturn",
+  "locale": "en",
+  "description": "SSE error, HTTP error, then recovery turns.",
+  "turns": [
+    {
+      "user": "Summarize my meetings",
+      "response": { "type": "error", "message": "model rate limited, try again later" }
+    },
+    {
+      "user": "Retry: summarize my meetings",
+      "response": { "type": "http-error", "status": 502, "message": "upstream unavailable" }
+    },
+    {
+      "user": "One more try",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["Recovered. Two meetings this week: ", "Q3 review and project kickoff."] }
+    },
+    {
+      "user": "What happened on the first two attempts?",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["Both failed — first rate limiting, then an upstream 502."] }
+    },
+    {
+      "user": "Give me the Q3 summary again",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["Q3: revenue +12%, churn 2.1%, app early."] }
+    }
+  ]
+}

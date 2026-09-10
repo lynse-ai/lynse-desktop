@@ -1,0 +1,42 @@
+{
+  "name": "clarify-then-answer",
+  "suite": "multiturn",
+  "locale": "en",
+  "description": "Two clarify rounds (one confirmed, one cancelled) interleaved with answers.",
+  "turns": [
+    {
+      "user": "Summarize the meeting",
+      "response": {
+        "type": "clarify",
+        "question": "Which recording do you mean?",
+        "options": [
+          { "label": "Q3 review.m4a", "value": "file-q3-review" },
+          { "label": "project kickoff.mp3", "value": "file-kickoff" }
+        ]
+      }
+    },
+    {
+      "user": "file-q3-review",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["Q3 review summary: revenue +12%, churn 2.1%, app shipped early."] }
+    },
+    {
+      "user": "Extract action items",
+      "response": {
+        "type": "clarify",
+        "question": "From the whole recording or just the last section?",
+        "options": [
+          { "label": "Whole recording", "value": "whole" },
+          { "label": "Last section only", "value": "last" }
+        ]
+      }
+    },
+    {
+      "user": "whole",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["Action items: send Q3 deck, prepare churn deep-dive, schedule retro."] }
+    },
+    {
+      "user": "One more question — who presented the churn section?",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["The CFO presented the churn section at 14:20."] }
+    }
+  ]
+}

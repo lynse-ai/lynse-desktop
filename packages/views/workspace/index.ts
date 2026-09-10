@@ -1,4 +1,5 @@
 export { WorkspaceLayout } from "./workspace-layout";
+export { setChatDirectBaseUrl } from "./chat-transport";
 export type {
   SttDownloadProgress,
   SttModelInfo,

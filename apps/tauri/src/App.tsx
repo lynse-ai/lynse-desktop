@@ -4,7 +4,7 @@ import { ThemeProvider } from "@lynse/ui/components/common/theme-provider";
 import { Toaster } from "@lynse/ui/components/ui/sonner";
 import { DashboardLayout } from "@lynse/views/layout";
 import { useNavigation } from "@lynse/views/navigation";
-import { WorkspaceLayout } from "@lynse/views/workspace";
+import { WorkspaceLayout, setChatDirectBaseUrl } from "@lynse/views/workspace";
 import { HomePage } from "@lynse/views/home";
 import { ChatPage } from "@lynse/views/chat";
 import { TodoPage } from "@lynse/views/todo";
@@ -15,7 +15,7 @@ import { DevicesPage } from "@lynse/views/devices";
 import { SettingsDialog, useWebdavAutoSync } from "@lynse/views/settings";
 import {
   LiveSubtitleOverlay,
-  RecordingFloatDock,
+  MeetingAutoRecordAgent,
   RecordingIslandWindow,
   RecordingTrayAgent,
   TranscriptDetailPage,
@@ -31,7 +31,7 @@ import { configureWechatLogin } from "@lynse/core/auth/wechat";
 import { useMaximized } from "@lynse/views/layout";
 import { cn } from "@lynse/ui/lib/utils";
 import { DesktopNavigationProvider } from "./platform/navigation";
-import { secureStorage } from "./secure-storage";
+import { clearAuthSecrets, secureStorage } from "./secure-storage";
 
 // Build channel (github | testflight) + WeChat Open Platform appid, injected
 // by Vite at build time — see apps/tauri/.env.example.
@@ -44,6 +44,11 @@ configureWechatLogin({
   // the web app's callback, which publishes the session for the desktop poll.
   redirectOrigin: import.meta.env.VITE_WEB_APP_URL ?? "",
 });
+
+// Chat talks to the lynclaw HTTP API directly (its native /api/chat/poll
+// contract) when a base URL is configured; otherwise it goes through the
+// gateway's /api/business/ai routes. See apps/tauri/.env.example.
+setChatDirectBaseUrl(import.meta.env.VITE_AI_BASE_URL);
 
 // How long the recording page's slide layers stay mounted — must cover the
 // longer slide duration in globals.css (300ms in / 260ms out).
@@ -178,10 +183,11 @@ function AppShell() {
       {/* Answers the tray menu's "start live recording" no matter which page
           is open; the island answers tray pause/stop while a session runs. */}
       <RecordingTrayAgent />
-      {/* Circular record button / frosted runway pill over content pages
-          (bottom-right); hidden over /recording, which owns its own dock. */}
-      <RecordingFloatDock />
-      {/* Pops the flomo-style capture panel over any page (sidebar icon). */}
+      {/* Starts/stops a recording when the Rust meeting detector spots a
+          whitelisted meeting app doing audio (user opt-in from Settings). */}
+      {featureFlags.autoRecord && <MeetingAutoRecordAgent />}
+      {/* Pops the flomo-style capture panel over any page (sidebar icon,
+          home quick actions). */}
       {featureFlags.inspiration && <InspirationCaptureSheet />}
       <AppUpdateNotifier />
     </AuthGate>
@@ -227,6 +233,10 @@ export default function App() {
           identity={identity}
           locale="en"
           resources={RESOURCES}
+          onLogout={() => {
+            // Logout must not leave credentials in the OS keychain.
+            void clearAuthSecrets();
+          }}
         >
           <AppContent />
         </CoreProvider>

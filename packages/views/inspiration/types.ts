@@ -9,6 +9,13 @@
  * local STT pipeline.
  */
 
+/**
+ * Reserved tag marking records collected via "paste link" (公众号 / 小红书
+ * / 微博 posts saved for later). The tag doubles as the visible marker and
+ * as the key the future AI-analysis pipeline filters on — do not localize.
+ */
+export const LINK_RECORD_TAG = "链接";
+
 export type InspirationTranscriptStatus =
   /** Text-only inspiration (or a memo that never asked for transcription). */
   | "none"

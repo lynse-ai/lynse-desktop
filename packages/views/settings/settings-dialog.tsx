@@ -35,6 +35,7 @@ import { openLogsFolder, openReportProblemDialog } from "../diagnostics";
 import type { LocalHotwordPackage, LocalVoiceprint } from "../workspace/types";
 import { SttConfigSection } from "./stt-config-section";
 import { LiveTranslationConfigCard } from "./live-translation-config-card";
+import { AutoRecordConfigCard } from "./auto-record-config-card";
 import { VaultConfigCard } from "./vault-config-card";
 import { WebdavSyncConfigCard } from "./webdav-sync-config-card";
 export const SETTINGS_DIALOG_CONTENT_CLASS =
@@ -235,6 +236,9 @@ export function SettingsDialog({
           </Card>
 
           <LiveTranslationConfigCard />
+
+          {/* ── Auto-record detected meetings ──────────── */}
+          <AutoRecordConfigCard />
 
           {/* ── Local markdown vault ───────────────────── */}
           <VaultConfigCard />

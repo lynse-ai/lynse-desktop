@@ -349,7 +349,9 @@ export function InspirationCaptureSheet() {
             </Button>
           </div>
         ) : (
-          <div className="flex flex-col gap-2 p-4 pt-3">
+          <div className="flex min-h-[208px] flex-col gap-2 p-4 pt-3">
+            {/* Fixed base height so both capture modes render the same sheet
+                size; the textarea flexes to absorb the leftover space. */}
             <div className="flex items-center justify-between">
               <div className="flex items-center rounded-full bg-muted/70 p-0.5">
                 <button
@@ -403,28 +405,8 @@ export function InspirationCaptureSheet() {
                   ? t("inspiration.todo_placeholder")
                   : t("inspiration.capture_placeholder")
               }
-              className="max-h-48 min-h-[72px] w-full resize-none bg-transparent text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/70"
+              className="max-h-48 min-h-[72px] w-full flex-1 resize-none bg-transparent text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/70"
             />
-            {mode === "todo" && (
-              <div className="flex items-center gap-1.5">
-                {DUE_CHOICES.map(({ value, labelKey }) => (
-                  <button
-                    key={value}
-                    type="button"
-                    aria-pressed={due === value}
-                    onClick={() => setDue(value)}
-                    className={cn(
-                      "rounded-full border px-2.5 py-1 text-3xs transition-colors",
-                      due === value
-                        ? "border-primary/40 bg-primary/10 text-accent-brand-text"
-                        : "border-border text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {t(labelKey)}
-                  </button>
-                ))}
-              </div>
-            )}
             {mode === "note" && images.length > 0 && (
               <div className="grid grid-cols-3 gap-1.5">
                 {images.map((image) => (
@@ -477,7 +459,7 @@ export function InspirationCaptureSheet() {
             )}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1">
-                {mode === "note" && (
+                {mode === "note" ? (
                   <>
                     <Button
                       variant="ghost"
@@ -509,6 +491,23 @@ export function InspirationCaptureSheet() {
                       <Mic className="size-4" />
                     </Button>
                   </>
+                ) : (
+                  DUE_CHOICES.map(({ value, labelKey }) => (
+                    <button
+                      key={value}
+                      type="button"
+                      aria-pressed={due === value}
+                      onClick={() => setDue(value)}
+                      className={cn(
+                        "rounded-full border px-2.5 py-1 text-3xs transition-colors",
+                        due === value
+                          ? "border-primary/40 bg-primary/10 text-accent-brand-text"
+                          : "border-border text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {t(labelKey)}
+                    </button>
+                  ))
                 )}
               </div>
               <div className="flex items-center gap-3">

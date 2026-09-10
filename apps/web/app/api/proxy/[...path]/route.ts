@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const DEFAULT_API_URL = "https://api.lynse.cn";
-
 async function handler(req: NextRequest) {
-  const targetUrl = req.headers.get("x-lynse-api-url") || DEFAULT_API_URL;
+  // No default target: the backend URL has a single source — the address the
+  // user entered on the login/API-config page, forwarded in this header.
+  const targetUrl = req.headers.get("x-lynse-api-url");
+  if (!targetUrl) {
+    return NextResponse.json(
+      { error: "Missing x-lynse-api-url header" },
+      { status: 400 },
+    );
+  }
 
   // Build the upstream path
   const path = req.nextUrl.pathname.replace(/^\/api\/proxy/, "");

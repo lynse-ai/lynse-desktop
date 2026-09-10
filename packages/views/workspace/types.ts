@@ -233,6 +233,15 @@ export interface ChatMessage {
   error?: boolean;
   /** Structured confirmation prompt emitted by the assistant (a2UI-style). */
   confirm?: ChatConfirm;
+  /** Human-handoff link; shown as a "contact support" button under the reply. */
+  humanSupportLink?: ChatHumanSupportLink;
+  /**
+   * When the finished answer landed (poll delivers the whole turn at once).
+   * The UI plays its two-phase reveal (text fades in, attachments follow)
+   * only while this timestamp is fresh, so history and conversation switches
+   * never replay the animation. Stripped before persisting.
+   */
+  revealedAt?: number;
 }
 
 /**
@@ -280,10 +289,24 @@ export interface ChatConfirmOption {
 
 /** Structured confirmation request the assistant can emit (a2UI-compatible). */
 export interface ChatConfirm {
-  /** Short question / instruction shown above the options. */
+  /** Short question / instruction shown above the options (card `title`). */
   question: string;
   /** Selectable options (2+). */
   options: ChatConfirmOption[];
+  /** Backend card kind, e.g. "clear_todos_confirm". */
+  kind?: string;
+  /** Echoed back as `confirm_token` when the user picks one of the actions. */
+  confirmToken?: string;
+  /** Backend risk hint for the card ("low" | "medium" | "high"). */
+  riskLevel?: string;
+}
+
+/** Human-handoff entry the backend attaches to a finished reply. */
+export interface ChatHumanSupportLink {
+  /** Button label from the backend (e.g. "联系人工"); UI falls back to a localized default. */
+  label?: string;
+  /** Clickable page or download URL. */
+  url?: string;
 }
 
 /**
@@ -298,7 +321,13 @@ export type ChatStreamEvent =
   /** Tool activity; `id` optional, `state` defaults to "running". */
   | { type: "tool"; name: string; id?: string; state?: "running" | "done" }
   | { type: "meta"; sources: string[]; attachments: ChatAttachment[] }
-  | { type: "done"; text?: string; sources?: string[]; attachments?: ChatAttachment[] }
+  | {
+      type: "done";
+      text?: string;
+      sources?: string[];
+      attachments?: ChatAttachment[];
+      humanSupportLink?: ChatHumanSupportLink;
+    }
   | { type: "error"; message: string }
   | { type: "confirm"; confirm: ChatConfirm };
 

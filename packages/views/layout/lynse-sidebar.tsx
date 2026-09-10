@@ -124,10 +124,13 @@ export function LynseSidebar() {
         )}
         data-tauri-drag-region
       >
-      {/* User avatar at the top — opens the profile menu */}
+      {/* User avatar at the top — opens the profile menu. It opens to the
+          right of the rail (not on top of it) and its top edge aligns with the
+          avatar's, so the tall menu starts as high as possible and the log-out
+          row at the bottom stays inside the window. */}
       <UserProfileDropdown
         onOpenSettings={() => setSettingsOpen(true)}
-        side="bottom"
+        side="right"
         trigger={
           <button
             type="button"

@@ -9,9 +9,9 @@ import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
   AlertCircle,
+  BookOpen,
   LayoutGrid,
   Lightbulb,
-  List,
   Loader2,
   Plus,
   RefreshCw,
@@ -28,11 +28,12 @@ import { InspirationDetailDialog } from "./detail-dialog";
 import type { InspirationImage, InspirationRecord } from "./types";
 
 const VIEW_STORAGE_KEY = "lynse_inspiration_view_v1";
-type FeedView = "masonry" | "list";
+type FeedView = "journal" | "masonry";
 
 function readStoredView(): FeedView {
-  if (typeof window === "undefined") return "masonry";
-  return window.localStorage.getItem(VIEW_STORAGE_KEY) === "list" ? "list" : "masonry";
+  if (typeof window === "undefined") return "journal";
+  // "list" was the pre-journal timeline; migrate it to the journal view.
+  return window.localStorage.getItem(VIEW_STORAGE_KEY) === "masonry" ? "masonry" : "journal";
 }
 
 /** Number of masonry columns for the current viewport width. */
@@ -226,8 +227,76 @@ function MasonryCard({ record, dateTime, cardCountLabel, onImageResolved, onOpen
   );
 }
 
-/** Detailed list card, grouped under day headers. */
-function ListCard({ record, dateTime, cardCountLabel, onImageResolved, onOpen, onOpenImage, onRetry, retrying }: {
+/** Media block of a journal card: 1 image full-width, else a 2-column grid of
+ *  up to four photos with a "+N" overlay on the last cell. */
+function JournalMedia({
+  record,
+  cardCountLabel,
+  onImageResolved,
+  onOpenImage,
+}: {
+  record: InspirationRecord;
+  cardCountLabel: string | null;
+  onImageResolved: (key: string, url: string) => void;
+  onOpenImage: (index: number) => void;
+}) {
+  const images = record.images ?? [];
+  if (images.length === 0) return null;
+  const cover = images[0];
+  if (!cover) return null;
+  if (images.length === 1) {
+    return (
+      <div className="relative">
+        <RecordImage
+          record={record}
+          image={cover}
+          className="h-48 w-full object-cover"
+          onResolved={onImageResolved}
+          onClick={() => onOpenImage(0)}
+          title={cardCountLabel ?? undefined}
+        />
+        {cardCountLabel && (
+          <span className="pointer-events-none absolute bottom-2 right-2 rounded-full bg-black/50 px-2 py-0.5 text-3xs text-white">
+            {cardCountLabel}
+          </span>
+        )}
+      </div>
+    );
+  }
+  const shown = images.slice(0, 4);
+  return (
+    <div className="grid grid-cols-2 gap-px bg-border/40">
+      {shown.map((image, index) => (
+        <div key={image.file} className="relative">
+          <RecordImage
+            record={record}
+            image={image}
+            className="h-36 w-full object-cover"
+            onResolved={onImageResolved}
+            onClick={() => onOpenImage(index)}
+            title={cardCountLabel ?? undefined}
+          />
+          {index === shown.length - 1 && images.length > 4 && (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenImage(index);
+              }}
+              className="absolute inset-0 flex items-center justify-center bg-black/45 text-lg font-medium text-white"
+            >
+              +{images.length - 3}
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Apple-Journal-style card: media on top, text + tags + voice below, in a
+ *  rounded sheet card floating on the day column. */
+function JournalCard({ record, dateTime, cardCountLabel, onImageResolved, onOpen, onOpenImage, onRetry, retrying }: {
   record: InspirationRecord;
   dateTime: string;
   cardCountLabel: string | null;
@@ -239,39 +308,29 @@ function ListCard({ record, dateTime, cardCountLabel, onImageResolved, onOpen, o
 }) {
   return (
     <article
-      className="cursor-pointer rounded-xl border border-border/50 bg-card/60 p-3.5"
+      className="cursor-pointer overflow-hidden rounded-2xl border border-border/50 bg-card shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-shadow hover:shadow-md"
       onClick={onOpen}
     >
-      <span className="text-3xs text-muted-foreground/70">{dateTime}</span>
-      {record.text.trim() && <HighlightedText text={record.text} className="mt-1 text-sm" />}
-      {record.images && record.images.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {record.images.slice(0, 3).map((image, index) => (
-            <RecordImage
-              key={image.file}
-              record={record}
-              image={image}
-              className="h-20 w-20 rounded-lg object-cover"
-              onResolved={onImageResolved}
-              onClick={() => onOpenImage(index)}
-              title={cardCountLabel ?? undefined}
-            />
-          ))}
-          {record.images.length > 3 && (
-            <div className="flex h-20 w-20 items-center justify-center rounded-lg bg-muted text-xs text-muted-foreground">
-              +{record.images.length - 3}
-            </div>
+      <JournalMedia
+        record={record}
+        cardCountLabel={cardCountLabel}
+        onImageResolved={onImageResolved}
+        onOpenImage={onOpenImage}
+      />
+      <div className="p-4">
+        <span className="text-3xs font-medium tracking-wide text-muted-foreground/70 uppercase">
+          {dateTime}
+        </span>
+        {record.text.trim() && <HighlightedText text={record.text} className="mt-1.5 text-sm" />}
+        <div className="mt-2.5 flex flex-col items-start gap-2.5">
+          {record.audio && (
+            <span onClick={(event) => event.stopPropagation()}>
+              <InspirationAudioPlayer record={record} />
+            </span>
           )}
+          <TagChips record={record} />
+          <InspirationTranscript record={record} onRetry={onRetry} retrying={retrying} />
         </div>
-      )}
-      <div className="mt-2 flex flex-col items-start gap-2">
-        {record.audio && (
-          <span onClick={(event) => event.stopPropagation()}>
-            <InspirationAudioPlayer record={record} />
-          </span>
-        )}
-        <TagChips record={record} />
-        <InspirationTranscript record={record} onRetry={onRetry} retrying={retrying} />
       </div>
     </article>
   );
@@ -413,15 +472,26 @@ export function InspirationPage() {
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full flex-col">
       <header
-        className="flex shrink-0 items-center justify-between border-b border-border/50 px-4 py-3 select-none"
+        className="flex shrink-0 items-center justify-between border-b border-border/50 px-6 py-3 select-none"
         data-tauri-drag-region
       >
         <h2 className="text-sm font-medium text-foreground">{t("inspiration.title")}</h2>
         {desktopApi && (
           <div className="flex items-center gap-2">
             <div className="flex items-center rounded-lg border border-border/50 p-0.5">
+              <button
+                type="button"
+                title={t("inspiration.view_journal")}
+                onClick={() => setViewAndPersist("journal")}
+                className={cn(
+                  "rounded-md p-1 transition-colors",
+                  view === "journal" ? "bg-foreground/80 text-background" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <BookOpen className="size-3.5" />
+              </button>
               <button
                 type="button"
                 title={t("inspiration.view_masonry")}
@@ -432,17 +502,6 @@ export function InspirationPage() {
                 )}
               >
                 <LayoutGrid className="size-3.5" />
-              </button>
-              <button
-                type="button"
-                title={t("inspiration.view_list")}
-                onClick={() => setViewAndPersist("list")}
-                className={cn(
-                  "rounded-md p-1 transition-colors",
-                  view === "list" ? "bg-foreground/80 text-background" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <List className="size-3.5" />
               </button>
             </div>
             <Button size="sm" className="gap-1.5" onClick={() => openCapture()}>
@@ -463,7 +522,7 @@ export function InspirationPage() {
       ) : (
         <div className="flex flex-1 flex-col overflow-hidden">
           {allTags.length > 0 && (
-            <div className="flex shrink-0 flex-wrap gap-1.5 border-b border-border/40 px-4 py-2.5">
+            <div className="flex shrink-0 flex-wrap gap-1.5 border-b border-border/40 px-6 py-2.5">
               <button
                 type="button"
                 onClick={() => setActiveTag(null)}
@@ -494,7 +553,7 @@ export function InspirationPage() {
             </div>
           )}
 
-          <div className="flex-1 overflow-y-auto px-4 py-4">
+          <div className="flex-1 overflow-y-auto px-6 py-4">
             {isLoading ? (
               <div className="flex h-full items-center justify-center">
                 <Loader2 className="size-5 animate-spin text-muted-foreground" />
@@ -522,21 +581,34 @@ export function InspirationPage() {
                 ))}
               </div>
             ) : (
-              <div className="mx-auto max-w-2xl">
-                {listGroups.map((group) => (
-                  <div key={group.label} className="mb-2">
-                    <div className="sticky top-0 z-10 -mx-1 mb-2 bg-background/80 px-1 py-1 text-3xs font-medium text-muted-foreground backdrop-blur">
-                      {group.label}
-                    </div>
-                    <div className="flex flex-col gap-3">
-                      {group.records.map((record) => {
-                        return (
+              /* Journal timeline: day columns with centered serif day headers
+                 (今天 · 9月9日 周二), each holding the day's cards. */
+              <div className="mx-auto max-w-2xl pb-16">
+                {listGroups.map((group) => {
+                  const first = group.records[0];
+                  const dateLabel = first
+                    ? new Intl.DateTimeFormat(i18n.language, {
+                        month: "long",
+                        day: "numeric",
+                        weekday: "short",
+                      }).format(new Date(first.createdAt))
+                    : "";
+                  return (
+                    <section key={group.label} className="mb-7">
+                      <div className="mb-3 flex items-baseline justify-center gap-2">
+                        <h3 className="font-serif text-lg font-semibold text-foreground">
+                          {group.label}
+                        </h3>
+                        <span className="text-xs text-muted-foreground">{dateLabel}</span>
+                      </div>
+                      <div className="flex flex-col gap-3.5">
+                        {group.records.map((record) => (
                           <div key={record.id} className="group relative">
-                            <ListCard
+                            <JournalCard
                               record={record}
                               dateTime={formatCardDateTime(record.createdAt, i18n.language)}
                               cardCountLabel={
-                                record.images && record.images.length > 3
+                                record.images && record.images.length > 4
                                   ? t("inspiration.images_count", { count: record.images.length })
                                   : null
                               }
@@ -557,7 +629,7 @@ export function InspirationPage() {
                                 setDeletingId(record.id);
                                 deleteMutation.mutate(record.id);
                               }}
-                              className="absolute right-2 top-2 rounded-md p-1 text-muted-foreground/50 opacity-0 transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"
+                              className="absolute right-2.5 top-2.5 rounded-md bg-background/70 p-1 text-muted-foreground/60 opacity-0 backdrop-blur transition-opacity hover:bg-muted hover:text-foreground group-hover:opacity-100"
                             >
                               {deletingId === record.id ? (
                                 <Loader2 className="size-3.5 animate-spin" />
@@ -566,14 +638,29 @@ export function InspirationPage() {
                               )}
                             </button>
                           </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
+                        ))}
+                      </div>
+                    </section>
+                  );
+                })}
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Journal-style compose button: the bottom-center "+" pops the capture
+          sheet (same bottom-up panel as the home page's 记录 entry). */}
+      {desktopApi && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-5 z-20 flex justify-center">
+          <Button
+            size="icon"
+            aria-label={t("inspiration.new")}
+            className="pointer-events-auto size-12 rounded-full shadow-lg shadow-primary/30"
+            onClick={() => openCapture()}
+          >
+            <Plus className="size-5" />
+          </Button>
         </div>
       )}
 

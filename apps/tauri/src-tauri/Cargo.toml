@@ -1,6 +1,6 @@
 [package]
 name = "lynse-tauri"
-version = "0.1.37"
+version = "1.0.3"
 description = "Lynse macOS desktop shell"
 authors = ["Lynse"]
 edition = "2021"
@@ -52,14 +52,25 @@ highlandcows-eventkit = "0.5.8"
 # keeps two copies — window-vibrancy 0.8 is explicitly built to tolerate that.
 window-vibrancy = "0.8"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSBitmapImageRep", "NSImage", "NSPasteboard"] }
-objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSString"] }
+# NSWorkspace/NSRunningApplication power the meeting detector's coarse
+# fallback path (see meeting_detector/macos.rs).
+objc2-app-kit = { version = "0.3", features = ["NSBitmapImageRep", "NSImage", "NSPasteboard", "NSRunningApplication", "NSWorkspace"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSData", "NSDictionary", "NSString"] }
 # Microphone TCC prompt from the main app process (see mic_permission.rs):
 # the grant must be attributed to the Lynse bundle, not the capture sidecar,
 # to survive App Store / TestFlight packaging.
 objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMediaFormat"] }
 block2 = "0.6"
 
-# Windows-only: microphone capture for live translation (stage 1).
+# Windows-only: microphone capture for live translation (stage 1), plus the
+# WASAPI session enumeration behind the meeting detector.
 [target.'cfg(target_os = "windows")'.dependencies]
 cpal = "0.15"
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+] }

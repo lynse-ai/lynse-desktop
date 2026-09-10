@@ -128,20 +128,19 @@ jobs:
           fi
           echo "Apple signing/notarization env forwarded:$forwarded"
 
-      - name: Stamp build number from tag (macOS)
-        # Release tags follow the vA.B.C(N) convention: the parenthesized N is
-        # the patch/build counter. Stamp it as CFBundleVersion so the bundle
-        # follows the macOS short-version + build-number convention. Tags
-        # without the parenthesized counter keep Tauri's default (= version).
-        if: runner.os == 'macOS' && contains(github.ref_name, '(')
+      - name: Stamp build number (macOS)
+        # Apple requires CFBundleVersion (the build number) to strictly increase
+        # over the app's lifetime, independent of the marketing version. Use the
+        # workflow run number: monotonic, never resets on major/minor bumps,
+        # and needs no bookkeeping in release tags (tags are pure semver now).
+        if: runner.os == 'macOS'
         shell: bash
         run: |
-          BUILD="${GITHUB_REF_NAME#*\(}"
-          BUILD="${BUILD%\)*}"
+          BUILD="${{ github.run_number }}"
           PLIST=apps/tauri/src-tauri/Info.plist
           /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $BUILD" "$PLIST" 2>/dev/null \
             || /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" "$PLIST"
-          echo "CFBundleVersion=$BUILD stamped from $GITHUB_REF_NAME"
+          echo "CFBundleVersion=$BUILD stamped from run ${{ github.run_number }}"
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0

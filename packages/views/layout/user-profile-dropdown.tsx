@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, type ReactElement } from "react";
+import { useRef, useState, type ReactElement } from "react";
 import { cn } from "@lynse/ui/lib/utils";
+import { Input } from "@lynse/ui/components/ui/input";
 import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
 import { useAuthStore } from "@lynse/core/auth";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useAppUpdate, getAppInfoSync, openAppUpdateDialog } from "../app-update";
 import { openReportProblemDialog } from "../diagnostics";
-import { useUserCredits, useMembership } from "./use-user-credits";
+import { useUserCredits, useMembership, useUpdateNickname } from "./use-user-credits";
 import { UserActivityHeatmap } from "./user-activity-heatmap";
 import {
   DropdownMenu,
@@ -21,7 +22,6 @@ import {
 } from "@lynse/ui/components/ui/dropdown-menu";
 import {
   Check,
-  Copy,
   Settings,
   Palette,
   Globe,
@@ -32,6 +32,7 @@ import {
   Info,
   ArrowUp,
   Download,
+  Pencil,
 } from "../icons";
 
 /* ── Map API memberLevel to localized plan name ────────────── */
@@ -83,6 +84,7 @@ export function UserProfileDropdown({
   const { data: membership } = useMembership();
   const { theme, setTheme } = useTheme();
   const { update, checking } = useAppUpdate();
+  const updateNickname = useUpdateNickname();
 
   const nickname = (data?.nickname as string) || "User";
   const plan = useLocalizedPlan(membership?.memberLevel || data?.benefitType);
@@ -101,23 +103,44 @@ export function UserProfileDropdown({
     getAppInfoSync()?.version ?? update?.currentVersion ?? null;
   const versionLabel = aboutVersion ? `v${aboutVersion}` : "—";
 
-  const [copied, setCopied] = useState(false);
   // `open` drives the menu; `hasOpened` latches on the first open and gates the
   // heatmap's queries. Latching (rather than tracking `open` directly) keeps the
   // data alive during the menu's close animation instead of flashing back to 0.
   const [open, setOpen] = useState(false);
   const [hasOpened, setHasOpened] = useState(false);
 
+  // Inline nickname editing: the pencil swaps the name for an input; Enter or
+  // blur commits, Escape cancels. `cancelRef` keeps the blur fired by Escape
+  // (or by unmount) from committing the stale draft.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(nickname);
+  const cancelRef = useRef(false);
+
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
     if (next) setHasOpened(true);
   };
 
-  const handleCopyName = () => {
-    void navigator.clipboard.writeText(nickname).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+  const startEditName = () => {
+    cancelRef.current = false;
+    setDraft(nickname);
+    setEditing(true);
+  };
+
+  const commitNickname = () => {
+    if (cancelRef.current) return;
+    const next = draft.trim();
+    if (!next || next === nickname) {
+      setEditing(false);
+      return;
+    }
+    // On failure the input stays open so the user can retry.
+    updateNickname.mutate(next, { onSuccess: () => setEditing(false) });
+  };
+
+  const cancelEditName = () => {
+    cancelRef.current = true;
+    setEditing(false);
   };
 
   return (
@@ -144,23 +167,34 @@ export function UserProfileDropdown({
           )
         }
       />
-      <DropdownMenuContent align="start" side={side} sideOffset={4} className="w-72 overflow-hidden p-0">
-        {/* ── Header: User name + copy ──────────────────── */}
+      <DropdownMenuContent align="start" side={side} sideOffset={4} className="w-72 overflow-y-auto p-0">
+        {/* ── Header: User name + inline edit ───────────── */}
         <div className="px-4 pt-4 pb-3">
-          <div className="flex items-center gap-2">
-            <span className="text-base font-semibold tracking-tight">{nickname}</span>
-            <button
-              onClick={handleCopyName}
-              className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-black/[0.05] hover:text-foreground"
-              title={copied ? t("layout.copied") : t("layout.copy_name")}
-            >
-              {copied ? (
-                <Check className="size-3 text-success" />
-              ) : (
-                <Copy className="size-3" />
-              )}
-            </button>
-          </div>
+          {editing ? (
+            <Input
+              autoFocus
+              value={draft}
+              disabled={updateNickname.isPending}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={commitNickname}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitNickname();
+                if (e.key === "Escape") cancelEditName();
+              }}
+              className="h-7 text-base font-semibold tracking-tight"
+            />
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="text-base font-semibold tracking-tight">{nickname}</span>
+              <button
+                onClick={startEditName}
+                className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-black/[0.05] hover:text-foreground"
+                title={t("layout.edit_name")}
+              >
+                <Pencil className="size-3" />
+              </button>
+            </div>
+          )}
         </div>
 
         {/* ── Plan / membership row ─────────────────────── */}

@@ -1,0 +1,98 @@
+{
+  "name": "recording-deep-dive",
+  "suite": "multiturn",
+  "locale": "en",
+  "description": "Drill into one recording: summary → detail → minutes → todos → translate.",
+  "turns": [
+    {
+      "user": "Summarize the Q3 review recording",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 50,
+        "chunks": [
+          "Q3 review (42 min): ",
+          "revenue up 12% QoQ, ",
+          "churn fell to 2.1%, ",
+          "mobile app launched ahead of schedule."
+        ],
+        "sources": [
+          {
+            "title": "Q3 review.m4a",
+            "url": "https://mock.local/q3"
+          }
+        ]
+      }
+    },
+    {
+      "user": "What did they say about churn exactly?",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 50,
+        "chunks": [
+          "At 14:20 the CFO said churn ",
+          "dropped from 3.4% to 2.1% ",
+          "driven by the annual-plan migration."
+        ],
+        "sources": [
+          {
+            "title": "Q3 review.m4a",
+            "url": "https://mock.local/q3"
+          }
+        ]
+      }
+    },
+    {
+      "user": "Turn it into meeting minutes",
+      "quickPrompt": "chat.quick_minutes",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 50,
+        "chunks": [
+          "## Meeting minutes — Q3 review\n",
+          "**Attendees:** CEO, CFO, CPO\n",
+          "- Revenue: +12% QoQ\n",
+          "- Churn: 3.4% → 2.1%\n",
+          "- Mobile app shipped 2 weeks early\n"
+        ]
+      }
+    },
+    {
+      "user": "Extract a to-do list",
+      "quickPrompt": "chat.quick_todos",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 50,
+        "chunks": [
+          "- Send the Q3 deck to the board\n",
+          "- Prepare churn deep-dive for next week\n",
+          "- Schedule app launch retro\n"
+        ]
+      }
+    },
+    {
+      "user": "Translate the key points into English",
+      "quickPrompt": "chat.quick_translate",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 50,
+        "chunks": [
+          "Key points in English: ",
+          "revenue grew 12% quarter over quarter, ",
+          "churn improved to 2.1%, ",
+          "the mobile app launched early."
+        ]
+      }
+    },
+    {
+      "user": "Rewrite the summary more concisely",
+      "quickPrompt": "chat.quick_rewrite",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 50,
+        "chunks": [
+          "Q3: revenue +12%, churn 2.1%, app shipped early."
+        ]
+      }
+    }
+  ]
+}

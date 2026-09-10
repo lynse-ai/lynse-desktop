@@ -37,9 +37,16 @@ html[data-window-effects="vibrancy"] {
    of washing only the sidebar, lay one veil of the theme background across the
    whole shell — the rail and the strips around the card share a single
    identical material. 90% paper keeps only a whisper of frost so the rail
-   reads near-white rather than grey; dark keeps the raw frost. */
+   reads near-white rather than grey.
+
+   Dark keeps the shell on raw frost: the frosted rail riding the wallpaper is
+   the look, and the content card carries the theme canvas on its own. */
 html[data-window-effects="vibrancy"]:not(.dark) .lyse-shell {
   background: color-mix(in srgb, var(--background) 90%, transparent);
+}
+
+html[data-window-effects="vibrancy"].dark .lyse-shell {
+  background: transparent;
 }
 
 /* Codex-style inset content card: rounded on all four corners with a
@@ -76,7 +83,8 @@ html[data-window-effects="vibrancy"] .lyse-sidebar {
   html[data-window-effects="vibrancy"] #root {
     background: var(--background);
   }
-  html[data-window-effects="vibrancy"]:not(.dark) .lyse-shell {
+  html[data-window-effects="vibrancy"]:not(.dark) .lyse-shell,
+  html[data-window-effects="vibrancy"].dark .lyse-shell {
     background: var(--background);
   }
   html[data-window-effects="vibrancy"] {

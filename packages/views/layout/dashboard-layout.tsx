@@ -18,7 +18,8 @@ export function DashboardLayout({ children, extra }: DashboardLayoutProps) {
       {/* .lyse-shell: under light-mode vibrancy the CSS washes this shell with
           one veil of the theme background, so the sidebar rail and the bare
           strips around the inset card share the same material instead of
-          letting raw wallpaper hues bleed through (no-op on the web).
+          letting raw wallpaper hues bleed through; dark mode keeps the rail
+          and strips on raw frost (no-op on the web).
           data-tauri-drag-region makes those strips draggable. */}
       <div className="lyse-shell flex h-svh overflow-hidden" data-tauri-drag-region>
         <LynseSidebar />

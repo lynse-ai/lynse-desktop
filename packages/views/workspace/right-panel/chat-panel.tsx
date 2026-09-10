@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useState, useMemo } from "react";
-import { X, Send, FileText, Plus, Square, Clock, Image as ImageIcon } from "../../icons";
+import { X, Send, FileText, Plus, Square, Clock, Image as ImageIcon, Headphones } from "../../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
 import { StreamingMarkdown } from "@lynse/ui/markdown";
@@ -13,6 +13,7 @@ import { useChat } from "../hooks/use-chat";
 import { WaitingText } from "../hooks/waiting-text";
 import { useFiles } from "../hooks/use-files";
 import { ConfirmDialog } from "../ConfirmDialog";
+import { isFreshlyRevealed } from "../chat-reveal";
 import { ChatAttachments } from "../../chat/chat-attachments";
 import { ChatHistorySidebar } from "../../chat/chat-history-sidebar";
 
@@ -120,7 +121,11 @@ export function ChatPanel() {
           </div>
         )}
         <div className="space-y-3">
-          {messages.map((msg) => (
+          {messages.map((msg) => {
+            // The transport types the answer out itself; `revealedAt` only
+            // staggers attachments / support link in after the text lands.
+            const revealed = msg.role === "assistant" && isFreshlyRevealed(msg);
+            return (
             <div key={msg.id} className={msg.role === "user" ? "flex justify-end" : ""}>
               <div
                 className={`max-w-[85%] rounded-lg px-3 py-2 text-xs leading-relaxed ${
@@ -178,10 +183,34 @@ export function ChatPanel() {
                     <WaitingText status={msg.status} />
                   </div>
                 )}
-                <ChatAttachments attachments={msg.attachments} compact />
+                {msg.role === "assistant" && msg.humanSupportLink?.url && (
+                  <a
+                    href={msg.humanSupportLink.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={`mt-2 flex w-fit items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-3xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent ${
+                      revealed ? "animate-in fade-in duration-300 delay-[350ms] fill-mode-backwards" : ""
+                    }`}
+                  >
+                    <Headphones className="size-3 shrink-0 text-primary/70" />
+                    {msg.humanSupportLink.label?.trim() || t("chat.contact_support")}
+                  </a>
+                )}
+                {msg.role === "assistant" ? (
+                  <div
+                    className={
+                      revealed ? "animate-in fade-in duration-300 delay-[350ms] fill-mode-backwards" : undefined
+                    }
+                  >
+                    <ChatAttachments attachments={msg.attachments} compact />
+                  </div>
+                ) : (
+                  <ChatAttachments attachments={msg.attachments} compact />
+                )}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
         <div ref={scrollRef} />
       </div>

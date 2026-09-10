@@ -24,6 +24,7 @@ mod live_translation;
 #[path = "live_translation_stub.rs"]
 mod live_translation;
 mod inspiration_voice;
+mod meeting_detector;
 mod recording_card;
 mod stt;
 // Microphone TCC prompt from the main app process (macOS); stubs elsewhere.
@@ -180,7 +181,10 @@ fn save_todo(app: &AppHandle, mut todo: Value) -> CommandResult<Value> {
     object.entry("createdAt".to_owned()).or_insert_with(|| json!(timestamp));
     object.insert("updatedAt".to_owned(), json!(timestamp));
     object.entry("completed".to_owned()).or_insert_with(|| json!(false));
-    save_store_value(app, "local-todos", todo)
+    let saved = save_store_value(app, "local-todos", todo)?;
+    // Mirror the todo into the Obsidian-style Tasks folder (markdown file).
+    vault::sync_task(app, &saved);
+    Ok(saved)
 }
 
 fn calendar_event_times(start_at: &str, end_at: &str) -> CommandResult<(DateTime<Utc>, DateTime<Utc>)> {
@@ -240,7 +244,11 @@ fn add_todo_to_system_calendar(
     patch.insert("calendarEndAt".to_owned(), json!(end_at));
     patch.insert("updatedAt".to_owned(), json!(now()));
     match update_store_value(app, "local-todos", todo_id, patch.clone())? {
-        Some(updated) => Ok(updated),
+        Some(updated) => {
+            // Keep the markdown task mirror in sync with calendar metadata.
+            vault::sync_task(app, &updated);
+            Ok(updated)
+        }
         // Cloud todos live server-side only — hand the calendar metadata back
         // so the frontend can persist it alongside the cloud record.
         None => {
@@ -1546,7 +1554,11 @@ fn todo_list(app: AppHandle) -> CommandResult<Vec<Value>> { list_store(&app, "lo
 fn todo_save(app: AppHandle, todo: Value) -> CommandResult<Value> { save_todo(&app, todo) }
 
 #[tauri::command]
-fn todo_delete(app: AppHandle, id: String) -> CommandResult<()> { remove_store_value(&app, "local-todos", &id) }
+fn todo_delete(app: AppHandle, id: String) -> CommandResult<()> {
+    remove_store_value(&app, "local-todos", &id)?;
+    vault::remove_task(&app, &id);
+    Ok(())
+}
 
 /// Persist an inspiration (create or edit).
 ///
@@ -1709,7 +1721,11 @@ fn save_inspiration(app: &AppHandle, inspiration: Value) -> CommandResult<Value>
         }
         record_object.insert("images".to_owned(), json!(final_images));
     }
-    save_store_value(app, "local-inspirations", record)
+    let saved = save_store_value(app, "local-inspirations", record)?;
+    // Mirror the memo into the Obsidian-style Journal folder (markdown file
+    // + copied attachments).
+    vault::sync_journal(app, &saved);
+    Ok(saved)
 }
 
 /// Transcribe an inspiration memo with the current default STT routing. Unlike
@@ -1724,8 +1740,13 @@ fn transcribe_inspiration(app: &AppHandle, mut record: Value, audio_path: PathBu
         patch.insert("transcriptStatus".to_owned(), json!(status));
         patch.insert("transcriptError".to_owned(), json!(error));
         patch.insert("updatedAt".to_owned(), json!(now()));
-        update_store_value(app, "local-inspirations", &id, patch)?
-            .ok_or_else(|| "Inspiration disappeared while transcribing".to_owned())
+        let updated = update_store_value(app, "local-inspirations", &id, patch)?
+            .ok_or_else(|| "Inspiration disappeared while transcribing".to_owned());
+        if let Ok(record) = updated.as_ref() {
+            // The transcript (or its failure state) lands in the journal mirror.
+            vault::sync_journal(app, record);
+        }
+        updated
     };
     let provider = resolve_provider(app, None, None);
     let model_id = match &provider {
@@ -1780,6 +1801,7 @@ fn inspiration_save(app: AppHandle, inspiration: Value) -> CommandResult<Value> 
 #[tauri::command(async)]
 fn inspiration_delete(app: AppHandle, id: String) -> CommandResult<()> {
     remove_store_value(&app, "local-inspirations", &id)?;
+    vault::remove_journal(&app, &id);
     let uuid = id.strip_prefix("inspiration:").unwrap_or(&id);
     let directory = app_data_dir(&app)?.join("inspirations").join(uuid);
     if directory.exists() {
@@ -1806,6 +1828,7 @@ async fn inspiration_transcribe(app: AppHandle, id: String) -> CommandResult<Val
     object.insert("transcriptStatus".to_owned(), json!("pending"));
     object.insert("updatedAt".to_owned(), json!(now()));
     let record = save_store_value(&app, "local-inspirations", record)?;
+    vault::sync_journal(&app, &record);
     let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || transcribe_inspiration(&handle, record, audio_path))
         .await
@@ -3003,6 +3026,7 @@ pub fn run() {
             tray_ui: Mutex::new(TrayUiState::default()),
         })
         .manage(LiveTranslationManager::default())
+        .manage(meeting_detector::MeetingDetectorHandle::default())
         .register_uri_scheme_protocol("local-media", media_response)
         .setup(|app| {
             app.manage(recording_card::RecordingCardManager::new(app.handle().clone()));
@@ -3024,6 +3048,10 @@ pub fn run() {
                 log::error!("Failed to setup system tray: {error}");
             }
             recording_card::spawn_reconnect_watcher(app.handle().clone());
+            // Auto-record on detected meetings: polls OS audio sessions for
+            // whitelisted meeting apps; runs whether or not the main window
+            // is visible, and no-ops until the webview enables it.
+            meeting_detector::spawn(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(error) = window_effects::apply_window_effects(&window) {
                     log::error!("Failed to apply native window effects: {error}");
@@ -3127,6 +3155,8 @@ pub fn run() {
             live_translation::live_translation_expand_island,
             live_translation::live_translation_update_tray,
             live_translation::live_translation_set_mode,
+            meeting_detector::meeting_detector_set_config,
+            meeting_detector::meeting_detector_get_state,
             recording_card::recording_card_state,
             recording_card::recording_card_scan_start,
             recording_card::recording_card_scan_stop,

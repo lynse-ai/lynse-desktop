@@ -23,9 +23,16 @@ import "@milkdown/kit/prose/view/style/prosemirror.css";
 
 const PROXY_PREFIX = "/api/proxy";
 
-/** Sanitize base64 image data URIs — convert Markdown image syntax to HTML <img> for reliable rendering. */
+/** Backend templates occasionally prefix data URIs with a marker scheme
+ *  ("mindmap:data:image/png;base64,...") that no browser can load. */
+const BOGUS_DATA_URI_SCHEME = /^[a-z][a-z0-9+.-]*:data:image\//i;
+
+/** Sanitize base64 image data URIs — strip bogus scheme prefixes and whitespace
+ *  that would otherwise break markdown parsing. Kept as Markdown image syntax:
+ *  Milkdown renders raw inline HTML as literal text (htmlSchema), only the
+ *  image node produces a real <img>. */
 function sanitizeBase64Images(markdown: string): string {
-  // Convert ![alt](data:image/...;base64,...) to <img> tags with cleaned base64
+  // Walk each ![alt](url) and rewrite the URL when needed
   let result = "";
   let pos = 0;
 
@@ -57,23 +64,16 @@ function sanitizeBase64Images(markdown: string): string {
       if (parenDepth > 0) urlEnd++;
     }
 
-    const url = markdown.slice(urlStart, urlEnd).trim();
-
+    let url = markdown.slice(urlStart, urlEnd).trim();
+    // Repair scheme-prefixed data URIs ("mindmap:data:image/png;...")
+    url = url.replace(BOGUS_DATA_URI_SCHEME, "data:image/");
+    // Base64 payloads may contain line wraps — remark truncates URLs at
+    // whitespace, which would cut the image off mid-data.
     if (url.startsWith("data:image/")) {
-      // Clean whitespace from base64 data and convert to HTML img tag
-      const semicolonIdx = url.indexOf(";");
-      const commaIdx = url.indexOf(",");
-      if (semicolonIdx > -1 && commaIdx > semicolonIdx) {
-        const prefix = url.slice(0, commaIdx + 1);
-        const b64data = url.slice(commaIdx + 1).replace(/\s+/g, "");
-        result += `<img alt="${alt}" src="${prefix}${b64data}" />`;
-      } else {
-        result += `<img alt="${alt}" src="${url}" />`;
-      }
-    } else {
-      // Keep as Markdown for non-data-URI images
-      result += `![${alt}](${url})`;
+      url = url.replace(/\s+/g, "");
     }
+
+    result += `![${alt}](${url})`;
 
     pos = urlEnd + 1; // skip past the closing )
   }
@@ -126,8 +126,15 @@ async function fetchImageAsBlob(src: string): Promise<string> {
 function proxyImages(root: HTMLElement) {
   const imgs = root.querySelectorAll<HTMLImageElement>("img");
   for (const img of imgs) {
-    const src = img.getAttribute("src");
+    let src = img.getAttribute("src");
     if (!src || img.dataset.proxying) continue;
+
+    // Repair scheme-prefixed data URIs that slipped through as raw HTML
+    const normalizedSrc = src.replace(BOGUS_DATA_URI_SCHEME, "data:image/");
+    if (normalizedSrc !== src) {
+      img.src = normalizedSrc;
+      src = normalizedSrc;
+    }
 
     // Fix data: URIs that might have whitespace
     if (src.startsWith("data:image/")) {

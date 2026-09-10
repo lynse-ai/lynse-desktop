@@ -1,0 +1,28 @@
+{
+  "name": "mentions-workflow",
+  "suite": "multiturn",
+  "locale": "en",
+  "description": "@ note / # group mentions woven into a five-turn conversation. The harness types the mention trigger and picks via the picker before sending.",
+  "turns": [
+    {
+      "user": "MENTION:@Q3 review.m4a summarize this note",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["Q3 review note: revenue +12%, churn 2.1%."], "sources": [{ "title": "Q3 review.m4a", "url": "https://mock.local/q3" }] }
+    },
+    {
+      "user": "What were the risks mentioned?",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["Risks: supply delay and hiring shortfall."] }
+    },
+    {
+      "user": "MENTION:#Work what is in this group?",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["The Work group has Q3 review.m4a and project kickoff.mp3."] }
+    },
+    {
+      "user": "Compare the two recordings",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["Q3 review is metrics-heavy; kickoff is scope-heavy."] }
+    },
+    {
+      "user": "Which one should I revisit first?",
+      "response": { "type": "stream", "chunkDelayMs": 50, "chunks": ["Revisit Q3 review first — the board deck depends on it."] }
+    }
+  ]
+}

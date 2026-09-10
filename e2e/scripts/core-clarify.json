@@ -1,0 +1,27 @@
+{
+  "name": "core-clarify",
+  "suite": "core",
+  "locale": "en",
+  "description": "Clarify dialog pops, option click sends the follow-up turn.",
+  "turns": [
+    {
+      "user": "Summarize the meeting",
+      "response": {
+        "type": "clarify",
+        "question": "Which recording do you mean?",
+        "options": [
+          { "label": "Q3 review.m4a", "value": "file-q3-review" },
+          { "label": "project kickoff.mp3", "value": "file-kickoff" }
+        ]
+      }
+    },
+    {
+      "user": "file-q3-review",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 40,
+        "chunks": ["Here is the summary of Q3 review: revenue up, churn down."]
+      }
+    }
+  ]
+}

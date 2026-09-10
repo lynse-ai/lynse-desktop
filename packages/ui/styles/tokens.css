@@ -184,24 +184,27 @@
 }
 
 .dark {
-    /* Pure-black canvas + warm gold accents. */
-    --background: #000000;
+    /* Soft charcoal canvas + warm gold accents. Lifted off pure black so the
+       window reads as a dark grey surface rather than a void; the surface
+       hierarchy (canvas < sidebar < card < popover < input) keeps the original
+       steps, just one notch lighter across the board. */
+    --background: #17181b;
     --foreground: #f5f3ee;
-    --card: #0d0e10;
+    --card: #1e1f23;
     --card-foreground: #f5f3ee;
-    --popover: #141519;
+    --popover: #232429;
     --popover-foreground: #f5f3ee;
     --primary: #e0b15c;
     --primary-foreground: #15110a;
-    --secondary: #16171a;
+    --secondary: #26272c;
     --secondary-foreground: #e8e6e0;
-    --muted: #16171a;
+    --muted: #26272c;
     --muted-foreground: #a8a39a;
     --accent: rgba(255, 255, 255, 0.06);
     --accent-foreground: #f5f3ee;
     --destructive: #ff453a;
     --border: rgb(255 255 255 / 9%);
-    --input: #1d1e22;
+    --input: #2c2d33;
     --ring: #e0b15c;
     --stroke-primary: rgb(255 255 255 / 20%);
     --stroke-secondary: rgb(255 255 255 / 14%);

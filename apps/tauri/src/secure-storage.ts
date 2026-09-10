@@ -199,3 +199,30 @@ export const secureStorage: StorageAdapter = {
     if (typeof window !== "undefined") window.localStorage.removeItem(key);
   },
 };
+
+/** Credential keys that must not outlive a logout. */
+const AUTH_SECRET_KEYS = ["lynse_api_key", "lynse_token"] as const;
+
+/**
+ * Wipe the login credentials from the OS keychain (plus the in-memory cache
+ * and any legacy plaintext copies). Called on logout: the keychain must not
+ * outlive the session. Idempotent — every step is a no-op when already gone.
+ * Note the vault write is an async IPC: quitting the app within the following
+ * few hundred ms could still land the delete on the next launch's hydration.
+ */
+export async function clearAuthSecrets(): Promise<void> {
+  for (const key of AUTH_SECRET_KEYS) {
+    secretCache.delete(key);
+    if (typeof window !== "undefined") window.localStorage.removeItem(key);
+  }
+  await vaultMutate((vault) => {
+    let dirty = false;
+    for (const key of AUTH_SECRET_KEYS) {
+      if (key in vault) {
+        delete vault[key];
+        dirty = true;
+      }
+    }
+    return dirty;
+  });
+}

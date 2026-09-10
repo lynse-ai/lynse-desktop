@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { api } from "@lynse/core/api/client";
 import { useAuthStore } from "@lynse/core/auth";
 
@@ -39,6 +39,24 @@ export function useUserCredits() {
     },
     enabled: isAuthenticated,
     staleTime: 60_000,
+  });
+}
+
+/**
+ * Updates the current customer's nickname via `PUT /api/business/customer`
+ * (CustomerUpdateReq — only `nickname` is sent) and refreshes the cached
+ * profile so every consumer (sidebar, dropdown trigger) re-renders.
+ */
+export function useUpdateNickname() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (nickname: string) => {
+      await api().put<boolean>("/api/business/customer", { nickname });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["user", "credits"] });
+    },
   });
 }
 

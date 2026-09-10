@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { cn } from "@lynse/ui/lib/utils";
+import { Input } from "@lynse/ui/components/ui/input";
 import { AppLink, useNavigation } from "../navigation";
 import {
   Lightbulb,
@@ -21,7 +22,7 @@ import {
   Upload,
   ChevronDown,
   Mic,
-  Copy,
+  Pencil,
   Palette,
   UserCircle,
   Download,
@@ -56,7 +57,7 @@ import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
 import { useAppUpdate, getAppInfoSync, openAppUpdateDialog } from "../app-update";
 import { featureFlags } from "../feature-flags";
-import { useUserCredits, useMembership } from "./use-user-credits";
+import { useUserCredits, useMembership, useUpdateNickname } from "./use-user-credits";
 import { FolderTreeSection } from "../workspace/sidebar/folder-tree-section";
 import { SettingsDialog } from "../settings/settings-dialog";
 import { UploadDialog } from "../workspace/upload-dialog";
@@ -341,6 +342,7 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
   const { data: membership } = useMembership();
   const { theme, setTheme } = useTheme();
   const { update, checking } = useAppUpdate();
+  const updateNickname = useUpdateNickname();
 
   const nickname = (data?.nickname as string) || "User";
   const plan = useLocalizedPlan(membership?.memberLevel || data?.benefitType);
@@ -353,13 +355,33 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
     getAppInfoSync()?.version ?? update?.currentVersion ?? null;
   const versionLabel = aboutVersion ? `v${aboutVersion}` : "—";
 
-  const [copied, setCopied] = useState(false);
+  // Inline nickname editing: the pencil swaps the name for an input; Enter or
+  // blur commits, Escape cancels. `cancelRef` keeps the blur fired by Escape
+  // (or by unmount) from committing the stale draft.
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(nickname);
+  const cancelRef = useRef(false);
 
-  const handleCopyName = () => {
-    void navigator.clipboard.writeText(nickname).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+  const startEditName = () => {
+    cancelRef.current = false;
+    setDraft(nickname);
+    setEditing(true);
+  };
+
+  const commitNickname = () => {
+    if (cancelRef.current) return;
+    const next = draft.trim();
+    if (!next || next === nickname) {
+      setEditing(false);
+      return;
+    }
+    // On failure the input stays open so the user can retry.
+    updateNickname.mutate(next, { onSuccess: () => setEditing(false) });
+  };
+
+  const cancelEditName = () => {
+    cancelRef.current = true;
+    setEditing(false);
   };
 
   return (
@@ -384,24 +406,35 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
           </button>
         }
       />
-      <DropdownMenuContent align="start" side="top" sideOffset={4} className="w-72 overflow-hidden p-0">
+      <DropdownMenuContent align="start" side="top" sideOffset={4} className="w-72 overflow-y-auto p-0">
 
-        {/* ── Header: User name + copy ──────────────────── */}
+        {/* ── Header: User name + inline edit ───────────── */}
         <div className="px-4 pt-4 pb-3">
-          <div className="flex items-center gap-2">
-            <span className="text-base font-semibold tracking-tight">{nickname}</span>
-            <button
-              onClick={handleCopyName}
-              className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-black/[0.05] hover:text-foreground"
-              title={copied ? t("layout.copied") : t("layout.copy_name")}
-            >
-              {copied ? (
-                <Check className="size-3 text-success" />
-              ) : (
-                <Copy className="size-3" />
-              )}
-            </button>
-          </div>
+          {editing ? (
+            <Input
+              autoFocus
+              value={draft}
+              disabled={updateNickname.isPending}
+              onChange={(e) => setDraft(e.target.value)}
+              onBlur={commitNickname}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitNickname();
+                if (e.key === "Escape") cancelEditName();
+              }}
+              className="h-7 text-base font-semibold tracking-tight"
+            />
+          ) : (
+            <div className="flex items-center gap-2">
+              <span className="text-base font-semibold tracking-tight">{nickname}</span>
+              <button
+                onClick={startEditName}
+                className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-black/[0.05] hover:text-foreground"
+                title={t("layout.edit_name")}
+              >
+                <Pencil className="size-3" />
+              </button>
+            </div>
+          )}
         </div>
 
         {/* ── Plan / membership row ─────────────────────── */}

@@ -8,6 +8,10 @@ type ClientOptions = {
 const PROXY_PREFIX = "/api/proxy";
 let apiTransportMode: "proxy" | "direct" = "proxy";
 
+/** Gateway envelope code for missing/expired credentials ("Please provide
+ *  authentication token") — arrives as HTTP 200, not a real 401. */
+const GATEWAY_AUTH_ERROR_CODE = 2013;
+
 /**
  * Desktop shells that provide a native fetch implementation can bypass the
  * browser-only development proxy while the web app keeps its existing route.
@@ -21,7 +25,8 @@ function apiRequestUrl(backendUrl: string, path: string): string {
 }
 
 export class ApiClient {
-  // The actual Lynse backend URL (e.g. http://api.lynse.cn)
+  // The actual Lynse backend URL — the address the user entered on the
+  // login/API-config page (persisted as lynse_api_url). No default here.
   private backendUrl: string;
   private token: string | null = null;
   private apiKey: string | null = null;
@@ -36,6 +41,11 @@ export class ApiClient {
 
   setToken(token: string | null) {
     this.token = token;
+  }
+
+  /** Current session's access token, or null when logged out. */
+  getToken(): string | null {
+    return this.token;
   }
 
   setApiKey(apiKey: string | null) {
@@ -88,6 +98,11 @@ export class ApiClient {
 
     if (json && typeof json === "object" && "code" in json && "data" in json) {
       if (json.code !== 200) {
+        // The gateway reports missing/expired credentials as an HTTP-200
+        // envelope (e.g. code 2013 "Please provide authentication token")
+        // instead of a real 401 — treat it as unauthorized so the session
+        // drops and the app falls back to the launch page.
+        if (json.code === GATEWAY_AUTH_ERROR_CODE) this.onUnauthorized?.();
         // `data` may carry useful fields even on failure (e.g. `cooldown`
         // alongside error.operation.too.frequent).
         throw new ApiError(

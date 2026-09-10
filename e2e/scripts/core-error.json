@@ -1,0 +1,20 @@
+{
+  "name": "core-error",
+  "suite": "core",
+  "locale": "en",
+  "description": "SSE error event and HTTP error surface as error bubbles.",
+  "turns": [
+    {
+      "user": "This turn fails with an SSE error",
+      "response": { "type": "error", "message": "model rate limited, try again later" }
+    },
+    {
+      "user": "This turn fails at the HTTP level",
+      "response": { "type": "http-error", "status": 500, "message": "upstream unavailable" }
+    },
+    {
+      "user": "And now a normal reply",
+      "response": { "type": "stream", "chunkDelayMs": 40, "chunks": ["Back online — here is your answer."] }
+    }
+  ]
+}

@@ -8,13 +8,16 @@ import { Button } from "@lynse/ui/components/ui/button";
 import { useAuthStore } from "@lynse/core/auth";
 import { useNavigation } from "../navigation";
 import { useTranslation } from "@lynse/core/i18n/react";
-
-export const DEFAULT_API_URL = "https://api.lynse.cn";
+import { authErrorText } from "./auth-errors";
 
 /**
  * Standalone API configuration page, linked from the login page's bottom-left
  * corner. Replaces the API configuration card that used to live in the
  * settings dialog: backend URL + API-key connect.
+ *
+ * The backend URL has exactly one source: what the user types here (persisted
+ * as `lynse_api_url`). No build-time or in-code default exists — both fields
+ * must be filled before connecting.
  */
 export function ApiConfigPage() {
   const { t } = useTranslation();
@@ -23,7 +26,7 @@ export function ApiConfigPage() {
   const login = useAuthStore((s) => s.login);
   const logout = useAuthStore((s) => s.logout);
 
-  const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
+  const [apiUrl, setApiUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -36,14 +39,14 @@ export function ApiConfigPage() {
   }, []);
 
   async function handleConnect() {
-    if (!apiKey.trim()) return;
+    if (!apiUrl.trim() || !apiKey.trim()) return;
     setError(null);
     setConnecting(true);
     try {
       await login(apiKey.trim(), apiUrl.trim());
       push("/");
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : t("auth.api_key_connect_failed"));
+      setError(authErrorText(e, t));
     } finally {
       setConnecting(false);
     }
@@ -80,7 +83,7 @@ export function ApiConfigPage() {
               </Label>
               <Input
                 id="api-config-url"
-                placeholder={DEFAULT_API_URL}
+                placeholder={t("auth.api_config_base_url_hint")}
                 value={apiUrl}
                 onChange={(e) => setApiUrl(e.target.value)}
                 className="h-8 text-sm"
@@ -125,7 +128,7 @@ export function ApiConfigPage() {
                 size="sm"
                 className="h-7 text-xs"
                 onClick={handleConnect}
-                disabled={!apiKey.trim() || connecting}
+                disabled={!apiUrl.trim() || !apiKey.trim() || connecting}
               >
                 {connecting ? t("auth.api_key_connecting") : t("auth.api_key_connect")}
               </Button>

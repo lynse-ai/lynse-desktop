@@ -14,6 +14,7 @@
     "./api/client": "./api/client.ts",
     "./api/schema": "./api/schema.ts",
     "./auth": "./auth/index.ts",
+    "./auth/qrcode": "./auth/qrcode.ts",
     "./auth/session": "./auth/session.ts",
     "./auth/wechat": "./auth/wechat.ts",
     "./config": "./config/index.ts",

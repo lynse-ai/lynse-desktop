@@ -48,30 +48,58 @@ Create one via Xcode → Settings → Accounts → Manage Certificates
 [[ -n "$PKG_IDENTITY" ]] || die "No '3rd Party Mac Developer Installer' certificate in the Keychain.
 Create it the same way as above."
 
-# --- version bump --------------------------------------------------------------
-# TestFlight requires every upload's version to be strictly higher than the
-# previous one, so each packaging run bumps the patch version across
-# tauri.conf.json, package.json and Cargo.toml (they must stay in sync).
-# Set NO_BUMP=1 to reuse the current version for a local test package.
-if [[ -z "${NO_BUMP:-}" ]]; then
-  CONF="$APP_DIR/src-tauri/tauri.conf.json"
-  VERSION="$(sed -nE 's/^[[:space:]]*"version": "([0-9]+)\.([0-9]+)\.([0-9]+)",?$/\1 \2 \3/p' "$CONF" | head -n1)"
-  [[ -n "$VERSION" ]] || die "Cannot parse version from $CONF"
-  read -r MAJ MIN PATCH <<< "$VERSION"
-  OLD_VERSION="$MAJ.$MIN.$PATCH"
-  NEW_VERSION="$MAJ.$MIN.$((PATCH + 1))"
-  log "Bumping version: $OLD_VERSION → $NEW_VERSION"
+# --- version -------------------------------------------------------------------
+# Version policy (see .agents/skills/testflight-release/SKILL.md):
+# - CFBundleShortVersionString (semver) only moves on planned releases: pass
+#   APP_VERSION=X.Y.Z to set it explicitly across all three manifests. Patch /
+#   test iterations keep the version and raise only the build number.
+# - CFBundleVersion (Apple build number) is a plain decimal integer, stamped
+#   after the build — see the build-number section. CI mirrors this with
+#   github.run_number.
+set_version() {
+  local NEW_VERSION="$1"
+  local CONF="$APP_DIR/src-tauri/tauri.conf.json"
+  local OLD_VERSION
+  OLD_VERSION="$(sed -nE 's/^[[:space:]]*"version": "([0-9]+\.[0-9]+\.[0-9]+)",?$/\1/p' "$CONF" | head -n1)"
+  [[ -n "$OLD_VERSION" ]] || die "Cannot parse version from $CONF"
+  log "Setting version: $OLD_VERSION → $NEW_VERSION"
   sed -i '' "s/\"version\": \"$OLD_VERSION\"/\"version\": \"$NEW_VERSION\"/" \
     "$CONF" "$APP_DIR/package.json"
   sed -i '' "s/^version = \"$OLD_VERSION\"/version = \"$NEW_VERSION\"/" \
     "$APP_DIR/src-tauri/Cargo.toml"
+}
+
+if [[ -n "${APP_VERSION:-}" ]]; then
+  [[ "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || die "APP_VERSION must be pure semver (X.Y.Z), got: $APP_VERSION (parentheses belong on the tag, not here)"
+  set_version "$APP_VERSION"
 fi
+
+# --- build number ---------------------------------------------------------------
+# Apple build number (CFBundleVersion): a plain decimal integer that must
+# strictly increase on every upload of the same version — independent of the
+# semver. Default: max(last local build, total commits) + 1, tracked in
+# .build-number so rebuilds from the same commit never collide. Override with
+# BUILD_NUMBER=N. CI stamps github.run_number for tagged releases.
+BUILD_NUMBER_FILE="$APP_DIR/.build-number"
+LAST_BUILD="$(cat "$BUILD_NUMBER_FILE" 2>/dev/null || echo 0)"
+COMMITS="$(git -C "$ROOT" rev-list --count HEAD 2>/dev/null || echo 0)"
+NEXT_BASE=$(( LAST_BUILD > COMMITS ? LAST_BUILD : COMMITS ))
+BUILD_NUMBER="${BUILD_NUMBER:-$(( NEXT_BASE + 1 ))}"
+echo "$BUILD_NUMBER" > "$BUILD_NUMBER_FILE"
+log "Apple build number: $BUILD_NUMBER"
 
 # --- build -------------------------------------------------------------------
 log "Building the Tauri app bundle (updater artifacts disabled for App Store)"
 (cd "$ROOT" && pnpm --filter @lynse/tauri exec tauri build --bundles app \
   --config '{"bundle":{"createUpdaterArtifacts":false}}')
 [[ -d "$APP_PATH" ]] || die "Expected app bundle not found at $APP_PATH"
+
+# Tauri copies the semver into CFBundleVersion — replace it with the decimal
+# build number before codesigning so the stamp is covered by the signature.
+PLIST="$APP_PATH/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$PLIST" \
+  || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $BUILD_NUMBER" "$PLIST"
 
 # --- sign --------------------------------------------------------------------
 # TestFlight rejects packages whose files carry the com.apple.quarantine xattr

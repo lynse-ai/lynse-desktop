@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import { ApiClient, setApiInstance } from "../api/client";
-import { createAuthStore, registerAuthStore } from "../auth";
+import { createAuthStore, getAuthStore, registerAuthStore } from "../auth";
 import { defaultStorage } from "./storage";
 import { QueryProvider } from "../provider";
 import { initI18n } from "../i18n";
@@ -12,7 +12,9 @@ import type { StorageAdapter } from "../types/storage";
 let initialized = false;
 let authStore: ReturnType<typeof createAuthStore>;
 
-function initCore(
+/** Idempotent core bootstrap (API client + auth store). Exported for
+ *  non-React bootstrap paths and tests; `CoreProvider` calls it on mount. */
+export function initCore(
   apiBaseUrl: string,
   storage: StorageAdapter,
   onLogin?: () => void,
@@ -29,6 +31,11 @@ function initCore(
   const apiClient = new ApiClient(effectiveUrl, {
     onUnauthorized: () => {
       storage.removeItem("lynse_token");
+      // The saved credential is dead. Drop the whole session so the AuthGate
+      // swaps to the launch page — the user can sign in again there (or
+      // re-enter the API key via its corner link) instead of staring at
+      // failing requests.
+      getAuthStore()?.getState().logout();
     },
     identity,
   });

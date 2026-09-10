@@ -2,13 +2,40 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const apiMocks = vi.hoisted(() => ({
-  stream: vi.fn(),
-}));
+// The store is tested against a fake transport so its event contract
+// (status/content/thinking/tool/done/confirm/error) can be driven directly;
+// the real poll transport's HTTP behavior is covered in chat-transport.test.ts.
+const fake = vi.hoisted(() => {
+  interface SendOptions {
+    query: string;
+    confirmToken?: string | null;
+    onEvent: (event: unknown) => void;
+    [key: string]: unknown;
+  }
+  class FakeTransport {
+    readonly provider = "cloud" as const;
+    opts: SendOptions | null = null;
+    private resolve: (() => void) | null = null;
+    send(opts: SendOptions): Promise<void> {
+      this.opts = opts;
+      fake.runs.push(this);
+      return new Promise<void>((resolve) => {
+        this.resolve = resolve;
+      });
+    }
+    // Mirrors the real transports: cancelling settles the turn.
+    cancel(): void {
+      this.resolve?.();
+    }
+  }
+  const fake = { FakeTransport, runs: [] as FakeTransport[] };
+  return fake;
+});
 
-vi.mock("@lynse/core/api", () => ({
-  api: () => ({ stream: apiMocks.stream }),
-}));
+vi.mock("../chat-transport", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../chat-transport")>();
+  return { ...actual, PollChatTransport: fake.FakeTransport };
+});
 
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -16,42 +43,22 @@ vi.mock("sonner", () => ({
 
 import { toast } from "sonner";
 import type { useChatStore as ChatStore } from "./use-chat-store";
+import type { ChatStreamEvent } from "../types";
 
-interface CapturedStream {
-  body: Record<string, unknown>;
-  onChunk: (data: string) => void;
-  onError: (error: Error) => void;
-  onComplete: () => void;
-}
-
-let streams: CapturedStream[];
 let store: typeof ChatStore;
+
+type FakeRun = InstanceType<typeof fake.FakeTransport>;
 
 beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
   window.localStorage.clear();
-  streams = [];
-  apiMocks.stream.mockImplementation(
-    (
-      _path: string,
-      body: Record<string, unknown>,
-      onChunk: (data: string) => void,
-      onError: (error: Error) => void,
-      onComplete: () => void,
-    ) => {
-      const controller = new AbortController();
-      // Mirror the real client: aborting the stream resolves the turn.
-      controller.signal.addEventListener("abort", () => onComplete());
-      streams.push({ body, onChunk, onError, onComplete });
-      return controller;
-    },
-  );
+  fake.runs.length = 0;
   store = (await import("./use-chat-store")).useChatStore;
 });
 
-function emit(stream: CapturedStream, event: Record<string, unknown>): void {
-  stream.onChunk(JSON.stringify(event));
+function emit(run: FakeRun, event: ChatStreamEvent): void {
+  run.opts!.onEvent(event);
 }
 
 function conversationByUserText(text: string) {
@@ -71,19 +78,19 @@ describe("concurrent chat conversations", () => {
     clearMessages();
     sendMessage("three");
 
-    expect(streams).toHaveLength(3);
+    expect(fake.runs).toHaveLength(3);
     expect(store.getState().workingConversationIds).toHaveLength(3);
     expect(store.getState().isLoading).toBe(true);
 
     clearMessages();
     sendMessage("four");
 
-    expect(streams).toHaveLength(3);
+    expect(fake.runs).toHaveLength(3);
     expect(toast.error).toHaveBeenCalled();
     expect(store.getState().workingConversationIds).toHaveLength(3);
   });
 
-  it("keeps background streams running when a new chat is started", () => {
+  it("keeps background turns running when a new chat is started", () => {
     const { sendMessage, clearMessages } = store.getState();
     sendMessage("one");
     clearMessages();
@@ -91,7 +98,7 @@ describe("concurrent chat conversations", () => {
     // Starting a new chat resets the view but never aborts the running turn.
     expect(store.getState().messages).toEqual([]);
     expect(store.getState().workingConversationIds).toHaveLength(1);
-    expect(streams[0]!.body.query).toBe("one");
+    expect(fake.runs[0]!.opts!.query).toBe("one");
   });
 
   it("marks a completed background reply unread and stores it in its conversation", async () => {
@@ -100,9 +107,9 @@ describe("concurrent chat conversations", () => {
     clearMessages();
     sendMessage("two");
 
-    emit(streams[0]!, { type: "content", delta: "answer A" });
-    emit(streams[0]!, { type: "done", text: "answer A" });
-    streams[0]!.onComplete();
+    emit(fake.runs[0]!, { type: "content", delta: "answer A" });
+    emit(fake.runs[0]!, { type: "done", text: "answer A" });
+    fake.runs[0]!.cancel();
     await vi.waitFor(() =>
       expect(store.getState().workingConversationIds).toHaveLength(1),
     );
@@ -122,14 +129,30 @@ describe("concurrent chat conversations", () => {
     expect(toast.success).toHaveBeenCalledWith("AI 助手已完成回复");
   });
 
+  it("stores the human-support link from the done payload", () => {
+    const { sendMessage } = store.getState();
+    sendMessage("help me");
+    emit(fake.runs[0]!, {
+      type: "done",
+      text: "已转接人工",
+      humanSupportLink: { url: "https://help.example.test", label: "联系人工" },
+    });
+
+    const message = store.getState().messages.at(-1)!;
+    expect(message.humanSupportLink).toEqual({
+      url: "https://help.example.test",
+      label: "联系人工",
+    });
+  });
+
   it("clears a conversation's unread count when it is opened", async () => {
     const { sendMessage, clearMessages, selectConversation } = store.getState();
     sendMessage("one");
     clearMessages();
     sendMessage("two");
 
-    emit(streams[0]!, { type: "done", text: "answer A" });
-    streams[0]!.onComplete();
+    emit(fake.runs[0]!, { type: "done", text: "answer A" });
+    fake.runs[0]!.cancel();
     // The unread mark lands with the done event; the run unregisters one
     // promise hop later — wait for both before switching.
     await vi.waitFor(() => {
@@ -144,7 +167,7 @@ describe("concurrent chat conversations", () => {
     expect(state.isLoading).toBe(false);
   });
 
-  it("routes events to the right conversation when switching mid-stream", async () => {
+  it("routes events to the right conversation when switching mid-turn", async () => {
     const { sendMessage, clearMessages, selectConversation } = store.getState();
     sendMessage("one");
     clearMessages();
@@ -152,27 +175,27 @@ describe("concurrent chat conversations", () => {
 
     const conversationA = conversationByUserText("one");
     selectConversation(conversationA.id);
-    // Conversation A is streaming and now on screen.
+    // Conversation A is running and now on screen.
     expect(store.getState().isLoading).toBe(true);
 
     // A delta for the background conversation B lands in its stored copy only.
-    emit(streams[1]!, { type: "content", delta: "B delta" });
+    emit(fake.runs[1]!, { type: "content", delta: "B delta" });
     expect(conversationByUserText("two").messages.at(-1)!.content).toBe("B delta");
     expect(store.getState().messages.at(-1)!.content).toBe("");
 
     // A delta for the viewed conversation A renders into the messages buffer.
-    emit(streams[0]!, { type: "content", delta: "A delta" });
+    emit(fake.runs[0]!, { type: "content", delta: "A delta" });
     expect(store.getState().messages.at(-1)!.content).toBe("A delta");
   });
 
-  it("stops only the active conversation's stream", async () => {
+  it("stops only the active conversation's turn", async () => {
     const { sendMessage, clearMessages, stopStreaming } = store.getState();
     sendMessage("one");
     clearMessages();
     sendMessage("two");
 
     stopStreaming();
-    // The abort resolves the transport promise and unregisters the run.
+    // Cancelling the transport settles the promise and unregisters the run.
     await vi.waitFor(() =>
       expect(store.getState().workingConversationIds).toHaveLength(1),
     );
@@ -186,19 +209,19 @@ describe("reasoning and tool activity", () => {
   it("accumulates thinking deltas and closes the trace when content starts", () => {
     const { sendMessage } = store.getState();
     sendMessage("hello");
-    const stream = streams[0]!;
+    const run = fake.runs[0]!;
 
-    emit(stream, { type: "thinking", content: "先想想" });
-    emit(stream, { type: "thinking", content: "再想想" });
+    emit(run, { type: "thinking", delta: "先想想" });
+    emit(run, { type: "thinking", delta: "再想想" });
     let message = store.getState().messages.at(-1)!;
     expect(message.thinking).toBe("先想想再想想");
     expect(message.thinkingActive).toBe(true);
 
-    emit(stream, { type: "thinking_end" });
+    emit(run, { type: "thinking", delta: "" });
     message = store.getState().messages.at(-1)!;
     expect(message.thinkingActive).toBe(false);
 
-    emit(stream, { type: "content", delta: "答案" });
+    emit(run, { type: "content", delta: "答案" });
     message = store.getState().messages.at(-1)!;
     expect(message.content).toBe("答案");
     expect(message.thinking).toBe("先想想再想想");
@@ -208,23 +231,23 @@ describe("reasoning and tool activity", () => {
   it("tracks tool calls from tool events and status ticks", () => {
     const { sendMessage } = store.getState();
     sendMessage("hello");
-    const stream = streams[0]!;
+    const run = fake.runs[0]!;
 
-    emit(stream, { type: "tool_use", name: "search_meetings", id: "t1" });
+    emit(run, { type: "tool", name: "search_meetings", id: "t1" });
     let message = store.getState().messages.at(-1)!;
     expect(message.toolUses).toEqual([
       { id: "t1", name: "search_meetings", state: "running" },
     ]);
 
     // A status tick announcing the next tool closes the previous one.
-    emit(stream, { type: "status", text: "调用工具: get_meeting" });
+    emit(run, { type: "status", text: "调用工具: get_meeting" });
     message = store.getState().messages.at(-1)!;
     expect(message.toolUses).toEqual([
       { id: "t1", name: "search_meetings", state: "done" },
       { id: "get_meeting", name: "get_meeting", state: "running" },
     ]);
 
-    emit(stream, { type: "tool_result", name: "get_meeting" });
+    emit(run, { type: "tool", name: "get_meeting", state: "done" });
     message = store.getState().messages.at(-1)!;
     expect(message.toolUses?.every((t) => t.state === "done")).toBe(true);
   });
@@ -232,16 +255,100 @@ describe("reasoning and tool activity", () => {
   it("closes running tools when the turn completes", () => {
     const { sendMessage } = store.getState();
     sendMessage("hello");
-    const stream = streams[0]!;
+    const run = fake.runs[0]!;
 
-    emit(stream, { type: "status", text: "调用工具: search_notes" });
-    emit(stream, { type: "content", delta: "partial" });
-    emit(stream, { type: "done", text: "partial" });
+    emit(run, { type: "status", text: "调用工具: search_notes" });
+    emit(run, { type: "content", delta: "partial" });
+    emit(run, { type: "done", text: "partial" });
 
     const message = store.getState().messages.at(-1)!;
     expect(message.content).toBe("partial");
     expect(message.status).toBeUndefined();
     expect(message.toolUses?.every((t) => t.state === "done")).toBe(true);
     expect(message.thinkingActive).toBeFalsy();
+  });
+});
+
+describe("stopping a pending poll turn", () => {
+  it("drops the empty assistant bubble when stopped before the answer lands", async () => {
+    const { sendMessage, stopStreaming } = store.getState();
+    sendMessage("hello");
+
+    // Poll has no partial content — stopping mid-turn leaves the placeholder
+    // empty, and an empty bubble would render a "thinking" spinner forever.
+    stopStreaming();
+    await vi.waitFor(() => expect(store.getState().workingConversationIds).toHaveLength(0));
+
+    const messages = store.getState().messages;
+    expect(messages.map((m) => m.role)).toEqual(["user"]);
+    expect(messages[0]!.content).toBe("hello");
+    expect(store.getState().isLoading).toBe(false);
+
+    // The conversation's stored copy is cleaned up too.
+    expect(conversationByUserText("hello").messages.map((m) => m.role)).toEqual(["user"]);
+  });
+
+  it("keeps the bubble when the turn wrote something before ending", async () => {
+    const { sendMessage, stopStreaming } = store.getState();
+    sendMessage("hello");
+    const run = fake.runs[0]!;
+    emit(run, { type: "error", message: "boom" });
+
+    stopStreaming();
+    await vi.waitFor(() => expect(store.getState().workingConversationIds).toHaveLength(0));
+
+    const last = store.getState().messages.at(-1)!;
+    expect(last.role).toBe("assistant");
+    expect(last.error).toBe(true);
+    expect(last.content).toContain("boom");
+  });
+
+  it("stamps revealedAt when the finished answer lands", () => {
+    const { sendMessage } = store.getState();
+    sendMessage("hello");
+    emit(fake.runs[0]!, { type: "done", text: "full answer" });
+
+    const message = store.getState().messages.at(-1)!;
+    expect(message.content).toBe("full answer");
+    expect(message.revealedAt).toBeGreaterThan(0);
+  });
+});
+
+describe("confirmation cards", () => {
+  it("pops the card from the confirm event and answers with its confirmToken", async () => {
+    const { sendMessage, answerConfirm } = store.getState();
+    sendMessage("清理待办");
+    const run = fake.runs[0]!;
+
+    emit(run, { type: "done", text: "请确认清理待办" });
+    emit(run, {
+      type: "confirm",
+      confirm: {
+        question: "清理待办",
+        options: [
+          { label: "确认清理", value: "confirm" },
+          { label: "先不了", value: "cancel" },
+        ],
+        confirmToken: "card-token-1",
+      },
+    });
+
+    const pending = store.getState().pendingConfirm;
+    expect(pending).not.toBeNull();
+    expect(pending!.confirm.options).toHaveLength(2);
+
+    // The transport settles right after emitting done/confirm; the user can
+    // only tap the card once the dialog renders, i.e. after that microtask.
+    run.cancel();
+    await vi.waitFor(() => expect(store.getState().workingConversationIds).toHaveLength(0));
+
+    answerConfirm(pending!.messageId, "confirm");
+    await vi.waitFor(() => expect(fake.runs).toHaveLength(2));
+
+    // The follow-up turn must carry the card's token as confirm_token.
+    expect(fake.runs[1]!.opts!.query).toBe("confirm");
+    expect(fake.runs[1]!.opts!.confirmToken).toBe("card-token-1");
+    // The card is cleared from the answered message.
+    expect(store.getState().messages.find((m) => m.id === pending!.messageId)?.confirm).toBeUndefined();
   });
 });

@@ -15,6 +15,7 @@ import type { WorkspaceItem } from "../workspace/types";
 import { useTodos } from "../todo/use-todos";
 import type { TodoItem } from "../todo/todo-api";
 import { getDesktopInspirationApi } from "../inspiration";
+import { LINK_RECORD_TAG } from "../inspiration/types";
 import type { InspirationRecord } from "../inspiration/types";
 
 export type FeedKind = "note" | "flash" | "todo";
@@ -180,16 +181,22 @@ function flashEntries(records: InspirationRecord[], windowStart: Date, now: Date
     if (!at || at < windowStart || at > now) continue;
 
     const title = record.text.split("\n")[0]?.trim() || record.text;
+    // Records carrying the reserved link tag are pasted-link collections:
+    // badge them so they read as links queued for AI analysis.
+    const isLink = record.tags?.includes(LINK_RECORD_TAG) ?? false;
     const badge =
       record.transcriptStatus === "pending"
         ? ({ labelKey: "home.badge_transcribing", tone: "busy" } as FeedBadge)
-        : undefined;
+        : isLink
+          ? ({ labelKey: "home.badge_link", tone: "busy" } as FeedBadge)
+          : undefined;
 
     entries.push({
       key: `flash:${record.id}`,
       kind: "flash",
       at,
       title,
+      description: isLink ? { i18nKey: "home.desc_link_ai" } : undefined,
       badge,
       data: record,
     });

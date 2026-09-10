@@ -1,0 +1,62 @@
+{
+  "name": "todo-extraction",
+  "suite": "multiturn",
+  "locale": "en",
+  "description": "Extract todos step by step and verify the todo list surface afterwards.",
+  "turns": [
+    {
+      "user": "List all commitments made in the Q3 review",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 50,
+        "chunks": [
+          "Commitments: send the Q3 deck, prepare a churn deep-dive, schedule a retro."
+        ]
+      }
+    },
+    {
+      "user": "Which have deadlines?",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 50,
+        "chunks": [
+          "The Q3 deck is due Monday; the others are open-ended."
+        ]
+      }
+    },
+    {
+      "user": "Extract a to-do list",
+      "quickPrompt": "chat.quick_todos",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 50,
+        "chunks": [
+          "- Send the Q3 summary to the team\n",
+          "- Prepare churn deep-dive\n",
+          "- Schedule app launch retro\n"
+        ]
+      }
+    },
+    {
+      "user": "Draft a next-step action plan",
+      "quickPrompt": "chat.quick_plan",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 50,
+        "chunks": [
+          "Mon: deck. Wed: deep-dive. Fri: retro."
+        ]
+      }
+    },
+    {
+      "user": "Remind me what the first todo was",
+      "response": {
+        "type": "stream",
+        "chunkDelayMs": 50,
+        "chunks": [
+          "The first todo: send the Q3 summary to the team."
+        ]
+      }
+    }
+  ]
+}

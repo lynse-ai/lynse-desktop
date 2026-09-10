@@ -1,17 +1,17 @@
 import { create } from "zustand";
 import type { ChatMessage, EditorMode, ItemType } from "./types";
 
-const CHAT_PANEL_WIDTH_KEY = "lynse_chat_panel_width";
-// Bumped from "lynse_file_list_width": the file card-grid redesign resets
-// stored widths so everyone starts from the new, wider default once.
-const FILE_LIST_WIDTH_KEY = "lynse_file_list_width_v2";
-const NOTES_LIST_WIDTH_KEY = "lynse_notes_list_width";
+// Key suffixes are bumped whenever a default width changes, so stored widths
+// reset once and everyone starts from the new default (current window: 960×600).
+const CHAT_PANEL_WIDTH_KEY = "lynse_chat_panel_width_v2";
+const FILE_LIST_WIDTH_KEY = "lynse_file_list_width_v3";
+const NOTES_LIST_WIDTH_KEY = "lynse_notes_list_width_v2";
 const FOLDER_TREE_WIDTH_KEY = "lynse_folder_tree_width";
 const NOTE_TABS_KEY = "lynse_note_tabs";
 
-const DEFAULT_CHAT_PANEL_WIDTH = 420;
-const DEFAULT_FILE_LIST_WIDTH = 480;
-const DEFAULT_NOTES_LIST_WIDTH = 400;
+const DEFAULT_CHAT_PANEL_WIDTH = 340;
+const DEFAULT_FILE_LIST_WIDTH = 340;
+const DEFAULT_NOTES_LIST_WIDTH = 340;
 const DEFAULT_FOLDER_TREE_WIDTH = 220;
 
 const MIN_CHAT_PANEL_WIDTH = 260;

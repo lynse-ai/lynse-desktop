@@ -27,6 +27,8 @@
     "./home": "./home/index.ts",
     "./notifications": "./notifications/index.ts",
     "./devices": "./devices/index.ts",
+    "./audio-editor": "./audio-editor/index.ts",
+    "./feishu": "./feishu/index.ts",
     "./i18n": "./i18n/index.ts",
     "./locales": "./locales/index.ts"
   },

@@ -1,20 +1,15 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
-import { Plus, Calendar, Trash2, X, RefreshCw } from "../icons";
+import { Plus, Calendar, Trash2, X, RefreshCw, Loader2 } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@lynse/ui/components/ui/dialog";
+import { Sheet, SheetContent } from "@lynse/ui/components/ui/sheet";
 import { Button } from "@lynse/ui/components/ui/button";
+import { toast } from "sonner";
 import { featureFlags } from "../feature-flags";
 import { getDesktopInspirationApi } from "../inspiration/desktop-api";
 import { useInspirationCaptureStore } from "../inspiration/capture-store";
-import { type TodoItem, addTodoToSystemCalendar, isCalendarAvailable } from "./todo-api";
+import { type TodoItem, addTodoToSystemCalendar, isCalendarAvailable, saveTodo } from "./todo-api";
 import { useTodos } from "./use-todos";
 
 // ── Helpers ────────────────────────────────────────────────
@@ -244,25 +239,44 @@ function GroupSection({
   );
 }
 
-// ── Detail Panel ───────────────────────────────────────────
+// ── Edit Sheet ─────────────────────────────────────────────
 
-function DetailPanel({
+/**
+ * Floating positioning shared by every bottom sheet in the app — identical
+ * to the inspiration capture sheet, so all popups have the same width,
+ * rounding, and slide-up/fade animation.
+ */
+const SHEET_FLOAT_CLASS =
+  "data-[side=bottom]:inset-x-auto data-[side=bottom]:bottom-4 data-[side=bottom]:left-1/2 data-[side=bottom]:w-[min(560px,calc(100vw-2rem))] data-[side=bottom]:-translate-x-1/2 data-[side=bottom]:rounded-2xl data-[side=bottom]:border";
+
+/**
+ * All todo actions (notes, date/time, add to calendar, delete) live in one
+ * bottom-up floating sheet, mirroring the capture sheet. The calendar
+ * confirmation is a second view inside the same sheet — same size, same
+ * animation — instead of a separate centered dialog.
+ */
+function TodoEditSheet({
   todo,
   calendarAvailable,
-  calendarError,
   onClose,
   onDelete,
-  onAddToCalendar,
+  onCalendarAdded,
+  onSaved,
 }: {
   todo: TodoItem;
   calendarAvailable: boolean;
-  calendarError: string | null;
   onClose: () => void;
   onDelete: () => void;
-  onAddToCalendar: (startAt: string, endAt: string) => void;
+  onCalendarAdded: () => void;
+  /** Called with the saved item after the sheet persists edits on close. */
+  onSaved: (todo: TodoItem) => void;
 }) {
   const { t } = useTranslation();
+  const [view, setView] = useState<"edit" | "calendar">("edit");
+  const [title, setTitle] = useState(todo.title);
+  const [titleDirty, setTitleDirty] = useState(false);
   const [notes, setNotes] = useState(todo.notes ?? "");
+  const [notesDirty, setNotesDirty] = useState(false);
   const [dateValue, setDateValue] = useState(() => {
     if (todo.calendarStartAt) {
       try {
@@ -290,187 +304,212 @@ function DetailPanel({
     }
     return "14:00";
   });
+  const [pendingStart, setPendingStart] = useState<Date | null>(null);
+  const [savingCalendar, setSavingCalendar] = useState(false);
+  const [calendarError, setCalendarError] = useState<string | null>(null);
 
-  const handleAddToCalendar = useCallback(() => {
+  const handleNotesChange = useCallback((value: string) => {
+    setNotes(value);
+    setNotesDirty(true);
+  }, []);
+
+  const handleClose = useCallback(() => {
+    // Persist edited title/notes on the way out; onSaved patches the visible
+    // list with the saved item since the title shows in list rows.
+    if (titleDirty || notesDirty) {
+      const updated: TodoItem = {
+        ...todo,
+        title: title.trim() ? title.trim() : todo.title,
+        notes,
+        updatedAt: new Date().toISOString(),
+      };
+      void saveTodo(updated)
+        .then(() => onSaved(updated))
+        .catch((e) => console.error("[Todo] edit save failed:", e));
+    }
+    onClose();
+  }, [title, titleDirty, notes, notesDirty, onClose, onSaved, todo]);
+
+  const handleJoinCalendarClick = useCallback(() => {
     const datePart = dateValue || toLocalDateInput(new Date());
     const timePart = timeValue || "14:00";
     const start = new Date(`${datePart}T${timePart}`); // local time per spec
     if (isNaN(start.getTime())) return;
+    setPendingStart(start);
+    setCalendarError(null);
+    setView("calendar");
+  }, [dateValue, timeValue]);
+
+  const handleConfirmCalendar = useCallback(async () => {
+    if (!pendingStart || savingCalendar) return;
     // Default 1-hour duration. Full ISO strings with offset so the Rust
     // side can parse them as RFC 3339.
-    const end = new Date(start.getTime() + 60 * 60 * 1000);
-    onAddToCalendar(start.toISOString(), end.toISOString());
-  }, [dateValue, timeValue, onAddToCalendar]);
+    const end = new Date(pendingStart.getTime() + 60 * 60 * 1000);
+    setSavingCalendar(true);
+    setCalendarError(null);
+    try {
+      await addTodoToSystemCalendar(todo, pendingStart.toISOString(), end.toISOString());
+      toast.success(t("todo.added_to_calendar"));
+      onCalendarAdded();
+    } catch (err) {
+      setCalendarError(
+        err instanceof Error && err.message
+          ? `${t("todo.calendar_add_failed")}${err.message}`
+          : t("todo.calendar_add_failed"),
+      );
+    } finally {
+      setSavingCalendar(false);
+    }
+  }, [onCalendarAdded, pendingStart, savingCalendar, t, todo]);
+
+  const inputClass =
+    "mt-1 w-full rounded-md border border-border/60 bg-transparent px-3 py-2 text-sm outline-none focus:border-primary/50";
 
   return (
-    <div className="flex h-full w-80 shrink-0 flex-col border-l border-stroke-secondary bg-background">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3">
-        <h2 className="truncate text-sm font-semibold text-foreground pr-2">{todo.title}</h2>
-        <button onClick={onClose} className="shrink-0 p-1 rounded hover:bg-accent/50">
-          <X className="size-4 text-muted-foreground" />
-        </button>
-      </div>
-
-      {/* Source */}
-      {todo.sourceTitle && (
-        <div className="px-4 pb-3">
-          <p className="text-xs text-muted-foreground mb-1">{t("todo.source_from")}{todo.sourceTitle}</p>
-          {todo.sourceMeetingTime && (
-            <p className="text-xs text-muted-foreground/70 tabular-nums">
-              {new Date(todo.sourceMeetingTime).toLocaleDateString("zh-CN")}{" "}
-              {formatSourceTime(Number(todo.sourceMeetingTime))}
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* Owner */}
-      {todo.owner && (
-        <div className="px-4 pb-3">
-          <p className="text-xs text-muted-foreground">负责人：{todo.owner}</p>
-        </div>
-      )}
-
-      {/* Divider */}
-      <div className="border-t border-border/40 mx-4" />
-
-      {/* Date & Time */}
-      <div className="px-4 py-3 space-y-3">
-        <label className="block">
-          <span className="text-xs font-medium text-muted-foreground">{t("todo.date_label")}</span>
-          <input
-            type="date"
-            value={dateValue}
-            onChange={(e) => setDateValue(e.target.value)}
-            className="mt-1 w-full rounded-md border border-border/60 bg-background px-3 py-2 text-sm outline-none focus:border-primary/50"
-          />
-        </label>
-        <input
-          type="time"
-          value={timeValue}
-          onChange={(e) => setTimeValue(e.target.value)}
-          className="w-full rounded-md border border-border/60 bg-background px-3 py-2 text-sm outline-none focus:border-primary/50"
-        />
-      </div>
-
-      {/* Notes */}
-      <div className="px-4 pb-3">
-        <textarea
-          className="w-full resize-none rounded-md border border-border/60 bg-background px-3 py-2 text-sm outline-none placeholder:text-muted-foreground/50"
-          rows={3}
-          placeholder={t("todo.notes_placeholder")}
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-        />
-      </div>
-
-      {/* Actions */}
-      <div className="mt-auto border-t border-border/40 px-4 py-3 space-y-2">
-        {calendarAvailable &&
-          (!todo.calendarEventId ? (
-            <Button
-              variant="default"
-              size="sm"
-              className="w-full justify-start gap-2"
-              onClick={handleAddToCalendar}
-            >
-              <Calendar className="size-4" />
-              {t("todo.actions_join_calendar")}
-            </Button>
-          ) : (
-            <div className="flex items-center gap-2 text-xs text-success px-2 py-1.5 rounded bg-success/10">
-              <Calendar className="size-3.5" />
-              {t("todo.added_to_calendar")}
+    <Sheet
+      open
+      onOpenChange={(next) => {
+        if (!next) handleClose();
+      }}
+    >
+      <SheetContent side="bottom" showCloseButton={false} className={SHEET_FLOAT_CLASS}>
+        {view === "calendar" ? (
+          <div className="flex min-h-[208px] flex-col p-4 pt-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-foreground">{t("todo.calendar_dialog_title")}</h2>
+              <button
+                onClick={() => setView("edit")}
+                className="shrink-0 rounded p-1 hover:bg-accent/50"
+              >
+                <X className="size-4 text-muted-foreground" />
+              </button>
             </div>
-          ))}
-        {calendarError && (
-          <p className="px-1 text-xs text-destructive">{calendarError}</p>
+            <p className="mt-1 text-sm text-muted-foreground">{t("todo.calendar_dialog_confirm")}</p>
+
+            <div className="mt-2 space-y-2 rounded-lg bg-muted/40 p-3 text-sm">
+              <div className="flex items-start justify-between gap-4">
+                <span className="shrink-0 text-xs text-muted-foreground">{t("todo.calendar_dialog_title_label")}</span>
+                <span className="text-right text-foreground">{title}</span>
+              </div>
+              <div className="flex items-start justify-between gap-4">
+                <span className="shrink-0 text-xs text-muted-foreground">{t("todo.calendar_dialog_date_label")}</span>
+                <span className="text-right tabular-nums text-foreground">
+                  {pendingStart && !isNaN(pendingStart.getTime())
+                    ? pendingStart.toLocaleDateString(undefined, {
+                        weekday: "short",
+                        year: "numeric",
+                        month: "numeric",
+                        day: "numeric",
+                      })
+                    : ""}
+                </span>
+              </div>
+              <div className="flex items-start justify-between gap-4">
+                <span className="shrink-0 text-xs text-muted-foreground">{t("todo.calendar_dialog_time_label")}</span>
+                <span className="text-right tabular-nums text-foreground">
+                  {pendingStart && !isNaN(pendingStart.getTime()) ? toLocalTimeInput(pendingStart) : ""}
+                </span>
+              </div>
+            </div>
+
+            {calendarError && <p className="text-xs text-destructive">{calendarError}</p>}
+
+            <div className="mt-auto flex justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" onClick={() => setView("edit")}>
+                {t("todo.cancel")}
+              </Button>
+              <Button size="sm" disabled={savingCalendar} onClick={() => void handleConfirmCalendar()}>
+                {savingCalendar && <Loader2 className="size-3.5 animate-spin" />}
+                {t("todo.confirm_add_to_calendar")}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex min-h-[208px] flex-col gap-2 p-4 pt-3">
+            {/* Header — title is an inline editable field like the notes */}
+            <div className="flex items-start justify-between gap-2">
+              <input
+                value={title}
+                onChange={(e) => {
+                  setTitle(e.target.value);
+                  setTitleDirty(true);
+                }}
+                className="min-w-0 flex-1 truncate rounded-md bg-transparent pr-2 text-sm font-semibold text-foreground outline-none focus:bg-muted/40"
+              />
+              <button onClick={handleClose} className="shrink-0 rounded p-1 hover:bg-accent/50">
+                <X className="size-4 text-muted-foreground" />
+              </button>
+            </div>
+
+            {/* Source / owner */}
+            {todo.sourceTitle && (
+              <p className="text-xs text-muted-foreground">
+                {t("todo.source_from")}{todo.sourceTitle}
+                {todo.sourceMeetingTime && (
+                  <span className="ml-2 tabular-nums text-muted-foreground/70">
+                    {new Date(todo.sourceMeetingTime).toLocaleDateString("zh-CN")}{" "}
+                    {formatSourceTime(Number(todo.sourceMeetingTime))}
+                  </span>
+                )}
+              </p>
+            )}
+            {todo.owner && <p className="text-xs text-muted-foreground">负责人：{todo.owner}</p>}
+
+            {/* Date & time */}
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="text-xs font-medium text-muted-foreground">{t("todo.date_label")}</span>
+                <input
+                  type="date"
+                  value={dateValue}
+                  onChange={(e) => setDateValue(e.target.value)}
+                  className={inputClass}
+                />
+              </label>
+              <label className="block">
+                <span className="select-none text-xs font-medium text-transparent">·</span>
+                <input
+                  type="time"
+                  value={timeValue}
+                  onChange={(e) => setTimeValue(e.target.value)}
+                  className={inputClass}
+                />
+              </label>
+            </div>
+
+            {/* Notes — borderless and transparent, same treatment as the
+                capture sheet's textarea on the glass panel. */}
+            <textarea
+              className="max-h-40 min-h-[56px] w-full flex-1 resize-none bg-transparent text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/70"
+              rows={2}
+              placeholder={t("todo.notes_placeholder")}
+              value={notes}
+              onChange={(e) => handleNotesChange(e.target.value)}
+            />
+
+            {/* Actions — calendar + delete share one centered row */}
+            <div className="mt-auto flex items-center gap-2 border-t border-border/40 pt-2">
+              {calendarAvailable &&
+                (!todo.calendarEventId ? (
+                  <Button variant="default" className="flex-1 gap-2" onClick={handleJoinCalendarClick}>
+                    <Calendar className="size-4" />
+                    {t("todo.actions_join_calendar")}
+                  </Button>
+                ) : (
+                  <div className="flex flex-1 items-center justify-center gap-2 rounded-full bg-success/10 px-3 py-2 text-xs text-success">
+                    <Calendar className="size-3.5" />
+                    {t("todo.added_to_calendar")}
+                  </div>
+                ))}
+              <Button variant="destructive" className="flex-1" onClick={onDelete}>
+                <Trash2 className="size-4" />
+                {t("todo.actions_delete")}
+              </Button>
+            </div>
+          </div>
         )}
-        <button
-          onClick={onDelete}
-          className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-2 text-sm text-destructive hover:bg-destructive/10 transition-colors"
-        >
-          <Trash2 className="size-4" />
-          {t("todo.actions_delete")}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── Calendar Confirmation Dialog ──────────────────────────
-
-function CalendarConfirmDialog({
-  open,
-  onOpenChange,
-  todo,
-  startAt,
-  onConfirm,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  todo: TodoItem;
-  startAt: string;
-  onConfirm: () => void;
-}) {
-  const { t } = useTranslation();
-
-  const displayDate = useMemo(() => {
-    try {
-      const d = new Date(startAt);
-      if (isNaN(d.getTime())) return "";
-      return d.toLocaleDateString("zh-CN", { weekday: "short", year: "numeric", month: "numeric", day: "numeric" });
-    } catch { return ""; }
-  }, [startAt]);
-
-  const displayTime = useMemo(() => {
-    try {
-      const d = new Date(startAt);
-      if (isNaN(d.getTime())) return "14:00";
-      return toLocalTimeInput(d);
-    } catch { return "14:00"; }
-  }, [startAt]);
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[400px]">
-        <DialogHeader>
-          <DialogTitle>{t("todo.calendar_dialog_title")}</DialogTitle>
-        </DialogHeader>
-        <p className="text-sm text-muted-foreground">{t("todo.calendar_dialog_confirm")}</p>
-
-        <div className="space-y-3 py-2 text-sm">
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">{t("todo.calendar_dialog_title_label")}</label>
-            <p className="mt-0.5 text-foreground">{todo.title}</p>
-          </div>
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">{t("todo.calendar_dialog_date_label")}</label>
-            <p className="mt-0.5 text-foreground">{displayDate}</p>
-          </div>
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">{t("todo.calendar_dialog_time_label")}</label>
-            <p className="mt-0.5 text-foreground">{displayTime}</p>
-          </div>
-          <div>
-            <label className="text-xs font-medium text-muted-foreground">{t("todo.calendar_dialog_calendar_label")}</label>
-            <select className="mt-0.5 w-full rounded-md border border-border/60 bg-background px-3 py-1.5 text-sm">
-              <option>{t("todo.calendar_default_name")}</option>
-            </select>
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            {t("todo.cancel")}
-          </Button>
-          <Button onClick={() => { onConfirm(); onOpenChange(false); }}>
-            {t("todo.confirm_add_to_calendar")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -478,16 +517,12 @@ function CalendarConfirmDialog({
 
 export function TodoPage() {
   const { t } = useTranslation();
-  const { todos, loading, refreshing, clearing, error, load, addLocal, toggle, remove, clearCompleted } = useTodos();
+  const { todos, loading, refreshing, clearing, error, load, addLocal, toggle, remove, patchLocal, clearCompleted } = useTodos();
   const openCapture = useInspirationCaptureStore((state) => state.openCapture);
   // The capture sheet needs the desktop bridge; web keeps the inline input.
   const sheetAvailable = featureFlags.inspiration && Boolean(getDesktopInspirationApi());
   const completedCount = todos.filter((x) => x.completed).length;
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [calendarOpen, setCalendarOpen] = useState(false);
-  const [pendingCalendarStart, setPendingCalendarStart] = useState("");
-  const [pendingCalendarEnd, setPendingCalendarEnd] = useState("");
-  const [calendarError, setCalendarError] = useState<string | null>(null);
   const calendarAvailable = useMemo(() => isCalendarAvailable(), []);
 
   const handleAdd = useCallback(
@@ -514,35 +549,6 @@ export function TodoPage() {
     },
     [todos, remove, selectedId],
   );
-
-  const handleAddToCalendar = useCallback(
-    (startAt: string, endAt: string) => {
-      if (!selectedId) return;
-      setPendingCalendarStart(startAt);
-      setPendingCalendarEnd(endAt);
-      setCalendarError(null);
-      setCalendarOpen(true);
-    },
-    [selectedId],
-  );
-
-  const confirmAddToCalendar = useCallback(async () => {
-    if (!selectedId || !pendingCalendarStart || !pendingCalendarEnd) return;
-    const todo = todos.find((x) => x.id === selectedId);
-    if (!todo) return;
-    setCalendarError(null);
-    try {
-      await addTodoToSystemCalendar(todo, pendingCalendarStart, pendingCalendarEnd);
-      await load();
-    } catch (err) {
-      console.error("[Todo] addToCalendar failed:", err);
-      setCalendarError(
-        err instanceof Error && err.message
-          ? `${t("todo.calendar_add_failed")}${err.message}`
-          : t("todo.calendar_add_failed"),
-      );
-    }
-  }, [selectedId, pendingCalendarStart, pendingCalendarEnd, todos, load, t]);
 
   const groups = useMemo(() => groupTodos(todos), [todos]);
   const selected = todos.find((x) => x.id === selectedId) ?? null;
@@ -652,26 +658,20 @@ export function TodoPage() {
         )}
       </div>
 
-      {/* Detail panel */}
+      {/* Edit sheet — all todo actions (notes, date/time, calendar, delete)
+          happen in the same bottom-up floating sheet as the capture sheet. */}
       {selected && (
-        <DetailPanel
+        <TodoEditSheet
+          key={selected.id}
           todo={selected}
           calendarAvailable={calendarAvailable}
-          calendarError={calendarError}
           onClose={() => setSelectedId(null)}
-          onDelete={() => handleDelete(selected.id)}
-          onAddToCalendar={handleAddToCalendar}
-        />
-      )}
-
-      {/* Calendar confirmation dialog (only when a todo is selected) */}
-      {selected && (
-        <CalendarConfirmDialog
-          open={calendarOpen}
-          onOpenChange={setCalendarOpen}
-          todo={selected}
-          startAt={pendingCalendarStart}
-          onConfirm={confirmAddToCalendar}
+          onDelete={() => void handleDelete(selected.id)}
+          onCalendarAdded={() => {
+            void load();
+            setSelectedId(null);
+          }}
+          onSaved={patchLocal}
         />
       )}
     </div>

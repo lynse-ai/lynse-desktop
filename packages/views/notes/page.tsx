@@ -27,6 +27,9 @@ import {
   useVaultConfig,
 } from "../workspace/note-vault";
 import { isNoteUnread, markNoteSeen, useSeenMap } from "./seen";
+import { useFeishuTranscriptionCompletedWatcher } from "../feishu/feishu-push";
+import { useAudioEditorStore } from "../audio-editor/store";
+import { useNavigation } from "../navigation";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
 import { useAuthStore } from "@lynse/core/auth";
@@ -278,6 +281,7 @@ function useLongPressSelection({
 
 export function NotesPage() {
   const { t, i18n } = useTranslation();
+  const { push } = useNavigation();
   const reduceMotion = useReducedMotion();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
@@ -435,6 +439,25 @@ export function NotesPage() {
     return filterWorkspaceFilesByFolder(sourceFiles, selectedFolderId);
   }, [sourceFiles, selectedFolderId]);
 
+  // Open the audio editor for local recordings (trim / merge / desilence /
+  // enhance run through the desktop FFmpeg runtime).
+  const openAudioEditor = useAudioEditorStore((s) => s.openEditor);
+  const handleEditAudio = useCallback(
+    (targetIds: string[]) => {
+      const localIds = targetIds.filter(isLocalFileId);
+      if (localIds.length === 0) return;
+      const byId = new Map(filteredFiles.map((file) => [file.id, file]));
+      openAudioEditor(
+        localIds
+          .map((id) => byId.get(id))
+          .filter((file): file is (typeof filteredFiles)[number] => !!file)
+          .map((file) => ({ id: file.id, title: file.title })),
+      );
+      push("/audio-editor");
+    },
+    [filteredFiles, openAudioEditor, push],
+  );
+
   // Unread dot: transcription finished but the note hasn't been opened since.
   // Cloud completion comes from the trans-status endpoint; local ids are
   // excluded from that query — they carry their own completed flag and would
@@ -444,6 +467,15 @@ export function NotesPage() {
     [filteredFiles],
   );
   const { data: transStatus } = useTranscriptionStatus(cloudVisibleIds);
+  // Feishu bot: a cloud transcription that completes while the notes page is
+  // open pushes its summary card to the configured group (no-op when off).
+  useFeishuTranscriptionCompletedWatcher(
+    transStatus,
+    useCallback(
+      (fileId: string) => filteredFiles.find((f) => f.id === fileId)?.title,
+      [filteredFiles],
+    ),
+  );
   const seenMap = useSeenMap();
   const unreadIds = useMemo(() => {
     const set = new Set<string>();
@@ -795,6 +827,7 @@ export function NotesPage() {
                           onMove={handleMoveFile}
                           onDelete={handleDeleteFile}
                           onTranscribe={handleTranscribe}
+                          onEditAudio={targetIds.some((id) => isLocalFileId(id)) ? handleEditAudio : undefined}
                         >
                           <GridCard
                             file={file}
@@ -839,6 +872,7 @@ export function NotesPage() {
                           onMove={handleMoveFile}
                           onDelete={handleDeleteFile}
                           onTranscribe={handleTranscribe}
+                          onEditAudio={targetIds.some((id) => isLocalFileId(id)) ? handleEditAudio : undefined}
                         >
                           <FileRow
                             file={file}

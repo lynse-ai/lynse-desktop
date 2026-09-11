@@ -51,6 +51,19 @@ import type {
   DesktopRecordingCardApi,
   RecordingCardEvent,
 } from "@lynse/views/devices";
+import type {
+  DesktopFeishuApi,
+  FeishuChatSummary,
+  FeishuConfig,
+  FeishuIncomingMessage,
+  FeishuRegistrationPoll,
+  FeishuRegistrationStart,
+  FeishuStatus,
+} from "@lynse/views/feishu";
+import type {
+  AudioEditorProgress,
+  DesktopAudioEditorApi,
+} from "@lynse/views/audio-editor";
 
 export type AppUpdateInfo = {
   currentVersion: string;
@@ -78,6 +91,8 @@ type DesktopApi = {
   todo: Record<string, (...args: any[]) => Promise<unknown>>;
   inspiration: DesktopInspirationApi;
   webdavSync: DesktopWebdavSyncApi;
+  audioEditor: DesktopAudioEditorApi;
+  feishu: DesktopFeishuApi;
   appInfo: { version: string; platform: string };
   app: {
     getInfo: () => Promise<{ version: string; platform: string }>;
@@ -318,6 +333,26 @@ export async function installTauriBridge(): Promise<void> {
       getSttConfig: () => command<TranscribeConfig>("local_stt_config_get"),
       saveSttConfig: (config: TranscribeConfig) => command<TranscribeConfig>("local_stt_config_save", { config }),
     },
+    audioEditor: {
+      status: () => command<{ ffmpegAvailable: boolean }>("audio_editor_status"),
+      ensureRuntime: () => command<{ ffmpegAvailable: boolean }>("audio_editor_ensure_runtime"),
+      trim: (source: string, startSec: number, endSec: number, outName?: string) =>
+        command("audio_editor_trim", { source, startSec, endSec, outName }),
+      merge: (sources: string[], outName?: string) =>
+        command("audio_editor_merge", { sources, outName }),
+      removeSilence: (
+        source: string,
+        options?: { thresholdDb?: number; minSilenceSec?: number; paddingSec?: number },
+        outName?: string,
+      ) => command("audio_editor_remove_silence", { source, ...options, outName }),
+      enhanceVoice: (source: string, outName?: string) =>
+        command("audio_editor_enhance_voice", { source, outName }),
+      cancel: () => command<void>("audio_editor_cancel"),
+      onProgress: (callback: (progress: AudioEditorProgress) => void) =>
+        getCurrentWebview().listen<AudioEditorProgress>("audio-editor-progress", (event) =>
+          callback(event.payload),
+        ),
+    },
     liveTranslation: {
       getProviderConfig: async () => getLiveTranslationProviderConfig(),
       saveProviderConfig: async (config) => saveLiveTranslationProviderConfig(config),
@@ -539,6 +574,44 @@ export async function installTauriBridge(): Promise<void> {
       putNotes: (notes) => command("webdav_put_notes", { notes }),
       onSyncProgress: (callback) =>
         getCurrentWebview().listen<WebdavSyncProgress>("webdav-sync-progress", (event) =>
+          callback(event.payload),
+        ),
+    },
+    feishu: {
+      getConfig: () => command<FeishuConfig>("feishu_config_get"),
+      saveConfig: (config: FeishuConfig, secret?: string | null) =>
+        command<FeishuConfig>("feishu_config_save", { config, secret: secret ?? null }),
+      start: () => command<FeishuStatus>("feishu_bot_start"),
+      stop: () => command<FeishuStatus>("feishu_bot_stop"),
+      state: () => command<FeishuStatus>("feishu_state"),
+      testConnection: () =>
+        command<{ ok: boolean; botName: string; openId: string }>("feishu_test_connection"),
+      listChats: () => command<FeishuChatSummary[]>("feishu_list_chats"),
+      sendText: (text: string, chatId?: string) =>
+        command("feishu_send_text", { text, chat_id: chatId ?? null }),
+      sendSummaryCard: (payload: { title: string; summary: string; fileId?: string }) =>
+        command("feishu_send_summary_card", {
+          title: payload.title,
+          summary: payload.summary,
+          file_id: payload.fileId ?? null,
+        }),
+      replyText: (messageId: string, text: string) =>
+        command("feishu_reply_text", { message_id: messageId, text }),
+      replyMarkdown: (messageId: string, markdown: string) =>
+        command("feishu_reply_markdown", { message_id: messageId, markdown }),
+      registerBegin: (options?: { name?: string; desc?: string }) =>
+        command<FeishuRegistrationStart>("feishu_register_begin", {
+          name: options?.name ?? null,
+          desc: options?.desc ?? null,
+        }),
+      registerPoll: () => command<FeishuRegistrationPoll>("feishu_register_poll"),
+      registerCancel: () => command("feishu_register_cancel"),
+      onState: (callback: (status: FeishuStatus) => void) =>
+        getCurrentWebview().listen<FeishuStatus>("feishu-state", (event) =>
+          callback(event.payload),
+        ),
+      onEvent: (callback: (event: FeishuIncomingMessage) => void) =>
+        getCurrentWebview().listen<FeishuIncomingMessage>("feishu-event", (event) =>
           callback(event.payload),
         ),
     },

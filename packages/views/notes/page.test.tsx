@@ -122,6 +122,11 @@ vi.mock("../workspace/content-panel", () => ({ ContentPanel: () => <div /> }));
 vi.mock("../workspace/right-panel/chat-panel", () => ({ ChatPanel: () => <div /> }));
 vi.mock("../workspace/resizable-handle", () => ({ ResizableHandle: () => <div /> }));
 vi.mock("../layout/title-bar", () => ({ TitleBar: () => <div /> }));
+// The audio-editor entry navigates to /audio-editor; these tests never
+// trigger it, so a stub navigation context is enough.
+vi.mock("../navigation", () => ({
+  useNavigation: () => ({ push: vi.fn(), pathname: "/notes" }),
+}));
 
 vi.mock("motion/react", async () => {
   const { createElement } = await import("react");

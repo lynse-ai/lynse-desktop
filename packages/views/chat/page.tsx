@@ -375,7 +375,7 @@ export function ChatPage() {
           <Button
             variant="ghost"
             size="icon"
-            className={`size-8 rounded-lg border transition-colors ${
+            className={`size-8 border transition-colors ${
               historyOpen
                 ? "border-border bg-card text-foreground"
                 : "border-transparent text-muted-foreground hover:border-border hover:bg-card hover:text-foreground"
@@ -390,7 +390,7 @@ export function ChatPage() {
           <Button
             variant="ghost"
             size="sm"
-            className="h-8 rounded-lg border border-transparent text-xs text-muted-foreground transition-colors hover:border-border hover:bg-card hover:text-foreground"
+            className="h-8 border border-transparent text-xs text-muted-foreground transition-colors hover:border-border hover:bg-card hover:text-foreground"
             onClick={handleNewChat}
             title={t("chat.new_chat")}
           >
@@ -550,7 +550,7 @@ export function ChatPage() {
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="size-8 rounded-lg border-0 bg-transparent text-muted-foreground shadow-none transition-colors hover:bg-muted hover:text-foreground dark:hover:bg-white/[0.06]"
+                  className="size-8 border-0 bg-transparent text-muted-foreground shadow-none transition-colors hover:bg-muted hover:text-foreground dark:hover:bg-white/[0.06]"
                   title={t("chat.microphone")}
                   aria-label={t("chat.microphone")}
                 >
@@ -569,7 +569,7 @@ export function ChatPage() {
                   type="button"
                   size="icon"
                   variant="outline"
-                  className="size-8 rounded-lg border-border bg-background text-foreground shadow-none transition-colors hover:bg-muted"
+                  className="size-8 border-border bg-background text-foreground shadow-none transition-colors hover:bg-muted"
                   onClick={stopStreaming}
                   title={t("chat.stop")}
                   aria-label={t("chat.stop")}
@@ -580,7 +580,7 @@ export function ChatPage() {
                 <Button
                   type="button"
                   size="icon"
-                  className="size-8 rounded-lg bg-foreground text-background shadow-[0_1px_2px_rgba(0,0,0,0.12)] transition-all hover:bg-foreground/85 hover:shadow-[0_2px_7px_rgba(0,0,0,0.12)] disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none dark:bg-primary dark:text-primary-foreground dark:hover:bg-primary/90"
+                  className="size-8 bg-foreground text-background shadow-[0_1px_2px_rgba(0,0,0,0.12)] transition-all hover:bg-foreground/85 hover:shadow-[0_2px_7px_rgba(0,0,0,0.12)] disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none dark:bg-primary dark:text-primary-foreground dark:hover:bg-primary/90"
                   onClick={() => handleSend()}
                   disabled={!input.trim() || hasUploadingAttachments}
                   title={t("chat.send")}

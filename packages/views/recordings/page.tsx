@@ -34,12 +34,12 @@ export function RecordingsPage() {
           <Button
             variant="outline"
             size="sm"
-            className="h-8 gap-1.5 rounded-lg border-border bg-card text-xs text-muted-foreground shadow-sm hover:border-primary/30 hover:bg-accent hover:text-foreground"
+            className="h-8 gap-1.5 border-border bg-card text-xs text-muted-foreground shadow-sm hover:border-primary/30 hover:bg-accent hover:text-foreground"
           >
             <Filter className="size-3.5" />
             {t("recordings.filter")}
           </Button>
-          <Button size="sm" className="h-8 gap-1.5 rounded-lg bg-primary text-xs text-primary-foreground shadow-sm hover:bg-primary/90">
+          <Button size="sm" className="h-8 gap-1.5 bg-primary text-xs text-primary-foreground shadow-sm hover:bg-primary/90">
             <Upload className="size-3.5" />
             {t("recordings.upload")}
           </Button>

@@ -141,6 +141,12 @@ export {
 
   // ── Auth ─────────────────────────────────────────────
   QrCode,           // App-scanned QR-code sign-in entry
+
+  // ── Audio Editor ─────────────────────────────────────
+  Scissors,         // Trim selection
+  Combine,          // Merge multiple audios
+  Wand2,            // Voice enhancement
+  ArrowLeft,        // Back to previous page
 } from "lucide-react";
 
 // ── Icon sizing tokens ────────────────────────────────────

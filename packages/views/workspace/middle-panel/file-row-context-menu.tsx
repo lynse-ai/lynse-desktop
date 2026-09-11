@@ -10,7 +10,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@lynse/ui/components/ui/context-menu";
-import { FolderOpen, Pencil, Trash2, RefreshCw } from "../../icons";
+import { FolderOpen, Pencil, Trash2, RefreshCw, Scissors } from "../../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import type { FolderInfo } from "../types";
 
@@ -28,6 +28,8 @@ interface FileRowContextMenuProps {
   onMove: (targetIds: string[], newFolderId: string, oldFolderId: string) => void;
   onDelete: (targetIds: string[]) => void;
   onTranscribe?: (targetIds: string[]) => void;
+  /** Audio editing (desktop local recordings only) — omit to hide the item. */
+  onEditAudio?: (targetIds: string[]) => void;
   children: React.ReactNode;
 }
 
@@ -41,6 +43,7 @@ export function FileRowContextMenu({
   onMove,
   onDelete,
   onTranscribe,
+  onEditAudio,
   children,
 }: FileRowContextMenuProps) {
   const { t } = useTranslation();
@@ -96,6 +99,14 @@ export function FileRowContextMenu({
           <Trash2 className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
           <span>{multi ? t("workspace.delete_selected") : t("workspace.delete")}</span>
         </ContextMenuItem>
+        {onEditAudio && (
+          <ContextMenuItem onClick={() => onEditAudio(targetIds)}>
+            <Scissors className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
+            <span>
+              {multi ? t("audio_editor.merge_selected") : t("audio_editor.edit")}
+            </span>
+          </ContextMenuItem>
+        )}
         {onTranscribe && (
           <>
             <ContextMenuSeparator />

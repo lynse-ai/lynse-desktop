@@ -13,6 +13,8 @@ import { InspirationCaptureSheet, InspirationPage } from "@lynse/views/inspirati
 import { NotificationsPage, AppUpdateNotifier } from "@lynse/views/notifications";
 import { DevicesPage } from "@lynse/views/devices";
 import { SettingsDialog, useWebdavAutoSync } from "@lynse/views/settings";
+import { FeishuAgent } from "@lynse/views/feishu";
+import { AudioEditorPage } from "@lynse/views/audio-editor";
 import {
   LiveSubtitleOverlay,
   MeetingAutoRecordAgent,
@@ -86,6 +88,9 @@ function PageRouter() {
   } else if (featureFlags.devices && pathname.startsWith("/devices")) {
     page = <DevicesPage />;
     route = "devices";
+  } else if (pathname.startsWith("/audio-editor")) {
+    page = <AudioEditorPage />;
+    route = "audio-editor";
   } else if (pathname.startsWith("/notes")) {
     page = <NotesPage />;
     route = "notes";
@@ -184,6 +189,9 @@ function AppShell() {
       {/* Answers the tray menu's "start live recording" no matter which page
           is open; the island answers tray pause/stop while a session runs. */}
       <RecordingTrayAgent />
+      {/* Answers Feishu chat messages through the Rust bot long connection —
+          headless, works with any page open or the window hidden. */}
+      <FeishuAgent />
       {/* Starts/stops a recording when the Rust meeting detector spots a
           whitelisted meeting app doing audio (user opt-in from Settings). */}
       {featureFlags.autoRecord && <MeetingAutoRecordAgent />}

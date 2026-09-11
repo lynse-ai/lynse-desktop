@@ -120,6 +120,12 @@ export function useTodos({ enabled = true }: { enabled?: boolean } = {}) {
     [load],
   );
 
+  /** Patch an already-persisted todo into state (e.g. the edit sheet saving
+   *  title/notes on close) without a full reload. */
+  const patchLocal = useCallback((updated: TodoItem) => {
+    setTodos((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+  }, []);
+
   const clearCompleted = useCallback(async () => {
     const completed = todos.filter((t) => t.completed);
     if (completed.length === 0) return;
@@ -164,5 +170,5 @@ export function useTodos({ enabled = true }: { enabled?: boolean } = {}) {
     await load();
   }, [todos, load]);
 
-  return { todos, loading, refreshing, clearing, error, load, addLocal, toggle, remove, clearCompleted };
+  return { todos, loading, refreshing, clearing, error, load, addLocal, toggle, remove, patchLocal, clearCompleted };
 }

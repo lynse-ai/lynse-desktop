@@ -38,6 +38,7 @@ import { LiveTranslationConfigCard } from "./live-translation-config-card";
 import { AutoRecordConfigCard } from "./auto-record-config-card";
 import { VaultConfigCard } from "./vault-config-card";
 import { WebdavSyncConfigCard } from "./webdav-sync-config-card";
+import { FeishuConfigCard } from "../feishu/feishu-config-card";
 export const SETTINGS_DIALOG_CONTENT_CLASS =
   "sm:max-w-2xl max-h-[min(90vh,760px)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0";
 
@@ -245,6 +246,9 @@ export function SettingsDialog({
 
           {/* ── WebDAV sync ────────────────────────────── */}
           <WebdavSyncConfigCard />
+
+          {/* ── Feishu bot ─────────────────────────────── */}
+          <FeishuConfigCard />
 
           {/* ── Speech-to-Text (STT) ───────────────────── */}
           {hasLocalTranscription && (

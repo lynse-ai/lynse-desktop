@@ -4,7 +4,7 @@ import { useState } from "react";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
-import { useInspirationCaptureStore, getDesktopInspirationApi } from "../inspiration";
+import { getDesktopInspirationApi } from "../inspiration";
 import { useUserCredits } from "./use-user-credits";
 import { useNotificationStore, selectUnreadCount } from "../notifications/use-notification-store";
 import { useChatStore, selectChatUnreadCount } from "../workspace/hooks/use-chat-store";
@@ -70,11 +70,10 @@ export function LynseSidebar() {
       label: t("nav.inspiration"),
       icon: Lightbulb,
       path: "/inspiration",
-      // flomo-style: the rail icon pops the capture sheet over the current
-      // page instead of navigating; the full feed lives at /inspiration and
-      // is reached from the sheet's "view all" link. Web has no capture sheet
-      // (no desktop bridge), so the entry is hidden there entirely.
-      action: () => useInspirationCaptureStore.getState().openCapture(),
+      // The rail entry lands directly on the full inspiration feed; quick
+      // capture stays on the feed's bottom "+" (and the home page entry).
+      // Web has no capture sheet (no desktop bridge), so the entry is
+      // hidden there entirely.
     },
     { key: "todo", label: t("nav.todo"), icon: ListChecks, path: "/todo" },
     { key: "notes", label: t("nav.notes"), icon: FolderOpen, path: "/notes" },

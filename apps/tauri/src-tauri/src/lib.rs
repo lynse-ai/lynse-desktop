@@ -25,7 +25,9 @@ mod live_translation;
 mod live_translation;
 mod inspiration_voice;
 mod meeting_detector;
+mod feishu;
 mod recording_card;
+mod audio_editor;
 mod stt;
 // Microphone TCC prompt from the main app process (macOS); stubs elsewhere.
 mod mic_permission;
@@ -3027,6 +3029,7 @@ pub fn run() {
         })
         .manage(LiveTranslationManager::default())
         .manage(meeting_detector::MeetingDetectorHandle::default())
+        .manage(feishu::FeishuHandle::default())
         .register_uri_scheme_protocol("local-media", media_response)
         .setup(|app| {
             app.manage(recording_card::RecordingCardManager::new(app.handle().clone()));
@@ -3052,6 +3055,9 @@ pub fn run() {
             // whitelisted meeting apps; runs whether or not the main window
             // is visible, and no-ops until the webview enables it.
             meeting_detector::spawn(app.handle().clone());
+            // Feishu bot long connection: reconnects only when the user left
+            // it enabled with valid-looking credentials.
+            feishu::spawn(app.handle().clone());
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(error) = window_effects::apply_window_effects(&window) {
                     log::error!("Failed to apply native window effects: {error}");
@@ -3134,6 +3140,12 @@ pub fn run() {
             vault::vault_remove_note,
             webdav::webdav_config_get, webdav::webdav_config_save, webdav::webdav_set_password,
             webdav::webdav_test_connection, webdav::webdav_sync_now, webdav::webdav_put_notes,
+            feishu::feishu_config_get, feishu::feishu_config_save, feishu::feishu_bot_start,
+            feishu::feishu_bot_stop, feishu::feishu_state, feishu::feishu_test_connection,
+            feishu::feishu_list_chats, feishu::feishu_send_text, feishu::feishu_reply_text,
+            feishu::feishu_reply_markdown, feishu::feishu_send_summary_card,
+            feishu::feishu_register_begin, feishu::feishu_register_poll,
+            feishu::feishu_register_cancel,
             secure_set_secret, secure_get_secret, secure_delete_secret,
             get_app_info,
             open_logs_folder,
@@ -3172,6 +3184,13 @@ pub fn run() {
             recording_card::recording_card_delete_file,
             recording_card::recording_card_transcribe_source,
             window_effects::window_effects_mode,
+            audio_editor::audio_editor_status,
+            audio_editor::audio_editor_ensure_runtime,
+            audio_editor::audio_editor_trim,
+            audio_editor::audio_editor_merge,
+            audio_editor::audio_editor_remove_silence,
+            audio_editor::audio_editor_enhance_voice,
+            audio_editor::audio_editor_cancel,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Lynse Tauri application")

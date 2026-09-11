@@ -180,7 +180,7 @@ export function DevicesPage() {
             <Button
               variant="outline"
               size="sm"
-              className="h-8 gap-1.5 rounded-lg border-border bg-card text-xs text-muted-foreground shadow-sm hover:border-destructive/40 hover:text-destructive"
+              className="h-8 gap-1.5 border-border bg-card text-xs text-muted-foreground shadow-sm hover:border-destructive/40 hover:text-destructive"
               onClick={async () => {
                 try {
                   await api.disconnect();
@@ -195,7 +195,7 @@ export function DevicesPage() {
           )}
           <Button
             size="sm"
-            className="h-8 gap-1.5 rounded-lg bg-primary text-xs text-primary-foreground shadow-sm hover:bg-primary/90"
+            className="h-8 gap-1.5 bg-primary text-xs text-primary-foreground shadow-sm hover:bg-primary/90"
             onClick={() => setAddOpen(true)}
           >
             <Plus className="size-3.5" />
@@ -403,7 +403,7 @@ export function DevicesPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-7 gap-1.5 rounded-lg text-xs"
+                  className="h-7 gap-1.5 text-xs"
                   disabled={transferActive}
                   onClick={async () => {
                     try {
@@ -554,7 +554,7 @@ function EmptyState({
             {t("devices.empty_hint")}
           </p>
         </div>
-        <Button size="sm" className="h-8 gap-1.5 rounded-lg text-xs" onClick={onAdd}>
+        <Button size="sm" className="h-8 gap-1.5 text-xs" onClick={onAdd}>
           <Plus className="size-3.5" />
           {t("devices.add_device")}
         </Button>

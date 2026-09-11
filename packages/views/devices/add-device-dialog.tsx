@@ -141,7 +141,7 @@ export function AddDeviceDialog({
               <Button
                 size="sm"
                 variant="outline"
-                className="h-8 shrink-0 rounded-lg text-xs"
+                className="h-8 shrink-0 text-xs"
                 disabled={code.trim().length === 0}
                 onClick={() => void saveCode()}
               >
@@ -219,7 +219,7 @@ export function AddDeviceDialog({
                     </div>
                     <Button
                       size="sm"
-                      className="h-7 shrink-0 rounded-lg px-3 text-xs"
+                      className="h-7 shrink-0 px-3 text-xs"
                       disabled={connectingId !== null}
                       onClick={() => void connect(device)}
                     >

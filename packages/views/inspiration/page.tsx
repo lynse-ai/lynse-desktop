@@ -177,9 +177,61 @@ function HighlightedText({ text, className }: { text: string; className?: string
   );
 }
 
-/** Xiaohongshu-style waterfall card: cover image, clamped text, meta row. */
-function MasonryCard({ record, dateTime, cardCountLabel, onImageResolved, onOpen, onOpenImage }: {
+/** Per-card masonry layout, picked by `masonryLayout`. */
+interface MasonryCardLayout {
+  /** Cover frame ratio — empty when the record has no images. */
+  ratioClass: string;
+  /** Text clamp applied to the card body. */
+  clampClass: string;
+  /** Edge-to-edge cover (no inset padding) for a mixed-card feel. */
+  bare: boolean;
+}
+
+/** Deterministic pseudo-random 0..1 from a string seed. Stable for a given
+ * record id so the scattered layout doesn't reshuffle on re-render. */
+function seededUnit(seed: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash ^= seed.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 4294967296;
+}
+
+const COVER_RATIOS = ["aspect-[4/3]", "aspect-square", "aspect-[3/4]", "aspect-[4/5]"] as const;
+const SHORT_CLAMPS = ["line-clamp-2", "line-clamp-3", "line-clamp-4"] as const;
+const LONG_CLAMPS = ["line-clamp-4", "line-clamp-6", "line-clamp-[8]"] as const;
+
+/** Pick a pseudo-random element of a non-empty list; `unit` is 0..1. */
+function pickFrom<T>(list: readonly T[], unit: number): T {
+  const index = Math.min(Math.floor(unit * list.length), list.length - 1);
+  return list[index] as T;
+}
+
+/** Content-driven masonry variety: cover ratio, text clamp and card chrome
+ * are pseudo-randomly picked per record but biased by the content — long
+ * notes pair with shorter covers, text-only records clamp later so they
+ * don't collapse into stubs. */
+function masonryLayout(record: InspirationRecord): MasonryCardLayout {
+  const hasCover = (record.images?.length ?? 0) > 0;
+  const textLength = record.text.trim().length;
+  const seed = seededUnit(record.id);
+  // Long text pairs with a short cover; short notes can afford tall ones.
+  const tallness = textLength > 140 ? seed * 0.5 : seed;
+  const clampSeed = seededUnit(`${record.id}:clamp`);
+  return {
+    ratioClass: hasCover ? pickFrom(COVER_RATIOS, tallness) : "",
+    clampClass: hasCover ? pickFrom(SHORT_CLAMPS, clampSeed) : pickFrom(LONG_CLAMPS, clampSeed),
+    bare: hasCover && seededUnit(`${record.id}:chrome`) > 0.65,
+  };
+}
+
+/** Xiaohongshu-style waterfall card: cover image, clamped text, meta row.
+ *  The layout comes pre-computed from `masonryLayout` so cards vary
+ *  organically instead of reading as one uniform grid. */
+function MasonryCard({ record, layout, dateTime, cardCountLabel, onImageResolved, onOpen, onOpenImage }: {
   record: InspirationRecord;
+  layout: MasonryCardLayout;
   dateTime: string;
   cardCountLabel: string | null;
   onImageResolved: (key: string, url: string) => void;
@@ -189,15 +241,18 @@ function MasonryCard({ record, dateTime, cardCountLabel, onImageResolved, onOpen
   const cover = record.images?.[0];
   return (
     <article
-      className="cursor-pointer overflow-hidden rounded-xl border border-border/50 bg-card/60 p-2.5 transition-shadow hover:shadow-md"
+      className={cn(
+        "cursor-pointer overflow-hidden rounded-xl border border-border/50 bg-card/60 transition-shadow hover:shadow-md",
+        layout.bare ? "p-0" : "p-2.5",
+      )}
       onClick={onOpen}
     >
       {cover && (
-        <div className="relative mb-2 overflow-hidden rounded-lg">
+        <div className={cn("relative overflow-hidden", !layout.bare && "mb-2 rounded-lg")}>
           <RecordImage
             record={record}
             image={cover}
-            className="w-full object-cover"
+            className={cn("w-full object-cover", layout.ratioClass)}
             onResolved={onImageResolved}
             onClick={() => onOpenImage(0)}
             title={cardCountLabel ?? undefined}
@@ -209,18 +264,20 @@ function MasonryCard({ record, dateTime, cardCountLabel, onImageResolved, onOpen
           )}
         </div>
       )}
-      {record.text.trim() && (
-        <HighlightedText text={record.text} className="text-[13px] line-clamp-6" />
-      )}
-      <div className="mt-2 flex flex-col gap-1.5">
-        <TagChips record={record} />
-        <div className="flex items-center justify-between">
-          <span className="text-3xs text-muted-foreground/70">{dateTime}</span>
-          {record.audio && (
-            <span onClick={(event) => event.stopPropagation()}>
-              <InspirationAudioPlayer record={record} />
-            </span>
-          )}
+      <div className={cn(layout.bare && "px-2.5 pb-2.5 pt-2")}>
+        {record.text.trim() && (
+          <HighlightedText text={record.text} className={cn("text-[13px]", layout.clampClass)} />
+        )}
+        <div className="mt-2 flex flex-col gap-1.5">
+          <TagChips record={record} />
+          <div className="flex items-center justify-between">
+            <span className="text-3xs text-muted-foreground/70">{dateTime}</span>
+            {record.audio && (
+              <span onClick={(event) => event.stopPropagation()}>
+                <InspirationAudioPlayer record={record} />
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </article>
@@ -445,6 +502,7 @@ export function InspirationPage() {
       >
         <MasonryCard
           record={record}
+          layout={masonryLayout(record)}
           dateTime={formatCardDateTime(record.createdAt, i18n.language)}
           cardCountLabel={extraCount > 0 ? t("inspiration.images_count", { count: extraCount + 1 }) : null}
           onImageResolved={trackImageUrl}
@@ -504,10 +562,6 @@ export function InspirationPage() {
                 <LayoutGrid className="size-3.5" />
               </button>
             </div>
-            <Button size="sm" className="gap-1.5" onClick={() => openCapture()}>
-              <Plus className="size-3.5" />
-              {t("inspiration.new")}
-            </Button>
           </div>
         )}
       </header>
@@ -650,8 +704,10 @@ export function InspirationPage() {
       )}
 
       {/* Journal-style compose button: the bottom-center "+" pops the capture
-          sheet (same bottom-up panel as the home page's 记录 entry). */}
-      {desktopApi && (
+          sheet (same bottom-up panel as the home page's 记录 entry). Hidden
+          while the feed is empty — the empty state carries its own inline
+          button, so the page never shows two capture entries at once. */}
+      {desktopApi && filtered.length > 0 && (
         <div className="pointer-events-none absolute inset-x-0 bottom-5 z-20 flex justify-center">
           <Button
             size="icon"

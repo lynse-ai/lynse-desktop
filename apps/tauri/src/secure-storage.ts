@@ -12,6 +12,7 @@ const SECRET_KEYS = new Set([
   "lynse_live_translation_ilivedata_secret_key",
   "lynse_live_translation_qwen_api_key",
   "lynse_live_translation_volc_api_key",
+  "lynse_feishu_app_secret",
 ]);
 
 /**

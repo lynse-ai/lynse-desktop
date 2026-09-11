@@ -19,6 +19,7 @@ import {
 import { useWorkspaceStore } from "./store";
 import { TAB_BAR_HEIGHT } from "./layout-constants";
 import { api } from "@lynse/core/api/client";
+import { pushMeetingSummaryToFeishu } from "../feishu/feishu-push";
 import { SummaryMarkdownEditor } from "./summary-editor";
 import { FloatingMarkdownToolbar } from "./center-panel/markdown-toolbar";
 import { AudioPlayer } from "./audio-player";
@@ -598,6 +599,15 @@ export function ContentPanel() {
         type: "transcription",
         title: (displayTitle ?? "").trim(),
         href: "/notes",
+      });
+      // Feishu bot: when enabled, push the finished summary card to the
+      // configured group (no-op on web / when the bot is off). A freshly
+      // produced conclusion rides along; reruns fall back to fetching the
+      // newest one.
+      void pushMeetingSummaryToFeishu({
+        fileId,
+        title: (displayTitle ?? "").trim(),
+        summary: options?.conclusion?.conclusionText ?? null,
       });
     }
     if (mode === "add" && options?.pendingId) {

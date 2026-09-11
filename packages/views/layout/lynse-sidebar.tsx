@@ -111,11 +111,12 @@ export function LynseSidebar() {
 
   return (
     <>
-      {/* .lyse-sidebar: vibrancy CSS drops the divider — the inset content
-          card's own edge separates it from the frosted rail. */}
+      {/* .lyse-sidebar: no divider of its own — the rail and the strips around
+          the inset content card share one flat frame material, and the card's
+          own border does the separating. */}
       <aside
         className={cn(
-          "lyse-sidebar flex h-full w-[68px] shrink-0 flex-col items-center border-r border-border/50 bg-sidebar pb-2",
+          "lyse-sidebar flex h-full w-[68px] shrink-0 flex-col items-center bg-sidebar pb-2",
           // On desktop the macOS traffic lights overlay the window top (bottom
           // edge ≈ 39px) — keep the avatar below with clear breathing room.
           // Web has no lights and keeps the tighter padding.
@@ -179,7 +180,7 @@ export function LynseSidebar() {
                   type="button"
                   title={t("nav.notifications")}
                   data-tauri-drag-region={false}
-                  className="relative flex w-[56px] flex-col items-center justify-center rounded-lg px-1 py-2 transition-colors text-muted-foreground hover:bg-accent hover:text-foreground"
+                  className="relative flex w-[56px] flex-col items-center justify-center rounded-lg px-1 py-2 transition-colors text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
                 >
                   <Bell className="size-5" />
                   <span className="mt-1 text-3xs font-medium leading-none">{item.label}</span>
@@ -278,7 +279,7 @@ function NavButton({
         // glyph alone carries the selected state.
         active
           ? "text-accent-brand-text"
-          : "text-muted-foreground hover:bg-accent hover:text-foreground"
+          : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
       )}
     >
       {!!badgeCount && (

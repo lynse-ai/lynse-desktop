@@ -4,7 +4,7 @@ import { ThemeProvider } from "@lynse/ui/components/common/theme-provider";
 import { Toaster } from "@lynse/ui/components/ui/sonner";
 import { DashboardLayout } from "@lynse/views/layout";
 import { useNavigation } from "@lynse/views/navigation";
-import { WorkspaceLayout, setChatDirectBaseUrl } from "@lynse/views/workspace";
+import { WorkspaceLayout } from "@lynse/views/workspace";
 import { HomePage } from "@lynse/views/home";
 import { ChatPage } from "@lynse/views/chat";
 import { TodoPage } from "@lynse/views/todo";
@@ -47,11 +47,6 @@ configureWechatLogin({
   // the web app's callback, which publishes the session for the desktop poll.
   redirectOrigin: import.meta.env.VITE_WEB_APP_URL ?? "",
 });
-
-// Chat talks to the lynclaw HTTP API directly (its native /api/chat/poll
-// contract) when a base URL is configured; otherwise it goes through the
-// gateway's /api/business/ai routes. See apps/tauri/.env.example.
-setChatDirectBaseUrl(import.meta.env.VITE_AI_BASE_URL);
 
 // How long the recording page's slide layers stay mounted — must cover the
 // longer slide duration in globals.css (300ms in / 260ms out).

@@ -56,6 +56,11 @@ export class ApiClient {
     this.backendUrl = url.replace(/\/+$/, "");
   }
 
+  /** The configured backend origin (no trailing slash), e.g. `https://api.lynse.cn`. */
+  getBaseUrl(): string {
+    return this.backendUrl;
+  }
+
   private async request<T>(
     path: string,
     options: RequestInit = {},

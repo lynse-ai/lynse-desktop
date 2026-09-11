@@ -40,37 +40,25 @@ export interface ChatTransport {
  */
 const CHAT_POLL_PATH = "/api/business/ai/chat/poll";
 
-/** Native lynclaw HTTP API path (no gateway prefix). */
-const DIRECT_CHAT_POLL_PATH = "/api/chat/poll";
+const CHAT_STREAM_PATH = "/api/business/ai/chat/stream";
+
+const chatPollTaskPath = (taskId: string) => `${CHAT_POLL_PATH}/${encodeURIComponent(taskId)}`;
 
 /**
- * Optional direct-lynclaw base URL (e.g. `http://host:8003`). When set, chat
- * bypasses the Java gateway's `/api/business/ai` routes and talks to the
- * lynclaw HTTP API with its native snake_case contract (JWT in the body,
- * raw JSON responses, `{detail}` errors). Desktop builds set this from
- * `VITE_AI_BASE_URL`; unset keeps the historical gateway routing.
+ * The managed gateway api.lynse.cn currently serves the stream contract only —
+ * the poll endpoint rolls out server by server — so for that host chat leads
+ * with SSE and poll is never probed. Every other server always polls.
+ * Flip here when the gateway upgrade lands.
  */
-let chatDirectBaseUrl: string | null = null;
+const STREAM_PRIMARY_HOST = "api.lynse.cn";
 
-export function setChatDirectBaseUrl(url: string | null | undefined): void {
-  const trimmed = url?.trim();
-  chatDirectBaseUrl = trimmed ? trimmed.replace(/\/+$/, "") : null;
-}
-
-const chatPollTaskPath = (taskId: string) =>
-  `${chatDirectBaseUrl ? DIRECT_CHAT_POLL_PATH : CHAT_POLL_PATH}/${encodeURIComponent(taskId)}`;
-
-/**
- * Raw JSON request against the direct lynclaw base. Non-2xx responses become
- * `ApiError`s carrying the raw body so the shared submit/poll error handling
- * (busy retry on 503/429, `{detail}` extraction) applies unchanged.
- */
-async function directJsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
-  const text = await res.text().catch(() => "");
-  if (!res.ok) throw new ApiError(res.status, text || res.statusText);
-  if (!text) return undefined as T;
-  return JSON.parse(text) as T;
+/** True when the configured backend should use the stream contract. */
+function isStreamPreferredServer(): boolean {
+  try {
+    return new URL(api().getBaseUrl()).host === STREAM_PRIMARY_HOST;
+  } catch {
+    return false; // client not initialized or unparsable URL — poll
+  }
 }
 
 /**
@@ -309,27 +297,6 @@ function sleep(ms: number, cancelled: () => boolean): Promise<void> {
 }
 
 /**
- * lynclaw's own HTTP API is snake_case; the gateway DTO camelCases fields.
- * `fileIds` implies the user pinned files, so the doc's
- * `user_specified_file: true` flag is set alongside it.
- */
-function snakeCaseTurnBody(body: Record<string, unknown>, userId?: string): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...body };
-  if ("sessionId" in out) {
-    out.session_id = out.sessionId;
-    delete out.sessionId;
-  }
-  if ("fileIds" in out) {
-    out.file_ids = out.fileIds;
-    out.user_specified_file = true;
-    delete out.fileIds;
-  }
-  delete out.confirmToken; // the doc's field is `confirm_token`
-  if (userId) out.user_id = userId;
-  return out;
-}
-
-/**
  * Stage captions emitted while a poll turn is still pending. The poll
  * protocol carries no per-step progress, so elapsed turn time drives these
  * stable keys and the UI rotates localized WAITING_POOL phrases per key
@@ -354,7 +321,10 @@ export class PollChatTransport implements ChatTransport {
     this.cancelled = false;
     opts.signal?.addEventListener("abort", () => this.cancel(), { once: true });
 
-    const { query, sessionId, userId, fileIds, userSpecifiedFile, token, confirmToken, onEvent } =
+    // The managed gateway leads with SSE (no poll route yet).
+    if (isStreamPreferredServer()) return this.sendViaStream(opts);
+
+    const { query, sessionId, fileIds, userSpecifiedFile, token, confirmToken, onEvent } =
       opts;
     // The gateway's poll route keeps the stream endpoint's request contract —
     // same camelCase fields, same auth — only the URL and the two-step
@@ -369,7 +339,6 @@ export class PollChatTransport implements ChatTransport {
       body.confirm_token = confirmToken;
       body.confirmToken = confirmToken;
     }
-    const turnBody = chatDirectBaseUrl ? snakeCaseTurnBody(body, userId) : body;
 
     const startedAt = Date.now();
     // Show the first pending caption right away (submit itself can take
@@ -379,7 +348,7 @@ export class PollChatTransport implements ChatTransport {
 
     let taskId: string;
     try {
-      taskId = await this.submit(turnBody);
+      taskId = await this.submit(body);
     } catch (error) {
       console.error("[chat-poll] submit failed", CHAT_POLL_PATH, error);
       if (!this.cancelled) onEvent({ type: "error", message: submitErrorMessage(error) });
@@ -392,6 +361,20 @@ export class PollChatTransport implements ChatTransport {
 
   cancel(): void {
     this.cancelled = true;
+    this.stream?.cancel();
+  }
+
+  /** Stream-contract turn, used on hosts where stream is the primary API. */
+  private stream: StreamChatTransport | null = null;
+
+  private async sendViaStream(opts: SendChatOptions): Promise<void> {
+    const stream = new StreamChatTransport();
+    this.stream = stream;
+    try {
+      await stream.send(opts);
+    } finally {
+      this.stream = null;
+    }
   }
 
   /**
@@ -416,27 +399,11 @@ export class PollChatTransport implements ChatTransport {
     return reached;
   }
 
-  /** POST one turn — direct fetch against lynclaw when a base URL is set,
-   *  otherwise the gateway route through the shared API client. */
   private postTurn(body: Record<string, unknown>): Promise<ChatPollSubmitResponse> {
-    if (chatDirectBaseUrl) {
-      return directJsonRequest<ChatPollSubmitResponse>(
-        `${chatDirectBaseUrl}${DIRECT_CHAT_POLL_PATH}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        },
-      );
-    }
     return api().post<ChatPollSubmitResponse>(CHAT_POLL_PATH, body);
   }
 
-  /** GET one task result — same direct/gateway split as `postTurn`. */
   private getTask(path: string): Promise<ChatPollTaskResponse> {
-    if (chatDirectBaseUrl) {
-      return directJsonRequest<ChatPollTaskResponse>(`${chatDirectBaseUrl}${path}`);
-    }
     return api().get<ChatPollTaskResponse>(path);
   }
 
@@ -565,4 +532,172 @@ export class PollChatTransport implements ChatTransport {
     const confirm = normalizePollConfirmation(data.confirmation);
     if (confirm) onEvent({ type: "confirm", confirm });
   }
+}
+
+/**
+ * Map one SSE `data:` payload (the lynclaw stream contract, e.g.
+ * `{"type":"content","content":"你好老"}`) onto ChatStreamEvents. Returns an
+ * array because one frame can carry two events: `done` with a non-null
+ * `confirmation` also produces the trailing `confirm` event, mirroring how
+ * the poll transport emits them.
+ *
+ * Tolerant of the camelCase fields the gateway DTO passes through
+ * (`humanSupportLink`) and the lynclaw-native snake_case (`human_support_link`).
+ */
+export function parseChatStreamData(payload: string): ChatStreamEvent[] {
+  let p: Record<string, unknown>;
+  try {
+    p = JSON.parse(payload) as Record<string, unknown>;
+  } catch {
+    // Non-JSON frame — some relays stream raw text deltas.
+    return payload ? [{ type: "content", delta: payload }] : [];
+  }
+  if (p == null || typeof p !== "object") return [];
+
+  const str = (...values: unknown[]): string | null => {
+    for (const value of values) {
+      if (typeof value === "string" && value) return value;
+    }
+    return null;
+  };
+
+  switch (p.type) {
+    case "round_start":
+      return [{ type: "status", text: str(p.content, p.text) ?? "正在思考…" }];
+    case "status": {
+      const text = str(p.text, p.content);
+      return text ? [{ type: "status", text }] : [];
+    }
+    case "thinking":
+    case "reasoning":
+      return [{ type: "thinking", delta: str(p.content, p.text, p.delta) ?? "" }];
+    case "thinking_end":
+    case "reasoning_end":
+      return [{ type: "thinking", delta: "" }]; // closes the reasoning trace
+    case "content":
+      return [{ type: "content", delta: str(p.content, p.text, p.delta) ?? "" }];
+    case "meta":
+      return [
+        {
+          type: "meta",
+          sources: Array.isArray(p.sources) ? (p.sources as string[]) : [],
+          attachments: Array.isArray(p.attachments)
+            ? (p.attachments as unknown[]).map(normalizePollAttachment).filter(
+                (a): a is ChatAttachment => a != null,
+              )
+            : [],
+        },
+      ];
+    case "tool":
+    case "tool_use":
+    case "tool_start": {
+      const name = str(p.name, p.tool, p.tool_name);
+      return name
+        ? [
+            {
+              type: "tool",
+              name,
+              id: str(p.id, p.tool_call_id) ?? undefined,
+              state: p.state === "done" || p.state === "result" ? "done" : "running",
+            },
+          ]
+        : [];
+    }
+    case "tool_result":
+    case "tool_end":
+    case "tool_done":
+      return [
+        {
+          type: "tool",
+          name: str(p.name, p.tool, p.tool_name) ?? "",
+          id: str(p.id, p.tool_call_id) ?? undefined,
+          state: "done",
+        },
+      ];
+    case "error":
+      return [
+        {
+          type: "error",
+          message:
+            humanizeBackendError(str(p.message, p.error, p.detail)) ?? "生成失败，请稍后重试",
+        },
+      ];
+    case "confirmation": {
+      const confirm = normalizePollConfirmation(p.confirmation ?? p);
+      return confirm ? [{ type: "confirm", confirm }] : [];
+    }
+    case "confirm": {
+      const confirm = normalizePollConfirmation(p.confirm ?? p);
+      return confirm ? [{ type: "confirm", confirm }] : [];
+    }
+    case "done": {
+      const text = str(p.text, p.content) ?? "";
+      const attachments = (Array.isArray(p.attachments) ? p.attachments : [])
+        .map(normalizePollAttachment)
+        .filter((a): a is ChatAttachment => a != null);
+      const events: ChatStreamEvent[] = [
+        {
+          type: "done",
+          text,
+          sources: Array.isArray(p.sources)
+            ? (p.sources as unknown[]).filter((s): s is string => typeof s === "string")
+            : [],
+          attachments,
+          humanSupportLink: normalizeHumanSupportLink(p.human_support_link ?? p.humanSupportLink),
+        },
+      ];
+      const confirm = normalizePollConfirmation(p.confirmation);
+      if (confirm) events.push({ type: "confirm", confirm });
+      return events;
+    }
+    default:
+      return [];
+  }
+}
+
+/**
+ * SSE transport over the pre-poll stream contract (`POST /api/chat/stream`).
+ * Used as the automatic fallback when the poll submit proves the backend has
+ * no poll route (e.g. production gateways awaiting the upgrade), so the
+ * caller can keep treating poll as the primary transport.
+ */
+export class StreamChatTransport implements ChatTransport {
+  readonly provider = "cloud" as const;
+  private controller: AbortController | null = null;
+
+  async send(opts: SendChatOptions): Promise<void> {
+    const { query, sessionId, fileIds, userSpecifiedFile, token, confirmToken, onEvent } = opts;
+    const body: Record<string, unknown> = { query };
+    if (sessionId) body.sessionId = sessionId;
+    if (token) body.token = token;
+    if (fileIds.length && userSpecifiedFile) body.fileIds = fileIds;
+    if (confirmToken) {
+      body.confirm_token = confirmToken;
+      body.confirmToken = confirmToken;
+    }
+    await new Promise<void>((resolve) => {
+      this.controller = api().stream(
+        CHAT_STREAM_PATH,
+        body,
+        (data) => {
+          for (const event of parseChatStreamData(data)) onEvent(event);
+        },
+        (err) => {
+          if (!opts.signal?.aborted) {
+            onEvent({ type: "error", message: submitErrorMessage(err) });
+          }
+          resolve();
+        },
+        () => resolve(),
+      );
+    });
+    this.controller = null;
+  }
+
+  cancel(): void {
+    this.controller?.abort();
+    this.controller = null;
+  }
+
+
 }

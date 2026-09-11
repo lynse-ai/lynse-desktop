@@ -7,6 +7,7 @@ import { Sheet, SheetContent } from "@lynse/ui/components/ui/sheet";
 import { cn } from "@lynse/ui/lib/utils";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { featureFlags } from "../feature-flags";
 import { ArrowRight, Camera, Image as ImageIcon, Lightbulb, ListChecks, Loader2, Mic, Send, X } from "../icons";
 import { useNavigation } from "../navigation";
 import { AudioVisualizer } from "../live-translation/audio-visualizer";
@@ -96,7 +97,10 @@ export function InspirationCaptureSheet() {
 
   const onVoiceError = useCallback((message: string) => toast.error(message), []);
   const voice = useInspirationVoice(onVoiceError);
-  const recording = voice.phase !== "idle";
+  // Voice input is gated off by flag — with it off, `voice.start()` is
+  // unreachable, so `recording` stays false and the mic UI never renders.
+  const voiceEnabled = featureFlags.inspirationVoiceCapture;
+  const recording = voiceEnabled && voice.phase !== "idle";
   const desktopApi = getDesktopInspirationApi();
   const isMac = (window as Window & { desktopAPI?: { appInfo?: { platform?: string } } }).desktopAPI?.appInfo?.platform === "darwin";
 
@@ -481,15 +485,17 @@ export function InspirationCaptureSheet() {
                         <Camera className="size-4" />
                       </Button>
                     )}
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      title={t("inspiration.record")}
-                      disabled={Boolean(audio)}
-                      onClick={() => void voice.start()}
-                    >
-                      <Mic className="size-4" />
-                    </Button>
+                    {voiceEnabled && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        title={t("inspiration.record")}
+                        disabled={Boolean(audio)}
+                        onClick={() => void voice.start()}
+                      >
+                        <Mic className="size-4" />
+                      </Button>
+                    )}
                   </>
                 ) : (
                   DUE_CHOICES.map(({ value, labelKey }) => (

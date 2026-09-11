@@ -14,6 +14,9 @@ export const featureFlags = {
    * The headless agent and the settings card gate on this so the feature can
    * be shipped or hidden from here alone. */
   autoRecord: true,
+  /** Quick voice-memo capture inside the inspiration popup. Hidden for now —
+   * flip to `true` to bring back the mic button and recording UI. */
+  inspirationVoiceCapture: false,
 } as const;
 
 /**

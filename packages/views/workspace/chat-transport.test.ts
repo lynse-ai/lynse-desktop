@@ -3,24 +3,36 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   PollChatTransport,
+  StreamChatTransport,
   chatPollTiming,
   extractConfirmFromText,
   normalizeHumanSupportLink,
   normalizePollAttachment,
   normalizePollConfirmation,
-  setChatDirectBaseUrl,
+  parseChatStreamData,
   type SendChatOptions,
 } from "./chat-transport";
 import { ApiError } from "@lynse/core/api";
+import type { ChatStreamEvent } from "./types";
 
 const apiMocks = vi.hoisted(() => ({
   post: vi.fn(),
   get: vi.fn(),
+  stream: vi.fn(),
+  getBaseUrl: vi.fn(() => "https://api.test.local"),
 }));
 
 vi.mock("@lynse/core/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@lynse/core/api")>();
-  return { ...actual, api: () => ({ post: apiMocks.post, get: apiMocks.get }) };
+  return {
+    ...actual,
+    api: () => ({
+      post: apiMocks.post,
+      get: apiMocks.get,
+      stream: apiMocks.stream,
+      getBaseUrl: apiMocks.getBaseUrl,
+    }),
+  };
 });
 
 afterEach(() => {
@@ -430,92 +442,139 @@ describe("PollChatTransport", () => {
   });
 });
 
-describe("direct lynclaw base URL", () => {
-  // Fresh Response per call — undici bodies are single-use.
-  const ok = (payload: unknown, status = 200) =>
-    new Response(JSON.stringify(payload), { status });
-
-  afterEach(() => {
-    setChatDirectBaseUrl(null);
-    vi.unstubAllGlobals();
+describe("parseChatStreamData", () => {
+  it("maps the lynclaw stream frames onto UI events", () => {
+    expect(parseChatStreamData('{"round":1,"content":"听明白…","type":"round_start"}')).toEqual([
+      { type: "status", text: "听明白…" },
+    ]);
+    expect(parseChatStreamData('{"type":"thinking","op":"append","content":"…"}')).toEqual([
+      { type: "thinking", delta: "…" },
+    ]);
+    expect(parseChatStreamData('{"type":"content","content":"你好老"}')).toEqual([
+      { type: "content", delta: "你好老" },
+    ]);
   });
 
-  it("posts the snake_case contract to the absolute lynclaw URL", async () => {
-    setChatDirectBaseUrl("http://lynclaw.test:8003/");
-    // POST then a terminal done GET, so send() always settles.
-    const fetchFn = vi.fn().mockResolvedValueOnce(ok({ task_id: "task-9", status: "pending" }));
-    fetchFn.mockImplementation(() => ok({ status: "done", text: "ok" }));
-    vi.stubGlobal("fetch", fetchFn);
+  it("splits done+confirmation into done then confirm, mapping camelCase fields", () => {
+    const events = parseChatStreamData(
+      JSON.stringify({
+        type: "done",
+        text: "请确认",
+        sources: ["周会"],
+        attachments: [{ kind: "pdf", filename: "r.pdf", download_url: "https://x/r.pdf" }],
+        humanSupportLink: { label: "人工", url: "https://h" },
+        confirmation: {
+          type: "confirmation",
+          title: "清理待办",
+          confirmToken: "tok-1",
+          actions: [
+            { label: "确认", value: "yes" },
+            { label: "取消", value: "no" },
+          ],
+        },
+      }),
+    );
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ type: "done", text: "请确认", sources: ["周会"] });
+    expect(events[1]).toMatchObject({
+      type: "confirm",
+      confirm: { question: "清理待办", confirmToken: "tok-1" },
+    });
+  });
 
-    const onEvent = vi.fn();
+  it("humanizes raw backend error keys and passes plain text frames through", () => {
+    expect(parseChatStreamData('{"type":"error","message":"system.error.busy"}')).toEqual([
+      { type: "error", message: "当前使用人数较多，请稍后再试" },
+    ]);
+    expect(parseChatStreamData("普通文本增量")).toEqual([{ type: "content", delta: "普通文本增量" }]);
+    expect(parseChatStreamData('{"type":"unknown"}')).toEqual([]);
+  });
+});
+
+describe("transport selection by server", () => {
+  /** Collect onEvent calls into a plain array. */
+  function collector() {
+    const events: ChatStreamEvent[] = [];
+    return { events, onEvent: (e: ChatStreamEvent) => events.push(e) };
+  }
+
+  /** api().stream fake that replays frames then completes. */
+  function streamReplaying(frames: unknown[]) {
+    return vi.fn(
+      (
+        _path: string,
+        _body: unknown,
+        onChunk: (data: string) => void,
+        _onError?: (err: Error) => void,
+        onComplete?: () => void,
+      ) => {
+        for (const frame of frames) onChunk(JSON.stringify(frame));
+        onComplete?.();
+        return new AbortController();
+      },
+    );
+  }
+
+  it("leads with SSE on api.lynse.cn and never probes poll", async () => {
+    apiMocks.getBaseUrl.mockReturnValue("https://api.lynse.cn");
+    apiMocks.stream = streamReplaying([
+      { type: "content", content: "你" },
+      { type: "done", text: "你好" },
+    ]);
+
+    const { events, onEvent } = collector();
     await new PollChatTransport().send(sendOptions({ onEvent }));
 
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-    const [url, init] = fetchFn.mock.calls[0] as unknown as [
-      string,
-      { method: string; body: string },
-    ];
-    expect(url).toBe("http://lynclaw.test:8003/api/chat/poll");
-    expect(init.method).toBe("POST");
-    const body = JSON.parse(init.body) as Record<string, unknown>;
-    expect(body).toMatchObject({
-      query: "hello",
-      session_id: "session-1",
-      user_id: "user-1",
-    });
-    expect(body.sessionId).toBeUndefined();
-    expect(body.token).toBeUndefined();
-    // The gateway client is never touched in direct mode.
+    expect(apiMocks.stream).toHaveBeenCalledTimes(1);
+    expect(apiMocks.stream.mock.calls[0]![0]).toBe("/api/business/ai/chat/stream");
     expect(apiMocks.post).not.toHaveBeenCalled();
+    expect(events.map((e) => e.type)).toEqual(["content", "done"]);
   });
 
-  it("polls the native task path and emits the done payload", async () => {
-    setChatDirectBaseUrl("http://lynclaw.test:8003");
-    const fetchFn = vi.fn();
-    fetchFn
-      .mockResolvedValueOnce(ok({ task_id: "task-9", status: "pending" }))
-      .mockResolvedValueOnce(ok({ status: "pending", text: null, sources: [] }))
-      .mockResolvedValueOnce(
-        ok({
-          status: "done",
-          text: "你好老板",
-          sources: ["周会"],
-          attachments: [],
-          human_support_link: null,
-          confirmation: null,
-          error: null,
-        }),
-      );
-    vi.stubGlobal("fetch", fetchFn);
+  it("uses poll on every other server and never touches stream", async () => {
+    apiMocks.getBaseUrl.mockReturnValue("http://10.20.0.5:10060");
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
 
-    const onEvent = vi.fn();
+    const { events, onEvent } = collector();
     await new PollChatTransport().send(sendOptions({ onEvent }));
 
-    const getUrl = fetchFn.mock.calls[1]![0] as string;
-    expect(getUrl).toBe("http://lynclaw.test:8003/api/chat/poll/task-9");
-    expect(onEvent).toHaveBeenCalledWith({
-      type: "done",
-      text: "你好老板",
-      sources: ["周会"],
-      attachments: [],
-      humanSupportLink: undefined,
-    });
+    expect(apiMocks.post).toHaveBeenCalledTimes(1);
+    expect(apiMocks.stream).not.toHaveBeenCalled();
+    expect(events.at(-1)).toMatchObject({ type: "done" });
   });
 
-  it("maps a 503 {detail} submit to the busy retry path", async () => {
-    setChatDirectBaseUrl("http://lynclaw.test:8003");
-    const fetchFn = vi.fn();
-    fetchFn
-      .mockResolvedValueOnce(ok({ detail: "身份校验失败，请稍后重试" }, 503))
-      .mockResolvedValueOnce(ok({ task_id: "task-9", status: "pending" }))
-      .mockResolvedValueOnce(ok({ status: "done", text: "ok" }));
-    vi.stubGlobal("fetch", fetchFn);
+  it("surfaces poll submit errors directly on non-managed servers", async () => {
+    apiMocks.getBaseUrl.mockReturnValue("http://10.20.0.5:10060");
+    apiMocks.post.mockRejectedValue(new ApiError(404, "Not Found"));
 
-    const onEvent = vi.fn();
+    const { events, onEvent } = collector();
     await new PollChatTransport().send(sendOptions({ onEvent }));
 
-    // First POST failed with 503, retry succeeded.
-    expect(fetchFn).toHaveBeenCalledTimes(3);
-    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "done" }));
+    expect(apiMocks.stream).not.toHaveBeenCalled();
+    expect(events.at(-1)).toMatchObject({ type: "error" });
+  });
+
+  it("StreamChatTransport forwards confirm frames after done", async () => {
+    apiMocks.stream = streamReplaying([
+      {
+        type: "done",
+        text: "选一个",
+        confirmation: {
+          title: "选择",
+          confirmToken: "t1",
+          actions: [
+            { label: "A", value: "a" },
+            { label: "B", value: "b" },
+          ],
+        },
+      },
+    ]);
+
+    const { events, onEvent } = collector();
+    await new StreamChatTransport().send(sendOptions({ onEvent }));
+
+    expect(events.map((e) => e.type)).toEqual(["done", "confirm"]);
+    expect(events[1]).toMatchObject({ type: "confirm", confirm: { confirmToken: "t1" } });
   });
 });

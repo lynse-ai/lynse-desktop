@@ -74,6 +74,9 @@ export interface DesktopFeishuApi {
   getConfig: () => Promise<FeishuConfig>;
   /** A non-empty `secret` is written to the OS keychain before saving. */
   saveConfig: (config: FeishuConfig, secret?: string | null) => Promise<FeishuConfig>;
+  /** Wipe the bot setup: stop the connection, delete the keychain secret and
+   *  restore defaults, so one-click registration can run again. */
+  resetConfig: () => Promise<FeishuConfig>;
   start: () => Promise<FeishuStatus>;
   stop: () => Promise<FeishuStatus>;
   state: () => Promise<FeishuStatus>;
@@ -84,8 +87,19 @@ export interface DesktopFeishuApi {
   sendSummaryCard: (payload: { title: string; summary: string; fileId?: string }) => Promise<unknown>;
   /** Threaded text reply (the agent's acknowledgement). */
   replyText: (messageId: string, text: string) => Promise<unknown>;
-  /** Threaded markdown-card reply (the agent's answers). */
+  /** Threaded markdown-card reply (the agent's answers). The response's
+   *  `data.message_id` lets the caller patch that card later. */
   replyMarkdown: (messageId: string, markdown: string) => Promise<unknown>;
+  /** Replace the markdown card on a previously sent interactive message —
+   *  the fallback "typewriter" when Cardkit streaming is unavailable. */
+  updateMarkdownCard: (messageId: string, markdown: string) => Promise<unknown>;
+  /** Official Cardkit streaming: create a streaming card entity and reply in
+   *  thread with it. `sequence` numbers below must increase per card. */
+  streamStart: (replyTo: string, markdown: string) => Promise<{ cardId: string; messageId: string }>;
+  /** Typewriter step: push the current full text (client renders the delta). */
+  streamPush: (cardId: string, markdown: string, sequence: number) => Promise<void>;
+  /** Deliver the final text and close streaming mode. */
+  streamFinish: (cardId: string, markdown: string, sequence: number) => Promise<void>;
   /** One-click app creation (OAuth device grant): show `url` as a QR code,
    *  then poll until the status is terminal. On success the secret is stored
    *  in the keychain, the bot is enabled and started — no manual console

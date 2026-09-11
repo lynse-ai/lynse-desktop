@@ -100,16 +100,16 @@
         "Apple Color Emoji", "Segoe UI Emoji";
     --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
         "Liberation Mono", "Courier New", monospace;
-    /* Light theme: warm paper + charcoal. The canvas is a subtle warm white
-       (≈#fcfaf6) so pages read as paper rather than a glowing sheet, while
-       cards and popovers stay pure white so floating surfaces lift off it.
-       The remaining neutral ramp carries a faint violet cast (hue 285.8) so
-       greys and the brand purple read as one family. Purple (#5f67d8) is
-       reserved for a few accents — primary buttons, focus rings, links,
-       active states, info — never large surfaces. Text is a lifted charcoal
-       (≈#202023), deliberately not pure black, for a softer premium feel;
-       muted grey stays ≥ 4.5:1 on the paper canvas. */
-    --background: oklch(0.985 0.006 80);               /* ≈#fcfaf6 warm paper */
+    /* Light theme: neutral white + charcoal. The canvas is a neutral white
+       (≈#fafafa, aligned with Codex/ZCode-style light themes — zero chroma,
+       no warm cast) while cards and popovers stay pure white so floating
+       surfaces lift off it. The remaining neutral ramp carries a faint violet
+       cast (hue 285.8) so greys and the brand purple read as one family.
+       Purple (#5f67d8) is reserved for a few accents — primary buttons,
+       focus rings, links, active states, info — never large surfaces. Text
+       is a lifted charcoal (≈#202023), deliberately not pure black, for a
+       softer premium feel; muted grey stays ≥ 4.5:1 on the canvas. */
+    --background: oklch(0.985 0 0);                    /* ≈#fafafa neutral white */
     --foreground: oklch(0.245 0.006 285.8);            /* ≈#202023 */
     --card: oklch(1 0 0);
     --card-foreground: oklch(0.245 0.006 285.8);
@@ -149,7 +149,7 @@
     --chart-4: #a7abed;
     --chart-5: #c7c9f3;
     --radius: 0.625rem;
-    --sidebar: oklch(0.992 0.003 80);                  /* ≈#fdfcfa, a step lighter than the canvas */
+    --sidebar: oklch(0.963 0 0);                       /* ≈#f5f5f5, ZCode/Codex-style rail grey — a step darker than the white content surfaces */
     --sidebar-foreground: oklch(0.245 0.006 285.8);
     --sidebar-primary: #5f67d8;
     --sidebar-primary-foreground: oklch(0.985 0 0);

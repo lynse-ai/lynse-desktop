@@ -46,6 +46,10 @@ type AuthOpts = {
 
 let authStoreInstance: ReturnType<typeof createAuthStore> | undefined;
 
+/** Cap on the startup session-restore probe. Without it, a configured-but-
+ *  unreachable backend hangs the AuthGate spinner forever. */
+const RESTORE_SESSION_TIMEOUT_MS = 10_000;
+
 export function createAuthStore(opts: AuthOpts) {
   return create<AuthState>()((set) => {
     /**
@@ -156,9 +160,19 @@ export function createAuthStore(opts: AuthOpts) {
         }
 
         try {
-          const res = await opts.api.post<{ accessToken: string }>(
-            "/api/auth/apikey/token",
-          );
+          // Race a timeout against the token probe: a configured-but-
+          // unreachable backend (e.g. a test server reachable only from the
+          // office network) must not hang the AuthGate spinner forever —
+          // fall through to the login page where the server can be switched.
+          const res = await Promise.race([
+            opts.api.post<{ accessToken: string }>("/api/auth/apikey/token"),
+            new Promise<never>((_, reject) =>
+              setTimeout(
+                () => reject(new Error("session restore timed out")),
+                RESTORE_SESSION_TIMEOUT_MS,
+              ),
+            ),
+          ]);
           opts.storage.setItem("lynse_token", res.accessToken);
           opts.api.setToken(res.accessToken);
           set({ isAuthenticated: true, isLoading: false });

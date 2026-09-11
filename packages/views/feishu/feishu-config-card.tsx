@@ -16,12 +16,22 @@ import {
   DialogTitle,
 } from "@lynse/ui/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@lynse/ui/components/ui/alert-dialog";
+import {
   NativeSelect,
   NativeSelectOption,
 } from "@lynse/ui/components/ui/native-select";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
-import { Bot, Check, Copy, Loader2, QrCode, RefreshCw } from "../icons";
+import { Bot, Check, Copy, Loader2, QrCode, RefreshCw, Trash2 } from "../icons";
 import { openExternalUrl } from "../app-update";
 import {
   getDesktopFeishuApi,
@@ -68,6 +78,8 @@ export function FeishuConfigCard() {
   const [registerError, setRegisterError] = useState<{ key: string; error?: string } | null>(null);
   const [startingRegister, setStartingRegister] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     if (!config) return;
@@ -165,6 +177,28 @@ export function FeishuConfigCard() {
       toast.error(
         t("feishu.test_message_failed", { error: error instanceof Error ? error.message : "" }),
       );
+    }
+  }
+
+  /** Wipe the bot setup (stop, drop the keychain secret, clear config) so
+   *  one-click registration can start from scratch. */
+  async function handleReset() {
+    if (!api || resetting) return;
+    setResetting(true);
+    try {
+      const fresh = await api.resetConfig();
+      qc.setQueryData(FEISHU_CONFIG_QUERY_KEY, fresh);
+      setForm({ ...DEFAULT_FORM });
+      setSecret("");
+      setChats([]);
+      toast.success(t("feishu.reset_done"));
+    } catch (error) {
+      toast.error(
+        t("feishu.reset_failed", { error: error instanceof Error ? error.message : "" }),
+      );
+    } finally {
+      setResetting(false);
+      setResetConfirmOpen(false);
     }
   }
 
@@ -303,6 +337,28 @@ export function FeishuConfigCard() {
         {status?.state === "error" && status?.error ? (
           <p className="text-2xs leading-relaxed text-destructive">{status.error}</p>
         ) : null}
+
+        {(form.appId.trim() || form.hasSecret) && (
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 w-full text-xs text-destructive hover:text-destructive"
+              onClick={() => setResetConfirmOpen(true)}
+              disabled={resetting}
+            >
+              {resetting ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="size-3.5" />
+              )}
+              {t("feishu.reset_button")}
+            </Button>
+            <p className="text-2xs leading-relaxed text-muted-foreground">
+              {t("feishu.reset_hint")}
+            </p>
+          </>
+        )}
 
         {form.enabled && (
           <>
@@ -493,6 +549,35 @@ export function FeishuConfigCard() {
           )}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={resetConfirmOpen}
+        onOpenChange={(open) => {
+          if (!resetting) setResetConfirmOpen(open);
+        }}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("feishu.reset_confirm_title")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("feishu.reset_confirm_desc")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel size="sm" className="h-8 text-xs">
+              {t("feishu.reset_cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              size="sm"
+              variant="destructive"
+              className="h-8 text-xs"
+              onClick={handleReset}
+              disabled={resetting}
+            >
+              {resetting && <Loader2 className="size-3.5 animate-spin" />}
+              {t("feishu.reset_confirm_action")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

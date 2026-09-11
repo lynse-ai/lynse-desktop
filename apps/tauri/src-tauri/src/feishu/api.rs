@@ -167,6 +167,122 @@ impl FeishuApi {
         self.parse_message_response(response, "reply").await
     }
 
+    /// PATCH the card on an already-sent interactive message — the basis of
+    /// the agent's streaming "typewriter" answer (the ack card grows into the
+    /// final answer). Fails with a permission error when the app lacks the
+    /// card-update scope; callers degrade to plain replies then.
+    pub(crate) async fn update_card(
+        &self,
+        token: &str,
+        message_id: &str,
+        card: &Value,
+    ) -> CommandResult<Value> {
+        let response = self
+            .http
+            .patch(format!("{}/open-apis/im/v1/messages/{message_id}", self.domain))
+            .bearer_auth(token)
+            .json(&json!({ "content": card.to_string() }))
+            .send()
+            .await
+            .map_err(|error| format!("Feishu card update failed: {error}"))?;
+        self.parse_message_response(response, "card update").await
+    }
+
+    /// Create a Cardkit card entity (JSON 2.0) and return its `card_id`. The
+    /// streaming card the agent replies with; requires the `cardkit:card`
+    /// (创建与更新卡片) scope.
+    pub(crate) async fn create_card_entity(
+        &self,
+        token: &str,
+        card: &Value,
+    ) -> CommandResult<String> {
+        let response = self
+            .http
+            .post(format!("{}/open-apis/cardkit/v1/cards", self.domain))
+            .bearer_auth(token)
+            .json(&json!({ "type": "card_json", "data": card.to_string() }))
+            .send()
+            .await
+            .map_err(|error| format!("Feishu card entity create failed: {error}"))?;
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| format!("Feishu card entity create response is not JSON: {error}"))?;
+        self.check_envelope(
+            body.get("code").and_then(Value::as_i64).unwrap_or(-1),
+            body.get("msg").and_then(Value::as_str).unwrap_or(""),
+            "card entity create",
+        )?;
+        body.pointer("/data/card_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| "Feishu card entity response missing card_id".to_owned())
+    }
+
+    /// Push the FULL markdown of a card entity's element. Cardkit renders the
+    /// delta client-side as a typewriter when the new text extends the old.
+    /// `sequence` must strictly increase per card; streaming mode has no QPS
+    /// cap for these updates.
+    pub(crate) async fn stream_card_content(
+        &self,
+        token: &str,
+        card_id: &str,
+        element_id: &str,
+        content: &str,
+        sequence: i64,
+    ) -> CommandResult<()> {
+        let response = self
+            .http
+            .put(format!(
+                "{}/open-apis/cardkit/v1/cards/{card_id}/elements/{element_id}/content",
+                self.domain
+            ))
+            .bearer_auth(token)
+            .json(&json!({ "content": content, "sequence": sequence }))
+            .send()
+            .await
+            .map_err(|error| format!("Feishu card stream push failed: {error}"))?;
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| format!("Feishu card stream push response is not JSON: {error}"))?;
+        self.check_envelope(
+            body.get("code").and_then(Value::as_i64).unwrap_or(-1),
+            body.get("msg").and_then(Value::as_str).unwrap_or(""),
+            "card stream push",
+        )
+    }
+
+    /// Close the card's streaming mode (PATCH cardkit settings) so the chat
+    /// preview shows real content and the card can be forwarded.
+    pub(crate) async fn finish_streaming_card(
+        &self,
+        token: &str,
+        card_id: &str,
+        sequence: i64,
+    ) -> CommandResult<()> {
+        let response = self
+            .http
+            .patch(format!("{}/open-apis/cardkit/v1/cards/{card_id}/settings", self.domain))
+            .bearer_auth(token)
+            .json(&json!({
+                "settings": json!({ "config": { "streaming_mode": false } }).to_string(),
+                "sequence": sequence,
+            }))
+            .send()
+            .await
+            .map_err(|error| format!("Feishu card stream finish failed: {error}"))?;
+        let body: Value = response
+            .json()
+            .await
+            .map_err(|error| format!("Feishu card stream finish response is not JSON: {error}"))?;
+        self.check_envelope(
+            body.get("code").and_then(Value::as_i64).unwrap_or(-1),
+            body.get("msg").and_then(Value::as_str).unwrap_or(""),
+            "card stream finish",
+        )
+    }
+
     async fn parse_message_response(
         &self,
         response: reqwest::Response,

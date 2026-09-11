@@ -28,7 +28,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::{app_data_dir, now, secret_get, secret_set, CommandResult};
+use crate::{app_data_dir, now, secret_delete, secret_get, secret_set, CommandResult};
 
 pub(crate) const FEISHU_EVENT: &str = "feishu-event";
 pub(crate) const FEISHU_STATE_EVENT: &str = "feishu-state";
@@ -328,6 +328,18 @@ pub fn feishu_config_save(
     Ok(stored)
 }
 
+/// Wipe the bot setup: stop the WS session, drop the keychain secret, and
+/// restore the default config. The settings card then behaves as if no bot
+/// was ever configured, so one-click registration can run again.
+#[tauri::command]
+pub fn feishu_config_reset(app: AppHandle) -> CommandResult<FeishuConfig> {
+    stop_bot(&app);
+    secret_delete(&app, APP_SECRET_ACCOUNT)?;
+    let fresh = FeishuConfig::default();
+    save_config_file(&app, &fresh)?;
+    Ok(load_config(&app)?)
+}
+
 #[tauri::command]
 pub fn feishu_bot_start(app: AppHandle) -> CommandResult<FeishuStatus> {
     let config = load_config(&app)?;
@@ -417,6 +429,105 @@ pub async fn feishu_reply_markdown(
     let card = markdown_card(&markdown);
     feishu
         .reply_message(&token, &message_id, "interactive", &card)
+        .await
+}
+
+/// Streaming "typewriter": replace the markdown card on a previously sent
+/// interactive message (the agent's ack card grows into the full answer).
+/// The card goes through the same builder as replies, so truncation applies.
+#[tauri::command(async)]
+pub async fn feishu_update_markdown_card(
+    app: AppHandle,
+    message_id: String,
+    markdown: String,
+) -> CommandResult<Value> {
+    let (feishu, token) = feishu_runtime(&app).await?;
+    let card = markdown_card(&markdown);
+    feishu.update_card(&token, &message_id, &card).await
+}
+
+// ── Official Cardkit streaming (the agent's primary answer strategy) ────────
+
+const STREAM_ELEMENT_ID: &str = "markdown_1";
+
+/// Streaming card JSON 2.0 with the typewriter tuned to the client default
+/// (70ms/char). `update_multi` must not be false in streaming mode.
+fn streaming_card(markdown: &str) -> Value {
+    json!({
+        "schema": "2.0",
+        "config": {
+            "streaming_mode": true,
+            "summary": { "content": "" },
+            "streaming_config": {
+                "print_frequency_ms": { "default": 70 },
+                "print_step": { "default": 1 },
+                "print_strategy": "fast"
+            }
+        },
+        "body": {
+            "elements": [
+                { "tag": "markdown", "content": truncate_markdown(markdown), "element_id": STREAM_ELEMENT_ID }
+            ]
+        }
+    })
+}
+
+/// Start a streaming answer: create the streaming card entity and reply in
+/// thread with it. Returns `cardId` (for later pushes) and `messageId`.
+#[tauri::command(async)]
+pub async fn feishu_stream_start(
+    app: AppHandle,
+    reply_to: String,
+    markdown: String,
+) -> CommandResult<Value> {
+    let config = load_config(&app)?;
+    let secret_value = secret(&app)?;
+    let feishu = api::FeishuApi::new(api::DEFAULT_DOMAIN, &config.app_id, &secret_value)?;
+    let token = tenant_token(&app, &feishu).await?;
+    let card_id = feishu.create_card_entity(&token, &streaming_card(&markdown)).await?;
+    let content = json!({ "type": "card", "data": { "card_id": card_id } });
+    let reply = feishu
+        .reply_message(&token, &reply_to, "interactive", &content)
+        .await?;
+    let message_id = reply
+        .pointer("/data/message_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    Ok(json!({ "cardId": card_id, "messageId": message_id }))
+}
+
+/// Typewriter step: push the current full text to the streaming card's
+/// markdown element. `sequence` must strictly increase per card.
+#[tauri::command(async)]
+pub async fn feishu_stream_push(
+    app: AppHandle,
+    card_id: String,
+    markdown: String,
+    sequence: i64,
+) -> CommandResult<()> {
+    let (feishu, token) = feishu_runtime(&app).await?;
+    feishu
+        .stream_card_content(&token, &card_id, STREAM_ELEMENT_ID, &truncate_markdown(&markdown), sequence)
+        .await
+}
+
+/// Deliver the final text and close streaming mode (content at `sequence`,
+/// settings at `sequence + 1`) so the preview unfreezes and the card can be
+/// forwarded.
+#[tauri::command(async)]
+pub async fn feishu_stream_finish(
+    app: AppHandle,
+    card_id: String,
+    markdown: String,
+    sequence: i64,
+) -> CommandResult<()> {
+    let (feishu, token) = feishu_runtime(&app).await?;
+    feishu
+        .stream_card_content(&token, &card_id, STREAM_ELEMENT_ID, &truncate_markdown(&markdown), sequence)
+        .await?;
+    feishu
+        .finish_streaming_card(&token, &card_id, sequence + 1)
         .await
 }
 

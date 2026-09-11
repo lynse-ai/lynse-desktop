@@ -28,21 +28,27 @@ html[data-window-effects="vibrancy"] #root {
 }
 
 html[data-window-effects="vibrancy"] {
-  --sidebar: transparent;
   --sidebar-border: color-mix(in srgb, currentColor 12%, transparent);
 }
 
+/* Dark dissolves the rail into the raw frost (--sidebar: transparent). Light
+   keeps --sidebar opaque so the rail paints the flat neutral grey of the
+   ZCode/Codex light theme — no wallpaper bleed, and clearly darker than the
+   white content card beside it. */
+html[data-window-effects="vibrancy"].dark {
+  --sidebar: transparent;
+}
+
 /* Light theme only: raw frost picks up wallpaper hues, and a dark wallpaper
-   reads as a dirty halo in the strips around the inset content card. Instead
-   of washing only the sidebar, lay one veil of the theme background across the
-   whole shell — the rail and the strips around the card share a single
-   identical material. 90% paper keeps only a whisper of frost so the rail
-   reads near-white rather than grey.
+   reads as a dirty halo in the strips around the inset content card. The
+   shell therefore carries a 90% veil of the sidebar grey — the same tone the
+   rail paints — so the whole outer frame (rail + strips) reads as one flat
+   material and the white content card sits inset in it.
 
    Dark keeps the shell on raw frost: the frosted rail riding the wallpaper is
    the look, and the content card carries the theme canvas on its own. */
 html[data-window-effects="vibrancy"]:not(.dark) .lyse-shell {
-  background: color-mix(in srgb, var(--background) 90%, transparent);
+  background: color-mix(in srgb, var(--sidebar) 90%, transparent);
 }
 
 html[data-window-effects="vibrancy"].dark .lyse-shell {
@@ -57,23 +63,15 @@ html[data-window-effects="vibrancy"].dark .lyse-shell {
 html[data-window-effects="vibrancy"] .lyse-content-card {
   margin: 5px;
   border-radius: var(--radius-xl);
-  /* The card floats on the desktop with an arbitrary wallpaper behind the
+  /* The card sits on the desktop with an arbitrary wallpaper behind the
      frost. Its edge uses the app's standard theme border — a soft gray in
-     light mode, 9% white in dark — so it never reads as a dark line; the
-     contact shadow below does the separating from light wallpapers, and is
-     black (not foreground-mixed) because a cast shadow must darken light
-     materials in both themes. */
+     light mode, 9% white in dark — so it never reads as a dark line; no
+     cast shadow: the flat border-edged card matches the ZCode look. */
   border: 1px solid var(--border);
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.08),
-    var(--shadow-overlay);
 }
 
-/* The card's own edge separates it from the rail, so the rail keeps no
-   divider of its own. */
-html[data-window-effects="vibrancy"] .lyse-sidebar {
-  border-right-width: 0;
-}
+/* The card's own border does the separating — the rail stays a flat,
+   borderless frame surface. */
 
 /* Respect the system "Reduce transparency" accessibility setting. The shell
    override repeats the wash rule's selector so it wins by order. */
@@ -83,11 +81,17 @@ html[data-window-effects="vibrancy"] .lyse-sidebar {
   html[data-window-effects="vibrancy"] #root {
     background: var(--background);
   }
-  html[data-window-effects="vibrancy"]:not(.dark) .lyse-shell,
+  /* Light shell settles on the sidebar grey so the frame stays one flat
+     material; dark keeps the theme canvas. */
+  html[data-window-effects="vibrancy"]:not(.dark) .lyse-shell {
+    background: var(--sidebar);
+  }
   html[data-window-effects="vibrancy"].dark .lyse-shell {
     background: var(--background);
   }
-  html[data-window-effects="vibrancy"] {
+  /* Must match the .dark override's specificity above, or the dark rail
+     would stay transparent (raw frost) instead of going opaque. */
+  html[data-window-effects="vibrancy"].dark {
     --sidebar: var(--background);
   }
 }

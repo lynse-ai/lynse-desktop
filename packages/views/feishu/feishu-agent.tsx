@@ -13,6 +13,15 @@ const TURN_TIMEOUT_MS = 120_000;
 const SEEN_LIMIT = 512;
 /** Feishu interactive-card markdown soft limit (Rust truncates too). */
 const ANSWER_MARKDOWN_LIMIT = 9_000;
+/** Min gap between pushes to the live card: each is a full HTTP round trip
+ *  and the streaming card's client-side animation (70ms/char) needs room to
+ *  drain before the next delta lands. */
+const CARD_UPDATE_MIN_GAP_MS = 1_000;
+
+/** Shape of the send/reply envelope used to grab the created card's id. */
+interface FeishuMessageResponse {
+  data?: { message_id?: string };
+}
 
 /** Strip "@bot" mention tokens ("@_user_1") so the model sees only the
  *  actual question, then trim the leftover punctuation/whitespace. */
@@ -29,6 +38,11 @@ function stripMentionTokens(text: string, mentions: FeishuIncomingMessage["menti
  * (the same PollChatTransport the in-app chat uses, with the logged-in
  * user's token) and replies in-thread. Mounted once inside the AuthGate in
  * App.tsx — it renders nothing and answers no matter which page is open.
+ *
+ * The ack reply is a live card that grows into the answer: primary path is
+ * the official Cardkit streaming card (client-side 70ms/char typewriter),
+ * falling back to im-card PATCHes and then to plain one-shot replies when
+ * the app lacks the respective permissions.
  *
  * Rules: single chats always get an answer; groups only when the message
  * @-mentions the bot. Multi-turn continuity maps (chat, sender) → lynclaw
@@ -85,14 +99,61 @@ export function FeishuAgent() {
         sessions.set(conversationKey, sessionId);
       }
 
-      // Acknowledge right away so the asker knows the bot picked it up —
-      // the answer itself can take a minute.
-      await feishu.replyText(event.messageId, translate("feishu.agent_ack")).catch(() => undefined);
+      // ── Delivery strategy, best first ──
+      // 1. Official Cardkit streaming card: the ack text types out into the
+      //    answer client-side (70ms/char) as full-text pushes arrive.
+      // 2. Patchable ack card (im PATCH): chunkier typewriter, for apps
+      //    without the cardkit scope.
+      // 3. Plain one-shot ack + final answer.
+      let streamCardId: string | null = null;
+      let seq = 0;
+      let cardMessageId: string | null = null;
+      try {
+        const start = await feishu.streamStart(
+          event.messageId,
+          translate("feishu.agent_ack"),
+        );
+        streamCardId = start?.cardId || null;
+      } catch {
+        streamCardId = null;
+      }
+      if (!streamCardId) {
+        try {
+          const ackCard = await feishu.replyMarkdown(
+            event.messageId,
+            translate("feishu.agent_ack"),
+          );
+          cardMessageId =
+            (ackCard as FeishuMessageResponse | null)?.data?.message_id ?? null;
+        } catch {
+          await feishu
+            .replyText(event.messageId, translate("feishu.agent_ack"))
+            .catch(() => undefined);
+        }
+      }
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), TURN_TIMEOUT_MS);
       let answerText: string | null = null;
       let errorMessage: string | null = null;
+      // Accumulated deltas + a serialized push chain so the live card always
+      // receives updates in order.
+      let streamed = "";
+      let lastPushAt = 0;
+      let pushChain: Promise<unknown> = Promise.resolve();
+      const push = (markdown: string) => {
+        const step = () => {
+          if (streamCardId) {
+            seq += 1;
+            const current = seq;
+            return feishu.streamPush(streamCardId, markdown, current);
+          }
+          if (cardMessageId) return feishu.updateMarkdownCard(cardMessageId, markdown);
+          return Promise.reject(new Error("no live card"));
+        };
+        pushChain = pushChain.then(step).catch(() => undefined);
+      };
+
       try {
         await new PollChatTransport().send({
           query: question,
@@ -103,8 +164,18 @@ export function FeishuAgent() {
           token: api().getToken(),
           signal: controller.signal,
           onEvent: (chatEvent) => {
-            if (chatEvent.type === "done") answerText = chatEvent.text ?? "";
-            else if (chatEvent.type === "error") errorMessage = chatEvent.message;
+            if (chatEvent.type === "content") {
+              streamed += chatEvent.delta;
+              const now = Date.now();
+              if (now - lastPushAt >= CARD_UPDATE_MIN_GAP_MS) {
+                lastPushAt = now;
+                push(streamed);
+              }
+            } else if (chatEvent.type === "done") {
+              answerText = chatEvent.text ?? streamed;
+            } else if (chatEvent.type === "error") {
+              errorMessage = chatEvent.message;
+            }
           },
         });
       } catch (error) {
@@ -112,16 +183,32 @@ export function FeishuAgent() {
       } finally {
         clearTimeout(timeout);
       }
+      // Let the last mid-stream push land before the final delivery.
+      await pushChain.catch(() => undefined);
 
       const text = (answerText ?? "").trim();
+      const finalText = text ? text.slice(0, ANSWER_MARKDOWN_LIMIT) : null;
+      // On failure the live card gets the failure text (a streaming card must
+      // also be closed, or its preview stays "[生成中...]" for 10 minutes).
+      const payload =
+        finalText ??
+        translate("feishu.agent_failed", { error: errorMessage ?? "timeout" });
       try {
-        if (text) {
-          await feishu.replyMarkdown(event.messageId, text.slice(0, ANSWER_MARKDOWN_LIMIT));
-        } else {
-          await feishu.replyText(
-            event.messageId,
-            translate("feishu.agent_failed", { error: errorMessage ?? "timeout" }),
+        if (streamCardId) {
+          seq += 1;
+          await feishu.streamFinish(streamCardId, payload, seq);
+        } else if (cardMessageId) {
+          // Patching may be unpermitted — the answer still goes out as a
+          // fresh threaded reply then.
+          await feishu.updateMarkdownCard(cardMessageId, payload).catch(() =>
+            finalText
+              ? feishu.replyMarkdown(event.messageId, finalText)
+              : feishu.replyText(event.messageId, payload),
           );
+        } else if (finalText) {
+          await feishu.replyMarkdown(event.messageId, finalText);
+        } else {
+          await feishu.replyText(event.messageId, payload);
         }
       } catch (error) {
         console.error("[feishu-agent] failed to deliver answer", error);

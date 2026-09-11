@@ -581,6 +581,7 @@ export async function installTauriBridge(): Promise<void> {
       getConfig: () => command<FeishuConfig>("feishu_config_get"),
       saveConfig: (config: FeishuConfig, secret?: string | null) =>
         command<FeishuConfig>("feishu_config_save", { config, secret: secret ?? null }),
+      resetConfig: () => command<FeishuConfig>("feishu_config_reset"),
       start: () => command<FeishuStatus>("feishu_bot_start"),
       stop: () => command<FeishuStatus>("feishu_bot_stop"),
       state: () => command<FeishuStatus>("feishu_state"),
@@ -588,17 +589,28 @@ export async function installTauriBridge(): Promise<void> {
         command<{ ok: boolean; botName: string; openId: string }>("feishu_test_connection"),
       listChats: () => command<FeishuChatSummary[]>("feishu_list_chats"),
       sendText: (text: string, chatId?: string) =>
-        command("feishu_send_text", { text, chat_id: chatId ?? null }),
+        command("feishu_send_text", { text, chatId: chatId ?? null }),
       sendSummaryCard: (payload: { title: string; summary: string; fileId?: string }) =>
         command("feishu_send_summary_card", {
           title: payload.title,
           summary: payload.summary,
-          file_id: payload.fileId ?? null,
+          fileId: payload.fileId ?? null,
         }),
       replyText: (messageId: string, text: string) =>
-        command("feishu_reply_text", { message_id: messageId, text }),
+        command("feishu_reply_text", { messageId, text }),
       replyMarkdown: (messageId: string, markdown: string) =>
-        command("feishu_reply_markdown", { message_id: messageId, markdown }),
+        command("feishu_reply_markdown", { messageId, markdown }),
+      updateMarkdownCard: (messageId: string, markdown: string) =>
+        command("feishu_update_markdown_card", { messageId, markdown }),
+      streamStart: (replyTo: string, markdown: string) =>
+        command<{ cardId: string; messageId: string }>("feishu_stream_start", {
+          replyTo,
+          markdown,
+        }),
+      streamPush: (cardId: string, markdown: string, sequence: number) =>
+        command("feishu_stream_push", { cardId, markdown, sequence }),
+      streamFinish: (cardId: string, markdown: string, sequence: number) =>
+        command("feishu_stream_finish", { cardId, markdown, sequence }),
       registerBegin: (options?: { name?: string; desc?: string }) =>
         command<FeishuRegistrationStart>("feishu_register_begin", {
           name: options?.name ?? null,

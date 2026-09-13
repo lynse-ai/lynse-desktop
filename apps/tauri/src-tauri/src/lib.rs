@@ -2681,11 +2681,21 @@ fn migrate_electron_data(app: &AppHandle) -> CommandResult<()> {
 fn bundle_build_number() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     let plist = fs::read_to_string(exe.parent()?.parent()?.join("Info.plist")).ok()?;
-    let key = plist.find("CFBundleVersion")?;
+    // Anchor on the full key tag so a stray "CFBundleVersion" in a comment or
+    // value can't redirect the search, and the following <string> is the value.
+    let key = plist.find("CFBundleVersion</key>")? + "CFBundleVersion</key>".len();
     let open = plist[key..].find("<string>")? + "<string>".len();
     let close = plist[open..].find("</string>")?;
     let value = plist[open..open + close].trim();
-    (!value.is_empty()).then(|| value.to_string())
+    // This string is rendered verbatim in the About window, and a concurrent
+    // build can leave the plist half-written. Only accept a short token, so a
+    // corrupt plist hides the build number instead of leaking raw XML into the UI.
+    let sane = !value.is_empty()
+        && value.len() <= 16
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
+    sane.then(|| value.to_string())
 }
 
 #[cfg(not(target_os = "macos"))]

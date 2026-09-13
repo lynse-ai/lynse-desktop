@@ -254,8 +254,11 @@ const SHEET_FLOAT_CLASS =
  * bottom-up floating sheet, mirroring the capture sheet. The calendar
  * confirmation is a second view inside the same sheet — same size, same
  * animation — instead of a separate centered dialog.
+ *
+ * Exported so other surfaces (the home feed) can open the same detail sheet
+ * in place instead of bouncing to the todo page.
  */
-function TodoEditSheet({
+export function TodoEditSheet({
   todo,
   calendarAvailable,
   onClose,

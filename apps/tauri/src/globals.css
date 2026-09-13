@@ -48,7 +48,7 @@ html[data-window-effects="vibrancy"].dark {
    Dark keeps the shell on raw frost: the frosted rail riding the wallpaper is
    the look, and the content card carries the theme canvas on its own. */
 html[data-window-effects="vibrancy"]:not(.dark) .lyse-shell {
-  background: color-mix(in srgb, var(--sidebar) 90%, transparent);
+  background: color-mix(in srgb, var(--sidebar) 80%, transparent);
 }
 
 html[data-window-effects="vibrancy"].dark .lyse-shell {

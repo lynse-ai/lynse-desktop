@@ -171,3 +171,26 @@ export function collectTags(texts: string[]): string[] {
   }
   return tags;
 }
+
+/**
+ * Looser split used only for the capture box highlight: every `#` starts a
+ * colored run that extends to the next whitespace. Unlike `splitByHashtags`
+ * it ignores what precedes the `#` and keeps running through punctuation, so
+ * while typing, the whole `#…` token reads as one tag (`会议#复盘,2024` and
+ * `#标签。` color to the space) instead of breaking mid-word.
+ */
+export function splitByHashRuns(text: string): TextSegment[] {
+  const segments: TextSegment[] = [];
+  const pattern = /#[^\s]+/g;
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > last) {
+      segments.push({ text: text.slice(last, match.index), tag: null });
+    }
+    segments.push({ text: match[0], tag: match[0].slice(1) });
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) segments.push({ text: text.slice(last), tag: null });
+  return segments;
+}

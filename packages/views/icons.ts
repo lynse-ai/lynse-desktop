@@ -142,6 +142,7 @@ export {
 
   // ── Auth ─────────────────────────────────────────────
   QrCode,           // App-scanned QR-code sign-in entry
+  KeyRound,         // API-key sign-in entry
 
   // ── Audio Editor ─────────────────────────────────────
   Scissors,         // Trim selection

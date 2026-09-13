@@ -10,35 +10,27 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import {
   ChevronLeft,
   ChevronRight,
-  Image as ImageIcon,
   Loader2,
   Pencil,
   Trash2,
-  X,
 } from "../icons";
 import { MilkdownViewer } from "../workspace/milkdown-viewer";
 import { getDesktopInspirationApi } from "./desktop-api";
+import { useInspirationCaptureStore } from "./capture-store";
 import { useInspirationDetailStore } from "./detail-store";
 import { formatCardDateTime } from "./format";
-import { parseHashtags } from "./tags";
 import { InspirationAudioPlayer } from "./audio-player";
 import { InspirationLightbox, type LightboxSlide } from "./lightbox";
-import { InspirationMarkdownEditor } from "./markdown-editor";
-import type { InspirationImage, InspirationRecord, InspirationStagedImage } from "./types";
+import type { InspirationRecord } from "./types";
 
-const MAX_IMAGES = 9;
-
-/** Xiaohongshu-style detail: images on top, content below; editable in place. */
+/** Xiaohongshu-style detail: images on top, content below; read-only —
+ * 编辑 hands the record to the capture sheet (the same composer as 新建). */
 export function InspirationDetailDialog() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const activeId = useInspirationDetailStore((state) => state.activeId);
   const closeDetail = useInspirationDetailStore((state) => state.closeDetail);
-  const [mode, setMode] = useState<"view" | "edit">("view");
-  const [editText, setEditText] = useState("");
-  const [keptImages, setKeptImages] = useState<InspirationImage[]>([]);
-  const [pendingImages, setPendingImages] = useState<InspirationStagedImage[]>([]);
-  const [saving, setSaving] = useState(false);
+  const openEdit = useInspirationCaptureStore((state) => state.openEdit);
   const [deleting, setDeleting] = useState(false);
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
@@ -86,84 +78,21 @@ export function InspirationDetailDialog() {
   });
 
   const open = Boolean(record);
+
+  const handleClose = useCallback(() => {
+    closeDetail();
+  }, [closeDetail]);
+
+  const handleEdit = useCallback(() => {
+    if (!record) return;
+    closeDetail();
+    openEdit(record.id);
+  }, [closeDetail, openEdit, record]);
+
   const images = record?.images ?? [];
   const slides: LightboxSlide[] = images
     .map((image) => ({ url: urls[image.file] ?? "", label: image.file }))
     .filter((slide) => slide.url);
-
-  const resetEditState = useCallback(() => {
-    setEditText("");
-    setKeptImages([]);
-    setPendingImages([]);
-  }, []);
-
-  const handleClose = useCallback(
-    (nextOpen: boolean) => {
-      if (nextOpen) return;
-      resetEditState();
-      setMode("view");
-      closeDetail();
-    },
-    [closeDetail, resetEditState],
-  );
-
-  const startEdit = useCallback(() => {
-    if (!record) return;
-    setEditText(record.text);
-    setKeptImages(record.images ?? []);
-    setPendingImages([]);
-    setMode("edit");
-  }, [record]);
-
-  const handlePickImages = useCallback(async () => {
-    if (!desktopApi) return;
-    try {
-      const picked = await desktopApi.pickImages();
-      for (const path of picked) {
-        const staged = await desktopApi.stageImageFromPath(path);
-        setPendingImages((current) => {
-          if (keptImages.length + current.length >= MAX_IMAGES) {
-            toast.warning(t("inspiration.image_limit", { count: MAX_IMAGES }));
-            return current;
-          }
-          return [...current, { sourcePath: staged.path, previewUrl: staged.url }];
-        });
-      }
-    } catch (error) {
-      toast.error(String(error));
-    }
-  }, [desktopApi, keptImages.length, t]);
-
-  const handleSave = useCallback(async () => {
-    const api = getDesktopInspirationApi();
-    if (!api || !record || saving) return;
-    setSaving(true);
-    try {
-      await api.save({
-        id: record.id,
-        text: editText,
-        tags: parseHashtags(editText),
-        images: keptImages.map((image) => ({ file: image.file })),
-        ...(pendingImages.length
-          ? {
-              pendingImages: pendingImages.map(({ sourcePath, width, height }) => ({
-                sourcePath,
-                width,
-                height,
-              })),
-            }
-          : {}),
-      });
-      void queryClient.invalidateQueries({ queryKey: ["inspirations"] });
-      toast.success(t("inspiration.toast_saved"));
-      resetEditState();
-      setMode("view");
-    } catch (error) {
-      toast.error(t("inspiration.toast_save_failed"), { description: String(error) });
-    } finally {
-      setSaving(false);
-    }
-  }, [editText, keptImages, pendingImages, queryClient, record, resetEditState, saving, t]);
 
   if (!activeId) {
     return null;
@@ -171,50 +100,29 @@ export function InspirationDetailDialog() {
 
   return (
     <>
-      <Dialog open={open} onOpenChange={handleClose}>
+      <Dialog open={open} onOpenChange={(next) => !next && handleClose()}>
         {record && (
           <DialogContent
             className="flex max-h-[86vh] w-[min(760px,calc(100vw-2rem))] flex-col gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-[min(760px,calc(100vw-2rem))]"
           >
-            {mode === "view" ? (
-              <DetailView
-                record={record}
-                slides={slides}
-                onOpenLightbox={setLightboxIndex}
-                onEdit={startEdit}
-                onDelete={() => {
-                  setDeleting(true);
-                  deleteMutation.mutate(record.id);
-                }}
-                deleting={deleting}
-              />
-            ) : (
-              <EditView
-                record={record}
-                onTextChange={setEditText}
-                keptImages={keptImages}
-                onRemoveKept={(file) => setKeptImages((current) => current.filter((image) => image.file !== file))}
-                pendingImages={pendingImages}
-                onRemovePending={(sourcePath) =>
-                  setPendingImages((current) => current.filter((image) => image.sourcePath !== sourcePath))
-                }
-                onAddImages={() => void handlePickImages()}
-                canAddImages={keptImages.length + pendingImages.length < MAX_IMAGES}
-                saving={saving}
-                onSave={() => void handleSave()}
-                onCancel={() => {
-                  resetEditState();
-                  setMode("view");
-                }}
-              />
-            )}
+            <DetailView
+              record={record}
+              slides={slides}
+              onOpenLightbox={setLightboxIndex}
+              onEdit={handleEdit}
+              onDelete={() => {
+                setDeleting(true);
+                deleteMutation.mutate(record.id);
+              }}
+              deleting={deleting}
+            />
           </DialogContent>
         )}
       </Dialog>
 
       <InspirationLightbox
-        slides={mode === "view" ? slides : []}
-        index={mode === "view" ? lightboxIndex : null}
+        slides={slides}
+        index={lightboxIndex}
         onIndexChange={setLightboxIndex}
         onClose={() => setLightboxIndex(null)}
       />
@@ -331,99 +239,4 @@ function DetailView({ record, slides, onOpenLightbox, onEdit, onDelete, deleting
       </div>
     </div>
   );
-}
-
-function EditView({ record, onTextChange, keptImages, onRemoveKept, pendingImages, onRemovePending, onAddImages, canAddImages, saving, onSave, onCancel }: {
-  record: InspirationRecord;
-  onTextChange: (value: string) => void;
-  keptImages: InspirationImage[];
-  onRemoveKept: (file: string) => void;
-  pendingImages: InspirationStagedImage[];
-  onRemovePending: (sourcePath: string) => void;
-  onAddImages: () => void;
-  canAddImages: boolean;
-  saving: boolean;
-  onSave: () => void;
-  onCancel: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-5">
-      <div className="flex items-center justify-between">
-        <span className="text-3xs font-medium text-foreground/80">{t("inspiration.edit")}</span>
-        <Button variant="ghost" size="icon-sm" title={t("inspiration.edit_cancel")} onClick={onCancel}>
-          <X className="size-4" />
-        </Button>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        {keptImages.map((image) => (
-          <div key={image.file} className="group relative size-20 overflow-hidden rounded-lg bg-muted">
-            <ImageThumbnail recordId={record.id} file={image.file} />
-            <button
-              type="button"
-              title={t("inspiration.image_remove")}
-              onClick={() => onRemoveKept(image.file)}
-              className="absolute right-1 top-1 rounded-full bg-black/50 p-0.5 text-white opacity-0 transition-opacity group-hover:opacity-100"
-            >
-              <X className="size-3" />
-            </button>
-          </div>
-        ))}
-        {pendingImages.map((image) => (
-          <div key={image.sourcePath} className="group relative size-20 overflow-hidden rounded-lg bg-muted">
-            <img src={image.previewUrl} alt="" loading="lazy" decoding="async" className="size-full object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10" />
-            <button
-              type="button"
-              title={t("inspiration.image_remove")}
-              onClick={() => onRemovePending(image.sourcePath)}
-              className="absolute right-1 top-1 rounded-full bg-black/50 p-0.5 text-white opacity-0 transition-opacity group-hover:opacity-100"
-            >
-              <X className="size-3" />
-            </button>
-          </div>
-        ))}
-        <button
-          type="button"
-          title={t("inspiration.add_image")}
-          disabled={!canAddImages}
-          onClick={onAddImages}
-          className="flex size-20 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border/60 text-muted-foreground transition-colors hover:bg-muted/50 disabled:opacity-40"
-        >
-          <ImageIcon className="size-4" />
-        </button>
-      </div>
-
-      <InspirationMarkdownEditor
-        initialContent={record.text}
-        onChange={onTextChange}
-        autoFocus
-      />
-
-      <div className="flex items-center justify-end gap-2">
-        <Button variant="ghost" size="sm" onClick={onCancel}>
-          {t("inspiration.edit_cancel")}
-        </Button>
-        <Button size="sm" disabled={saving} onClick={onSave}>
-          {saving ? <Loader2 className="size-3.5 animate-spin" /> : null}
-          {t("inspiration.edit_save")}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function ImageThumbnail({ recordId, file }: { recordId: string; file: string }) {
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    void getDesktopInspirationApi()?.getImageUrl(recordId, file).then((next) => {
-      if (!cancelled && next) setUrl(next);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [file, recordId]);
-  if (!url) return <div className="size-full animate-pulse bg-muted" />;
-  return <img src={url} alt="" loading="lazy" decoding="async" className="size-full object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10" />;
 }

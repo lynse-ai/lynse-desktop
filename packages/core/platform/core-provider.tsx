@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { ApiClient, setApiInstance } from "../api/client";
 import { createAuthStore, getAuthStore, registerAuthStore } from "../auth";
+import { DEFAULT_API_URL } from "../config";
 import { defaultStorage } from "./storage";
 import { QueryProvider } from "../provider";
 import { initI18n } from "../i18n";
@@ -24,9 +25,11 @@ export function initCore(
 ) {
   if (initialized) return;
 
-  // Use saved API URL if available, otherwise fall back to env default
+  // Server precedence: user's saved pick → build-time env → production
+  // default. An empty URL must never reach the client: the packaged shells
+  // fetch from a custom-scheme origin where relative URLs don't parse.
   const savedApiUrl = storage.getItem("lynse_api_url");
-  const effectiveUrl = savedApiUrl || apiBaseUrl;
+  const effectiveUrl = savedApiUrl || apiBaseUrl || DEFAULT_API_URL;
 
   const apiClient = new ApiClient(effectiveUrl, {
     onUnauthorized: () => {

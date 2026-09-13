@@ -1,22 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Sheet, SheetContent } from "@lynse/ui/components/ui/sheet";
 import { cn } from "@lynse/ui/lib/utils";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { featureFlags } from "../feature-flags";
-import { ArrowRight, Camera, Image as ImageIcon, Lightbulb, ListChecks, Loader2, Mic, Send, X } from "../icons";
+import { ArrowRight, Camera, Hash, Image as ImageIcon, Lightbulb, ListChecks, Loader2, Mic, Send, X } from "../icons";
 import { useNavigation } from "../navigation";
 import { AudioVisualizer } from "../live-translation/audio-visualizer";
 import { getDesktopInspirationApi } from "./desktop-api";
 import { useInspirationCaptureStore, type CaptureMode } from "./capture-store";
-import { parseHashtags, stripHashtags } from "./tags";
+import { parseHashtags, splitByHashRuns, stripHashtags } from "./tags";
 import { formatVoiceDuration, useInspirationVoice } from "./use-inspiration-voice";
 import { saveTodo, type TodoItem } from "../todo/todo-api";
-import type { InspirationStagedImage, InspirationVoiceStopResult } from "./types";
+import { useTodoStore } from "../todo/use-todos";
+import {
+  LINK_RECORD_TAG,
+  type InspirationImage,
+  type InspirationStagedImage,
+  type InspirationVoiceStopResult,
+} from "./types";
 
 /** Xiaohongshu-style cap: nine images per inspiration. */
 const MAX_IMAGES = 9;
@@ -63,14 +69,16 @@ function probeDimensions(url: string): Promise<{ width?: number; height?: number
 /**
  * The flomo-style capture panel: slides up from the bottom of the window when
  * the sidebar inspiration icon is clicked (or "记一条" on the feed page, or
- * the home quick-capture bar). Unified input for flash notes and quick todos:
- * it opens in the mode requested by the capture store (note by default) and
- * can be switched with the segmented control in the header. Notes accept
- * plain text with inline `#tags`, quick voice memos, and image attachments
- * (file picker, clipboard paste, or macOS Continuity Camera from the paired
- * iPhone); todos are text-only with a quick due-date chip. Attachments are
- * staged by the desktop shell and adopted into durable storage when the memo
- * is saved.
+ * the home quick-capture bar). The single composer for notes and quick todos,
+ * and also the editor for existing records (opened via `openEdit` from the
+ * detail dialog — prefilled, with the same tag highlighting and quick tag
+ * picker). It opens in the mode requested by the capture store (note by
+ * default); notes accept plain text with inline `#tags`, quick voice memos,
+ * and image attachments (file picker, clipboard paste, or macOS Continuity
+ * Camera from the paired iPhone); todos are text-only with a quick due-date
+ * chip. Attachments are staged by the desktop shell and adopted into durable
+ * storage when the memo is saved; an edit keeps the record's saved images
+ * unless removed and never touches its audio/transcript.
  */
 export function InspirationCaptureSheet() {
   const { t } = useTranslation();
@@ -78,13 +86,21 @@ export function InspirationCaptureSheet() {
   const queryClient = useQueryClient();
   const open = useInspirationCaptureStore((state) => state.open);
   const storeMode = useInspirationCaptureStore((state) => state.mode);
+  const editId = useInspirationCaptureStore((state) => state.editId);
   const closeCapture = useInspirationCaptureStore((state) => state.closeCapture);
   const [mode, setMode] = useState<CaptureMode>("note");
   const [due, setDue] = useState<DueChoice>("none");
   const [text, setText] = useState("");
   const [audio, setAudio] = useState<InspirationVoiceStopResult | null>(null);
   const [images, setImages] = useState<InspirationStagedImage[]>([]);
+  /** Already-saved images of the record being edited (kept files). */
+  const [keptImages, setKeptImages] = useState<InspirationImage[]>([]);
   const [saving, setSaving] = useState(false);
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const highlightRef = useRef<HTMLDivElement | null>(null);
+  const pendingCaret = useRef<number | null>(null);
+  const prefilledEditId = useRef<string | null>(null);
 
   // Adopt the opener's mode each time the sheet opens (the store resets to
   // note on close, which also restores this local state for the next open).
@@ -106,17 +122,121 @@ export function InspirationCaptureSheet() {
 
   const tags = useMemo(() => parseHashtags(text), [text]);
   const todoTitle = useMemo(() => stripHashtags(text), [text]);
+
+  // Shares the feed's query cache so the picker reflects existing tags even
+  // when the capture sheet is opened from the home page before visiting it.
+  const { data: inspirations = [] } = useQuery({
+    queryKey: ["inspirations"],
+    queryFn: () => desktopApi!.list(),
+    enabled: Boolean(desktopApi),
+  });
+  // Quick-picker source: tags ranked by how many records use them; the
+  // reserved link-collection tag stays out of the picker.
+  const frequentTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const record of inspirations) {
+      for (const tag of new Set(parseHashtags(record.text))) {
+        if (tag === LINK_RECORD_TAG) continue;
+        counts.set(tag, (counts.get(tag) ?? 0) + 1);
+      }
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 12)
+      .map(([tag]) => tag);
+  }, [inspirations]);
+
+  // Editing reuses this composer: prefill once per opened record from the
+  // shared query cache. The ref guard keeps later refetches from clobbering
+  // in-progress edits.
+  useEffect(() => {
+    if (!open || !editId) {
+      prefilledEditId.current = null;
+      return;
+    }
+    if (prefilledEditId.current === editId) return;
+    const record = inspirations.find((item) => item.id === editId);
+    if (!record) return;
+    prefilledEditId.current = editId;
+    setText(record.text);
+    setKeptImages(record.images ?? []);
+    setImages([]);
+    setAudio(null);
+    setDue("none");
+    setMode("note");
+    setTagPickerOpen(false);
+  }, [open, editId, inspirations]);
+
   const canSave =
-    mode === "todo"
-      ? Boolean(todoTitle) && !saving
-      : Boolean(text.trim() || audio || images.length) && !saving;
+    saving
+      ? false
+      : editId
+        ? true
+        : mode === "todo"
+          ? Boolean(todoTitle)
+          : Boolean(text.trim() || audio || images.length);
 
   const reset = useCallback(() => {
     setText("");
     setAudio(null);
     setImages([]);
+    setKeptImages([]);
     setDue("none");
     setMode("note");
+    setTagPickerOpen(false);
+  }, []);
+
+  /** Complete a tag at the caret. When the caret sits right after a dangling
+   * `#` (dropped by the # button when the picker opened), only the tag name
+   * is appended — no second hash. */
+  const insertTag = useCallback(
+    (tag: string) => {
+      const start = textareaRef.current?.selectionStart ?? text.length;
+      const end = textareaRef.current?.selectionEnd ?? start;
+      const dangling = /#$/.test(text.slice(0, start));
+      const glue = !dangling && start > 0 && /[a-zA-Z0-9/#]/.test(text.charAt(start - 1));
+      const token = dangling ? `${tag} ` : `${glue ? " " : ""}#${tag} `;
+      setText(text.slice(0, start) + token + text.slice(end));
+      pendingCaret.current = start + token.length;
+    },
+    [text],
+  );
+
+  /** The # button: drops a bare `#` at the caret and opens the quick-tag bar,
+   * so picking a tag completes that hash. Clicking again just closes the bar
+   * (a stray `#` stays as plain text, which the lexer ignores). */
+  const handleHashButton = useCallback(() => {
+    if (tagPickerOpen) {
+      setTagPickerOpen(false);
+      return;
+    }
+    const start = textareaRef.current?.selectionStart ?? text.length;
+    const end = textareaRef.current?.selectionEnd ?? start;
+    const needsSpace = start > 0 && !/\s/.test(text.charAt(start - 1));
+    const token = `${needsSpace ? " " : ""}#`;
+    setText(text.slice(0, start) + token + text.slice(end));
+    pendingCaret.current = start + token.length;
+    setTagPickerOpen(true);
+  }, [tagPickerOpen, text]);
+
+  // Restore the caret after the controlled textarea re-renders with the
+  // inserted `#tag` token.
+  useEffect(() => {
+    if (pendingCaret.current === null) return;
+    const element = textareaRef.current;
+    if (element) {
+      element.focus();
+      element.setSelectionRange(pendingCaret.current, pendingCaret.current);
+    }
+    pendingCaret.current = null;
+  }, [text]);
+
+  /** Keep the highlight backdrop scrolled in step with the textarea (both
+   * share identical text metrics, so offsets map 1:1). */
+  const syncHighlightScroll = useCallback(() => {
+    if (highlightRef.current && textareaRef.current) {
+      highlightRef.current.scrollTop = textareaRef.current.scrollTop;
+    }
   }, []);
 
   const handleClose = useCallback(
@@ -135,7 +255,7 @@ export function InspirationCaptureSheet() {
   const addStagedImage = useCallback(
     async (staged: { path: string; url: string }) => {
       setImages((current) => {
-        if (current.length >= MAX_IMAGES) {
+        if (keptImages.length + current.length >= MAX_IMAGES) {
           toast.warning(t("inspiration.image_limit", { count: MAX_IMAGES }));
           return current;
         }
@@ -148,7 +268,7 @@ export function InspirationCaptureSheet() {
         ),
       );
     },
-    [t],
+    [keptImages.length, t],
   );
 
   const handlePickImages = useCallback(async () => {
@@ -231,6 +351,11 @@ export function InspirationCaptureSheet() {
     setImages((current) => current.filter((image) => image.sourcePath !== sourcePath));
   }, []);
 
+  /** Drop a saved image from the record being edited (deleted on save). */
+  const handleRemoveKept = useCallback((file: string) => {
+    setKeptImages((current) => current.filter((image) => image.file !== file));
+  }, []);
+
   /**
    * Single save entry, branched by capture mode. The planned AI classifier
    * hooks into the note branch: after the note lands, classify it async and
@@ -253,8 +378,45 @@ export function InspirationCaptureSheet() {
           updatedAt: now,
           backend: false,
         };
-        await saveTodo(todo);
+        const saved = await saveTodo(todo);
+        // Publish into the shared todo store so the todo page / home feed
+        // pick the new item up without waiting for their next load.
+        useTodoStore.getState().upsert(saved);
         toast.success(t("inspiration.toast_todo_saved"));
+        reset();
+        closeCapture();
+      } catch (error) {
+        toast.error(t("inspiration.toast_save_failed"), { description: String(error) });
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+    // Edit of an existing record: same composer, but the payload keeps the
+    // record's saved images (files missing from the keep-list are deleted)
+    // and never touches its audio/transcript.
+    if (editId) {
+      const api = getDesktopInspirationApi();
+      if (!api) return;
+      setSaving(true);
+      try {
+        await api.save({
+          id: editId,
+          text,
+          tags: parseHashtags(text),
+          images: keptImages.map((image) => ({ file: image.file })),
+          ...(images.length
+            ? {
+                pendingImages: images.map(({ sourcePath, width, height }) => ({
+                  sourcePath,
+                  width,
+                  height,
+                })),
+              }
+            : {}),
+        });
+        void queryClient.invalidateQueries({ queryKey: ["inspirations"] });
+        toast.success(t("inspiration.toast_saved"));
         reset();
         closeCapture();
       } catch (error) {
@@ -295,7 +457,7 @@ export function InspirationCaptureSheet() {
     } finally {
       setSaving(false);
     }
-  }, [audio, closeCapture, due, images, mode, queryClient, reset, saving, t, text, todoTitle]);
+  }, [audio, closeCapture, due, editId, images, keptImages, mode, queryClient, reset, saving, t, text, todoTitle]);
 
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -357,37 +519,43 @@ export function InspirationCaptureSheet() {
             {/* Fixed base height so both capture modes render the same sheet
                 size; the textarea flexes to absorb the leftover space. */}
             <div className="flex items-center justify-between">
-              <div className="flex items-center rounded-full bg-muted/70 p-0.5">
-                <button
-                  type="button"
-                  aria-pressed={mode === "note"}
-                  onClick={() => setMode("note")}
-                  className={cn(
-                    "flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-                    mode === "note"
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  <Lightbulb className="size-3" />
-                  {t("inspiration.mode_note")}
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={mode === "todo"}
-                  disabled={recording}
-                  onClick={() => setMode("todo")}
-                  className={cn(
-                    "flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50",
-                    mode === "todo"
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  <ListChecks className="size-3" />
-                  {t("inspiration.mode_todo")}
-                </button>
-              </div>
+              {editId ? (
+                <span className="px-1 text-xs font-medium text-foreground">
+                  {t("inspiration.edit")}
+                </span>
+              ) : (
+                <div className="flex items-center rounded-full bg-muted/70 p-0.5">
+                  <button
+                    type="button"
+                    aria-pressed={mode === "note"}
+                    onClick={() => setMode("note")}
+                    className={cn(
+                      "flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+                      mode === "note"
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <Lightbulb className="size-3" />
+                    {t("inspiration.mode_note")}
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={mode === "todo"}
+                    disabled={recording}
+                    onClick={() => setMode("todo")}
+                    className={cn(
+                      "flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50",
+                      mode === "todo"
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <ListChecks className="size-3" />
+                    {t("inspiration.mode_todo")}
+                  </button>
+                </div>
+              )}
               <button
                 type="button"
                 onClick={handleViewAll}
@@ -397,44 +565,125 @@ export function InspirationCaptureSheet() {
                 <ArrowRight className="size-3" />
               </button>
             </div>
-            <textarea
-              autoFocus
-              rows={3}
-              value={text}
-              onChange={(event) => setText(event.target.value)}
-              onKeyDown={handleKeyDown}
-              onPaste={(event) => void handlePaste(event)}
-              placeholder={
-                mode === "todo"
-                  ? t("inspiration.todo_placeholder")
-                  : t("inspiration.capture_placeholder")
-              }
-              className="max-h-48 min-h-[72px] w-full flex-1 resize-none bg-transparent text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/70"
-            />
-            {mode === "note" && images.length > 0 && (
-              <div className="grid grid-cols-3 gap-1.5">
-                {images.map((image) => (
-                  <div
-                    key={image.sourcePath}
-                    className="group relative aspect-square overflow-hidden rounded-lg bg-muted"
-                  >
-                    <img
-                      src={image.previewUrl}
-                      alt=""
-                      loading="lazy"
-                      decoding="async"
-                      className="size-full object-cover"
-                    />
-                    <button
-                      type="button"
-                      title={t("inspiration.image_remove")}
-                      onClick={() => handleRemoveImage(image.sourcePath)}
-                      className="absolute right-1 top-1 rounded-full bg-black/50 p-0.5 text-white opacity-0 transition-opacity group-hover:opacity-100"
+            <div className="relative max-h-48 min-h-[72px] w-full flex-1">
+              {/* Highlight backdrop mirroring the textarea's text metrics:
+                  every `#…` run (up to the next whitespace) is painted in the
+                  accent color while the textarea itself renders its text
+                  transparent, keeping only the caret and selection. Tag runs
+                  shrink via transform only — layout keeps the body font size,
+                  so line breaks and the caret still line up 1:1. Trailing
+                  newline preserves the final line's height. */}
+              <div
+                ref={highlightRef}
+                aria-hidden
+                className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground"
+              >
+                {splitByHashRuns(text).map((segment, index) =>
+                  segment.tag ? (
+                    <span
+                      key={index}
+                      className="inline-block origin-left scale-[0.857] text-accent-brand-text"
                     >
-                      <X className="size-3" />
-                    </button>
+                      {segment.text}
+                    </span>
+                  ) : (
+                    <span key={index}>{segment.text}</span>
+                  ),
+                )}
+                {"\n"}
+              </div>
+              <textarea
+                ref={textareaRef}
+                autoFocus
+                rows={3}
+                value={text}
+                onChange={(event) => setText(event.target.value)}
+                onKeyDown={handleKeyDown}
+                onPaste={(event) => void handlePaste(event)}
+                onScroll={syncHighlightScroll}
+                placeholder={
+                  mode === "todo"
+                    ? t("inspiration.todo_placeholder")
+                    : t("inspiration.capture_placeholder")
+                }
+                className="relative size-full resize-none bg-transparent p-0 text-sm leading-relaxed text-transparent caret-foreground outline-none placeholder:text-muted-foreground/70"
+              />
+            </div>
+            {mode === "note" && (images.length > 0 || keptImages.length > 0) && (
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-pressed={tagPickerOpen}
+                  title={t("inspiration.add_tag")}
+                  onClick={handleHashButton}
+                >
+                  <Hash className="size-4" />
+                </Button>
+                <div className="grid flex-1 grid-cols-3 gap-1.5">
+                  {keptImages.map((image) => (
+                    <div
+                      key={image.file}
+                      className="group relative aspect-square overflow-hidden rounded-lg bg-muted"
+                    >
+                      <SavedImageThumbnail recordId={editId!} file={image.file} />
+                      <button
+                        type="button"
+                        title={t("inspiration.image_remove")}
+                        onClick={() => handleRemoveKept(image.file)}
+                        className="absolute right-1 top-1 rounded-full bg-black/50 p-0.5 text-white opacity-0 transition-opacity group-hover:opacity-100"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </div>
+                  ))}
+                  {images.map((image) => (
+                    <div
+                      key={image.sourcePath}
+                      className="group relative aspect-square overflow-hidden rounded-lg bg-muted"
+                    >
+                      <img
+                        src={image.previewUrl}
+                        alt=""
+                        loading="lazy"
+                        decoding="async"
+                        className="size-full object-cover"
+                      />
+                      <button
+                        type="button"
+                        title={t("inspiration.image_remove")}
+                        onClick={() => handleRemoveImage(image.sourcePath)}
+                        className="absolute right-1 top-1 rounded-full bg-black/50 p-0.5 text-white opacity-0 transition-opacity group-hover:opacity-100"
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {mode === "note" && tagPickerOpen && (
+              <div className="rounded-xl border border-border/60 bg-muted/30 p-2">
+                <p className="mb-1.5 text-3xs text-muted-foreground">{t("inspiration.common_tags")}</p>
+                {frequentTags.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {frequentTags.map((tag) => (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => {
+                          insertTag(tag);
+                          setTagPickerOpen(false);
+                        }}
+                        className="rounded-full bg-background px-2 py-0.5 text-3xs text-accent-brand-text transition-colors hover:bg-primary/10"
+                      >
+                        #{tag}
+                      </button>
+                    ))}
                   </div>
-                ))}
+                ) : (
+                  <p className="text-3xs text-muted-foreground/70">{t("inspiration.common_tags_empty")}</p>
+                )}
               </div>
             )}
             {mode === "note" && audio && (
@@ -467,11 +716,22 @@ export function InspirationCaptureSheet() {
               <div className="flex items-center gap-1">
                 {mode === "note" ? (
                   <>
+                    {images.length === 0 && keptImages.length === 0 && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-pressed={tagPickerOpen}
+                        title={t("inspiration.add_tag")}
+                        onClick={handleHashButton}
+                      >
+                        <Hash className="size-4" />
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="icon-sm"
                       title={t("inspiration.add_image")}
-                      disabled={images.length >= MAX_IMAGES}
+                      disabled={images.length + keptImages.length >= MAX_IMAGES}
                       onClick={() => void handlePickImages()}
                     >
                       <ImageIcon className="size-4" />
@@ -481,13 +741,13 @@ export function InspirationCaptureSheet() {
                         variant="ghost"
                         size="icon-sm"
                         title={t("inspiration.iphone_camera")}
-                        disabled={images.length >= MAX_IMAGES}
+                        disabled={images.length + keptImages.length >= MAX_IMAGES}
                         onClick={() => void handleIPhone()}
                       >
                         <Camera className="size-4" />
                       </Button>
                     )}
-                    {voiceEnabled && (
+                    {voiceEnabled && !editId && (
                       <Button
                         variant="ghost"
                         size="icon-sm"
@@ -532,7 +792,7 @@ export function InspirationCaptureSheet() {
                   ) : (
                     <Send className="size-3.5" />
                   )}
-                  {t("inspiration.save")}
+                  {t(editId ? "inspiration.edit_save" : "inspiration.save")}
                 </Button>
               </div>
             </div>
@@ -541,4 +801,21 @@ export function InspirationCaptureSheet() {
       </SheetContent>
     </Sheet>
   );
+}
+
+/** One already-saved image of the record being edited, served through
+ * `local-media://`, with skeleton while the URL resolves. */
+function SavedImageThumbnail({ recordId, file }: { recordId: string; file: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void getDesktopInspirationApi()?.getImageUrl(recordId, file).then((next) => {
+      if (!cancelled && next) setUrl(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [file, recordId]);
+  if (!url) return <div className="size-full animate-pulse bg-muted" />;
+  return <img src={url} alt="" loading="lazy" decoding="async" className="size-full object-cover" />;
 }

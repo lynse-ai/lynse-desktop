@@ -10,7 +10,11 @@
   <string>Lynse 仅在你确认后将待办写入系统日历。</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Lynse 使用麦克风记录你的发言并生成实时双语字幕。</string>
-  <key>NSAudioCaptureUsageDescription</key>
+  <!-- ScreenCaptureKit requires both keys on macOS 15+: screen-recording TCC
+       prompt (audio-only streams still need it) and system-audio capture. -->
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Lynse 需要屏幕录制权限来采集系统播放的会议声音并生成实时双语字幕；不会录制或存储你的屏幕画面。</string>
+  <key>NSSystemAudioCaptureUsageDescription</key>
   <string>Lynse 捕获系统音频，以记录远端会议声音并生成实时双语字幕。</string>
   <key>NSBluetoothAlwaysUsageDescription</key>
   <string>Lynse 使用蓝牙连接录音卡，同步录音、实时音频与文件。</string>

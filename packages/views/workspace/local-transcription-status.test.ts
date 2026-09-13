@@ -11,6 +11,7 @@ describe("isLocalTranscriptionActive", () => {
   it("does not treat completed or failed records as active without retrying", () => {
     expect(isLocalTranscriptionActive({ status: "completed", retrying: false })).toBe(false);
     expect(isLocalTranscriptionActive({ status: "failed", retrying: false })).toBe(false);
+    expect(isLocalTranscriptionActive({ status: "recorded", retrying: false })).toBe(false);
     expect(isLocalTranscriptionActive({ retrying: false })).toBe(false);
   });
 });

@@ -101,6 +101,10 @@ export type LocalTranscriptionStatus =
   | "transcribing"
   | "completed"
   | "failed"
+  // Terminal state of a live session that saved audio but never produced
+  // transcript text (pure recording mode). Written by the Rust side and
+  // normalized from legacy completed-with-empty-transcript records.
+  | "recorded"
   // Frontend-only placeholder states for a session that started but has not
   // persisted its record yet (see live-translation/pending-recording-store).
   | "recording"

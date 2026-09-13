@@ -4,6 +4,7 @@ import type {
   LocalTranscriptionOptions,
   LocalTranscriptionSegment,
   LocalTranscriptionRecord,
+  LocalTranscriptionStatus,
   LocalVoiceprint,
   WorkspaceItem,
 } from "./types";
@@ -113,6 +114,11 @@ export function isLocalFileId(fileId: string | null | undefined): boolean {
 }
 
 export function localRecordToWorkspaceItem(record: LocalTranscriptionRecord): WorkspaceItem {
+  // Legacy pure recordings were persisted as `completed` with an empty
+  // transcript; normalize them so the UI never badges audio-only records as
+  // transcribed (the store itself is not migrated).
+  const status: LocalTranscriptionStatus =
+    record.status === "completed" && !record.transcriptText.trim() ? "recorded" : record.status;
   return {
     id: record.id,
     type: "file",
@@ -122,8 +128,8 @@ export function localRecordToWorkspaceItem(record: LocalTranscriptionRecord): Wo
     folderId: LOCAL_TRANSCRIPTION_FOLDER_ID,
     // Cards identify local recordings via `isLocalFileId` (badge), not via a
     // tag; the status lives here for the detail panel's progress pill.
-    localStatus: record.status,
-    transcriptionCompleted: record.status === "completed",
+    localStatus: status,
+    transcriptionCompleted: status === "completed",
     ...(record.durationMs !== undefined ? { durationSeconds: record.durationMs / 1000 } : {}),
   };
 }

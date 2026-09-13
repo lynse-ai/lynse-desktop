@@ -98,6 +98,31 @@ describe("local transcription helpers", () => {
     }).tags).toBeUndefined();
   });
 
+  it("normalizes audio-only records so they never read as transcribed", () => {
+    // Pure live recordings now persist as `recorded`…
+    const recorded = localRecordToWorkspaceItem({
+      ...localRecord,
+      transcriptText: "",
+      segments: [],
+      status: "recorded",
+    });
+    expect(recorded.localStatus).toBe("recorded");
+    expect(recorded.transcriptionCompleted).toBe(false);
+
+    // …while legacy stores already hold them as completed-with-empty-text.
+    const legacy = localRecordToWorkspaceItem({
+      ...localRecord,
+      transcriptText: "  ",
+      segments: [],
+      status: "completed",
+    });
+    expect(legacy.localStatus).toBe("recorded");
+    expect(legacy.transcriptionCompleted).toBe(false);
+
+    // A real transcript keeps its completed status.
+    expect(localRecordToWorkspaceItem(localRecord).transcriptionCompleted).toBe(true);
+  });
+
   it("falls back to transcript text when FunASR returns no sentence segments", () => {
     const transcription = localRecordToTranscription({
       ...localRecord,

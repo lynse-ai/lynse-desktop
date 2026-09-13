@@ -29,7 +29,7 @@ import { useTodos } from "../todo/use-todos";
 import type { TodoItem } from "../todo/todo-api";
 import { getDesktopInspirationApi } from "../inspiration";
 import type { InspirationRecord } from "../inspiration/types";
-import { FileText, ListChecks, Zap } from "../icons";
+import { FileText, Lightbulb, ListChecks } from "../icons";
 
 /** Results shown per group, so one noisy group can't drown the others. */
 const MAX_PER_GROUP = 5;
@@ -152,7 +152,7 @@ export function GlobalSearchDialog({
                       value={`journal-${record.id}`}
                       onSelect={() => openJournal(record)}
                     >
-                      <Zap className="text-primary" />
+                      <Lightbulb className="text-primary" />
                       <span className="truncate">{journalLabel(record)}</span>
                     </CommandItem>
                   ))}

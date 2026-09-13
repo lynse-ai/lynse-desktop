@@ -28,11 +28,11 @@ import {
   ArrowRight,
   Clock,
   FileText,
+  Lightbulb,
   Link,
   ListChecks,
   Mic,
   Search,
-  Zap,
   ChevronRight,
   Loader2,
   Pencil,
@@ -44,7 +44,12 @@ import { featureFlags } from "../feature-flags";
 import {
   getDesktopInspirationApi,
   useInspirationCaptureStore,
+  useInspirationDetailStore,
+  InspirationDetailDialog,
+  type InspirationRecord,
 } from "../inspiration";
+import { TodoEditSheet } from "../todo";
+import { isCalendarAvailable } from "../todo/todo-api";
 import { useHomeFeed, groupByDay, type DayGroup, type FeedEntry, type FeedKind } from "./feed";
 import { useDailyQuotes, QUOTE_ROTATE_MS } from "./daily-quote";
 import { WeatherStrip } from "./weather-card";
@@ -94,6 +99,16 @@ export function HomePage() {
   const [pasteOpen, setPasteOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const notesPath = useNotesPath();
+  // Todos and flash records have popup details (the todo edit sheet and the
+  // inspiration detail dialog) — clicked on home they open in place instead
+  // of navigating away. The id resolves against the live store so edits made
+  // elsewhere are reflected, and a deleted item closes the sheet.
+  const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
+  const editingTodo = editingTodoId
+    ? todosStore.todos.find((todo) => todo.id === editingTodoId) ?? null
+    : null;
+  const calendarAvailable = useMemo(() => isCalendarAvailable(), []);
+  const openTodoDetail = (todo: TodoItem) => setEditingTodoId(todo.id);
 
   const startRecording = async () => {
     if (startingRecord) return;
@@ -198,7 +213,7 @@ export function HomePage() {
           <button
             type="button"
             disabled={!todoPageAvailable}
-            onClick={() => todoPageAvailable && push("/todo")}
+            onClick={() => todoPageAvailable && openTodoDetail(upcomingTodo)}
             className="min-w-0 flex-1 truncate text-left text-sm text-foreground transition-colors hover:text-primary disabled:cursor-default"
           >
             {upcomingTodo.title}
@@ -372,6 +387,7 @@ export function HomePage() {
                     key={entry.key}
                     entry={entry}
                     onToggleTodo={todosStore.toggle}
+                    onOpenTodo={openTodoDetail}
                   />
                 ))}
               </section>
@@ -453,6 +469,27 @@ export function HomePage() {
       <GlobalSearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
       <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
       <PasteLinkDialog open={pasteOpen} onOpenChange={setPasteOpen} />
+      {/* Details open in place on home: the flash record's dialog and the
+          todo's edit sheet are popups on their own pages too, so a click on
+          a feed row (or the summary strip's due todo) shows them here. */}
+      <InspirationDetailDialog />
+      {editingTodo && (
+        <TodoEditSheet
+          key={editingTodo.id}
+          todo={editingTodo}
+          calendarAvailable={calendarAvailable}
+          onClose={() => setEditingTodoId(null)}
+          onDelete={() => {
+            void todosStore.remove(editingTodo);
+            setEditingTodoId(null);
+          }}
+          onCalendarAdded={() => {
+            void todosStore.load();
+            setEditingTodoId(null);
+          }}
+          onSaved={todosStore.patchLocal}
+        />
+      )}
     </div>
   );
 }
@@ -589,7 +626,9 @@ function EmptyState({ filter }: { filter: FeedFilter }) {
 
 const KIND_STYLE: Record<FeedKind, { icon: typeof FileText; chip: string }> = {
   note: { icon: FileText, chip: "bg-primary/10 text-primary" },
-  flash: { icon: Zap, chip: "bg-feed-flash/15 text-feed-flash" },
+  // Same lightbulb glyph as the sidebar's 记录 (inspiration) entry — the
+  // feed's flash rows are that module's records.
+  flash: { icon: Lightbulb, chip: "bg-feed-flash/15 text-feed-flash" },
   todo: { icon: ListChecks, chip: "bg-feed-todo/15 text-feed-todo" },
 };
 
@@ -629,13 +668,16 @@ function FeedSkeleton() {
 function FeedRow({
   entry,
   onToggleTodo,
+  onOpenTodo,
 }: {
   entry: FeedEntry;
   onToggleTodo: (todo: TodoItem) => void;
+  onOpenTodo: (todo: TodoItem) => void;
 }) {
   const { t } = useTranslation();
   const { push } = useNavigation();
   const notesPath = useNotesPath();
+  const openInspirationDetail = useInspirationDetailStore((state) => state.openDetail);
 
   const time = new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
@@ -653,8 +695,11 @@ function FeedRow({
         ? t(entry.description.i18nKey, entry.description.params)
         : undefined;
 
-  // Click-through: every kind jumps to its module. Notes additionally get
-  // preselected in the workspace store so the detail panel opens on them.
+  // Click-through: notes jump to the notes module (preselected in the
+  // workspace store so the detail panel opens on them — their detail is a
+  // page, not a popup). Flash records and todos have popup details (the
+  // inspiration detail dialog / the todo edit sheet), so those open in
+  // place on the home page.
   let onClick: (() => void) | undefined;
   if (entry.kind === "note") {
     onClick = () => {
@@ -664,9 +709,11 @@ function FeedRow({
     };
   } else if (entry.kind === "todo") {
     // The todo page is desktop-only today; on web the row stays inert.
-    onClick = notesPath === "/notes" ? () => push("/todo") : undefined;
-  } else {
-    onClick = notesPath === "/notes" ? () => push("/inspiration") : undefined;
+    onClick = notesPath === "/notes" ? () => onOpenTodo(entry.data as TodoItem) : undefined;
+  } else if (entry.kind === "flash") {
+    // Flash entries only exist where the inspiration bridge does, so the
+    // detail dialog can always open for them.
+    onClick = () => openInspirationDetail((entry.data as InspirationRecord).id);
   }
 
   return (

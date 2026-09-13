@@ -15,13 +15,19 @@ type InspirationCaptureState = {
   open: boolean;
   /** Mode the sheet was last opened in; reset to note on close. */
   mode: CaptureMode;
+  /** When set, the sheet edits that record instead of composing a new one. */
+  editId: string | null;
   openCapture: (mode?: CaptureMode) => void;
+  /** Open the sheet as an editor for an existing record (same composer). */
+  openEdit: (id: string) => void;
   closeCapture: () => void;
 };
 
 export const useInspirationCaptureStore = create<InspirationCaptureState>((set) => ({
   open: false,
   mode: "note",
-  openCapture: (mode = "note") => set({ open: true, mode }),
-  closeCapture: () => set({ open: false, mode: "note" }),
+  editId: null,
+  openCapture: (mode = "note") => set({ open: true, mode, editId: null }),
+  openEdit: (id) => set({ open: true, mode: "note", editId: id }),
+  closeCapture: () => set({ open: false, mode: "note", editId: null }),
 }));

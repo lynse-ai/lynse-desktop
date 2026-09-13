@@ -48,3 +48,19 @@ export function getBuildChannel(): BuildChannel {
 export function hasPasswordlessAuth(): boolean {
   return buildChannel === "testflight";
 }
+
+/**
+ * Dev-only API-key sign-in on the login page. Production builds never ship
+ * it; dev shells expose it as an extra entry under "more ways to sign in".
+ * Like the build channel, each app shell injects this from its own env
+ * (`import.meta.env.DEV` in Tauri, `process.env.NODE_ENV` on web).
+ */
+let devApiAuth = false;
+
+export function configureDevApiAuth(enabled: boolean): void {
+  devApiAuth = enabled;
+}
+
+export function hasDevApiAuth(): boolean {
+  return devApiAuth;
+}

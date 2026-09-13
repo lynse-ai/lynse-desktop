@@ -887,11 +887,13 @@ export function ContentPanel() {
               />
               {isLocalSelectedItem && (
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-                  {effectiveLocalStatus && effectiveLocalStatus !== "completed" && (
-                    <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
-                      {LOCAL_STATUS_LABEL[effectiveLocalStatus]}
-                    </span>
-                  )}
+                  {effectiveLocalStatus &&
+                    effectiveLocalStatus !== "completed" &&
+                    effectiveLocalStatus !== "recorded" && (
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
+                        {LOCAL_STATUS_LABEL[effectiveLocalStatus]}
+                      </span>
+                    )}
                   {localStatus === "failed" && !selectedLocalRetrying && (
                     <button
                       type="button"

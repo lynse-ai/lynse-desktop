@@ -2208,6 +2208,11 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
     let completed_at = now();
     let source_language = session.source_language.read().expect("live source language").clone();
     let target_language = session.target_language.read().expect("live target language").clone();
+    // `completed` is reserved for sessions that actually produced transcript
+    // text. A pure recording (no transcription connection attached, or nothing
+    // recognized) persists as `recorded` so the UI never shows a transcription
+    // badge for audio-only records.
+    let status = if transcript_text.trim().is_empty() { "recorded" } else { "completed" };
     save_store_value(
         app,
         "local-transcriptions",
@@ -2220,8 +2225,8 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
             "startedAt": session.started_at,
             "completedAt": completed_at,
             "transcriptText": transcript_text,
-            "status": "completed",
-            "progressPhase": "completed",
+            "status": status,
+            "progressPhase": status,
             "durationMs": duration_ms,
             "engine": "ilivedata_rtvt",
             "modelId": "ilivedata-rtvt",

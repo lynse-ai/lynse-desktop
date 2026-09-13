@@ -1,7 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { QRCodeSVG } from "qrcode.react";
+import { useCallback, useEffect, useRef, useState } from "react";import { QRCodeSVG } from "qrcode.react";
 import { Input } from "@lynse/ui/components/ui/input";
 import { Button } from "@lynse/ui/components/ui/button";
 import { useAuthStore } from "@lynse/core/auth";
@@ -23,21 +22,23 @@ import {
   sendSmsCaptcha,
   smsSessionFromLogin,
 } from "@lynse/core/auth/sms";
-import { useNavigation } from "../navigation";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { Loader2, QrCode } from "../icons";
+import { ChevronRight, KeyRound, Loader2, QrCode } from "../icons";
 import { getDesktopAppApi, openExternalUrl } from "../app-update";
-import { hasPasswordlessAuth } from "../feature-flags";
+import { hasDevApiAuth, hasPasswordlessAuth } from "../feature-flags";
 import { PRIVACY_URL, TERMS_URL } from "../about/links";
 import { WechatIcon } from "./wechat-icon";
 import { authErrorText } from "./auth-errors";
+import { ApiAuthPanel } from "./api-auth-panel";
 import { LYNSE_LOGO_SRC } from "./lynse-logo";
+import { LOGIN_BG_SRC } from "./login-bg";
 
 /** Login QR panel phases. "expired"/"error" offer a manual refresh. */
 type QrPhase = "creating" | "ready" | "scanned" | "expired" | "error";
 
-/** Sign-in views: phone + SMS form, or the app-scanned QR code. */
-type LoginView = "phone" | "qr";
+/** Sign-in views: phone + SMS form, the "more ways" screen (WeChat / QR /
+ *  dev API entry), the app-scanned QR code, or the API form. */
+type LoginView = "phone" | "more" | "qr" | "api";
 
 // A 4-digit code waits this long before auto-submitting, in case the user is
 // still typing towards a 6-digit one; 6 digits submit without waiting.
@@ -51,25 +52,23 @@ const CODE_AUTO_SUBMIT_DELAY_MS = 600;
  * circular third-party sign-in entries at the bottom. No card, no panels.
  *
  * Form content differs by build channel:
- *  - "testflight": phone + SMS code form, plus QR-code and WeChat entries.
- *  - "github": API-key connect form only.
+ *  - "testflight": phone + SMS code form; a "more ways to sign in" screen
+ *    holds WeChat, the app-scanned QR code and — in dev builds — the API
+ *    form (server selection + API key, the same UI as /api-config).
+ *  - "github": the API form as the main sign-in form.
  *
- * A small bottom-left link opens the API configuration page on both channels.
+ * Server / API-key configuration lives inside the API form itself (and the
+ * standalone /api-config route); the page keeps no extra link to it.
  */
 export function LoginPage() {
   const { t } = useTranslation();
-  const { push } = useNavigation();
   const passwordless = hasPasswordlessAuth();
+  const devApiAuth = hasDevApiAuth();
   const isDesktop = !!getDesktopAppApi();
 
   // Active sign-in view. Phone is the default: unlike the QR flow it needs no
   // Lynse mobile app, and it also covers registration.
   const [view, setView] = useState<LoginView>("phone");
-
-  // API-key channel (github build)
-  const login = useAuthStore((s) => s.login);
-  const [apiKey, setApiKey] = useState("");
-  const [connecting, setConnecting] = useState(false);
 
   // QR channel (testflight build): create a challenge, show its QR, then
   // poll until the Lynse mobile app scans + confirms it.
@@ -164,19 +163,6 @@ export function LoginPage() {
     );
     return () => clearInterval(timer);
   }, [resending]);
-
-  async function handleApiKeyLogin() {
-    if (!apiKey.trim()) return;
-    setError(null);
-    setConnecting(true);
-    try {
-      await login(apiKey.trim());
-    } catch (e: unknown) {
-      setError(authErrorText(e, t));
-    } finally {
-      setConnecting(false);
-    }
-  }
 
   async function handleSendCode() {
     if (!isValidChinaPhone(phone) || codeSending || resendIn > 0) return;
@@ -296,15 +282,82 @@ export function LoginPage() {
     "border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none rounded-none";
 
   return (
-    <main className="relative flex min-h-screen flex-col items-center bg-background px-6">
+    /* Locked to the viewport with no page scroll: the column is sized to fit
+       the minimum window (600px), and an overflow scrollbar on the login
+       face reads as a glitch. */
+    <main className="relative flex h-dvh flex-col items-center overflow-hidden bg-background px-6">
+      {/* Ambient wallpaper backdrop (swap recipe in login-bg.ts) behind a
+          vertical gradient scrim: heavier at the top and bottom where copy
+          sits, lighter mid-frame so the artwork keeps its drama. */}
+      <img
+        src={LOGIN_BG_SRC}
+        alt=""
+        aria-hidden
+        className="pointer-events-none absolute inset-0 h-full w-full select-none object-cover"
+      />
+      <div
+        aria-hidden
+        className="absolute inset-0 bg-gradient-to-b from-background/70 via-background/25 to-background/90"
+      />
+
       <img
         src={LYNSE_LOGO_SRC}
         alt="Lynse"
-        className="mt-[15vh] h-10 w-auto dark:invert"
+        className="relative mt-[15vh] h-10 w-auto dark:invert"
       />
 
-      <div className="mt-10 w-full max-w-xs">
-        {passwordless ? (
+      {/* Generous air below the wordmark — the bare column reads calmer and
+          more premium than a cramped form. */}
+      <div className="relative mt-24 w-full max-w-xs">
+        {view === "more" ? (
+          /* ── More ways to sign in ─────────────────────── */
+          <div className="space-y-4">
+            <p className="text-center text-sm font-medium">
+              {t("auth.more_login")}
+            </p>
+            <div className="space-y-3">
+              <button
+                type="button"
+                onClick={handleWechatLogin}
+                className="flex h-12 w-full items-center gap-3 rounded-full bg-muted px-5 text-left transition-colors hover:bg-muted/70"
+              >
+                <WechatIcon className="size-5" />
+                <span className="text-sm">{t("auth.wechat_login")}</span>
+                <ChevronRight className="ml-auto size-4 text-muted-foreground" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("qr")}
+                className="flex h-12 w-full items-center gap-3 rounded-full bg-muted px-5 text-left transition-colors hover:bg-muted/70"
+              >
+                <QrCode className="size-5" />
+                <span className="text-sm">{t("auth.qr_login")}</span>
+                <ChevronRight className="ml-auto size-4 text-muted-foreground" />
+              </button>
+              {devApiAuth && (
+                <button
+                  type="button"
+                  onClick={() => setView("api")}
+                  className="flex h-12 w-full items-center gap-3 rounded-full bg-muted px-5 text-left transition-colors hover:bg-muted/70"
+                >
+                  <KeyRound className="size-5" />
+                  <span className="text-sm">{t("auth.api_login")}</span>
+                  <ChevronRight className="ml-auto size-4 text-muted-foreground" />
+                </button>
+              )}
+            </div>
+            <div className="text-center">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 text-xs text-muted-foreground"
+                onClick={() => setView("phone")}
+              >
+                {t("auth.back_to_phone")}
+              </Button>
+            </div>
+          </div>
+        ) : passwordless && view !== "api" ? (
           view === "phone" ? (
             <>
               {/* ── Phone number pill ──────────────────────── */}
@@ -454,42 +507,37 @@ export function LoginPage() {
             </div>
           )
         ) : (
-          /* ── API-key channel (github build) ────────────── */
-          <div className="space-y-3">
-            <Input
-              type="password"
-              placeholder="dk-..."
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void handleApiKeyLogin();
-              }}
-              className="h-12 rounded-full border-0 bg-muted px-5 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none"
-            />
-            <Button
-              size="sm"
-              className="h-12 w-full rounded-full text-sm font-medium"
-              onClick={handleApiKeyLogin}
-              disabled={!apiKey.trim() || connecting}
-            >
-              {connecting ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" />
-                  {t("auth.api_key_connecting")}
-                </>
-              ) : (
-                t("auth.api_key_connect")
-              )}
-            </Button>
-          </div>
+          /* ── API sign-in: server selection + API key in one form. The main
+             sign-in form on "github" builds, a "more ways" view on
+             "testflight"; the same UI the /api-config page renders. ─────── */
+          <>
+            <div className="space-y-4">
+              <p className="text-center text-sm font-medium">
+                {t("auth.api_config_title")}
+              </p>
+              <ApiAuthPanel />
+            </div>
+            {passwordless && (
+              <div className="mt-2 text-center">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 text-xs text-muted-foreground"
+                  onClick={() => setView("phone")}
+                >
+                  {t("auth.back_to_phone")}
+                </Button>
+              </div>
+            )}
+          </>
         )}
 
         {error && <p className="mt-3 text-center text-xs text-destructive">{error}</p>}
       </div>
 
-      {/* ── Third-party sign-in entries ──────────────────── */}
-      {passwordless && (
-        <div className="mt-auto w-full max-w-xs pb-10 pt-12">
+      {/* ── More ways to sign in (phone view) / WeChat wait state ── */}
+      {passwordless && (view === "phone" || wechatWaiting) && (
+        <div className="relative mt-auto w-full max-w-xs pb-10 pt-12">
           {wechatWaiting ? (
             <div className="space-y-1.5 text-center">
               <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
@@ -509,54 +557,18 @@ export function LoginPage() {
               </Button>
             </div>
           ) : (
-            <>
-              <div className="flex items-center gap-3">
-                <span className="h-px flex-1 bg-border" />
-                <span className="text-2xs text-muted-foreground">
-                  {t("auth.other_login")}
-                </span>
-                <span className="h-px flex-1 bg-border" />
-              </div>
-              <div className="mt-5 flex items-start justify-center gap-10">
-                <div className="flex flex-col items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={handleWechatLogin}
-                    className="flex size-11 items-center justify-center rounded-full bg-muted transition-colors hover:bg-muted/70"
-                  >
-                    <WechatIcon className="size-5" />
-                  </button>
-                  <span className="text-2xs text-muted-foreground">
-                    {t("auth.wechat")}
-                  </span>
-                </div>
-                <div className="flex flex-col items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setView("qr")}
-                    className={`flex size-11 items-center justify-center rounded-full bg-muted transition-colors hover:bg-muted/70 ${
-                      view === "qr" ? "ring-1 ring-ring" : ""
-                    }`}
-                  >
-                    <QrCode className="size-5" />
-                  </button>
-                  <span className="text-2xs text-muted-foreground">
-                    {t("auth.qr_login")}
-                  </span>
-                </div>
-              </div>
-            </>
+            <button
+              type="button"
+              onClick={() => setView("more")}
+              className="flex w-full items-center justify-center gap-1 text-2xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {t("auth.more_login")}
+              <ChevronRight className="size-3" />
+            </button>
           )}
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={() => push("/api-config")}
-        className="absolute bottom-4 left-4 text-2xs text-muted-foreground transition-colors hover:text-foreground"
-      >
-        {t("auth.api_config_link")}
-      </button>
     </main>
   );
 }

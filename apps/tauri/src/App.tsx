@@ -26,6 +26,7 @@ import {
 import { RESOURCES } from "@lynse/views/locales";
 import {
   configureBuildChannel,
+  configureDevApiAuth,
   type BuildChannel,
 } from "@lynse/views/feature-flags";
 import { featureFlags } from "@lynse/views/feature-flags";
@@ -42,6 +43,9 @@ import { clearAuthSecrets, secureStorage } from "./secure-storage";
 configureBuildChannel(
   (import.meta.env.VITE_BUILD_CHANNEL as BuildChannel | undefined) ?? "github",
 );
+// Dev runs get the API-key sign-in as an extra entry under "more ways to
+// sign in"; packaged builds never ship it.
+configureDevApiAuth(!!import.meta.env.DEV);
 configureWechatLogin({
   appId: import.meta.env.VITE_WECHAT_APP_ID ?? "",
   // The desktop app can't be a WeChat redirect target; send the QR page to

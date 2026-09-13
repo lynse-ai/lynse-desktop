@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectTags, parseHashtags, splitByHashtags } from "./tags";
+import { collectTags, parseHashtags, splitByHashRuns, splitByHashtags } from "./tags";
 
 describe("parseHashtags", () => {
   it("extracts simple latin tags", () => {
@@ -67,5 +67,42 @@ describe("splitByHashtags", () => {
 describe("collectTags", () => {
   it("unions tags across texts in first-appearance order", () => {
     expect(collectTags(["#b x", "y #a #b"])).toEqual(["b", "a"]);
+  });
+});
+
+describe("splitByHashRuns", () => {
+  it("colors from # to the next whitespace, ignoring preceding characters", () => {
+    expect(splitByHashRuns("glued#标签 rest")).toEqual([
+      { text: "glued", tag: null },
+      { text: "#标签", tag: "标签" },
+      { text: " rest", tag: null },
+    ]);
+  });
+
+  it("keeps punctuation inside the run until whitespace", () => {
+    expect(splitByHashRuns("#标签,。 end")).toEqual([
+      { text: "#标签,。", tag: "标签,。" },
+      { text: " end", tag: null },
+    ]);
+  });
+
+  it("swallows consecutive hashes into one run", () => {
+    expect(splitByHashRuns("x ##double y")).toEqual([
+      { text: "x ", tag: null },
+      { text: "##double", tag: "#double" },
+      { text: " y", tag: null },
+    ]);
+  });
+
+  it("ignores a lone hash with nothing attached", () => {
+    expect(splitByHashRuns("a # b")).toEqual([{ text: "a # b", tag: null }]);
+    expect(splitByHashRuns("trailing #")).toEqual([{ text: "trailing #", tag: null }]);
+  });
+
+  it("colors a run that ends at end of text", () => {
+    expect(splitByHashRuns("note #测试标签")).toEqual([
+      { text: "note ", tag: null },
+      { text: "#测试标签", tag: "测试标签" },
+    ]);
   });
 });

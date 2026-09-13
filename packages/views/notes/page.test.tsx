@@ -231,7 +231,6 @@ describe("NotesPage multi-select", () => {
   });
 
   it("batch-deletes the whole selection and exits multi-select on success", () => {
-    window.confirm = vi.fn(() => true);
     renderNotesPage();
 
     longPressRow("Note One");
@@ -242,6 +241,9 @@ describe("NotesPage multi-select", () => {
     act(() => {
       menu!.onDelete!(menu!.targetIds);
     });
+
+    // Deletion is staged behind the themed confirm dialog; confirm it.
+    fireEvent.click(screen.getByRole("button", { name: "workspace.delete" }));
 
     expect(testData.deleteMutate).toHaveBeenCalledWith(
       ["f1", "f2", "f3"],
@@ -271,12 +273,14 @@ describe("NotesPage multi-select", () => {
   });
 
   it("batch-deletes from the floating bar", () => {
-    window.confirm = vi.fn(() => true);
     renderNotesPage();
 
     longPressRow("Note One");
     fireEvent.click(screen.getByLabelText("workspace.select_all"));
     fireEvent.click(screen.getByTitle("workspace.delete_selected"));
+
+    // Deletion is staged behind the themed confirm dialog; confirm it.
+    fireEvent.click(screen.getByRole("button", { name: "workspace.delete" }));
 
     expect(testData.deleteMutate).toHaveBeenCalledWith(
       ["f1", "f2", "f3"],

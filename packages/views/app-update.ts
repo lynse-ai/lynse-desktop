@@ -28,7 +28,9 @@ export type UpdateInstallState = {
 };
 
 type DesktopAppApi = {
-  getInfo: () => Promise<{ version: string; platform: string }>;
+  getInfo: () => Promise<{ version: string; build?: string | null; platform: string }>;
+  /** Opens (or focuses) the standalone About window with a localized title. */
+  openAboutWindow: (title?: string) => Promise<void>;
   checkForUpdate: () => Promise<AppUpdateInfo>;
   downloadAndInstallUpdate: (onProgress: (progress: UpdateDownloadProgress) => void) => Promise<void>;
   relaunchApp: () => Promise<void>;
@@ -42,10 +44,14 @@ export function getDesktopAppApi(): DesktopAppApi | null {
 }
 
 /** Synchronously read the version the bridge populated from the Rust host. */
-export function getAppInfoSync(): { version: string; platform: string } | null {
+export function getAppInfoSync(): {
+  version: string;
+  build?: string | null;
+  platform: string;
+} | null {
   if (typeof window === "undefined") return null;
   const desktopWindow = window as Window & {
-    desktopAPI?: { appInfo?: { version: string; platform: string } };
+    desktopAPI?: { appInfo?: { version: string; build?: string | null; platform: string } };
   };
   return desktopWindow.desktopAPI?.appInfo ?? null;
 }

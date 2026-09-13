@@ -169,6 +169,10 @@ export interface DesktopLiveTranslationApi {
   stop: () => Promise<void>;
   getState: () => Promise<LiveTranslationSnapshot>;
   finalizeLocal: (sessionId: string, synced: boolean) => Promise<void>;
+  /** Cancel the save of a finished recording: delete its local cache
+   *  (transcriptions entry + session directory). Backs the completion
+   *  dialog's 取消 button. */
+  discard: (sessionId: string) => Promise<void>;
   listRecoveries: () => Promise<LiveRecoverySummary[]>;
   recover: (sessionId: string) => Promise<CompletedLiveSession>;
   showSubtitles: (show: boolean) => Promise<void>;

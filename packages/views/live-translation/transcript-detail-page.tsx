@@ -1,6 +1,8 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   AnimatePresence,
   motion,
@@ -9,6 +11,7 @@ import {
   type Variants,
 } from "motion/react";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { IconSwap } from "../icon-swap";
 import {
   Select,
   SelectContent,
@@ -112,6 +115,7 @@ const stageSpringTransition: Transition = { type: "spring", bounce: 0, duration:
 
 export function TranscriptDetailPage() {
   const { t, i18n } = useTranslation();
+  const queryClient = useQueryClient();
   const session = useRecordingSession();
   const { syncCompletedSession } = useRecordingCloudSync();
   const reduceMotion = useReducedMotion();
@@ -185,15 +189,31 @@ export function TranscriptDetailPage() {
           : t("recording_mode.status_recording")
       : t("recording_mode.idle_status");
 
-  // Completion dialog handlers. The recording is always persisted locally by
-  // the Rust sidecar; `onSave` fires only when the user ticks "保存到云" in the
-  // dialog, uploading it to the cloud and starting the transcription +
-  // summarization pipeline (progress is reported via toasts).
+  // Completion dialog handlers. The recording is cached locally by the Rust
+  // sidecar until the user decides: 保存 keeps it (plus the cloud upload +
+  // transcription pipeline when "保存到云" is ticked), 取消 cancels the save
+  // and deletes the cache (transcriptions entry + session directory).
   const handleSave = useCallback(
     (completed: CompletedLiveSession) => {
       void syncCompletedSession(completed);
     },
     [syncCompletedSession],
+  );
+
+  const handleDiscard = useCallback(
+    (completed: CompletedLiveSession) => {
+      const desktopApi = getDesktopLiveTranslationApi();
+      if (!desktopApi) return;
+      void desktopApi
+        .discard(completed.sessionId)
+        .then(() => {
+          toast.success(t("recording_mode.complete_discarded"));
+          void queryClient.invalidateQueries({ queryKey: ["files"] });
+          void queryClient.invalidateQueries({ queryKey: ["notes"] });
+        })
+        .catch((error) => toast.error(String(error)));
+    },
+    [queryClient, t],
   );
 
   return (
@@ -442,7 +462,7 @@ export function TranscriptDetailPage() {
             if (!open) clearPendingComplete();
           }}
           onSave={handleSave}
-          onDismiss={() => undefined}
+          onDiscard={handleDiscard}
         />
       </div>
     </TooltipProvider>
@@ -712,13 +732,15 @@ function RecordingStage({
                     onClick={onStop}
                     disabled={busy}
                     aria-label={t("recording_mode.stop_recording")}
-                    className="mx-auto flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-all duration-200 hover:scale-105 hover:bg-destructive/90 active:scale-95 disabled:opacity-60 disabled:hover:scale-100"
+                    className="mx-auto flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-[background-color,transform,box-shadow] duration-150 hover:bg-destructive/90 active:scale-[0.96] disabled:opacity-60"
                   >
-                    {busy ? (
-                      <Loader2 className="size-6 animate-spin" />
-                    ) : (
-                      <Square className="size-5 fill-current" />
-                    )}
+                    <IconSwap stateKey={busy ? "busy" : "idle"}>
+                      {busy ? (
+                        <Loader2 className="size-6 animate-spin" />
+                      ) : (
+                        <Square className="size-5 fill-current" />
+                      )}
+                    </IconSwap>
                   </button>
                 }
               />
@@ -737,11 +759,13 @@ function RecordingStage({
                       aria-label={paused ? t("recording_mode.resume") : t("recording_mode.pause")}
                       className="mx-auto flex flex-col items-center gap-2 rounded-xl px-4 py-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
                     >
-                      {paused ? (
-                        <Play className="size-6 fill-current text-foreground/80" />
-                      ) : (
-                        <Pause className="size-6 text-foreground/80" />
-                      )}
+                      <IconSwap stateKey={paused ? "play" : "pause"}>
+                        {paused ? (
+                          <Play className="size-6 fill-current text-foreground/80" />
+                        ) : (
+                          <Pause className="size-6 text-foreground/80" />
+                        )}
+                      </IconSwap>
                       <span>{paused ? t("recording_mode.resume") : t("recording_mode.pause")}</span>
                     </button>
                   }
@@ -782,9 +806,11 @@ function RecordingStage({
                     onClick={onStart}
                     disabled={busy || stopping}
                     aria-label={t("recording_mode.start_recording")}
-                    className="mx-auto flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-all duration-200 hover:scale-105 hover:bg-destructive/90 active:scale-95 disabled:opacity-60 disabled:hover:scale-100"
+                    className="mx-auto flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-[background-color,transform,box-shadow] duration-150 hover:bg-destructive/90 active:scale-[0.96] disabled:opacity-60"
                   >
-                    {busy ? <Loader2 className="size-6 animate-spin" /> : <Mic className="size-6" />}
+                    <IconSwap stateKey={busy ? "busy" : "idle"}>
+                      {busy ? <Loader2 className="size-6 animate-spin" /> : <Mic className="size-6" />}
+                    </IconSwap>
                   </button>
                 }
               />

@@ -4,6 +4,7 @@ import { useEffect, type ReactNode } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
 import { ChevronDown, Maximize2, Pause, Play, Square, X } from "../icons";
+import { IconSwap } from "../icon-swap";
 import { AudioVisualizer } from "./audio-visualizer";
 import { useLiveTranslation } from "./use-live-translation";
 
@@ -139,7 +140,7 @@ export function DynamicIsland({
                   : t("recording_mode.view_transcribe")
               }
               className={cn(
-                "flex size-6 items-center justify-center rounded-full transition-colors hover:bg-muted hover:text-foreground",
+                "flex size-6 items-center justify-center rounded-full transition-[color,background-color,transform] duration-150 hover:bg-muted hover:text-foreground active:scale-[0.96]",
                 drawerOpen ? "text-primary" : "text-muted-foreground",
               )}
             >
@@ -159,7 +160,7 @@ export function DynamicIsland({
               onClick={onExpand}
               aria-label={t("recording_mode.expand")}
               title={t("recording_mode.expand")}
-              className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-muted hover:text-foreground active:scale-[0.96]"
             >
               <Maximize2 className="size-3" />
             </button>
@@ -168,15 +169,17 @@ export function DynamicIsland({
             type="button"
             onClick={onPause}
             aria-label={paused ? t("recording_mode.resume") : t("recording_mode.pause")}
-            className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-muted hover:text-foreground active:scale-[0.96]"
           >
-            {paused ? <Play className="size-3" /> : <Pause className="size-3" />}
+            <IconSwap stateKey={paused ? "play" : "pause"}>
+              {paused ? <Play className="size-3" /> : <Pause className="size-3" />}
+            </IconSwap>
           </button>
           <button
             type="button"
             onClick={onStop}
             aria-label={t("recording_mode.stop_recording")}
-            className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+            className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-destructive/10 hover:text-destructive active:scale-[0.96]"
           >
             <Square className="size-3" />
           </button>

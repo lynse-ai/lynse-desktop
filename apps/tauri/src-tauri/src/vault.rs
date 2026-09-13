@@ -114,6 +114,14 @@ fn vault_root(config: &VaultConfig) -> CommandResult<PathBuf> {
     Ok(expanded)
 }
 
+/// Resolved user-facing vault folder, or `None` when no folder is configured.
+/// Used by the storage manager to report and reveal the folder without
+/// duplicating the `~`-expansion logic here.
+pub(crate) fn vault_user_dir(app: &AppHandle) -> CommandResult<Option<PathBuf>> {
+    let config = load_vault_config(app)?;
+    Ok(vault_root(&config).ok())
+}
+
 /// Turn a note title into a cross-platform-safe file base name. Forbidden
 /// characters are dropped (not replaced) so CJK titles keep their exact text;
 /// the id suffix added on collision keeps names unique.

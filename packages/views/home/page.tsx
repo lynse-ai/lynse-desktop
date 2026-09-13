@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
 import { useNavigation } from "../navigation";
+import { IconSwap } from "../icon-swap";
 import { getWorkspaceState } from "../workspace/store";
 import { getDesktopLocalTranscriptionApi } from "../workspace/local-transcription";
 import { UploadDialog } from "../workspace/upload-dialog";
@@ -224,7 +225,7 @@ export function HomePage() {
   const todoPageAvailable = notesPath === "/notes";
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-4xl flex-col overflow-y-auto px-6 pb-6">
+    <div className="mx-auto flex h-full w-full max-w-4xl flex-col overflow-y-auto overscroll-contain px-6 pb-6">
       {/* ── Header ───────────────────────────────────────
           Doubles as the window drag region (same as the other pages' title
           bars). Tauri only starts a drag when the exact mousedown target has
@@ -350,9 +351,7 @@ export function HomePage() {
 
         {/* ── Feed ─────────────────────────────────────── */}
         {loading ? (
-          <div className="flex flex-1 items-center justify-center py-16 text-muted-foreground">
-            <Loader2 className="size-5 animate-spin" />
-          </div>
+          <FeedSkeleton />
         ) : visible.length === 0 ? (
           <EmptyState filter={filter} />
         ) : (
@@ -407,12 +406,12 @@ export function HomePage() {
             >
               <Plus className="size-[18px]" strokeWidth={1.8} />
             </button>
-            <div className="pointer-events-none absolute bottom-full left-0 z-50 translate-y-1 pb-2 opacity-0 transition-all duration-150 group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100">
+            <div className="pointer-events-none absolute bottom-full left-0 z-50 translate-y-1 pb-2 opacity-0 transition-[translate,opacity] duration-150 group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100">
               <div className="w-48 rounded-xl border border-border/60 bg-popover p-1.5 shadow-lg">
                 <button
                   type="button"
                   onClick={() => setUploadOpen(true)}
-                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-foreground transition-colors hover:bg-accent"
+                  className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-foreground transition-colors hover:bg-accent"
                 >
                   <Upload className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
                   {t("home.import_audio")}
@@ -420,7 +419,7 @@ export function HomePage() {
                 <button
                   type="button"
                   onClick={() => setPasteOpen(true)}
-                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-foreground transition-colors hover:bg-accent"
+                  className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-foreground transition-colors hover:bg-accent"
                 >
                   <Link className="size-4 shrink-0 text-muted-foreground" strokeWidth={1.8} />
                   {t("home.paste_link")}
@@ -432,6 +431,7 @@ export function HomePage() {
             <RecordAction
               starting={startingRecord}
               recording={quick.recording}
+              paused={quick.paused}
               onStart={() => void startRecording()}
             />
           )}
@@ -457,36 +457,63 @@ export function HomePage() {
   );
 }
 
-/** The hero record button: the original red circle — click to start a session
- *  and land on the recording page. Audio import lives in the card's right-side
- *  circle action. */
+/** The pill bar's record button: idle it is the red circle — click to start a
+ *  session and land on the recording page. While a session is live (started
+ *  from anywhere: this button, the dock, the tray, auto-record) it morphs into
+ *  a compact recording indicator so re-entering home mid-recording still shows
+ *  the running state; tapping it returns to the session instead of starting a
+ *  new one. */
 function RecordAction({
   starting,
   recording,
+  paused,
   onStart,
 }: {
   starting: boolean;
   recording: boolean;
+  paused: boolean;
   onStart: () => void;
 }) {
   const { t } = useTranslation();
+  const active = recording || paused;
+  const label = active
+    ? t("recording_mode.expand")
+    : t("recording_mode.start_recording");
   return (
     <button
       type="button"
       disabled={starting}
       onClick={onStart}
-      aria-label={t("recording_mode.start_recording")}
-      title={t("recording_mode.start_recording")}
-      className="relative flex size-10 shrink-0 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-all duration-200 hover:scale-105 hover:bg-destructive/90 active:scale-95 disabled:opacity-60"
+      aria-label={label}
+      title={label}
+      className={cn(
+        "flex h-10 shrink-0 items-center justify-center rounded-full transition-[width,padding,gap,background-color,border-color,box-shadow,transform] duration-300 active:scale-[0.96] disabled:opacity-60",
+        active
+          ? "gap-2 border border-border/50 bg-popover/80 px-3.5 shadow-sm backdrop-blur-md hover:bg-accent"
+          : "w-10 bg-destructive text-destructive-foreground shadow-lg shadow-destructive/25 hover:bg-destructive/90",
+      )}
     >
-      {starting ? (
-        <Loader2 className="size-4 animate-spin" />
-      ) : (
-        <Mic className="size-[18px]" />
-      )}
-      {recording && (
-        <span className="absolute -right-0.5 -top-0.5 size-2.5 animate-pulse rounded-full border-2 border-background bg-destructive" />
-      )}
+      {/* `starting` only spins on the idle→starting path; while a session is
+          live the click just navigates back, so keep the indicator visible. */}
+      <IconSwap stateKey={starting && !active ? "starting" : active ? "active" : "idle"}>
+        {starting && !active ? (
+          <Loader2 className="size-4 animate-spin" />
+        ) : active ? (
+          <>
+            <span
+              className={cn(
+                "size-2.5 rounded-full",
+                paused ? "bg-warning" : "animate-pulse bg-destructive",
+              )}
+            />
+            <span className="text-xs font-medium text-foreground">
+              {t(paused ? "recording_mode.state_paused" : "recording_mode.recording_label")}
+            </span>
+          </>
+        ) : (
+          <Mic className="size-[18px]" />
+        )}
+      </IconSwap>
     </button>
   );
 }
@@ -562,16 +589,42 @@ function EmptyState({ filter }: { filter: FeedFilter }) {
 
 const KIND_STYLE: Record<FeedKind, { icon: typeof FileText; chip: string }> = {
   note: { icon: FileText, chip: "bg-primary/10 text-primary" },
-  flash: { icon: Zap, chip: "bg-violet-500/15 text-violet-600 dark:text-violet-400" },
-  todo: { icon: ListChecks, chip: "bg-sky-500/15 text-sky-600 dark:text-sky-400" },
+  flash: { icon: Zap, chip: "bg-feed-flash/15 text-feed-flash" },
+  todo: { icon: ListChecks, chip: "bg-feed-todo/15 text-feed-todo" },
 };
 
 const TONE_STYLE: Record<string, string> = {
   ok: "bg-success/10 text-success",
   busy: "bg-primary/10 text-primary",
-  warn: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+  warn: "bg-warning/10 text-warning-text",
   danger: "bg-destructive/10 text-destructive",
 };
+
+/** Skeleton matching the feed layout: two day groups of FeedRow-shaped rows. */
+function FeedSkeleton() {
+  return (
+    <div className="pb-2" aria-hidden>
+      {[3, 2].map((rows, g) => (
+        <section key={g} className="mt-4">
+          <div className="mb-1 flex items-center gap-3">
+            <span className="h-3.5 w-16 animate-pulse rounded bg-muted-foreground/10" />
+            <div className="h-px flex-1 bg-border/60" />
+          </div>
+          {Array.from({ length: rows }, (_, i) => (
+            <div key={i} className="flex items-start gap-3 px-2 py-2.5">
+              <span className="h-3 w-10 animate-pulse rounded bg-muted-foreground/10" />
+              <span className="size-7 shrink-0 animate-pulse rounded-lg bg-muted-foreground/10" />
+              <div className="min-w-0 flex-1 pt-0.5">
+                <span className="block h-3.5 w-2/5 animate-pulse rounded bg-muted-foreground/10" />
+                <span className="mt-2 block h-3 w-3/5 animate-pulse rounded bg-muted-foreground/10" />
+              </div>
+            </div>
+          ))}
+        </section>
+      ))}
+    </div>
+  );
+}
 
 function FeedRow({
   entry,

@@ -41,6 +41,7 @@ import type {
 } from "@lynse/views/inspiration";
 import type {
   DesktopWebdavSyncApi,
+  DesktopStorageApi,
   WebdavSyncProgress,
 } from "@lynse/views/settings";
 import {
@@ -55,11 +56,16 @@ import type {
   DesktopFeishuApi,
   FeishuChatSummary,
   FeishuConfig,
-  FeishuIncomingMessage,
   FeishuRegistrationPoll,
   FeishuRegistrationStart,
   FeishuStatus,
 } from "@lynse/views/feishu";
+import type {
+  BotChannelConfig,
+  BotIncomingMessage,
+  BotOutboundApi,
+  DesktopBotsApi,
+} from "@lynse/views/bots";
 import type {
   AudioEditorProgress,
   DesktopAudioEditorApi,
@@ -91,11 +97,14 @@ type DesktopApi = {
   todo: Record<string, (...args: any[]) => Promise<unknown>>;
   inspiration: DesktopInspirationApi;
   webdavSync: DesktopWebdavSyncApi;
+  storage: DesktopStorageApi;
   audioEditor: DesktopAudioEditorApi;
   feishu: DesktopFeishuApi;
-  appInfo: { version: string; platform: string };
+  bots: DesktopBotsApi;
+  appInfo: { version: string; build?: string | null; platform: string };
   app: {
     getInfo: () => Promise<{ version: string; platform: string }>;
+    openAboutWindow: (title?: string) => Promise<void>;
     openLogsFolder: () => Promise<void>;
     // Tail of the app log files for the bug report dialog. `truncated` marks
     // that older rotated archives were left out of the tail.
@@ -336,17 +345,18 @@ export async function installTauriBridge(): Promise<void> {
     audioEditor: {
       status: () => command<{ ffmpegAvailable: boolean }>("audio_editor_status"),
       ensureRuntime: () => command<{ ffmpegAvailable: boolean }>("audio_editor_ensure_runtime"),
-      trim: (source: string, startSec: number, endSec: number, outName?: string) =>
-        command("audio_editor_trim", { source, startSec, endSec, outName }),
+      trim: (source: string, startSec: number, endSec: number, outName?: string, overwrite?: boolean) =>
+        command("audio_editor_trim", { source, startSec, endSec, outName, overwrite }),
       merge: (sources: string[], outName?: string) =>
         command("audio_editor_merge", { sources, outName }),
       removeSilence: (
         source: string,
         options?: { thresholdDb?: number; minSilenceSec?: number; paddingSec?: number },
         outName?: string,
-      ) => command("audio_editor_remove_silence", { source, ...options, outName }),
-      enhanceVoice: (source: string, outName?: string) =>
-        command("audio_editor_enhance_voice", { source, outName }),
+        overwrite?: boolean,
+      ) => command("audio_editor_remove_silence", { source, ...options, outName, overwrite }),
+      enhanceVoice: (source: string, outName?: string, overwrite?: boolean) =>
+        command("audio_editor_enhance_voice", { source, outName, overwrite }),
       cancel: () => command<void>("audio_editor_cancel"),
       onProgress: (callback: (progress: AudioEditorProgress) => void) =>
         getCurrentWebview().listen<AudioEditorProgress>("audio-editor-progress", (event) =>
@@ -365,6 +375,7 @@ export async function installTauriBridge(): Promise<void> {
       stop: () => command<void>("live_translation_stop"),
       getState: () => command<LiveTranslationSnapshot>("live_translation_state"),
       finalizeLocal: (sessionId, synced) => command<void>("live_translation_finalize_local", { sessionId, synced }),
+      discard: (sessionId) => command<void>("live_translation_discard", { sessionId }),
       listRecoveries: () => command<LiveRecoverySummary[]>("live_translation_recoveries"),
       recover: (sessionId) => command<CompletedLiveSession>("live_translation_recover", { sessionId }),
       showSubtitles: (show) => command<void>("live_translation_show_subtitles", { show }),
@@ -437,9 +448,13 @@ export async function installTauriBridge(): Promise<void> {
         return unlisten;
       },
     },
-    appInfo: { version: "0.1.0", platform: "darwin" },
+    appInfo: { version: "0.1.0", build: null, platform: "darwin" },
     app: {
-      getInfo: () => command<{ version: string; platform: string }>("get_app_info"),
+      getInfo: () => command<{ version: string; build: string | null; platform: string }>("get_app_info"),
+      // Opens (or focuses) the standalone About window. The localized title
+      // is passed in because only the frontend knows the active locale.
+      openAboutWindow: (title?: string) =>
+        command<void>("open_about_window", { title: title ?? null }),
       openLogsFolder: () => command<void>("open_logs_folder"),
       readLogs: (maxBytes?: number) =>
         command<{ dir: string; tail: string; truncated: boolean; files: number }>(
@@ -577,11 +592,15 @@ export async function installTauriBridge(): Promise<void> {
           callback(event.payload),
         ),
     },
+    storage: {
+      usage: () => command("storage_usage"),
+      reveal: (category: string) => command("storage_reveal", { category }),
+      clear: (category: string) => command("storage_clear", { category }),
+    },
     feishu: {
       getConfig: () => command<FeishuConfig>("feishu_config_get"),
       saveConfig: (config: FeishuConfig, secret?: string | null) =>
         command<FeishuConfig>("feishu_config_save", { config, secret: secret ?? null }),
-      resetConfig: () => command<FeishuConfig>("feishu_config_reset"),
       start: () => command<FeishuStatus>("feishu_bot_start"),
       stop: () => command<FeishuStatus>("feishu_bot_stop"),
       state: () => command<FeishuStatus>("feishu_state"),
@@ -596,21 +615,6 @@ export async function installTauriBridge(): Promise<void> {
           summary: payload.summary,
           fileId: payload.fileId ?? null,
         }),
-      replyText: (messageId: string, text: string) =>
-        command("feishu_reply_text", { messageId, text }),
-      replyMarkdown: (messageId: string, markdown: string) =>
-        command("feishu_reply_markdown", { messageId, markdown }),
-      updateMarkdownCard: (messageId: string, markdown: string) =>
-        command("feishu_update_markdown_card", { messageId, markdown }),
-      streamStart: (replyTo: string, markdown: string) =>
-        command<{ cardId: string; messageId: string }>("feishu_stream_start", {
-          replyTo,
-          markdown,
-        }),
-      streamPush: (cardId: string, markdown: string, sequence: number) =>
-        command("feishu_stream_push", { cardId, markdown, sequence }),
-      streamFinish: (cardId: string, markdown: string, sequence: number) =>
-        command("feishu_stream_finish", { cardId, markdown, sequence }),
       registerBegin: (options?: { name?: string; desc?: string }) =>
         command<FeishuRegistrationStart>("feishu_register_begin", {
           name: options?.name ?? null,
@@ -622,8 +626,38 @@ export async function installTauriBridge(): Promise<void> {
         getCurrentWebview().listen<FeishuStatus>("feishu-state", (event) =>
           callback(event.payload),
         ),
-      onEvent: (callback: (event: FeishuIncomingMessage) => void) =>
-        getCurrentWebview().listen<FeishuIncomingMessage>("feishu-event", (event) =>
+    },
+    bots: {
+      config: (channel: string) => command("bot_config_get", { channel }),
+      save: (channel: string, config: BotChannelConfig, secret?: string | null) =>
+        command("bot_config_save", { channel, config, secret: secret ?? null }),
+      reset: (channel: string) => command("bot_reset", { channel }),
+      start: (channel: string) => command("bot_start", { channel }),
+      stop: (channel: string, reason?: string) =>
+        command("bot_stop", { channel, reason: reason ?? null }),
+      state: (channel: string) => command("bot_state", { channel }),
+      outbound: (channel: string): BotOutboundApi | null =>
+        channel === "feishu"
+          ? {
+              replyText: (messageId: string, text: string) =>
+                command("feishu_reply_text", { messageId, text }),
+              replyMarkdown: (messageId: string, markdown: string) =>
+                command("feishu_reply_markdown", { messageId, markdown }),
+              updateMarkdownCard: (messageId: string, markdown: string) =>
+                command("feishu_update_markdown_card", { messageId, markdown }),
+              streamStart: (replyTo: string, markdown: string) =>
+                command<{ cardId: string; messageId: string }>("feishu_stream_start", {
+                  replyTo,
+                  markdown,
+                }),
+              streamPush: (cardId: string, markdown: string, sequence: number) =>
+                command("feishu_stream_push", { cardId, markdown, sequence }),
+              streamFinish: (cardId: string, markdown: string, sequence: number) =>
+                command("feishu_stream_finish", { cardId, markdown, sequence }),
+            }
+          : null,
+      onEvent: (callback: (event: BotIncomingMessage) => void) =>
+        getCurrentWebview().listen<BotIncomingMessage>("bot-event", (event) =>
           callback(event.payload),
         ),
     },

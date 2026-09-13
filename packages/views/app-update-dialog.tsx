@@ -135,7 +135,7 @@ export function AppUpdateDialog() {
             {installState.phase === "downloading" && (
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-primary/15">
                 <div
-                  className="h-full rounded-full bg-primary transition-all"
+                  className="h-full rounded-full bg-primary transition-[width]"
                   style={{ width: `${percent}%` }}
                 />
               </div>

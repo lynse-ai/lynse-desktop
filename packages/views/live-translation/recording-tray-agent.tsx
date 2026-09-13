@@ -1,12 +1,17 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
 import { audioModeSources, requestRealtimeSession } from "./api";
 import { useLiveTranslation } from "./use-live-translation";
 import { useRecordingCompleteStore } from "./recording-complete-store";
+import {
+  refreshUntilRecordingVisible,
+  usePendingRecordingStore,
+} from "./pending-recording-store";
 import type {
   DesktopLiveTranslationApi,
   LivePermissionStatus,
@@ -135,7 +140,9 @@ export function RecordingTrayAgent() {
   // user is on any page. This always-mounted listener is what turns the
   // resulting `completed` event into the completion dialog: the session is
   // parked in the hand-off store and the recording page picks it up (now or
-  // on its next visit).
+  // on its next visit). It also retires the optimistic pending card and
+  // refreshes the notes lists until the persisted record shows up.
+  const queryClient = useQueryClient();
   useEffect(() => {
     if (!api) return;
     let disposed = false;
@@ -143,7 +150,17 @@ export function RecordingTrayAgent() {
     void api
       .onEvent((event) => {
         if (event.type === "completed") {
+          usePendingRecordingStore.getState().remove(event.session.sessionId);
+          void refreshUntilRecordingVisible(queryClient, event.session.sessionId);
           useRecordingCompleteStore.getState().open(event.session);
+        } else if (event.type === "error") {
+          // Persist failures arrive as session-less errors after the stop
+          // ack; drop the card that was promising the save. Errors while a
+          // session is still recording keep the card.
+          const { pending, remove } = usePendingRecordingStore.getState();
+          for (const entry of pending) {
+            if (entry.phase === "saving") remove(entry.sessionId);
+          }
         }
       })
       .then((unsub) => {
@@ -154,7 +171,7 @@ export function RecordingTrayAgent() {
       disposed = true;
       cleanup?.();
     };
-  }, [api]);
+  }, [api, queryClient]);
 
   return null;
 }

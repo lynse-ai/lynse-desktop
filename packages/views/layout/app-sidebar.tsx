@@ -25,7 +25,6 @@ import {
   Pencil,
   Palette,
   UserCircle,
-  Download,
   Info,
   ArrowUp,
 } from "lucide-react";
@@ -56,6 +55,7 @@ import {
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
 import { useAppUpdate, getAppInfoSync, openAppUpdateDialog } from "../app-update";
+import { openAboutWindow } from "../about/open-about";
 import { featureFlags } from "../feature-flags";
 import { useUserCredits, useMembership, useUpdateNickname } from "./use-user-credits";
 import { FolderTreeSection } from "../workspace/sidebar/folder-tree-section";
@@ -104,7 +104,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
       <SidebarHeader className={cn("gap-2 px-3 pt-3 pb-2", headerClassName)} style={headerStyle}>
         <DropdownMenu>
           <DropdownMenuTrigger
-            className="group flex w-full items-center gap-2 rounded-lg border border-sidebar-border bg-card/70 px-2.5 py-1.5 text-sm text-muted-foreground shadow-sm transition-all hover:border-primary/35 hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            className="group flex w-full items-center gap-2 rounded-lg border border-sidebar-border bg-card/70 px-2.5 py-1.5 text-sm text-muted-foreground shadow-sm transition-[border-color,background-color,color] hover:border-primary/35 hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
           >
             <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/[0.12] text-primary transition-colors group-hover:bg-primary/[0.18]">
               <Plus className="size-3.5 shrink-0" />
@@ -155,7 +155,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                     href={item.path}
                     title={item.label}
                     className={cn(
-                      "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-3xs font-medium leading-none transition-colors",
+                      "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-3xs font-medium leading-none transition-[color,background-color,transform] duration-150 active:scale-[0.96]",
                       isActive
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                         : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -171,7 +171,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                 href="/todo"
                 title={t("nav.todo")}
                 className={cn(
-                  "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-3xs font-medium leading-none transition-colors",
+                  "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-3xs font-medium leading-none transition-[color,background-color,transform] duration-150 active:scale-[0.96]",
                   isNavActive(pathname, "/todo")
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -185,7 +185,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                 type="button"
                 onClick={() => setTemplateManagerOpen(true)}
                 title={t("templates.title")}
-                className="flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-3xs font-medium leading-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-3xs font-medium leading-none text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-accent hover:text-foreground active:scale-[0.96]"
               >
                 <LayoutTemplate className="size-4 shrink-0" />
                 <span className="w-full truncate text-center">{t("templates.title")}</span>
@@ -299,7 +299,7 @@ function CreditsPopover() {
                 <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
                   <div
                     className={cn(
-                      "h-full rounded-full transition-all",
+                      "h-full rounded-full transition-[width,background-color]",
                       percentage <= 20 ? "bg-destructive/70" : "bg-primary/70"
                     )}
                     style={{ width: `${percentage}%` }}
@@ -321,7 +321,7 @@ function CreditsPopover() {
               <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
                 <div
                   className={cn(
-                    "h-full rounded-full transition-all",
+                    "h-full rounded-full transition-[width,background-color]",
                     (pointsRemaining / pointsTotal) <= 0.2 ? "bg-destructive/70" : "bg-primary/70"
                   )}
                   style={{ width: `${Math.min(100, (pointsRemaining / pointsTotal) * 100)}%` }}
@@ -341,7 +341,7 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
   const { data } = useUserCredits();
   const { data: membership } = useMembership();
   const { theme, setTheme } = useTheme();
-  const { update, checking } = useAppUpdate();
+  const { update } = useAppUpdate();
   const updateNickname = useUpdateNickname();
 
   const nickname = (data?.nickname as string) || "User";
@@ -504,8 +504,8 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
           <span>{t("layout.user_help_feedback")}</span>
         </DropdownMenuItem>
 
-        {/* ── About (version) ─────────────────────────── */}
-        <DropdownMenuItem onClick={onOpenSettings}>
+        {/* ── About (version) — pops the standalone About window ── */}
+        <DropdownMenuItem onClick={openAboutWindow}>
           <Info className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.about")}</span>
           <span className="ml-auto flex items-center gap-1 text-2xs tabular-nums text-muted-foreground">
@@ -514,20 +514,6 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
             )}
             {versionLabel}
           </span>
-        </DropdownMenuItem>
-
-        {/* ── Check for Updates ────────────────────────── */}
-        <DropdownMenuItem
-          onClick={() => openAppUpdateDialog({ refresh: true })}
-          disabled={checking}
-        >
-          <Download className={cn("size-4 text-muted-foreground", checking && "animate-spin")} strokeWidth={1.5} />
-          <span>{checking ? t("layout.checking_update") : t("layout.check_update")}</span>
-          {update?.hasUpdate && (
-            <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-3xs font-medium text-white">
-              !
-            </span>
-          )}
         </DropdownMenuItem>
 
         <DropdownMenuSeparator />
@@ -579,7 +565,7 @@ function UpdateReminder() {
         </p>
         {installBusy ? (
           <div className="mt-1.5 space-y-1">
-            <p className="text-2xs font-medium text-warning-text">
+            <p className="text-2xs font-medium leading-snug text-warning-text tabular-nums">
               {installState.phase === "downloading"
                 ? t("settings.update_downloading", { percent })
                 : installState.phase === "installing"
@@ -588,7 +574,7 @@ function UpdateReminder() {
             </p>
             {installState.phase === "downloading" && installState.total > 0 && (
               <div className="h-1 w-full overflow-hidden rounded-full bg-warning/20">
-                <div className="h-full rounded-full bg-warning transition-all" style={{ width: `${percent}%` }} />
+                <div className="h-full rounded-full bg-warning transition-[width]" style={{ width: `${percent}%` }} />
               </div>
             )}
           </div>

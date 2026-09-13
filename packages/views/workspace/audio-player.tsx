@@ -1,7 +1,8 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback, useImperativeHandle, forwardRef } from "react";
-import { Play, Pause, SkipForward, Volume2, VolumeX } from "../icons";
+import { Play, Pause, SkipForward, Volume2, VolumeX, Scissors } from "../icons";
+import { IconSwap } from "../icon-swap";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useWaveformPeaks } from "./use-waveform-peaks";
 import { WaveformProgress } from "./waveform-progress";
@@ -23,10 +24,12 @@ interface AudioPlayerProps {
   src: string | null | undefined;
   /** Highlight a specific time (ms) when clicked from transcript */
   highlightTimeMs?: number | null;
+  /** Open the audio editor for this recording; renders the scissors entry when set. */
+  onEdit?: () => void;
 }
 
 export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
-  function AudioPlayer({ src, highlightTimeMs }, ref) {
+  function AudioPlayer({ src, highlightTimeMs, onEdit }, ref) {
     const audioRef = useRef<HTMLAudioElement>(null);
     const [playing, setPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
@@ -199,7 +202,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
                 onClick={handleSeek}
               >
                 <div
-                  className="absolute inset-y-0 left-0 rounded-full bg-primary transition-[width] duration-100"
+                  className="absolute inset-y-0 left-0 rounded-full bg-primary"
                   style={{ width: `${progress}%` }}
                 />
                 {/* Thumb */}
@@ -215,13 +218,15 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
               {/* Play / Pause */}
               <button
                 onClick={togglePlay}
-                className="flex size-7 items-center justify-center rounded-full bg-primary text-primary-foreground transition-colors hover:bg-primary/90"
+                className="flex size-7 items-center justify-center rounded-full bg-primary text-primary-foreground transition-[background-color,transform] duration-150 hover:bg-primary/90 active:scale-[0.96]"
               >
-                {playing ? (
-                  <Pause className="size-3.5" />
-                ) : (
-                  <Play className="size-3.5 ml-0.5" />
-                )}
+                <IconSwap stateKey={playing ? "pause" : "play"}>
+                  {playing ? (
+                    <Pause className="size-3.5" />
+                  ) : (
+                    <Play className="size-3.5 ml-0.5" />
+                  )}
+                </IconSwap>
               </button>
 
               {/* Skip forward 15s */}
@@ -240,6 +245,17 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
 
               <div className="flex-1" />
 
+              {/* Edit audio — local recordings only (passed by the parent) */}
+              {onEdit && (
+                <button
+                  onClick={onEdit}
+                  className="flex size-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  title={t("audio_editor.edit")}
+                >
+                  <Scissors className="size-3.5" />
+                </button>
+              )}
+
               {/* Speed */}
               <button
                 onClick={cycleSpeed}
@@ -253,11 +269,13 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
                 onClick={() => setMuted(!muted)}
                 className="flex size-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
-                {muted ? (
-                  <VolumeX className="size-3.5" />
-                ) : (
-                  <Volume2 className="size-3.5" />
-                )}
+                <IconSwap stateKey={muted ? "muted" : "unmuted"}>
+                  {muted ? (
+                    <VolumeX className="size-3.5" />
+                  ) : (
+                    <Volume2 className="size-3.5" />
+                  )}
+                </IconSwap>
               </button>
             </div>
           </div>

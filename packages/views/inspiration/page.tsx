@@ -393,6 +393,40 @@ function JournalCard({ record, dateTime, cardCountLabel, onImageResolved, onOpen
   );
 }
 
+/** Loading skeleton matching the journal layout: a centered day header over
+ *  varied-height card blocks, so the feed doesn't jump when data arrives. */
+function FeedSkeleton() {
+  return (
+    <div className="mx-auto max-w-2xl pb-16" aria-hidden>
+      <div className="mb-3 flex items-baseline justify-center gap-2">
+        <span className="h-5 w-14 animate-pulse rounded bg-muted-foreground/10" />
+        <span className="h-3 w-20 animate-pulse rounded bg-muted-foreground/10" />
+      </div>
+      <div className="flex flex-col gap-3.5">
+        {[176, 96, 232, 128].map((mediaHeight, i) => (
+          <div
+            key={i}
+            className="overflow-hidden rounded-2xl border border-border/50 bg-card shadow-[0_1px_2px_rgba(0,0,0,0.03)]"
+          >
+            <div
+              className="animate-pulse bg-muted-foreground/10"
+              style={{ height: mediaHeight }}
+            />
+            <div className="p-4">
+              <span className="block h-2.5 w-20 animate-pulse rounded bg-muted-foreground/10" />
+              <span className="mt-3 block h-3.5 w-full animate-pulse rounded bg-muted-foreground/10" />
+              <span
+                className="mt-2 block h-3.5 animate-pulse rounded bg-muted-foreground/10"
+                style={{ width: `${45 + seededUnit(String(i)) * 40}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** flomo-style feed with Xiaohongshu masonry and grouped list layouts. */
 export function InspirationPage() {
   const { t, i18n } = useTranslation();
@@ -426,6 +460,22 @@ export function InspirationPage() {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["inspirations"] });
   const deleteMutation = useMutation({
     mutationFn: (id: string) => desktopApi!.delete(id),
+    // Optimistic removal: the card disappears immediately instead of sitting
+    // with a spinner; the snapshot is restored if the delete fails.
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: ["inspirations"] });
+      const previous = queryClient.getQueryData<InspirationRecord[]>(["inspirations"]);
+      queryClient.setQueryData<InspirationRecord[]>(["inspirations"], (old) =>
+        (old ?? []).filter((record) => record.id !== id),
+      );
+      return { previous };
+    },
+    onError: (_error, _id, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(["inspirations"], context.previous);
+      }
+      toast.error(t("inspiration.delete_failed"));
+    },
     onSuccess: () => {
       toast.success(t("inspiration.toast_deleted"));
       void invalidate();
@@ -607,11 +657,9 @@ export function InspirationPage() {
             </div>
           )}
 
-          <div className="flex-1 overflow-y-auto px-6 py-4">
+          <div className="flex-1 overflow-y-auto overscroll-contain px-6 py-4">
             {isLoading ? (
-              <div className="flex h-full items-center justify-center">
-                <Loader2 className="size-5 animate-spin text-muted-foreground" />
-              </div>
+              <FeedSkeleton />
             ) : filtered.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center text-center">
                 <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full bg-muted">

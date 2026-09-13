@@ -18,12 +18,14 @@ import {
   isTranscriptionCompleted,
 } from "../hooks/use-files";
 import { useMoveFiles } from "../hooks/use-folder-mutations";
+import { useDebouncedSearchInput } from "../hooks/use-debounced-search-input";
 import { useNotificationStore } from "../../notifications/use-notification-store";
 import { useFolders } from "../hooks/use-folders";
 import type { WorkspaceItem } from "../types";
 import { filterWorkspaceFilesByFolder } from "./file-list-filter";
 import { LOCAL_TRANSCRIPTION_FOLDER_ID, isLocalFileId } from "../local-transcription";
 import { FileRowContextMenu } from "./file-row-context-menu";
+import { DeleteConfirmDialog } from "../delete-confirm-dialog";
 
 /** Press-and-hold duration (ms) before a row enters multi-select mode. */
 const LONG_PRESS_MS = 400;
@@ -39,7 +41,7 @@ export function FileList() {
   const setFileSummarizing = useWorkspaceStore((s) => s.setFileSummarizing);
   const fileListWidth = useWorkspaceStore((s) => s.fileListWidth);
   const searchQuery = useWorkspaceStore((s) => s.searchQuery);
-  const setSearchQuery = useWorkspaceStore((s) => s.setSearchQuery);
+  const { input: searchInput, setInput: setSearchInput } = useDebouncedSearchInput();
   const fileSortField = useWorkspaceStore((s) => s.fileSortField);
   const fileSortDir = useWorkspaceStore((s) => s.fileSortDir);
   const toggleFileSortField = useWorkspaceStore((s) => s.toggleFileSortField);
@@ -49,7 +51,7 @@ export function FileList() {
   const filterDate = useWorkspaceStore((s) => s.filterDate);
   const { t } = useTranslation();
 
-  const { data: files } = useFiles({
+  const { data: files, isFetching: filesFetching } = useFiles({
     pageNum: 1,
     pageSize: 200,
     folderId: selectedFolderId ?? undefined,
@@ -62,6 +64,8 @@ export function FileList() {
   // Tracks the file the user just right-clicked (may not be in the selection).
   // Used to decide the "转写" vs "重新生成" label for that file in the menu.
   const [rightClickedId, setRightClickedId] = useState<string | null>(null);
+  // Files staged for deletion behind the themed confirm dialog.
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
 
   // Multi-select mode is entered by long-pressing a row; checkboxes are only
   // visible while at least one file is selected.
@@ -170,20 +174,26 @@ export function FileList() {
   };
 
   const handleDelete = (targetIds: string[]) => {
-    if (window.confirm(t("workspace.delete_confirm"))) {
-      deleteMutation.mutate(targetIds, {
-        onSuccess: () => {
-          if (targetIds.includes(selectedItemId ?? "")) {
-            selectItem(null, null);
-          }
-          clearFileSelection();
-        },
-        onError: (error) => {
-          toast.error(t("workspace.delete_failed", { error: error.message }));
-        },
-      });
-    }
+    // Stage the selection; the themed confirm dialog fires the mutation.
+    setPendingDeleteIds(targetIds);
     setRightClickedId(null);
+  };
+
+  const confirmDelete = () => {
+    if (!pendingDeleteIds) return;
+    deleteMutation.mutate(pendingDeleteIds, {
+      onSuccess: () => {
+        if (pendingDeleteIds.includes(selectedItemId ?? "")) {
+          selectItem(null, null);
+        }
+        clearFileSelection();
+        setPendingDeleteIds(null);
+      },
+      onError: (error) => {
+        toast.error(t("workspace.delete_failed", { error: error.message }));
+        setPendingDeleteIds(null);
+      },
+    });
   };
 
   const handleTranscribe = async (targetIds: string[]) => {
@@ -270,7 +280,7 @@ export function FileList() {
             {folderColor ? (
               <span className="size-2.5 shrink-0 rounded-sm" style={{ backgroundColor: folderColor }} />
             ) : null}
-            <span className="truncate text-13 font-semibold tracking-tight text-foreground">{folderName}</span>
+            <span className="truncate text-13 font-semibold tracking-tight text-foreground" title={folderName}>{folderName}</span>
             {multiMode ? (
               <>
                 <input
@@ -308,8 +318,8 @@ export function FileList() {
             <div className="relative flex-1 select-text" data-tauri-drag-region={false}>
               <Search className="absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
               <Input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
                 placeholder={t("workspace.search_files")}
                 className="h-8 rounded-lg border-border bg-card pl-7 text-xs shadow-sm focus-visible:border-primary/50 focus-visible:ring-primary/15"
               />
@@ -340,7 +350,7 @@ export function FileList() {
       )}
 
       {/* File list */}
-      <div className="flex-1 overflow-y-auto px-2 py-2">
+      <div className="flex-1 overflow-y-auto overscroll-contain px-2 py-2">
         {!selectedFolderId ? (
           <div className="flex flex-col items-center justify-center py-10 text-center">
             <FolderOpen className="size-6 text-muted-foreground/50" />
@@ -348,6 +358,8 @@ export function FileList() {
               {t("workspace.select_folder")}
             </p>
           </div>
+        ) : filesFetching && filteredFiles.length === 0 ? (
+          <FileGridSkeleton />
         ) : filteredFiles.length === 0 ? (
           <p className="px-2 py-6 text-center text-2xs text-muted-foreground">
             {t("workspace.no_files")}
@@ -393,6 +405,40 @@ export function FileList() {
           </div>
         )}
       </div>
+
+      <DeleteConfirmDialog
+        open={pendingDeleteIds !== null}
+        description={t("workspace.delete_confirm")}
+        pending={deleteMutation.isPending}
+        onConfirm={confirmDelete}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteIds(null);
+        }}
+      />
+    </div>
+  );
+}
+
+/** Skeleton matching DraggableFileCard (4:3 thumbnail + title lines) so the
+ *  first load reads as a loading grid instead of flashing "no files". */
+function FileGridSkeleton() {
+  return (
+    <div
+      className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-2"
+      aria-hidden
+    >
+      {Array.from({ length: 8 }, (_, i) => (
+        <div
+          key={i}
+          className="overflow-hidden rounded-xl border border-border/70 bg-card"
+        >
+          <div className="aspect-[4/3] animate-pulse bg-muted-foreground/10" />
+          <div className="space-y-2 p-3">
+            <span className="block h-3 w-4/5 animate-pulse rounded bg-muted-foreground/10" />
+            <span className="block h-2.5 w-2/5 animate-pulse rounded bg-muted-foreground/10" />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -533,7 +579,7 @@ function DraggableFileCard({
       onContextMenu={() => onContextMenu?.()}
       style={{ opacity: isDragging ? 0.4 : 1 }}
       className={cn(
-        "group relative flex h-full w-full flex-col overflow-hidden rounded-xl border text-left transition-all",
+        "group relative flex h-full w-full flex-col overflow-hidden rounded-xl border text-left transition-[border-color,background-color,box-shadow]",
         isSelected
           ? "border-primary/40 bg-primary/10 shadow-md"
           : isChecked

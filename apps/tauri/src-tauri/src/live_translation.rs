@@ -1,12 +1,12 @@
 use crate::volc_ast;
-use crate::{app_data_dir, now, save_store_value, update_store_value, CommandResult};
+use crate::{app_data_dir, now, remove_store_value, save_store_value, update_store_value, CommandResult};
 use futures_util::{SinkExt, StreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 #[cfg(target_os = "macos")]
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
@@ -2115,7 +2115,14 @@ async fn finalize_session(app: AppHandle, session: Arc<LiveSession>) {
 fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<CompletedSession> {
     let mic = session.directory.join("mic.wav");
     let system = session.directory.join("system.wav");
-    let playback = session.directory.join("playback.wav");
+    // Name the mixed-down playback file after the recording's end time
+    // (local clock, precise to the second) — this is the name shown in the
+    // completion dialog and carried by the cloud upload, not an internal
+    // "playback.wav".
+    let ended_at = chrono::Local::now();
+    let playback = session
+        .directory
+        .join(format!("{}.wav", ended_at.format("%Y%m%d_%H%M%S")));
     build_playback_wav(
         mic.exists().then_some(mic.as_path()),
         system.exists().then_some(system.as_path()),
@@ -2245,69 +2252,143 @@ fn build_playback_wav(
     system: Option<&Path>,
     output: &Path,
 ) -> CommandResult<()> {
-    let mic_samples = mic.map(read_pcm16_wav).transpose()?.unwrap_or_default();
-    let system_samples = system.map(read_pcm16_wav).transpose()?.unwrap_or_default();
-    if mic_samples.is_empty() && system_samples.is_empty() {
-        return Err("no captured audio was written".to_owned());
+    // Single-source sessions (mic only / system only — the common case) are
+    // already valid 16 kHz mono WAVs: stream-copy instead of decoding and
+    // re-encoding every sample.
+    let no_audio = "no captured audio was written".to_owned();
+    match (mic, system) {
+        (Some(source), None) | (None, Some(source)) => {
+            if fs::metadata(source).map_err(|error| error.to_string())?.len() <= 44 {
+                return Err(no_audio);
+            }
+            fs::copy(source, output).map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+        (None, None) => return Err(no_audio),
+        _ => {}
     }
-    let length = mic_samples.len().max(system_samples.len());
-    let mut mixed = Vec::with_capacity(length);
-    for index in 0..length {
-        let mic = mic_samples.get(index).copied().unwrap_or(0) as i32;
-        let system = system_samples.get(index).copied().unwrap_or(0) as i32;
-        let sample = if mic_samples.is_empty() {
-            system
-        } else if system_samples.is_empty() {
-            mic
-        } else {
-            (mic + system) / 2
-        };
-        mixed.push(sample.clamp(i16::MIN as i32, i16::MAX as i32) as i16);
+    let (mic, system) = (mic.unwrap(), system.unwrap());
+
+    // Streaming mixdown in 64 KB chunks: memory stays flat for hour-long
+    // meetings instead of holding three whole-file sample buffers in RAM.
+    let mic_data_len = wav_data_len(mic)?;
+    let system_data_len = wav_data_len(system)?;
+    if mic_data_len == 0 && system_data_len == 0 {
+        return Err(no_audio);
     }
-    write_pcm16_wav(output, &mixed)
+    let length_samples = usize::try_from(mic_data_len.max(system_data_len) / 2)
+        .map_err(|_| "recording is too large for WAV")?;
+    let mut mic_reader = BufReader::new(File::open(mic).map_err(|error| error.to_string())?);
+    let mut system_reader = BufReader::new(File::open(system).map_err(|error| error.to_string())?);
+    // Skip the 44-byte WAV headers so only PCM data enters the mix.
+    mic_reader
+        .seek(SeekFrom::Start(44))
+        .map_err(|error| error.to_string())?;
+    system_reader
+        .seek(SeekFrom::Start(44))
+        .map_err(|error| error.to_string())?;
+    let mut out = BufWriter::new(File::create(output).map_err(|error| error.to_string())?);
+    write_wav_header(&mut out, length_samples)?;
+    let mut mic_chunk = vec![0u8; MIX_CHUNK_BYTES];
+    let mut system_chunk = vec![0u8; MIX_CHUNK_BYTES];
+    loop {
+        let mic_read = read_chunk(&mut mic_reader, &mut mic_chunk)?;
+        let system_read = read_chunk(&mut system_reader, &mut system_chunk)?;
+        let valid_samples = mic_read.max(system_read) & !1; // keep i16 pairing
+        if valid_samples == 0 {
+            break;
+        }
+        let mut chunk_out = Vec::with_capacity(valid_samples * 2);
+        for index in (0..valid_samples).step_by(2) {
+            let mic = if index + 1 < mic_read {
+                i16::from_le_bytes([mic_chunk[index], mic_chunk[index + 1]]) as i32
+            } else {
+                0
+            };
+            let system = if index + 1 < system_read {
+                i16::from_le_bytes([system_chunk[index], system_chunk[index + 1]]) as i32
+            } else {
+                0
+            };
+            let sample = if mic_read == 0 {
+                system
+            } else if system_read == 0 {
+                mic
+            } else {
+                (mic + system) / 2
+            };
+            chunk_out.extend_from_slice(&(sample.clamp(i16::MIN as i32, i16::MAX as i32) as i16).to_le_bytes());
+        }
+        out.write_all(&chunk_out).map_err(|error| error.to_string())?;
+    }
+    out.flush().map_err(|error| error.to_string())?;
+    Ok(())
 }
 
-fn read_pcm16_wav(path: &Path) -> CommandResult<Vec<i16>> {
-    let bytes = fs::read(path).map_err(|error| error.to_string())?;
-    if bytes.len() < 44 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
-        return Err(format!("invalid WAV: {}", path.display()));
+/// Data-chunk byte length of a 44-byte-header PCM16 WAV.
+fn wav_data_len(path: &Path) -> CommandResult<u64> {
+    let len = fs::metadata(path).map_err(|error| error.to_string())?.len();
+    Ok(len.saturating_sub(44))
+}
+
+/// Reads a full buffer, tolerating a short final chunk. Returns bytes read.
+fn read_chunk(reader: &mut BufReader<File>, buffer: &mut [u8]) -> CommandResult<usize> {
+    let mut filled = 0;
+    while filled < buffer.len() {
+        match reader.read(&mut buffer[filled..]) {
+            Ok(0) => break,
+            Ok(count) => filled += count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error.to_string()),
+        }
     }
-    Ok(bytes[44..]
-        .chunks_exact(2)
-        .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
-        .collect())
+    Ok(filled)
+}
+
+/// Chunk size for the streaming mixdown (32 768 samples = 64 KB of PCM16).
+const MIX_CHUNK_BYTES: usize = 64 * 1024;
+
+/// Writes the 44-byte canonical PCM16 mono 16 kHz WAV header. `data_samples`
+/// is the sample count of the data chunk.
+fn write_wav_header<W: Write>(out: &mut W, data_samples: usize) -> CommandResult<()> {
+    let data_bytes = u32::try_from(data_samples.saturating_mul(2))
+        .map_err(|_| "recording is too large for WAV")?;
+    out.write_all(b"RIFF").map_err(|error| error.to_string())?;
+    out.write_all(&(36 + data_bytes).to_le_bytes())
+        .map_err(|error| error.to_string())?;
+    out.write_all(b"WAVEfmt ")
+        .map_err(|error| error.to_string())?;
+    out.write_all(&16u32.to_le_bytes())
+        .map_err(|error| error.to_string())?;
+    out.write_all(&1u16.to_le_bytes())
+        .map_err(|error| error.to_string())?;
+    out.write_all(&1u16.to_le_bytes())
+        .map_err(|error| error.to_string())?;
+    out.write_all(&16_000u32.to_le_bytes())
+        .map_err(|error| error.to_string())?;
+    out.write_all(&32_000u32.to_le_bytes())
+        .map_err(|error| error.to_string())?;
+    out.write_all(&2u16.to_le_bytes())
+        .map_err(|error| error.to_string())?;
+    out.write_all(&16u16.to_le_bytes())
+        .map_err(|error| error.to_string())?;
+    out.write_all(b"data").map_err(|error| error.to_string())?;
+    out.write_all(&data_bytes.to_le_bytes())
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 pub(crate) fn write_pcm16_wav(path: &Path, samples: &[i16]) -> CommandResult<()> {
-    let data_bytes = u32::try_from(samples.len().saturating_mul(2))
-        .map_err(|_| "recording is too large for WAV")?;
-    let mut file = File::create(path).map_err(|error| error.to_string())?;
-    file.write_all(b"RIFF").map_err(|error| error.to_string())?;
-    file.write_all(&(36 + data_bytes).to_le_bytes())
-        .map_err(|error| error.to_string())?;
-    file.write_all(b"WAVEfmt ")
-        .map_err(|error| error.to_string())?;
-    file.write_all(&16u32.to_le_bytes())
-        .map_err(|error| error.to_string())?;
-    file.write_all(&1u16.to_le_bytes())
-        .map_err(|error| error.to_string())?;
-    file.write_all(&1u16.to_le_bytes())
-        .map_err(|error| error.to_string())?;
-    file.write_all(&16_000u32.to_le_bytes())
-        .map_err(|error| error.to_string())?;
-    file.write_all(&32_000u32.to_le_bytes())
-        .map_err(|error| error.to_string())?;
-    file.write_all(&2u16.to_le_bytes())
-        .map_err(|error| error.to_string())?;
-    file.write_all(&16u16.to_le_bytes())
-        .map_err(|error| error.to_string())?;
-    file.write_all(b"data").map_err(|error| error.to_string())?;
-    file.write_all(&data_bytes.to_le_bytes())
-        .map_err(|error| error.to_string())?;
+    let mut file = BufWriter::new(File::create(path).map_err(|error| error.to_string())?);
+    write_wav_header(&mut file, samples.len())?;
+    // One buffered bulk write — the old per-sample `write_all` cost one
+    // syscall per sample (57 million for an hour of audio).
+    let mut bytes = Vec::with_capacity(samples.len() * 2);
     for sample in samples {
-        file.write_all(&sample.to_le_bytes())
-            .map_err(|error| error.to_string())?;
+        bytes.extend_from_slice(&sample.to_le_bytes());
     }
+    file.write_all(&bytes).map_err(|error| error.to_string())?;
+    file.flush().map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -2337,6 +2418,38 @@ pub fn live_translation_finalize_local(
                 fs::remove_file(path).map_err(|error| error.to_string())?;
             }
         }
+    }
+    Ok(())
+}
+
+/// Cancel the save of a finished recording: drop the cached
+/// local-transcriptions entry and delete the whole session directory
+/// (the end-time-named playback WAV, raw sources, transcript). Backs the
+/// completion dialog's "取消" button — without it a cancelled recording
+/// would stay in the notes list forever.
+#[tauri::command]
+pub fn live_translation_discard(
+    app: AppHandle,
+    state: State<LiveTranslationManager>,
+    session_id: String,
+) -> CommandResult<()> {
+    if !valid_session_id(&session_id) {
+        return Err("invalid live translation session id".to_owned());
+    }
+    // Never delete data out from under a live session.
+    let active = state
+        .session
+        .lock()
+        .map_err(|_| "live session lock is poisoned")?
+        .as_ref()
+        .map(|session| session.session_id.clone());
+    if active.as_deref() == Some(session_id.as_str()) {
+        return Err("cannot discard the active live translation session".to_owned());
+    }
+    remove_store_value(&app, "local-transcriptions", &format!("local:live:{session_id}"))?;
+    let directory = recovery_root(&app)?.join(session_id);
+    if directory.exists() {
+        fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -3316,12 +3429,32 @@ mod tests {
     }
 
     #[test]
-    fn writes_and_reads_pcm16_wav() {
-        let path =
-            std::env::temp_dir().join(format!("lynse-wav-test-{}.wav", uuid::Uuid::new_v4()));
-        let samples = vec![i16::MIN, -1, 0, 1, i16::MAX];
-        write_pcm16_wav(&path, &samples).unwrap();
-        assert_eq!(read_pcm16_wav(&path).unwrap(), samples);
-        let _ = fs::remove_file(path);
+    fn build_playback_wav_copies_single_source_and_mixes_dual_sources() {
+        let directory = std::env::temp_dir().join(format!("lynse-mix-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+
+        // Single source: the file must be copied verbatim (no re-encode).
+        let mic = directory.join("mic.wav");
+        write_pcm16_wav(&mic, &[100, -200, 300]).unwrap();
+        let playback = directory.join("playback.wav");
+        build_playback_wav(Some(&mic), None, &playback).unwrap();
+        let copied = fs::read(&playback).unwrap();
+        let original = fs::read(&mic).unwrap();
+        assert_eq!(copied, original, "single source must copy byte-for-byte");
+
+        // Dual source: samples are averaged, clamped, and the shorter stream
+        // is padded with silence past its end.
+        let system = directory.join("system.wav");
+        write_pcm16_wav(&system, &[100, 100, i16::MAX, i16::MAX]).unwrap();
+        build_playback_wav(Some(&mic), Some(&system), &playback).unwrap();
+        let bytes = fs::read(&playback).unwrap();
+        let data = &bytes[44..];
+        let sample = |index: usize| i16::from_le_bytes([data[index * 2], data[index * 2 + 1]]);
+        assert_eq!(data.len() / 2, 4, "output spans the longer source");
+        assert_eq!(sample(0), 100, "(100 + 100) / 2");
+        assert_eq!(sample(1), -50, "(-200 + 100) / 2");
+        assert_eq!(sample(2), ((300 + i16::MAX as i32) / 2) as i16);
+        assert_eq!(sample(3), ((i16::MAX as i32) / 2) as i16, "beyond mic's end it is silence, so the system tail plays at half gain");
+        let _ = fs::remove_dir_all(directory);
     }
 }

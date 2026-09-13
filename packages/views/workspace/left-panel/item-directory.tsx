@@ -10,9 +10,11 @@ import { Input } from "@lynse/ui/components/ui/input";
 import { ScrollArea } from "@lynse/ui/components/ui/scroll-area";
 import { Collapsible } from "@lynse/ui/components/ui/collapsible";
 import { useAuthStore } from "@lynse/core/auth";
+import { useTranslation } from "@lynse/core/i18n/react";
 import { useWorkspaceStore } from "../store";
 import { useFiles } from "../hooks/use-files";
 import { useFolders } from "../hooks/use-folders";
+import { useDebouncedSearchInput } from "../hooks/use-debounced-search-input";
 
 interface GroupedItem {
   id: string;
@@ -21,8 +23,9 @@ interface GroupedItem {
 }
 
 export function ItemDirectory() {
+  const { t } = useTranslation();
   const searchQuery = useWorkspaceStore((s) => s.searchQuery);
-  const setSearchQuery = useWorkspaceStore((s) => s.setSearchQuery);
+  const { input: searchInput, setInput: setSearchInput } = useDebouncedSearchInput(300);
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
   const selectItem = useWorkspaceStore((s) => s.selectItem);
   const collapsedGroups = useWorkspaceStore((s) => s.collapsedGroups);
@@ -94,9 +97,9 @@ export function ItemDirectory() {
         <div className="relative">
           <Search className="absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" />
           <Input
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search files..."
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder={t("workspace.search_files")}
             className="h-8 pl-8 text-xs"
           />
         </div>

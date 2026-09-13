@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { IconSwap } from "../icon-swap";
 import { useWorkspaceStore } from "../workspace/store";
 import { ContentPanel } from "../workspace/content-panel";
 import { ChatPanel } from "../workspace/right-panel/chat-panel";
@@ -18,8 +19,13 @@ import {
 import { useMoveFiles } from "../workspace/hooks/use-folder-mutations";
 import { useFolders } from "../workspace/hooks/use-folders";
 import { FileRowContextMenu } from "../workspace/middle-panel/file-row-context-menu";
+import { DeleteConfirmDialog } from "../workspace/delete-confirm-dialog";
 import { filterWorkspaceFilesByFolder } from "../workspace/middle-panel/file-list-filter";
 import { LOCAL_TRANSCRIPTION_FOLDER_ID, isLocalFileId } from "../workspace/local-transcription";
+import {
+  pendingRecordingRecordId,
+  usePendingRecordingStore,
+} from "../live-translation/pending-recording-store";
 import {
   getDesktopVaultApi,
   markVaultLastSync,
@@ -48,8 +54,6 @@ import {
   Trash2,
   Circle,
   Filter,
-  LayoutGrid,
-  List,
   X,
   Loader2,
   RefreshCw,
@@ -60,8 +64,6 @@ import {
 import { UploadDialog } from "../workspace/upload-dialog";
 import { cn } from "@lynse/ui/lib/utils";
 import type { WorkspaceItem, FolderInfo } from "../workspace/types";
-
-type ViewMode = "list" | "grid";
 
 /**
  * Local cache of the notes list, so a refresh (or app reload) paints the last
@@ -285,7 +287,8 @@ export function NotesPage() {
   const reduceMotion = useReducedMotion();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
-  const [viewMode, setViewMode] = useState<ViewMode>("list");
+  // Files staged for deletion behind the themed confirm dialog.
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
 
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
   const selectedFolderId = useWorkspaceStore((s) => s.selectedFolderId);
@@ -317,7 +320,7 @@ export function NotesPage() {
     return toApiDateTime(d);
   }, []);
 
-  const { data: files } = useNotes({
+  const { data: files, isFetching: filesFetching } = useNotes({
     // Wide range → effectively "all my meetings" (recordings + their notes).
     startTime: "2020-01-01T00:00:00",
     endTime,
@@ -345,19 +348,25 @@ export function NotesPage() {
   };
 
   const handleDeleteFile = (targetIds: string[]) => {
-    if (window.confirm(t("workspace.delete_confirm"))) {
-      deleteMutation.mutate(targetIds, {
-        onSuccess: () => {
-          if (targetIds.includes(selectedItemId ?? "")) {
-            selectItem(null, null);
-          }
-          clearFileSelection();
-        },
-        onError: (error) => {
-          toast.error(t("workspace.delete_failed", { error: error.message }));
-        },
-      });
-    }
+    // Stage the selection; the themed confirm dialog fires the mutation.
+    setPendingDeleteIds(targetIds);
+  };
+
+  const confirmDeleteFile = () => {
+    if (!pendingDeleteIds) return;
+    deleteMutation.mutate(pendingDeleteIds, {
+      onSuccess: () => {
+        if (pendingDeleteIds.includes(selectedItemId ?? "")) {
+          selectItem(null, null);
+        }
+        clearFileSelection();
+        setPendingDeleteIds(null);
+      },
+      onError: (error) => {
+        toast.error(t("workspace.delete_failed", { error: error.message }));
+        setPendingDeleteIds(null);
+      },
+    });
   };
 
   // Last known-good list, hydrated from localStorage on mount.
@@ -377,7 +386,26 @@ export function NotesPage() {
   // refetch), so the panel never goes blank.
   // Logged out → the notes query is disabled and `files` is undefined; never
   // surface cached cloud data in that state.
-  const sourceFiles = files ?? (isAuthenticated ? cachedFiles : []);
+  // Optimistic cards for recordings that have started but not persisted yet;
+  // the tray agent retires them (and refreshes this list) on `completed`.
+  const pendingRecordings = usePendingRecordingStore((s) => s.pending);
+  const sourceFiles = useMemo(() => {
+    const base = files ?? (isAuthenticated ? cachedFiles : []);
+    if (pendingRecordings.length === 0) return base;
+    const placeholders = pendingRecordings.map(
+      (entry): WorkspaceItem => ({
+        id: pendingRecordingRecordId(entry.sessionId),
+        type: "file",
+        title: entry.title,
+        createdAt: entry.startedAt,
+        updatedAt: entry.startedAt,
+        folderId: LOCAL_TRANSCRIPTION_FOLDER_ID,
+        localStatus: entry.phase,
+        transcriptionCompleted: false,
+      }),
+    );
+    return [...placeholders, ...base];
+  }, [files, isAuthenticated, cachedFiles, pendingRecordings]);
 
   // One-click mirror of every cloud note into the local markdown vault.
   const vaultApi = getDesktopVaultApi();
@@ -451,7 +479,7 @@ export function NotesPage() {
         localIds
           .map((id) => byId.get(id))
           .filter((file): file is (typeof filteredFiles)[number] => !!file)
-          .map((file) => ({ id: file.id, title: file.title })),
+          .map((file) => ({ id: file.id, title: file.title, createdAt: file.createdAt })),
       );
       push("/audio-editor");
     },
@@ -628,17 +656,17 @@ export function NotesPage() {
   const folderDropdownItems = (
     <DropdownMenuContent align="end" className="w-52">
       <DropdownMenuItem onClick={() => handleSelectFolder("__all__")}>
-        <Layers className="mr-2 size-4 text-muted-foreground" strokeWidth={1.5} />
+        <Layers className="me-2 size-4 text-muted-foreground" strokeWidth={1.5} />
         <span className="flex-1">{t("layout.all_files")}</span>
         <FolderCount count={folderCounts.get("__all__")} />
       </DropdownMenuItem>
       <DropdownMenuItem onClick={() => handleSelectFolder(LOCAL_TRANSCRIPTION_FOLDER_ID)}>
-        <FileAudio className="mr-2 size-4 text-muted-foreground" strokeWidth={1.5} />
+        <FileAudio className="me-2 size-4 text-muted-foreground" strokeWidth={1.5} />
         <span className="flex-1">{t("layout.local_transcriptions")}</span>
         <FolderCount count={folderCounts.get(LOCAL_TRANSCRIPTION_FOLDER_ID)} />
       </DropdownMenuItem>
       <DropdownMenuItem onClick={() => handleSelectFolder("__uncategorized__")}>
-        <Circle className="mr-2 size-4 text-muted-foreground" strokeWidth={1.5} />
+        <Circle className="me-2 size-4 text-muted-foreground" strokeWidth={1.5} />
         <span className="flex-1">{t("layout.uncategorized")}</span>
         <FolderCount count={folderCounts.get("__uncategorized__")} />
       </DropdownMenuItem>
@@ -649,9 +677,9 @@ export function NotesPage() {
       {folderList.map((folder) => (
         <DropdownMenuItem key={folder.id} onClick={() => handleSelectFolder(String(folder.id))}>
           {folder.color ? (
-            <span className="mr-2 size-2.5 rounded-full" style={{ backgroundColor: folder.color }} />
+            <span className="me-2 size-2.5 rounded-full" style={{ backgroundColor: folder.color }} />
           ) : (
-            <Circle className="mr-2 size-4 text-muted-foreground" strokeWidth={1.5} />
+            <Circle className="me-2 size-4 text-muted-foreground" strokeWidth={1.5} />
           )}
           <span className="flex-1 truncate">{folder.folderName}</span>
           <FolderCount count={folderCounts.get(String(folder.id))} />
@@ -659,7 +687,7 @@ export function NotesPage() {
       ))}
       <DropdownMenuSeparator />
       <DropdownMenuItem onClick={() => handleSelectFolder("__trash__")}>
-        <Trash2 className="mr-2 size-4 text-muted-foreground" strokeWidth={1.5} />
+        <Trash2 className="me-2 size-4 text-muted-foreground" strokeWidth={1.5} />
         {t("layout.trash")}
       </DropdownMenuItem>
     </DropdownMenuContent>
@@ -695,7 +723,7 @@ export function NotesPage() {
                 style={{ backgroundColor: currentFolderColor }}
               />
             )}
-            <h2 className="min-w-0 truncate text-sm font-semibold text-foreground">{currentFolderName}</h2>
+            <h2 className="min-w-0 truncate text-sm font-semibold text-foreground" title={currentFolderName}>{currentFolderName}</h2>
             <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
               ({filteredFiles.length})
             </span>
@@ -731,7 +759,7 @@ export function NotesPage() {
                   type="button"
                   onClick={() => setUploadOpen(true)}
                   title={t("layout.new_recording_import")}
-                  className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-accent hover:text-foreground active:scale-[0.96]"
                   data-tauri-drag-region={false}
                 >
                   <Upload className="size-4" />
@@ -742,14 +770,16 @@ export function NotesPage() {
                     onClick={handleSyncVault}
                     disabled={vaultSyncing}
                     title={t("vault.sync_all")}
-                    className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                    className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-accent hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50"
                     data-tauri-drag-region={false}
                   >
-                    {vaultSyncing ? (
-                      <Loader2 className="size-4 animate-spin" />
-                    ) : (
-                      <LayersArrowDown className="size-4" />
-                    )}
+                    <IconSwap stateKey={vaultSyncing ? "busy" : "idle"}>
+                      {vaultSyncing ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <LayersArrowDown className="size-4" />
+                      )}
+                    </IconSwap>
                   </button>
                 )}
                 <DropdownMenu>
@@ -765,88 +795,18 @@ export function NotesPage() {
                   </DropdownMenuTrigger>
                   {folderDropdownItems}
                 </DropdownMenu>
-
-                <button
-                  type="button"
-                  onClick={() => setViewMode("grid")}
-                  title={t("notes.grid_view")}
-                  className={cn(
-                    "flex size-8 items-center justify-center rounded-lg transition-colors",
-                    viewMode === "grid"
-                      ? "bg-muted text-foreground"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                  )}
-                >
-                  <LayoutGrid className="size-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode("list")}
-                  title={t("notes.list_view")}
-                  className={cn(
-                    "flex size-8 items-center justify-center rounded-lg transition-colors",
-                    viewMode === "list"
-                      ? "bg-muted text-foreground"
-                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
-                  )}
-                >
-                  <List className="size-4" />
-                </button>
               </div>
             )}
           </div>
         </div>
 
-        {/* File list / grid, grouped by time. Extra bottom padding while the
+        {/* File list, grouped by time. Extra bottom padding while the
             batch bar is up so the last rows aren't hidden behind it. */}
-        <div className={cn("flex-1 overflow-y-auto", multiMode && "pb-20")}>
-          {timeSections.length === 0 ? (
+        <div className={cn("flex-1 overflow-y-auto overscroll-contain", multiMode && "pb-20")}>
+          {filesFetching && timeSections.length === 0 ? (
+            <NotesListSkeleton />
+          ) : timeSections.length === 0 ? (
             <EmptyState />
-          ) : viewMode === "grid" ? (
-            <div className="pb-4">
-              {timeSections.map((section) => (
-                <div key={section.key} className="px-4 pt-3">
-                  <TimeSectionHeader label={section.label} count={section.items.length} />
-                  <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3 pb-1 pt-2">
-                    {section.items.map((file) => {
-                      const isChecked = selectedFileIds.has(file.id);
-                      const targetIds =
-                        isChecked && selectedFileIds.size > 0
-                          ? Array.from(selectedFileIds)
-                          : [file.id];
-                      return (
-                        <FileRowContextMenu
-                          key={file.id}
-                          file={file}
-                          targetIds={targetIds}
-                          folders={folderList}
-                          canTranscribe={
-                            !!defaultTemplateId && !targetIds.some((id) => isLocalFileId(id))
-                          }
-                          transcribedIds={transcribedIds}
-                          onMove={handleMoveFile}
-                          onDelete={handleDeleteFile}
-                          onTranscribe={handleTranscribe}
-                          onEditAudio={targetIds.some((id) => isLocalFileId(id)) ? handleEditAudio : undefined}
-                        >
-                          <GridCard
-                            file={file}
-                            isSelected={selectedItemId === file.id}
-                            unread={unreadIds.has(file.id)}
-                            isSummarizing={summarizingFileIds.has(file.id)}
-                            isChecked={isChecked}
-                            multiMode={multiMode}
-                            onOpen={() => handleOpenNote(file)}
-                            onToggleSelect={() => toggleFileSelected(file.id)}
-                            onLongPressSelect={() => handleLongPressSelect(file.id)}
-                          />
-                        </FileRowContextMenu>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-            </div>
           ) : (
             <div>
               {timeSections.map((section) => (
@@ -902,7 +862,13 @@ export function NotesPage() {
               key="batch-action-bar"
               initial={{ opacity: 0, y: 24, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 16, scale: 0.96 }}
+              exit={{
+                opacity: 0,
+                y: 12,
+                transition: reduceMotion
+                  ? { duration: 0 }
+                  : { duration: 0.18, ease: "easeOut" },
+              }}
               transition={
                 reduceMotion
                   ? { duration: 0 }
@@ -915,7 +881,7 @@ export function NotesPage() {
                   <DropdownMenuTrigger
                     disabled={movableFolders.length === 0}
                     title={t("workspace.move_to")}
-                    className="flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+                    className="flex h-8 items-center gap-1.5 rounded-[12px] px-3 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
                     data-tauri-drag-region={false}
                   >
                     <FolderOpen className="size-4 text-muted-foreground" strokeWidth={1.5} />
@@ -936,11 +902,11 @@ export function NotesPage() {
                         >
                           {folder.color ? (
                             <span
-                              className="mr-2 size-2.5 rounded-full"
+                              className="me-2 size-2.5 rounded-full"
                               style={{ backgroundColor: folder.color }}
                             />
                           ) : (
-                            <Circle className="mr-2 size-4 text-muted-foreground" strokeWidth={1.5} />
+                            <Circle className="me-2 size-4 text-muted-foreground" strokeWidth={1.5} />
                           )}
                           <span className="truncate">{folder.folderName}</span>
                         </DropdownMenuItem>
@@ -956,7 +922,7 @@ export function NotesPage() {
                   disabled={!canBatchTranscribe || selectionTranscribing}
                   onClick={() => handleTranscribe(selectionIds)}
                   title={batchTranscribeLabel}
-                  className="flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
+                  className="flex h-8 items-center gap-1.5 rounded-[12px] px-3 text-xs font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-50"
                   data-tauri-drag-region={false}
                 >
                   <RefreshCw className="size-4 text-muted-foreground" strokeWidth={1.5} />
@@ -969,7 +935,7 @@ export function NotesPage() {
                   type="button"
                   onClick={() => handleDeleteFile(selectionIds)}
                   title={t("workspace.delete_selected")}
-                  className="flex h-8 items-center gap-1.5 rounded-xl px-3 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
+                  className="flex h-8 items-center gap-1.5 rounded-[12px] px-3 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"
                   data-tauri-drag-region={false}
                 >
                   <Trash2 className="size-4" strokeWidth={1.5} />
@@ -1036,6 +1002,15 @@ export function NotesPage() {
         )}
       </AnimatePresence>
       <UploadDialog open={uploadOpen} onOpenChange={setUploadOpen} />
+      <DeleteConfirmDialog
+        open={pendingDeleteIds !== null}
+        description={t("workspace.delete_confirm")}
+        pending={deleteMutation.isPending}
+        onConfirm={confirmDeleteFile}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteIds(null);
+        }}
+      />
     </div>
   );
 }
@@ -1045,7 +1020,7 @@ function TimeSectionHeader({ label, count }: { label: string; count: number }) {
     <div className="sticky top-0 z-10 flex items-center gap-2 bg-background/90 px-4 py-1.5 backdrop-blur-sm">
       <span className="text-xs font-semibold tracking-wide text-muted-foreground">{label}</span>
       <span className="text-2xs tabular-nums text-muted-foreground/70">{count}</span>
-      <div className="ml-1 h-px flex-1 bg-border/40" />
+      <div className="ms-1 h-px flex-1 bg-border/40" />
     </div>
   );
 }
@@ -1096,90 +1071,24 @@ function FileRow({
           checked={isChecked}
           onChange={onToggleSelect}
           onClick={(e) => e.stopPropagation()}
-          className="mr-2.5 size-3.5 shrink-0 cursor-pointer accent-primary"
+          className="me-2.5 size-3.5 shrink-0 cursor-pointer accent-primary"
         />
       )}
       {/* Info */}
       <div className="min-w-0 flex-1">
-        <h3 className="truncate text-sm font-semibold text-foreground">{file.title}</h3>
+        <h3 className="truncate text-sm font-semibold text-foreground" title={file.title}>{file.title}</h3>
         <NoteMetadata file={file} />
       </div>
       {isSummarizing ? (
-        <span className="ml-2 shrink-0" title={t("workspace.summarizing")}>
+        <span className="ms-2 shrink-0" title={t("workspace.summarizing")}>
           <Loader2 className="size-3.5 animate-spin text-primary" />
         </span>
       ) : unread ? (
         <span
-          className="ml-2 size-2 shrink-0 rounded-full bg-destructive"
+          className="ms-2 size-2 shrink-0 rounded-full bg-destructive"
           title={t("notes.unread_hint")}
         />
       ) : null}
-    </button>
-  );
-}
-
-function GridCard({
-  file,
-  isSelected,
-  unread,
-  isSummarizing,
-  isChecked,
-  multiMode,
-  onOpen,
-  onToggleSelect,
-  onLongPressSelect,
-}: {
-  file: WorkspaceItem;
-  isSelected: boolean;
-  /** Transcription finished but the note hasn't been opened yet — shows the dot. */
-  unread: boolean;
-  /** Batch transcription pipeline currently running for this note. */
-  isSummarizing: boolean;
-  isChecked: boolean;
-  multiMode: boolean;
-  onOpen: () => void;
-  onToggleSelect: () => void;
-  onLongPressSelect: () => void;
-}) {
-  const { t } = useTranslation();
-  const press = useLongPressSelection({ multiMode, onOpen, onToggleSelect, onLongPressSelect });
-  return (
-    <button
-      {...press}
-      className={cn(
-        "group relative flex flex-col rounded-xl border bg-card p-2.5 text-left transition-colors hover:border-primary/20 hover:bg-accent/30",
-        isChecked
-          ? "border-primary/40 bg-primary/5"
-          : isSelected
-            ? "border-primary/40 bg-accent/40 ring-1 ring-primary/30"
-            : "border-border/60"
-      )}
-    >
-      {isSummarizing ? (
-        <span className="absolute right-2 top-2" title={t("workspace.summarizing")}>
-          <Loader2 className="size-3.5 animate-spin text-primary" />
-        </span>
-      ) : unread ? (
-        <span
-          className="absolute right-2 top-2 size-2 rounded-full bg-destructive"
-          title={t("notes.unread_hint")}
-        />
-      ) : null}
-      {multiMode && (
-        <span className="absolute left-1.5 top-1.5 flex size-4 items-center justify-center">
-          <input
-            type="checkbox"
-            aria-label={t("workspace.select_file", { name: file.title })}
-            checked={isChecked}
-            onChange={onToggleSelect}
-            onClick={(e) => e.stopPropagation()}
-            className="size-3.5 cursor-pointer accent-primary"
-          />
-        </span>
-      )}
-      {/* Title */}
-      <h3 className="line-clamp-2 min-h-[2.25rem] text-sm font-semibold leading-[1.125rem] text-foreground">{file.title}</h3>
-      <NoteMetadata file={file} />
     </button>
   );
 }
@@ -1248,6 +1157,37 @@ function formatRecordingDuration(value: number | undefined): string {
   return hours > 0
     ? `${String(hours).padStart(2, "0")}:${minuteLabel}:${secondLabel}`
     : `${minuteLabel}:${secondLabel}`;
+}
+
+/** Skeleton matching the grouped list (time header + rows) so the first load
+ *  doesn't flash the empty state while the meeting list is in flight. */
+function NotesListSkeleton() {
+  return (
+    <div className="pb-4" aria-hidden>
+      {[3, 2].map((rows, s) => (
+        <div key={s} className="px-4 pt-3">
+          <div className="flex items-center gap-2 pb-1 pt-2">
+            <span className="h-3 w-16 animate-pulse rounded bg-muted-foreground/10" />
+            <span className="h-3 w-6 animate-pulse rounded bg-muted-foreground/10" />
+          </div>
+          <div className="flex flex-col gap-2">
+            {Array.from({ length: rows }, (_, i) => (
+              <div
+                key={i}
+                className="flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2.5"
+              >
+                <span className="size-8 shrink-0 animate-pulse rounded-lg bg-muted-foreground/10" />
+                <div className="min-w-0 flex-1">
+                  <span className="block h-3 w-2/5 animate-pulse rounded bg-muted-foreground/10" />
+                  <span className="mt-1.5 block h-2.5 w-1/4 animate-pulse rounded bg-muted-foreground/10" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function EmptyState() {

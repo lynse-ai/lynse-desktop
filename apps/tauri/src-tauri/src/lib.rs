@@ -15,7 +15,7 @@ use std::time::Duration;
 use tauri::http::{header, Request, Response, StatusCode};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, Runtime, UriSchemeContext};
+use tauri::{AppHandle, Emitter, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -26,6 +26,7 @@ mod live_translation;
 mod inspiration_voice;
 mod meeting_detector;
 mod feishu;
+mod bots;
 mod recording_card;
 mod audio_editor;
 mod stt;
@@ -41,6 +42,7 @@ mod mic_permission;
 mod vault;
 mod volc_ast;
 mod webdav;
+mod storage;
 mod window_effects;
 
 use live_translation::LiveTranslationManager;
@@ -145,7 +147,7 @@ fn save_store_value(app: &AppHandle, directory: &str, value: Value) -> CommandRe
     Ok(value)
 }
 
-fn remove_store_value(app: &AppHandle, directory: &str, id: &str) -> CommandResult<()> {
+pub(crate) fn remove_store_value(app: &AppHandle, directory: &str, id: &str) -> CommandResult<()> {
     let path = local_store_path(app, directory)?;
     let values = read_array(&path)?;
     let next: Vec<Value> = values
@@ -2081,8 +2083,15 @@ fn local_transcription_delete(app: AppHandle, id: String) -> CommandResult<()> {
 
 #[tauri::command]
 fn local_transcription_audio_url(app: AppHandle, id: String) -> CommandResult<Option<String>> {
-    Ok(get_store_value(&app, "local-transcriptions", &id)?.map(|_| {
-        format!("local-media://localhost/{}", utf8_percent_encode(&id, NON_ALPHANUMERIC))
+    // `?v=<updatedAt>` busts the webview's cache after an in-place edit
+    // overwrites the record's audio; the media handler only reads the path.
+    Ok(get_store_value(&app, "local-transcriptions", &id)?.map(|record| {
+        let version = record.get("updatedAt").and_then(Value::as_str).unwrap_or_default();
+        format!(
+            "local-media://localhost/{}?v={}",
+            utf8_percent_encode(&id, NON_ALPHANUMERIC),
+            utf8_percent_encode(version, NON_ALPHANUMERIC)
+        )
     }))
 }
 
@@ -2530,15 +2539,15 @@ fn secure_delete_secret(app: AppHandle, account: String) -> CommandResult<()> {
     secret_delete(&app, &account)
 }
 
-fn media_response<R: Runtime>(context: UriSchemeContext<'_, R>, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
+fn media_response_body(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let id = request
         .uri()
         .path()
         .strip_prefix('/')
         .map(|value| percent_decode_str(value).decode_utf8_lossy().into_owned());
-    let result = (|| -> CommandResult<(PathBuf, u64, u64, bool)> {
+    let result = (|| -> CommandResult<(PathBuf, u64, u64, bool, u64)> {
         let id = id.ok_or("Missing local media id")?;
-        let data_dir = context.app_handle().path().app_data_dir().map_err(|error| error.to_string())?;
+        let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
         // Paths come in two shapes: `<id>` resolves the record's audio file,
         // `<id>/<file>` picks a concrete asset (a saved inspiration image),
         // and `staging:<file>` previews an attachment that is not saved yet.
@@ -2582,22 +2591,37 @@ fn media_response<R: Runtime>(context: UriSchemeContext<'_, R>, request: Request
                 .ok_or("Unknown local media id")?;
             PathBuf::from(record.get("sourcePath").and_then(Value::as_str).ok_or("Missing source path")?)
         };
-        let length = fs::metadata(&path).map_err(|error| error.to_string())?.len();
+        let total = fs::metadata(&path).map_err(|error| error.to_string())?.len();
         let range = request.headers().get(header::RANGE).and_then(|value| value.to_str().ok());
-        let (start, end, partial) = parse_range(range, length);
-        Ok((path, start, end, partial))
+        let (start, end, partial) = parse_range(range, total);
+        Ok((path, start, end, partial, total))
     })();
-    let Ok((path, start, end, partial)) = result else {
-        return Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap();
+    let Ok((path, start, end, partial, total)) = result else {
+        return Response::builder()
+            // WKWebView treats custom-scheme fetches as cross-origin; without
+            // this header `fetch("local-media://…")` fails and waveform
+            // decoding (editor + player scrubber) never sees the bytes.
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .status(StatusCode::NOT_FOUND)
+            .body(Vec::new())
+            .unwrap();
     };
     let mut file = match File::open(&path) { Ok(file) => file, Err(_) => return Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap() };
-    let length = end.saturating_sub(start).saturating_add(1);
-    let mut body = vec![0; length as usize];
+    // Read exactly the requested span. WebKit probes media with offset
+    // ranges (an m4a's moov atom sits at the tail), so a range response must
+    // carry `end - start + 1` bytes — a full-file buffer overruns EOF here
+    // and fails every such load.
+    let span = end.saturating_sub(start).saturating_add(1);
+    let mut body = vec![0; span as usize];
     if file.seek(SeekFrom::Start(start)).and_then(|_| file.read_exact(&mut body)).is_err() {
-        return Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Vec::new()).unwrap();
+        return Response::builder()
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .body(Vec::new())
+            .unwrap();
     }
-    let total = fs::metadata(&path).map(|metadata| metadata.len()).unwrap_or(end + 1);
     let mut builder = Response::builder()
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .header(header::CONTENT_TYPE, mime_guess::from_path(&path).first_or_octet_stream().essence_str())
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CONTENT_LENGTH, body.len());
@@ -2649,6 +2673,26 @@ fn migrate_electron_data(app: &AppHandle) -> CommandResult<()> {
 // tauri-plugin-updater (endpoints + pubkey live in tauri.conf.json), with
 // release assets published to GitHub Releases by `.github/workflows/release.yml`.
 
+/// The macOS build number the release workflow stamps into the bundle's
+/// Info.plist (`CFBundleVersion` — the monotonic CI run number, see the
+/// "Stamp build number" step). Dev builds have no bundle and return None.
+/// Windows/msi builds carry no build number either.
+#[cfg(target_os = "macos")]
+fn bundle_build_number() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let plist = fs::read_to_string(exe.parent()?.parent()?.join("Info.plist")).ok()?;
+    let key = plist.find("CFBundleVersion")?;
+    let open = plist[key..].find("<string>")? + "<string>".len();
+    let close = plist[open..].find("</string>")?;
+    let value = plist[open..open + close].trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn bundle_build_number() -> Option<String> {
+    None
+}
+
 #[tauri::command]
 fn get_app_info(app: AppHandle) -> Value {
     let version = app.package_info().version.to_string();
@@ -2658,7 +2702,7 @@ fn get_app_info(app: AppHandle) -> Value {
         "linux" => "linux",
         other => other,
     };
-    json!({ "version": version, "platform": platform })
+    json!({ "version": version, "build": bundle_build_number(), "platform": platform })
 }
 
 /// Reveal the app log folder in the system file manager so users can attach
@@ -2915,6 +2959,66 @@ pub(crate) fn show_main_window(app: &AppHandle) {
     live_translation::set_recording_island_visible(app, false);
 }
 
+/// Logical size of the standalone About window (icon, version, legal links).
+const ABOUT_WINDOW_WIDTH: f64 = 320.0;
+const ABOUT_WINDOW_HEIGHT: f64 = 460.0;
+
+/// Center `window` over the main window (falling back to the screen center),
+/// so the About popup reads as attached to the app instead of free-floating.
+fn center_window_over_main(
+    app: &AppHandle,
+    window: &tauri::WebviewWindow,
+    width: f64,
+    height: f64,
+) {
+    let fallback = window.center();
+    let Some(main) = app.get_webview_window("main") else {
+        let _ = fallback;
+        return;
+    };
+    let (Ok(main_position), Ok(main_size)) = (main.outer_position(), main.outer_size()) else {
+        let _ = fallback;
+        return;
+    };
+    let Ok(scale) = main.scale_factor() else { return };
+    // Physical pixels → logical units, then top-left for our centered window.
+    let x = (main_position.x as f64 + main_size.width as f64 / 2.0) / scale - width / 2.0;
+    let y = (main_position.y as f64 + main_size.height as f64 / 2.0) / scale - height / 2.0;
+    let _ = window.set_position(LogicalPosition::new(x, y));
+}
+
+/// Open (or focus) the standalone About window — a small fixed-size window
+/// with the app icon, version and legal links that used to sit at the bottom
+/// of the settings dialog. `title` is the localized window title picked by
+/// the frontend, which knows the active locale.
+#[tauri::command]
+fn open_about_window(app: AppHandle, title: Option<String>) -> CommandResult<()> {
+    if let Some(window) = app.get_webview_window("about") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    // Created hidden and positioned before the reveal, so the popup never
+    // flashes at the screen origin before settling over the main window.
+    let window = WebviewWindowBuilder::new(
+        &app,
+        "about",
+        WebviewUrl::App("index.html?window=about".into()),
+    )
+    .title(title.unwrap_or_else(|| "Lynse".to_string()))
+    .inner_size(ABOUT_WINDOW_WIDTH, ABOUT_WINDOW_HEIGHT)
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .visible(false)
+    .build()
+    .map_err(|error| format!("failed to create about window: {error}"))?;
+    center_window_over_main(&app, &window, ABOUT_WINDOW_WIDTH, ABOUT_WINDOW_HEIGHT);
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(())
+}
+
 /// Creates the menu-bar / notification-area tray icon and its menu so the
 /// app (and the live-translation floating window) can be minimized to and
 /// restored from the system status bar.
@@ -3030,7 +3134,15 @@ pub fn run() {
         .manage(LiveTranslationManager::default())
         .manage(meeting_detector::MeetingDetectorHandle::default())
         .manage(feishu::FeishuHandle::default())
-        .register_uri_scheme_protocol("local-media", media_response)
+        .register_asynchronous_uri_scheme_protocol("local-media", |context, request, responder| {
+            // WKURLSchemeHandler fires this on the MAIN thread; a long
+            // meeting's WAV is 100+ MB, so the file read must leave the main
+            // thread or the whole UI stalls while the editor / player loads.
+            let app = context.app_handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                responder.respond(media_response_body(&app, request));
+            });
+        })
         .setup(|app| {
             app.manage(recording_card::RecordingCardManager::new(app.handle().clone()));
             if let Err(error) = migrate_electron_data(&app.handle()) {
@@ -3138,9 +3250,12 @@ pub fn run() {
             vault::vault_config_get, vault::vault_config_save, vault::vault_default_path,
             vault::vault_write_note, vault::vault_write_notes, vault::vault_read_note,
             vault::vault_remove_note,
+            storage::storage_usage, storage::storage_reveal, storage::storage_clear,
             webdav::webdav_config_get, webdav::webdav_config_save, webdav::webdav_set_password,
             webdav::webdav_test_connection, webdav::webdav_sync_now, webdav::webdav_put_notes,
             feishu::feishu_config_get, feishu::feishu_config_save, feishu::feishu_config_reset,
+            bots::bot_config_get, bots::bot_config_save, bots::bot_reset, bots::bot_start,
+            bots::bot_stop, bots::bot_state,
             feishu::feishu_bot_start,
             feishu::feishu_bot_stop, feishu::feishu_state, feishu::feishu_test_connection,
             feishu::feishu_list_chats, feishu::feishu_send_text, feishu::feishu_reply_text,
@@ -3151,6 +3266,7 @@ pub fn run() {
             feishu::feishu_register_cancel,
             secure_set_secret, secure_get_secret, secure_delete_secret,
             get_app_info,
+            open_about_window,
             open_logs_folder,
             diagnostics_read_logs, diagnostics_prepare_report,
             live_translation::live_translation_permissions,
@@ -3161,6 +3277,7 @@ pub fn run() {
             live_translation::live_translation_resume,
             live_translation::live_translation_stop,
             live_translation::live_translation_finalize_local,
+            live_translation::live_translation_discard,
             live_translation::live_translation_recoveries,
             live_translation::live_translation_recover,
             live_translation::live_translation_show_subtitles,

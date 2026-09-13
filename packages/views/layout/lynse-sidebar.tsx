@@ -160,7 +160,7 @@ export function LynseSidebar() {
               title={item.label}
             >
               <Icon className={cn("size-5", active && item.solid !== false && "fill-current")} />
-              <span className="mt-1 text-3xs font-medium leading-none">{item.label}</span>
+              <span className="mt-1 whitespace-nowrap text-3xs font-medium leading-none">{item.label}</span>
             </NavButton>
           );
         })}
@@ -183,11 +183,11 @@ export function LynseSidebar() {
                   className="relative flex w-[56px] flex-col items-center justify-center rounded-lg px-1 py-2 transition-colors text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
                 >
                   <Bell className="size-5" />
-                  <span className="mt-1 text-3xs font-medium leading-none">{item.label}</span>
+                  <span className="mt-1 whitespace-nowrap text-3xs font-medium leading-none">{item.label}</span>
                   {!!unreadCount && (
                     <span
                       aria-label={t("layout.unread_replies", { count: unreadCount })}
-                      className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-3xs font-semibold leading-none text-white ring-2 ring-card"
+                      className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-3xs font-semibold leading-none text-destructive-foreground ring-2 ring-card"
                     >
                       {unreadCount > 99 ? "99+" : unreadCount}
                     </span>
@@ -240,7 +240,7 @@ export function LynseSidebar() {
               title={item.label}
             >
               <Icon className={cn("size-5", active && item.solid !== false && "fill-current")} />
-              <span className="mt-1 text-3xs font-medium leading-none">{item.label}</span>
+              <span className="mt-1 whitespace-nowrap text-3xs font-medium leading-none">{item.label}</span>
             </NavButton>
           );
         })}
@@ -285,7 +285,7 @@ function NavButton({
       {!!badgeCount && (
         <span
           aria-label={t("layout.unread_replies", { count: badgeCount })}
-          className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-3xs font-semibold leading-none text-white ring-2 ring-sidebar"
+          className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-3xs font-semibold leading-none text-destructive-foreground ring-2 ring-sidebar"
         >
           {badgeCount > 99 ? "99+" : badgeCount}
         </span>

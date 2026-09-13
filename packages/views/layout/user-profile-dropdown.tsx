@@ -6,7 +6,8 @@ import { Input } from "@lynse/ui/components/ui/input";
 import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
 import { useAuthStore } from "@lynse/core/auth";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
-import { useAppUpdate, getAppInfoSync, openAppUpdateDialog } from "../app-update";
+import { useAppUpdate, getAppInfoSync } from "../app-update";
+import { openAboutWindow } from "../about/open-about";
 import { openReportProblemDialog } from "../diagnostics";
 import { useUserCredits, useMembership, useUpdateNickname } from "./use-user-credits";
 import { UserActivityHeatmap } from "./user-activity-heatmap";
@@ -31,12 +32,11 @@ import {
   UserCircle,
   Info,
   ArrowUp,
-  Download,
   Pencil,
 } from "../icons";
 
 /* ── Map API memberLevel to localized plan name ────────────── */
-function useLocalizedPlan(rawLevel?: string) {
+export function useLocalizedPlan(rawLevel?: string) {
   const { t } = useTranslation();
   if (!rawLevel) return t("layout.default_plan");
   const key = rawLevel.toLowerCase();
@@ -83,7 +83,7 @@ export function UserProfileDropdown({
   const { data } = useUserCredits();
   const { data: membership } = useMembership();
   const { theme, setTheme } = useTheme();
-  const { update, checking } = useAppUpdate();
+  const { update } = useAppUpdate();
   const updateNickname = useUpdateNickname();
 
   const nickname = (data?.nickname as string) || "User";
@@ -154,7 +154,7 @@ export function UserProfileDropdown({
                   {initials}
                 </div>
                 {hasUpdate && (
-                  <span className="absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-success text-white ring-2 ring-background">
+                  <span className="absolute -right-1 -top-1 flex size-3.5 items-center justify-center rounded-full bg-success text-success-foreground ring-2 ring-background">
                     <ArrowUp className="size-2.5" strokeWidth={3} />
                   </span>
                 )}
@@ -188,7 +188,7 @@ export function UserProfileDropdown({
               <span className="text-base font-semibold tracking-tight">{nickname}</span>
               <button
                 onClick={startEditName}
-                className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-black/[0.05] hover:text-foreground"
+                className="flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/50 transition-colors hover:bg-foreground/5 hover:text-foreground"
                 title={t("layout.edit_name")}
               >
                 <Pencil className="size-3" />
@@ -278,8 +278,8 @@ export function UserProfileDropdown({
           <span>{t("layout.user_help_feedback")}</span>
         </DropdownMenuItem>
 
-        {/* ── About (version) ─────────────────────────── */}
-        <DropdownMenuItem onClick={onOpenSettings}>
+        {/* ── About (version) — pops the standalone About window ── */}
+        <DropdownMenuItem onClick={openAboutWindow}>
           <Info className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.about")}</span>
           <span className="ml-auto flex items-center gap-1 text-2xs tabular-nums text-muted-foreground">
@@ -288,32 +288,6 @@ export function UserProfileDropdown({
             )}
             {versionLabel}
           </span>
-        </DropdownMenuItem>
-
-        {/* ── Update ─────────────────────────────────────
-            Opens the update dialog directly — one click from here to a
-            confirmed install, no detour through Settings → About. */}
-        <DropdownMenuItem
-          onClick={() => openAppUpdateDialog({ refresh: true })}
-          disabled={checking}
-        >
-          {hasUpdate ? (
-            <ArrowUp className="size-4 text-success" strokeWidth={2.5} />
-          ) : (
-            <Download className="size-4 text-muted-foreground" strokeWidth={1.5} />
-          )}
-          <span>
-            {hasUpdate
-              ? t("settings.install_update")
-              : checking
-                ? t("layout.checking_update")
-                : t("layout.check_update")}
-          </span>
-          {hasUpdate && (
-            <span className="ml-auto text-2xs tabular-nums text-muted-foreground">
-              v{update?.latestVersion}
-            </span>
-          )}
         </DropdownMenuItem>
 
         <DropdownMenuSeparator />

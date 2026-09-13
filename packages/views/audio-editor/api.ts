@@ -15,14 +15,21 @@ export interface DesktopAudioEditorApi {
   /** Download the shared FFmpeg runtime on first use (no-op when present). */
   ensureRuntime: () => Promise<{ ffmpegAvailable: boolean }>;
   /** `source` is a filesystem path or a `local:<uuid>` record id. */
-  trim: (source: string, startSec: number, endSec: number, outName?: string) => Promise<LocalTranscriptionRecord>;
+  trim: (
+    source: string,
+    startSec: number,
+    endSec: number,
+    outName?: string,
+    overwrite?: boolean,
+  ) => Promise<LocalTranscriptionRecord>;
   merge: (sources: string[], outName?: string) => Promise<LocalTranscriptionRecord>;
   removeSilence: (
     source: string,
     options?: { thresholdDb?: number; minSilenceSec?: number; paddingSec?: number },
     outName?: string,
+    overwrite?: boolean,
   ) => Promise<LocalTranscriptionRecord>;
-  enhanceVoice: (source: string, outName?: string) => Promise<LocalTranscriptionRecord>;
+  enhanceVoice: (source: string, outName?: string, overwrite?: boolean) => Promise<LocalTranscriptionRecord>;
   cancel: () => Promise<void>;
   /** Subscribe to `audio-editor-progress` events; returns an unlisten fn. */
   onProgress: (callback: (progress: AudioEditorProgress) => void) => Promise<() => void>;

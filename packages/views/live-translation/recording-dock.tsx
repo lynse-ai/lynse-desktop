@@ -9,6 +9,7 @@ import {
 } from "@lynse/ui/components/ui/tooltip";
 import { cn } from "@lynse/ui/lib/utils";
 import { AudioVisualizer } from "./audio-visualizer";
+import { IconSwap } from "../icon-swap";
 import { Bookmark, EyeOff, Loader2, Mic, Pause, Play, Square } from "../icons";
 
 interface RecordingDockProps {
@@ -83,13 +84,15 @@ export function RecordingDock({
                   onClick={onStart}
                   disabled={busy || stopping}
                   aria-label={t("recording_mode.start_recording")}
-                  className="flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-all duration-200 hover:scale-105 hover:bg-destructive/90 active:scale-95 disabled:opacity-60 disabled:hover:scale-100"
+                  className="flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-[background-color,transform,box-shadow] duration-150 hover:bg-destructive/90 active:scale-[0.96] disabled:opacity-60"
                 >
-                  {busy ? (
-                    <Loader2 className="size-6 animate-spin" />
-                  ) : (
-                    <Mic className="size-6" />
-                  )}
+                  <IconSwap stateKey={busy ? "busy" : "idle"}>
+                    {busy ? (
+                      <Loader2 className="size-6 animate-spin" />
+                    ) : (
+                      <Mic className="size-6" />
+                    )}
+                  </IconSwap>
                 </button>
               }
             />
@@ -125,7 +128,9 @@ export function RecordingDock({
                 label={paused ? t("recording_mode.resume") : t("recording_mode.pause")}
                 onClick={onTogglePause}
               >
-                {paused ? <Play className="size-4" /> : <Pause className="size-4" />}
+                <IconSwap stateKey={paused ? "play" : "pause"}>
+                  {paused ? <Play className="size-4" /> : <Pause className="size-4" />}
+                </IconSwap>
               </DockButton>
               <DockButton
                 label={t("recording_mode.stop_recording")}
@@ -171,7 +176,7 @@ function DockButton({
             onClick={onClick}
             aria-label={label}
             className={cn(
-              "flex size-9 items-center justify-center rounded-full transition-colors",
+              "flex size-9 items-center justify-center rounded-full transition-[color,background-color,transform] duration-150 active:scale-[0.96]",
               destructive
                 ? "text-destructive hover:bg-destructive/10"
                 : "text-foreground/70 hover:bg-foreground/10 hover:text-foreground",

@@ -18,6 +18,7 @@
     "./knowledge-base": "./knowledge-base/index.ts",
     "./chat": "./chat/index.ts",
     "./settings": "./settings/index.ts",
+    "./about": "./about/index.ts",
     "./files": "./files/index.ts",
     "./workspace": "./workspace/index.ts",
     "./todo": "./todo/index.ts",
@@ -29,6 +30,7 @@
     "./devices": "./devices/index.ts",
     "./audio-editor": "./audio-editor/index.ts",
     "./feishu": "./feishu/index.ts",
+    "./bots": "./bots/index.ts",
     "./i18n": "./i18n/index.ts",
     "./locales": "./locales/index.ts"
   },

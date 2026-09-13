@@ -594,7 +594,7 @@ export function TodoPage() {
       {error && (
         <div className="flex items-center justify-between gap-2 border-b border-destructive/30 bg-destructive/10 px-6 py-2 text-xs text-destructive">
           <span>{t("todo.load_error")}</span>
-          <button onClick={() => load()} className="underline">
+          <button onClick={() => load()} className="underline decoration-from-font underline-offset-2">
             {t("todo.retry")}
           </button>
         </div>
@@ -605,9 +605,9 @@ export function TodoPage() {
       {sheetAvailable ? <AddTodoTrigger onOpen={() => openCapture("todo")} /> : <AddTodoInput onAdd={handleAdd} />}
 
       {/* List */}
-      <div className="flex-1 min-h-0 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {loading ? (
-          <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">...</div>
+          <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">…</div>
         ) : todos.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
             <p className="text-sm font-medium text-foreground">{t("todo.empty")}</p>

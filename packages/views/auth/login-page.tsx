@@ -28,6 +28,7 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { Loader2, QrCode } from "../icons";
 import { getDesktopAppApi, openExternalUrl } from "../app-update";
 import { hasPasswordlessAuth } from "../feature-flags";
+import { PRIVACY_URL, TERMS_URL } from "../about/links";
 import { WechatIcon } from "./wechat-icon";
 import { authErrorText } from "./auth-errors";
 import { LYNSE_LOGO_SRC } from "./lynse-logo";
@@ -37,14 +38,6 @@ type QrPhase = "creating" | "ready" | "scanned" | "expired" | "error";
 
 /** Sign-in views: phone + SMS form, or the app-scanned QR code. */
 type LoginView = "phone" | "qr";
-
-// Legal documents linked from the sign-in agreement row (opened in the
-// system browser on desktop, a new tab on web). Currently the zh-CN versions;
-// switch by locale here if localized policy pages ship later.
-const TERMS_URL =
-  "https://www.lynse.cn/policy/policy-viewer.html?md=user-agreement-cn.md";
-const PRIVACY_URL =
-  "https://www.lynse.cn/policy/policy-viewer.html?md=privacy-cn.md";
 
 // A 4-digit code waits this long before auto-submitting, in case the user is
 // still typing towards a 6-digit one; 6 digits submit without waiting.
@@ -369,7 +362,14 @@ export function LoginPage() {
                 disabled={loginDisabled}
                 onClick={() => handleSmsLogin()}
               >
-                {smsSubmitting ? t("auth.sms_logging_in") : t("auth.sms_login_btn")}
+                {smsSubmitting ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    {t("auth.sms_logging_in")}
+                  </>
+                ) : (
+                  t("auth.sms_login_btn")
+                )}
               </Button>
               {smsError && (
                 <p className="mt-3 text-center text-xs text-destructive">{smsError}</p>
@@ -384,12 +384,12 @@ export function LoginPage() {
                     agreed ? "border-primary bg-primary" : "border-muted-foreground/60"
                   }`}
                 />
-                <p className="text-2xs leading-relaxed text-muted-foreground">
+                <p className="text-2xs leading-relaxed text-muted-foreground text-pretty">
                   {t("auth.agree_prefix")}
                   <button
                     type="button"
                     onClick={() => handleAgreeLink(TERMS_URL)}
-                    className="underline underline-offset-2 transition-colors hover:text-foreground"
+                    className="underline decoration-from-font underline-offset-2 transition-colors hover:text-foreground"
                   >
                     {t("auth.agree_terms")}
                   </button>
@@ -397,7 +397,7 @@ export function LoginPage() {
                   <button
                     type="button"
                     onClick={() => handleAgreeLink(PRIVACY_URL)}
-                    className="underline underline-offset-2 transition-colors hover:text-foreground"
+                    className="underline decoration-from-font underline-offset-2 transition-colors hover:text-foreground"
                   >
                     {t("auth.agree_privacy")}
                   </button>
@@ -472,7 +472,14 @@ export function LoginPage() {
               onClick={handleApiKeyLogin}
               disabled={!apiKey.trim() || connecting}
             >
-              {connecting ? t("auth.api_key_connecting") : t("auth.api_key_connect")}
+              {connecting ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  {t("auth.api_key_connecting")}
+                </>
+              ) : (
+                t("auth.api_key_connect")
+              )}
             </Button>
           </div>
         )}

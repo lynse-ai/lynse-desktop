@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { LynseSidebar } from "./lynse-sidebar";
 import { DndProvider } from "../workspace/dnd-provider";
+import { AboutDialog } from "../about/about-dialog";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -33,6 +34,9 @@ export function DashboardLayout({ children, extra }: DashboardLayoutProps) {
           {extra}
         </main>
       </div>
+      {/* About fallback dialog — on desktop the About entry pops a real OS
+          window instead, so this stays closed there (see open-about.ts). */}
+      <AboutDialog />
     </DndProvider>
   );
 }

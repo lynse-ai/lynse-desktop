@@ -2,6 +2,15 @@
  * Multica shared base styles — imported by all apps
  * ============================================================================= */
 
+/* Global icon stroke: 1.5px for every lucide icon.
+ * stroke-width set as an SVG presentation attribute (lucide default 2, plus
+ * all per-usage strokeWidth props) loses to any CSS rule, so this single
+ * rule overrides them app-wide. Hand-drawn SVGs without the .lucide class
+ * are unaffected. Un-layered so Tailwind stroke-* utilities can't win ties. */
+.lucide {
+  stroke-width: 1.5px;
+}
+
 /* Shiki dual themes: CSS-only light/dark switching via CSS variables */
 /* @see https://shiki.style/guide/dual-themes */
 .shiki,
@@ -265,6 +274,10 @@
   }
   html {
     @apply font-sans;
+    /* macOS renders text heavier than intended; smooth once on the root for
+     * every host (web sets it on <html> too — harmless duplication). */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     /* Auto-insert 1/4em space between CJK ideographs and Latin letters/numerals.
      * Native CSS text-autospace (Chrome 119+, Electron recent versions).
      * Progressive enhancement: browsers that don't support it simply ignore the rule. */

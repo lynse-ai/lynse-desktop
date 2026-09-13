@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 // Audio analysis for the editor page.
 //
 // Fetches the audio at `src` once, decodes it with Web Audio, and derives:
-//  · dense peaks (10 bars / second, capped) for the editor waveform,
+//  · dense peaks (10 bars / second) for the editor waveform,
 //  · silence segments ([startSec, endSec]) using an RMS threshold — the
 //    same definition of silence the Rust `silenceremove` filter applies,
 //    so the highlighted "will be removed" regions match the export.
@@ -31,7 +31,10 @@ export interface AudioAnalysis {
 }
 
 const BARS_PER_SEC = 10;
-const MAX_BARS = 2400;
+// Keep 10 bars/s for the full 2 h decode window (~72 k floats) so long
+// meetings stay dense when the editor zooms in; zoomed-out views bucket
+// them down to a fixed display pitch instead.
+const MAX_BARS = 72000;
 const MAX_DECODE_SECONDS = 2 * 60 * 60;
 const MAX_DECODE_BYTES = 400 * 1024 * 1024;
 
@@ -161,8 +164,11 @@ export function useAudioAnalysis(
         } finally {
           void context.close();
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
+          // installLogger routes console.warn into the app log file, so a
+          // user report of "waveform unavailable" carries the actual cause.
+          console.warn("[audio-editor] waveform load failed", error);
           setAnalysis({ durationSec: 0, peaks: [], silenceSegments: [], loading: false, error: true, skipped: false });
         }
       }

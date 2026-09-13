@@ -26,7 +26,9 @@
     --color-stroke-tertiary: var(--stroke-tertiary);
     --color-stroke-quaternary: var(--stroke-quaternary);
     --color-destructive: var(--destructive);
+    --color-destructive-foreground: var(--destructive-foreground);
     --color-success: var(--success);
+    --color-success-foreground: var(--success-foreground);
     --color-warning: var(--warning);
     /* Text-safe warning variant (mirrors --accent-brand-text): --warning is
        tuned for dots and fills and lacks contrast as glyph color on light
@@ -34,6 +36,11 @@
     --color-warning-text: var(--warning-text);
     --color-info: var(--info);
     --color-brand: var(--brand);
+    /* Feed-entry category hues — the home feed's flash/todo chips need hues
+       distinguishable from note (brand) at a glance; role-named so components
+       never reference raw palette steps (violet-500 etc.). */
+    --color-feed-flash: var(--feed-flash);
+    --color-feed-todo: var(--feed-todo);
     --color-brand-foreground: var(--brand-foreground);
     --color-accent-brand: var(--accent-brand);
     --color-accent-brand-strong: var(--accent-brand-strong);
@@ -100,6 +107,10 @@
         "Apple Color Emoji", "Segoe UI Emoji";
     --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
         "Liberation Mono", "Courier New", monospace;
+    /* Serif display face — the bundled Noto Serif SC variable also covers
+       Latin (same subsets as the sans), so `font-serif` never falls through
+       to a browser default (fonts.css ships it for the serif editor themes). */
+    --font-serif: "Noto Serif SC Variable", "Songti SC", "SimSun", serif;
     /* Light theme: neutral white + charcoal. The canvas is a neutral white
        (≈#fafafa, aligned with Codex/ZCode-style light themes — zero chroma,
        no warm cast) while cards and popovers stay pure white so floating
@@ -124,6 +135,7 @@
     --accent: oklch(0.958 0.003 285.8);                /* ≈#f1f1f3 hover surface */
     --accent-foreground: oklch(0.32 0.007 285.8);
     --destructive: oklch(0.577 0.245 27.325);
+    --destructive-foreground: oklch(0.985 0 0);
     --border: oklch(0.929 0.003 285.8);                /* ≈#e7e7e9 */
     --input: oklch(0.918 0.004 285.8);                 /* ≈#e3e3e6 */
     --ring: #5f67d8;
@@ -158,6 +170,7 @@
     --sidebar-border: oklch(0.94 0.003 285.8);         /* ≈#ebebed */
     --sidebar-ring: #5f67d8;
     --success: oklch(0.55 0.16 145);
+    --success-foreground: oklch(0.985 0 0);
     --warning: oklch(0.75 0.16 85);
     --warning-text: oklch(0.55 0.163 85);
     --info: #5f67d8;
@@ -173,6 +186,11 @@
     --speaker-6: oklch(0.6 0.12 335);
     --speaker-7: oklch(0.7 0.15 85);
     --speaker-8: oklch(0.55 0.14 250);
+    /* Feed category hues, matching the light chip text steps (violet-600 /
+       sky-600 equivalents). The flash violet sits ~13° from the brand hue —
+       flagged in review; moving it is a design decision. */
+    --feed-flash: #7c3aed;
+    --feed-todo: #0284c7;
     /* Motion tokens — durations (UI stays ≤ 300ms). Theme-independent, so defined
        once on :root. Plain CSS vars (no Tailwind namespace) consumed by keyframes
        and motion configs; use duration-[var(--duration-standard)] in markup. */
@@ -203,6 +221,7 @@
     --accent: rgba(255, 255, 255, 0.06);
     --accent-foreground: #f5f3ee;
     --destructive: #ff453a;
+    --destructive-foreground: #ffffff;
     --border: rgb(255 255 255 / 9%);
     --input: #2c2d33;
     --ring: #e0b15c;
@@ -229,6 +248,7 @@
     --accent-brand-strong: rgb(224 177 92 / 16%);
     --accent-brand-text: #f3d08a;
     --success: #30d158;
+    --success-foreground: #ffffff;
     --warning: #ff9f0a;
     --warning-text: oklch(0.879 0.169 85);
     --info: #e0b15c;
@@ -244,6 +264,10 @@
     --speaker-6: oklch(0.7 0.1 335);
     --speaker-7: oklch(0.75 0.13 85);
     --speaker-8: oklch(0.65 0.12 250);
+    /* Lightened steps of the light-theme feed hues so chips stay legible on
+       the dark canvas (violet-400 / sky-400 equivalents). */
+    --feed-flash: #a78bfa;
+    --feed-todo: #38bdf8;
 }
 
 /* ── Frosted-glass overlay material (Apple-style) ──────────────────────────

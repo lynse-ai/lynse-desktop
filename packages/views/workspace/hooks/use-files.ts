@@ -205,6 +205,9 @@ export function useFiles(params: {
     // (e.g. the always-mounted "__all__" query from FolderTreeSection) are
     // re-fetched once the user is authenticated, instead of showing stale empties.
     queryKey: ["files", params, isAuthenticated],
+    // Keep the previous folder's list visible while the next folder loads,
+    // instead of flashing an empty grid mid-switch.
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       const request = buildFilesRequest(params);
       const localApi = getDesktopLocalTranscriptionApi();

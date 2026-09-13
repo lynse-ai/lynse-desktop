@@ -30,7 +30,6 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::{app_data_dir, now, secret_delete, secret_get, secret_set, CommandResult};
 
-pub(crate) const FEISHU_EVENT: &str = "feishu-event";
 pub(crate) const FEISHU_STATE_EVENT: &str = "feishu-state";
 
 const FEISHU_DIR: &str = "feishu";
@@ -131,6 +130,9 @@ impl FeishuStatusKind {
 pub struct FeishuStatus {
     pub state: String,
     pub error: Option<String>,
+    /// Why the bot is in this state when it is not the channel's own doing —
+    /// e.g. `logged_out` when the auth supervisor paused it on logout.
+    pub reason: Option<String>,
     pub updated_at: String,
 }
 
@@ -150,6 +152,7 @@ impl Default for FeishuHandle {
             status: Mutex::new(FeishuStatus {
                 state: FeishuStatusKind::Disabled.as_str().to_owned(),
                 error: None,
+                reason: None,
                 updated_at: now(),
             }),
             generation: AtomicU64::new(0),
@@ -160,11 +163,26 @@ impl Default for FeishuHandle {
 }
 
 impl FeishuHandle {
-    /// Update the status snapshot and broadcast it to the webview.
+    /// Update the status snapshot and broadcast it to the webview. Any
+    /// previously set reason is cleared — reasons only stick when set
+    /// explicitly via [`Self::set_status_reasoned`].
     fn set_status(&self, app: &AppHandle, kind: FeishuStatusKind, error: Option<String>) {
+        self.set_status_reasoned(app, kind, error, None);
+    }
+
+    /// [`Self::set_status`] plus a machine-readable reason (e.g.
+    /// `logged_out`) the UI can use to explain a paused bot.
+    pub(crate) fn set_status_reasoned(
+        &self,
+        app: &AppHandle,
+        kind: FeishuStatusKind,
+        error: Option<String>,
+        reason: Option<String>,
+    ) {
         if let Ok(mut status) = self.status.lock() {
             status.state = kind.as_str().to_owned();
             status.error = error;
+            status.reason = reason;
             status.updated_at = now();
         }
         let _ = app.emit(FEISHU_STATE_EVENT, self.status_snapshot());
@@ -177,6 +195,7 @@ impl FeishuHandle {
             .unwrap_or(FeishuStatus {
                 state: FeishuStatusKind::Disabled.as_str().to_owned(),
                 error: Some("status lock is poisoned".to_owned()),
+                reason: None,
                 updated_at: now(),
             })
     }
@@ -230,12 +249,18 @@ pub(crate) fn start_bot(app: &AppHandle) {
 
 /// Stop the WS session and flip the status to disabled.
 fn stop_bot(app: &AppHandle) {
+    stop_bot_reasoned(app, None);
+}
+
+/// Stop the session with a machine-readable reason (e.g. `logged_out`) the
+/// settings UI can surface instead of a bare "disabled".
+pub(crate) fn stop_bot_reasoned(app: &AppHandle, reason: Option<String>) {
     let handle = app.state::<FeishuHandle>();
     handle.generation.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut guard) = handle.token.lock() {
         *guard = None;
     }
-    handle.set_status(app, FeishuStatusKind::Disabled, None);
+    handle.set_status_reasoned(app, FeishuStatusKind::Disabled, None, reason);
 }
 
 /// Auto-start at app launch when the bot was left enabled. Modeled on

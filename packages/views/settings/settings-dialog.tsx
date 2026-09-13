@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import {
   Dialog,
   DialogContent,
@@ -14,7 +14,18 @@ import { Button } from "@lynse/ui/components/ui/button";
 import { Switch } from "@lynse/ui/components/ui/switch";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { Sun, Moon, Monitor, Download } from "../icons";
+import {
+  Sun,
+  Moon,
+  Monitor,
+  UserCircle,
+  Languages,
+  CalendarDays,
+  Cloud,
+  Bot,
+  Captions,
+  Info,
+} from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
 import {
   getDesktopLocalTranscriptionApi,
@@ -24,25 +35,49 @@ import {
   type SttModelInfo,
   OFFLINE_TRANSCRIPTION_ENABLED_KEY,
 } from "../workspace/local-transcription";
-import {
-  useAppUpdate,
-  getDesktopAppApi,
-  getAppInfoSync,
-  openExternalUrl,
-  openAppUpdateDialog,
-} from "../app-update";
-import { openLogsFolder, openReportProblemDialog } from "../diagnostics";
 import type { LocalHotwordPackage, LocalVoiceprint } from "../workspace/types";
+import { getDesktopMeetingDetectorApi } from "../live-translation";
+import { getDesktopLiveTranslationApi } from "../live-translation/desktop-api";
+import { featureFlags } from "../feature-flags";
+import { getDesktopVaultApi } from "../workspace/note-vault";
+import { getDesktopWebdavSyncApi } from "./webdav-sync";
+import { getDesktopFeishuApi } from "../feishu/feishu";
+import { AboutContent } from "../about/about-content";
+import { AccountCard } from "./account-card";
+import { StorageCard } from "./storage-card";
 import { SttConfigSection } from "./stt-config-section";
 import { LiveTranslationConfigCard } from "./live-translation-config-card";
 import { AutoRecordConfigCard } from "./auto-record-config-card";
 import { VaultConfigCard } from "./vault-config-card";
 import { WebdavSyncConfigCard } from "./webdav-sync-config-card";
 import { FeishuConfigCard } from "../feishu/feishu-config-card";
+// Fixed width AND height so switching sections never resizes the window —
+// each section scrolls inside the same body pane.
 export const SETTINGS_DIALOG_CONTENT_CLASS =
-  "sm:max-w-2xl max-h-[min(90vh,760px)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0";
+  "sm:max-w-3xl h-[min(90vh,760px)] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0";
+// Two-pane layout: category nav on the left, active section content on the
+// right (WeChat-style settings).
+export const SETTINGS_NAV_CLASS =
+  "w-40 shrink-0 space-y-0.5 overflow-y-auto border-e bg-muted/30 p-2 sm:w-48";
+export const SETTINGS_BODY_CLASS = "min-h-0 flex-1 overflow-y-auto";
 
 type ThemeOption = "light" | "dark" | "system";
+
+type SettingsSectionId =
+  | "account"
+  | "live_translation"
+  | "auto_record"
+  | "sync"
+  | "feishu"
+  | "stt"
+  | "about";
+
+interface SettingsSection {
+  id: SettingsSectionId;
+  label: string;
+  icon: typeof Sun;
+  content: ReactNode;
+}
 
 export function SettingsDialog({
   open,
@@ -60,18 +95,10 @@ export function SettingsDialog({
     { value: "system", label: t("layout.theme_system"), icon: Monitor },
   ];
 
+  const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>("account");
   const [offlineTranscription, setOfflineTranscription] = useState(false);
   const localTranscriptionApi = getDesktopLocalTranscriptionApi();
   const hasLocalTranscription = !!localTranscriptionApi;
-  const appApi = getDesktopAppApi();
-  const appInfo = getAppInfoSync();
-  const { update, checking, error: updateError, installState } = useAppUpdate();
-  const installBusy =
-    installState.phase === "downloading" ||
-    installState.phase === "installing" ||
-    installState.phase === "restarting";
-  const installPercent =
-    installState.total > 0 ? Math.min(100, Math.round((installState.downloaded / installState.total) * 100)) : 0;
   const [models, setModels] = useState<SttModelInfo[]>([]);
   const [modelBusy, setModelBusy] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
@@ -197,285 +224,272 @@ export function SettingsDialog({
     await refreshLocalAssets();
   }
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={SETTINGS_DIALOG_CONTENT_CLASS}>
-        <DialogHeader className="border-b px-4 py-3 pr-12">
-          <DialogTitle>{t("nav.settings")}</DialogTitle>
-        </DialogHeader>
+  // Only sections available in the current environment get a nav entry; the
+  // availability checks mirror the ones the config cards use internally.
+  const sections: SettingsSection[] = [];
 
-        <div className="min-h-0 space-y-4 overflow-y-auto px-4 py-4">
-          {/* ── Appearance ─────────────────────────────── */}
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-xs">{t("settings.appearance")}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Label className="text-xs mb-2 block">{t("layout.theme")}</Label>
-              <div className="grid grid-cols-3 gap-2">
-                {themeOptions.map((option) => {
-                  const isActive = theme === option.value;
-                  const Icon = option.icon;
-                  return (
-                    <button
-                      key={option.value}
-                      onClick={() => setTheme(option.value)}
-                      className={cn(
-                        "flex flex-col items-center gap-1.5 rounded-lg border-2 px-2 py-2 text-xs font-medium transition-all",
-                        isActive
-                          ? "border-primary bg-primary/5 text-foreground"
-                          : "border-transparent bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
-                      )}
-                    >
-                      <Icon className="size-4" />
-                      <span>{option.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </CardContent>
-          </Card>
+  // Account & Storage: identity + quota, appearance, and local disk usage.
+  sections.push({
+    id: "account",
+    label: t("settings.account_storage"),
+    icon: UserCircle,
+    content: (
+      <>
+        <AccountCard />
 
-          <LiveTranslationConfigCard />
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs">{t("settings.appearance")}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Label className="text-xs mb-2 block">{t("layout.theme")}</Label>
+            <div className="grid grid-cols-3 gap-2">
+              {themeOptions.map((option) => {
+                const isActive = theme === option.value;
+                const Icon = option.icon;
+                return (
+                  <button
+                    key={option.value}
+                    onClick={() => setTheme(option.value)}
+                    className={cn(
+                      "flex flex-col items-center gap-1.5 rounded-lg border-2 px-2 py-2 text-xs font-medium transition-[border-color,background-color,color]",
+                      isActive
+                        ? "border-primary bg-primary/5 text-foreground"
+                        : "border-transparent bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    )}
+                  >
+                    <Icon className="size-4" />
+                    <span>{option.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
 
-          {/* ── Auto-record detected meetings ──────────── */}
-          <AutoRecordConfigCard />
+        <StorageCard onManageModels={hasLocalTranscription ? () => setActiveSectionId("stt") : undefined} />
+      </>
+    ),
+  });
 
-          {/* ── Local markdown vault ───────────────────── */}
+  if (getDesktopLiveTranslationApi()) {
+    sections.push({
+      id: "live_translation",
+      label: t("settings.live_translation"),
+      icon: Languages,
+      content: <LiveTranslationConfigCard />,
+    });
+  }
+
+  if (featureFlags.autoRecord && getDesktopMeetingDetectorApi()) {
+    sections.push({
+      id: "auto_record",
+      label: t("auto_record.title"),
+      icon: CalendarDays,
+      content: <AutoRecordConfigCard />,
+    });
+  }
+
+  // Vault and WebDAV are both note-sync targets; they share one page.
+  if (getDesktopVaultApi() || getDesktopWebdavSyncApi()) {
+    sections.push({
+      id: "sync",
+      label: t("settings.sync"),
+      icon: Cloud,
+      content: (
+        <>
           <VaultConfigCard />
-
-          {/* ── WebDAV sync ────────────────────────────── */}
           <WebdavSyncConfigCard />
+        </>
+      ),
+    });
+  }
 
-          {/* ── Feishu bot ─────────────────────────────── */}
-          <FeishuConfigCard />
+  if (getDesktopFeishuApi()) {
+    sections.push({
+      id: "feishu",
+      label: t("feishu.title"),
+      icon: Bot,
+      content: <FeishuConfigCard />,
+    });
+  }
 
-          {/* ── Speech-to-Text (STT) ───────────────────── */}
-          {hasLocalTranscription && (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-xs">{t("settings.stt")}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                  <Label htmlFor="dlg-offline-transcription" className="text-xs">
-                    {t("settings.offline_transcription")}
-                  </Label>
-                  <Switch
-                    id="dlg-offline-transcription"
-                    checked={offlineTranscription}
-                    onCheckedChange={handleOfflineTranscriptionChange}
-                  />
-                </div>
-                <p className="text-2xs leading-relaxed text-muted-foreground">
-                  {t("settings.offline_transcription_hint")}
-                </p>
+  if (hasLocalTranscription) {
+    sections.push({
+      id: "stt",
+      label: t("settings.stt"),
+      icon: Captions,
+      content: (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-xs">{t("settings.stt")}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="dlg-offline-transcription" className="text-xs">
+                {t("settings.offline_transcription")}
+              </Label>
+              <Switch
+                id="dlg-offline-transcription"
+                checked={offlineTranscription}
+                onCheckedChange={handleOfflineTranscriptionChange}
+              />
+            </div>
+            <p className="text-2xs leading-relaxed text-muted-foreground">
+              {t("settings.offline_transcription_hint")}
+            </p>
 
-                {!offlineTranscription ? (
-                  <p className="rounded-md border bg-muted/30 p-2.5 text-2xs text-muted-foreground">
-                    {t("settings.offline_off_hint")}
-                  </p>
-                ) : (
-                  <>
-                    <SttConfigSection
-                      api={localTranscriptionApi as DesktopLocalTranscriptionApi}
-                      models={models}
-                      modelBusy={modelBusy}
-                      modelError={modelError}
-                      downloadProgress={downloadProgress}
-                      onDownloadModel={handleDownloadModel}
-                      onDeleteModel={handleDeleteModel}
-                      hotwordPackages={hotwordPackages}
+            {!offlineTranscription ? (
+              <p className="rounded-md border bg-muted/30 p-2.5 text-2xs text-muted-foreground">
+                {t("settings.offline_off_hint")}
+              </p>
+            ) : (
+              <>
+                <SttConfigSection
+                  api={localTranscriptionApi as DesktopLocalTranscriptionApi}
+                  models={models}
+                  modelBusy={modelBusy}
+                  modelError={modelError}
+                  downloadProgress={downloadProgress}
+                  onDownloadModel={handleDownloadModel}
+                  onDeleteModel={handleDeleteModel}
+                  hotwordPackages={hotwordPackages}
+                />
+
+                <div className="rounded-md border bg-muted/30 p-2.5">
+                  <p className="text-xs font-medium">{t("settings.hotword_packages")}</p>
+                  <div className="mt-2 space-y-2">
+                    <Input
+                      value={hotwordName}
+                      onChange={(event) => setHotwordName(event.target.value)}
+                      placeholder={t("settings.hotword_name_placeholder")}
+                      className="h-8 text-xs"
                     />
-
-                    <div className="rounded-md border bg-muted/30 p-2.5">
-                      <p className="text-xs font-medium">{t("settings.hotword_packages")}</p>
-                      <div className="mt-2 space-y-2">
-                        <Input
-                          value={hotwordName}
-                          onChange={(event) => setHotwordName(event.target.value)}
-                          placeholder={t("settings.hotword_name_placeholder")}
-                          className="h-8 text-xs"
-                        />
-                        <textarea
-                          value={hotwordText}
-                          onChange={(event) => setHotwordText(event.target.value)}
-                          placeholder={t("settings.hotword_text_placeholder")}
-                          className="min-h-20 w-full rounded-md border border-border bg-background px-3 py-2 text-xs outline-none focus:border-primary"
-                        />
-                        <Button
-                          type="button"
-                          size="sm"
-                          className="h-7 text-xs"
-                          onClick={handleSaveHotwordPackage}
-                          disabled={!hotwordName.trim()}
-                        >
-                          {t("settings.hotword_save")}
-                        </Button>
-                        {hotwordPackages.length > 0 && (
-                          <div className="space-y-1">
-                            {hotwordPackages.map((pkg) => (
-                              <div key={pkg.id} className="flex items-center justify-between gap-2 rounded bg-background px-2 py-1 text-xs">
-                                <span className="truncate">
-                                  {t("settings.hotword_terms_count", {
-                                    name: pkg.name,
-                                    terms: pkg.terms.length,
-                                  })}
-                                </span>
-                                <Button
-                                  type="button"
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-6 px-2 text-xs"
-                                  onClick={() => handleDeleteHotwordPackage(pkg.id)}
-                                >
-                                  {t("settings.delete")}
-                                </Button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="rounded-md border bg-muted/30 p-2.5">
-                      <p className="text-xs font-medium">{t("settings.voiceprints")}</p>
-                      <div className="mt-2 space-y-1">
-                        {voiceprints.length === 0 ? (
-                          <p className="text-2xs text-muted-foreground">
-                            {t("settings.voiceprints_empty")}
-                          </p>
-                        ) : voiceprints.map((voiceprint) => (
-                          <div key={voiceprint.id} className="flex items-center justify-between gap-2 rounded bg-background px-2 py-1 text-xs">
-                            <span className="truncate">{voiceprint.name}</span>
+                    <textarea
+                      value={hotwordText}
+                      onChange={(event) => setHotwordText(event.target.value)}
+                      placeholder={t("settings.hotword_text_placeholder")}
+                      className="min-h-20 w-full rounded-md border border-border bg-background px-3 py-2 text-xs outline-none focus:border-primary"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={handleSaveHotwordPackage}
+                      disabled={!hotwordName.trim()}
+                    >
+                      {t("settings.hotword_save")}
+                    </Button>
+                    {hotwordPackages.length > 0 && (
+                      <div className="space-y-1">
+                        {hotwordPackages.map((pkg) => (
+                          <div key={pkg.id} className="flex items-center justify-between gap-2 rounded bg-background px-2 py-1 text-xs">
+                            <span className="truncate">
+                              {t("settings.hotword_terms_count", {
+                                name: pkg.name,
+                                terms: pkg.terms.length,
+                              })}
+                            </span>
                             <Button
                               type="button"
                               size="sm"
                               variant="ghost"
                               className="h-6 px-2 text-xs"
-                              onClick={() => handleDeleteVoiceprint(voiceprint.id)}
+                              onClick={() => handleDeleteHotwordPackage(pkg.id)}
                             >
                               {t("settings.delete")}
                             </Button>
                           </div>
                         ))}
                       </div>
-                    </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* ── About / Version ────────────────────────── */}
-          {appApi && (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-xs">{t("settings.about")}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium">{t("app_name")}</p>
-                    <p className="text-2xs text-muted-foreground">
-                      {t("settings.version")}: {appInfo?.version ?? "—"}
-                    </p>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 shrink-0 text-xs"
-                    onClick={() => openAppUpdateDialog({ refresh: true })}
-                    disabled={checking}
-                  >
-                    {checking ? t("settings.checking_update") : t("settings.check_update")}
-                  </Button>
-                </div>
-
-                <p className="text-2xs leading-relaxed text-muted-foreground">
-                  {t("settings.report_issue_hint")}
-                </p>
-                <div className="flex items-center gap-2">
-                  <Button size="sm" className="h-7 text-xs" onClick={openReportProblemDialog}>
-                    {t("settings.report_issue")}
-                  </Button>
-                  <Button size="sm" variant="outline" className="h-7 text-xs" onClick={openLogsFolder}>
-                    {t("settings.open_logs_folder")}
-                  </Button>
-                </div>
-
-                {updateError && (
-                  <p className="text-2xs text-destructive">{t("settings.update_check_failed")}</p>
-                )}
-
-                {update?.hasUpdate ? (
-                  <div className="rounded-md border border-warning/40 bg-warning/10 p-2.5">
-                    <p className="flex items-center gap-1.5 text-xs font-medium text-warning-text">
-                      <Download className="size-3.5" />
-                      {t("settings.update_available")}
-                    </p>
-                    <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums">
-                      <span className="rounded bg-background/70 px-1.5 py-0.5 text-muted-foreground">
-                        v{update.currentVersion}
-                      </span>
-                      <span className="text-muted-foreground/50">→</span>
-                      <span className="rounded bg-warning/15 px-1.5 py-0.5 font-semibold text-warning-text">
-                        v{update.latestVersion}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-2xs leading-relaxed text-muted-foreground">
-                      {t("settings.update_available_desc")}
-                    </p>
-
-                    {installBusy ? (
-                      <div className="mt-2 space-y-1.5">
-                        <p className="text-2xs font-medium text-warning-text">
-                          {installState.phase === "downloading"
-                            ? t("settings.update_downloading", { percent: installPercent })
-                            : installState.phase === "installing"
-                              ? t("settings.update_installing")
-                              : t("settings.update_restarting")}
-                        </p>
-                        {installState.phase === "downloading" && installState.total > 0 && (
-                          <div className="h-1.5 w-full overflow-hidden rounded-full bg-warning/15">
-                            <div
-                              className="h-full rounded-full bg-warning transition-all"
-                              style={{ width: `${installPercent}%` }}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <>
-                        <div className="mt-2 flex items-center gap-2.5">
-                          <Button size="sm" className="h-7 text-xs" onClick={() => openAppUpdateDialog()}>
-                            <Download className="size-3.5" />
-                            {t("settings.install_update")}
-                          </Button>
-                          <button
-                            type="button"
-                            onClick={() => openExternalUrl(update.releaseUrl)}
-                            className="text-2xs text-muted-foreground transition-colors hover:text-foreground"
-                          >
-                            {t("settings.view_release")}
-                          </button>
-                        </div>
-                        {installState.phase === "failed" && (
-                          <p className="mt-1.5 text-2xs text-destructive">
-                            {t("settings.update_install_failed", { error: installState.error ?? "" })}
-                          </p>
-                        )}
-                      </>
                     )}
                   </div>
-                ) : (
-                  !updateError && (
-                    <p className="text-2xs text-muted-foreground">{t("settings.up_to_date")}</p>
-                  )
-                )}
-              </CardContent>
-            </Card>
-          )}
+                </div>
+
+                <div className="rounded-md border bg-muted/30 p-2.5">
+                  <p className="text-xs font-medium">{t("settings.voiceprints")}</p>
+                  <div className="mt-2 space-y-1">
+                    {voiceprints.length === 0 ? (
+                      <p className="text-2xs text-muted-foreground">
+                        {t("settings.voiceprints_empty")}
+                      </p>
+                    ) : voiceprints.map((voiceprint) => (
+                      <div key={voiceprint.id} className="flex items-center justify-between gap-2 rounded bg-background px-2 py-1 text-xs">
+                        <span className="truncate">{voiceprint.name}</span>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-2 text-xs"
+                          onClick={() => handleDeleteVoiceprint(voiceprint.id)}
+                        >
+                          {t("settings.delete")}
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
+      ),
+    });
+  }
+
+  // About is environment-independent (desktop window on Tauri, dialog fallback
+  // on web), so it always gets a nav entry — last, like native settings apps.
+  sections.push({
+    id: "about",
+    label: t("layout.about"),
+    icon: Info,
+    content: <AboutContent />,
+  });
+
+  const activeSection =
+    sections.find((section) => section.id === activeSectionId) ?? sections[0];
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className={SETTINGS_DIALOG_CONTENT_CLASS}>
+        <DialogHeader className="border-b px-4 py-3 pe-12">
+          <DialogTitle>{t("nav.settings")}</DialogTitle>
+        </DialogHeader>
+
+        <div className="flex min-h-0">
+          <nav className={SETTINGS_NAV_CLASS} aria-label={t("nav.settings")}>
+            {sections.map((section) => {
+              const isActive = section.id === activeSection?.id;
+              const Icon = section.icon;
+              return (
+                <button
+                  key={section.id}
+                  type="button"
+                  onClick={() => setActiveSectionId(section.id)}
+                  aria-current={isActive ? "true" : undefined}
+                  className={cn(
+                    "flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium transition-colors",
+                    isActive
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground hover:bg-background/60 hover:text-foreground"
+                  )}
+                >
+                  <Icon className={cn("size-3.5 shrink-0", isActive && "text-primary")} />
+                  <span className="truncate">{section.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          <div className={SETTINGS_BODY_CLASS}>
+            {/* About fills the pane so its copyright block pins to the bottom
+                like the native About window; other sections stack cards. */}
+            {activeSection?.id === "about" ? (
+              <div className="h-full px-4 pb-4">{activeSection.content}</div>
+            ) : (
+              <div className="space-y-4 px-4 py-4">{activeSection?.content}</div>
+            )}
+          </div>
         </div>
       </DialogContent>
     </Dialog>

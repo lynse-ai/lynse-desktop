@@ -42,7 +42,7 @@ export function ChatAttachments({
                 <img
                   src={attachment.thumbnailUrl || attachment.url || href}
                   alt={name}
-                  className={compact ? "max-h-52 w-full object-contain" : "max-h-[440px] w-full object-contain"}
+                  className={`outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10 ${compact ? "max-h-52 w-full object-contain" : "max-h-[440px] w-full object-contain"}`}
                 />
               </a>
               <figcaption className="flex min-w-0 items-center gap-2 border-t border-border px-3 py-2 text-xs text-muted-foreground">
@@ -154,7 +154,7 @@ export function ChatAttachmentTray({
             <img
               src={draft.previewUrl}
               alt={draft.name}
-              className="size-7 shrink-0 rounded-md object-cover"
+              className="size-7 shrink-0 rounded-md object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
             />
           ) : (
             <FileText className="size-3.5 shrink-0 text-muted-foreground" />

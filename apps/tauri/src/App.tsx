@@ -13,7 +13,8 @@ import { InspirationCaptureSheet, InspirationPage } from "@lynse/views/inspirati
 import { NotificationsPage, AppUpdateNotifier } from "@lynse/views/notifications";
 import { DevicesPage } from "@lynse/views/devices";
 import { SettingsDialog, useWebdavAutoSync } from "@lynse/views/settings";
-import { FeishuAgent } from "@lynse/views/feishu";
+import { AboutWindow } from "@lynse/views/about";
+import { BotAgent, BotAuthSupervisor } from "@lynse/views/bots";
 import { AudioEditorPage } from "@lynse/views/audio-editor";
 import {
   LiveSubtitleOverlay,
@@ -184,9 +185,10 @@ function AppShell() {
       {/* Answers the tray menu's "start live recording" no matter which page
           is open; the island answers tray pause/stop while a session runs. */}
       <RecordingTrayAgent />
-      {/* Answers Feishu chat messages through the Rust bot long connection —
-          headless, works with any page open or the window hidden. */}
-      <FeishuAgent />
+      {/* Answers IM chat messages (Feishu today; DingTalk next) through the
+          Rust bot long connection — headless, works with any page open or the
+          window hidden. */}
+      <BotAgent />
       {/* Starts/stops a recording when the Rust meeting detector spots a
           whitelisted meeting app doing audio (user opt-in from Settings). */}
       {featureFlags.autoRecord && <MeetingAutoRecordAgent />}
@@ -204,6 +206,11 @@ function AppContent() {
   useWebdavAutoSync();
   return (
     <DesktopNavigationProvider>
+      {/* Bot channel lifecycle (pause on logout, resume on login) must sit
+          OUTSIDE the AuthGate: after logout the gate unmounts its children,
+          and this supervisor is what stops the bots and aborts in-flight
+          answers. */}
+      <BotAuthSupervisor />
       <AppShell />
     </DesktopNavigationProvider>
   );
@@ -213,6 +220,7 @@ export default function App() {
   const windowKind = new URLSearchParams(window.location.search).get("window");
   const subtitleWindow = windowKind === "live-subtitles";
   const recordingIslandWindow = windowKind === "recording-island";
+  const aboutWindow = windowKind === "about";
   const identity = useMemo(() => {
     const appInfo = (window as unknown as { desktopAPI?: { appInfo?: { version: string } } })
       .desktopAPI?.appInfo;
@@ -233,6 +241,8 @@ export default function App() {
         <RecordingIslandWindow />
       ) : subtitleWindow ? (
         <LiveSubtitleOverlay />
+      ) : aboutWindow ? (
+        <AboutWindow />
       ) : (
         <CoreProvider
           apiBaseUrl={import.meta.env.VITE_API_URL}

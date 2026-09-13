@@ -12,7 +12,7 @@ import { useLiveTranslation } from "./use-live-translation";
 import type { LiveConnectionDescriptor, LiveTranslationTrayAction } from "./types";
 
 /** How long the drawer's collapse animation runs before the window shrinks.
-    Matches `animate-island-drawer-out` in globals.css. */
+    Matches the closing transition in `IslandTranscriptDrawer` (150ms). */
 const DRAWER_CLOSE_ANIMATION_MS = 150;
 
 /**

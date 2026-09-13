@@ -96,7 +96,15 @@ export interface LocalTranscriptionSegment {
   speaker?: string;
 }
 
-export type LocalTranscriptionStatus = "queued" | "transcribing" | "completed" | "failed";
+export type LocalTranscriptionStatus =
+  | "queued"
+  | "transcribing"
+  | "completed"
+  | "failed"
+  // Frontend-only placeholder states for a session that started but has not
+  // persisted its record yet (see live-translation/pending-recording-store).
+  | "recording"
+  | "saving";
 
 export interface LocalTranscriptionRecord {
   id: string;

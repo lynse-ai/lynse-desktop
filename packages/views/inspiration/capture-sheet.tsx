@@ -421,6 +421,8 @@ export function InspirationCaptureSheet() {
                     <img
                       src={image.previewUrl}
                       alt=""
+                      loading="lazy"
+                      decoding="async"
                       className="size-full object-cover"
                     />
                     <button

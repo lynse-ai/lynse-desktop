@@ -129,45 +129,9 @@ html[data-window-effects="none"] .island-surface {
 
 /* Drawer reveal: the window itself unrolls downward (eased, see
    `animate_island_height` in live_translation.rs); the content rides it with
-   a synced fade + drop from under the pill. Expand uses the same fast-attack,
-   long-settle curve as the window; collapse is a quick fold-back before the
-   window shrinks. */
-@keyframes lynse-island-drawer-in {
-  from {
-    transform: translateY(-14px);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
-
-@keyframes lynse-island-drawer-out {
-  from {
-    transform: translateY(0);
-    opacity: 1;
-  }
-  to {
-    transform: translateY(-10px);
-    opacity: 0;
-  }
-}
-
-.animate-island-drawer-in {
-  animation: lynse-island-drawer-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.animate-island-drawer-out {
-  animation: lynse-island-drawer-out 150ms cubic-bezier(0.55, 0, 1, 0.45) forwards;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .animate-island-drawer-in,
-  .animate-island-drawer-out {
-    animation: none;
-  }
-}
+   a synced fade + drop from under the pill. That motion lives in
+   `IslandTranscriptDrawer` (motion/react) so it stays interruptible —
+   reopening mid-collapse retargets instead of restarting. */
 
 /* AI assistant IP image: entrance animation when switching appearances */
 @keyframes lynse-avatar-in {

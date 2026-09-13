@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { IconSwap } from "../icon-swap";
 import { Badge } from "@lynse/ui/components/ui/badge";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
@@ -462,7 +463,7 @@ export function LiveTranslationPage() {
             onClick={() => setSettingsCollapsed(true)}
             title="收起设置栏（最大化字幕区）"
             aria-label="收起设置栏"
-            className="absolute right-0 top-1/2 z-20 flex size-8 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition hover:bg-muted hover:text-foreground"
+            className="absolute right-0 top-1/2 z-20 flex size-8 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-[color,background-color] hover:bg-muted hover:text-foreground"
           >
             <ChevronRight className="size-4" />
           </button>
@@ -644,8 +645,8 @@ export function LiveTranslationPage() {
                   onClick={() => selectAudioSource(mode)}
                   className={
                     (providerConfig.audioSource ?? "both") === mode
-                      ? "h-7 rounded-md bg-background text-xs font-medium shadow-sm"
-                      : "h-7 rounded-md text-xs text-muted-foreground transition-colors hover:text-foreground"
+                      ? "h-7 rounded-sm bg-background text-xs font-medium shadow-sm"
+                      : "h-7 rounded-sm text-xs text-muted-foreground transition-colors hover:text-foreground"
                   }
                 >
                   {t(`live_translation.audio_source_${mode}`)}
@@ -717,7 +718,7 @@ export function LiveTranslationPage() {
             onClick={() => setSettingsCollapsed(false)}
             title="展开设置栏"
             aria-label="展开设置栏"
-            className="absolute left-0 top-1/2 z-20 flex size-8 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition hover:bg-muted hover:text-foreground"
+            className="absolute left-0 top-1/2 z-20 flex size-8 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-[color,background-color] hover:bg-muted hover:text-foreground"
           >
             <ChevronLeft className="size-4" />
           </button>
@@ -727,7 +728,7 @@ export function LiveTranslationPage() {
           <div className="flex h-11 shrink-0 items-center justify-between border-b border-border px-5">
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium">{t("live_translation.live_transcript")}</span>
-              <span className="text-2xs text-muted-foreground">
+              <span className="text-2xs tabular-nums text-muted-foreground">
                 {visibleSegments.length} {t("live_translation.segments")}
               </span>
             </div>
@@ -825,7 +826,9 @@ export function LiveTranslationPage() {
             <div className="flex flex-wrap items-center gap-2">
               {view.state === "paused" ? (
                 <Button className="flex-1 sm:flex-none" onClick={resume} disabled={busy}>
-                  {busy ? <Loader2 className="animate-spin" /> : <Play />}
+                  <IconSwap stateKey={busy ? "busy" : "idle"}>
+                    {busy ? <Loader2 className="animate-spin" /> : <Play />}
+                  </IconSwap>
                   {t("live_translation.resume")}
                 </Button>
               ) : active ? (
@@ -849,7 +852,9 @@ export function LiveTranslationPage() {
                   disabled={busy}
                   title={startBlockedReason ?? undefined}
                 >
-                  {busy ? <Loader2 className="animate-spin" /> : <Play />}
+                  <IconSwap stateKey={busy ? "busy" : "idle"}>
+                    {busy ? <Loader2 className="animate-spin" /> : <Play />}
+                  </IconSwap>
                   {permissions?.systemAudioRequired || permissions?.systemAudio === "granted"
                     ? t("live_translation.start")
                     : t("live_translation.start_mic_only")}

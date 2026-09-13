@@ -25,7 +25,7 @@ export function AssistantAvatar({ size = 28, className, interactive = true }: As
 
   const frameClass = [
     "relative inline-flex shrink-0 items-center justify-center bg-transparent drop-shadow-[0_12px_24px_rgba(0,0,0,0.28)] dark:brightness-[0.82] dark:contrast-[0.96] dark:saturate-[1.12]",
-    interactive ? "cursor-pointer transition-transform hover:-translate-y-0.5 hover:scale-105 active:scale-95" : "cursor-default",
+    interactive ? "cursor-pointer transition-transform duration-150 ease-out hover:-translate-y-0.5 active:scale-[0.96]" : "cursor-default",
     className ?? "",
   ].join(" ");
 

@@ -3,8 +3,6 @@
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { QRCodeSVG } from "qrcode.react";
-import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/ui/card";
-import { Badge } from "@lynse/ui/components/ui/badge";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
 import { Label } from "@lynse/ui/components/ui/label";
@@ -16,28 +14,19 @@ import {
   DialogTitle,
 } from "@lynse/ui/components/ui/dialog";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@lynse/ui/components/ui/alert-dialog";
-import {
   NativeSelect,
   NativeSelectOption,
 } from "@lynse/ui/components/ui/native-select";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
-import { Bot, Check, Copy, Loader2, QrCode, RefreshCw, Trash2 } from "../icons";
+import { Bot, Check, Copy, Loader2, QrCode, RefreshCw } from "../icons";
+import { IconSwap } from "../icon-swap";
 import { openExternalUrl } from "../app-update";
+import { ChannelCardShell } from "../bots/channel-card-shell";
+import { botConfigKey, useBotConfig } from "../bots/config";
+import { getDesktopBotsApi, type BotChannelConfig } from "../bots/types";
 import {
   getDesktopFeishuApi,
-  FEISHU_CONFIG_QUERY_KEY,
-  useFeishuConfig,
-  useFeishuStatus,
   type FeishuChatSummary,
   type FeishuConfig,
   type FeishuRegistrationStart,
@@ -51,22 +40,15 @@ const DEFAULT_FORM: FeishuConfig = {
   hasSecret: false,
 };
 
-function stateBadgeVariant(state: string): "default" | "secondary" | "destructive" | "outline" {
-  if (state === "online") return "default";
-  if (state === "error") return "destructive";
-  if (state === "disabled") return "outline";
-  return "secondary";
-}
-
-/** Settings card for the Feishu bot (desktop only). Renders nothing when the
- *  bridge is unavailable (web). The App Secret goes to the OS keychain and is
- *  never displayed back. */
+/** The Feishu channel's settings body, wrapped in the generic bot-channel
+ *  card shell (status badge, logged-out notice, reset). Owns the enable
+ *  switch (credential-gated), one-click registration, and push targets. */
 export function FeishuConfigCard() {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const api = getDesktopFeishuApi();
-  const { data: config } = useFeishuConfig();
-  const { data: status } = useFeishuStatus();
+  const bots = getDesktopBotsApi();
+  const feishu = getDesktopFeishuApi();
+  const { data: config } = useBotConfig("feishu");
   const [form, setForm] = useState<FeishuConfig>(DEFAULT_FORM);
   const [secret, setSecret] = useState("");
   const [saving, setSaving] = useState(false);
@@ -78,26 +60,13 @@ export function FeishuConfigCard() {
   const [registerError, setRegisterError] = useState<{ key: string; error?: string } | null>(null);
   const [startingRegister, setStartingRegister] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
-  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
-  const [resetting, setResetting] = useState(false);
 
   useEffect(() => {
     if (!config) return;
     setForm((previous) => ({ ...previous, ...config }));
   }, [config]);
 
-  if (!api) return null;
-
-  const stateKey =
-    status?.state === "online"
-      ? "feishu.state_online"
-      : status?.state === "connecting"
-        ? "feishu.state_connecting"
-        : status?.state === "reconnecting"
-          ? "feishu.state_reconnecting"
-          : status?.state === "error"
-            ? "feishu.state_error"
-            : "feishu.state_disabled";
+  if (!feishu) return null;
 
   function update(patch: Partial<FeishuConfig>) {
     setForm((previous) => ({ ...previous, ...patch }));
@@ -105,13 +74,13 @@ export function FeishuConfigCard() {
 
   /** Persist the draft (and the secret when typed) and reconcile the bot. */
   async function persist(patch?: Partial<FeishuConfig>) {
-    if (!api) return;
-    const next = { ...form, ...patch };
+    if (!bots) return;
+    const next: BotChannelConfig = { ...form, ...patch };
     setSaving(true);
     try {
-      const saved = await api.saveConfig(next, secret || null);
+      const saved = await bots.save("feishu", next, secret || null);
       setSecret("");
-      qc.setQueryData(FEISHU_CONFIG_QUERY_KEY, saved);
+      qc.setQueryData(botConfigKey("feishu"), saved);
       setForm((previous) => ({ ...previous, ...saved }));
     } catch (error) {
       toast.error(
@@ -120,6 +89,12 @@ export function FeishuConfigCard() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function resetLocalState() {
+    setForm({ ...DEFAULT_FORM });
+    setSecret("");
+    setChats([]);
   }
 
   async function handleToggle(enabled: boolean) {
@@ -134,12 +109,12 @@ export function FeishuConfigCard() {
   }
 
   async function handleTestConnection() {
-    if (!api) return;
+    if (!feishu) return;
     setTesting(true);
     try {
       // Save first so the Rust side tests the credentials the form shows.
       await persist();
-      const result = await api.testConnection();
+      const result = await feishu.testConnection();
       toast.success(t("feishu.test_ok", { name: result.botName || result.openId }));
     } catch (error) {
       toast.error(
@@ -151,12 +126,12 @@ export function FeishuConfigCard() {
   }
 
   async function handleLoadChats() {
-    if (!api || loadingChats) return;
+    if (!feishu || loadingChats) return;
     setLoadingChats(true);
     try {
       // Credentials must be persisted before the Rust side can list chats.
       await persist();
-      const list = await api.listChats();
+      const list = await feishu.listChats();
       setChats(list.filter((chat) => chat.chatId));
       if (list.length === 0) toast.warning(t("feishu.chats_empty"));
     } catch (error) {
@@ -169,9 +144,9 @@ export function FeishuConfigCard() {
   }
 
   async function handleSendTestMessage() {
-    if (!api) return;
+    if (!feishu) return;
     try {
-      await api.sendText(t("feishu.test_message"));
+      await feishu.sendText(t("feishu.test_message"));
       toast.success(t("feishu.test_message_sent"));
     } catch (error) {
       toast.error(
@@ -180,37 +155,15 @@ export function FeishuConfigCard() {
     }
   }
 
-  /** Wipe the bot setup (stop, drop the keychain secret, clear config) so
-   *  one-click registration can start from scratch. */
-  async function handleReset() {
-    if (!api || resetting) return;
-    setResetting(true);
-    try {
-      const fresh = await api.resetConfig();
-      qc.setQueryData(FEISHU_CONFIG_QUERY_KEY, fresh);
-      setForm({ ...DEFAULT_FORM });
-      setSecret("");
-      setChats([]);
-      toast.success(t("feishu.reset_done"));
-    } catch (error) {
-      toast.error(
-        t("feishu.reset_failed", { error: error instanceof Error ? error.message : "" }),
-      );
-    } finally {
-      setResetting(false);
-      setResetConfirmOpen(false);
-    }
-  }
-
   // ── One-click registration (device grant) ─────────────────────────────────
 
   /** Start the flow: ask Rust for a confirmation URL and open the QR dialog. */
   async function handleRegister() {
-    if (!api || startingRegister) return;
+    if (!feishu || startingRegister) return;
     setStartingRegister(true);
     setRegisterError(null);
     try {
-      const session = await api.registerBegin({
+      const session = await feishu.registerBegin({
         name: t("feishu.register_app_name"),
         desc: t("feishu.register_app_desc"),
       });
@@ -226,7 +179,7 @@ export function FeishuConfigCard() {
 
   /** Close the dialog and drop the Rust-side session. */
   function handleCancelRegistration() {
-    api?.registerCancel().catch(() => {});
+    feishu?.registerCancel().catch(() => {});
     setRegistration(null);
     setRegisterError(null);
   }
@@ -246,7 +199,7 @@ export function FeishuConfigCard() {
   // with the credentials already saved (secret in the keychain, bot started).
   useEffect(() => {
     const session = registration;
-    if (!api || !session) return;
+    if (!feishu || !session) return;
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const fallbackIntervalMs = Math.max(session.intervalSecs, 1) * 1000;
@@ -259,13 +212,13 @@ export function FeishuConfigCard() {
     }
 
     async function tick() {
-      if (stopped || !api) return;
+      if (stopped || !feishu) return;
       try {
-        const result = await api.registerPoll();
+        const result = await feishu.registerPoll();
         intervalMs = Math.max(result.intervalSecs * 1000, fallbackIntervalMs);
         if (result.status === "success" && result.config) {
           stopped = true;
-          qc.setQueryData(FEISHU_CONFIG_QUERY_KEY, result.config);
+          qc.setQueryData(botConfigKey("feishu"), result.config);
           setForm((previous) => ({ ...previous, ...result.config! }));
           setSecret("");
           toast.success(t("feishu.register_success"));
@@ -288,198 +241,171 @@ export function FeishuConfigCard() {
       if (timer) clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- restart only on a fresh session
-  }, [api, registration, t]);
+  }, [feishu, registration, t]);
 
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2 text-xs">
-          <Bot className="size-3.5" />
-          {t("feishu.title")}
-          <Badge variant={stateBadgeVariant(status?.state ?? "disabled")} className="ml-auto text-2xs">
-            {t(stateKey)}
-          </Badge>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <Label htmlFor="feishu-enable" className="text-xs">
-            {t("feishu.enable")}
-          </Label>
-          <Switch
-            id="feishu-enable"
-            checked={form.enabled}
-            onCheckedChange={handleToggle}
-            disabled={saving}
-          />
-        </div>
-        <p className="text-2xs leading-relaxed text-muted-foreground">{t("feishu.hint")}</p>
-        {(!form.appId.trim() || !form.hasSecret) && (
-          <>
-            <Button
-              size="sm"
-              className="h-8 w-full text-xs"
-              onClick={handleRegister}
-              disabled={startingRegister}
-            >
+    <ChannelCardShell
+      channelId="feishu"
+      title={t("feishu.title")}
+      icon={<Bot className="size-3.5" />}
+      onReset={resetLocalState}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <Label htmlFor="feishu-enable" className="text-xs">
+          {t("feishu.enable")}
+        </Label>
+        <Switch
+          id="feishu-enable"
+          checked={form.enabled}
+          onCheckedChange={handleToggle}
+          disabled={saving}
+        />
+      </div>
+      <p className="text-2xs leading-relaxed text-muted-foreground">{t("feishu.hint")}</p>
+      {(!form.appId.trim() || !form.hasSecret) && (
+        <>
+          <Button
+            size="sm"
+            className="h-8 w-full text-xs"
+            onClick={handleRegister}
+            disabled={startingRegister}
+          >
+            <IconSwap stateKey={startingRegister ? "busy" : "idle"}>
               {startingRegister ? (
                 <Loader2 className="size-3.5 animate-spin" />
               ) : (
                 <QrCode className="size-3.5" />
               )}
-              {t("feishu.register_button")}
-            </Button>
-            <p className="text-2xs leading-relaxed text-muted-foreground">
-              {t("feishu.register_manual_hint")}
-            </p>
-          </>
-        )}
-        {status?.state === "error" && status?.error ? (
-          <p className="text-2xs leading-relaxed text-destructive">{status.error}</p>
-        ) : null}
+            </IconSwap>
+            {t("feishu.register_button")}
+          </Button>
+          <p className="text-2xs leading-relaxed text-muted-foreground">
+            {t("feishu.register_manual_hint")}
+          </p>
+        </>
+      )}
 
-        {(form.appId.trim() || form.hasSecret) && (
-          <>
+      {form.enabled && (
+        <>
+          <div className="space-y-2">
+            <Label htmlFor="feishu-app-id" className="text-xs">
+              App ID
+            </Label>
+            <Input
+              id="feishu-app-id"
+              className="h-8 text-xs"
+              placeholder="cli_a5..."
+              autoComplete="off"
+              value={form.appId}
+              onChange={(event) => update({ appId: event.target.value })}
+              onBlur={() => persist()}
+              disabled={saving}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="feishu-app-secret" className="text-xs">
+              App Secret
+            </Label>
+            <Input
+              id="feishu-app-secret"
+              className="h-8 text-xs"
+              type="password"
+              autoComplete="new-password"
+              placeholder={form.hasSecret ? t("feishu.secret_stored") : ""}
+              value={secret}
+              onChange={(event) => setSecret(event.target.value)}
+              onBlur={() => {
+                if (secret) persist();
+              }}
+              disabled={saving}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-2">
             <Button
               size="sm"
               variant="outline"
-              className="h-8 w-full text-xs text-destructive hover:text-destructive"
-              onClick={() => setResetConfirmOpen(true)}
-              disabled={resetting}
+              className="h-8 text-xs"
+              onClick={handleTestConnection}
+              disabled={testing || !form.appId.trim()}
             >
-              {resetting ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="size-3.5" />
-              )}
-              {t("feishu.reset_button")}
+              {testing && <Loader2 className="size-3.5 animate-spin" />}
+              {t("feishu.test_connection")}
             </Button>
-            <p className="text-2xs leading-relaxed text-muted-foreground">
-              {t("feishu.reset_hint")}
-            </p>
-          </>
-        )}
+          </div>
 
-        {form.enabled && (
-          <>
+          <div className="flex items-center justify-between gap-3">
+            <Label htmlFor="feishu-push-summary" className="text-xs">
+              {t("feishu.push_summary")}
+            </Label>
+            <Switch
+              id="feishu-push-summary"
+              checked={form.pushSummary}
+              onCheckedChange={(value) => persist({ pushSummary: value })}
+              disabled={saving}
+            />
+          </div>
+
+          <div className="grid grid-cols-[1fr_auto] items-end gap-2">
             <div className="space-y-2">
-              <Label htmlFor="feishu-app-id" className="text-xs">
-                App ID
+              <Label htmlFor="feishu-target-chat" className="text-xs">
+                {t("feishu.target_chat")}
               </Label>
-              <Input
-                id="feishu-app-id"
+              <NativeSelect
+                id="feishu-target-chat"
                 className="h-8 text-xs"
-                placeholder="cli_a5..."
-                autoComplete="off"
-                value={form.appId}
-                onChange={(event) => update({ appId: event.target.value })}
-                onBlur={() => persist()}
-                disabled={saving}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="feishu-app-secret" className="text-xs">
-                App Secret
-              </Label>
-              <Input
-                id="feishu-app-secret"
-                className="h-8 text-xs"
-                type="password"
-                autoComplete="new-password"
-                placeholder={form.hasSecret ? t("feishu.secret_stored") : ""}
-                value={secret}
-                onChange={(event) => setSecret(event.target.value)}
-                onBlur={() => {
-                  if (secret) persist();
-                }}
-                disabled={saving}
-              />
-            </div>
-
-            <div className="flex items-center justify-between gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 text-xs"
-                onClick={handleTestConnection}
-                disabled={testing || !form.appId.trim()}
+                value={form.targetChatId}
+                onChange={(event) => persist({ targetChatId: event.target.value })}
+                disabled={saving || chats.length === 0}
               >
-                {testing && <Loader2 className="size-3.5 animate-spin" />}
-                {t("feishu.test_connection")}
-              </Button>
+                <NativeSelectOption value="">
+                  {form.targetChatId
+                    ? form.targetChatId
+                    : t("feishu.chat_none")}
+                </NativeSelectOption>
+                {chats
+                  .filter((chat) => chat.chatId !== form.targetChatId)
+                  .map((chat) => (
+                    <NativeSelectOption key={chat.chatId} value={chat.chatId}>
+                      {chat.name || chat.chatId}
+                    </NativeSelectOption>
+                  ))}
+              </NativeSelect>
             </div>
-
-            <div className="flex items-center justify-between gap-3">
-              <Label htmlFor="feishu-push-summary" className="text-xs">
-                {t("feishu.push_summary")}
-              </Label>
-              <Switch
-                id="feishu-push-summary"
-                checked={form.pushSummary}
-                onCheckedChange={(value) => persist({ pushSummary: value })}
-                disabled={saving}
-              />
-            </div>
-
-            <div className="grid grid-cols-[1fr_auto] items-end gap-2">
-              <div className="space-y-2">
-                <Label htmlFor="feishu-target-chat" className="text-xs">
-                  {t("feishu.target_chat")}
-                </Label>
-                <NativeSelect
-                  id="feishu-target-chat"
-                  className="h-8 text-xs"
-                  value={form.targetChatId}
-                  onChange={(event) => persist({ targetChatId: event.target.value })}
-                  disabled={saving || chats.length === 0}
-                >
-                  <NativeSelectOption value="">
-                    {form.targetChatId
-                      ? form.targetChatId
-                      : t("feishu.chat_none")}
-                  </NativeSelectOption>
-                  {chats
-                    .filter((chat) => chat.chatId !== form.targetChatId)
-                    .map((chat) => (
-                      <NativeSelectOption key={chat.chatId} value={chat.chatId}>
-                        {chat.name || chat.chatId}
-                      </NativeSelectOption>
-                    ))}
-                </NativeSelect>
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 text-xs"
-                onClick={handleLoadChats}
-                disabled={loadingChats || !form.appId.trim() || !(form.hasSecret || secret)}
-              >
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 text-xs"
+              onClick={handleLoadChats}
+              disabled={loadingChats || !form.appId.trim() || !(form.hasSecret || secret)}
+            >
+              <IconSwap stateKey={loadingChats ? "busy" : "idle"}>
                 {loadingChats ? (
                   <Loader2 className="size-3.5 animate-spin" />
                 ) : (
                   <RefreshCw className="size-3.5" />
                 )}
-                {t("feishu.refresh_chats")}
-              </Button>
-            </div>
-            <p className="text-2xs leading-relaxed text-muted-foreground">
-              {t("feishu.target_chat_hint")}
-            </p>
+              </IconSwap>
+              {t("feishu.refresh_chats")}
+            </Button>
+          </div>
+          <p className="text-2xs leading-relaxed text-muted-foreground">
+            {t("feishu.target_chat_hint")}
+          </p>
 
-            <div className="flex items-center justify-end">
-              <Button
-                size="sm"
-                className="h-7 text-xs"
-                onClick={handleSendTestMessage}
-                disabled={!form.targetChatId}
-              >
-                {t("feishu.send_test_message")}
-              </Button>
-            </div>
-          </>
-        )}
-      </CardContent>
+          <div className="flex items-center justify-end">
+            <Button
+              size="sm"
+              className="h-7 text-xs"
+              onClick={handleSendTestMessage}
+              disabled={!form.targetChatId}
+            >
+              {t("feishu.send_test_message")}
+            </Button>
+          </div>
+        </>
+      )}
 
       <Dialog
         open={!!registration}
@@ -535,11 +461,13 @@ export function FeishuConfigCard() {
                   className="h-8 text-xs"
                   onClick={handleCopyRegistrationLink}
                 >
-                  {linkCopied ? (
-                    <Check className="size-3.5" />
-                  ) : (
-                    <Copy className="size-3.5" />
-                  )}
+                  <IconSwap stateKey={linkCopied ? "copied" : "idle"}>
+                    {linkCopied ? (
+                      <Check className="size-3.5" />
+                    ) : (
+                      <Copy className="size-3.5" />
+                    )}
+                  </IconSwap>
                   {linkCopied
                     ? t("feishu.register_copied")
                     : t("feishu.register_copy_link")}
@@ -549,35 +477,6 @@ export function FeishuConfigCard() {
           )}
         </DialogContent>
       </Dialog>
-
-      <AlertDialog
-        open={resetConfirmOpen}
-        onOpenChange={(open) => {
-          if (!resetting) setResetConfirmOpen(open);
-        }}
-      >
-        <AlertDialogContent size="sm">
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("feishu.reset_confirm_title")}</AlertDialogTitle>
-            <AlertDialogDescription>{t("feishu.reset_confirm_desc")}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel size="sm" className="h-8 text-xs">
-              {t("feishu.reset_cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              size="sm"
-              variant="destructive"
-              className="h-8 text-xs"
-              onClick={handleReset}
-              disabled={resetting}
-            >
-              {resetting && <Loader2 className="size-3.5 animate-spin" />}
-              {t("feishu.reset_confirm_action")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </Card>
+    </ChannelCardShell>
   );
 }

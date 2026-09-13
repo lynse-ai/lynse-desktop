@@ -2,8 +2,8 @@
 
 import type { ReactNode } from "react";
 import { useAuthStore } from "@lynse/core/auth";
-import { Loader2 } from "../icons";
 import { LoginPage } from "./login-page";
+import { LYNSE_LOGO_SRC } from "./lynse-logo";
 
 /**
  * Startup authentication gate: while the session is being restored show a
@@ -15,9 +15,15 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
   if (isLoading) {
+    // Branded splash matching the login page's logo placement, so the cold
+    // start reads as the product loading rather than a stalled blank page.
     return (
-      <main className="flex min-h-screen items-center justify-center bg-background">
-        <Loader2 className="size-5 animate-spin text-muted-foreground" />
+      <main className="flex min-h-screen flex-col items-center bg-background">
+        <img
+          src={LYNSE_LOGO_SRC}
+          alt="Lynse"
+          className="mt-[15vh] h-10 w-auto animate-pulse dark:invert"
+        />
       </main>
     );
   }

@@ -104,7 +104,7 @@ export function InspirationLightbox({
             src={current.url}
             alt={current.label ?? ""}
             onClick={(event) => event.stopPropagation()}
-            className="max-h-[88vh] max-w-[88vw] rounded-lg object-contain shadow-2xl"
+            className="max-h-[88vh] max-w-[88vw] rounded-lg object-contain shadow-2xl outline outline-1 -outline-offset-1 outline-white/10"
           />
 
           {slides.length > 1 && (
@@ -118,7 +118,7 @@ export function InspirationLightbox({
                     onIndexChange(slideIndex);
                   }}
                   className={cn(
-                    "h-1.5 rounded-full transition-all",
+                    "h-1.5 rounded-full transition-[width,background-color]",
                     slideIndex === index ? "w-4 bg-white" : "w-1.5 bg-white/40 hover:bg-white/70",
                   )}
                 />

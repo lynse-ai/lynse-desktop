@@ -11,18 +11,18 @@ import { Button } from "@lynse/ui/components/ui/button";
 import { Checkbox } from "@lynse/ui/components/ui/checkbox";
 import type { CompletedLiveSession } from "./types";
 import { Play, Pause } from "../icons";
+import { IconSwap } from "../icon-swap";
 import { useWaveformPeaks } from "../workspace/use-waveform-peaks";
 import { WaveformProgress } from "../workspace/waveform-progress";
 
 // ───────────────────────────────────────────────────────────────
 // Recording Complete Dialog
 //
-// Modal shown after a recording session stops. The audio is ALWAYS
-// persisted locally by the Rust sidecar, so this dialog only asks
-// whether the user also wants to push it to the cloud — a "保存到云"
-// (save to cloud) checkbox, unchecked by default. When unchecked the
-// primary action just closes the dialog; when checked it triggers the
-// cloud upload + transcription/summary pipeline.
+// Modal shown after a recording session stops. The audio sits in a
+// local cache persisted by the Rust sidecar; "保存" keeps it (and
+// uploads to the cloud when "保存到云" is ticked), "取消" cancels the
+// save and deletes the cached recording. The preview player lets the
+// user listen before choosing.
 // ───────────────────────────────────────────────────────────────
 
 interface RecordingCompleteDialogProps {
@@ -33,10 +33,11 @@ interface RecordingCompleteDialogProps {
   readonly open: boolean;
   /** Called when the dialog should close (user dismisses or acts). */
   readonly onOpenChange: (open: boolean) => void;
-  /** Called when the user confirms "保存到云" (checkbox checked + primary action). */
+  /** Called when the user confirms "保存到云" (checkbox checked + 保存). */
   readonly onSave?: (session: CompletedLiveSession) => void;
-  /** Called when the user taps "关闭". */
-  readonly onDismiss?: () => void;
+  /** Called when the user taps "取消" — cancel the save and delete the
+   *  cached recording. */
+  readonly onDiscard?: (session: CompletedLiveSession) => void;
   /** Called when the "remember choice" checkbox value changes. */
   readonly onRememberChoiceChange?: (remember: boolean) => void;
 }
@@ -111,7 +112,7 @@ export function RecordingCompleteDialog({
   open,
   onOpenChange,
   onSave,
-  onDismiss,
+  onDiscard,
   onRememberChoiceChange,
 }: RecordingCompleteDialogProps) {
   const { t } = useTranslation();
@@ -140,8 +141,10 @@ export function RecordingCompleteDialog({
     onOpenChange(false);
   }
 
-  function handleDismiss() {
-    onDismiss?.();
+  // 取消 = cancel the save: hand the session to onDiscard, which deletes
+  // the cached recording; 保存 keeps it (plus cloud sync when ticked).
+  function handleCancel() {
+    onDiscard?.(session);
     onOpenChange(false);
   }
 
@@ -160,7 +163,7 @@ export function RecordingCompleteDialog({
         {/* ═══ Body ═══ */}
         <div className="flex flex-col gap-4 px-6 pt-6 pb-2">
           {/* Title */}
-          <DialogTitle className="text-lg font-semibold leading-tight">
+          <DialogTitle className="text-lg font-semibold leading-tight text-balance">
             {t("recording_mode.complete_title")}
           </DialogTitle>
 
@@ -207,18 +210,18 @@ export function RecordingCompleteDialog({
           </label>
         </div>
 
-        {/* ═══ Footer buttons ═══ */}
-        <div className="flex items-center justify-end gap-3 border-t border-border/60 bg-background px-6 py-4">
+        {/* ═══ Footer buttons — centered 取消 / 保存 ═══ */}
+        <div className="flex items-center justify-center gap-3 border-t border-border/60 bg-background px-6 py-4">
           <Button
             variant="outline"
-            onClick={handleDismiss}
-            className="min-w-[80px]"
+            onClick={handleCancel}
+            className="min-w-[96px]"
           >
-            {t("recording_mode.complete_dismiss")}
+            {t("recording_mode.complete_cancel")}
           </Button>
           <Button
             onClick={handlePrimary}
-            className="min-w-[120px] bg-foreground text-background hover:bg-foreground/90"
+            className="min-w-[96px] bg-foreground text-background hover:bg-foreground/90"
           >
             {saveToCloud
               ? t("recording_mode.complete_save_cloud")
@@ -272,9 +275,11 @@ function RecordingPreview({ src }: { src: string }) {
           type="button"
           onClick={togglePlay}
           aria-label={playing ? t("recording_mode.pause") : t("recording_mode.resume")}
-          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-colors hover:bg-foreground/90"
+          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-[background-color,transform] duration-150 hover:bg-foreground/90 active:scale-[0.96]"
         >
-          {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5 ml-0.5" />}
+          <IconSwap stateKey={playing ? "pause" : "play"}>
+            {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5 ml-0.5" />}
+          </IconSwap>
         </button>
 
         <div className="min-w-0 flex-1">

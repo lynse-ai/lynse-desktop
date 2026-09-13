@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
+  ArrowDown,
   ArrowUp,
   BookOpen,
   CalendarDays,
@@ -120,6 +122,7 @@ export function ChatPage() {
   const [input, setInput] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const reduceMotion = useReducedMotion();
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { t } = useTranslation();
@@ -297,11 +300,40 @@ export function ChatPage() {
     });
   };
 
+  // Stick-to-bottom: follow the newest message (including streaming tokens)
+  // only while the user is parked near the bottom — never yank the view if
+  // they scrolled up to re-read mid-answer.
+  const stickToBottomRef = useRef(true);
+  const [pinnedToBottom, setPinnedToBottom] = useState(true);
+
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const el = scrollRef.current;
+    if (el && stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
     }
   }, [messages, isLoading]);
+
+  const handleListScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    stickToBottomRef.current = pinned;
+    setPinnedToBottom((prev) => (prev === pinned ? prev : pinned));
+  };
+
+  const scrollToBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottomRef.current = true;
+    setPinnedToBottom(true);
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  };
+
+  // Switching conversations always lands on the newest message.
+  useEffect(() => {
+    stickToBottomRef.current = true;
+    setPinnedToBottom(true);
+  }, [activeConversationId]);
 
   const handleSend = (content = input) => {
     const trimmedContent = content.trim();
@@ -400,22 +432,33 @@ export function ChatPage() {
         </div>
       </header>
 
-      {historyOpen && (
-        <aside className="absolute bottom-0 left-0 top-14 flex w-56 flex-col border-r border-border/60">
-          <ChatHistorySidebar
-            conversations={conversations}
-            activeConversationId={activeConversationId}
-            workingConversationIds={workingConversationIds}
-            onSelect={selectConversation}
-            onClose={() => setHistoryOpen(false)}
-          />
-        </aside>
-      )}
+      <AnimatePresence initial={false}>
+        {historyOpen && (
+          <motion.aside
+            key="history"
+            initial={reduceMotion ? false : { x: "-100%" }}
+            animate={{ x: 0 }}
+            exit={reduceMotion ? { opacity: 0 } : { x: "-100%" }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            className="absolute bottom-0 left-0 top-14 flex w-56 flex-col border-r border-border/60"
+          >
+            <ChatHistorySidebar
+              conversations={conversations}
+              activeConversationId={activeConversationId}
+              workingConversationIds={workingConversationIds}
+              onSelect={selectConversation}
+              onClose={() => setHistoryOpen(false)}
+            />
+          </motion.aside>
+        )}
+      </AnimatePresence>
 
-      <main
-        ref={scrollRef}
-        className={`${historyOpen ? "ml-56" : "ml-0"} min-h-0 flex-1 overflow-y-auto transition-[margin] duration-150`}
-      >
+      <div className="relative min-h-0 flex-1">
+        <main
+          ref={scrollRef}
+          onScroll={handleListScroll}
+          className={`${historyOpen ? "ml-56" : "ml-0"} h-full overflow-y-auto overscroll-contain transition-[margin] duration-150`}
+        >
         {messages.length === 0 && !isLoading ? (
           <EmptyChat />
         ) : (
@@ -467,6 +510,24 @@ export function ChatPage() {
           </div>
         )}
       </main>
+
+        <AnimatePresence>
+          {!pinnedToBottom && (
+            <motion.button
+              type="button"
+              onClick={scrollToBottom}
+              initial={{ opacity: 0, y: 8, x: "-50%" }}
+              animate={{ opacity: 1, y: 0, x: "-50%" }}
+              exit={{ opacity: 0, y: 8, x: "-50%" }}
+              transition={{ duration: 0.15, ease: "easeOut" }}
+              className="absolute bottom-4 left-1/2 z-10 flex size-8 items-center justify-center rounded-full border border-border/70 bg-background/95 text-muted-foreground shadow-md backdrop-blur transition-colors hover:border-primary/30 hover:text-foreground"
+              aria-label={t("chat.scroll_to_bottom")}
+            >
+              <ArrowDown className="size-4" />
+            </motion.button>
+          )}
+        </AnimatePresence>
+      </div>
 
       <div
         className={`${historyOpen ? "ml-56" : "ml-0"} pointer-events-none shrink-0 bg-background/95 pb-3 pt-2 transition-[margin] duration-150 dark:bg-background/75 dark:backdrop-blur-xl`}
@@ -539,7 +600,8 @@ export function ChatPage() {
               }}
               placeholder={t("chat.page_placeholder")}
               className="max-h-40 min-h-12 resize-none border-0 bg-transparent px-2.5 py-2 text-13 text-foreground shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
-              disabled={isLoading}
+              // Stays editable while a response streams so the user can
+              // pre-type; sending is what's blocked (button + handleSend).
               rows={1}
               autoFocus
             />
@@ -580,7 +642,7 @@ export function ChatPage() {
                 <Button
                   type="button"
                   size="icon"
-                  className="size-8 bg-foreground text-background shadow-[0_1px_2px_rgba(0,0,0,0.12)] transition-all hover:bg-foreground/85 hover:shadow-[0_2px_7px_rgba(0,0,0,0.12)] disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none dark:bg-primary dark:text-primary-foreground dark:hover:bg-primary/90"
+                  className="size-8 bg-foreground text-background shadow-[0_1px_2px_rgba(0,0,0,0.12)] transition-[background-color,box-shadow] hover:bg-foreground/85 hover:shadow-[0_2px_7px_rgba(0,0,0,0.12)] disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none dark:bg-primary dark:text-primary-foreground dark:hover:bg-primary/90"
                   onClick={() => handleSend()}
                   disabled={!input.trim() || hasUploadingAttachments}
                   title={t("chat.send")}

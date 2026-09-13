@@ -17,11 +17,14 @@ import {
   ChevronRight,
 } from "../icons";
 import { useWorkspaceStore } from "./store";
+import { useAudioEditorStore } from "../audio-editor/store";
+import { useNavigation } from "../navigation";
 import { TAB_BAR_HEIGHT } from "./layout-constants";
 import { api } from "@lynse/core/api/client";
 import { pushMeetingSummaryToFeishu } from "../feishu/feishu-push";
 import { SummaryMarkdownEditor } from "./summary-editor";
 import { FloatingMarkdownToolbar } from "./center-panel/markdown-toolbar";
+import { DeleteConfirmDialog } from "./delete-confirm-dialog";
 import { AudioPlayer } from "./audio-player";
 import type { AudioPlayerHandle } from "./audio-player";
 import { getSpeakerColor } from "@lynse/ui/lib/speaker";
@@ -48,7 +51,12 @@ import { useNotificationStore } from "../notifications/use-notification-store";
 import {
   getDesktopLocalTranscriptionApi,
   isLocalFileId,
+  LOCAL_TRANSCRIPTION_FOLDER_ID,
 } from "./local-transcription";
+import {
+  pendingRecordingRecordId,
+  usePendingRecordingStore,
+} from "../live-translation/pending-recording-store";
 import { retryLocalTranscription } from "./local-transcription-retry";
 import { isLocalTranscriptionActive, LOCAL_STATUS_LABEL } from "./local-transcription-status";
 import { wrapCjkSpacing } from "./cjk-spacing";
@@ -284,6 +292,8 @@ export function ContentPanel() {
   const [retryingLocalFileIds, setRetryingLocalFileIds] = useState<Set<string>>(() => new Set());
   const [localRetryError, setLocalRetryError] = useState<string | null>(null);
   const [voiceprintDraft, setVoiceprintDraft] = useState<{ segmentId: string; name: string } | null>(null);
+  // Summary tab staged for deletion behind the themed confirm dialog.
+  const [pendingDeleteSummary, setPendingDeleteSummary] = useState<{ conclusionId: string; idx: number } | null>(null);
   const summaryCountBeforeResummary = useRef(0);
 
   const selectedTitle = useMemo(() => {
@@ -292,10 +302,27 @@ export function ContentPanel() {
     return listedTitle || selectedItemTitle;
   }, [selectedItemId, files, selectedItemTitle]);
 
+  // Optimistic placeholder while a recording has not persisted yet (see
+  // live-translation/pending-recording-store) — keeps the detail panel in its
+  // pending state instead of flashing an empty page.
+  const pendingRecording = usePendingRecordingStore((s) =>
+    s.pending.find((p) => pendingRecordingRecordId(p.sessionId) === selectedItemId),
+  );
   const selectedFile = useMemo(() => {
-    if (!selectedItemId || !files) return null;
-    return files.find((f) => f.id === selectedItemId) ?? null;
-  }, [selectedItemId, files]);
+    if (!selectedItemId) return null;
+    const listed = files?.find((f) => f.id === selectedItemId) ?? null;
+    if (listed || !pendingRecording) return listed;
+    return {
+      id: selectedItemId,
+      type: "file" as const,
+      title: pendingRecording.title,
+      createdAt: pendingRecording.startedAt,
+      updatedAt: pendingRecording.startedAt,
+      folderId: LOCAL_TRANSCRIPTION_FOLDER_ID,
+      localStatus: pendingRecording.phase,
+      transcriptionCompleted: false,
+    };
+  }, [selectedItemId, files, pendingRecording]);
 
   const isLocalSelectedItem = isLocalFileId(selectedItemId);
   const localStatus = selectedFile?.localStatus;
@@ -312,6 +339,19 @@ export function ContentPanel() {
     if (!selectedItemId || !files) return null;
     return files.find((f) => f.id === selectedItemId)?.createdAt ?? null;
   }, [selectedItemId, files]);
+
+  // Scissors entry on the audio player bar: open the desktop audio editor for
+  // this local recording (trim / desilence / enhance run through FFmpeg).
+  const openAudioEditor = useAudioEditorStore((s) => s.openEditor);
+  const { push } = useNavigation();
+  const handleEditSelectedAudio = useCallback(() => {
+    if (!selectedFile || !isLocalFileId(selectedFile.id)) return;
+    openAudioEditor(
+      [{ id: selectedFile.id, title: selectedFile.title, createdAt: selectedFile.createdAt }],
+      "overwrite",
+    );
+    push("/audio-editor");
+  }, [openAudioEditor, push, selectedFile]);
 
   const [editedTitle, setEditedTitle] = useState<EditedTitleState | null>(null);
   const displayTitle = getDisplayTitle(selectedItemId, selectedTitle, editedTitle, selectedItemTitle);
@@ -679,16 +719,25 @@ export function ContentPanel() {
   ]);
 
   const handleDeleteSummary = useCallback((conclusionId: string, idx: number) => {
-    if (!selectedItemId || !window.confirm(text("summary_tab.delete_confirm", summaryTabFallback.deleteConfirm))) return;
+    if (!selectedItemId) return;
+    // Stage the deletion; the themed confirm dialog fires the mutation.
+    setPendingDeleteSummary({ conclusionId, idx });
+  }, [selectedItemId]);
+
+  const confirmDeleteSummary = useCallback(() => {
+    if (!pendingDeleteSummary) return;
+    const { conclusionId, idx } = pendingDeleteSummary;
     deleteConclusion.mutate(conclusionId, {
       onSuccess: () => {
+        setPendingDeleteSummary(null);
         if (contentTab === `summary-${idx}`) {
           const nextIdx = idx > 0 ? idx - 1 : 0;
           setContentTab(visibleConclusionTexts.length > 1 ? `summary-${nextIdx}` : "outline");
         }
       },
+      onError: () => setPendingDeleteSummary(null),
     });
-  }, [contentTab, deleteConclusion, selectedItemId, setContentTab, text, summaryTabFallback.deleteConfirm, visibleConclusionTexts.length]);
+  }, [pendingDeleteSummary, deleteConclusion, contentTab, setContentTab, visibleConclusionTexts.length]);
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col bg-background">
@@ -717,7 +766,7 @@ export function ContentPanel() {
                   onClick={() => setContentTab(`summary-${idx}`)}
                 >
                   <Sparkles className="size-3.5 shrink-0" />
-                  <span className="max-w-28 truncate">{block.name || t("workspace.summary")}</span>
+                  <span className="max-w-28 truncate" title={block.name || t("workspace.summary")}>{block.name || t("workspace.summary")}</span>
                 </TabButton>
               </ContextMenuTrigger>
               <ContextMenuContent>
@@ -748,7 +797,7 @@ export function ContentPanel() {
               active={contentTab === `note-${note.id}`}
               onClick={() => setContentTab(`note-${note.id}`)}
             >
-              <span className="max-w-28 truncate">{note.title}</span>
+              <span className="max-w-28 truncate" title={note.title}>{note.title}</span>
               <button
                 onClick={(e) => { e.stopPropagation(); removeNoteTab(note.id); }}
                 className="ml-0.5 rounded p-0.5 hover:bg-accent/50"
@@ -764,7 +813,7 @@ export function ContentPanel() {
               setResummarizeOpen(true);
             }}
             disabled={!selectedItemId || currentFileSummarizing}
-            className="ml-0.5 flex shrink-0 items-center justify-center rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors disabled:pointer-events-none disabled:opacity-50"
+            className="ml-0.5 flex shrink-0 items-center justify-center rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-accent/50 hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50"
             title={t("add_summary.button")}
           >
             <Plus className="size-3.5" />
@@ -869,8 +918,8 @@ export function ContentPanel() {
                 </div>
               )}
               {selectedCreatedAt && (
-                <div className="mt-1 text-2xs text-muted-foreground shrink-0">
-                  {formatDate(selectedCreatedAt)}
+                <div className="mt-1 text-2xs text-muted-foreground shrink-0 tabular-nums">
+                  {formatDate(selectedCreatedAt, i18n.language)}
                 </div>
               )}
 
@@ -906,6 +955,7 @@ export function ContentPanel() {
                               ref={audioPlayerRef}
                               src={audioUrl as string}
                               highlightTimeMs={highlightTimeMs}
+                              onEdit={isLocalSelectedItem ? handleEditSelectedAudio : undefined}
                             />
                           </div>
                         )}
@@ -1084,6 +1134,16 @@ export function ContentPanel() {
         onStarted={handleResummaryStarted}
         onFinished={handleResummaryFinished}
       />
+
+      <DeleteConfirmDialog
+        open={pendingDeleteSummary !== null}
+        description={text("summary_tab.delete_confirm", summaryTabFallback.deleteConfirm)}
+        pending={deleteConclusion.isPending}
+        onConfirm={confirmDeleteSummary}
+        onOpenChange={(open) => {
+          if (!open) setPendingDeleteSummary(null);
+        }}
+      />
     </div>
   );
 }
@@ -1235,7 +1295,7 @@ function ScrollableTabs({ activeTab, children }: { activeTab: string; children: 
           onClick={() => scrollByDir(-1)}
           aria-label={t("workspace.scroll_tabs_left")}
           title={t("workspace.scroll_tabs_left")}
-          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-accent/50 hover:text-foreground active:scale-[0.96]"
         >
           <ChevronLeft className="size-4" />
         </button>
@@ -1257,7 +1317,7 @@ function ScrollableTabs({ activeTab, children }: { activeTab: string; children: 
           onClick={() => scrollByDir(1)}
           aria-label={t("workspace.scroll_tabs_right")}
           title={t("workspace.scroll_tabs_right")}
-          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-accent/50 hover:text-foreground active:scale-[0.96]"
         >
           <ChevronRight className="size-4" />
         </button>
@@ -1426,7 +1486,7 @@ function SourceView({ code, language }: { code: string; language: "html" | "mark
                 <img
                   src={dataUri}
                   alt={`base64-image-${i + 1}`}
-                  className="max-w-full rounded"
+                  className="max-w-full rounded outline outline-1 -outline-offset-1 outline-white/10"
                   style={{ maxHeight: 400 }}
                 />
               </div>
@@ -1456,11 +1516,29 @@ function EmptyState() {
 }
 
 function LoadingState() {
-  const { t } = useTranslation();
   return (
-    <div className="flex h-full items-center justify-center gap-2">
-      <Loader2 className="size-4 animate-spin text-muted-foreground" />
-      <p className="text-xs text-muted-foreground">{t("workspace.loading")}</p>
+    // Prose-shaped skeleton: mirrors a note document (title + paragraphs)
+    // instead of a spinner, so the panel doesn't jarringly reflow on load.
+    <div className="mx-auto flex h-full max-w-3xl flex-col gap-6 px-8 py-10" aria-hidden>
+      <span className="h-6 w-2/5 animate-pulse rounded bg-muted-foreground/10" />
+      <div className="flex flex-col gap-3">
+        {[100, 92, 96, 60].map((width, i) => (
+          <span
+            key={i}
+            className="h-3.5 animate-pulse rounded bg-muted-foreground/10"
+            style={{ width: `${width}%` }}
+          />
+        ))}
+      </div>
+      <div className="flex flex-col gap-3">
+        {[95, 88, 40].map((width, i) => (
+          <span
+            key={i}
+            className="h-3.5 animate-pulse rounded bg-muted-foreground/10"
+            style={{ width: `${width}%` }}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -1538,11 +1616,11 @@ function TranscriptionGeneratePrompt({
   );
 }
 
-function formatDate(dateStr: string): string {
+function formatDate(dateStr: string, locale: string): string {
   try {
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return dateStr;
-    return d.toLocaleString("zh-CN", {
+    return d.toLocaleString(locale || "en", {
       year: "numeric", month: "2-digit", day: "2-digit",
       hour: "2-digit", minute: "2-digit", second: "2-digit",
     });

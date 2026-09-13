@@ -47,11 +47,23 @@ export function ChatPanel() {
     return listedTitle || selectedItemTitle;
   }, [selectedItemId, files, selectedItemTitle]);
 
+  // Stick-to-bottom: follow the newest message while the user is parked near
+  // the bottom, and never yank the view if they scrolled up to re-read.
+  const stickToBottomRef = useRef(true);
+
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    const el = scrollRef.current;
+    if (el && stickToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
     }
   }, [messages, isLoading]);
+
+  const handleListScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  };
 
   const handleSend = () => {
     if (!input.trim() || isLoading) return;
@@ -112,7 +124,12 @@ export function ChatPanel() {
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto" style={{ padding: 12 }}>
+      <div
+        ref={scrollRef}
+        onScroll={handleListScroll}
+        className="flex-1 overflow-y-auto overscroll-contain"
+        style={{ padding: 12 }}
+      >
         {messages.length === 0 && !isLoading && (
             <div className="flex flex-col items-center justify-center pt-10 text-center text-muted-foreground">
             <AssistantAvatar size={179} className="mb-2 opacity-90" />
@@ -212,7 +229,6 @@ export function ChatPanel() {
             );
           })}
         </div>
-        <div ref={scrollRef} />
       </div>
 
       {/* Composer */}
@@ -225,7 +241,6 @@ export function ChatPanel() {
               onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
               placeholder={t("workspace.chat_placeholder")}
               className="h-8 text-xs"
-              disabled={isLoading}
             />
           </div>
           {isLoading ? (

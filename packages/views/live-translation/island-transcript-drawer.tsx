@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
 import { AudioVisualizer } from "./audio-visualizer";
@@ -38,6 +39,7 @@ export function IslandTranscriptDrawer({
   onSelectTargetLanguage,
 }: IslandTranscriptDrawerProps) {
   const { t } = useTranslation();
+  const reduceMotion = useReducedMotion();
   const { view } = useLiveTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
@@ -78,18 +80,27 @@ export function IslandTranscriptDrawer({
   const level = view.micSuppressed ? view.systemLevel : Math.max(view.micLevel, view.systemLevel);
 
   return (
-    <div
-      className={cn(
-        "relative flex min-h-0 flex-1 flex-col",
-        closing ? "animate-island-drawer-out" : "animate-island-drawer-in",
-      )}
+    <motion.div
+      className="relative flex min-h-0 flex-1 flex-col"
+      initial={reduceMotion ? false : { y: -14, opacity: 0 }}
+      animate={{ y: closing ? -10 : 0, opacity: closing ? 0 : 1 }}
+      // Interruptible transition instead of one-shot keyframes: reopening
+      // mid-close retargets smoothly. Curves/durations match the window
+      // unroll (`animate_island_height` in live_translation.rs).
+      transition={
+        reduceMotion
+          ? { duration: 0 }
+          : closing
+            ? { duration: 0.15, ease: [0.55, 0, 1, 0.45] }
+            : { duration: 0.32, ease: [0.22, 1, 0.36, 1] }
+      }
     >
       {/* Header */}
       <div
         data-tauri-drag-region
         className="flex shrink-0 items-center justify-between border-t border-border/40 pl-4 pr-2 pb-1 pt-2"
       >
-        <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+        <span className="text-3xs font-medium uppercase tracking-wider text-muted-foreground">
           {translating ? t("recording_mode.translate") : t("recording_mode.transcribe")}
         </span>
         {onSelectTargetLanguage && (
@@ -98,7 +109,7 @@ export function IslandTranscriptDrawer({
             onClick={() => setPickerOpen((open) => !open)}
             aria-label={t("live_translation.translation_direction")}
             title={t("live_translation.translation_direction")}
-            className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="flex items-center gap-1 rounded-full px-2 py-0.5 text-3xs tabular-nums text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             {directionLabel(view.sourceLanguage ?? "auto", view.targetLanguage ?? "none", t)}
             <ChevronDown
@@ -158,7 +169,7 @@ export function IslandTranscriptDrawer({
             <p className="text-xs font-medium text-foreground/70">
               {t("live_translation.empty_title")}
             </p>
-            <p className="mt-1 text-[11px] text-muted-foreground">
+            <p className="mt-1 text-2xs text-muted-foreground">
               {t("live_translation.empty_hint")}
             </p>
           </div>
@@ -184,12 +195,12 @@ export function IslandTranscriptDrawer({
                   : segment.source !== prev?.source;
               return (
                 <div key={segment.id} className="flex items-start gap-2 text-[13px] leading-relaxed">
-                  <span className="w-10 shrink-0 pt-0.5 text-right font-mono text-[10px] tabular-nums text-muted-foreground/50">
+                  <span className="w-10 shrink-0 pt-0.5 text-right font-mono text-3xs tabular-nums text-muted-foreground/50">
                     {formatTime(segment.startMs).slice(3)}
                   </span>
                   <div className="min-w-0 flex-1">
                     {newUtterance && (
-                      <div className="mb-0.5 text-[10px] font-medium text-primary/80">
+                      <div className="mb-0.5 text-3xs font-medium text-primary/80">
                         {speakerLabel}
                       </div>
                     )}
@@ -237,6 +248,6 @@ export function IslandTranscriptDrawer({
           )}
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }

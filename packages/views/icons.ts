@@ -110,6 +110,7 @@ export {
   // ── Audio Player ────────────────────────────────────
   Play,             // Play
   Pause,            // Pause
+  SkipBack,         // Rewind / skip back
   SkipForward,      // Fast forward / skip
   Volume2,          // Volume on
   VolumeX,          // Volume off / mute
@@ -146,6 +147,7 @@ export {
   Scissors,         // Trim selection
   Combine,          // Merge multiple audios
   Wand2,            // Voice enhancement
+  Crop,             // Zoom the view to the trim selection
   ArrowLeft,        // Back to previous page
 } from "lucide-react";
 

@@ -7,7 +7,13 @@ export function isLocalTranscriptionActive({
   status?: LocalTranscriptionStatus;
   retrying: boolean;
 }): boolean {
-  return retrying || status === "queued" || status === "transcribing";
+  return (
+    retrying ||
+    status === "queued" ||
+    status === "transcribing" ||
+    status === "recording" ||
+    status === "saving"
+  );
 }
 
 /** Detail-panel pill labels for the in-flight / failed states. A completed
@@ -16,4 +22,6 @@ export const LOCAL_STATUS_LABEL: Record<Exclude<LocalTranscriptionStatus, "compl
   queued: "排队中",
   transcribing: "转写中",
   failed: "失败",
+  recording: "录音中",
+  saving: "保存中",
 };

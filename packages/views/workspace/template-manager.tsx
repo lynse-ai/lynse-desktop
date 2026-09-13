@@ -12,7 +12,7 @@ import { ScrollArea } from "@lynse/ui/components/ui/scroll-area";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTemplateCategories } from "./hooks/use-files";
-import { Loader2, Sparkles } from "../icons";
+import { Sparkles } from "../icons";
 import type { PromptTemplate } from "./types";
 
 interface TemplateManagerProps {
@@ -40,8 +40,24 @@ export function TemplateManager({ open, onOpenChange }: TemplateManagerProps) {
         </DialogHeader>
 
         {isLoading ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          <div className="flex flex-col gap-6 py-2" aria-hidden>
+            {[0, 1].map((cat) => (
+              <div key={cat}>
+                <span className="block h-4 w-24 animate-pulse rounded bg-muted-foreground/10" />
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  {[0, 1].map((card) => (
+                    <div
+                      key={card}
+                      className="rounded-xl border border-border/60 p-4"
+                    >
+                      <span className="block h-3.5 w-3/5 animate-pulse rounded bg-muted-foreground/10" />
+                      <span className="mt-2.5 block h-3 w-full animate-pulse rounded bg-muted-foreground/10" />
+                      <span className="mt-2 block h-3 w-4/5 animate-pulse rounded bg-muted-foreground/10" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         ) : (
           <ScrollArea className="max-h-[60vh]">
@@ -122,6 +138,7 @@ function TemplateCard({ template }: { template: PromptTemplate }) {
             <img
               src={template.iconUrl}
               alt=""
+              decoding="async"
               className="size-5 object-contain"
               onError={(e) => {
                 (e.target as HTMLImageElement).style.display = "none";

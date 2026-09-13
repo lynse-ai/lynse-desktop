@@ -14,4 +14,7 @@ export async function changeLanguage(locale: string) {
   if (typeof window !== "undefined") {
     localStorage.setItem(LOCALE_STORAGE_KEY, locale);
   }
+  if (typeof document !== "undefined") {
+    document.documentElement.lang = locale;
+  }
 }

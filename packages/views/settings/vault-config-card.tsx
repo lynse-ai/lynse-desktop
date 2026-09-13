@@ -141,7 +141,7 @@ export function VaultConfigCard() {
             disabled={saving}
           />
         </div>
-        <p className="text-2xs leading-relaxed text-muted-foreground">{t("vault.hint")}</p>
+        <p className="text-2xs leading-relaxed text-muted-foreground text-pretty">{t("vault.hint")}</p>
 
         {enabled && (
           <>

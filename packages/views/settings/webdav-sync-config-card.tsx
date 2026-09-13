@@ -188,7 +188,7 @@ export function WebdavSyncConfigCard() {
             disabled={saving}
           />
         </div>
-        <p className="text-2xs leading-relaxed text-muted-foreground">{t("webdav.hint")}</p>
+        <p className="text-2xs leading-relaxed text-muted-foreground text-pretty">{t("webdav.hint")}</p>
 
         {form.enabled && (
           <>

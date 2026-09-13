@@ -214,7 +214,7 @@ export function ReportProblemDialog() {
               <Check className="size-5 text-success" />
             </div>
             <p className="text-sm font-medium">{t("settings.report_submitted_title")}</p>
-            <p className="max-w-sm text-2xs leading-relaxed text-muted-foreground">
+            <p className="max-w-sm text-2xs leading-relaxed text-muted-foreground text-pretty">
               {t("settings.report_submitted_hint")}
             </p>
             <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
@@ -286,7 +286,7 @@ export function ReportProblemDialog() {
                           key={attachment.path}
                           className="relative size-16 overflow-hidden rounded-md border"
                         >
-                          <img src={attachment.url} alt="" className="size-full object-cover" />
+                          <img src={attachment.url} alt="" loading="lazy" decoding="async" className="size-full object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10" />
                           <button
                             type="button"
                             aria-label={t("settings.report_remove_attachment")}
@@ -336,7 +336,7 @@ export function ReportProblemDialog() {
                       onCheckedChange={setIncludeLogs}
                     />
                   </div>
-                  <p className="mt-1 text-2xs leading-relaxed text-muted-foreground">
+                  <p className="mt-1 text-2xs leading-relaxed text-muted-foreground text-pretty">
                     {logFailed
                       ? t("settings.report_logs_failed", { error: logFailed })
                       : logTail
@@ -344,7 +344,7 @@ export function ReportProblemDialog() {
                         : t("settings.report_logs_loading")}
                   </p>
                   {logTail?.truncated && !logFailed && (
-                    <p className="mt-0.5 text-2xs leading-relaxed text-muted-foreground">
+                    <p className="mt-0.5 text-2xs leading-relaxed text-muted-foreground text-pretty">
                       {t("settings.report_logs_truncated")}
                     </p>
                   )}
@@ -353,7 +353,7 @@ export function ReportProblemDialog() {
             </div>
 
             <div className="flex items-center justify-between gap-3 border-t px-4 py-3">
-              <p className="min-w-0 text-2xs leading-relaxed text-muted-foreground">
+              <p className="min-w-0 text-2xs leading-relaxed text-muted-foreground text-pretty">
                 {t("settings.report_footer_hint")}
               </p>
               <div className="flex shrink-0 items-center gap-2">

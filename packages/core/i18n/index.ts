@@ -9,6 +9,16 @@ export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 const LOCALE_STORAGE_KEY = "lynse_locale";
 
 /**
+ * Keep <html lang> in step with the active locale so browsers and assistive
+ * tech pick the right pronunciation, quotes, hyphenation and CJK fonts.
+ */
+function syncDocumentLang(locale: string) {
+  if (typeof document !== "undefined") {
+    document.documentElement.lang = locale;
+  }
+}
+
+/**
  * Initialise i18next with the given locale and translation resources.
  * Safe to call multiple — subsequent calls are no-ops once initialised.
  */
@@ -32,4 +42,5 @@ export function initI18n(opts: {
     interpolation: { escapeValue: false },
     react: { useSuspense: false },
   });
+  syncDocumentLang(lng);
 }

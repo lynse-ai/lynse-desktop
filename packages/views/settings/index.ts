@@ -1,6 +1,15 @@
 export { SettingsDialog } from "./settings-dialog";
 export { WebdavSyncConfigCard } from "./webdav-sync-config-card";
 export {
+  formatBytes,
+  getDesktopStorageApi,
+  type DesktopStorageApi,
+  type StorageCategoryId,
+  type StorageUsage,
+} from "./storage";
+export { AccountCard } from "./account-card";
+export { StorageCard } from "./storage-card";
+export {
   getDesktopWebdavSyncApi,
   isWebdavSyncAvailable,
   useWebdavAutoSync,

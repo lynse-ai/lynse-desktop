@@ -13,6 +13,7 @@ import {
 import { Button } from "@lynse/ui/components/ui/button";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Upload, Loader2, Check, FileAudio, Sparkles } from "../icons";
+import { IconSwap } from "../icon-swap";
 import { cn } from "@lynse/ui/lib/utils";
 import {
   useTransferFile,
@@ -217,8 +218,8 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{t("upload.title")}</DialogTitle>
-          <DialogDescription>{t("upload.description")}</DialogDescription>
+          <DialogTitle className="text-balance">{t("upload.title")}</DialogTitle>
+          <DialogDescription className="text-pretty">{t("upload.description")}</DialogDescription>
         </DialogHeader>
 
         {phase === "idle" || phase === "error" ? (
@@ -445,13 +446,15 @@ function ProgressContent({
                 "flex size-6 shrink-0 items-center justify-center rounded-full transition-colors",
                 done ? "bg-primary text-primary-foreground" : active ? "bg-primary/10" : "bg-muted",
               )}>
-                {done ? (
-                  <Check className="size-3.5" />
-                ) : active ? (
-                  <Loader2 className="size-3.5 animate-spin text-primary" />
-                ) : (
-                  <span className="text-xs text-muted-foreground">{i + 1}</span>
-                )}
+                <IconSwap stateKey={done ? "done" : active ? "active" : `pending-${i}`}>
+                  {done ? (
+                    <Check className="size-3.5" />
+                  ) : active ? (
+                    <Loader2 className="size-3.5 animate-spin text-primary" />
+                  ) : (
+                    <span className="text-xs text-muted-foreground">{i + 1}</span>
+                  )}
+                </IconSwap>
               </div>
               <div className="flex-1 min-w-0">
                 <p className={cn(
@@ -463,7 +466,7 @@ function ProgressContent({
                 {step.pct >= 0 && active && (
                   <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-muted">
                     <div
-                      className="h-full rounded-full bg-primary transition-all duration-300"
+                      className="h-full rounded-full bg-primary transition-[width] duration-300"
                       style={{ width: `${step.pct}%` }}
                     />
                   </div>

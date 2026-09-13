@@ -246,7 +246,8 @@ function DetailView({ record, slides, onOpenLightbox, onEdit, onDelete, deleting
             <img
               src={slides[Math.min(slideIndex, slides.length - 1)]?.url ?? ""}
               alt=""
-              className="mx-auto max-h-[46vh] w-full object-contain"
+              decoding="async"
+              className="mx-auto max-h-[46vh] w-full object-contain outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10"
             />
           </button>
           {slides.length > 1 && (
@@ -274,7 +275,7 @@ function DetailView({ record, slides, onOpenLightbox, onEdit, onDelete, deleting
                     type="button"
                     onClick={() => setSlideIndex(index)}
                     className={cn(
-                      "h-1.5 rounded-full transition-all",
+                      "h-1.5 rounded-full transition-[width,background-color]",
                       index === slideIndex ? "w-4 bg-white" : "w-1.5 bg-white/50",
                     )}
                   />
@@ -371,7 +372,7 @@ function EditView({ record, onTextChange, keptImages, onRemoveKept, pendingImage
         ))}
         {pendingImages.map((image) => (
           <div key={image.sourcePath} className="group relative size-20 overflow-hidden rounded-lg bg-muted">
-            <img src={image.previewUrl} alt="" className="size-full object-cover" />
+            <img src={image.previewUrl} alt="" loading="lazy" decoding="async" className="size-full object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10" />
             <button
               type="button"
               title={t("inspiration.image_remove")}
@@ -424,5 +425,5 @@ function ImageThumbnail({ recordId, file }: { recordId: string; file: string }) 
     };
   }, [file, recordId]);
   if (!url) return <div className="size-full animate-pulse bg-muted" />;
-  return <img src={url} alt="" className="size-full object-cover" />;
+  return <img src={url} alt="" loading="lazy" decoding="async" className="size-full object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10" />;
 }

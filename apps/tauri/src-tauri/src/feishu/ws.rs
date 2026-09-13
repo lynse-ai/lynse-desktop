@@ -35,7 +35,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::connect_async;
 
 use super::api::{FeishuApi, DEFAULT_DOMAIN};
-use super::{FeishuHandle, FeishuStatusKind, FEISHU_EVENT};
+use super::{FeishuHandle, FeishuStatusKind};
 
 /// Reconnect backoff cap (the official SDKs ramp 5s steps to 32s; the floor
 /// here is shorter so the first reconnect after a dropped socket is snappy).
@@ -593,8 +593,11 @@ fn emit_event(app: &AppHandle, payload: &[u8], bot_open_id: &str) {
 
     let app = app.clone();
     if let Err(error) = app.emit(
-        FEISHU_EVENT,
+        // Unified bot-channel event: the payload carries `channel` so the
+        // frontend agent can route it without a per-channel listener.
+        crate::bots::BOT_EVENT,
         serde_json::json!({
+            "channel": crate::bots::CHANNEL_FEISHU,
             "eventId": envelope.pointer("/header/event_id").and_then(Value::as_str).unwrap_or_default(),
             "eventType": event_type,
             "messageId": message.get("message_id").and_then(Value::as_str).unwrap_or_default(),

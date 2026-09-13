@@ -114,6 +114,45 @@ fn register_export(app: &AppHandle, output: &Path, duration_ms: Option<u64>) -> 
     Ok(record)
 }
 
+/// Point the source record at the freshly exported file instead of creating a
+/// new record: the original audio is replaced in place. The old file is only
+/// removed after the index safely references the new one. Only `local:<uuid>`
+/// record sources carry a file to overwrite.
+fn overwrite_record(app: &AppHandle, source: &str, output: &Path, duration_ms: Option<u64>) -> CommandResult<Value> {
+    if source.strip_prefix("local:").is_none() {
+        return Err("覆盖原音频仅支持本地录音".to_owned());
+    }
+    let path = local_store_path(app, "local-transcriptions")?;
+    let mut records = read_array(&path)?;
+    let index = records
+        .iter()
+        .position(|value| value.get("id").and_then(Value::as_str) == Some(source))
+        .ok_or("找不到指定的本地音频记录")?;
+    let old_path = records[index]
+        .get("sourcePath")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if old_path.as_deref() == Some(output.to_string_lossy().as_ref()) {
+        return Err("输出文件与源文件相同".to_owned());
+    }
+    let updated = {
+        let record = &mut records[index];
+        if let Some(object) = record.as_object_mut() {
+            object.insert("sourcePath".into(), json!(output.to_string_lossy()));
+            object.insert("updatedAt".into(), json!(now()));
+            if let Some(duration) = duration_ms {
+                object.insert("durationMs".into(), json!(duration));
+            }
+        }
+        record.clone()
+    };
+    crate::write_array(&path, &records)?;
+    if let Some(old) = old_path {
+        let _ = std::fs::remove_file(old);
+    }
+    Ok(updated)
+}
+
 /// Probe duration in ms via ffprobe (best effort).
 fn probe_duration_ms(app: &AppHandle, path: &str) -> Option<u64> {
     let ffprobe = stt::sidecar_path(app, "ffprobe").ok()?;
@@ -188,8 +227,9 @@ pub(crate) async fn audio_editor_trim(
     start_sec: f64,
     end_sec: f64,
     out_name: Option<String>,
+    overwrite: Option<bool>,
 ) -> CommandResult<Value> {
-    run_job(app.clone(), move |app, job_id| {
+    run_job(app.clone(), source.clone(), overwrite.unwrap_or(false), move |app, job_id| {
         if end_sec <= start_sec {
             return Err("选区无效：结束时间必须晚于开始时间".to_owned());
         }
@@ -205,7 +245,8 @@ pub(crate) async fn audio_editor_trim(
             output.to_string_lossy().into_owned(),
         ];
         run_ffmpeg(app, job_id, &args)?;
-        Ok((output, probe_duration_ms(app, &input.to_string_lossy())))
+        let duration_ms = probe_duration_ms(app, &output.to_string_lossy());
+        Ok((output, duration_ms))
     })
     .await
 }
@@ -216,7 +257,8 @@ pub(crate) async fn audio_editor_merge(
     sources: Vec<String>,
     out_name: Option<String>,
 ) -> CommandResult<Value> {
-    run_job(app.clone(), move |app, job_id| {
+    // Merge always produces a new note; there is no single source to overwrite.
+    run_job(app.clone(), String::new(), false, move |app, job_id| {
         if sources.len() < 2 {
             return Err("合并至少需要两个音频文件".to_owned());
         }
@@ -263,8 +305,9 @@ pub(crate) async fn audio_editor_remove_silence(
     min_silence_sec: Option<f64>,
     padding_sec: Option<f64>,
     out_name: Option<String>,
+    overwrite: Option<bool>,
 ) -> CommandResult<Value> {
-    run_job(app.clone(), move |app, job_id| {
+    run_job(app.clone(), source.clone(), overwrite.unwrap_or(false), move |app, job_id| {
         let input = resolve_source(app, &source)?;
         let output = output_path(app, out_name.as_deref(), "desilenced")?;
         let threshold = threshold_db.unwrap_or(-35.0);
@@ -296,8 +339,9 @@ pub(crate) async fn audio_editor_enhance_voice(
     app: AppHandle,
     source: String,
     out_name: Option<String>,
+    overwrite: Option<bool>,
 ) -> CommandResult<Value> {
-    run_job(app.clone(), move |app, job_id| {
+    run_job(app.clone(), source.clone(), overwrite.unwrap_or(false), move |app, job_id| {
         let input = resolve_source(app, &source)?;
         let output = output_path(app, out_name.as_deref(), "enhanced")?;
         // Speech chain: cut rumble below 80 Hz, FFT denoise, then two-pass
@@ -313,7 +357,8 @@ pub(crate) async fn audio_editor_enhance_voice(
             output.to_string_lossy().into_owned(),
         ];
         run_ffmpeg(app, job_id, &args)?;
-        Ok((output, probe_duration_ms(app, &input.to_string_lossy())))
+        let duration_ms = probe_duration_ms(app, &output.to_string_lossy());
+        Ok((output, duration_ms))
     })
     .await
 }
@@ -340,9 +385,10 @@ pub(crate) fn audio_editor_cancel() -> CommandResult<()> {
 }
 
 /// Shared wrapper: acquire the single job slot, run the ffmpeg work off the
-/// main thread, then register the export as a notes-visible record. Maps the
-/// internal "cancelled" sentinel to a user-facing error.
-async fn run_job<F>(app: AppHandle, work: F) -> CommandResult<Value>
+/// main thread, then either register the export as a notes-visible record or —
+/// when `overwrite` is set — replace the source record's audio with it. Maps
+/// the internal "cancelled" sentinel to a user-facing error.
+async fn run_job<F>(app: AppHandle, source: String, overwrite: bool, work: F) -> CommandResult<Value>
 where
     F: FnOnce(&AppHandle, u32) -> CommandResult<(PathBuf, Option<u64>)> + Send + 'static,
 {
@@ -350,8 +396,13 @@ where
     let handle = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         emit_progress(&handle, job_id, "processing", None);
-        let result = work(&handle, job_id)
-            .and_then(|(output, duration_ms)| register_export(&handle, &output, duration_ms));
+        let result = work(&handle, job_id).and_then(|(output, duration_ms)| {
+            if overwrite {
+                overwrite_record(&handle, &source, &output, duration_ms)
+            } else {
+                register_export(&handle, &output, duration_ms)
+            }
+        });
         match &result {
             Ok(_) => emit_progress(&handle, job_id, "done", None),
             Err(error) => emit_progress(&handle, job_id, "error", Some(error)),

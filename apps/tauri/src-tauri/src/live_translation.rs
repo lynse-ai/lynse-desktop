@@ -1,5 +1,5 @@
 use crate::volc_ast;
-use crate::{app_data_dir, now, remove_store_value, save_store_value, update_store_value, CommandResult};
+use crate::{now, remove_store_value, save_store_value, update_store_value, CommandResult};
 use futures_util::{SinkExt, StreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
@@ -410,9 +410,7 @@ fn valid_session_id(value: &str) -> bool {
 }
 
 fn recovery_root(app: &AppHandle) -> CommandResult<PathBuf> {
-    Ok(app_data_dir(app)?
-        .join("live-translations")
-        .join("recovery"))
+    crate::vault::content_dir(app, crate::vault::ContentKind::Recordings)
 }
 
 fn emit_snapshot(app: &AppHandle, session: &LiveSession) {
@@ -458,7 +456,8 @@ pub(crate) fn sidecar_command(app: &AppHandle) -> CommandResult<Command> {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn run_permission_command(app: &AppHandle, argument: &str) -> CommandResult<PermissionStatus> {
-    let output = sidecar_command(app)?
+    let mut command = sidecar_command(app)?;
+    let output = command
         .arg(argument)
         .output()
         .map_err(|error| format!("failed to run audio-capture: {error}"))?;
@@ -598,6 +597,12 @@ pub async fn live_translation_start(
     // Pure recording mode (no translation connection) is allowed — it only
     // captures audio locally without any cloud API key.
     validate_connections(&request.connections)?;
+    log::info!(
+        "Live translation start requested: session={} sources={} title={:?}",
+        request.session_id,
+        request.sources_argument(),
+        request.title.trim()
+    );
     #[cfg(target_os = "macos")]
     {
         // First, surface the native TCC prompts so the OS dialog actually
@@ -661,7 +666,7 @@ pub async fn live_translation_start(
     #[cfg(target_os = "macos")]
     let macos_audio = {
         let socket_path =
-            std::env::temp_dir().join(format!("lynse-live-{}.sock", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("l-{}.sock", uuid::Uuid::new_v4().simple()));
         let _ = fs::remove_file(&socket_path);
         let listener = UnixListener::bind(&socket_path)
             .map_err(|error| format!("bind audio IPC: {error}"))?;
@@ -724,7 +729,7 @@ pub async fn live_translation_start(
             .arg("--out")
             .arg(&session.directory)
             .arg("--sources")
-            .arg(sources_argument)
+            .arg(&sources_argument)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = match command.spawn() {
@@ -735,6 +740,11 @@ pub async fn live_translation_start(
                 return Err(format!("spawn audio-capture: {error}"));
             }
         };
+        log::info!(
+            "Live translation capture spawned: session={} socket={} sources={sources_argument}",
+            session.session_id,
+            session.socket_path.display()
+        );
         let stdout = child
             .stdout
             .take()
@@ -825,6 +835,15 @@ fn spawn_control_reader(
             };
             match value.get("event").and_then(Value::as_str) {
                 Some("ready" | "resumed") => {
+                    log::info!(
+                        "Live translation {} (session={})",
+                        if value.get("event").and_then(Value::as_str) == Some("ready") {
+                            "recording started"
+                        } else {
+                            "recording resumed"
+                        },
+                        session.session_id
+                    );
                     session.set_state("recording");
                     emit_snapshot(&app, &session);
                 }

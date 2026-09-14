@@ -15,7 +15,8 @@ export interface CoreProviderProps {
   onLogin?: () => void;
   onLogout?: () => void;
   identity?: ClientIdentity;
-  locale: string;
+  /** Pins the UI language; omit to auto-detect the system language. */
+  locale?: string;
   resources: Record<string, Record<string, unknown>>;
   localeAdapter?: { get(): string | null; set(locale: string): void };
 }

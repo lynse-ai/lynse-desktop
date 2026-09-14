@@ -1,8 +1,9 @@
 // Audio editing for local note recordings: trim, merge, silence removal and
 // voice enhancement. All processing runs through the shared on-demand FFmpeg
 // runtime (the same binary set the offline STT engines use), so no new
-// binaries ship with the app. Each export lands in
-// `app_data/audio-edits/<uuid>.m4a` and is registered as a local
+// binaries ship with the app. Each export lands in the `Transcriptions/`
+// subfolder of the unified content root (the vault folder when enabled, else
+// the legacy `app_data/audio-edits/`) and is registered as a local
 // transcription record, which makes it show up in the notes list, playable
 // via `local-media://`, and available for offline transcription.
 
@@ -12,7 +13,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 use crate::{ensure_runtime_available, local_store_path, now, read_array, stt, CommandResult};
 
@@ -27,11 +28,7 @@ fn ffmpeg_path(app: &AppHandle) -> CommandResult<PathBuf> {
 }
 
 fn edits_dir(app: &AppHandle) -> CommandResult<PathBuf> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("audio-edits");
+    let dir = crate::vault::content_dir(app, crate::vault::ContentKind::EditExports)?;
     std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
     Ok(dir)
 }

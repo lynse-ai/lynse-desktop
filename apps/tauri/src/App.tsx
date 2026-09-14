@@ -253,7 +253,6 @@ export default function App() {
           wsUrl={import.meta.env.VITE_WS_URL}
           storage={secureStorage}
           identity={identity}
-          locale="en"
           resources={RESOURCES}
           onLogout={() => {
             // Logout must not leave credentials in the OS keychain.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { initI18n } from "@lynse/core/i18n";
 import { useTranslation } from "@lynse/core/i18n/react";
@@ -30,17 +30,18 @@ const DRAWER_CLOSE_ANIMATION_MS = 150;
  * (`live_translation_expand_island`) while the drawer slides in.
  */
 export function RecordingIslandWindow() {
+  // The island window renders outside CoreProvider, so bootstrap i18n here.
+  // The init must happen during render, before useTranslation() below: a
+  // passive effect is too late — the hook resolves no i18next instance on
+  // the first render, subscribes to nothing, and never re-renders once init
+  // completes (raw keys stay on screen). initI18n is idempotent and reads
+  // the persisted locale from localStorage.
+  useMemo(() => initI18n({ resources: RESOURCES }), []);
   const { api, view } = useLiveTranslation();
   const { t } = useTranslation();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMounted, setDrawerMounted] = useState(false);
   const closeTimer = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
-
-  // The island window renders outside CoreProvider, so bootstrap i18n here;
-  // initI18n is idempotent and reads the persisted locale from localStorage.
-  useEffect(() => {
-    initI18n({ resources: RESOURCES });
-  }, []);
 
   // Point the running session's live cloud connections at `targetLanguage` —
   // "none" attaches pure transcription, a language code attaches translation.

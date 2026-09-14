@@ -37,7 +37,6 @@ export function WebProviders({ children }: { children: React.ReactNode }) {
       apiBaseUrl={process.env.NEXT_PUBLIC_API_URL}
       wsUrl={process.env.NEXT_PUBLIC_WS_URL}
       identity={identity}
-      locale="en"
       resources={RESOURCES}
     >
       <WebNavigationProvider>{children}</WebNavigationProvider>

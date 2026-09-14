@@ -11,6 +11,7 @@ import {
   FUNASR_MODEL_ID,
   VIBEVOICE_MODEL_ID,
   DEFAULT_WHISPER_MODEL,
+  DEFAULT_QWEN3_MODEL,
 } from "./local-transcription";
 import type { SttModelInfo, TranscribeConfig } from "./local-transcription";
 import type { LocalTranscriptionRecord, WorkspaceItem } from "./types";
@@ -185,17 +186,34 @@ describe("STT provider config", () => {
     });
   });
 
-  it("resolves per-note > language > default > funasr", () => {
+  it("normalizes qwen3 configs and fills the default model", () => {
+    expect(migrateSttProviderConfig({ provider: "qwen3" })).toEqual({
+      provider: "qwen3",
+      model: DEFAULT_QWEN3_MODEL,
+      hotword_package_id: null,
+    });
+    expect(migrateSttProviderConfig({ provider: "qwen3", model: "qwen3-asr-0.6b-4bit" })).toEqual({
+      provider: "qwen3",
+      model: "qwen3-asr-0.6b-4bit",
+      hotword_package_id: null,
+    });
+  });
+
+  it("resolves per-note > language > default > qwen3", () => {
     const config: TranscribeConfig = {
-      default: { provider: "funasr" },
+      default: { provider: "qwen3" },
       per_language: { zh: { provider: "whisper", model: "small-q5_1" } },
     };
-    expect(resolveSttProvider(config, null, null).provider).toBe("funasr");
+    expect(resolveSttProvider(config, null, null).provider).toBe("qwen3");
     expect(resolveSttProvider(config, "zh", null).provider).toBe("whisper");
     expect(resolveSttProvider(config, "en", { provider: "vibeasr" }).provider).toBe("vibeasr");
+    // With no config at all the default engine is Qwen3-ASR.
+    expect(resolveSttProvider({ per_language: {} }, null, null).provider).toBe("qwen3");
   });
 
   it("derives the backing model id per engine", () => {
+    expect(providerModelId({ provider: "qwen3" })).toBe(DEFAULT_QWEN3_MODEL);
+    expect(providerModelId({ provider: "qwen3", model: "qwen3-asr-0.6b-4bit" })).toBe("qwen3-asr-0.6b-4bit");
     expect(providerModelId({ provider: "funasr" })).toBe(FUNASR_MODEL_ID);
     expect(providerModelId({ provider: "whisper", model: "medium-q5_0" })).toBe("medium-q5_0");
     expect(providerModelId({ provider: "vibeasr" })).toBe(VIBEVOICE_MODEL_ID);

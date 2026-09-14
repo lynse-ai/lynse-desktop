@@ -1,4 +1,5 @@
-//! Local STT engine abstraction (multi-engine: FunASR, Whisper, VibeVoice).
+//! Local STT engine abstraction (multi-engine: Qwen3-ASR, FunASR, Whisper,
+//! VibeVoice, MLX-Whisper).
 //!
 //! Every engine implements [`BatchSttAdapter`] and returns a normalized
 //! [`SttOutput`] (`{ text, segments }`) so the storage path never has to parse
@@ -142,6 +143,31 @@ pub struct MlxProviderConfig {
     pub hotword_package_id: Option<String>,
 }
 
+/// Qwen3-ASR (Alibaba) on Apple MLX — the default local engine. `model` is a
+/// catalog id from [`STT_MODELS`] (quantized mlx-community weights); `None`
+/// selects [`QWEN3_DEFAULT_MODEL_ID`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Qwen3ProviderConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hotword_package_id: Option<String>,
+}
+
+/// Catalog id of the model used when a Qwen3 config names none: the 1.7B
+/// 8-bit weights (fp16-parity quality, faster and half the memory of fp16).
+pub const QWEN3_DEFAULT_MODEL_ID: &str = "qwen3-asr-1.7b-8bit";
+
+/// HF repo backing a Qwen3 catalog id. Quantized `mlx-community` conversions:
+/// 8-bit matches fp16 accuracy at roughly 1.5x the speed, 4-bit is the speed
+/// tier for the 0.6B model.
+pub fn qwen3_hf_repo(model_id: &str) -> &'static str {
+    match model_id {
+        "qwen3-asr-0.6b-4bit" => "mlx-community/Qwen3-ASR-0.6B-4bit",
+        _ => "mlx-community/Qwen3-ASR-1.7B-8bit",
+    }
+}
+
 /// Single source of truth for provider config. Serialized as a tagged enum so
 /// future engines can be added without breaking stored configs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,11 +178,12 @@ pub enum ProviderConfig {
     #[serde(rename = "vibeasr")]
     VibeVoice(VibeVoiceProviderConfig),
     Mlx(MlxProviderConfig),
+    Qwen3(Qwen3ProviderConfig),
 }
 
 impl Default for ProviderConfig {
     fn default() -> Self {
-        ProviderConfig::Funasr(FunasrProviderConfig::default())
+        ProviderConfig::Qwen3(Qwen3ProviderConfig::default())
     }
 }
 
@@ -167,6 +194,7 @@ impl ProviderConfig {
             ProviderConfig::Whisper(_) => "whisper",
             ProviderConfig::VibeVoice(_) => "vibeasr",
             ProviderConfig::Mlx(_) => "mlx",
+            ProviderConfig::Qwen3(_) => "qwen3",
         }
     }
 
@@ -176,6 +204,7 @@ impl ProviderConfig {
             ProviderConfig::Whisper(config) => config.hotword_package_id.as_deref(),
             ProviderConfig::VibeVoice(config) => config.hotword_package_id.as_deref(),
             ProviderConfig::Mlx(config) => config.hotword_package_id.as_deref(),
+            ProviderConfig::Qwen3(config) => config.hotword_package_id.as_deref(),
         }
     }
 
@@ -185,6 +214,7 @@ impl ProviderConfig {
             ProviderConfig::Whisper(config) => config.expected_speakers,
             ProviderConfig::VibeVoice(_) => None,
             ProviderConfig::Mlx(_) => None,
+            ProviderConfig::Qwen3(_) => None,
         }
     }
 
@@ -194,7 +224,7 @@ impl ProviderConfig {
         match self {
             ProviderConfig::Funasr(config) => config.expected_speakers = expected,
             ProviderConfig::Whisper(config) => config.expected_speakers = expected,
-            ProviderConfig::VibeVoice(_) | ProviderConfig::Mlx(_) => {}
+            ProviderConfig::VibeVoice(_) | ProviderConfig::Mlx(_) | ProviderConfig::Qwen3(_) => {}
         }
     }
 
@@ -206,6 +236,7 @@ impl ProviderConfig {
             ProviderConfig::Whisper(config) => config.hotword_package_id = package_id,
             ProviderConfig::VibeVoice(config) => config.hotword_package_id = package_id,
             ProviderConfig::Mlx(config) => config.hotword_package_id = package_id,
+            ProviderConfig::Qwen3(config) => config.hotword_package_id = package_id,
         }
     }
 
@@ -215,12 +246,13 @@ impl ProviderConfig {
             ProviderConfig::Whisper(_) => &WhisperAdapter,
             ProviderConfig::VibeVoice(_) => &VibeVoiceAdapter,
             ProviderConfig::Mlx(_) => &MlxAdapter,
+            ProviderConfig::Qwen3(_) => &Qwen3Adapter,
         }
     }
 }
 
 /// Single source of truth for STT routing. Resolution order:
-/// `per_note` → `per_language[lang]` → `default` → Funasr.
+/// `per_note` → `per_language[lang]` → `default` → Qwen3.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TranscribeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -315,9 +347,16 @@ pub(crate) fn sidecar_path(app: &tauri::AppHandle, base: &str) -> CommandResult<
     let name = sidecar_binary_name(base);
 
     // 1. Dev resources/sidecars (local development convenience).
-    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/sidecars").join(&name);
-    if development.exists() {
-        return Ok(development);
+    // Debug builds only: `CARGO_MANIFEST_DIR` is baked in at compile time, so a
+    // packaged release build would otherwise resolve to the build machine's
+    // repo — and the App Sandbox denies exec'ing any binary outside the app
+    // bundle (EPERM), which silently killed every sidecar call (permissions,
+    // capture, transcription) in TestFlight builds.
+    #[cfg(debug_assertions)]
+    if development_exists(&name) {
+        return Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/sidecars")
+            .join(&name));
     }
 
     // 2. On-demand shared runtime in the user data dir.
@@ -340,6 +379,16 @@ pub(crate) fn sidecar_path(app: &tauri::AppHandle, base: &str) -> CommandResult<
 
     // 4. Not found.
     Err("离线转写组件尚未下载，请先安装任意离线模型以自动获取运行时".to_owned())
+}
+
+/// Dev-only helper so the compile-time repo check above is not even evaluated
+/// (or warned about) in release builds.
+#[cfg(debug_assertions)]
+fn development_exists(name: &str) -> bool {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources/sidecars")
+        .join(name)
+        .exists()
 }
 
 /// Convert any audio/video to 16 kHz mono 16-bit PCM WAV via the bundled
@@ -676,6 +725,103 @@ impl BatchSttAdapter for MlxAdapter {
     }
 }
 
+/// Qwen3-ASR (Alibaba) on Apple MLX — the default local engine. The whole
+/// pipeline runs locally via the `qwen3_transcribe.py` bridge through the
+/// shared MLX venv (`mlx-qwen3-asr` package + vendored ffmpeg); no shared STT
+/// runtime (whisper/vibeasr/ffmpeg sidecars) is required. Execution is refused
+/// on non-Apple-Silicon platforms with a clear message.
+///
+/// Hotwords and trailing context are folded into Qwen3-ASR's native `context`
+/// bias input. Speaker labels are always single-speaker (spk-1): the engine
+/// has no built-in diarization, and CAM++ reassignment can be layered later.
+pub struct Qwen3Adapter;
+
+impl Qwen3Adapter {
+    /// Bridge-agnostic pipeline: build args, spawn the Python bridge, parse
+    /// and normalize its transcript. Free of the `AppHandle` so the e2e test
+    /// can run the real subprocess against a mock Tauri runtime.
+    pub(crate) fn transcribe_via_bridge(
+        python: &str,
+        script: &Path,
+        request: &SttRequest,
+        model_id: &str,
+    ) -> CommandResult<SttOutput> {
+        let output_json = request.model_directory.join("qwen3-output.json");
+        let mut args = vec![
+            script.to_string_lossy().into_owned(),
+            request.audio_path.clone(),
+            "--model-dir".to_owned(),
+            request.model_directory.to_string_lossy().into_owned(),
+            "--model".to_owned(),
+            qwen3_hf_repo(model_id).to_owned(),
+            "--output".to_owned(),
+            output_json.to_string_lossy().into_owned(),
+        ];
+        let mut context = String::new();
+        if !request.hotword.is_empty() {
+            context.push_str(request.hotword.trim());
+        }
+        if let Some(prior) = request.prior_context.as_deref().filter(|value| !value.trim().is_empty()) {
+            if !context.is_empty() {
+                context.push(' ');
+            }
+            context.push_str(prior.trim());
+        }
+        if !context.is_empty() {
+            args.extend(["--context".to_owned(), context]);
+        }
+
+        crate::run_python_with_model_cache(python, &args, &request.model_directory)?;
+
+        let parsed: Value = {
+            let content = std::fs::read_to_string(&output_json).map_err(|error| error.to_string())?;
+            serde_json::from_str(&content).map_err(|error| error.to_string())?
+        };
+        let mut segments = normalize_whisper_output(&parsed);
+
+        for segment in &mut segments {
+            if let Some(object) = segment.as_object_mut() {
+                object.insert("speakerId".to_owned(), json!("spk-1"));
+                object.insert("speakerName".to_owned(), json!("发言人1"));
+                object.insert("rawSpeaker".to_owned(), json!("0"));
+            }
+        }
+
+        let text = segments
+            .iter()
+            .filter_map(|segment| segment.get("text").and_then(Value::as_str))
+            .collect::<String>();
+        Ok(SttOutput { text, segments })
+    }
+}
+
+impl BatchSttAdapter for Qwen3Adapter {
+    fn engine(&self) -> &'static str {
+        "qwen3"
+    }
+
+    fn transcribe(&self, app: &tauri::AppHandle, request: &SttRequest) -> CommandResult<SttOutput> {
+        if std::env::consts::OS != "macos" || std::env::consts::ARCH != "aarch64" {
+            return Err("Qwen3-ASR（MLX）引擎仅支持 macOS（Apple Silicon）。请在设置中改用 Whisper / VibeVoice。".to_owned());
+        }
+
+        let ProviderConfig::Qwen3(config) = &request.provider else {
+            return Err("Qwen3 适配器收到非 Qwen3 配置".to_owned());
+        };
+        let model_id = config.model.as_deref().unwrap_or(QWEN3_DEFAULT_MODEL_ID);
+
+        let python = ensure_mlx_venv(app)?;
+        crate::ensure_qwen3_asr_package(app, &python)?;
+
+        Self::transcribe_via_bridge(
+            &python,
+            &crate::qwen3_script_path(app)?,
+            request,
+            model_id,
+        )
+    }
+}
+
 /// Parse whisper.cpp JSON into normalized segments. Current whisper.cpp emits
 /// a `transcription` array whose items carry `offsets.from`/`offsets.to` in
 /// milliseconds and no `start`/`end` fields; `segments`/`result` arrays with
@@ -855,21 +1001,96 @@ mod tests {
     fn transcribe_config_resolves_priority() {
         let whisper: ProviderConfig =
             serde_json::from_value(json!({"provider": "whisper", "model": "small-q5_1"})).unwrap();
-        let funasr: ProviderConfig = serde_json::from_value(json!({"provider": "funasr"})).unwrap();
+        let qwen3: ProviderConfig = serde_json::from_value(json!({"provider": "qwen3"})).unwrap();
         let mut per_language = BTreeMap::new();
         per_language.insert("zh".to_owned(), whisper.clone());
         let config = TranscribeConfig {
-            default: Some(funasr.clone()),
+            default: Some(qwen3.clone()),
             per_language,
         };
         // per-note wins over everything
-        assert_eq!(config.resolve(Some("zh"), Some(&funasr)).engine(), "funasr");
+        assert_eq!(config.resolve(Some("zh"), Some(&qwen3)).engine(), "qwen3");
         // per-language beats default
         assert_eq!(config.resolve(Some("zh"), None).engine(), "whisper");
         // default when nothing else matches
-        assert_eq!(config.resolve(Some("en"), None).engine(), "funasr");
-        // fall back to Funasr when config empty
-        assert_eq!(TranscribeConfig::default().resolve(None, None).engine(), "funasr");
+        assert_eq!(config.resolve(Some("en"), None).engine(), "qwen3");
+        // fall back to Qwen3 when config empty
+        assert_eq!(TranscribeConfig::default().resolve(None, None).engine(), "qwen3");
+    }
+
+    #[test]
+    fn qwen3_provider_defaults_and_repo_mapping() {
+        let default: ProviderConfig = serde_json::from_value(json!({"provider": "qwen3"})).unwrap();
+        assert_eq!(default.engine(), "qwen3");
+        match &default {
+            ProviderConfig::Qwen3(config) => {
+                assert_eq!(config.model, None);
+                assert_eq!(config.model.as_deref().unwrap_or(QWEN3_DEFAULT_MODEL_ID), "qwen3-asr-1.7b-8bit");
+            }
+            _ => panic!("expected qwen3 variant"),
+        }
+        assert_eq!(qwen3_hf_repo("qwen3-asr-1.7b-8bit"), "mlx-community/Qwen3-ASR-1.7B-8bit");
+        assert_eq!(qwen3_hf_repo("qwen3-asr-0.6b-4bit"), "mlx-community/Qwen3-ASR-0.6B-4bit");
+        // Unknown ids resolve to the default (1.7B 8-bit) repo.
+        assert_eq!(qwen3_hf_repo("nope"), "mlx-community/Qwen3-ASR-1.7B-8bit");
+    }
+
+    /// Full end-to-end: the pipeline spawns the real `qwen3_transcribe.py`
+    /// bridge through the dev MLX venv and parses its transcript. Skips
+    /// silently when the local artifacts (venv, model snapshot, sample audio)
+    /// are absent — CI and other machines stay fast, while on a set-up dev
+    /// machine `cargo test` proves the whole Qwen3 pipeline actually runs.
+    #[test]
+    fn qwen3_adapter_transcribes_real_audio_end_to_end() {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let venv_python = manifest.join("../../../.venv-mlx/bin/python");
+        let bridge = manifest.join("resources/qwen3_transcribe.py");
+        let model_dir = std::env::var_os("LYNSE_QWEN3_TEST_MODEL_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp/qwen3-modeldir-qwen3-asr-1.7b-8bit"));
+        let audio = std::env::var_os("LYNSE_QWEN3_TEST_AUDIO")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp/qwen3-test.wav"));
+        if !venv_python.exists() || !bridge.exists() || !model_dir.join(".ready").exists() || !audio.exists() {
+            eprintln!(
+                "skipping: missing artifacts (venv={} bridge={} ready={} audio={})",
+                venv_python.exists(),
+                bridge.exists(),
+                model_dir.join(".ready").exists(),
+                audio.exists()
+            );
+            return;
+        }
+
+        let provider: ProviderConfig = serde_json::from_value(json!({
+            "provider": "qwen3",
+            "hotword_package_id": null
+        }))
+        .unwrap();
+        let request = SttRequest {
+            audio_path: audio.to_string_lossy().into_owned(),
+            model_directory: model_dir,
+            provider,
+            expected_speakers: None,
+            hotword: "Lynse 产品周会".to_owned(),
+            prior_context: None,
+        };
+        let output = Qwen3Adapter::transcribe_via_bridge(
+            venv_python.to_string_lossy().as_ref(),
+            &bridge,
+            &request,
+            QWEN3_DEFAULT_MODEL_ID,
+        )
+        .expect("Qwen3 adapter end-to-end transcription");
+
+        assert!(!output.text.trim().is_empty(), "transcript must not be empty");
+        assert!(output.text.contains("Lynse"), "transcript should mention Lynse: {}", output.text);
+        assert!(!output.segments.is_empty(), "chunk segments must be present");
+        for segment in &output.segments {
+            assert_eq!(segment.get("speakerId").and_then(Value::as_str), Some("spk-1"));
+            assert!(segment.get("startMs").and_then(Value::as_i64).is_some());
+            assert!(segment.get("endMs").and_then(Value::as_i64).is_some());
+        }
     }
 
     #[test]
@@ -879,6 +1100,7 @@ mod tests {
             json!({"provider": "whisper", "model": "small-q5_1", "expected_speakers": 3, "hotword_package_id": "pkg-a"}),
             json!({"provider": "vibeasr", "hotword_package_id": "pkg-a"}),
             json!({"provider": "mlx", "hotword_package_id": "pkg-a"}),
+            json!({"provider": "qwen3", "hotword_package_id": "pkg-a"}),
         ]
         .iter()
         .map(|value| serde_json::from_value(value.clone()).unwrap())

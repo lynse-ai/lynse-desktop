@@ -46,6 +46,14 @@ const STORAGE_ROWS: StorageRowMeta[] = [
   { id: "logs", icon: Terminal, labelKey: "settings.storage_cat_logs", actions: ["open", "clear"] },
 ];
 
+/** Rows whose files live inside the vault folder once it is enabled (the
+ * shell relocates them automatically — see content_migration.rs). */
+const VAULT_HOSTED_ROW_IDS: ReadonlySet<StorageCategoryId> = new Set([
+  "inspirations",
+  "recovery",
+  "transcriptions",
+]);
+
 /**
  * Local-storage manager: total app-data footprint, per-category sizes, reveal
  * in the system file manager, and clearing for the two disposable categories
@@ -59,6 +67,7 @@ export function StorageCard({ onManageModels }: { onManageModels?: () => void })
   const canManageModels = typeof onManageModels === "function";
   const { data: vaultConfig } = useVaultConfig();
   const vaultConfigured = !!vaultConfig?.path;
+  const vaultHosted = !!vaultConfig?.enabled && vaultConfigured;
 
   const { data: usage, isLoading } = useQuery<StorageUsage>({
     queryKey: ["storage", "usage"],
@@ -133,6 +142,11 @@ export function StorageCard({ onManageModels }: { onManageModels?: () => void })
           {STORAGE_ROWS.map((row) => {
             const bytes = bytesByCategory.get(row.id) ?? 0;
             const vaultMissing = row.id === "vault" && !vaultConfigured;
+            // Once the vault is enabled these rows sit inside its folder.
+            const hintKey =
+              vaultHosted && VAULT_HOSTED_ROW_IDS.has(row.id)
+                ? "settings.storage_vault_hosted_hint"
+                : row.hintKey;
             const Icon = row.icon;
             return (
               <div
@@ -142,8 +156,8 @@ export function StorageCard({ onManageModels }: { onManageModels?: () => void })
                 <Icon className="size-3.5 shrink-0 text-muted-foreground" />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-medium">{t(row.labelKey)}</p>
-                  {row.hintKey && (
-                    <p className="truncate text-2xs text-muted-foreground">{t(row.hintKey)}</p>
+                  {hintKey && (
+                    <p className="truncate text-2xs text-muted-foreground">{t(hintKey)}</p>
                   )}
                   {vaultMissing && (
                     <p className="truncate text-2xs text-muted-foreground">

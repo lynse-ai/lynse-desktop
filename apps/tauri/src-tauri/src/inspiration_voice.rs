@@ -4,12 +4,13 @@
 //! live translation uses, so the TCC permission flow and the 16 kHz / mono /
 //! PCM16 WAV output are identical). Windows captures in-process via `cpal`,
 //! mirroring the live-translation microphone path. Both write
-//! `<app_data>/inspirations/capture-<id>/audio.wav` and stream throttled level
+//! `<inspirations>/capture-<id>/audio.wav` and stream throttled level
 //! events (`inspiration-voice-event`) to the main window for the waveform UI.
-//! The file is adopted into `<app_data>/inspirations/<uuid>/` by
-//! `inspiration_save` when the memo is actually stored.
+//! The file is adopted into `<inspirations>/<uuid>/` by
+//! `inspiration_save` when the memo is actually stored. `<inspirations>` is
+//! the unified content root: the vault folder's `Inspirations/` subfolder once
+//! the vault is enabled, else the legacy `<app_data>/inspirations/`.
 
-use crate::app_data_dir;
 use crate::CommandResult;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use crate::live_translation::decode_audio_header;
@@ -129,7 +130,7 @@ fn frame_level(payload: &[u8]) -> f32 {
 }
 
 fn inspirations_root(app: &AppHandle) -> CommandResult<std::path::PathBuf> {
-    Ok(app_data_dir(app)?.join("inspirations"))
+    crate::vault::content_dir(app, crate::vault::ContentKind::Inspirations)
 }
 
 fn idle_snapshot() -> Value {
@@ -180,7 +181,11 @@ fn platform_start(app: &AppHandle) -> CommandResult<Value> {
     let directory = inspirations_root(app)?.join(&capture_id);
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
 
-    let socket_path = std::env::temp_dir().join(format!("lynse-inspiration-{capture_id}.sock"));
+    // sun_path is capped at 104 bytes on macOS: "lynse-inspiration-<capture_id>"
+    // overflowed it under TestFlight and failed to bind. A short unique name
+    // leaves headroom; the sidecar receives the full path via --socket, so the
+    // name carries no correlation meaning.
+    let socket_path = std::env::temp_dir().join(format!("i-{}.sock", Uuid::new_v4().simple()));
     let _ = fs::remove_file(&socket_path);
     let listener =
         UnixListener::bind(&socket_path).map_err(|error| format!("bind audio IPC: {error}"))?;

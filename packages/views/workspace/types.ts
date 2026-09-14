@@ -128,7 +128,7 @@ export interface LocalTranscriptionRecord {
   elapsedMs?: number;
   expectedSpeakers?: number;
   hotwordPackageId?: string;
-  engine: "funasr" | "whisper" | "vibeasr" | "ilivedata_rtvt";
+  engine: "qwen3" | "funasr" | "whisper" | "vibeasr" | "mlx" | "ilivedata_rtvt";
   modelId?: string;
   providerConfig?: SttProviderConfig;
   segments: LocalTranscriptionSegment[];

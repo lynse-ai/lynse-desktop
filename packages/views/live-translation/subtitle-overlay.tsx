@@ -2,10 +2,17 @@
 
 import { useMemo } from "react";
 import { ChevronDown, X } from "../icons";
+import { initI18n } from "@lynse/core/i18n";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { RESOURCES } from "../locales";
 import { useLiveTranslation } from "./use-live-translation";
 
 export function LiveSubtitleOverlay() {
+  // This overlay window renders outside CoreProvider, so bootstrap i18n
+  // itself — during render, before useTranslation() below: a passive effect
+  // is too late (the hook resolves no i18next instance on the first render,
+  // subscribes to nothing, and never re-renders once init completes).
+  useMemo(() => initI18n({ resources: RESOURCES }), []);
   const { t } = useTranslation();
   const { api, view } = useLiveTranslation();
   const active = useMemo(() => {

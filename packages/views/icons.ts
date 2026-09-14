@@ -115,6 +115,7 @@ export {
   Volume2,          // Volume on
   VolumeX,          // Volume off / mute
   Captions,         // Live transcription toggle
+  CaptionsOff,      // Live transcription toggle (off / exit state)
   Languages,        // Live translation switch (speech → translated text)
 
   // ── Actions (extra) ──────────────────────────────────

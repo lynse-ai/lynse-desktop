@@ -2456,6 +2456,7 @@ dependencies = [
  "byteorder",
  "chrono",
  "cpal",
+ "fern",
  "futures-util",
  "highlandcows-eventkit",
  "keyring",

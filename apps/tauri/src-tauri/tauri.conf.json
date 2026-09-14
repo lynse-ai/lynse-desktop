@@ -53,6 +53,7 @@
     "resources": {
       "resources/funasr_transcribe.py": "funasr_transcribe.py",
       "resources/mlx_transcribe.py": "mlx_transcribe.py",
+      "resources/qwen3_transcribe.py": "qwen3_transcribe.py",
       "resources/sidecars/audio-capture": "audio-capture"
     },
     "macOS": {

@@ -25,7 +25,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
-use crate::{app_data_dir, get_store_value, now, save_store_value, CommandResult};
+use crate::{get_store_value, now, save_store_value, CommandResult};
 use decode::CardOpusDecoder;
 use protocol::{parse_advertisement, OpusFormat, RecordMode, RecordStatus, StreamReassembler};
 
@@ -885,7 +885,7 @@ fn persist_transfer(
 }
 
 pub(crate) fn card_recordings_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app_data_dir(app)?.join("recordings").join("card"))
+    crate::vault::content_dir(app, crate::vault::ContentKind::CardRecordings)
 }
 
 // ---------------------------------------------------------------------------

@@ -30,8 +30,11 @@ export const KNOWN_MEETING_APPS: readonly MeetingAppEntry[] = [
   {
     id: "tencent-meeting",
     name: "auto_record.app_tencent_meeting",
-    bundleIds: ["com.tencent.wemeetapp", "com.tencent.wemeet"],
-    processNames: ["wemeetapp", "wemeet"],
+    // The unified 4.x client reports HAL bundle `com.tencent.meeting` and
+    // executable `TencentMeeting` (observed in the field, 2026-09-13); the
+    // wemeetapp identifiers cover the legacy client.
+    bundleIds: ["com.tencent.meeting", "com.tencent.wemeetapp", "com.tencent.wemeet"],
+    processNames: ["tencentmeeting", "wemeetapp", "wemeet"],
   },
   {
     id: "feishu",

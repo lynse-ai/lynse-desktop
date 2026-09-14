@@ -9,7 +9,7 @@ import type {
   WorkspaceItem,
 } from "./types";
 
-export type SttEngine = "funasr" | "whisper" | "vibeasr" | "mlx";
+export type SttEngine = "qwen3" | "funasr" | "whisper" | "vibeasr" | "mlx";
 
 export type WhisperModel = "small-q5_1" | "medium-q5_0" | "large-v3-turbo-q5_0";
 
@@ -23,7 +23,17 @@ export const DEFAULT_WHISPER_MODEL: WhisperModel = "large-v3-turbo-q5_0";
 export const VIBEVOICE_MODEL_ID = "vibeasr-bitnet-1.5b";
 export const FUNASR_MODEL_ID = "funasr-paraformer";
 
+/** Qwen3-ASR model catalog ids (must mirror the Rust `STT_MODELS`). */
+export type Qwen3Model = "qwen3-asr-1.7b-8bit" | "qwen3-asr-0.6b-4bit";
+export const QWEN3_MODELS: Qwen3Model[] = ["qwen3-asr-1.7b-8bit", "qwen3-asr-0.6b-4bit"];
+export const QWEN3_MODEL_LABELS: Record<Qwen3Model, string> = {
+  "qwen3-asr-1.7b-8bit": "Qwen3-ASR 1.7B（MLX 8-bit，推荐，~2 GiB）",
+  "qwen3-asr-0.6b-4bit": "Qwen3-ASR 0.6B（MLX 4-bit，极速，~0.6 GiB）",
+};
+export const DEFAULT_QWEN3_MODEL: Qwen3Model = "qwen3-asr-1.7b-8bit";
+
 export type SttProviderConfig =
+  | { provider: "qwen3"; model?: Qwen3Model | string; hotword_package_id?: string | null }
   | { provider: "funasr"; expected_speakers?: number | null; hotword_package_id?: string | null }
   | {
       provider: "whisper";
@@ -210,6 +220,13 @@ export function migrateSttProviderConfig(value: unknown): SttProviderConfig | nu
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
   const provider = record.provider;
+  if (provider === "qwen3") {
+    return {
+      provider: "qwen3",
+      model: (record.model as Qwen3Model | string | undefined) ?? DEFAULT_QWEN3_MODEL,
+      hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
+    };
+  }
   if (provider === "whisper") {
     const model = (record.model as WhisperModel) ?? DEFAULT_WHISPER_MODEL;
     return {
@@ -257,7 +274,7 @@ export function resolveSttProvider(
     const migrated = migrateSttProviderConfig(config.default);
     if (migrated) return migrated;
   }
-  return { provider: "funasr" };
+  return { provider: "qwen3", model: DEFAULT_QWEN3_MODEL };
 }
 
 export function providerEngine(config: SttProviderConfig): SttEngine {
@@ -266,6 +283,8 @@ export function providerEngine(config: SttProviderConfig): SttEngine {
 
 export function providerModelId(config: SttProviderConfig): string {
   switch (config.provider) {
+    case "qwen3":
+      return config.model ?? DEFAULT_QWEN3_MODEL;
     case "funasr":
       return FUNASR_MODEL_ID;
     case "whisper":

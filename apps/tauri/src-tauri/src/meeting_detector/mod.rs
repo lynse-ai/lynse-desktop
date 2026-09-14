@@ -319,6 +319,55 @@ fn wall_now() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+/// One-line, log-friendly summary of the webview-provided detector config, so
+/// a missed or malformed config push is visible in the packaged app's log.
+fn config_summary(config: &DetectorConfig) -> String {
+    let apps = config
+        .apps
+        .iter()
+        .map(|app| {
+            format!(
+                "{}({}) bundles={:?} names={:?}",
+                app.id, app.name, app.bundle_ids, app.process_names
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "enabled={} debounce={}s grace={}s apps=[{}]",
+        config.enabled, config.start_debounce_secs, config.end_grace_secs, apps
+    )
+}
+
+/// Compact signature of one poll sample. Logging only on change keeps the 3s
+/// poll from flooding the log while still recording every appearance or
+/// disappearance of an audio-active process.
+fn sample_signature(active: &[ActiveProcess], matched: &[MatchedApp]) -> String {
+    const MAX_PROCESSES: usize = 10;
+    let mut processes = active
+        .iter()
+        .take(MAX_PROCESSES)
+        .map(|process| {
+            format!(
+                "pid={} bundle={} name={}",
+                process.pid,
+                process.bundle_id.as_deref().unwrap_or("-"),
+                process.process_name.as_deref().unwrap_or("-")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    if active.len() > MAX_PROCESSES {
+        processes.push_str(&format!(" (+{} more)", active.len() - MAX_PROCESSES));
+    }
+    let matched = matched
+        .iter()
+        .map(|app| app.id.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("active=[{processes}] matched=[{matched}]")
+}
+
 /// True when the executable belongs to Lynse's own capture sidecar; those
 /// processes hold the mic/system audio while *we* record and must never
 /// trigger the detector.
@@ -338,8 +387,9 @@ pub fn meeting_detector_set_config(
             .config
             .lock()
             .map_err(|_| "meeting detector config lock is poisoned")?;
-        *guard = config;
+        *guard = config.clone();
     }
+    log::info!("Meeting detector config: {}", config_summary(&config));
     meeting_detector_get_state(handle)
 }
 
@@ -368,10 +418,12 @@ pub fn spawn(app: AppHandle) {
         .spawn(move || {
             platform::init_thread();
             log::info!("Meeting detector polling every {}s", POLL_INTERVAL.as_secs());
+            let mut last_enabled: Option<bool> = None;
+            let mut last_sample: Option<String> = None;
             loop {
                 std::thread::sleep(POLL_INTERVAL);
-                if let Err(error) = poll_once(&app) {
-                    log::debug!("Meeting detector poll failed: {error}");
+                if let Err(error) = poll_once(&app, &mut last_enabled, &mut last_sample) {
+                    log::warn!("Meeting detector poll failed: {error}");
                 }
             }
         })
@@ -379,7 +431,11 @@ pub fn spawn(app: AppHandle) {
         .unwrap_or_else(|error| log::error!("Failed to spawn meeting detector: {error}"));
 }
 
-fn poll_once(app: &AppHandle) -> CommandResult<()> {
+fn poll_once(
+    app: &AppHandle,
+    last_enabled: &mut Option<bool>,
+    last_sample: &mut Option<String>,
+) -> CommandResult<()> {
     let handle = app.state::<MeetingDetectorHandle>();
     let config = handle
         .config
@@ -387,7 +443,19 @@ fn poll_once(app: &AppHandle) -> CommandResult<()> {
         .map_err(|_| "meeting detector config lock is poisoned")?
         .clone();
 
+    if *last_enabled != Some(config.enabled) {
+        log::info!(
+            "Meeting detector {}",
+            if config.enabled {
+                "enabled, sampling active audio processes"
+            } else {
+                "disabled"
+            }
+        );
+        *last_enabled = Some(config.enabled);
+    }
     if !config.enabled {
+        *last_sample = None;
         handle
             .runtime
             .lock()
@@ -414,11 +482,28 @@ fn poll_once(app: &AppHandle) -> CommandResult<()> {
         .collect();
     let matched = match_apps(&config, &active);
 
-    let event = handle
-        .runtime
-        .lock()
-        .map_err(|_| "meeting detector runtime lock is poisoned")?
-        .tick(&config, Instant::now(), &wall_now(), &matched);
+    let sample = sample_signature(&active, &matched);
+    if last_sample.as_deref() != Some(sample.as_str()) {
+        log::info!("Meeting detector sample: {sample}");
+        *last_sample = Some(sample);
+    }
+
+    let (event, phase_before, phase_after) = {
+        let mut runtime = handle
+            .runtime
+            .lock()
+            .map_err(|_| "meeting detector runtime lock is poisoned")?;
+        let before = runtime.phase;
+        let event = runtime.tick(&config, Instant::now(), &wall_now(), &matched);
+        (event, before, runtime.phase)
+    };
+    if phase_before != phase_after {
+        log::info!(
+            "Meeting detector phase: {} -> {}",
+            phase_before.as_str(),
+            phase_after.as_str()
+        );
+    }
 
     if let Some(event) = event {
         log::info!(

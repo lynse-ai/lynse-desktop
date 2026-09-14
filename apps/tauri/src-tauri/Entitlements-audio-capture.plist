@@ -2,12 +2,17 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- App Store validation requires every executable in the package to be sandboxed. -->
+  <!-- Exactly these two keys, per Apple's "Embedding a command-line tool in a
+       sandboxed app": app-sandbox satisfies the App Store validator (ITMS-90296
+       fires without it), inherit makes the helper adopt the parent's sandbox
+       instead of initializing its own container (a bare app-sandbox helper
+       without an application-identifier SIGTRAPs in libsecinit at launch, and
+       adding the application-identifier triggers ITMS-90885). No other
+       entitlements here — audio access comes from the inherited profile and
+       TCC attributes the capture to the main app. -->
   <key>com.apple.security.app-sandbox</key>
   <true/>
-  <!-- Captures microphone (mic-only mode) and system audio via ScreenCaptureKit.
-       Talks to the main app over stdout/stderr pipes — no network entitlement needed. -->
-  <key>com.apple.security.device.audio-input</key>
+  <key>com.apple.security.inherit</key>
   <true/>
 </dict>
 </plist>

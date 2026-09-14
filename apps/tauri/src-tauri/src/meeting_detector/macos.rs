@@ -18,9 +18,36 @@ use super::ActiveProcess;
 
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 type OSStatus = i32;
 type AudioObjectID = u32;
+
+/// Rate limiter for repeating diagnostics (one line per window) so a persistent
+/// failure on the 3s poll does not flood the log.
+struct RateLimiter(AtomicU64);
+
+impl RateLimiter {
+    const fn new() -> Self {
+        Self(AtomicU64::new(0))
+    }
+
+    fn ready(&self, window_secs: u64) -> bool {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|since| since.as_secs())
+            .unwrap_or(0);
+        if now < self.0.load(Ordering::Relaxed) + window_secs {
+            return false;
+        }
+        self.0.store(now, Ordering::Relaxed);
+        true
+    }
+}
+
+static ENUMERATION_FAILURE_LOG: RateLimiter = RateLimiter::new();
+static COARSE_BLIND_LOG: RateLimiter = RateLimiter::new();
 
 const NO_ERROR: OSStatus = 0;
 const K_AUDIO_OBJECT_SYSTEM_OBJECT: AudioObjectID = 1;
@@ -250,6 +277,11 @@ fn default_input_in_use() -> bool {
 /// while Lynse itself is not capturing.
 fn poll_coarse_fallback() -> Vec<ActiveProcess> {
     if !default_input_in_use() {
+        if COARSE_BLIND_LOG.ready(60) {
+            log::info!(
+                "Meeting detector: coarse fallback skipped — default input device not in use (or none present), so detection is blind until CoreAudio enumeration recovers"
+            );
+        }
         return Vec::new();
     }
     run_appkit(|apps| {
@@ -287,7 +319,16 @@ pub fn poll(allow_coarse: bool) -> Vec<ActiveProcess> {
     match poll_process_objects() {
         Ok(active) => active,
         Err(error) => {
-            log::debug!("CoreAudio process enumeration unavailable: {error}");
+            if ENUMERATION_FAILURE_LOG.ready(60) {
+                log::warn!(
+                    "Meeting detector: CoreAudio process enumeration failed: {error}; {}",
+                    if allow_coarse {
+                        "falling back to coarse detection"
+                    } else {
+                        "no fallback available while recording"
+                    }
+                );
+            }
             if allow_coarse {
                 poll_coarse_fallback()
             } else {

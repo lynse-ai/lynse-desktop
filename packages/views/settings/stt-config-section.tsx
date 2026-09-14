@@ -19,13 +19,18 @@ import {
   WHISPER_MODELS,
   WHISPER_MODEL_LABELS,
   DEFAULT_WHISPER_MODEL,
+  QWEN3_MODELS,
+  QWEN3_MODEL_LABELS,
+  DEFAULT_QWEN3_MODEL,
   providerModelId,
 } from "../workspace/local-transcription";
 import type { LocalHotwordPackage } from "../workspace/types";
 
-/** Engine id -> translation key, resolved at render time so the labels follow the UI locale. */
+/** Engine id -> translation key, resolved at render time so the labels follow the UI locale.
+ *  FunASR is retired from the list (Qwen3-ASR replaces it); stored funasr configs still
+ *  deserialize but the engine must be re-selected. */
 const ENGINE_OPTIONS: { value: SttEngine; labelKey: string }[] = [
-  { value: "funasr", labelKey: "settings.stt_engine_funasr" },
+  { value: "qwen3", labelKey: "settings.stt_engine_qwen3" },
   { value: "whisper", labelKey: "settings.stt_engine_whisper" },
   { value: "vibeasr", labelKey: "settings.stt_engine_vibeasr" },
   { value: "mlx", labelKey: "settings.stt_engine_mlx" },
@@ -33,6 +38,12 @@ const ENGINE_OPTIONS: { value: SttEngine; labelKey: string }[] = [
 
 function providerForEngine(engine: SttEngine, prev?: SttProviderConfig): SttProviderConfig {
   switch (engine) {
+    case "qwen3":
+      return {
+        provider: "qwen3",
+        model: prev?.provider === "qwen3" ? prev.model ?? DEFAULT_QWEN3_MODEL : DEFAULT_QWEN3_MODEL,
+        hotword_package_id: prev?.provider === "qwen3" ? prev.hotword_package_id ?? null : null,
+      };
     case "funasr":
       return {
         provider: "funasr",
@@ -235,6 +246,25 @@ function EngineFields({
     : null;
   return (
     <div className="mt-2 space-y-2 rounded bg-background p-2">
+      {config.provider === "qwen3" && (
+        <>
+          <p className="text-2xs text-muted-foreground">{t("settings.stt_qwen3_hint")}</p>
+          <div className="space-y-1">
+            <Label className="text-2xs">{t("settings.stt_qwen3_model")}</Label>
+            <select
+              value={config.model ?? DEFAULT_QWEN3_MODEL}
+              onChange={(event) => onChange({ ...config, model: event.target.value })}
+              className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
+            >
+              {QWEN3_MODELS.map((id) => (
+                <option key={id} value={id}>
+                  {QWEN3_MODEL_LABELS[id]}
+                </option>
+              ))}
+            </select>
+          </div>
+        </>
+      )}
       {config.provider === "mlx" && (
         <p className="text-2xs text-muted-foreground">{t("settings.stt_mlx_hint")}</p>
       )}
@@ -380,7 +410,7 @@ export function SttConfigSection({
     );
   }
 
-  const defaultConfig: SttProviderConfig = config.default ?? { provider: "funasr" };
+  const defaultConfig: SttProviderConfig = config.default ?? { provider: "qwen3", model: DEFAULT_QWEN3_MODEL };
   const defaultModelId = providerModelId(defaultConfig);
   const defaultModel = models.find((m) => m.provider === defaultConfig.provider && m.id === defaultModelId);
 
@@ -427,7 +457,7 @@ export function SttConfigSection({
             variant="outline"
             className="h-6 px-2 text-xs"
             onClick={() =>
-              setLangEntries((list) => [...list, { language: "", config: { provider: "funasr" } }])
+              setLangEntries((list) => [...list, { language: "", config: { provider: "qwen3", model: DEFAULT_QWEN3_MODEL } }])
             }
           >
             <Plus className="mr-1 size-3" />

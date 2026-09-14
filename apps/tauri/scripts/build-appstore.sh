@@ -123,7 +123,11 @@ HELPER_ENTITLEMENTS="$APP_DIR/src-tauri/Entitlements-audio-capture.plist"
 find "$APP_PATH/Contents" -type f ! -path "*/Contents/MacOS/*" | while read -r nested; do
   file "$nested" | grep -q "Mach-O" || continue
   log "Codesigning nested executable: ${nested#"$APP_PATH/Contents/"}"
+  # --identifier gives the helper a stable code signing identifier (Apple's
+  # "Embedding a command-line tool in a sandboxed app" pattern); without it the
+  # identifier defaults to the build-machine path.
   codesign --force --options runtime \
+    --identifier "com.lynse.sparknote.$(basename "$nested")" \
     --entitlements "$HELPER_ENTITLEMENTS" --sign "$APP_IDENTITY" "$nested"
 done
 

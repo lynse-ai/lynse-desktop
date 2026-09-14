@@ -23,6 +23,7 @@ mod live_translation;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[path = "live_translation_stub.rs"]
 mod live_translation;
+mod logging;
 mod inspiration_voice;
 mod meeting_detector;
 mod feishu;
@@ -43,6 +44,7 @@ mod vault;
 mod volc_ast;
 mod webdav;
 mod storage;
+mod content_migration;
 mod window_effects;
 
 use live_translation::LiveTranslationManager;
@@ -89,8 +91,9 @@ pub(crate) fn model_dir(app: &AppHandle) -> CommandResult<PathBuf> {
     Ok(path)
 }
 
-/// Directory holding a concrete engine/model's artifacts. FunASR keeps a
-/// single model bundle at the base; Whisper/VibeVoice use a per-model subfolder.
+/// Directory holding a concrete engine/model's artifacts. FunASR kept a single
+/// model bundle at the base (legacy); Qwen3/Whisper/VibeVoice/MLX use a
+/// per-model subfolder.
 pub(crate) fn engine_model_dir(app: &AppHandle, engine: &str, model_id: &str) -> CommandResult<PathBuf> {
     if engine == "funasr" {
         return model_dir(app);
@@ -313,6 +316,44 @@ pub(crate) fn mlx_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
     Ok(resources.join("mlx_transcribe.py"))
 }
 
+/// Resource path to the Qwen3-ASR bridge, mirroring [`mlx_script_path`].
+pub(crate) fn qwen3_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/qwen3_transcribe.py");
+    if development.exists() {
+        return Ok(development);
+    }
+    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
+    Ok(resources.join("qwen3_transcribe.py"))
+}
+
+/// Ensure `mlx-qwen3-asr` (+ its vendored ffmpeg helper) is importable in the
+/// MLX venv, pip-installing on first use. The shared venv is created by
+/// [`ensure_mlx_venv`], which predates the Qwen3 engine — installs that already
+/// have a venv therefore pick up the new package lazily, right here.
+pub(crate) fn ensure_qwen3_asr_package(_app: &AppHandle, python: &str) -> CommandResult<()> {
+    let python_path = PathBuf::from(python);
+    let check = Command::new(python)
+        .args(["-c", "import mlx_qwen3_asr"])
+        .env("HF_HUB_OFFLINE", "1")
+        .output()
+        .map_err(|error| format!("无法运行 MLX Python：{error}"))?;
+    if check.status.success() {
+        return Ok(());
+    }
+    let pip = python_path
+        .parent()
+        .map(|directory| directory.join("pip"))
+        .unwrap_or_else(|| PathBuf::from("pip"));
+    let install = Command::new(&pip)
+        .args(["install", "--quiet", "--disable-pip-version-check", "mlx-qwen3-asr", "imageio-ffmpeg"])
+        .status()
+        .map_err(|error| format!("安装 mlx-qwen3-asr 失败：{error}"))?;
+    if !install.success() {
+        return Err("安装 mlx-qwen3-asr 失败（请检查网络，或手动安装到 MLX 虚拟环境）".to_owned());
+    }
+    Ok(())
+}
+
 /// Ensure a usable MLX venv exists, creating one (and `pip install`-ing
 /// `mlx-whisper` + `imageio-ffmpeg`) on first use. Returns the python path.
 pub(crate) fn ensure_mlx_venv(app: &AppHandle) -> CommandResult<String> {
@@ -348,10 +389,9 @@ pub(crate) fn ensure_mlx_venv(app: &AppHandle) -> CommandResult<String> {
     Ok(python.to_string_lossy().into_owned())
 }
 
-/// Run the MLX-Whisper bridge with an explicit Python interpreter. `MODELSCOPE_CACHE`
-/// is harmless (MLX uses `HF_HOME`); both point the model cache at `model_directory`.
-pub(crate) fn run_mlx(
-    _app: &AppHandle,
+/// Spawn a Python bridge with the model directory scoped as its HF/ModelScope
+/// cache root; returns captured stdout.
+pub(crate) fn run_python_with_model_cache(
     python: &str,
     arguments: &[String],
     model_directory: &Path,
@@ -371,6 +411,17 @@ pub(crate) fn run_mlx(
     } else {
         error
     })
+}
+
+/// Run the MLX-Whisper bridge with an explicit Python interpreter. `MODELSCOPE_CACHE`
+/// is harmless (MLX uses `HF_HOME`); both point the model cache at `model_directory`.
+pub(crate) fn run_mlx(
+    _app: &AppHandle,
+    python: &str,
+    arguments: &[String],
+    model_directory: &Path,
+) -> CommandResult<String> {
+    run_python_with_model_cache(python, arguments, model_directory)
 }
 
 pub(crate) fn parse_funasr_json(stdout: &str) -> CommandResult<Value> {
@@ -523,9 +574,18 @@ pub const VIBEVOICE_BITNET_FILES: &[SttModelFile] = &[
 
 pub const STT_MODELS: &[SttModelEntry] = &[
     SttModelEntry {
-        provider: "funasr",
-        id: "funasr-paraformer",
-        label: "FunASR Paraformer + VAD + PUNC + CAM++",
+        provider: "qwen3",
+        id: "qwen3-asr-1.7b-8bit",
+        label: "Qwen3-ASR 1.7B（本地·Apple Silicon MLX 8-bit，推荐，~2 GiB）",
+        size_bytes: 0,
+        download_url: "",
+        sha256: "",
+        files: &[],
+    },
+    SttModelEntry {
+        provider: "qwen3",
+        id: "qwen3-asr-0.6b-4bit",
+        label: "Qwen3-ASR 0.6B（本地·Apple Silicon MLX 4-bit，极速，~0.6 GiB）",
         size_bytes: 0,
         download_url: "",
         sha256: "",
@@ -640,10 +700,10 @@ fn model_is_installed(app: &AppHandle, provider: &str, model_id: &str) -> bool {
         }
     }
     // Whisper/VibeVoice also require the shared on-demand runtime
-    // (whisper, vibeasr, ffmpeg, ffprobe). FunASR and MLX do not:
-    // FunASR ships its own bundle and MLX runs through a self-contained Python
-    // venv with a vendored ffmpeg (imageio-ffmpeg).
-    if provider != "funasr" && provider != "mlx" {
+    // (whisper, vibeasr, ffmpeg, ffprobe). FunASR, MLX and Qwen3 do not:
+    // FunASR ships its own bundle and the MLX engines run through a
+    // self-contained Python venv with a vendored ffmpeg (imageio-ffmpeg).
+    if provider != "funasr" && provider != "mlx" && provider != "qwen3" {
         let version = format!("v{}", app.package_info().version);
         let runtime = stt::runtime_dir(app, &version);
         if !stt::runtime_is_complete(&runtime) {
@@ -1225,7 +1285,10 @@ fn resolve_provider(app: &AppHandle, language: Option<&str>, per_note: Option<&s
 fn ensure_model_installed(app: &AppHandle, provider: &str, model_id: &str) -> CommandResult<()> {
     if !model_is_installed(app, provider, model_id) {
         return Err(match provider {
-            "funasr" => "本地 ASR 模型未安装".to_owned(),
+            // FunASR is retired from the catalog; a stored funasr config can no
+            // longer run, so point the user at its replacement.
+            "funasr" => "FunASR 引擎已由 Qwen3-ASR 接替，请在设置中选择并下载新引擎".to_owned(),
+            "qwen3" => "Qwen3-ASR 模型未安装，请先在设置中下载".to_owned(),
             _ => format!("STT 模型未安装：{provider}/{model_id}"),
         });
     }
@@ -1384,6 +1447,7 @@ fn create_queued_record(app: &AppHandle, audio_path: &str, options: Option<&Valu
         stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
         stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
         stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
+        stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
     };
     Ok(json!({
         "id": format!("local:{}", Uuid::new_v4()),
@@ -1479,6 +1543,7 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
             stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
             stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
             stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
+            stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
         });
         ensure_model_installed(app, provider.engine(), model_id)?;
         let directory = engine_model_dir(app, provider.engine(), model_id)?;
@@ -1566,6 +1631,14 @@ fn todo_delete(app: AppHandle, id: String) -> CommandResult<()> {
 
 /// Persist an inspiration (create or edit).
 ///
+/// Durable per-inspiration directory: `<content>/Inspirations/<uuid>/` — the
+/// vault folder's `Inspirations/` subfolder once the vault is enabled, else
+/// the legacy `<app_data>/inspirations/<uuid>/`. Records store relative file
+/// names only, so relocating the root needs no index rewrite.
+fn inspiration_dir(app: &AppHandle, uuid: &str) -> CommandResult<PathBuf> {
+    Ok(vault::content_dir(app, vault::ContentKind::Inspirations)?.join(uuid))
+}
+
 /// Create: fresh attachments arrive as `pendingAudioPath` / `pendingImages`
 /// pointing at staging (or picked) files; they are adopted into the
 /// inspiration's durable directory (`inspirations/<uuid>/`) before the record
@@ -1633,19 +1706,19 @@ fn save_inspiration(app: &AppHandle, inspiration: Value) -> CommandResult<Value>
     let record_object = record.as_object_mut().ok_or("Record must be an object")?;
 
     if pending_path.is_some() || !pending_images.is_empty() {
-        fs::create_dir_all(app_data_dir(app)?.join("inspirations").join(&uuid))
-            .map_err(|error| error.to_string())?;
+        fs::create_dir_all(inspiration_dir(app, &uuid)?).map_err(|error| error.to_string())?;
     }
 
     // AUDIO: adopt a freshly captured memo (creation flow only — edits keep
     // the existing WAV untouched).
     if let Some(pending) = pending_path {
         if record_object.get("audio").and_then(Value::as_object).is_none() {
-            let directory = app_data_dir(app)?.join("inspirations").join(&uuid);
+            let directory = inspiration_dir(app, &uuid)?;
             let destination = directory.join("audio.wav");
             if !destination.exists() {
-                // Both paths live under app data, so rename stays on one
-                // volume; copy is only a cross-volume fallback.
+                // Staging lives under app data while the destination may be
+                // the vault folder, so the rename can hit a volume boundary;
+                // copy is the fallback.
                 if fs::rename(&pending, &destination).is_err() {
                     fs::copy(&pending, &destination).map_err(|error| error.to_string())?;
                     let _ = fs::remove_file(&pending);
@@ -1665,7 +1738,7 @@ fn save_inspiration(app: &AppHandle, inspiration: Value) -> CommandResult<Value>
     // IMAGES: final list = keep-list + newly adopted staged/picked files,
     // then prune files that fell out of the keep-list.
     if images_field_present || !pending_images.is_empty() {
-        let directory = app_data_dir(app)?.join("inspirations").join(&uuid);
+        let directory = inspiration_dir(app, &uuid)?;
         if !pending_images.is_empty() {
             fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
         }
@@ -1758,6 +1831,7 @@ fn transcribe_inspiration(app: &AppHandle, mut record: Value, audio_path: PathBu
         stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
         stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
         stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
+        stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
     };
     if !model_is_installed(app, provider.engine(), model_id) {
         return patch_status("unavailable", Some("本地 ASR 模型未安装，请先在设置中下载语音识别模型"));
@@ -1807,7 +1881,7 @@ fn inspiration_delete(app: AppHandle, id: String) -> CommandResult<()> {
     remove_store_value(&app, "local-inspirations", &id)?;
     vault::remove_journal(&app, &id);
     let uuid = id.strip_prefix("inspiration:").unwrap_or(&id);
-    let directory = app_data_dir(&app)?.join("inspirations").join(uuid);
+    let directory = inspiration_dir(&app, uuid)?;
     if directory.exists() {
         fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
     }
@@ -1823,7 +1897,7 @@ async fn inspiration_transcribe(app: AppHandle, id: String) -> CommandResult<Val
         .ok_or("Inspiration has no audio")?
         .to_owned();
     let uuid = id.strip_prefix("inspiration:").unwrap_or(&id);
-    let audio_path = app_data_dir(&app)?.join("inspirations").join(uuid).join(audio_file);
+    let audio_path = inspiration_dir(&app, uuid)?.join(audio_file);
     if !audio_path.exists() {
         return Err("灵感音频文件不存在".to_owned());
     }
@@ -2116,9 +2190,9 @@ fn local_stt_download_model(
     }
     let result = (|| {
         let entry = stt_model_entry(&provider, &model_id)?;
-        if provider == "funasr" || provider == "mlx" {
-            // FunASR and MLX download through their Python helpers rather than a
-            // fixed URL. Their size is unknown, so we only signal an
+        if provider == "funasr" || provider == "mlx" || provider == "qwen3" {
+            // FunASR, MLX and Qwen3 download through their Python helpers rather
+            // than a fixed URL. Their size is unknown, so we only signal an
             // indeterminate download.
             emit_download_progress(&app, &provider, &model_id, 0, 0, None, "downloading", None);
             if provider == "mlx" {
@@ -2130,6 +2204,23 @@ fn local_stt_download_model(
                     "--download-models".to_owned(),
                     "--model-dir".to_owned(),
                     directory.to_string_lossy().into_owned(),
+                ];
+                if let Err(error) = run_mlx(&app, &python, &args, &directory) {
+                    emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
+                    return Err(error);
+                }
+            } else if provider == "qwen3" {
+                let directory = engine_model_dir(&app, &provider, &model_id)?;
+                fs::create_dir_all(&directory).ok();
+                let python = ensure_mlx_venv(&app)?;
+                ensure_qwen3_asr_package(&app, &python)?;
+                let args = vec![
+                    qwen3_script_path(&app)?.to_string_lossy().into_owned(),
+                    "--download-models".to_owned(),
+                    "--model-dir".to_owned(),
+                    directory.to_string_lossy().into_owned(),
+                    "--model".to_owned(),
+                    stt::qwen3_hf_repo(&model_id).to_owned(),
                 ];
                 if let Err(error) = run_mlx(&app, &python, &args, &directory) {
                     emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
@@ -2583,7 +2674,9 @@ fn media_response_body(app: &AppHandle, request: Request<Vec<u8>>) -> Response<V
             if !is_safe_asset_file_name(&file) {
                 return Err("Unsafe local media asset name".to_owned());
             }
-            data_dir.join("inspirations").join(inspiration_uuid).join(file)
+            vault::content_dir(app, vault::ContentKind::Inspirations)?
+                .join(inspiration_uuid)
+                .join(file)
         } else {
             let index = data_dir.join("local-transcriptions").join("index.json");
             let record = read_array(&index)?.into_iter()
@@ -3114,24 +3207,6 @@ pub fn run() {
     }));
 
     tauri::Builder::default()
-        .plugin(
-            // Register first so logs emitted during later plugin/setup
-            // initialization are captured too. File logs live in the OS log
-            // dir (~/Library/Logs/<bundle-id> on macOS); rotated archives are
-            // kept so a crash history survives post-mortem diagnosis.
-            tauri_plugin_log::Builder::new()
-                .level(log::LevelFilter::Info)
-                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
-                .max_file_size(2 * 1024 * 1024)
-                .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
-                .targets([
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
-                        file_name: Some("lynse".into()),
-                    }),
-                ])
-                .build(),
-        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
@@ -3154,9 +3229,28 @@ pub fn run() {
             });
         })
         .setup(|app| {
+            // File logging needs the OS log dir, which only resolves with the
+            // app handle — so the plugin registers here rather than on the
+            // builder chain, and anything logged before this point reaches
+            // stdout only. Daily files beyond the retention window are pruned
+            // first, so the crash history stays bounded (see logging.rs).
+            match app.path().app_log_dir() {
+                Ok(log_dir) => {
+                    logging::prune_old_logs(&log_dir);
+                    if let Err(error) = app.handle().plugin(logging::build_plugin(&log_dir)) {
+                        eprintln!("Failed to initialize file logging: {error}");
+                    }
+                }
+                Err(error) => eprintln!("Failed to resolve log dir: {error}"),
+            }
             app.manage(recording_card::RecordingCardManager::new(app.handle().clone()));
             if let Err(error) = migrate_electron_data(&app.handle()) {
                 log::error!("Failed to migrate Electron local data: {error}");
+            }
+            // Fold user content into the vault folder for installs that
+            // enabled it before unified content storage shipped.
+            if let Err(error) = content_migration::migrate_on_launch(&app.handle()) {
+                log::error!("Failed to relocate user content into the vault folder: {error}");
             }
             // Inspiration staging only holds in-flight paste/pick previews;
             // anything left over belongs to a crashed session.

@@ -48,19 +48,34 @@ export function MeetingAutoRecordAgent() {
     // this only covers the config that exists before this effect runs).
     void detector
       .setConfig(toDetectorConfigPayload(loadMeetingAutoRecordConfig(), (key) => t(key)))
+      .then(() => {
+        // Warn-level on purpose: installLogger only forwards warn/error to the
+        // log file, and "agent mounted + config reached Rust" is the first link
+        // in the auto-record chain we need visible there.
+        console.warn("[meeting-auto-record] agent ready (config pushed, listening for meetings)");
+      })
       .catch((error) => {
         logWarn("failed to push config", error);
       });
 
     const startAutoRecording = async (event: MeetingDetectorEvent): Promise<string | null> => {
       const current = await api.getState().catch(() => null);
-      if (!current || current.sessionId) return null;
+      if (!current || current.sessionId) {
+        console.warn(
+          `[meeting-auto-record] skip start: session already active (${current?.sessionId ?? "unknown"})`,
+        );
+        return null;
+      }
 
       const config = loadMeetingAutoRecordConfig();
       const cfg = await api.getProviderConfig().catch(() => null);
       const perms = await api.permissions().catch(() => null);
-      if (!perms) return null;
+      if (!perms) {
+        console.warn("[meeting-auto-record] skip start: permission query failed");
+        return null;
+      }
       if (perms.restartRequired) {
+        console.warn("[meeting-auto-record] skip start: permission restart required");
         toast.warning(t("auto_record.permission_restart"));
         return null;
       }
@@ -70,6 +85,7 @@ export function MeetingAutoRecordAgent() {
         perms.systemAudio !== "granted";
       const sources = autoRecordAudioSources(cfg?.audioSource, perms);
       if (!sources) {
+        console.warn("[meeting-auto-record] skip start: microphone permission missing");
         toast.warning(t("auto_record.permission_missing_mic"));
         return null;
       }
@@ -85,6 +101,9 @@ export function MeetingAutoRecordAgent() {
         connections: [],
         audioSources: sources,
       });
+      console.warn(
+        `[meeting-auto-record] recording started: session=${sessionId} sources=[${sources.join(",")}]`,
+      );
       if (droppedSystemAudio) {
         toast.warning(t("auto_record.permission_missing_system"));
       }
@@ -104,8 +123,14 @@ export function MeetingAutoRecordAgent() {
           currentSessionId: current?.sessionId ?? null,
           agentStartedSessionId: agentStartedSessionIdRef.current,
         });
+        console.warn(
+          `[meeting-auto-record] event=${event.type} app=${event.appId ?? "-"} enabled=${enabled} currentSession=${current?.sessionId ?? "-"} agentSession=${agentStartedSessionIdRef.current ?? "-"} action=${decision.action}`,
+        );
         if (decision.action === "start") {
-          const sessionId = await startAutoRecording(event).catch(() => null);
+          const sessionId = await startAutoRecording(event).catch((error) => {
+            logWarn("auto start failed", error);
+            return null;
+          });
           if (sessionId) agentStartedSessionIdRef.current = sessionId;
         } else if (decision.action === "stop") {
           agentStartedSessionIdRef.current = null;

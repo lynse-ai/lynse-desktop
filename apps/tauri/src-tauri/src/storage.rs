@@ -14,6 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
+use crate::vault::ContentKind;
 use crate::{app_data_dir, CommandResult};
 
 /// Categories reported by `storage_usage`, in stable display order. The
@@ -52,7 +53,9 @@ fn dir_size(path: &Path) -> u64 {
 }
 
 /// The directories that make up one storage category. Missing directories are
-/// fine — they simply contribute zero bytes.
+/// fine — they simply contribute zero bytes. User-content categories resolve
+/// through `vault::content_dir`, so they follow the vault folder once it is
+/// enabled (and fall back to the legacy app-data locations otherwise).
 fn category_dirs(app: &AppHandle, category: &str) -> CommandResult<Vec<PathBuf>> {
     let base = app_data_dir(app)?;
     let dirs = match category {
@@ -63,12 +66,18 @@ fn category_dirs(app: &AppHandle, category: &str) -> CommandResult<Vec<PathBuf>>
             base.join("stt-runtimes"),
             base.join("mlx-venv"),
         ],
-        // Inspiration voice memos: audio, saved images and the staging area.
-        "inspirations" => vec![base.join("inspirations")],
-        // Live-recording recovery wavs (mic/system) not yet uploaded.
-        "recovery" => vec![base.join("live-translations").join("recovery")],
-        // Transcription records (index + text); audio stays at sourcePath.
-        "transcriptions" => vec![base.join("local-transcriptions")],
+        // Inspiration voice memos: audio and saved images (staging is
+        // disposable and stays in app data).
+        "inspirations" => vec![crate::vault::content_dir(app, ContentKind::Inspirations)?],
+        // Live-recording session directories (raw wavs, mixed-down playback,
+        // transcripts), including sessions not yet uploaded.
+        "recovery" => vec![crate::vault::content_dir(app, ContentKind::Recordings)?],
+        // Transcription records (index + text) plus the audio-editor exports
+        // registered as records; imported audio stays at its source path.
+        "transcriptions" => vec![
+            base.join("local-transcriptions"),
+            crate::vault::content_dir(app, ContentKind::EditExports)?,
+        ],
         // Diagnostic report bundles assembled by the bug-report dialog.
         "reports" => vec![base.join("reports")],
         // The user-configured vault folder; None when never configured.
@@ -197,7 +206,7 @@ pub fn storage_clear(app: AppHandle, category: String) -> CommandResult<()> {
             Ok(())
         }
         "recovery" => {
-            let dir = app_data_dir(&app)?.join("live-translations").join("recovery");
+            let dir = crate::vault::content_dir(&app, ContentKind::Recordings)?;
             clear_dir_contents(&dir)
         }
         other => Err(format!("Storage category cannot be cleared: {other}")),

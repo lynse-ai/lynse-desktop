@@ -122,6 +122,72 @@ pub(crate) fn vault_user_dir(app: &AppHandle) -> CommandResult<Option<PathBuf>> 
     Ok(vault_root(&config).ok())
 }
 
+// ── Unified user-content root ───────────────────────────────────────────
+// Once the vault folder is enabled it doubles as the root for app-managed
+// user content (inspiration memos, live recordings, audio-editor exports,
+// recording-card imports), so everything the user owns lives under one
+// folder — one subfolder per kind, English-named to match the existing
+// Journal/Tasks/attachments convention. While the vault is disabled each
+// kind stays at its historical app-data location.
+
+/// Kinds of app-managed user content whose on-disk home follows the vault
+/// folder. Each kind has a legacy app-data layout (used while the vault is
+/// disabled) and a vault layout; `content_migration` moves content between
+/// the two whenever the configuration changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContentKind {
+    /// Inspiration voice memos and saved images.
+    Inspirations,
+    /// Live-recording session directories (raw wavs, mixed-down playback,
+    /// transcripts) — including sessions still pending cloud upload.
+    Recordings,
+    /// Audio-editor exports, registered as local transcription records.
+    EditExports,
+    /// Recording-card (hardware recorder) imports.
+    CardRecordings,
+}
+
+impl ContentKind {
+    /// Path segments under the active content base. The legacy names are the
+    /// historical app-data directories and must stay stable — existing
+    /// installs keep finding their data there.
+    pub(crate) fn segments(self, vaulted: bool) -> &'static [&'static str] {
+        match (self, vaulted) {
+            (Self::Inspirations, false) => &["inspirations"],
+            (Self::Inspirations, true) => &["Inspirations"],
+            (Self::Recordings, false) => &["live-translations", "recovery"],
+            (Self::Recordings, true) => &["Recordings"],
+            (Self::EditExports, false) => &["audio-edits"],
+            (Self::EditExports, true) => &["Transcriptions"],
+            (Self::CardRecordings, false) => &["recordings", "card"],
+            (Self::CardRecordings, true) => &["Recordings", "Card"],
+        }
+    }
+}
+
+/// Base directory for user content under a given vault config: the vault
+/// folder when enabled and configured, else the app data dir.
+pub(crate) fn content_base(app: &AppHandle, config: &VaultConfig) -> CommandResult<PathBuf> {
+    if config.enabled {
+        if let Ok(root) = vault_root(config) {
+            return Ok(root);
+        }
+    }
+    app_data_dir(app)
+}
+
+/// Where one kind of user content lives right now: a subfolder of the vault
+/// folder once the vault is enabled, otherwise the legacy app-data location.
+/// Callers create the directory on demand.
+pub(crate) fn content_dir(app: &AppHandle, kind: ContentKind) -> CommandResult<PathBuf> {
+    let config = load_vault_config(app)?;
+    let base = content_base(app, &config)?;
+    Ok(kind
+        .segments(config.enabled)
+        .iter()
+        .fold(base, |path, segment| path.join(segment)))
+}
+
 /// Turn a note title into a cross-platform-safe file base name. Forbidden
 /// characters are dropped (not replaced) so CJK titles keep their exact text;
 /// the id suffix added on collision keeps names unique.
@@ -308,12 +374,18 @@ pub fn vault_config_get(app: AppHandle) -> CommandResult<VaultConfig> {
 
 #[tauri::command]
 pub fn vault_config_save(app: AppHandle, config: VaultConfig) -> CommandResult<VaultConfig> {
+    let previous = load_vault_config(&app)?;
     if config.enabled {
         // Create/validate the folder up front so a bad path fails at save
         // time instead of on the first sync.
         let root = vault_root(&config)?;
         fs::create_dir_all(root).map_err(|error| error.to_string())?;
     }
+    // User content follows the vault folder: relocate it (and rewrite index
+    // paths) BEFORE the new config goes live, so the renderer never resolves
+    // a record to a location the files have not reached yet. A refused or
+    // failed move leaves the old config in force.
+    crate::content_migration::relocate_user_content(&app, &previous, &config)?;
     let path = vault_config_path(&app)?;
     let content = serde_json::to_string_pretty(&config).map_err(|error| error.to_string())?;
     fs::write(&path, content).map_err(|error| error.to_string())?;
@@ -667,8 +739,8 @@ fn write_entry(app: &AppHandle, entry: &VaultEntry) -> CommandResult<()> {
 /// Best-effort mirror write — a failed vault write must never disturb the
 /// store command that called it.
 pub(crate) fn sync_journal(app: &AppHandle, record: &Value) {
-    let attachments_root = match app_data_dir(app) {
-        Ok(path) => path.join("inspirations"),
+    let attachments_root = match content_dir(app, ContentKind::Inspirations) {
+        Ok(path) => path,
         Err(_) => return,
     };
     if let Some(entry) = build_journal_entry(record, &attachments_root) {

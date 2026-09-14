@@ -16,7 +16,7 @@ Lynse is a meeting knowledge management platform — recording, transcription, n
 **Monorepo frontend (pnpm workspaces + Turborepo) with shared packages.**
 
 - `apps/web/` — Next.js frontend (App Router)
-- `apps/tauri/` — Tauri 2 desktop app (Rust shell + Vite renderer). Native capabilities — local FunASR transcription, voiceprints, hotwords, `local-media://` streaming — live in `apps/tauri/src-tauri/src/lib.rs`.
+- `apps/tauri/` — Tauri 2 desktop app (Rust shell + Vite renderer). Native capabilities — local Qwen3-ASR transcription (MLX on Apple Silicon, the default engine), voiceprints, hotwords, `local-media://` streaming — live in `apps/tauri/src-tauri/src/lib.rs`.
 - `packages/ui/` — Atomic UI components (shadcn, Base UI). Extracted from Multica's design system.
 - `packages/views/` — Shared business pages/components (zero next/* imports, zero react-router imports)
 - `packages/core/` — Headless business logic: API client, auth, navigation, platform layer

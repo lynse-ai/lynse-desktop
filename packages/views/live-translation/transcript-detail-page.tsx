@@ -12,16 +12,8 @@ import {
 } from "motion/react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { IconSwap } from "../icon-swap";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@lynse/ui/components/ui/select";
-import { Separator } from "@lynse/ui/components/ui/separator";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@lynse/ui/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@lynse/ui/components/ui/tabs";
-import { Toggle } from "@lynse/ui/components/ui/toggle";
 import { Switch } from "@lynse/ui/components/ui/switch";
 import {
   Tooltip,
@@ -42,7 +34,7 @@ import {
   ArrowRight,
   Bookmark,
   Captions,
-  Eye,
+  CaptionsOff,
   EyeOff,
   Loader2,
   Mic,
@@ -87,18 +79,19 @@ function formatTimerCentis(ms: number): string {
 // holds regardless of whether cloud sync is later chosen in the dialog.
 //
 // Layout:
-//   · Header — title, mode switch (录音 / 实时), translation switch,
-//     language pair, status chip, and the two view toggles.
+//   · Header — title, and (in live mode) the captions-exit toggle plus the
+//     translation switch / language pair.
 //   · Main   — the whole area shows the live transcript when a text stream is
-//              active; in pure-recording mode (or with live transcription
-//              paused) it shows only the recording activity (timer + animation).
+//              active; in pure-recording mode it shows only the recording
+//              activity (timer + animation). The Captions icon beside the
+//              stage status label swaps between the two surfaces.
 //   · Dock   — a floating glassmorphism bar at the bottom holds Start / Pause /
 //              Stop and animates while recording.
 // ───────────────────────────────────────────────────────────────
 
-// Stage swap choreography: the incoming pane slides in from the side of its
-// header-toggle position (录音 left / 实时 right) while the outgoing pane
-// leaves through the opposite side, so everything drifts one way.
+// Stage swap choreography: the live pane slides in from the right while the
+// recording pane leaves through the left (and vice versa), so everything
+// drifts one way.
 const stageVariants: Variants = {
   enter: (direction: number) => ({
     opacity: 0,
@@ -110,8 +103,6 @@ const stageVariants: Variants = {
     transform: `translateX(${-24 * direction}px)`,
   }),
 };
-
-const stageSpringTransition: Transition = { type: "spring", bounce: 0, duration: 0.25 };
 
 export function TranscriptDetailPage() {
   const { t, i18n } = useTranslation();
@@ -136,10 +127,6 @@ export function TranscriptDetailPage() {
     }).format(d);
   }, [session.startedAt, i18n.language]);
 
-  // ── view toggles ──
-  const [showSource, setShowSource] = useState(true); // 显示原文
-  const [liveTranscribe, setLiveTranscribe] = useState(true); // 实时转录
-  const [frozenSegments, setFrozenSegments] = useState<readonly LiveTranslationSegment[]>([]);
   const [transcriptTab, setTranscriptTab] = useState<TranscriptTab>("transcript");
 
   const recording = session.recording;
@@ -151,28 +138,11 @@ export function TranscriptDetailPage() {
   const displayMode: RecordMode = recording ? session.activeMode : session.mode;
   const transcribing = displayMode !== "record";
 
-  // Panes enter from the side of their toggle position (录音 left / 实时 right).
+  // Live pane drifts in from the right, recording pane from the left.
   const stageDirection = displayMode === "record" ? -1 : 1;
   const stageTransition: Transition = reduceMotion
     ? { duration: 0 }
     : { duration: 0.2, ease: [0.23, 1, 0.32, 1] };
-
-  // Freeze the transcript snapshot when live transcription is toggled off.
-  const visibleSegments = useMemo(() => {
-    if (liveTranscribe) return session.segments;
-    return frozenSegments.length ? frozenSegments : session.segments;
-  }, [liveTranscribe, frozenSegments, session.segments]);
-
-  // Stable (reads through refs) so the memoized transcript feed does not
-  // re-render on the 5 Hz level/elapsed updates from the capture sidecar.
-  const liveTranscribeRef = useRef(liveTranscribe);
-  liveTranscribeRef.current = liveTranscribe;
-  const segmentsRef = useRef(session.segments);
-  segmentsRef.current = session.segments;
-  const handleToggleLive = useCallback(() => {
-    if (liveTranscribeRef.current) setFrozenSegments(segmentsRef.current);
-    setLiveTranscribe((v) => !v);
-  }, []);
 
   // The whole page shows the transcript only while a text stream is active;
   // otherwise it shows just the recording activity (timer + animation).
@@ -234,37 +204,8 @@ export function TranscriptDetailPage() {
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
-            {/* mode switch — pure recording vs live (transcription ± translation) */}
-            <div className="flex items-center gap-0.5 rounded-full border border-border/60 bg-background/40 p-0.5">
-              {(["record", "live"] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => void session.selectMode(m)}
-                  className={cn(
-                    "relative rounded-full px-2.5 py-1 text-2xs font-medium transition-colors",
-                    displayMode === m
-                      ? "text-primary"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {displayMode === m && (
-                    <motion.span
-                      layoutId="recording-mode-thumb"
-                      className="absolute inset-0 rounded-full bg-primary/15"
-                      transition={reduceMotion ? { duration: 0 } : stageSpringTransition}
-                    />
-                  )}
-                  <span className="relative">
-                    {m === "record"
-                      ? t("recording_mode.record")
-                      : t("recording_mode.live_short")}
-                  </span>
-                </button>
-              ))}
-            </div>
-
-            {/* live mode controls — translation switch + language pair */}
+            {/* live mode controls — captions-exit toggle + translation switch
+                + language pair; the stage's Captions icon is the way in */}
             {transcribing && (
               <motion.div
                 initial={reduceMotion ? false : { opacity: 0, transform: "translateX(8px)" }}
@@ -272,6 +213,23 @@ export function TranscriptDetailPage() {
                 transition={{ duration: 0.15, ease: [0.23, 1, 0.32, 1] }}
                 className="flex items-center gap-2"
               >
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        onClick={() => void session.selectMode("record")}
+                        disabled={busy || stopping}
+                        aria-label={t("transcript_detail.exit_live")}
+                        className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+                      >
+                        <CaptionsOff className="size-4" />
+                      </button>
+                    }
+                  />
+                  <TooltipContent>{t("transcript_detail.exit_live")}</TooltipContent>
+                </Tooltip>
+
                 <label
                   className={cn(
                     "flex items-center gap-1.5 rounded-full border px-2.5 py-1",
@@ -342,41 +300,6 @@ export function TranscriptDetailPage() {
                 )}
               </motion.div>
             )}
-
-            <Separator orientation="vertical" className="data-[orientation=vertical]:h-5" />
-
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Toggle
-                    variant="outline"
-                    size="sm"
-                    pressed={showSource}
-                    onPressedChange={() => setShowSource((v) => !v)}
-                    aria-label={t("transcript_detail.show_original")}
-                  >
-                    <Eye className="size-3.5" />
-                  </Toggle>
-                }
-              />
-              <TooltipContent>{t("transcript_detail.show_original")}</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Toggle
-                    variant="outline"
-                    size="sm"
-                    pressed={liveTranscribe}
-                    onPressedChange={handleToggleLive}
-                    aria-label={t("transcript_detail.live_transcribe")}
-                  >
-                    <Captions className="size-3.5" />
-                  </Toggle>
-                }
-              />
-              <TooltipContent>{t("transcript_detail.live_transcribe")}</TooltipContent>
-            </Tooltip>
           </div>
         </header>
 
@@ -395,13 +318,10 @@ export function TranscriptDetailPage() {
                 className="absolute inset-0"
               >
                 <TranscriptFeed
-                  segments={visibleSegments}
-                  showSource={showSource}
-                  liveTranscribe={liveTranscribe}
+                  segments={session.segments}
                   translationEnabled={session.translationEnabled}
                   tab={transcriptTab}
                   onTabChange={setTranscriptTab}
-                  onToggleLive={handleToggleLive}
                   t={t}
                 />
 
@@ -447,6 +367,7 @@ export function TranscriptDetailPage() {
                   onTogglePause={() => void session.togglePause()}
                   onStop={() => void session.toggleRecording()}
                   onHide={() => void getDesktopLiveTranslationApi()?.hideMainWindow()}
+                  onSwitchToLive={() => void session.selectMode("live")}
                   t={t}
                 />
               </motion.div>
@@ -473,25 +394,20 @@ export function TranscriptDetailPage() {
 //
 // Memoized: the recording session pushes a level/elapsed update five times a
 // second, and re-reconciling a long transcript that often is pure waste — the
-// feed only changes when the segments (or a view toggle) actually change.
+// feed only changes when the segments (or the tab / translation flag) actually
+// change.
 const TranscriptFeed = memo(function TranscriptFeed({
   segments,
-  showSource,
-  liveTranscribe,
   translationEnabled,
   tab,
   onTabChange,
-  onToggleLive,
   t,
 }: {
   segments: readonly LiveTranslationSegment[];
-  showSource: boolean;
-  liveTranscribe: boolean;
   /** Whether live translation (target-language output) is currently active. */
   translationEnabled: boolean;
   tab: TranscriptTab;
   onTabChange: (tab: TranscriptTab) => void;
-  onToggleLive: () => void;
   t: (key: string) => string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -520,17 +436,6 @@ const TranscriptFeed = memo(function TranscriptFeed({
       </div>
 
       <div ref={ref} className="min-h-0 flex-1 overflow-y-auto py-5 pb-28">
-        {!liveTranscribe && (
-          <button
-            type="button"
-            onClick={onToggleLive}
-            className="mb-3 flex w-full items-center gap-2 rounded-md bg-warning/10 px-3 py-2 text-left text-xs text-warning-text transition-colors hover:bg-warning/15"
-          >
-            <Pause className="size-3.5" />
-            {t("transcript_detail.transcribe_paused")}
-          </button>
-        )}
-
         {segments.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center text-center text-muted-foreground">
             <span className="mb-3 flex size-12 items-center justify-center rounded-full bg-muted">
@@ -565,14 +470,12 @@ const TranscriptFeed = memo(function TranscriptFeed({
                         {t("live_translation.speaker")} {segment.speaker}
                       </div>
                     )}
-                    {showSource && (
-                      <p className="text-sm leading-relaxed text-foreground">
-                        {segment.recognizedText}
-                        {!segment.isFinal && (
-                          <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse rounded-full bg-primary align-[-2px]" />
-                        )}
-                      </p>
-                    )}
+                    <p className="text-sm leading-relaxed text-foreground">
+                      {segment.recognizedText}
+                      {!segment.isFinal && (
+                        <span className="ml-0.5 inline-block h-3.5 w-0.5 animate-pulse rounded-full bg-primary align-[-2px]" />
+                      )}
+                    </p>
                     {hasTranslation && (
                       <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                         {segment.translatedText}
@@ -619,6 +522,7 @@ function RecordingStage({
   onTogglePause,
   onStop,
   onHide,
+  onSwitchToLive,
   t,
 }: {
   recording: boolean;
@@ -632,6 +536,8 @@ function RecordingStage({
   onTogglePause: () => void;
   onStop: () => void;
   onHide: () => void;
+  /** Swap this stage for the live-transcript pane (Captions toggle). */
+  onSwitchToLive: () => void;
   t: (key: string) => string;
 }) {
   const [markers, setMarkers] = useState<number[]>([]);
@@ -681,6 +587,24 @@ function RecordingStage({
           className="block text-6xl font-medium tracking-tight tabular-nums text-foreground"
         />
         <div className="mt-1.5 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+          {/* Captions toggle — the way into the live-transcript pane (the
+              live pane's header hosts the matching CaptionsOff way back) */}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  onClick={onSwitchToLive}
+                  disabled={busy || stopping}
+                  aria-label={t("transcript_detail.live_transcribe")}
+                  className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+                >
+                  <Captions className="size-4" />
+                </button>
+              }
+            />
+            <TooltipContent>{t("transcript_detail.live_transcribe")}</TooltipContent>
+          </Tooltip>
           <span
             className={cn(
               "size-2 rounded-full",

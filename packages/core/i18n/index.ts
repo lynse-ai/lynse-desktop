@@ -9,6 +9,43 @@ export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 const LOCALE_STORAGE_KEY = "lynse_locale";
 
 /**
+ * Map a BCP-47 tag (e.g. "zh-CN", "en-US") onto a supported locale.
+ * Exact match wins, then base-language match. Chinese branches on region:
+ * zh-TW/HK/MO/Hant → zh-Hant, everything else → zh-Hans. Returns null when
+ * nothing matches.
+ */
+export function matchLocale(tag: string): SupportedLocale | null {
+  const normalized = tag.toLowerCase().replace(/_/g, "-");
+  const exact = SUPPORTED_LOCALES.find((l) => l.toLowerCase() === normalized);
+  if (exact) return exact;
+  const [base, region] = normalized.split("-");
+  if (base === "zh") {
+    return region && ["tw", "hk", "mo", "hant"].includes(region)
+      ? "zh-Hant"
+      : "zh-Hans";
+  }
+  return (
+    SUPPORTED_LOCALES.find((l) => l.toLowerCase().split("-")[0] === base) ??
+    null
+  );
+}
+
+/**
+ * Best-effort detection of the system's preferred language from the
+ * navigator's ordered language list. Falls back to DEFAULT_LOCALE when the
+ * environment exposes no languages or none of them is supported.
+ */
+export function detectSystemLocale(): SupportedLocale {
+  if (typeof navigator === "undefined") return DEFAULT_LOCALE;
+  const candidates = navigator.languages ?? [navigator.language];
+  for (const tag of candidates) {
+    const match = tag ? matchLocale(tag) : null;
+    if (match) return match;
+  }
+  return DEFAULT_LOCALE;
+}
+
+/**
  * Keep <html lang> in step with the active locale so browsers and assistive
  * tech pick the right pronunciation, quotes, hyphenation and CJK fonts.
  */
@@ -28,12 +65,12 @@ export function initI18n(opts: {
 }) {
   if (i18next.isInitialized) return;
 
-  // Restore persisted locale or fall back to the provided / default value
+  // Precedence: persisted choice → caller-supplied locale → system language
   const stored =
     typeof window !== "undefined"
       ? localStorage.getItem(LOCALE_STORAGE_KEY)
       : null;
-  const lng = stored || opts.locale || DEFAULT_LOCALE;
+  const lng = stored || opts.locale || detectSystemLocale();
 
   i18next.use(initReactI18next).init({
     lng,

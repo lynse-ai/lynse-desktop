@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   ArrowDown,
@@ -8,6 +8,8 @@ import {
   BookOpen,
   CalendarDays,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Clock,
   FileText,
@@ -682,7 +684,9 @@ interface QuickPrompt {
  * Floating quick-prompt chips anchored right above the composer: one row,
  * horizontally scrollable, each a one-click send of a frequently typed
  * question. Dims (without collapsing) while a reply is streaming so the
- * composer height stays stable.
+ * composer height stays stable. The row hides its scrollbar, so chevron
+ * buttons on each overflowing edge do the scrolling with the mouse; each
+ * button only shows while that side actually has more content.
  */
 function QuickPromptStrip({
   prompts,
@@ -693,23 +697,93 @@ function QuickPromptStrip({
   onSelect: (prompt: string) => void;
   disabled?: boolean;
 }) {
+  const { t } = useTranslation();
+  const stripRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  const updateScrollState = useCallback(() => {
+    const el = stripRef.current;
+    if (!el) return;
+    const maxScroll = el.scrollWidth - el.clientWidth;
+    setCanScrollLeft(el.scrollLeft > 1);
+    setCanScrollRight(el.scrollLeft < maxScroll - 1);
+  }, []);
+
+  useEffect(() => {
+    const el = stripRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateScrollState);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [updateScrollState]);
+
+  // Re-check after every render: locale switches and container resizes swap
+  // chip widths without firing the observer's initial snapshot again.
+  useEffect(updateScrollState);
+
+  const scrollStrip = (direction: 1 | -1) => {
+    stripRef.current?.scrollBy({
+      left: direction * Math.max(stripRef.current.clientWidth * 0.75, 180),
+      behavior: "smooth",
+    });
+  };
+
+  // Fade only the edges that hide overflow, so the mask follows the arrows.
+  const maskImage = canScrollLeft
+    ? canScrollRight
+      ? "linear-gradient(to right, transparent, black 6%, black 94%, transparent)"
+      : "linear-gradient(to right, transparent, black 6%)"
+    : canScrollRight
+      ? "linear-gradient(to right, black 92%, transparent)"
+      : undefined;
+
   return (
     <div
-      className={`no-scrollbar -mx-1 mb-2 flex gap-1.5 overflow-x-auto px-1 pb-0.5 transition-opacity duration-200 [mask-image:linear-gradient(to_right,black_92%,transparent)] ${
+      className={`mb-2 flex items-center gap-1 transition-opacity duration-200 ${
         disabled ? "pointer-events-none opacity-40" : "opacity-100"
       }`}
     >
-      {prompts.map((prompt) => (
+      {canScrollLeft && (
         <button
-          key={prompt.key}
           type="button"
-          onClick={() => onSelect(prompt.label)}
-          className="flex shrink-0 items-center gap-1.5 rounded-full border border-border/70 bg-card px-3 py-1.5 text-xs text-muted-foreground shadow-sm transition-[border-color,background-color,color] hover:border-primary/25 hover:bg-accent/50 hover:text-foreground"
+          onClick={() => scrollStrip(-1)}
+          className="flex size-6 shrink-0 items-center justify-center rounded-full border border-border/70 bg-card text-muted-foreground shadow-sm transition-[border-color,background-color,color] hover:border-primary/25 hover:bg-accent/50 hover:text-foreground"
+          title={t("chat.prompts_previous")}
+          aria-label={t("chat.prompts_previous")}
         >
-          <prompt.icon className="size-3.5 shrink-0 text-primary/70" />
-          <span className="whitespace-nowrap">{prompt.label}</span>
+          <ChevronLeft className="size-3.5" />
         </button>
-      ))}
+      )}
+      <div
+        ref={stripRef}
+        onScroll={updateScrollState}
+        className="no-scrollbar -mx-1 flex min-w-0 flex-1 gap-1.5 overflow-x-auto px-1 pb-0.5"
+        style={maskImage ? { maskImage, WebkitMaskImage: maskImage } : undefined}
+      >
+        {prompts.map((prompt) => (
+          <button
+            key={prompt.key}
+            type="button"
+            onClick={() => onSelect(prompt.label)}
+            className="flex shrink-0 items-center gap-1.5 rounded-full border border-border/70 bg-card px-3 py-1.5 text-xs text-muted-foreground shadow-sm transition-[border-color,background-color,color] hover:border-primary/25 hover:bg-accent/50 hover:text-foreground"
+          >
+            <prompt.icon className="size-3.5 shrink-0 text-primary/70" />
+            <span className="whitespace-nowrap">{prompt.label}</span>
+          </button>
+        ))}
+      </div>
+      {canScrollRight && (
+        <button
+          type="button"
+          onClick={() => scrollStrip(1)}
+          className="flex size-6 shrink-0 items-center justify-center rounded-full border border-border/70 bg-card text-muted-foreground shadow-sm transition-[border-color,background-color,color] hover:border-primary/25 hover:bg-accent/50 hover:text-foreground"
+          title={t("chat.prompts_next")}
+          aria-label={t("chat.prompts_next")}
+        >
+          <ChevronRight className="size-3.5" />
+        </button>
+      )}
     </div>
   );
 }

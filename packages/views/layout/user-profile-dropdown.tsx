@@ -8,6 +8,7 @@ import { useAuthStore } from "@lynse/core/auth";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useAppUpdate, getAppInfoSync } from "../app-update";
 import { openAboutWindow } from "../about/open-about";
+import { openFeedbackWindow } from "../feedback/open-feedback";
 import { openReportProblemDialog } from "../diagnostics";
 import { useUserCredits, useMembership, useUpdateNickname } from "./use-user-credits";
 import { UserActivityHeatmap } from "./user-activity-heatmap";
@@ -27,6 +28,7 @@ import {
   Palette,
   Globe,
   HelpCircle,
+  MessageSquarePlus,
   Zap,
   LogOut,
   UserCircle,
@@ -276,6 +278,12 @@ export function UserProfileDropdown({
         <DropdownMenuItem onClick={openReportProblemDialog}>
           <HelpCircle className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_help_feedback")}</span>
+        </DropdownMenuItem>
+
+        {/* ── Feature requests (FeedLog board) ────────── */}
+        <DropdownMenuItem onClick={openFeedbackWindow}>
+          <MessageSquarePlus className="size-4 text-muted-foreground" strokeWidth={1.5} />
+          <span>{t("layout.user_feature_requests")}</span>
         </DropdownMenuItem>
 
         {/* ── About (version) — pops the standalone About window ── */}

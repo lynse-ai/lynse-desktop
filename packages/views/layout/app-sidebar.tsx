@@ -64,8 +64,9 @@ import { UploadDialog } from "../workspace/upload-dialog";
 import { TemplateManager } from "../workspace/template-manager";
 import { AppUpdateDialog } from "../app-update-dialog";
 import { openReportProblemDialog } from "../diagnostics";
+import { openFeedbackWindow } from "../feedback/open-feedback";
 import { ReportProblemDialog } from "../report-problem-dialog";
-import { LayoutTemplate } from "lucide-react";
+import { LayoutTemplate, MessageSquarePlus } from "lucide-react";
 
 function isNavActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(href + "/");
@@ -502,6 +503,12 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
         <DropdownMenuItem onClick={openReportProblemDialog}>
           <HelpCircle className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_help_feedback")}</span>
+        </DropdownMenuItem>
+
+        {/* ── Feature requests (FeedLog board) ────────── */}
+        <DropdownMenuItem onClick={openFeedbackWindow}>
+          <MessageSquarePlus className="size-4 text-muted-foreground" strokeWidth={1.5} />
+          <span>{t("layout.user_feature_requests")}</span>
         </DropdownMenuItem>
 
         {/* ── About (version) — pops the standalone About window ── */}

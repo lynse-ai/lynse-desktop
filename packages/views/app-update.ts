@@ -31,6 +31,8 @@ type DesktopAppApi = {
   getInfo: () => Promise<{ version: string; build?: string | null; platform: string }>;
   /** Opens (or focuses) the standalone About window with a localized title. */
   openAboutWindow: (title?: string) => Promise<void>;
+  /** Opens (or focuses) the standalone feedback board window with a localized title. */
+  openFeedbackWindow: (title?: string) => Promise<void>;
   checkForUpdate: () => Promise<AppUpdateInfo>;
   downloadAndInstallUpdate: (onProgress: (progress: UpdateDownloadProgress) => void) => Promise<void>;
   relaunchApp: () => Promise<void>;

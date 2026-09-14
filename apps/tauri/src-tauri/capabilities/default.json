@@ -1,1 +1,25 @@
-{"$schema": "../gen/schemas/desktop-schema.json", "identifier": "default", "description": "Lynse desktop capability set", "windows": ["main", "live-subtitles", "recording-island", "about"], "permissions": ["core:default", "core:event:default", "core:window:allow-start-dragging", "core:window:allow-hide", "core:window:allow-set-title", "core:window:allow-set-theme", "dialog:default", "log:default", "opener:default", "process:allow-restart", "updater:default"]}
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Lynse desktop capability set",
+  "windows": [
+    "main",
+    "live-subtitles",
+    "recording-island",
+    "about",
+    "feedback"
+  ],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-hide",
+    "core:window:allow-set-title",
+    "core:window:allow-set-theme",
+    "dialog:default",
+    "log:default",
+    "opener:default",
+    "process:allow-restart",
+    "updater:default"
+  ]
+}

@@ -19,6 +19,7 @@
     "./chat": "./chat/index.ts",
     "./settings": "./settings/index.ts",
     "./about": "./about/index.ts",
+    "./feedback": "./feedback/index.ts",
     "./files": "./files/index.ts",
     "./workspace": "./workspace/index.ts",
     "./todo": "./todo/index.ts",
@@ -37,6 +38,7 @@
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
+    "@feedlog/widget": "^0.0.4",
     "@lynse/core": "workspace:*",
     "@lynse/ui": "workspace:*",
     "@milkdown/kit": "^7.19.2",

@@ -385,6 +385,9 @@ importers:
       '@dnd-kit/sortable':
         specifier: ^10.0.0
         version: 10.0.0(@dnd-kit/core@6.3.1(react-dom@19.2.3(react@19.2.3))(react@19.2.3))(react@19.2.3)
+      '@feedlog/widget':
+        specifier: ^0.0.4
+        version: 0.0.4
       '@lynse/core':
         specifier: workspace:*
         version: link:../core
@@ -1008,6 +1011,10 @@ packages:
     peerDependenciesMeta:
       '@noble/hashes':
         optional: true
+
+  '@feedlog/widget@0.0.4':
+    resolution: {integrity: sha512-gfGSrkc2bRd419OVKiLcQH7AsrSsVMy+Ejmo+yChoXC4Pec/z5LsryOSxhZ4NlfL6P+KuTeYmU4e1k98McXCVA==}
+    engines: {node: '>=18'}
 
   '@floating-ui/core@1.7.5':
     resolution: {integrity: sha512-1Ih4WTWyw0+lKyFMcBHGbb5U5FtuHJuujoyyr5zTaWS5EYMeT6Jb2AuDeftsCsEuchO+mM2ij5+q9crhydzLhQ==}
@@ -5394,6 +5401,8 @@ snapshots:
   '@exodus/bytes@1.15.1(@noble/hashes@2.2.0)':
     optionalDependencies:
       '@noble/hashes': 2.2.0
+
+  '@feedlog/widget@0.0.4': {}
 
   '@floating-ui/core@1.7.5':
     dependencies:

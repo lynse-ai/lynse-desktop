@@ -46,6 +46,7 @@ export {
 
   // ── Actions ───────────────────────────────────────────
   Plus,             // Create / Add
+  MessageSquarePlus, // Feature request / feedback board entry
   Search,           // Search inputs
   Filter,           // Filter controls
   Send,             // Send message (chat)

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Lynse",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "identifier": "com.lynse.sparknote",
   "build": {
     "beforeDevCommand": "pnpm --filter @lynse/tauri build:audio-capture && pnpm --filter @lynse/tauri exec vite --host 127.0.0.1",
@@ -32,6 +32,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdGRENEQzg5NUYxQUMxQ0UKUldUT3dScGZpZHpjZjhVZkN4VTJYVE9aSFF1ZXRpT2t3SlJsSDVDak5PUllPQXFqcHpYSjJsVE8K",
       "endpoints": [
+        "https://lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com/updates/latest.json",
         "https://github.com/lynse-ai/lynse-desktop/releases/latest/download/latest.json"
       ],
       "windows": {

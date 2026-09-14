@@ -53,6 +53,14 @@ export function DynamicIsland({
   const { api, view } = useLiveTranslation();
   const recording = view.state === "recording";
   const paused = view.state === "paused";
+  // Pure-recording session (target == source): the transcript toggle doubles
+  // as the "start live transcription" switch, so its label says so.
+  const transcribing = view.targetLanguage !== view.sourceLanguage;
+  const drawerLabel = drawerOpen
+    ? t("recording_mode.hide_transcript")
+    : transcribing
+      ? t("recording_mode.view_transcribe")
+      : t("recording_mode.start_transcribe");
 
   // Format seconds into M:SS for the compact display.
   const fmt = (ms: number) => {
@@ -129,16 +137,8 @@ export function DynamicIsland({
             <button
               type="button"
               onClick={onToggleDrawer}
-              aria-label={
-                drawerOpen
-                  ? t("recording_mode.hide_transcript")
-                  : t("recording_mode.view_transcribe")
-              }
-              title={
-                drawerOpen
-                  ? t("recording_mode.hide_transcript")
-                  : t("recording_mode.view_transcribe")
-              }
+              aria-label={drawerLabel}
+              title={drawerLabel}
               className={cn(
                 "flex size-6 items-center justify-center rounded-full transition-[color,background-color,transform] duration-150 hover:bg-muted hover:text-foreground active:scale-[0.96]",
                 drawerOpen ? "text-primary" : "text-muted-foreground",

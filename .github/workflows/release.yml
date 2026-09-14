@@ -9,6 +9,15 @@ on:
 permissions:
   contents: write
 
+# Tencent CloudBase static hosting serves the in-app updater and the STT
+# runtime archives (GitHub Releases is blocked/throttled from mainland China,
+# so CloudBase is primary and the GitHub release stays as fallback). The env
+# below is the "lynse" CloudBase environment; the only secret needed is
+# CLOUDBASE_API_KEY (云开发控制台 → 环境设置 → API 密钥).
+env:
+  CLOUDBASE_ENV_ID: lynse-d8g49o1i956741f9e
+  CLOUDBASE_UPDATES_BASE: https://lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com/updates
+
 jobs:
   build:
     name: Build ${{ matrix.os }}
@@ -142,6 +151,22 @@ jobs:
             || /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD" "$PLIST"
           echo "CFBundleVersion=$BUILD stamped from run ${{ github.run_number }}"
 
+      - name: Resolve updater mirror base URL
+        # The CloudBase hosting mirror is opt-in via the CLOUDBASE_API_KEY
+        # secret. When absent the build behaves exactly as before (GitHub
+        # Releases only) and the mirror-cloudbase job is skipped. Written to
+        # GITHUB_ENV so the build step bakes it into the binary (option_env!)
+        # as the first STT-runtime download candidate.
+        shell: bash
+        env:
+          CLOUDBASE_API_KEY: ${{ secrets.CLOUDBASE_API_KEY }}
+        run: |
+          if [[ -n "${CLOUDBASE_API_KEY:-}" ]]; then
+            echo "LYNSE_UPDATES_MIRROR_BASE=${CLOUDBASE_UPDATES_BASE}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::CLOUDBASE_API_KEY secret is not set — the updater stays on GitHub Releases and the mirror-cloudbase job will be skipped."
+          fi
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -155,7 +180,9 @@ jobs:
           # Updater signing key (minisign). The matching pubkey lives in
           # apps/tauri/src-tauri/tauri.conf.json. With the key present the
           # action signs every bundle (.sig files) and generates + uploads
-          # latest.json — the endpoint the in-app updater polls.
+          # latest.json to the GitHub Release — the origin the mirror-cloudbase
+          # job rewrites and republishes to Tencent CloudBase hosting, which is
+          # the endpoint the in-app updater polls first.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # APPLE_* Developer ID signing secrets are forwarded by the
@@ -184,3 +211,70 @@ jobs:
             ARCHIVE="lynse-stt-runtime-macos-aarch64.tar.gz"
           fi
           gh release upload "${{ github.ref_name }}" "$ARCHIVE" --clobber
+
+  mirror-cloudbase:
+    name: Mirror updater artifacts to CloudBase hosting
+    # Tags only: workflow_dispatch runs have no release to mirror from.
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      CLOUDBASE_API_KEY: ${{ secrets.CLOUDBASE_API_KEY }}
+    steps:
+      - name: Guard on CloudBase credentials
+        id: guard
+        shell: bash
+        run: |
+          if [[ -z "${CLOUDBASE_API_KEY:-}" ]]; then
+            echo "::warning::CLOUDBASE_API_KEY secret is not set — skipping the CloudBase mirror (updates stay on GitHub Releases)."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node
+        if: steps.guard.outputs.configured == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Download release assets
+        if: steps.guard.outputs.configured == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist
+          gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --dir dist
+
+      - name: Rewrite latest.json download URLs to CloudBase
+        if: steps.guard.outputs.configured == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          BASE="${CLOUDBASE_UPDATES_BASE}/${TAG}"
+          sed -i "s#https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/#${BASE}/#g" dist/latest.json
+          # Both platform entries must exist and point at CloudBase before the
+          # stable endpoint is republished: a partial latest.json would send
+          # live clients to a missing file.
+          jq -e --arg base "$BASE" '.platforms["darwin-aarch64"].url | startswith($base)' dist/latest.json > /dev/null
+          jq -e --arg base "$BASE" '.platforms["windows-x86_64"].url | startswith($base)' dist/latest.json > /dev/null
+          echo "latest.json rewritten:"
+          cat dist/latest.json
+
+      - name: Upload artifacts to CloudBase hosting
+        if: steps.guard.outputs.configured == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm i -g @cloudbase/cli@latest
+          # Environment API key (云开发控制台 → 环境设置 → API 密钥), scoped to
+          # this one environment.
+          tcb login --cloudbase-api-key "${CLOUDBASE_API_KEY}" -e "${CLOUDBASE_ENV_ID}"
+          # Per-tag copy first, so the stable latest.json never points at a
+          # file that is not there yet.
+          tcb hosting deploy dist/ "updates/${GITHUB_REF_NAME}" -e "${CLOUDBASE_ENV_ID}" --yes
+          # Stable endpoint polled by the in-app updater (last, atomic flip).
+          # The hosting gateway serves no-cache, so clients read it fresh.
+          tcb hosting deploy dist/latest.json updates/latest.json -e "${CLOUDBASE_ENV_ID}" --yes

@@ -14,6 +14,7 @@ import { NotificationsPage, AppUpdateNotifier } from "@lynse/views/notifications
 import { DevicesPage } from "@lynse/views/devices";
 import { SettingsDialog, useWebdavAutoSync } from "@lynse/views/settings";
 import { AboutWindow } from "@lynse/views/about";
+import { FeedbackWindow } from "@lynse/views/feedback";
 import { BotAgent, BotAuthSupervisor } from "@lynse/views/bots";
 import { AudioEditorPage } from "@lynse/views/audio-editor";
 import {
@@ -225,6 +226,7 @@ export default function App() {
   const subtitleWindow = windowKind === "live-subtitles";
   const recordingIslandWindow = windowKind === "recording-island";
   const aboutWindow = windowKind === "about";
+  const feedbackWindow = windowKind === "feedback";
   const identity = useMemo(() => {
     const appInfo = (window as unknown as { desktopAPI?: { appInfo?: { version: string } } })
       .desktopAPI?.appInfo;
@@ -247,6 +249,8 @@ export default function App() {
         <LiveSubtitleOverlay />
       ) : aboutWindow ? (
         <AboutWindow />
+      ) : feedbackWindow ? (
+        <FeedbackWindow getStoredValue={(key) => secureStorage.getItem(key)} />
       ) : (
         <CoreProvider
           apiBaseUrl={import.meta.env.VITE_API_URL}

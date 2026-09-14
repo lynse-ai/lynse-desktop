@@ -105,6 +105,7 @@ type DesktopApi = {
   app: {
     getInfo: () => Promise<{ version: string; platform: string }>;
     openAboutWindow: (title?: string) => Promise<void>;
+    openFeedbackWindow: (title?: string) => Promise<void>;
     openLogsFolder: () => Promise<void>;
     // Tail of the app log files for the bug report dialog. `truncated` marks
     // that older rotated archives were left out of the tail.
@@ -455,6 +456,10 @@ export async function installTauriBridge(): Promise<void> {
       // is passed in because only the frontend knows the active locale.
       openAboutWindow: (title?: string) =>
         command<void>("open_about_window", { title: title ?? null }),
+      // Opens (or focuses) the standalone feature-request window hosting the
+      // FeedLog widget. Same localized-title convention as openAboutWindow.
+      openFeedbackWindow: (title?: string) =>
+        command<void>("open_feedback_window", { title: title ?? null }),
       openLogsFolder: () => command<void>("open_logs_folder"),
       readLogs: (maxBytes?: number) =>
         command<{ dir: string; tail: string; truncated: boolean; files: number }>(

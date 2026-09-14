@@ -1048,32 +1048,50 @@ fn verify_and_install(part: &Path, target: &Path, expected_sha256: &str) -> Comm
 /// the release workflow that uploads them.
 const RUNTIME_REPO: &str = "lynse-ai/lynse-desktop";
 
+/// Tencent CloudBase static hosting mirror serving the same per-tag layout as
+/// the GitHub release (`updates/<tag>/<archive>`). Compiled in from the
+/// release workflow's env; absent in local dev builds, whose candidate list
+/// then starts at GitHub direct.
+const RUNTIME_MIRROR_BASE: Option<&'static str> = option_env!("LYNSE_UPDATES_MIRROR_BASE");
+
 /// Per-platform runtime archive base name, e.g.
 /// `lynse-stt-runtime-macos-aarch64.tar.gz`.
 fn runtime_archive_name() -> String {
     format!("lynse-stt-runtime-{}.tar.gz", stt::runtime_platform_dir())
 }
 
-/// Download URL for this app version's runtime archive. Mirrors the git tag
-/// exactly (e.g. `v0.1.15`).
-fn runtime_download_url(version: &str) -> String {
+/// GitHub download URL for this app version's runtime archive — also the
+/// source the CloudBase mirror copies from. Mirrors the git tag exactly (e.g.
+/// `v0.1.15`).
+fn runtime_github_url(version: &str) -> String {
     format!(
         "https://github.com/{RUNTIME_REPO}/releases/download/{version}/{}",
         runtime_archive_name()
     )
 }
 
+/// Mirror URL for this version's runtime archive; `None` when the build has
+/// no mirror compiled in.
+fn runtime_mirror_url(version: &str) -> Option<String> {
+    match RUNTIME_MIRROR_BASE {
+        Some(base) if !base.is_empty() => Some(format!("{base}/{version}/{}", runtime_archive_name())),
+        _ => None,
+    }
+}
+
 /// Same domestic-mirror strategy as model downloads: GitHub Releases is blocked
-/// or throttled from mainland China, so try `ghproxy`-style mirrors after the
-/// direct URL. Direct access is always first so non-China users are unaffected.
-fn runtime_download_candidates(primary: &str) -> Vec<String> {
-    let mirrors = [
-        primary.replace("https://github.com/", "https://ghproxy.net/https://github.com/"),
-        primary.replace("https://github.com/", "https://mirror.ghproxy.com/https://github.com/"),
-    ];
-    let mut list: Vec<String> = vec![primary.to_owned()];
-    for mirror in mirrors {
-        if mirror != *primary {
+/// or throttled from mainland China, so try the CloudBase mirror first, then
+/// the direct GitHub URL, then `ghproxy`-style mirrors. GitHub direct stays in
+/// the list so non-China users and unmirrored old tags are unaffected.
+fn runtime_download_candidates(version: &str) -> Vec<String> {
+    let github = runtime_github_url(version);
+    let mut list: Vec<String> = runtime_mirror_url(version).into_iter().collect();
+    list.push(github.clone());
+    for mirror in [
+        github.replace("https://github.com/", "https://ghproxy.net/https://github.com/"),
+        github.replace("https://github.com/", "https://mirror.ghproxy.com/https://github.com/"),
+    ] {
+        if mirror != github {
             list.push(mirror);
         }
     }
@@ -1141,7 +1159,7 @@ fn download_runtime(app: &AppHandle, provider: &str, model_id: &str, version: &s
     fs::create_dir_all(&downloads).map_err(|error| error.to_string())?;
     let part = downloads.join(format!("{archive}.part"));
 
-    let candidates = runtime_download_candidates(&runtime_download_url(version));
+    let candidates = runtime_download_candidates(version);
     // Resolve the archive size so the runtime download shows a determinate
     // percentage bar; falls back to 0 → indeterminate sweep.
     let total = resolve_content_length(&candidates);
@@ -2998,7 +3016,7 @@ fn build_tray_menu(
     let elapsed = MenuItemBuilder::with_id(TRAY_ELAPSED_ID, elapsed_text)
         .enabled(false)
         .build(app)?;
-    let start = MenuItemBuilder::with_id(TRAY_START_ID, "▶  开启实时录音")
+    let start = MenuItemBuilder::with_id(TRAY_START_ID, "▶  开启录音")
         .enabled(!st.recording)
         .build(app)?;
     let pause_label = if st.paused { "▶  继续录音" } else { "⏸  暂停录音" };
@@ -3066,6 +3084,12 @@ pub(crate) fn show_main_window(app: &AppHandle) {
 const ABOUT_WINDOW_WIDTH: f64 = 320.0;
 const ABOUT_WINDOW_HEIGHT: f64 = 460.0;
 
+/// Logical size of the standalone feature-request window hosting the FeedLog
+/// widget. The widget's panel is 400pt wide and up to `100vh - 120pt` tall,
+/// so the window leaves room for the launcher bubble plus the header.
+const FEEDBACK_WINDOW_WIDTH: f64 = 440.0;
+const FEEDBACK_WINDOW_HEIGHT: f64 = 760.0;
+
 /// Center `window` over the main window (falling back to the screen center),
 /// so the About popup reads as attached to the app instead of free-floating.
 fn center_window_over_main(
@@ -3122,6 +3146,38 @@ fn open_about_window(app: AppHandle, title: Option<String>) -> CommandResult<()>
     Ok(())
 }
 
+/// Open (or focus) the standalone feature-request window — a small fixed-size
+/// window hosting the FeedLog feedback widget (`?window=feedback` route),
+/// mirroring the About window setup. `title` is the localized window title
+/// picked by the frontend, which knows the active locale.
+#[tauri::command]
+fn open_feedback_window(app: AppHandle, title: Option<String>) -> CommandResult<()> {
+    if let Some(window) = app.get_webview_window("feedback") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+    // Created hidden and positioned before the reveal, so the popup never
+    // flashes at the screen origin before settling over the main window.
+    let window = WebviewWindowBuilder::new(
+        &app,
+        "feedback",
+        WebviewUrl::App("index.html?window=feedback".into()),
+    )
+    .title(title.unwrap_or_else(|| "Lynse".to_string()))
+    .inner_size(FEEDBACK_WINDOW_WIDTH, FEEDBACK_WINDOW_HEIGHT)
+    .resizable(false)
+    .maximizable(false)
+    .minimizable(false)
+    .visible(false)
+    .build()
+    .map_err(|error| format!("failed to create feedback window: {error}"))?;
+    center_window_over_main(&app, &window, FEEDBACK_WINDOW_WIDTH, FEEDBACK_WINDOW_HEIGHT);
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(())
+}
+
 /// Creates the menu-bar / notification-area tray icon and its menu so the
 /// app (and the live-translation floating window) can be minimized to and
 /// restored from the system status bar.
@@ -3143,10 +3199,12 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "start_live_recording" => {
                 // Relay to the main window's always-mounted tray agent
-                // (`RecordingTrayAgent`): starting live transcription needs the
-                // provider config + connection negotiation that live in the
+                // (`RecordingTrayAgent`): starting a recording needs the
+                // permission checks + audio-source config that live in the
                 // webview layer, and the agent exists no matter which page is
-                // open or whether the window is hidden.
+                // open or whether the window is hidden. The session starts as
+                // a plain recording; live transcription is opt-in via the
+                // island's transcript drawer.
                 if let Err(error) = app.emit("live-translation-tray-action", "start") {
                     log::error!("Failed to request live recording start: {error}");
                 }
@@ -3371,6 +3429,7 @@ pub fn run() {
             secure_set_secret, secure_get_secret, secure_delete_secret,
             get_app_info,
             open_about_window,
+            open_feedback_window,
             open_logs_folder,
             diagnostics_read_logs, diagnostics_prepare_report,
             live_translation::live_translation_permissions,
@@ -3539,15 +3598,16 @@ mod tests {
     }
 
     #[test]
-    fn runtime_download_url_embeds_version_repo_and_archive() {
-        let url = runtime_download_url("v0.1.15");
-        assert_eq!(
-            url,
-            format!(
-                "https://github.com/{}/releases/download/v0.1.15/{}",
-                "lynse-ai/lynse-desktop",
-                runtime_archive_name()
-            )
-        );
+    fn runtime_download_candidates_order_mirror_then_github_then_proxies() {
+        let candidates = runtime_download_candidates("v0.1.15");
+        let archive = runtime_archive_name();
+        let mut expected: Vec<String> = Vec::new();
+        if let Some(base) = RUNTIME_MIRROR_BASE.filter(|base| !base.is_empty()) {
+            expected.push(format!("{base}/v0.1.15/{archive}"));
+        }
+        expected.push(format!("https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"));
+        expected.push(format!("https://ghproxy.net/https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"));
+        expected.push(format!("https://mirror.ghproxy.com/https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"));
+        assert_eq!(candidates, expected);
     }
 }

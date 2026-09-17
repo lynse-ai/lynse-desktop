@@ -41,6 +41,15 @@ mod mic_permission;
     allow(dead_code)
 )]
 mod vault;
+// Dual-track recording contract shared by the macOS capture sidecar and the
+// Windows WASAPI engine: track manifest, timeline/framing, WAV writers and
+// the echo-canceller ABI.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+mod audio_contract;
+// Windows in-process capture engine for dual-track meeting recording
+// (WASAPI loopback + microphone through the shared echo-canceller ABI).
+#[cfg(target_os = "windows")]
+mod windows_capture;
 mod volc_ast;
 mod webdav;
 mod storage;
@@ -232,7 +241,10 @@ fn add_todo_to_system_calendar(
     let notes = source.map(|value| format!("来自 Lynse 待办\n来源：{value}"));
 
     let store = CalendarStore::builder().connect().map_err(|error| error.to_string())?;
-    let access = store.authorize_write_only().map_err(|error| error.to_string())?;
+    // Full access, not write-only: on macOS 14+ defaultCalendarForNewEvents
+    // only resolves under full access — under write-only it returns nil and
+    // every save fails with "no default Calendar configured".
+    let access = store.authorize().map_err(|error| error.to_string())?;
     let event_id = store.save(&CalendarEvent {
         identifier: None,
         title: event_title,
@@ -326,6 +338,17 @@ pub(crate) fn qwen3_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
     Ok(resources.join("qwen3_transcribe.py"))
 }
 
+/// Resource path to the MOSS-Transcribe-Diarize bridge, mirroring
+/// [`qwen3_script_path`].
+pub(crate) fn moss_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/moss_transcribe.py");
+    if development.exists() {
+        return Ok(development);
+    }
+    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
+    Ok(resources.join("moss_transcribe.py"))
+}
+
 /// Ensure `mlx-qwen3-asr` (+ its vendored ffmpeg helper) is importable in the
 /// MLX venv, pip-installing on first use. The shared venv is created by
 /// [`ensure_mlx_venv`], which predates the Qwen3 engine — installs that already
@@ -344,14 +367,75 @@ pub(crate) fn ensure_qwen3_asr_package(_app: &AppHandle, python: &str) -> Comman
         .parent()
         .map(|directory| directory.join("pip"))
         .unwrap_or_else(|| PathBuf::from("pip"));
+    log::info!("[stt] 首次使用 Qwen3 引擎，安装 mlx-qwen3-asr 依赖…");
     let install = Command::new(&pip)
-        .args(["install", "--quiet", "--disable-pip-version-check", "mlx-qwen3-asr", "imageio-ffmpeg"])
+        .args(["install", "--quiet", "--disable-pip-version-check", "mlx-qwen3-asr", "imageio-ffmpeg", "modelscope"])
         .status()
         .map_err(|error| format!("安装 mlx-qwen3-asr 失败：{error}"))?;
     if !install.success() {
         return Err("安装 mlx-qwen3-asr 失败（请检查网络，或手动安装到 MLX 虚拟环境）".to_owned());
     }
     Ok(())
+}
+
+/// Ensure the MOSS bridge's Python dependencies are importable in the shared
+/// MLX venv (mlx-lm for the Qwen3 backbone, tokenizers + soundfile for the
+/// port, imageio-ffmpeg for audio decode), pip-installing on first use. The
+/// MOSS model weights download through the bridge itself, like Qwen3.
+pub(crate) fn ensure_moss_packages(_app: &AppHandle, python: &str) -> CommandResult<()> {
+    let check = Command::new(python)
+        .args(["-c", "import mlx_lm, tokenizers, soundfile, imageio_ffmpeg"])
+        .env("HF_HUB_OFFLINE", "1")
+        .output()
+        .map_err(|error| format!("无法运行 MLX Python：{error}"))?;
+    if check.status.success() {
+        return Ok(());
+    }
+    // Some venvs (e.g. the dev `.venv-mlx`) ship no `bin/pip` wrapper, so go
+    // through the interpreter's pip module instead of a path that may not exist.
+    log::info!("[stt] 首次使用 MOSS 引擎，安装 mlx-lm/tokenizers/soundfile 依赖…");
+    let install = Command::new(python)
+        .args(["-m", "pip", "install", "--quiet", "--disable-pip-version-check", "mlx-lm", "tokenizers", "soundfile", "imageio-ffmpeg"])
+        .status()
+        .map_err(|error| format!("安装 MOSS 转写依赖失败：{error}"))?;
+    if !install.success() {
+        return Err("安装 MOSS 转写依赖失败（请检查网络，或手动安装到 MLX 虚拟环境）".to_owned());
+    }
+    Ok(())
+}
+
+/// Resolve the download region from the machine's public IP, detected once per
+/// process and cached: mainland-China IPs download models from ModelScope
+/// (huggingface.co is blocked or throttled there); everything else prefers
+/// HuggingFace. Both geo endpoints are best-effort with short timeouts — on
+/// total failure we return `global` and the python bridge still falls back to
+/// the other source, so a misdetection costs speed, not the download.
+pub(crate) fn detect_net_region() -> &'static str {
+    static REGION: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    REGION.get_or_init(|| {
+        for url in ["https://ipinfo.io/json", "http://ip-api.com/json/?fields=countryCode"] {
+            let output = Command::new("curl")
+                .args(["-fsSL", "--connect-timeout", "3", "-m", "5", url])
+                .output();
+            let body = match output {
+                Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout).into_owned(),
+                _ => continue,
+            };
+            let parsed: Value = match serde_json::from_str(&body) {
+                Ok(parsed) => parsed,
+                Err(_) => continue,
+            };
+            let country = parsed
+                .get("country")
+                .and_then(Value::as_str)
+                .or_else(|| parsed.get("countryCode").and_then(Value::as_str))
+                .unwrap_or_default();
+            if !country.is_empty() {
+                return if country.eq_ignore_ascii_case("CN") { "cn" } else { "global" };
+            }
+        }
+        "global"
+    })
 }
 
 /// Ensure a usable MLX venv exists, creating one (and `pip install`-ing
@@ -370,6 +454,7 @@ pub(crate) fn ensure_mlx_venv(app: &AppHandle) -> CommandResult<String> {
         return Ok(python.to_string_lossy().into_owned());
     }
 
+    log::info!("[stt] 创建 MLX 虚拟环境：{}", venv.display());
     fs::create_dir_all(&venv).map_err(|error| error.to_string())?;
     let status = Command::new("python3")
         .args(["-m", "venv", venv.to_string_lossy().as_ref()])
@@ -396,21 +481,41 @@ pub(crate) fn run_python_with_model_cache(
     arguments: &[String],
     model_directory: &Path,
 ) -> CommandResult<String> {
-    let output = Command::new(python)
+    let script = arguments
+        .first()
+        .map(Path::new)
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "python".to_owned());
+    let output = match Command::new(python)
         .args(arguments)
         .env("MODELSCOPE_CACHE", model_directory)
         .env("HF_HOME", model_directory)
         .output()
-        .map_err(|error| error.to_string())?;
+    {
+        Ok(output) => output,
+        Err(error) => {
+            log::error!("[stt] 无法启动 Python 桥 {script}（{python}）：{error}");
+            return Err(error.to_string());
+        }
+    };
     if output.status.success() {
         return String::from_utf8(output.stdout).map_err(|error| error.to_string());
     }
     let error = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    log::error!("[stt] Python 桥 {script} 异常退出（{}）：{}", output.status, log_tail(&error));
     Err(if error.is_empty() {
         format!("MLX 进程退出：{}", output.status)
     } else {
         error
     })
+}
+
+/// Last lines of a potentially huge stderr blob — Python tracebacks put the
+/// actual exception at the end, so the tail carries the diagnosis.
+fn log_tail(text: &str) -> String {
+    let tail: Vec<&str> = text.lines().rev().take(20).collect();
+    tail.into_iter().rev().collect::<Vec<_>>().join("\n")
 }
 
 /// Run the MLX-Whisper bridge with an explicit Python interpreter. `MODELSCOPE_CACHE`
@@ -592,6 +697,15 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         files: &[],
     },
     SttModelEntry {
+        provider: "moss",
+        id: "moss-transcribe-8bit",
+        label: "MOSS-Transcribe-Diarize 0.9B（本地·说话人分离·时间戳，Apple Silicon MLX 8-bit，~1.1 GiB）",
+        size_bytes: 0,
+        download_url: "",
+        sha256: "",
+        files: &[],
+    },
+    SttModelEntry {
         provider: "whisper",
         id: "small-q5_1",
         label: "Whisper small (q5_1, ~190 MB)",
@@ -703,7 +817,7 @@ fn model_is_installed(app: &AppHandle, provider: &str, model_id: &str) -> bool {
     // (whisper, vibeasr, ffmpeg, ffprobe). FunASR, MLX and Qwen3 do not:
     // FunASR ships its own bundle and the MLX engines run through a
     // self-contained Python venv with a vendored ffmpeg (imageio-ffmpeg).
-    if provider != "funasr" && provider != "mlx" && provider != "qwen3" {
+    if provider != "funasr" && provider != "mlx" && provider != "qwen3" && provider != "moss" {
         let version = format!("v{}", app.package_info().version);
         let runtime = stt::runtime_dir(app, &version);
         if !stt::runtime_is_complete(&runtime) {
@@ -1466,6 +1580,7 @@ fn create_queued_record(app: &AppHandle, audio_path: &str, options: Option<&Valu
         stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
         stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
         stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
+        stt::ProviderConfig::Moss(config) => config.model.as_deref().unwrap_or(stt::MOSS_DEFAULT_MODEL_ID),
     };
     Ok(json!({
         "id": format!("local:{}", Uuid::new_v4()),
@@ -1503,6 +1618,11 @@ fn fail_interrupted_records(app: &AppHandle) -> CommandResult<()> {
         object.insert("error".to_owned(), json!("转写被中断，请重试"));
         object.insert("updatedAt".to_owned(), json!(timestamp));
         object.insert("completedAt".to_owned(), json!(timestamp));
+        log::warn!(
+            "[stt] 启动时标记中断的转写记录：{}（{}）",
+            object.get("id").and_then(Value::as_str).unwrap_or("?"),
+            object.get("title").and_then(Value::as_str).unwrap_or("?")
+        );
         changed = true;
     }
     if changed {
@@ -1536,6 +1656,157 @@ fn probe_audio_duration_ms(app: &AppHandle, path: &str) -> Option<i64> {
     (duration_ms > 0).then_some(duration_ms)
 }
 
+/// A finished dual-channel recording's per-track offline-transcription
+/// inputs, resolved from the track manifest against the session directory.
+/// Records without a usable manifest fall back to single-file transcription.
+fn dual_track_files(record: &Value) -> Option<Vec<(&'static str, PathBuf)>> {
+    let manifest = record.get("trackManifest").filter(|value| value.is_object())?;
+    let tracks = manifest.get("tracks")?.as_array()?;
+    let source_dir = PathBuf::from(record.get("sourcePath").and_then(Value::as_str)?)
+        .parent()?
+        .to_path_buf();
+    let pick = |id: &str| -> Option<PathBuf> {
+        tracks
+            .iter()
+            .find(|track| track.get("id").and_then(Value::as_str) == Some(id))
+            .and_then(|track| track.get("file").and_then(Value::as_str))
+            .map(|file| source_dir.join(file))
+            .filter(|path| path.exists())
+    };
+    let mic = pick("mic_processed")?;
+    let system = pick("system_processed")?;
+    Some(vec![("mic", mic), ("system", system)])
+}
+
+/// Speaker attribution for offline per-track results: `mic → local` and
+/// `system → remote` is fixed by the capture layout; voiceprints and model
+/// diarization never override it.
+fn track_speaker(source: &str) -> (&'static str, &'static str) {
+    if source == "mic" {
+        ("local", "本机")
+    } else {
+        ("remote", "远端")
+    }
+}
+
+/// Transcribes both tracks of a dual-channel recording serially (one local
+/// model at a time) and merges the results on the shared timeline. A failed
+/// track keeps the other track's transcript and reports per-track status so
+/// the UI can offer a targeted retry.
+fn transcribe_dual_tracks(
+    app: &AppHandle,
+    record: &Value,
+    tracks: &[(&'static str, PathBuf)],
+) -> CommandResult<(String, Vec<Value>, Option<i64>, Value)> {
+    let mut merged: Vec<Value> = Vec::new();
+    let mut statuses = Map::new();
+    let mut duration_ms: Option<i64> = None;
+    let mut last_error: Option<String> = None;
+    let mut any_completed = false;
+    for (source, path) in tracks {
+        let path_text = path.to_string_lossy().into_owned();
+        match transcribe_single_track(app, record, &path_text) {
+            Ok((_, mut segments, probe)) => {
+                any_completed = true;
+                let (speaker_id, speaker_name) = track_speaker(source);
+                for segment in &mut segments {
+                    if let Some(object) = segment.as_object_mut() {
+                        object.insert("source".to_owned(), json!(source));
+                        object.insert("speakerId".to_owned(), json!(speaker_id));
+                        object.insert("speakerName".to_owned(), json!(speaker_name));
+                    }
+                }
+                merged.append(&mut segments);
+                if probe.is_some() {
+                    duration_ms = probe;
+                }
+                statuses.insert(source.to_string(), json!({ "status": "completed" }));
+            }
+            Err(error) => {
+                last_error = Some(error.clone());
+                statuses.insert(source.to_string(), json!({ "status": "failed", "error": error }));
+            }
+        }
+    }
+    if !any_completed {
+        return Err(last_error.unwrap_or_else(|| "转录失败".to_owned()));
+    }
+    // Shared-timeline merge; mic sorts before system at equal starts so a
+    // simultaneous reply keeps a stable reading order.
+    merged.sort_by_key(|segment| {
+        (
+            segment.get("startMs").and_then(Value::as_i64).unwrap_or(0),
+            segment.get("source").and_then(Value::as_str) != Some("mic"),
+        )
+    });
+    let transcript = merged
+        .iter()
+        .filter_map(|segment| {
+            let text = segment.get("text").and_then(Value::as_str)?.trim();
+            if text.is_empty() {
+                return None;
+            }
+            let name = segment.get("speakerName").and_then(Value::as_str).unwrap_or("");
+            Some(format!("{}：{}", name, text))
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    Ok((transcript, merged, duration_ms, Value::Object(statuses)))
+}
+
+/// Transcribes one audio file with the record's frozen engine config.
+/// Returns (transcript text, segments, duration probe).
+fn transcribe_single_track(
+    app: &AppHandle,
+    record: &Value,
+    audio_path: &str,
+) -> CommandResult<(String, Vec<Value>, Option<i64>)> {
+    // Use the frozen per-record provider config (set at creation time) so a
+    // later change to the default routing never affects an in-flight task.
+    let provider: stt::ProviderConfig = record
+        .get("providerConfig")
+        .filter(|value| !value.is_null())
+        .and_then(|value| serde_json::from_value::<stt::ProviderConfig>(value.clone()).ok())
+        .ok_or("本地转写缺少引擎配置")?;
+    let model_id = record.get("modelId").and_then(Value::as_str).unwrap_or_else(|| match &provider {
+        stt::ProviderConfig::Funasr(_) => "funasr-paraformer",
+        stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
+        stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
+        stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
+        stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
+        stt::ProviderConfig::Moss(config) => config.model.as_deref().unwrap_or(stt::MOSS_DEFAULT_MODEL_ID),
+    });
+    ensure_model_installed(app, provider.engine(), model_id)?;
+    let directory = engine_model_dir(app, provider.engine(), model_id)?;
+    let funasr_dir = model_dir(app)?;
+    let expected_speakers = provider.expected_speakers();
+    let hotword_package_id = provider.hotword_package_id().map(str::to_owned);
+    let terms = active_hotword_terms(app, hotword_package_id.as_deref())?;
+    let hotword = terms.iter().filter(|term| term.get("enabled").and_then(Value::as_bool) != Some(false))
+        .filter_map(|term| term.get("term").and_then(Value::as_str)).collect::<Vec<_>>().join(" ");
+    let prior_context = record.get("priorContext").and_then(Value::as_str).map(str::to_owned);
+    let request = stt::SttRequest {
+        audio_path: audio_path.to_owned(),
+        model_directory: directory.clone(),
+        provider: provider.clone(),
+        expected_speakers,
+        hotword,
+        prior_context,
+    };
+    let output = provider.adapter().transcribe(app, &request)?;
+    let normalized = json!({ "text": output.text, "segments": output.segments });
+    let transcript = apply_hotwords(value_text(normalized.get("text")), &terms);
+    let mut segments = normalized.get("segments").and_then(Value::as_array).cloned().unwrap_or_default();
+    for segment in &mut segments {
+        if let Some(object) = segment.as_object_mut() {
+            let text = value_text(object.get("text"));
+            object.insert("text".to_owned(), json!(apply_hotwords(text, &terms)));
+        }
+    }
+    apply_voiceprints(app, audio_path, &mut segments, &funasr_dir)?;
+    Ok((transcript, segments, probe_audio_duration_ms(app, audio_path)))
+}
+
 fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
     let id = record.get("id").and_then(Value::as_str).ok_or("Record id is required")?.to_owned();
     let started_at = now();
@@ -1546,60 +1817,34 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
     started.insert("updatedAt".to_owned(), json!(started_at));
     started.insert("error".to_owned(), Value::Null);
     update_store_value(app, "local-transcriptions", &id, started)?;
+    let engine = record.get("engine").and_then(Value::as_str).unwrap_or("unknown");
+    let model_id = record.get("modelId").and_then(Value::as_str).unwrap_or("unknown");
+    let title = record.get("title").and_then(Value::as_str).unwrap_or("unknown");
+    log::info!("[stt] 转写开始：{title}（engine={engine} model={model_id} id={id}）");
 
-    let result: CommandResult<(String, Vec<Value>, Option<i64>)> = (|| {
-        let audio_path = record.get("sourcePath").and_then(Value::as_str).ok_or("Source path is required")?;
-        // Use the frozen per-record provider config (set at creation time) so a
-        // later change to the default routing never affects an in-flight task.
-        let provider: stt::ProviderConfig = record
-            .get("providerConfig")
-            .filter(|value| !value.is_null())
-            .and_then(|value| serde_json::from_value::<stt::ProviderConfig>(value.clone()).ok())
-            .ok_or("本地转写缺少引擎配置")?;
-        let model_id = record.get("modelId").and_then(Value::as_str).unwrap_or_else(|| match &provider {
-            stt::ProviderConfig::Funasr(_) => "funasr-paraformer",
-            stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
-            stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
-            stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
-            stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
-        });
-        ensure_model_installed(app, provider.engine(), model_id)?;
-        let directory = engine_model_dir(app, provider.engine(), model_id)?;
-        let funasr_dir = model_dir(app)?;
-        let expected_speakers = provider.expected_speakers();
-        let hotword_package_id = provider.hotword_package_id().map(str::to_owned);
-        let terms = active_hotword_terms(app, hotword_package_id.as_deref())?;
-        let hotword = terms.iter().filter(|term| term.get("enabled").and_then(Value::as_bool) != Some(false))
-            .filter_map(|term| term.get("term").and_then(Value::as_str)).collect::<Vec<_>>().join(" ");
-        let prior_context = record.get("priorContext").and_then(Value::as_str).map(str::to_owned);
-        let request = stt::SttRequest {
-            audio_path: audio_path.to_owned(),
-            model_directory: directory.clone(),
-            provider: provider.clone(),
-            expected_speakers,
-            hotword,
-            prior_context,
-        };
-        let output = provider.adapter().transcribe(app, &request)?;
-        let normalized = json!({ "text": output.text, "segments": output.segments });
-        let transcript = apply_hotwords(value_text(normalized.get("text")), &terms);
-        let mut segments = normalized.get("segments").and_then(Value::as_array).cloned().unwrap_or_default();
-        for segment in &mut segments {
-            if let Some(object) = segment.as_object_mut() {
-                let text = value_text(object.get("text"));
-                object.insert("text".to_owned(), json!(apply_hotwords(text, &terms)));
+    let result: CommandResult<(String, Vec<Value>, Option<i64>, Option<Value>)> =
+        match dual_track_files(&record) {
+            Some(tracks) => transcribe_dual_tracks(app, &record, &tracks)
+                .map(|(transcript, segments, duration, statuses)| {
+                    (transcript, segments, duration, Some(statuses))
+                }),
+            None => {
+                let audio_path = record
+                    .get("sourcePath")
+                    .and_then(Value::as_str)
+                    .ok_or("Source path is required")?;
+                transcribe_single_track(app, &record, audio_path)
+                    .map(|(transcript, segments, duration)| (transcript, segments, duration, None))
             }
-        }
-        apply_voiceprints(app, audio_path, &mut segments, &funasr_dir)?;
-        Ok((transcript, segments, probe_audio_duration_ms(app, audio_path)))
-    })();
+        };
 
     match result {
-        Ok((transcript, segments, audio_duration_ms)) => {
+        Ok((transcript, segments, audio_duration_ms, track_statuses)) => {
             let completed_at = now();
             let duration = chrono::DateTime::parse_from_rfc3339(&completed_at).ok()
                 .zip(chrono::DateTime::parse_from_rfc3339(&started_at).ok())
                 .map(|(end, start)| (end - start).num_milliseconds()).unwrap_or_default();
+            log::info!("[stt] 转写完成：{title}（耗时 {duration}ms，{} 段，id={id}）", segments.len());
             let mut patch = Map::new();
             patch.insert("transcriptText".to_owned(), json!(transcript));
             patch.insert("segments".to_owned(), json!(segments));
@@ -1613,11 +1858,15 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
             if let Some(audio_duration_ms) = audio_duration_ms {
                 patch.insert("durationMs".to_owned(), json!(audio_duration_ms));
             }
+            if let Some(statuses) = track_statuses {
+                patch.insert("trackStatuses".to_owned(), statuses);
+            }
             patch.insert("elapsedMs".to_owned(), json!(duration));
             patch.insert("error".to_owned(), Value::Null);
             update_store_value(app, "local-transcriptions", &id, patch)?.ok_or("Local transcription record disappeared".to_owned())
         }
         Err(error) => {
+            log::error!("[stt] 转写失败：{title}（engine={engine}，{error}）");
             let failed_at = now();
             let mut patch = Map::new();
             patch.insert("status".to_owned(), json!("failed"));
@@ -1850,6 +2099,7 @@ fn transcribe_inspiration(app: &AppHandle, mut record: Value, audio_path: PathBu
         stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
         stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
         stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
+        stt::ProviderConfig::Moss(config) => config.model.as_deref().unwrap_or(stt::MOSS_DEFAULT_MODEL_ID),
     };
     if !model_is_installed(app, provider.engine(), model_id) {
         return patch_status("unavailable", Some("本地 ASR 模型未安装，请先在设置中下载语音识别模型"));
@@ -2187,6 +2437,38 @@ fn local_transcription_audio_url(app: AppHandle, id: String) -> CommandResult<Op
     }))
 }
 
+/// Audio URL for one track of a dual-channel recording (`file` must be
+/// listed in the record's track manifest — see `media_response_body`).
+#[tauri::command]
+fn local_transcription_track_audio_url(
+    app: AppHandle,
+    id: String,
+    file: String,
+) -> CommandResult<Option<String>> {
+    let record = get_store_value(&app, "local-transcriptions", &id)?;
+    let Some(record) = record else { return Ok(None) };
+    let allowed = record
+        .get("trackManifest")
+        .and_then(|manifest| manifest.get("tracks"))
+        .and_then(Value::as_array)
+        .map(|tracks| {
+            tracks
+                .iter()
+                .any(|track| track.get("file").and_then(Value::as_str) == Some(file.as_str()))
+        })
+        .unwrap_or(false);
+    if !allowed {
+        return Err("Unknown recording track".to_owned());
+    }
+    let version = record.get("updatedAt").and_then(Value::as_str).unwrap_or_default();
+    Ok(Some(format!(
+        "local-media://localhost/{}/{}?v={}",
+        utf8_percent_encode(&id, NON_ALPHANUMERIC),
+        utf8_percent_encode(&file, NON_ALPHANUMERIC),
+        utf8_percent_encode(version, NON_ALPHANUMERIC),
+    )))
+}
+
 #[tauri::command]
 fn local_stt_model_status(app: AppHandle) -> CommandResult<Value> {
     model_status_list(&app)
@@ -2208,7 +2490,7 @@ fn local_stt_download_model(
     }
     let result = (|| {
         let entry = stt_model_entry(&provider, &model_id)?;
-        if provider == "funasr" || provider == "mlx" || provider == "qwen3" {
+        if provider == "funasr" || provider == "mlx" || provider == "qwen3" || provider == "moss" {
             // FunASR, MLX and Qwen3 download through their Python helpers rather
             // than a fixed URL. Their size is unknown, so we only signal an
             // indeterminate download.
@@ -2239,6 +2521,27 @@ fn local_stt_download_model(
                     directory.to_string_lossy().into_owned(),
                     "--model".to_owned(),
                     stt::qwen3_hf_repo(&model_id).to_owned(),
+                    "--region".to_owned(),
+                    detect_net_region().to_owned(),
+                ];
+                if let Err(error) = run_mlx(&app, &python, &args, &directory) {
+                    emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
+                    return Err(error);
+                }
+            } else if provider == "moss" {
+                let directory = engine_model_dir(&app, &provider, &model_id)?;
+                fs::create_dir_all(&directory).ok();
+                let python = ensure_mlx_venv(&app)?;
+                ensure_moss_packages(&app, &python)?;
+                let args = vec![
+                    moss_script_path(&app)?.to_string_lossy().into_owned(),
+                    "--download-models".to_owned(),
+                    "--model-dir".to_owned(),
+                    directory.to_string_lossy().into_owned(),
+                    "--model".to_owned(),
+                    stt::moss_hf_repo(&model_id).to_owned(),
+                    "--region".to_owned(),
+                    detect_net_region().to_owned(),
                 ];
                 if let Err(error) = run_mlx(&app, &python, &args, &directory) {
                     emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
@@ -2320,19 +2623,134 @@ async fn local_transcription_transcribe(app: AppHandle, audio_path: String, opti
 }
 
 #[tauri::command]
-async fn local_transcription_retry(app: AppHandle, id: String) -> CommandResult<Value> {
+async fn local_transcription_retry(
+    app: AppHandle,
+    id: String,
+    options: Option<Value>,
+) -> CommandResult<Value> {
+    // `options.track` ("mic" | "system") re-runs one track of a dual-channel
+    // recording and replaces just that track's results — the other track's
+    // transcript stays exactly as it was.
+    let track = options
+        .as_ref()
+        .and_then(|value| value.get("track"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .filter(|track| track == "mic" || track == "system");
+    let Some(track) = track else {
+        let mut record = get_store_value(&app, "local-transcriptions", &id)?.ok_or("Local transcription not found")?;
+        let object = record.as_object_mut().ok_or("Stored record must be an object")?;
+        object.insert("transcriptText".to_owned(), json!(""));
+        object.insert("segments".to_owned(), json!([]));
+        object.insert("status".to_owned(), json!("queued"));
+        object.insert("progressPhase".to_owned(), json!("queued"));
+        object.insert("error".to_owned(), Value::Null);
+        save_store_value(&app, "local-transcriptions", record.clone())?;
+        let handle = app.clone();
+        return tauri::async_runtime::spawn_blocking(move || transcribe_record(&handle, record))
+            .await
+            .map_err(|error| error.to_string())?;
+    };
+
     let mut record = get_store_value(&app, "local-transcriptions", &id)?.ok_or("Local transcription not found")?;
-    let object = record.as_object_mut().ok_or("Stored record must be an object")?;
-    object.insert("transcriptText".to_owned(), json!(""));
-    object.insert("segments".to_owned(), json!([]));
-    object.insert("status".to_owned(), json!("queued"));
-    object.insert("progressPhase".to_owned(), json!("queued"));
-    object.insert("error".to_owned(), Value::Null);
+    let tracks = dual_track_files(&record)
+        .ok_or_else(|| "这份录音没有保留可重试的音轨".to_owned())?;
+    let path = tracks
+        .iter()
+        .find(|(source, _)| *source == track)
+        .map(|(_, path)| path.clone())
+        .ok_or_else(|| "未知音轨".to_owned())?;
+    {
+        let object = record.as_object_mut().ok_or("Stored record must be an object")?;
+        let mut statuses = object
+            .get("trackStatuses")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        statuses.insert(track.clone(), json!({ "status": "transcribing" }));
+        object.insert("trackStatuses".to_owned(), Value::Object(statuses));
+        object.insert("updatedAt".to_owned(), json!(now()));
+        object.insert("error".to_owned(), Value::Null);
+    }
     save_store_value(&app, "local-transcriptions", record.clone())?;
-    let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || transcribe_record(&handle, record))
-        .await
-        .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = transcribe_single_track(&app, &record, &path.to_string_lossy().as_ref());
+        let mut statuses = record
+            .get("trackStatuses")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let object = record.as_object_mut().ok_or("Stored record must be an object")?;
+        match result {
+            Ok((_, mut segments, probe)) => {
+                let (speaker_id, speaker_name) = track_speaker(&track);
+                for segment in &mut segments {
+                    if let Some(entry) = segment.as_object_mut() {
+                        entry.insert("source".to_owned(), json!(track));
+                        entry.insert("speakerId".to_owned(), json!(speaker_id));
+                        entry.insert("speakerName".to_owned(), json!(speaker_name));
+                    }
+                }
+                if let Some(array) = object.get("segments").and_then(Value::as_array).cloned() {
+                    let mut kept: Vec<Value> = array
+                        .into_iter()
+                        .filter(|segment| segment.get("source").and_then(Value::as_str) != Some(track.as_str()))
+                        .collect();
+                    kept.append(&mut segments);
+                    kept.sort_by_key(|segment| {
+                        (
+                            segment.get("startMs").and_then(Value::as_i64).unwrap_or(0),
+                            segment.get("source").and_then(Value::as_str) != Some("mic"),
+                        )
+                    });
+                    object.insert("segments".to_owned(), json!(kept));
+                }
+                if let Some(probe) = probe {
+                    object.insert("durationMs".to_owned(), json!(probe));
+                }
+                statuses.insert(track, json!({ "status": "completed" }));
+                let all_done = statuses.values().all(|status| {
+                    status.get("status").and_then(Value::as_str) == Some("completed")
+                });
+                if all_done {
+                    object.insert("status".to_owned(), json!("completed"));
+                    object.insert("progressPhase".to_owned(), json!("completed"));
+                    object.insert("completedAt".to_owned(), json!(now()));
+                }
+                object.insert("trackStatuses".to_owned(), Value::Object(statuses));
+                object.insert("updatedAt".to_owned(), json!(now()));
+                // Rebuild the prefixed transcript from the merged segments.
+                let transcript = object.get("segments").and_then(Value::as_array).map(|segments| {
+                    segments.iter().filter_map(|segment| {
+                        let text = segment.get("text").and_then(Value::as_str)?.trim();
+                        if text.is_empty() { return None; }
+                        let name = segment.get("speakerName").and_then(Value::as_str).unwrap_or("");
+                        Some(format!("{}：{}", name, text))
+                    }).collect::<Vec<_>>().join("\n\n")
+                }).unwrap_or_default();
+                object.insert("transcriptText".to_owned(), json!(transcript));
+                save_store_value(&app, "local-transcriptions", record.clone())?;
+                Ok(record)
+            }
+            Err(error) => {
+                statuses.insert(track.clone(), json!({ "status": "failed", "error": error.clone() }));
+                let any_ok = statuses.values().any(|status| {
+                    status.get("status").and_then(Value::as_str) == Some("completed")
+                });
+                if !any_ok {
+                    object.insert("status".to_owned(), json!("failed"));
+                    object.insert("progressPhase".to_owned(), json!("failed"));
+                }
+                object.insert("trackStatuses".to_owned(), Value::Object(statuses));
+                object.insert("error".to_owned(), json!(error.clone()));
+                object.insert("updatedAt".to_owned(), json!(now()));
+                let _ = save_store_value(&app, "local-transcriptions", record.clone());
+                Err(error)
+            }
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -2700,7 +3118,24 @@ fn media_response_body(app: &AppHandle, request: Request<Vec<u8>>) -> Response<V
             let record = read_array(&index)?.into_iter()
                 .find(|value| value.get("id").and_then(Value::as_str) == Some(id.as_str()))
                 .ok_or("Unknown local media id")?;
-            PathBuf::from(record.get("sourcePath").and_then(Value::as_str).ok_or("Missing source path")?)
+            let source = PathBuf::from(record.get("sourcePath").and_then(Value::as_str).ok_or("Missing source path")?);
+            // `<id>/<file>` on a recording picks a concrete audio track from
+            // the session directory (本机/远端 per-track listening). Only
+            // files listed in the record's track manifest are servable.
+            match asset_file.as_deref() {
+                Some(file) => {
+                    let allowed = record.get("trackManifest")
+                        .and_then(|manifest| manifest.get("tracks"))
+                        .and_then(Value::as_array)
+                        .map(|tracks| tracks.iter().any(|track| track.get("file").and_then(Value::as_str) == Some(file)))
+                        .unwrap_or(false);
+                    if !allowed {
+                        return Err("Unknown recording track".to_owned());
+                    }
+                    source.parent().map(|dir| dir.join(file)).ok_or("Missing session directory")?
+                }
+                None => source,
+            }
         };
         let total = fs::metadata(&path).map_err(|error| error.to_string())?.len();
         let range = request.headers().get(header::RANGE).and_then(|value| value.to_str().ok());
@@ -3397,6 +3832,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             local_transcription_list, local_transcription_get, local_transcription_delete, local_transcription_audio_url,
+            local_transcription_track_audio_url,
             todo_list, todo_save, todo_delete, todo_add_to_calendar,
             inspiration_list, inspiration_save, inspiration_delete, inspiration_transcribe, inspiration_audio_url,
             inspiration_image_url, inspiration_stage_image, inspiration_stage_image_from_path,
@@ -3434,6 +3870,7 @@ pub fn run() {
             diagnostics_read_logs, diagnostics_prepare_report,
             live_translation::live_translation_permissions,
             live_translation::live_translation_request_permission,
+            live_translation::live_translation_audio_devices,
             live_translation::live_translation_state,
             live_translation::live_translation_start,
             live_translation::live_translation_pause,
@@ -3441,6 +3878,7 @@ pub fn run() {
             live_translation::live_translation_stop,
             live_translation::live_translation_finalize_local,
             live_translation::live_translation_discard,
+            live_translation::live_translation_reprocess,
             live_translation::live_translation_recoveries,
             live_translation::live_translation_recover,
             live_translation::live_translation_show_subtitles,

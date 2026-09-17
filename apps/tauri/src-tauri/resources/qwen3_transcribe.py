@@ -37,46 +37,97 @@ HF_MIRROR_ENDPOINT = "https://hf-mirror.com"
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("audio_path", nargs="?")
-    parser.add_argument("--model-dir", default="", help="Directory holding (or to receive) the Qwen3-ASR weights; also used as the HF cache root.")
+    parser.add_argument("--model-dir", default="", help="Directory holding (or to receive) the Qwen3-ASR weights; also used as the HF/ModelScope cache root.")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="HF repo id of the model to download/transcribe.")
     parser.add_argument("--download-models", action="store_true", help="Pre-download weights into --model-dir, then exit.")
+    parser.add_argument("--region", default="global", choices=["cn", "global"], help="IP-detected network region: cn tries ModelScope first, global tries HuggingFace first. The other source is always kept as a fallback.")
     parser.add_argument("--output", default="", help="Write the transcript JSON here instead of stdout.")
     parser.add_argument("--context", default="", help="Hotword terms + trailing prior context, passed as the model's context bias.")
     parser.add_argument("--timestamps", action="store_true", help="Word-level timestamps via the forced aligner (downloads an extra model).")
     return parser.parse_args()
 
 
+def cached_snapshot(model_dir: str) -> str | None:
+    """Snapshot path recorded by a previous download, if it still exists.
+
+    Works for weights fetched from either HuggingFace or ModelScope, so an
+    installed model never re-resolves — and never touches the network.
+    """
+    if not model_dir:
+        return None
+    marker = Path(model_dir).joinpath(".snapshot")
+    try:
+        path = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return path if path and Path(path).exists() else None
+
+
+def record_snapshot(model_dir: str, path: str) -> str:
+    if model_dir:
+        try:
+            Path(model_dir).mkdir(parents=True, exist_ok=True)
+            Path(model_dir).joinpath(".snapshot").write_text(path, encoding="utf-8")
+        except OSError:
+            pass
+    return path
+
+
+def download_model(repo: str, region: str = "global", model_dir: str = "") -> str:
+    """Resolve (downloading if needed) the local snapshot path for `repo`.
+
+    Resolution order: the `.snapshot` path recorded by a previous download,
+    then the offline HF cache, then network sources ordered by the
+    IP-detected region — mainland China downloads from ModelScope first
+    (huggingface.co is blocked or throttled there, so the hf-mirror proxy
+    outranks direct HF), everywhere else HuggingFace comes first with
+    ModelScope as the fallback.
+    """
+    cached = cached_snapshot(model_dir)
+    if cached:
+        return cached
+
+    from huggingface_hub import snapshot_download
+
+    try:
+        return record_snapshot(model_dir, snapshot_download(repo, local_files_only=True))
+    except Exception:  # noqa: BLE001 - not cached yet, fall through to download
+        pass
+
+    def from_modelscope() -> str:
+        # MODELSCOPE_CACHE is pointed at --model-dir by the Rust side, so the
+        # weights land inside the same managed model directory.
+        try:
+            from modelscope import snapshot_download as modelscope_download
+        except ImportError:  # pragma: no cover - older layouts keep it nested
+            from modelscope.hub.snapshot_download import snapshot_download as modelscope_download
+        return record_snapshot(model_dir, modelscope_download(repo))
+
+    def from_huggingface() -> str:
+        return record_snapshot(model_dir, snapshot_download(repo))
+
+    def from_hf_mirror() -> str:
+        return record_snapshot(model_dir, snapshot_download(repo, endpoint=HF_MIRROR_ENDPOINT))
+
+    if region == "cn":
+        sources = [from_modelscope, from_hf_mirror, from_huggingface]
+    else:
+        sources = [from_huggingface, from_modelscope, from_hf_mirror]
+
+    last_error: Exception | None = None
+    for source in sources:
+        try:
+            return source()
+        except Exception as exc:  # noqa: BLE001 - network errors vary by region
+            last_error = exc
+            print(f"Model download source failed: {exc}", file=sys.stderr)
+    raise last_error  # type: ignore[misc]
+
+
 def mark_ready(model_dir: str) -> None:
     if model_dir:
         Path(model_dir).mkdir(parents=True, exist_ok=True)
         Path(model_dir).joinpath(".ready").write_text("ok\n", encoding="utf-8")
-
-
-def download_model(repo: str) -> str:
-    """Resolve (downloading if needed) the local snapshot path for `repo`.
-
-    The cache is checked fully offline first (`local_files_only`), so an
-    installed model never pays a network round trip — direct huggingface.co
-    connectivity is slow or blocked in some regions and etag probes would
-    otherwise run on every transcription. Only on a cache miss do we hit the
-    network, trying the default endpoint and then the hf-mirror.com proxy.
-    """
-    from huggingface_hub import snapshot_download
-
-    try:
-        return snapshot_download(repo, local_files_only=True)
-    except Exception:  # noqa: BLE001 - not cached yet, fall through to download
-        pass
-
-    endpoints = [None, HF_MIRROR_ENDPOINT]
-    last_error: Exception | None = None
-    for endpoint in endpoints:
-        try:
-            return snapshot_download(repo, endpoint=endpoint)
-        except Exception as exc:  # noqa: BLE001 - network errors vary by region
-            last_error = exc
-            print(f"Download from {endpoint or 'huggingface.co'} failed: {exc}", file=sys.stderr)
-    raise last_error  # type: ignore[misc]
 
 
 def prepare_wav(path: str) -> str:
@@ -112,7 +163,7 @@ def main() -> int:
     if args.download_models:
         if args.model_dir:
             Path(args.model_dir).mkdir(parents=True, exist_ok=True)
-        download_model(model_repo)
+        download_model(model_repo, args.region, args.model_dir)
         mark_ready(args.model_dir)
         print(json.dumps({"status": "installed"}, ensure_ascii=False))
         return 0
@@ -122,8 +173,8 @@ def main() -> int:
         return 2
 
     # Resolve the snapshot locally before inference so transcription never
-    # touches the network (snapshot_download is cache-first).
-    model_path = download_model(model_repo)
+    # touches the network (the .snapshot marker / offline caches resolve it).
+    model_path = download_model(model_repo, args.region, args.model_dir)
 
     wav = prepare_wav(args.audio_path)
     try:

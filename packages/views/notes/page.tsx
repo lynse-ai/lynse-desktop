@@ -981,7 +981,7 @@ export function NotesPage() {
                           ? { duration: 0 }
                           : { type: "spring", bounce: 0, duration: 0.3 }
                       }
-                      className="flex shrink-0 overflow-hidden border-l border-border/50 bg-card/95 shadow-[var(--shadow-panel-left)] backdrop-blur-xl"
+                      className="flex shrink-0 overflow-hidden bg-card/95 backdrop-blur-xl"
                     >
                       <ResizableHandle
                         label={t("workspace.resize_chat_panel")}

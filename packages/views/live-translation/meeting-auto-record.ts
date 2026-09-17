@@ -39,7 +39,10 @@ export const KNOWN_MEETING_APPS: readonly MeetingAppEntry[] = [
   {
     id: "feishu",
     name: "auto_record.app_feishu",
-    bundleIds: ["com.electron.lark", "com.ss.lark"],
+    // `com.electron.lark.iron` is the media helper that actually holds the
+    // audio IO (observed in the field, 2026-09-14); the Rust matcher also
+    // covers helper suffixes generically, this keeps Windows + docs explicit.
+    bundleIds: ["com.electron.lark", "com.electron.lark.iron", "com.ss.lark"],
     processNames: ["feishu", "lark"],
   },
   {

@@ -6,6 +6,8 @@ export { RecordingTrayAgent } from "./recording-tray-agent";
 export { MeetingAutoRecordAgent } from "./meeting-auto-record-agent";
 export { useQuickRecording } from "./quick-recording";
 export type {
+  AudioDeviceOption,
+  AudioDevicesSnapshot,
   CompletedLiveSession,
   DesktopLiveTranslationApi,
   LiveAudioSource,
@@ -24,6 +26,12 @@ export type {
   LiveTranslationTrayAction,
 } from "./types";
 export { DEFAULT_ILIVEDATA_RTVT_ENDPOINT } from "./types";
+export {
+  RECORDING_MIC_DEVICE_KEY,
+  RECORDING_SYSTEM_DEVICE_KEY,
+  readRecordingDeviceSelection,
+  saveRecordingDeviceSelection,
+} from "./recording-devices";
 export { normalizeMaxSpeakers } from "./api";
 export {
   DEFAULT_END_GRACE_SECS,

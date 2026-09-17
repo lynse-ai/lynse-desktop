@@ -110,6 +110,31 @@ export type LocalTranscriptionStatus =
   | "recording"
   | "saving";
 
+/** One selectable audio track of a dual-channel recording (mirrors the Rust
+ *  `audio_contract::manifest::TrackEntry`). */
+export interface RecordingTrackEntry {
+  id: string;
+  file: string;
+  role: "mic" | "system";
+  processed: boolean;
+  sampleRate: number;
+  channels: number;
+  bitsPerSample?: number;
+  sampleFormat?: string;
+}
+
+/** Versioned dual-track manifest (`tracks.json`, written by the capture
+ *  sidecar / Windows engine next to the recording). */
+export interface RecordingTrackManifest {
+  version: number;
+  /** `webrtc-aec3-1.3`, or `none` when the engine was unavailable. */
+  engine: string;
+  sampleRate: number;
+  tracks: RecordingTrackEntry[];
+  /** Half-open [startMs, endMs) spans that could not be echo-cancelled. */
+  degradedIntervalsMs?: [number, number][];
+}
+
 export interface LocalTranscriptionRecord {
   id: string;
   title: string;
@@ -128,7 +153,7 @@ export interface LocalTranscriptionRecord {
   elapsedMs?: number;
   expectedSpeakers?: number;
   hotwordPackageId?: string;
-  engine: "qwen3" | "funasr" | "whisper" | "vibeasr" | "mlx" | "ilivedata_rtvt";
+  engine: "qwen3" | "funasr" | "whisper" | "vibeasr" | "mlx" | "moss" | "ilivedata_rtvt";
   modelId?: string;
   providerConfig?: SttProviderConfig;
   segments: LocalTranscriptionSegment[];
@@ -136,6 +161,15 @@ export interface LocalTranscriptionRecord {
   /** Set by the Rust side once the recording is uploaded ("synced") or
    * marked for retry ("pending") — see live_translation_finalize_local. */
   syncStatus?: string;
+  /** Dual-channel track manifest; absent for legacy single-file recordings. */
+  trackManifest?: RecordingTrackManifest;
+  /** True when any span of the recording could not be echo-cancelled. */
+  aecDegraded?: boolean;
+  /** Per-track offline-transcription results (dual-channel re-transcribe). */
+  trackStatuses?: Partial<Record<"mic" | "system", { status: string; error?: string }>>;
+  /** Present on recordings captured by the live-translation sidecar; needed
+   *  for the detail panel's reprocess entry. */
+  liveSessionId?: string;
 }
 
 export interface LocalTranscriptionOptions {

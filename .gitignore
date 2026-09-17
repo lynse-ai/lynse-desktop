@@ -76,3 +76,11 @@ GIF/
 research/
 *.vetd
 *.vetd.d/
+
+# Vendored AEC3 build workspace (extracted sources + merged static lib; tarballs are committed)
+apps/tauri/audio-capture/vendor/src/
+apps/tauri/audio-capture/vendor/build/
+
+# Vendored WebRTC AEC3 static library (scripts/build-lynse-aec3.ps1) — the
+# real artifact is built per machine / CI, never committed.
+apps/tauri/src-tauri/aec3/lib/

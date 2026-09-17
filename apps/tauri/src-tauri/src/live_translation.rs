@@ -39,6 +39,33 @@ const LIVE_EVENT: &str = "live-translation-event";
 pub(crate) const PCM_FRAME_BYTES: usize = 640;
 pub(crate) const AUDIO_HEADER_BYTES: usize = 19;
 
+/// Silence watchdog: while a session is recording, a microphone that carries
+/// neither recognized speech nor audible level for this long ends the session
+/// and saves it — a recording started by accident (or left running after
+/// everyone left) still lands in the library instead of growing a silent file.
+const SILENCE_AUTO_STOP: Duration = Duration::from_secs(60);
+/// How often the watchdog re-checks the silence clock.
+const SILENCE_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+/// Mic peak amplitude (0..1, measured per 200 ms window) below which the room
+/// counts as silent. Speech and ordinary handling noise sit well above this.
+const MIC_SILENCE_LEVEL: f32 = 0.02;
+
+/// A healthy realtime stream carries provider traffic constantly (interim
+/// results during speech, keepalive frames otherwise). After this long without
+/// any inbound frame the stream is probed with a websocket ping.
+const LIVE_STREAM_PING_AFTER: Duration = Duration::from_secs(15);
+/// If the ping probe (or any other traffic) still hasn't arrived this long
+/// after it was sent, the TCP path is silently dead — typical after the
+/// machine slept through a connection teardown — and the stream reconnects.
+const LIVE_STREAM_PONG_GRACE: Duration = Duration::from_secs(10);
+/// Upper bound on the reconnect backoff so a long outage keeps probing
+/// steadily instead of waiting longer and longer.
+const LIVE_RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(15);
+/// A single connect attempt is bounded so a half-up network (SYN blackhole,
+/// Wi-Fi still re-associating after wake) fails fast into the retry path
+/// instead of hanging for the OS default (~75 s).
+const LIVE_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
 pub(crate) fn decode_audio_header(
     header: &[u8; AUDIO_HEADER_BYTES],
 ) -> CommandResult<(AudioSource, u64, u64, usize)> {
@@ -133,7 +160,7 @@ impl AudioSource {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Mic => "我",
+            Self::Mic => "本机",
             Self::System => "远端",
         }
     }
@@ -186,11 +213,29 @@ pub struct StartRequest {
     /// "system". Absent or empty means both.
     #[serde(default)]
     audio_sources: Vec<String>,
+    /// Windows: pin the microphone to this WASAPI endpoint id. Absent
+    /// follows the default communications input device.
+    #[serde(default)]
+    mic_device_id: Option<String>,
+    /// Windows: pin the system mixdown to this render endpoint id. Absent
+    /// follows the default multimedia output device.
+    #[serde(default)]
+    system_device_id: Option<String>,
+    /// Dual-channel recording (raw tracks + AEC3 on the microphone). Absent
+    /// means enabled; `false` rolls back to the legacy 16 kHz pipeline — it
+    /// only affects new recordings, existing dual-format ones keep loading.
+    #[serde(default)]
+    dual_channel: Option<bool>,
 }
 
 impl StartRequest {
     fn wants_mic(&self) -> bool {
         self.audio_sources.is_empty() || self.audio_sources.iter().any(|source| source == "mic")
+    }
+
+    fn wants_system(&self) -> bool {
+        self.audio_sources.is_empty()
+            || self.audio_sources.iter().any(|source| source == "system")
     }
 
     /// Collapse the requested sources into the sidecar's `--sources` value.
@@ -286,6 +331,15 @@ pub struct CompletedSession {
     transcript_path: String,
     duration_ms: u64,
     segments: Vec<LiveSegment>,
+    /// True when the silence watchdog ended this session rather than the user.
+    auto_stopped_silence: bool,
+    /// Dual-channel track manifest (engine, degraded intervals, track files).
+    /// Absent for legacy-format recordings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tracks: Option<Value>,
+    /// True when any span of the recording could not be echo-cancelled.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    aec_degraded: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -361,6 +415,22 @@ struct LiveSession {
     handles: Mutex<HashMap<AudioSource, JoinHandle<()>>>,
     child: Mutex<Option<Child>>,
     capture_stop: Arc<AtomicBool>,
+    /// False for system-only sessions: no microphone is captured, so the
+    /// mic-silence watchdog must not judge (or stop) the recording.
+    wants_mic: bool,
+    /// Dual-channel recording (raw tracks + AEC). Skips the transcript-level
+    /// echo de-duplication (real-time overlaps stay visible) and persists the
+    /// track manifest with the recording.
+    dual_channel: bool,
+    /// False for mic-only sessions: no system mixdown is captured.
+    wants_system: bool,
+    /// Last instant the session saw evidence of voice — a recognized provider
+    /// segment or a mic level above [`MIC_SILENCE_LEVEL`]. Re-based whenever
+    /// capture (re)starts so a resume gets a fresh silence window.
+    last_voice_at: Mutex<Instant>,
+    /// Set by the silence watchdog when it stops the session, so the
+    /// completed payload can tell the UI why the recording ended.
+    auto_stopped_silence: AtomicBool,
     directory: PathBuf,
     socket_path: PathBuf,
 }
@@ -368,6 +438,10 @@ struct LiveSession {
 impl LiveSession {
     fn set_state(&self, state: &str) {
         *self.state.lock().expect("live state lock") = state.to_owned();
+    }
+
+    fn mark_voice_activity(&self) {
+        *self.last_voice_at.lock().expect("live last voice lock") = Instant::now();
     }
 
     fn snapshot(&self) -> LiveSnapshot {
@@ -513,17 +587,33 @@ pub(crate) fn request_microphone_permission(
     read_permission_status(app)
 }
 
+/// Windows has no Screen-Capture-style consent for output loopback: the
+/// render endpoint can always be captured. The microphone is governed by the
+/// privacy master switch (read best-effort from the ConsentStore registry).
+#[cfg(target_os = "windows")]
+fn read_windows_permission_status() -> PermissionStatus {
+    let microphone = match crate::windows_capture::microphone_consent() {
+        crate::windows_capture::MicConsent::Denied => "denied",
+        // Unreadable registry (atypical builds) proceeds like the OS default
+        // (allow): a real capture failure surfaces its own error.
+        crate::windows_capture::MicConsent::Granted | crate::windows_capture::MicConsent::Unknown => {
+            "granted"
+        }
+    };
+    PermissionStatus {
+        microphone: microphone.to_owned(),
+        system_audio: "granted".to_owned(),
+        system_audio_required: true,
+        restart_required: false,
+    }
+}
+
 #[tauri::command]
 pub fn live_translation_permissions(app: AppHandle) -> CommandResult<PermissionStatus> {
     #[cfg(target_os = "macos")]
     return read_permission_status(&app);
     #[cfg(target_os = "windows")]
-    return Ok(PermissionStatus {
-        microphone: "granted".to_owned(),
-        system_audio: "denied".to_owned(),
-        system_audio_required: false,
-        restart_required: false,
-    });
+    return Ok(read_windows_permission_status());
 }
 
 #[tauri::command]
@@ -545,13 +635,21 @@ pub fn live_translation_request_permission(
     }
     #[cfg(target_os = "windows")]
     {
-        let _ = (app, kind);
-        return Ok(PermissionStatus {
-            microphone: "granted".to_owned(),
-            system_audio: "denied".to_owned(),
-            system_audio_required: false,
-            restart_required: false,
-        });
+        let _ = app;
+        match kind.as_str() {
+            // Loopback needs no consent on Windows; route both kinds to the
+            // mic privacy page when the mic is denied, otherwise just report.
+            "microphone" | "systemAudio" => {
+                if kind == "microphone"
+                    && crate::windows_capture::microphone_consent()
+                        == crate::windows_capture::MicConsent::Denied
+                {
+                    crate::windows_capture::open_microphone_privacy_settings();
+                }
+                return Ok(read_windows_permission_status());
+            }
+            _ => return Err("permission kind must be microphone or systemAudio".to_owned()),
+        }
     }
 }
 
@@ -569,6 +667,23 @@ pub(crate) fn open_macos_privacy_pane(kind: &str) {
             "x-apple.systempreferences:com.apple.preference.security?{anchor}"
         ))
         .spawn();
+}
+
+/// Endpoint lists for the recording settings pickers. Windows returns the
+/// real WASAPI endpoints (stable ids + friendly names + defaults); other
+/// platforms return empty lists so the UI can hide the pickers.
+#[tauri::command]
+pub fn live_translation_audio_devices() -> CommandResult<Value> {
+    #[cfg(target_os = "windows")]
+    return serde_json::to_value(crate::windows_capture::enumerate_devices())
+        .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "windows"))]
+    return Ok(json!({
+        "inputs": [],
+        "outputs": [],
+        "defaultInput": null,
+        "defaultOutput": null,
+    }));
 }
 
 #[tauri::command]
@@ -691,6 +806,13 @@ pub async fn live_translation_start(
         handles: Mutex::new(HashMap::new()),
         child: Mutex::new(None),
         capture_stop: Arc::new(AtomicBool::new(true)),
+        wants_mic: request.wants_mic(),
+        wants_system: request.wants_system(),
+        // Cross-platform feature switch: macOS gates `--aec` on it; Windows
+        // gates the AEC bridge + raw tracks (see CaptureConfig::aec_enabled).
+        dual_channel: request.dual_channel.unwrap_or(true),
+        last_voice_at: Mutex::new(Instant::now()),
+        auto_stopped_silence: AtomicBool::new(false),
         directory,
         socket_path: {
             #[cfg(target_os = "macos")]
@@ -732,6 +854,9 @@ pub async fn live_translation_start(
             .arg(&sources_argument)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if session.dual_channel {
+            command.arg("--aec");
+        }
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -764,12 +889,23 @@ pub async fn live_translation_start(
     #[cfg(target_os = "windows")]
     {
         // Run capture off the async runtime (mirrors macOS, where the sidecar
-        // is spawned detached). The blocking `while capture_stop` loop inside
-        // `start_windows_capture` must not run on the command's future.
+        // is spawned detached). The blocking engine event pump must not run
+        // on the command's future.
         let win_app = app.clone();
         let win_session = session.clone();
+        let win_config = crate::windows_capture::CaptureConfig {
+            mic_endpoint: request.mic_device_id.clone(),
+            system_endpoint: request.system_device_id.clone(),
+            // RAW keeps driver effects from stacking under our processing;
+            // the engine falls back to shared mode and records the downgrade.
+            raw_mic: true,
+            // The dual_channel=false rollback runs the legacy pipeline: no
+            // AEC bridge, no raw tracks (matches macOS `--sources` without
+            // `--aec`).
+            aec_enabled: session.dual_channel,
+        };
         thread::spawn(move || {
-            if let Err(error) = start_windows_capture(&win_app, &win_session) {
+            if let Err(error) = start_windows_capture(&win_app, &win_session, win_config) {
                 voice_end(&win_session);
                 emit_error(&win_app, None, error);
             }
@@ -780,6 +916,7 @@ pub async fn live_translation_start(
         .session
         .lock()
         .map_err(|_| "live session lock is poisoned")? = Some(session.clone());
+    spawn_silence_watchdog(app.clone(), session.clone());
     set_card_feed_target(&session);
     emit_snapshot(&app, &session);
     // The island is the tray-side control surface: only pop it when the main
@@ -845,6 +982,10 @@ fn spawn_control_reader(
                         session.session_id
                     );
                     session.set_state("recording");
+                    // A fresh capture (re)start also restarts the silence
+                    // window, so a long pause never bleeds into the resumed
+                    // session's watchdog budget.
+                    session.mark_voice_activity();
                     emit_snapshot(&app, &session);
                 }
                 Some("paused") => {
@@ -872,6 +1013,14 @@ fn spawn_control_reader(
                     session
                         .last_elapsed_ms
                         .fetch_max(elapsed, Ordering::Relaxed);
+                    // Sound on the microphone counts as "not silent" even
+                    // while the echo gate suppresses recognition: the room is
+                    // clearly not abandoned, so keep the recording running.
+                    // The system track counts too — listening to a remote
+                    // speaker for a long stretch must not end the recording.
+                    if mic >= MIC_SILENCE_LEVEL || system >= MIC_SILENCE_LEVEL {
+                        session.mark_voice_activity();
+                    }
                     let _ = app.emit(LIVE_EVENT, json!({ "type": "levels", "mic": mic, "system": system, "elapsedMs": elapsed, "micSuppressed": mic_suppressed }));
                 }
                 Some("error") => emit_error(
@@ -1016,6 +1165,27 @@ fn volc_languages(source: &str, target: &str) -> (String, String, bool) {
     (source_language, target_language, detect)
 }
 
+/// Drop the audio that piled up in the channel while a stream was down, so a
+/// reconnect resumes live speech instead of dumping minutes of stale audio at
+/// the provider (the recording file keeps everything regardless). Returns true
+/// when a VoiceEnd was seen — the session paused or stopped meanwhile and this
+/// loop must not reconnect.
+fn drain_stale_audio(receiver: &mut UnboundedReceiver<WsCommand>) -> bool {
+    while let Ok(command) = receiver.try_recv() {
+        if matches!(command, WsCommand::VoiceEnd) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Reconnect backoff after `streak` consecutive failed attempts (1-based):
+/// 0.5 s doubling, capped so a long outage keeps retrying at a steady pace.
+fn live_reconnect_backoff(streak: u32) -> Duration {
+    Duration::from_millis(500u64 << (streak.saturating_sub(1)).min(5))
+        .min(LIVE_RECONNECT_BACKOFF_MAX)
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn websocket_loop(
     app: AppHandle,
@@ -1040,10 +1210,29 @@ async fn websocket_loop(
             .expect("live target language")
             .as_str()
             == "none";
-    let mut attempt = 0u32;
+    // Consecutive failed (re)connect attempts. Resets as soon as the provider
+    // sends any traffic, so a long session only pays the backoff while the
+    // network is actually broken — and never stops trying while the session
+    // lives: sleep/wake (lid close), App Nap or a Wi-Fi roam can sever the
+    // websocket at any moment, and transcription must resume once it returns.
+    let mut failure_streak: u32 = 0;
+    // Count of websocket streams opened for this source. A re-attached stream
+    // restarts its relative provider timestamps at zero, so after the first
+    // one the anchor must be re-based on the capture clock (see below).
+    let mut connections_opened: u32 = 0;
+    let mut stream_offset_ms = epoch_offset_ms;
     loop {
-        attempt += 1;
+        // Audio kept piling into the channel while the stream was down; drop
+        // that stale backlog before the next attempt.
+        if failure_streak > 0 && drain_stale_audio(&mut receiver) {
+            return;
+        }
+        failure_streak += 1;
         emit_stream_state(&app, source, "connecting", epoch);
+        log::info!(
+            "Live translation stream {source:?} connecting (attempt {failure_streak}, session={})",
+            session.session_id
+        );
         let mut request = match url.as_str().into_client_request() {
             Ok(request) => request,
             Err(error) => {
@@ -1073,9 +1262,23 @@ async fn websocket_loop(
                 request.headers_mut().insert("x-api-connect-id", value);
             }
         }
-        match tokio_tungstenite::connect_async(request).await {
-            Ok((socket, _)) => {
+        let connect = tokio::time::timeout(
+            LIVE_CONNECT_TIMEOUT,
+            tokio_tungstenite::connect_async(request),
+        )
+        .await;
+        match connect {
+            Ok(Ok((socket, _))) => {
                 emit_stream_state(&app, source, "connected", epoch);
+                connections_opened += 1;
+                if connections_opened > 1 {
+                    // This stream re-attached after an outage: its relative
+                    // timestamps restart at zero, so re-anchor them on the
+                    // capture clock — otherwise every utterance after the
+                    // reconnect would land near the session start and sort to
+                    // the top of the finished transcript.
+                    stream_offset_ms = session.last_elapsed_ms.load(Ordering::Relaxed);
+                }
                 let (mut writer, mut reader) = socket.split();
                 // For Qwen, configure translation and/or source-language ASR
                 // right after the handshake. `none` is Lynse's transcript-only
@@ -1161,6 +1364,13 @@ async fn websocket_loop(
                 let mut volc_speaker_index: u32 = 1;
                 let mut finishing: Option<tokio::time::Instant> = None;
                 let mut qwen_finishing = false;
+                // Liveness tracking: a half-open TCP path (connection severed
+                // without a FIN — e.g. the network dropped while the machine
+                // was asleep) never produces a read error on its own, so after
+                // a silence window we probe with a websocket ping and force a
+                // reconnect when the probe goes unanswered.
+                let mut last_inbound = tokio::time::Instant::now();
+                let mut pinged_at: Option<tokio::time::Instant> = None;
                 loop {
                     tokio::select! {
                         command = receiver.recv(), if finishing.is_none() => {
@@ -1232,6 +1442,11 @@ async fn websocket_loop(
                         incoming = reader.next() => {
                             match incoming {
                                 Some(Ok(Message::Text(text))) => {
+                                    // Provider traffic proves the connection is
+                                    // healthy and clears the reconnect backoff.
+                                    last_inbound = tokio::time::Instant::now();
+                                    pinged_at = None;
+                                    failure_streak = 0;
                                     if is_qwen && qwen_finishing
                                         && text.contains("\"session.finished\"")
                                     {
@@ -1244,12 +1459,15 @@ async fn websocket_loop(
                                         &session,
                                         source,
                                         epoch,
-                                        epoch_offset_ms,
+                                        stream_offset_ms,
                                         text.as_ref(),
                                         is_qwen,
                                     );
                                 }
                                 Some(Ok(Message::Binary(frame))) if is_volc => {
+                                    last_inbound = tokio::time::Instant::now();
+                                    pinged_at = None;
+                                    failure_streak = 0;
                                     match volc_ast::decode_response(&frame) {
                                         Ok(response) => match response.event {
                                             volc_ast::EVENT_SESSION_FINISHED => {
@@ -1279,7 +1497,7 @@ async fn websocket_loop(
                                                 &session,
                                                 source,
                                                 epoch,
-                                                epoch_offset_ms,
+                                                stream_offset_ms,
                                                 &response,
                                                 volc_transcript_only,
                                                 &mut volc_last_source,
@@ -1300,12 +1518,41 @@ async fn websocket_loop(
                                     emit_error(&app, Some(source), "翻译连接由服务端关闭，正在重连。");
                                     break;
                                 }
-                                Some(Ok(_)) => {}
+                                Some(Ok(_)) => {
+                                    // Ping/Pong and other framing traffic also
+                                    // count as a liveness proof.
+                                    last_inbound = tokio::time::Instant::now();
+                                    pinged_at = None;
+                                    failure_streak = 0;
+                                }
                                 Some(Err(error)) => {
                                     emit_error(&app, Some(source), format!("翻译连接中断：{error}"));
                                     break;
                                 }
                             }
+                        }
+                        _ = async {
+                            let deadline = match pinged_at {
+                                Some(sent) => sent + LIVE_STREAM_PONG_GRACE,
+                                None => last_inbound + LIVE_STREAM_PING_AFTER,
+                            };
+                            tokio::time::sleep_until(deadline).await
+                        }, if finishing.is_none() => {
+                            if pinged_at.is_some() {
+                                // The ping probe came back empty: the TCP path
+                                // is silently dead, so tear this socket down and
+                                // let the reconnect loop below take over.
+                                log::warn!(
+                                    "Live translation stream {source:?} unresponsive (session={}), forcing reconnect",
+                                    session.session_id
+                                );
+                                emit_error(&app, Some(source), "实时转写连接无响应，正在重连。");
+                                break;
+                            }
+                            if writer.send(Message::Ping(Vec::new().into())).await.is_err() {
+                                break;
+                            }
+                            pinged_at = Some(tokio::time::Instant::now());
                         }
                         _ = async {
                             if let Some(deadline) = finishing { tokio::time::sleep_until(deadline).await }
@@ -1317,17 +1564,49 @@ async fn websocket_loop(
                     }
                 }
             }
-            Err(error) => emit_error(
-                &app,
-                Some(source),
-                format!("实时翻译连接失败（第 {attempt} 次）：{error}"),
-            ),
+            Ok(Err(error)) => {
+                log::warn!(
+                    "Live translation stream {source:?} connect failed (streak {failure_streak}, session={}): {error}",
+                    session.session_id
+                );
+                // A 4xx handshake rejection (bad API key, wrong resource id) is
+                // a configuration error the provider will keep refusing, so
+                // retrying forever would only spin — fail the stream for real.
+                // Everything else (connect timeout, DNS, TCP, 5xx) is
+                // transient: keep trying for as long as the session lives.
+                let rejected = matches!(
+                    &error,
+                    tokio_tungstenite::tungstenite::Error::Http(response)
+                        if response.status().is_client_error()
+                            && response.status().as_u16() != 429
+                );
+                if rejected {
+                    emit_error(
+                        &app,
+                        Some(source),
+                        format!("实时翻译连接被拒绝（{error}），请检查引擎配置。"),
+                    );
+                    emit_stream_state(&app, source, "failed", epoch);
+                    return;
+                }
+                // Surface only the first failure of a streak — the banner stays
+                // up (and clears on recovery) without flickering every retry.
+                if failure_streak == 1 {
+                    emit_error(
+                        &app,
+                        Some(source),
+                        format!("实时翻译连接失败（第 {failure_streak} 次）：{error}"),
+                    );
+                }
+            }
+            Err(_elapsed) => {
+                log::warn!(
+                    "Live translation stream {source:?} connect timed out after {LIVE_CONNECT_TIMEOUT:?} (streak {failure_streak}, session={})",
+                    session.session_id
+                );
+            }
         }
-        if attempt >= 3 {
-            emit_stream_state(&app, source, "failed", epoch);
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(500 * (1u64 << (attempt - 1)))).await;
+        tokio::time::sleep(live_reconnect_backoff(failure_streak)).await;
     }
 }
 
@@ -1683,6 +1962,12 @@ fn ingest_provider_text(
     speaker: Option<u32>,
     text: &str,
 ) -> Option<ProviderEmission> {
+    // Recognized speech resets the silence watchdog, whichever provider or
+    // source (mic/system) produced it — a transcript is the strongest evidence
+    // the recording is still worth keeping.
+    if is_recognized && !text.trim().is_empty() {
+        session.mark_voice_activity();
+    }
     let mut segments = session.segments.lock().expect("live segments lock");
 
     // Coalesce each utterance onto a single live segment/card. The provider
@@ -1781,7 +2066,13 @@ fn ingest_provider_text(
     segment.is_final = segment.recognized_final && segment.translated_final;
 
     if is_final {
-        deduplicate_echoes(&mut segments);
+        // Dual-channel sessions keep simultaneous-speech overlaps visible:
+        // the AEC removes the echo acoustically, so text-similarity
+        // truncation of mic sentences is no longer applied (old recordings
+        // keep their existing echo flags).
+        if !session.dual_channel {
+            deduplicate_echoes(&mut segments);
+        }
         segments.sort_by_key(|segment| {
             (
                 segment.start_ms,
@@ -1946,10 +2237,23 @@ pub async fn live_translation_pause(
     }
     session.set_state("paused");
     signal_child(&session, SIGNAL_PAUSE)?;
-    voice_end(&session);
-    emit_snapshot(&app, &session);
-    tokio::time::sleep(Duration::from_millis(3_100)).await;
-    Ok(session.snapshot())
+    #[cfg(target_os = "windows")]
+    {
+        // In-process engine: pausing is stopping the feed, not signalling a
+        // sidecar — effective immediately.
+        let _ = with_windows_engine(|engine| engine.pause());
+        voice_end(&session);
+        emit_snapshot(&app, &session);
+        return Ok(session.snapshot());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // The sidecar needs a moment to fully stop its capture streams.
+        voice_end(&session);
+        emit_snapshot(&app, &session);
+        tokio::time::sleep(Duration::from_millis(3_100)).await;
+        Ok(session.snapshot())
+    }
 }
 
 #[tauri::command]
@@ -1983,6 +2287,12 @@ pub async fn live_translation_resume(
     session.set_state("connecting");
     spawn_connections(&app, &session, request.epoch, offset, request.connections)?;
     signal_child(&session, SIGNAL_RESUME)?;
+    #[cfg(target_os = "windows")]
+    {
+        // The engine rebuilds its streams and re-anchors the timeline; the
+        // echo canceller is reset on resume inside the engine.
+        let _ = with_windows_engine(|engine| engine.resume());
+    }
     emit_snapshot(&app, &session);
     Ok(session.snapshot())
 }
@@ -2070,9 +2380,80 @@ pub async fn live_translation_stop(
     Ok(())
 }
 
+/// Silence watchdog for the live session. Runs for the session's whole life
+/// and stops + saves the recording once the microphone has carried no
+/// recognizable speech and no audible level for [`SILENCE_AUTO_STOP`]. The
+/// stop sequence mirrors `live_translation_stop`; the manager hand-off makes
+/// it a no-op when the user stopped the session first.
+fn silence_expired(state: &str, silent_for: Duration) -> bool {
+    state == "recording" && silent_for >= SILENCE_AUTO_STOP
+}
+
+fn spawn_silence_watchdog(app: AppHandle, session: Arc<LiveSession>) {
+    if !session.wants_mic {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(SILENCE_CHECK_INTERVAL).await;
+            let state = session.state.lock().expect("live state lock").clone();
+            match state.as_str() {
+                // Paused/connecting freezes the window; capture restarts
+                // (`ready`/`resumed`) re-base it. Anything terminal ends the
+                // watchdog — the session is already stopping or gone.
+                "paused" | "connecting" => continue,
+                "recording" => {}
+                _ => return,
+            }
+            let silent_for = session
+                .last_voice_at
+                .lock()
+                .expect("live last voice lock")
+                .elapsed();
+            if !silence_expired(&state, silent_for) {
+                continue;
+            }
+            log::info!(
+                "Live translation silence watchdog: no mic voice for {:.0}s, auto-stopping session={}",
+                silent_for.as_secs_f32(),
+                session.session_id
+            );
+            session.auto_stopped_silence.store(true, Ordering::Relaxed);
+            let manager = app.state::<LiveTranslationManager>();
+            let taken = manager
+                .session
+                .lock()
+                .ok()
+                .and_then(|mut guard| guard.take());
+            match taken {
+                Some(current) if Arc::ptr_eq(&current, &session) => {}
+                Some(other) => {
+                    // Not ours (a newer session took over) — put it back and
+                    // leave the decision to that session's own watchdog.
+                    if let Ok(mut guard) = manager.session.lock() {
+                        *guard = Some(other);
+                    }
+                    return;
+                }
+                None => return,
+            }
+            clear_card_feed_target();
+            session.set_state("stopping");
+            emit_snapshot(&app, &session);
+            set_recording_island_visible(&app, false);
+            session.capture_stop.store(false, Ordering::Relaxed);
+            let _ = signal_child(&session, SIGNAL_STOP);
+            finalize_session(app, session).await;
+            return;
+        }
+    });
+}
+
 /// Drain the capture sidecar, persist the finished session and announce it.
 /// Runs in the background after `live_translation_stop` has acked.
 async fn finalize_session(app: AppHandle, session: Arc<LiveSession>) {
+    #[cfg(target_os = "windows")]
+    wait_windows_capture_done().await;
     let child = session
         .child
         .lock()
@@ -2131,8 +2512,85 @@ async fn finalize_session(app: AppHandle, session: Arc<LiveSession>) {
     }
 }
 
+use crate::audio_contract::manifest::TrackManifest;
+
+/// Makes sure `mic_processed.wav` exists for a dual-channel session,
+/// reprocessing the raw tracks through the sidecar when the processed file
+/// is missing or empty (crash recovery, failed writer). Returns Ok(()) even
+/// when nothing can be produced — the persist path falls back to whatever
+/// audio exists rather than losing the recording.
+#[cfg(target_os = "macos")]
+pub(crate) fn ensure_dual_channel_processed(app: &AppHandle, directory: &Path) -> CommandResult<()> {
+    let processed = directory.join("mic_processed.wav");
+    if wav_data_len(&processed).map(|length| length > 0).unwrap_or(false) {
+        return Ok(());
+    }
+    let mic_raw = directory.join("mic_raw.wav");
+    let system_raw = directory.join("system_raw.wav");
+    if wav_data_len(&mic_raw).map(|length| length > 0).unwrap_or(false)
+        && wav_data_len(&system_raw).map(|length| length > 0).unwrap_or(false)
+    {
+        log::info!(
+            "Reprocessing dual-channel tracks from raw audio: {}",
+            directory.display()
+        );
+        let mut command = sidecar_command(app)?;
+        command
+            .arg("--process")
+            .arg(directory)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        match command.spawn() {
+            Ok(mut child) => {
+                let deadline = Instant::now() + Duration::from_secs(300);
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(status)) => {
+                            if !status.success() {
+                                log::warn!("dual-channel reprocessing exited with {status}");
+                            }
+                            break;
+                        }
+                        Ok(None) if Instant::now() < deadline => {
+                            thread::sleep(Duration::from_millis(100));
+                        }
+                        _ => {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                            log::warn!("dual-channel reprocessing timed out");
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(error) => log::warn!("spawn audio-capture for reprocessing: {error}"),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn ensure_dual_channel_processed(
+    _app: &AppHandle,
+    _directory: &Path,
+) -> CommandResult<()> {
+    // The Swift sidecar's `--process` reprocessor is macOS-only. Windows raw
+    // tracks stay archived for recovery; persist falls back to whatever
+    // audio exists until the in-engine reprocessor lands.
+    Ok(())
+}
+
 fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<CompletedSession> {
-    let mic = session.directory.join("mic.wav");
+    // Dual-source sessions name the processed mic track `mic_processed.wav`
+    // (frozen track table); single-source mic sessions and the current macOS
+    // sidecar write plain `mic.wav`. Either lands in the default mixdown.
+    let mic = [
+        session.directory.join("mic_processed.wav"),
+        session.directory.join("mic.wav"),
+    ]
+    .into_iter()
+    .find(|path| path.exists())
+    .unwrap_or_else(|| session.directory.join("mic.wav"));
     let system = session.directory.join("system.wav");
     // Name the mixed-down playback file after the recording's end time
     // (local clock, precise to the second) — this is the name shown in the
@@ -2147,6 +2605,26 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
         system.exists().then_some(system.as_path()),
         &playback,
     )?;
+    // Dual-channel recordings carry the versioned track manifest (engine +
+    // degraded intervals + per-track files, `tracks.json`); legacy recordings
+    // have none. The same file is written by the macOS sidecar and the
+    // Windows in-process engine, so both parse through the shared contract.
+    let tracks_manifest = session
+        .dual_channel
+        .then(|| {
+            crate::audio_contract::manifest::read_manifest(
+                &session.directory.join(crate::audio_contract::manifest::MANIFEST_FILE),
+            )
+            .ok()
+        })
+        .flatten();
+    let aec_degraded = tracks_manifest
+        .as_ref()
+        .map(|manifest| !manifest.degraded_intervals_ms.is_empty() || manifest.engine == "none")
+        .unwrap_or(false);
+    let tracks_value = tracks_manifest
+        .as_ref()
+        .map(|manifest| serde_json::to_value(manifest).unwrap_or(Value::Null));
 
     let mut segments: Vec<LiveSegment> = session
         .segments
@@ -2254,6 +2732,7 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
             "liveSessionId": session.session_id,
             "syncStatus": "pending",
             "segments": local_segments,
+            "trackManifest": tracks_value.clone().unwrap_or(Value::Null),
         }),
     )?;
 
@@ -2268,6 +2747,11 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
         transcript_path: transcript_path.to_string_lossy().into_owned(),
         duration_ms,
         segments,
+        auto_stopped_silence: session
+            .auto_stopped_silence
+            .load(Ordering::Relaxed),
+        tracks: tracks_value,
+        aec_degraded,
     })
 }
 
@@ -2436,7 +2920,17 @@ pub fn live_translation_finalize_local(
             return Err("invalid live translation session id".to_owned());
         }
         let directory = recovery_root(&app)?.join(session_id);
-        for name in ["mic.wav", "system.wav"] {
+        // Every capture-side source file goes: cloud holds the default
+        // playback mix, and the raws' whole point (local reprocessing)
+        // belongs to the local-only phase. Removing them here also caps the
+        // storage the dual-track layout costs.
+        for name in [
+            "mic.wav",
+            "system.wav",
+            "mic_raw.wav",
+            "system_raw.wav",
+            "mic_processed.wav",
+        ] {
             let path = directory.join(name);
             if path.exists() {
                 fs::remove_file(path).map_err(|error| error.to_string())?;
@@ -2476,6 +2970,98 @@ pub fn live_translation_discard(
         fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+/// Re-run echo cancellation over a recording's raw tracks (the detail
+/// page's "重新处理" entry): the sidecar rebuilds `mic_processed.wav` and
+/// the 16 kHz system track from the raws, the playback mix is regenerated
+/// and the stored manifest/flags are refreshed. Only dual-channel sessions
+/// with raw tracks qualify.
+#[tauri::command]
+pub async fn live_translation_reprocess(
+    app: AppHandle,
+    state: State<'_, LiveTranslationManager>,
+    session_id: String,
+) -> CommandResult<Value> {
+    if !valid_session_id(&session_id) {
+        return Err("invalid live translation session id".to_owned());
+    }
+    // Never rewrite audio out from under a live session.
+    let active = state
+        .session
+        .lock()
+        .map_err(|_| "live session lock is poisoned")?
+        .as_ref()
+        .map(|session| session.session_id.clone());
+    if active.as_deref() == Some(session_id.as_str()) {
+        return Err("cannot reprocess the active live translation session".to_owned());
+    }
+    let record_id = format!("local:live:{session_id}");
+    tauri::async_runtime::spawn_blocking(move || {
+        let directory = recovery_root(&app)?.join(&session_id);
+        let mic_raw = directory.join("mic_raw.wav");
+        let system_raw = directory.join("system_raw.wav");
+        if !mic_raw.exists() || !system_raw.exists() {
+            return Err("这份录音没有保留原始音轨，无法重新处理".to_owned());
+        }
+        // Force a full rebuild: drop the previous processed outputs first so
+        // a stale file can never short-circuit the engine run.
+        for name in ["mic_processed.wav", "system.wav"] {
+            let path = directory.join(name);
+            if path.exists() {
+                fs::remove_file(path).map_err(|error| error.to_string())?;
+            }
+        }
+        ensure_dual_channel_processed(&app, &directory)?;
+        let processed = directory.join("mic_processed.wav");
+        if !processed.exists() {
+            return Err("重新处理失败：原始音轨无法完成回声消除".to_owned());
+        }
+
+        // Regenerate the default playback mix under its stored name so
+        // existing players and cloud references stay valid.
+        let record = crate::get_store_value(&app, "local-transcriptions", &record_id)?
+            .ok_or("recording not found")?;
+        let playback = record
+            .get("sourcePath")
+            .and_then(Value::as_str)
+            .ok_or("recording has no playback path")?
+            .to_owned();
+        let playback_path = PathBuf::from(&playback);
+        let system = directory.join("system.wav");
+        build_playback_wav(
+            processed.exists().then_some(processed.as_path()),
+            system.exists().then_some(system.as_path()),
+            &playback_path,
+        )?;
+
+        // Refresh the manifest-derived fields in the stored record.
+        let track_manifest = crate::audio_contract::manifest::read_manifest(
+            &directory.join(crate::audio_contract::manifest::MANIFEST_FILE),
+        )
+        .ok()
+        .and_then(|manifest| serde_json::to_value(&manifest).ok())
+        .unwrap_or(Value::Null);
+        let aec_degraded = serde_json::from_value::<
+            crate::audio_contract::manifest::TrackManifest,
+        >(track_manifest.clone())
+        .map(|manifest| {
+            !manifest.degraded_intervals_ms.is_empty() || manifest.engine == "none"
+        })
+        .unwrap_or(false);
+        let mut patch = Map::new();
+        patch.insert("trackManifest".to_owned(), track_manifest);
+        patch.insert("aecDegraded".to_owned(), json!(aec_degraded));
+        patch.insert("updatedAt".to_owned(), json!(now()));
+        patch.insert("error".to_owned(), Value::Null);
+        update_store_value(&app, "local-transcriptions", &record_id, patch)?
+            .ok_or("recording not found")?;
+        log::info!("Reprocessed dual-channel recording session={session_id}");
+        Ok(crate::get_store_value(&app, "local-transcriptions", &record_id)?
+            .ok_or("recording not found")?)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -2569,6 +3155,10 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
         .map(|metadata| metadata.len().saturating_sub(44).saturating_mul(1_000) / 32_000)
         .max()
         .unwrap_or_default();
+    // Recovered sessions may come from either pipeline; detect from the
+    // track files the sidecar managed to write.
+    let dual_channel = directory.join("mic_processed.wav").exists()
+        || directory.join("mic_raw.wav").exists();
     let session = LiveSession {
         session_id: manifest.session_id,
         title: manifest.title,
@@ -2577,6 +3167,7 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
         started_at: manifest.started_at,
         state: Mutex::new("stopping".to_owned()),
         epoch: AtomicU32::new(0),
+        wants_system: true,
         epoch_offset_ms: AtomicU64::new(0),
         last_elapsed_ms: AtomicU64::new(duration_ms),
         wall_start_ms: AtomicU64::new(wall_clock_ms()),
@@ -2589,6 +3180,10 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
         directory,
         socket_path: PathBuf::new(),
         capture_stop: Arc::new(AtomicBool::new(true)),
+        wants_mic: true,
+        dual_channel,
+        last_voice_at: Mutex::new(Instant::now()),
+        auto_stopped_silence: AtomicBool::new(false),
     };
     persist_session(app, &session)
 }
@@ -2929,165 +3524,165 @@ pub fn live_translation_update_tray(app: AppHandle, payload: TrayUpdatePayload) 
 }
 
 // ---------------------------------------------------------------------------
-// Windows live-translation audio capture (stage 1: microphone).
+// Windows live-translation audio capture (dual-track).
 //
-// On Windows there is no Swift `audio-capture` sidecar. We capture the default
-// microphone in-process with `cpal`, resample to the 16 kHz / mono / 16-bit
-// format the rest of the pipeline expects, and feed the exact same 640-byte PCM
-// frames through `enqueue_audio` so the cloud translation path is identical to
-// macOS. System-audio loopback capture is a follow-up (stage 2).
+// There is no Swift `audio-capture` sidecar on Windows: the WASAPI engine in
+// `windows_capture` captures the system mixdown (loopback) and the microphone
+// in-process, runs the shared echo-canceller contract, and streams the same
+// 640-byte 16 kHz mono PCM frames macOS produces into `enqueue_audio`. Raw
+// and processed tracks land in the session directory under a versioned
+// `manifest.json` (see `audio_contract`).
 // ---------------------------------------------------------------------------
+// The Windows capture engine instance for the active session. Only one live
+// session can exist at a time (enforced by the manager), so a module-level
+// holder keeps pause/resume/stop reachable from the shared commands without
+// threading an engine handle through the platform-agnostic LiveSession.
 #[cfg(target_os = "windows")]
-fn start_windows_capture(app: &AppHandle, session: &Arc<LiveSession>) -> CommandResult<()> {
-    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+static WINDOWS_ENGINE: Mutex<Option<Arc<crate::windows_capture::CaptureEngine>>> = Mutex::new(None);
 
-    let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| "未找到默认麦克风输入设备".to_owned())?;
-    let config = device
-        .default_input_config()
-        .map_err(|error| format!("获取麦克风输入配置失败：{error}"))?;
-    let sample_format = config.sample_format();
-    let stream_config: cpal::StreamConfig = config.into();
-    let channels = stream_config.channels as usize;
-    let in_rate = stream_config.sample_rate.0;
-    let start = Instant::now();
-    let leftover = Arc::new(Mutex::new(Vec::<u8>::new()));
+#[cfg(target_os = "windows")]
+fn set_windows_engine(engine: Arc<crate::windows_capture::CaptureEngine>) {
+    *WINDOWS_ENGINE
+        .lock()
+        .expect("windows engine lock") = Some(engine);
+}
 
-    let stream = match sample_format {
-        cpal::SampleFormat::F32 => {
-            let leftover = leftover.clone();
-            let session_ref = session.clone();
-            let app_ref = app.clone();
-            device
-                .build_input_stream(
-                    &stream_config,
-                    move |data: &[f32], _| {
-                        feed_samples(data, channels, in_rate, &start, &leftover, &session_ref)
-                    },
-                    move |error| {
-                        emit_error(
-                            &app_ref,
-                            Some(AudioSource::Mic),
-                            format!("麦克风音频流错误：{error}"),
-                        )
-                    },
-                    None,
-                )
-                .map_err(|error| format!("创建麦克风输入流失败：{error}"))?
-        }
-        cpal::SampleFormat::I16 => {
-            let leftover = leftover.clone();
-            let session_ref = session.clone();
-            let app_ref = app.clone();
-            device
-                .build_input_stream(
-                    &stream_config,
-                    move |data: &[i16], _| {
-                        feed_samples(data, channels, in_rate, &start, &leftover, &session_ref)
-                    },
-                    move |error| {
-                        emit_error(
-                            &app_ref,
-                            Some(AudioSource::Mic),
-                            format!("麦克风音频流错误：{error}"),
-                        )
-                    },
-                    None,
-                )
-                .map_err(|error| format!("创建麦克风输入流失败：{error}"))?
-        }
-        cpal::SampleFormat::U16 => {
-            let leftover = leftover.clone();
-            let session_ref = session.clone();
-            let app_ref = app.clone();
-            device
-                .build_input_stream(
-                    &stream_config,
-                    move |data: &[u16], _| {
-                        feed_samples(data, channels, in_rate, &start, &leftover, &session_ref)
-                    },
-                    move |error| {
-                        emit_error(
-                            &app_ref,
-                            Some(AudioSource::Mic),
-                            format!("麦克风音频流错误：{error}"),
-                        )
-                    },
-                    None,
-                )
-                .map_err(|error| format!("创建麦克风输入流失败：{error}"))?
-        }
-        _ => return Err("不支持的麦克风采样格式".to_owned()),
+#[cfg(target_os = "windows")]
+fn take_windows_engine() -> Option<Arc<crate::windows_capture::CaptureEngine>> {
+    WINDOWS_ENGINE
+        .lock()
+        .expect("windows engine lock")
+        .take()
+}
+
+#[cfg(target_os = "windows")]
+fn with_windows_engine<R>(apply: impl FnOnce(&crate::windows_capture::CaptureEngine) -> R) -> Option<R> {
+    let engine = WINDOWS_ENGINE
+        .lock()
+        .expect("windows engine lock")
+        .clone();
+    engine.as_deref().map(apply)
+}
+
+/// True while the capture engine of the current session is still running.
+#[cfg(target_os = "windows")]
+fn windows_engine_running() -> bool {
+    WINDOWS_ENGINE
+        .lock()
+        .map(|guard| guard.is_some())
+        .unwrap_or(false)
+}
+
+/// In-process WASAPI dual-track capture: system loopback + microphone through
+/// the shared echo-canceller contract (`windows_capture` + `audio_contract`).
+/// Mirrors the macOS sidecar's control surface: raw + processed tracks land in
+/// the session directory, recognition frames surface as engine events, and
+/// stop drains every queue before the writers' headers are fixed.
+#[cfg(target_os = "windows")]
+fn start_windows_capture(
+    app: &AppHandle,
+    session: &Arc<LiveSession>,
+    config: crate::windows_capture::CaptureConfig,
+) -> CommandResult<()> {
+    use crate::windows_capture::{CaptureEngine, EngineEvent, Sources};
+
+    let sources = Sources {
+        mic: session.wants_mic,
+        system: session.wants_system,
     };
+    log::info!(
+        "Windows dual-track capture starting: session={} mic={} system={}",
+        session.session_id,
+        sources.mic,
+        sources.system
+    );
+    let engine = Arc::new(CaptureEngine::start(config, sources, session.directory.clone())?);
+    set_windows_engine(engine.clone());
 
-    stream
-        .play()
-        .map_err(|error| format!("启动麦克风输入流失败：{error}"))?;
-
-    // Keep the stream alive (and the device capturing) until the session stops.
-    while session.capture_stop.load(Ordering::Relaxed) {
-        thread::sleep(Duration::from_millis(200));
+    // Event pump: engine events play the role of the macOS sidecar's stdout
+    // JSON lines and audio socket frames.
+    let mut stopping = false;
+    loop {
+        if !stopping && !session.capture_stop.load(Ordering::Relaxed) {
+            stopping = true;
+            // Joins the capture threads, fixes the WAV headers and finalises
+            // the track manifest before persist_session reads the files.
+            engine.stop();
+        }
+        match engine.recv_event_timeout(Duration::from_millis(100)) {
+            Some(EngineEvent::Stopped) => break,
+            Some(event) => handle_engine_event(app, session, event),
+            None if stopping && engine.is_done() => break,
+            None => {}
+        }
     }
+    take_windows_engine();
+    log::info!(
+        "Windows dual-track capture finished: session={}",
+        session.session_id
+    );
     Ok(())
 }
 
+/// Map engine events onto the same in-app surface the macOS sidecar feeds.
 #[cfg(target_os = "windows")]
-fn feed_samples<T: Sample>(
-    data: &[T],
-    channels: usize,
-    in_rate: u32,
-    start: &Instant,
-    leftover: &Arc<Mutex<Vec<u8>>>,
+fn handle_engine_event(
+    app: &AppHandle,
     session: &Arc<LiveSession>,
-) where
-    f32: cpal::FromSample<T>,
-{
-    if !session.capture_stop.load(Ordering::Relaxed) {
-        return;
-    }
-    let mono: Vec<f32> = data
-        .chunks(channels)
-        .map(|frame| {
-            let sum: f32 = frame.iter().map(|&sample| f32::from_sample(sample)).sum();
-            sum / channels as f32
-        })
-        .collect();
-    let resampled = resample_linear(&mono, in_rate, 16_000);
-    let mut pcm: Vec<u8> = Vec::with_capacity(resampled.len() * 2);
-    for sample in resampled {
-        let value = (sample.clamp(-1.0, 1.0) * 32_767.0) as i16;
-        pcm.extend_from_slice(&value.to_le_bytes());
-    }
-    let mut buffer = leftover.lock().expect("live audio buffer lock");
-    buffer.extend_from_slice(&pcm);
-    let elapsed = start.elapsed().as_millis() as u64;
-    while buffer.len() >= 640 {
-        let frame: Vec<u8> = buffer.drain(..640).collect();
-        enqueue_audio(session, AudioSource::Mic, elapsed, frame);
+    event: crate::windows_capture::EngineEvent,
+) {
+    use crate::windows_capture::EngineEvent;
+    match event {
+        EngineEvent::Ready { mic, system } => {
+            log::info!(
+                "Live translation recording started (session={}, mic={:?}, system={:?})",
+                session.session_id,
+                mic.as_ref().map(|d| d.name.clone()),
+                system.as_ref().map(|d| d.name.clone())
+            );
+            session.set_state("recording");
+            // A fresh capture (re)start also restarts the silence window.
+            session.mark_voice_activity();
+            emit_snapshot(app, session);
+        }
+        EngineEvent::Diagnostic(message) => {
+            log::info!("Capture diagnostic: {message}");
+        }
+        EngineEvent::Levels { mic, system } => {
+            session.mic_level.store(mic.to_bits(), Ordering::Relaxed);
+            session.system_level.store(system.to_bits(), Ordering::Relaxed);
+            // The watchdog must check BOTH sources: a remote speaker talking
+            // alone is a live meeting, not an empty room.
+            if mic > MIC_SILENCE_LEVEL || (session.wants_system && system > MIC_SILENCE_LEVEL) {
+                session.mark_voice_activity();
+            }
+        }
+        EngineEvent::AudioFrame {
+            source,
+            elapsed_ms,
+            bytes,
+        } => match AudioSource::from_byte(source) {
+            Some(source) => enqueue_audio(session, source, elapsed_ms, bytes),
+            None => log::warn!("dropping engine frame with unknown source byte {source}"),
+        },
+        EngineEvent::Stopped => {}
     }
 }
 
+/// Wait until the capture engine fully stopped (writers closed, manifest
+/// written) so persist_session reads final files. Bounded: a wedged device
+/// must not stall the save path forever.
 #[cfg(target_os = "windows")]
-fn resample_linear(input: &[f32], in_rate: u32, out_rate: u32) -> Vec<f32> {
-    if in_rate == out_rate {
-        return input.to_vec();
+async fn wait_windows_capture_done() {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while windows_engine_running() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let step = in_rate as f64 / out_rate as f64;
-    let out_len = (input.len() as f64 / step).ceil() as usize;
-    let mut out = Vec::with_capacity(out_len);
-    for i in 0..out_len {
-        let pos = i as f64 * step;
-        let idx = pos as usize;
-        let frac = (pos - idx as f64) as f32;
-        let a = *input.get(idx).unwrap_or(&0.0);
-        let b = *input.get(idx + 1).unwrap_or(&a);
-        out.push(a + (b - a) * frac);
-    }
-    out
 }
 
+#[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
+async fn wait_windows_capture_done() {}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3111,6 +3706,11 @@ mod tests {
             handles: Mutex::new(HashMap::new()),
             child: Mutex::new(None),
             capture_stop: Arc::new(AtomicBool::new(true)),
+            wants_mic: true,
+            wants_system: true,
+            dual_channel: false,
+            last_voice_at: Mutex::new(Instant::now()),
+            auto_stopped_silence: AtomicBool::new(false),
             directory: std::env::temp_dir(),
             socket_path: std::env::temp_dir().join("unused-live-translation-test.sock"),
         }
@@ -3134,6 +3734,76 @@ mod tests {
             recognized_final: true,
             translated_final: false,
         }
+    }
+
+    #[test]
+    fn silence_watchdog_needs_recording_state_and_full_window() {
+        assert!(!silence_expired("recording", Duration::from_secs(59)));
+        assert!(silence_expired("recording", SILENCE_AUTO_STOP));
+        // Only a live recording can be auto-stopped: paused and connecting
+        // freeze the window, anything else means the session is already gone.
+        assert!(!silence_expired("paused", SILENCE_AUTO_STOP));
+        assert!(!silence_expired("connecting", SILENCE_AUTO_STOP));
+        assert!(!silence_expired("stopping", SILENCE_AUTO_STOP));
+    }
+
+    #[test]
+    fn reconnect_backoff_doubles_then_caps() {
+        assert_eq!(live_reconnect_backoff(1), Duration::from_millis(500));
+        assert_eq!(live_reconnect_backoff(2), Duration::from_millis(1_000));
+        assert_eq!(live_reconnect_backoff(3), Duration::from_millis(2_000));
+        // A long outage keeps probing at the capped cadence instead of
+        // growing the wait without bound.
+        assert_eq!(live_reconnect_backoff(20), LIVE_RECONNECT_BACKOFF_MAX);
+        // Defensive: a zero streak must not shift into overflow territory.
+        assert_eq!(live_reconnect_backoff(0), Duration::from_millis(500));
+    }
+
+    #[test]
+    fn drain_drops_stale_audio_but_reports_voice_end() {
+        let (tx, mut rx) = unbounded_channel::<WsCommand>();
+        tx.send(WsCommand::Audio(vec![1, 2, 3])).unwrap();
+        tx.send(WsCommand::Audio(vec![4])).unwrap();
+        assert!(!drain_stale_audio(&mut rx));
+        assert!(rx.try_recv().is_err(), "stale audio must be dropped");
+
+        tx.send(WsCommand::Audio(vec![5])).unwrap();
+        tx.send(WsCommand::VoiceEnd).unwrap();
+        tx.send(WsCommand::Audio(vec![6])).unwrap();
+        drop(tx);
+        // VoiceEnd ends the drain immediately: the session paused or stopped
+        // while the stream was down, so the loop must not reconnect.
+        assert!(drain_stale_audio(&mut rx));
+    }
+
+    #[test]
+    fn voice_activity_resets_the_silence_clock() {
+        let session = live_session();
+        // Simulate a session that has been silent since capture started.
+        *session
+            .last_voice_at
+            .lock()
+            .expect("live last voice lock") = Instant::now() - SILENCE_AUTO_STOP;
+        session.mark_voice_activity();
+        let elapsed = session
+            .last_voice_at
+            .lock()
+            .expect("live last voice lock")
+            .elapsed();
+        assert!(
+            elapsed < SILENCE_CHECK_INTERVAL,
+            "mark_voice_activity must re-base the silence window"
+        );
+        // Recognized provider speech marks activity (recognized + non-empty).
+        session.mark_voice_activity();
+        assert!(!silence_expired(
+            "recording",
+            session
+                .last_voice_at
+                .lock()
+                .expect("live last voice lock")
+                .elapsed()
+        ));
     }
 
     #[test]

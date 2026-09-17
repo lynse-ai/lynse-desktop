@@ -12,7 +12,7 @@
     "build:testflight": "VITE_BUILD_CHANNEL=testflight tauri build",
     "ios:testflight": "VITE_BUILD_CHANNEL=testflight tauri ios build",
     "build:audio-capture": "bash ./scripts/build-audio-capture.sh",
-    "test:audio-capture": "swift run --package-path audio-capture audio-capture-core-tests",
+    "test:audio-capture": "bash ./audio-capture/scripts/test-audio-capture.sh",
     "tauri": "tauri",
     "check": "cargo check --manifest-path src-tauri/Cargo.toml"
   },

@@ -21,4 +21,12 @@ describe("settings dialog layout", () => {
     expect(SETTINGS_BODY_CLASS).toContain("overflow-y-auto");
     expect(SETTINGS_BODY_CLASS).toContain("min-h-0");
   });
+
+  it("constrains the body width so long content (model paths) cannot push the section wider than the dialog", () => {
+    // Without min-w-0 the flex/grid item's automatic minimum size tracks the
+    // content's min-content width — an unbreakable model-dir path then shoves
+    // the whole pane (and the offline-transcription Switch) past the dialog's
+    // overflow-hidden edge.
+    expect(SETTINGS_BODY_CLASS).toContain("min-w-0");
+  });
 });

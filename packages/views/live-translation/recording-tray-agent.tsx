@@ -125,6 +125,11 @@ export function RecordingTrayAgent() {
       .onEvent((event) => {
         if (event.type === "completed") {
           usePendingRecordingStore.getState().remove(event.session.sessionId);
+          if (event.session.autoStoppedSilence) {
+            // Nobody was around to stop it: tell the user why the recording
+            // ended before the completion dialog takes over.
+            toast.info(t("live_translation.auto_stopped_silence"));
+          }
           void refreshUntilRecordingVisible(queryClient, event.session.sessionId);
           useRecordingCompleteStore.getState().open(event.session);
         } else if (event.type === "error") {
@@ -145,7 +150,7 @@ export function RecordingTrayAgent() {
       disposed = true;
       cleanup?.();
     };
-  }, [api, queryClient]);
+  }, [api, queryClient, t]);
 
   return null;
 }

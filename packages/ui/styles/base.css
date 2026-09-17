@@ -237,6 +237,37 @@
   animation: floating-toolbar-enter var(--duration-quick) var(--ease-out);
 }
 
+/* Floating markdown toolbar material — a lighter coat than .glass-overlay:
+   less popover tint over strong blur so the bar reads as clear glass floating
+   above the text it formats. The compound selector out-specifies the unlayered
+   .glass-overlay rules in tokens.css regardless of import order. */
+.floating-toolbar.glass-overlay {
+  background: color-mix(in srgb, var(--popover) 42%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  backdrop-filter: blur(20px) saturate(160%);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 18%),
+    inset 0 0 0 1px rgb(255 255 255 / 4%);
+}
+
+.dark .floating-toolbar.glass-overlay {
+  background: color-mix(in srgb, var(--popover) 34%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 8%),
+    inset 0 0 0 1px rgb(255 255 255 / 4%);
+}
+
+/* Keep tokens.css's accessibility fallbacks authoritative despite the higher
+   specificity above: near-solid bar when the system reduces transparency. */
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  .floating-toolbar.glass-overlay {
+    background: var(--popover);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
+}
+
 /* Sidebar: open triggers (dropdown/popover) get active background */
 [data-sidebar="menu-button"][data-popup-open] {
   background-color: var(--sidebar-accent);

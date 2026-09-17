@@ -79,7 +79,7 @@ export function WorkspaceLayout() {
             {chatPanelVisible && (
               <motion.div
                 key="chat-panel"
-                className="flex shrink-0 overflow-hidden border-l border-border/50 bg-card/95 shadow-[var(--shadow-panel-left)] backdrop-blur-xl"
+                className="flex shrink-0 overflow-hidden bg-card/95 backdrop-blur-xl"
                 initial={{ width: 0, opacity: 0 }}
                 animate={{ width: chatPanelWidth, opacity: 1 }}
                 exit={{ width: 0, opacity: 0 }}

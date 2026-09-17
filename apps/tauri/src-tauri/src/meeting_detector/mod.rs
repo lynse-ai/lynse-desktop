@@ -287,6 +287,16 @@ fn normalize(value: &str) -> String {
     value.trim().to_lowercase()
 }
 
+/// A whitelisted bundle matches the observed one exactly, or as its parent:
+/// meeting audio often flows through Electron helper processes whose bundle
+/// ID is the app's plus a dot-suffix (e.g. Feishu's `com.electron.lark.iron`).
+fn bundle_matches(whitelisted: &str, observed: &str) -> bool {
+    observed == whitelisted
+        || observed
+            .strip_prefix(whitelisted)
+            .is_some_and(|rest| rest.starts_with('.'))
+}
+
 /// Match one sample of active-audio processes against the whitelist,
 /// deduplicating by app id (several processes of the same app are one match).
 fn match_apps(config: &DetectorConfig, active: &[ActiveProcess]) -> Vec<MatchedApp> {
@@ -297,9 +307,11 @@ fn match_apps(config: &DetectorConfig, active: &[ActiveProcess]) -> Vec<MatchedA
         for app in &config.apps {
             let already = matched.iter().any(|m| m.id == app.id);
             let by_bundle = !app.bundle_ids.is_empty()
-                && bundle
-                    .as_deref()
-                    .is_some_and(|bundle| app.bundle_ids.iter().any(|id| normalize(id) == bundle));
+                && bundle.as_deref().is_some_and(|bundle| {
+                    app.bundle_ids
+                        .iter()
+                        .any(|id| bundle_matches(&normalize(id), bundle))
+                });
             let by_name = !app.process_names.is_empty()
                 && name
                     .as_deref()
@@ -597,6 +609,18 @@ mod tests {
         let config = config(vec![app("wemeet", "腾讯会议", &[], &["wemeetapp"])]);
         let active = vec![active(100, None, Some("WemeetApp"))];
         assert_eq!(match_apps(&config, &active).len(), 1);
+    }
+
+    #[test]
+    fn matches_helper_bundle_ids_by_parent_prefix() {
+        let config = config(vec![app("feishu", "飞书", &["com.electron.lark"], &[])]);
+        // Feishu's audio flows through a helper whose bundle ID is the app's
+        // plus a dot-suffix — still a match.
+        let helper = vec![active(100, Some("com.electron.lark.iron"), Some("Lark Helper (Iron)"))];
+        assert_eq!(match_apps(&config, &helper).len(), 1);
+        // A longer bundle that merely shares a segment is not.
+        let lookalike = vec![active(101, Some("com.electron.larkish"), None)];
+        assert!(match_apps(&config, &lookalike).is_empty());
     }
 
     #[test]

@@ -1,5 +1,19 @@
-import type { DesktopLiveTranslationApi } from "./types";
+import type { DesktopLiveTranslationApi, LiveStartRequest } from "./types";
 import { usePendingRecordingStore } from "./pending-recording-store";
+import { readRecordingDeviceSelection } from "./recording-devices";
+
+/** Merge the persisted device selection into a start request. Explicit ids
+ * on the request win; otherwise the persisted pick applies; otherwise the OS
+ * defaults are followed. Runs at the single choke point every start entry
+ * point (page, tray, quick recording, meeting auto-record) goes through. */
+function withDeviceSelection(args: LiveStartRequest): LiveStartRequest {
+  const selection = readRecordingDeviceSelection();
+  return {
+    ...args,
+    micDeviceId: args.micDeviceId ?? selection.micDeviceId,
+    systemDeviceId: args.systemDeviceId ?? selection.systemDeviceId,
+  };
+}
 
 /**
  * Wrap the raw bridge api so every recording start/stop entry point (pages,
@@ -11,7 +25,7 @@ function withPendingRecording(api: DesktopLiveTranslationApi): DesktopLiveTransl
   const wrapped: DesktopLiveTranslationApi = {
     ...api,
     async start(args) {
-      const result = await api.start(args);
+      const result = await api.start(withDeviceSelection(args));
       usePendingRecordingStore.getState().add({
         sessionId: args.sessionId,
         title: args.title,

@@ -111,6 +111,28 @@ export interface LiveStartRequest {
   connections: LiveConnectionDescriptor[];
   /** Capture sources for the sidecar; omitted/empty means both. */
   audioSources?: LiveAudioSource[];
+  /** Windows: pin the microphone to this WASAPI endpoint id (stable device
+   * identity, never just the name). Omitted follows the OS default. */
+  micDeviceId?: string;
+  /** Windows: pin the system mixdown to this render endpoint id. Omitted
+   * follows the OS default. */
+  systemDeviceId?: string;
+}
+
+/** One selectable WASAPI endpoint, as surfaced by the device pickers. */
+export interface AudioDeviceOption {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  /** Default communications endpoint — what conferencing apps pick. */
+  isDefaultCommunications: boolean;
+}
+
+export interface AudioDevicesSnapshot {
+  inputs: AudioDeviceOption[];
+  outputs: AudioDeviceOption[];
+  defaultInput?: string | null;
+  defaultOutput?: string | null;
 }
 
 export interface LiveResumeRequest {
@@ -137,6 +159,12 @@ export interface CompletedLiveSession {
   transcriptPath: string;
   durationMs: number;
   segments: LiveTranslationSegment[];
+  /** Set when the silence watchdog (60s without mic voice) ended the session. */
+  autoStoppedSilence?: boolean;
+  /** Dual-channel track manifest; absent for legacy single-file recordings. */
+  tracks?: import("../workspace/types").RecordingTrackManifest;
+  /** True when any span of the recording could not be echo-cancelled. */
+  aecDegraded?: boolean;
 }
 
 export interface LiveRecoverySummary {
@@ -159,6 +187,9 @@ export interface DesktopLiveTranslationApi {
   saveProviderConfig: (config: LiveTranslationProviderConfig) => Promise<LiveTranslationProviderConfig>;
   permissions: () => Promise<LivePermissionStatus>;
   requestPermission: (kind: "microphone" | "systemAudio") => Promise<LivePermissionStatus>;
+  /** List selectable capture/playback endpoints (Windows). Empty lists on
+   * platforms without device pickers — the UI hides the selectors then. */
+  audioDevices: () => Promise<AudioDevicesSnapshot>;
   start: (request: LiveStartRequest) => Promise<LiveTranslationSnapshot>;
   pause: () => Promise<LiveTranslationSnapshot>;
   resume: (request: LiveResumeRequest) => Promise<LiveTranslationSnapshot>;
@@ -175,6 +206,9 @@ export interface DesktopLiveTranslationApi {
   discard: (sessionId: string) => Promise<void>;
   listRecoveries: () => Promise<LiveRecoverySummary[]>;
   recover: (sessionId: string) => Promise<CompletedLiveSession>;
+  /** Re-run echo cancellation over a recording's raw tracks (detail page's
+   *  重新处理 entry). Resolves with the refreshed transcription record. */
+  reprocess: (sessionId: string) => Promise<Record<string, unknown>>;
   showSubtitles: (show: boolean) => Promise<void>;
   minimizeToTray: () => Promise<void>;
   showMainWindow: () => Promise<void>;

@@ -6,6 +6,12 @@
   <false/>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.productivity</string>
+  <!-- Full access (not write-only): the save path resolves the default
+       calendar via defaultCalendarForNewEvents, which requires full access
+       on macOS 14+. Requested together with the write-only key kept for
+       TCC migration on already-granted installs. -->
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Lynse 需要日历权限来选择默认日历，并仅在你确认后将待办写入系统日历。</string>
   <key>NSCalendarsWriteOnlyAccessUsageDescription</key>
   <string>Lynse 仅在你确认后将待办写入系统日历。</string>
   <key>NSMicrophoneUsageDescription</key>

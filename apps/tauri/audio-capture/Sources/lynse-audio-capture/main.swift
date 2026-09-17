@@ -8,10 +8,13 @@ import Darwin
 import Foundation
 import ScreenCaptureKit
 
-private let targetSampleRate = 16_000.0
-private let controlLock = NSLock()
+private let targetSampleRate = 48_000.0
+private let recognitionSampleRate = 16_000.0
+private let controlLock2 = NSLock()
 private let microphonePermissionMessage = "缺少麦克风权限。请在“系统设置 → 隐私与安全性 → 麦克风”中允许 Lynse，然后重新启动应用。"
 private let systemAudioPermissionMessage = "缺少“屏幕与系统音频录制”权限。请在“系统设置 → 隐私与安全性 → 屏幕与系统音频录制”中允许 Lynse Audio Capture，然后重新启动 Lynse。"
+
+private let controlLock = NSLock()
 
 private func emit(_ payload: [String: Any]) {
     guard JSONSerialization.isValidJSONObject(payload),
@@ -78,6 +81,84 @@ private func argumentValue(_ name: String) -> String? {
     return arguments[index + 1]
 }
 
+// ───────────────────────────────────────────────────────────────
+// Offline reprocessing: rebuild the processed tracks from the raw
+// recordings (crash recovery, or the "重新处理" entry point).
+// Usage: lynse-audio-capture --process <session-dir>
+// ───────────────────────────────────────────────────────────────
+if let processDirectory = argumentValue("--process") {
+    guard #available(macOS 15.0, *) else {
+        emitError("离线重新处理需要 macOS 15 或更高版本。")
+        exit(2)
+    }
+    let directory = URL(fileURLWithPath: processDirectory, isDirectory: true)
+    let micRawURL = directory.appendingPathComponent("mic_raw.wav")
+    let systemRawURL = directory.appendingPathComponent("system_raw.wav")
+    guard let micRaw = WavReader(path: micRawURL), micRaw.channels == 1 else {
+        emitError("重新处理失败：缺少原始麦克风音轨 (mic_raw.wav)")
+        exit(5)
+    }
+    guard let systemRaw = WavReader(path: systemRawURL), systemRaw.channels == 2 else {
+        emitError("重新处理失败：缺少原始系统音轨 (system_raw.wav)")
+        exit(5)
+    }
+
+    let processedWav: WavWriter
+    let system16kWav: WavWriter
+    do {
+        processedWav = try WavWriter(path: directory.appendingPathComponent("mic_processed.wav").path, sampleRate: 16_000, channels: 1)
+        system16kWav = try WavWriter(path: directory.appendingPathComponent("system.wav").path, sampleRate: 16_000, channels: 1)
+    } catch {
+        emitError("重新处理失败：\(error.localizedDescription)")
+        exit(5)
+    }
+
+    let processor = DualChannelProcessor(enableAec: true)
+    processor.onMicProcessed16k = { startMs, samples in
+        processedWav.write(samples: samples, firstFrameElapsedMs: startMs)
+    }
+    processor.onSystem16k = { startMs, samples in
+        system16kWav.write(samples: samples, firstFrameElapsedMs: startMs)
+    }
+
+    let chunk = DualChannelProcessor.processingRate / 50  // 20 ms
+    let frameCount = min(micRaw.frameCount, systemRaw.frameCount)
+    var offset = 0
+    while offset < frameCount {
+        let end = min(offset + chunk, frameCount)
+        let micChunk = Array(micRaw.samples[offset * micRaw.channels..<end * micRaw.channels])
+            .map { Float($0) / 32_767.0 }
+        let systemChunk = Array(systemRaw.samples[offset * systemRaw.channels..<end * systemRaw.channels])
+            .map { Float($0) / 32_767.0 }
+        let position = Int64(offset)
+        // Alternate push order to mirror the live callback races.
+        if (offset / chunk) % 2 == 0 {
+            processor.pushMic(positionSamples: position, samples: micChunk)
+            processor.pushSystem(positionSamples: position, samples: systemChunk)
+        } else {
+            processor.pushSystem(positionSamples: position, samples: systemChunk)
+            processor.pushMic(positionSamples: position, samples: micChunk)
+        }
+        offset = end
+    }
+    processor.flush()
+    processedWav.close()
+    system16kWav.close()
+
+    let degraded = processor.snapshotDegradedIntervals()
+    TrackManifest.dualChannel(
+        engine: processor.aecActive ? AecProcessor.engineId : "none",
+        degraded: degraded
+    ).write(to: directory)
+    emit([
+        "event": "processed",
+        "durationMs": UInt64(frameCount) * 1_000 / UInt64(DualChannelProcessor.processingRate),
+        "engine": processor.aecActive ? AecProcessor.engineId : "none",
+        "degradedIntervals": degraded.map { [$0.startMs, $0.endMs] },
+    ])
+    exit(0)
+}
+
 guard #available(macOS 15.0, *) else {
     emitError("实时双流转写需要 macOS 15 或更高版本。")
     exit(2)
@@ -98,6 +179,12 @@ case "mic": (captureMic, captureSystem) = (true, false)
 case "system": (captureMic, captureSystem) = (false, true)
 default: (captureMic, captureSystem) = (true, true)
 }
+// Dual-channel recording: raw tracks + AEC on the microphone. `--aec` is the
+// feature switch — without it the sidecar runs the legacy 16 kHz pipeline
+// (rollback keeps reading new-format recordings, it only affects new ones).
+let aecRequested = arguments.contains("--aec")
+let dualChannel = aecRequested && captureMic && captureSystem
+
 guard !captureMic || microphonePermission() == "granted" else {
     emitError(microphonePermissionMessage)
     exit(4)
@@ -217,61 +304,6 @@ private extension NSLock {
     }
 }
 
-private final class WavWriter {
-    private let handle: FileHandle
-    private var sampleCount: UInt64 = 0
-    private var wroteFirstSample = false
-    private var closed = false
-    private let lock = NSLock()
-
-    init(path: String) throws {
-        FileManager.default.createFile(atPath: path, contents: Data(repeating: 0, count: 44))
-        handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
-        try handle.seek(toOffset: 44)
-    }
-
-    func write(_ samples: [Int16], firstSampleElapsedMs: UInt64) {
-        lock.withLock {
-            guard !closed else { return }
-            let intendedSample = firstSampleElapsedMs.saturatingMultiply(16)
-            if !wroteFirstSample { wroteFirstSample = true }
-            if intendedSample > sampleCount {
-                let padding = Int(min(intendedSample - sampleCount, UInt64(Int.max)))
-                let silence = [Int16](repeating: 0, count: padding)
-                try? handle.write(contentsOf: silence.withUnsafeBytesData())
-                sampleCount += UInt64(padding)
-            }
-            try? handle.write(contentsOf: samples.withUnsafeBytesData())
-            sampleCount += UInt64(samples.count)
-        }
-    }
-
-    func close() {
-        lock.withLock {
-            guard !closed else { return }
-            closed = true
-            let dataBytes = UInt32(min(sampleCount * 2, UInt64(UInt32.max)))
-            var header = Data()
-            header.append(Data("RIFF".utf8))
-            appendLittleEndian(UInt32(36) + dataBytes, to: &header)
-            header.append(Data("WAVEfmt ".utf8))
-            appendLittleEndian(UInt32(16), to: &header)
-            appendLittleEndian(UInt16(1), to: &header)
-            appendLittleEndian(UInt16(1), to: &header)
-            appendLittleEndian(UInt32(16_000), to: &header)
-            appendLittleEndian(UInt32(32_000), to: &header)
-            appendLittleEndian(UInt16(2), to: &header)
-            appendLittleEndian(UInt16(16), to: &header)
-            header.append(Data("data".utf8))
-            appendLittleEndian(dataBytes, to: &header)
-            try? handle.seek(toOffset: 0)
-            try? handle.write(contentsOf: header)
-            try? handle.synchronize()
-            try? handle.close()
-        }
-    }
-}
-
 private extension Array where Element == Int16 {
     func withUnsafeBytesData() -> Data {
         withUnsafeBytes { Data($0) }
@@ -331,49 +363,28 @@ private final class LevelState {
     }
 }
 
-private final class FrameSink {
-    private let source: UInt8
-    private let socket: LocalSocketWriter
-    private let wav: WavWriter
-    private var assembler = PCMFrameAssembler()
-    private let queue: DispatchQueue
-    /// Cross-stream echo-gate hooks, active only in dual-stream mode.
-    /// `observe` feeds the reference (system) stream into the gate; `admit`
-    /// decides whether mic frames reach the recognition socket. The WAV is
-    /// always written, so suppressed audio is never lost from the recording.
-    private let observe: (([Int16]) -> Void)?
-    private let admit: (([Int16]) -> Bool)?
+// ───────────────────────────────────────────────────────────────
+// Recognition output: 16 kHz WAV + recognition socket, 20 ms frames.
+// ───────────────────────────────────────────────────────────────
+private final class RecognitionSink {
+    let source: UInt8
+    let socket: LocalSocketWriter
+    let wav: WavWriter
+    var assembler = PCMFrameAssembler()
+    let queue: DispatchQueue
 
-    init(
-        source: UInt8,
-        name: String,
-        socket: LocalSocketWriter,
-        wav: WavWriter,
-        observe: (([Int16]) -> Void)? = nil,
-        admit: (([Int16]) -> Bool)? = nil
-    ) {
+    init(source: UInt8, name: String, socket: LocalSocketWriter, wav: WavWriter) {
         self.source = source
         self.socket = socket
         self.wav = wav
-        self.observe = observe
-        self.admit = admit
         queue = DispatchQueue(label: "app.lynse.capture.\(name)")
     }
 
-    func consume(_ floats: [Float], callbackElapsedMs: UInt64) {
+    func consume(_ samples: [Int16], firstFrameElapsedMs: UInt64) {
         queue.async {
-            let durationMs = UInt64((Double(floats.count) / targetSampleRate * 1_000).rounded())
-            let chunkStartMs = callbackElapsedMs > durationMs ? callbackElapsedMs - durationMs : 0
-            let samples = floats.map { value -> Int16 in
-                let scaled = Int((max(-1, min(1, value)) * 32_767).rounded())
-                return Int16(max(-32_768, min(32_767, scaled)))
-            }
-            self.wav.write(samples, firstSampleElapsedMs: chunkStartMs)
-            self.observe?(samples)
-            let frames = self.assembler.append(samples: samples, chunkStartMs: chunkStartMs)
-            if self.admit?(samples) ?? true {
-                self.send(frames)
-            }
+            self.wav.write(samples: samples, firstFrameElapsedMs: firstFrameElapsedMs)
+            let frames = self.assembler.append(samples: samples, chunkStartMs: firstFrameElapsedMs)
+            self.send(frames)
         }
     }
 
@@ -400,6 +411,54 @@ private final class FrameSink {
     }
 }
 
+// ───────────────────────────────────────────────────────────────
+// Legacy single-stream sink (rollback / mic-only / system-only modes):
+// converts 48 kHz capture straight to 16 kHz mono, no AEC, no raw tracks.
+// ───────────────────────────────────────────────────────────────
+private final class LegacySink {
+    let source: UInt8
+    let recognition: RecognitionSink
+    var decimator = Decimator48to16()
+    let queue: DispatchQueue
+
+    init(source: UInt8, name: String, recognition: RecognitionSink) {
+        self.source = source
+        self.recognition = recognition
+        queue = DispatchQueue(label: "app.lynse.capture.legacy.\(name)")
+    }
+
+    func consume(_ floats: [Float], positionSamples: Int64) {
+        queue.async {
+            let decimated = self.decimator.decimate(floats)
+            guard !decimated.isEmpty else { return }
+            let startMs = UInt64(Float(positionSamples) / 48.0)
+            let samples = decimated.map { value -> Int16 in
+                let clamped = max(-1.0, min(1.0, value))
+                return Int16(clamping: Int((clamped * 32_767).rounded()))
+            }
+            self.recognition.consume(samples, firstFrameElapsedMs: startMs)
+        }
+    }
+
+    func close() {
+        queue.sync {
+            let tail = self.decimator.flush()
+            if !tail.isEmpty {
+                recognition.consume(tail.map { value -> Int16 in
+                    let clamped = max(-1.0, min(1.0, value))
+                    return Int16(clamping: Int((clamped * 32_767).rounded()))
+                }, firstFrameElapsedMs: UInt64.max)  // contiguous: assembler appends
+            }
+            recognition.close()
+        }
+    }
+}
+
+// ───────────────────────────────────────────────────────────────
+// ScreenCaptureKit output: converts each callback to the canonical
+// 48 kHz format (mic mono / system stereo) and pushes it, tagged with
+// its presentation timestamp, onto the shared processing pipeline.
+// ───────────────────────────────────────────────────────────────
 private final class AudioConverterState {
     var formatDescription: String = ""
     var converter: AVAudioConverter?
@@ -408,19 +467,31 @@ private final class AudioConverterState {
 @available(macOS 15.0, *)
 private final class CaptureOutput: NSObject, SCStreamOutput {
     let source: UInt8
-    let sink: FrameSink
+    let channels: Int
     let clock: ActiveClock
     let levels: LevelState
+    let onAudio: (_ positionSamples: Int64, _ floats: [Float]) -> Void
+    let timeline: TimelineBox
     private let converterState = AudioConverterState()
 
-    init(source: UInt8, sink: FrameSink, clock: ActiveClock, levels: LevelState) {
+    init(
+        source: UInt8,
+        channels: Int,
+        clock: ActiveClock,
+        levels: LevelState,
+        timeline: TimelineBox,
+        onAudio: @escaping (_ positionSamples: Int64, _ floats: [Float]) -> Void
+    ) {
         self.source = source
-        self.sink = sink
+        self.channels = channels
         self.clock = clock
         self.levels = levels
+        self.timeline = timeline
+        self.onAudio = onAudio
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        guard !shuttingDown else { return }
         guard sampleBuffer.isValid,
               let description = sampleBuffer.formatDescription,
               let basic = CMAudioFormatDescriptionGetStreamBasicDescription(description)?.pointee else { return }
@@ -430,12 +501,16 @@ private final class CaptureOutput: NSObject, SCStreamOutput {
         guard let inputFormat, inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else { return }
         let signature = "\(inputFormat.sampleRate)-\(inputFormat.channelCount)-\(inputFormat.commonFormat.rawValue)-\(inputFormat.isInterleaved)"
         if converterState.converter == nil || converterState.formatDescription != signature {
-            guard let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: targetSampleRate, channels: 1, interleaved: false) else { return }
+            guard let target = AVAudioFormat(
+                commonFormat: .pcmFormatFloat32,
+                sampleRate: targetSampleRate,
+                channels: UInt32(channels),
+                interleaved: false
+            ) else { return }
             converterState.converter = AVAudioConverter(from: inputFormat, to: target)
             converterState.formatDescription = signature
         }
         guard let converter = converterState.converter else { return }
-        let target = converter.outputFormat
 
         let frames = AVAudioFrameCount(sampleBuffer.numSamples)
         guard frames > 0,
@@ -469,7 +544,7 @@ private final class CaptureOutput: NSObject, SCStreamOutput {
 
         let ratio = targetSampleRate / inputFormat.sampleRate
         let capacity = AVAudioFrameCount(Double(frames) * ratio + 1_024)
-        guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
+        guard let output = AVAudioPCMBuffer(pcmFormat: converter.outputFormat, frameCapacity: capacity) else { return }
         var error: NSError?
         var supplied = false
         let conversion = converter.convert(to: output, error: &error) { _, state in
@@ -481,10 +556,30 @@ private final class CaptureOutput: NSObject, SCStreamOutput {
             state.pointee = .haveData
             return input
         }
-        guard conversion != .error, output.frameLength > 0, let channels = output.floatChannelData else { return }
-        let samples = Array(UnsafeBufferPointer(start: channels[0], count: Int(output.frameLength)))
-        levels.record(source: Int(source), samples: samples)
-        sink.consume(samples, callbackElapsedMs: clock.elapsedMs())
+        guard conversion != .error, output.frameLength > 0, let channelData = output.floatChannelData else { return }
+
+        // The sample buffer's presentation timestamp places the audio on the
+        // shared host clock — both sources use the same timebase, so the
+        // tracks stay sample-aligned without arrival-time guesses.
+        let ptsSeconds = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+        guard let position = timeline.position(firstSampleSeconds: ptsSeconds) else { return }
+
+        let frameLength = Int(output.frameLength)
+        var floats: [Float]
+        if channels == 1 {
+            floats = Array(UnsafeBufferPointer(start: channelData[0], count: frameLength))
+        } else {
+            // Interleave the non-interleaved converter output.
+            floats = [Float](repeating: 0, count: frameLength * channels)
+            for channel in 0..<channels {
+                let channelSamples = UnsafeBufferPointer(start: channelData[channel], count: frameLength)
+                for index in 0..<frameLength {
+                    floats[index * channels + channel] = channelSamples[index]
+                }
+            }
+        }
+        levels.record(source: Int(source), samples: floats)
+        onAudio(position, floats)
     }
 }
 
@@ -515,27 +610,88 @@ do {
 
 private let clock = ActiveClock()
 private let levels = LevelState()
-/// Shared echo gate — active only in dual-stream mode, where speaker playback
-/// can feed the system audio back into the microphone as pure echo.
-private let echoGate: EchoGate? = (captureMic && captureSystem) ? EchoGate() : nil
-private let micWav = try WavWriter(path: outputDirectory.appendingPathComponent("mic.wav").path)
-private let systemWav = try WavWriter(path: outputDirectory.appendingPathComponent("system.wav").path)
-private let micSink = FrameSink(
-    source: 0,
-    name: "mic",
-    socket: socketWriter,
-    wav: micWav,
-    admit: echoGate.map { gate in { gate.admitMic(samples: $0) } }
-)
-private let systemSink = FrameSink(
-    source: 1,
-    name: "system",
-    socket: socketWriter,
-    wav: systemWav,
-    observe: echoGate.map { gate in { gate.pushSystem(samples: $0) } }
-)
-private let micOutput = CaptureOutput(source: 0, sink: micSink, clock: clock, levels: levels)
-private let systemOutput = CaptureOutput(source: 1, sink: systemSink, clock: clock, levels: levels)
+
+// ───────────────────────────────────────────────────────────────
+// Pipeline wiring: dual-channel (raw tracks + AEC) vs legacy.
+// ───────────────────────────────────────────────────────────────
+/// Reference box so capture outputs always read the CURRENT timeline
+/// (re-anchored on every capture restart) rather than a stale copy.
+private final class TimelineBox {
+    var timeline = SampleTimeline()
+    func position(firstSampleSeconds pts: Double) -> Int64? {
+        timeline.position(firstSampleSeconds: pts)
+    }
+}
+
+private let micTimeline = TimelineBox()
+private let systemTimeline = TimelineBox()
+
+private let processor = DualChannelProcessor(enableAec: dualChannel)
+
+private var micRecognition: RecognitionSink!
+private var systemRecognition: RecognitionSink!
+private var micRawWav: WavWriter?
+private var systemRawWav: WavWriter?
+private var legacyMicSink: LegacySink?
+private var legacySystemSink: LegacySink?
+
+do {
+    if dualChannel {
+        micRecognition = RecognitionSink(
+            source: 0, name: "mic", socket: socketWriter,
+            wav: try WavWriter(path: outputDirectory.appendingPathComponent("mic_processed.wav").path, sampleRate: 16_000, channels: 1)
+        )
+        systemRecognition = RecognitionSink(
+            source: 1, name: "system", socket: socketWriter,
+            wav: try WavWriter(path: outputDirectory.appendingPathComponent("system.wav").path, sampleRate: 16_000, channels: 1)
+        )
+        micRawWav = try WavWriter(path: outputDirectory.appendingPathComponent("mic_raw.wav").path, sampleRate: 48_000, channels: 1)
+        systemRawWav = try WavWriter(path: outputDirectory.appendingPathComponent("system_raw.wav").path, sampleRate: 48_000, channels: 2)
+        legacyMicSink = nil
+        legacySystemSink = nil
+
+        processor.onRawMic = { startMs, samples in
+            micRawWav?.write(samples: samples, firstFrameElapsedMs: startMs)
+        }
+        processor.onRawSystem = { startMs, samples in
+            systemRawWav?.write(samples: samples, firstFrameElapsedMs: startMs)
+        }
+        processor.onMicProcessed16k = { startMs, samples in
+            micRecognition.consume(samples, firstFrameElapsedMs: startMs)
+        }
+        processor.onSystem16k = { startMs, samples in
+            systemRecognition.consume(samples, firstFrameElapsedMs: startMs)
+        }
+    } else {
+        micRecognition = RecognitionSink(
+            source: 0, name: "mic", socket: socketWriter,
+            wav: try WavWriter(path: outputDirectory.appendingPathComponent("mic.wav").path, sampleRate: 16_000, channels: 1)
+        )
+        systemRecognition = RecognitionSink(
+            source: 1, name: "system", socket: socketWriter,
+            wav: try WavWriter(path: outputDirectory.appendingPathComponent("system.wav").path, sampleRate: 16_000, channels: 1)
+        )
+        if captureMic {
+            legacyMicSink = LegacySink(source: 0, name: "mic", recognition: micRecognition)
+        } else {
+            legacyMicSink = nil
+        }
+        if captureSystem {
+            legacySystemSink = LegacySink(source: 1, name: "system", recognition: systemRecognition)
+        } else {
+            legacySystemSink = nil
+        }
+        micRawWav = nil
+        systemRawWav = nil
+    }
+} catch {
+    emitError("recording files unavailable: \(error.localizedDescription)")
+    exit(3)
+}
+
+private var micOutput: CaptureOutput!
+private var systemOutput: CaptureOutput!
+
 private let videoOutput = NoopVideoOutput()
 private let captureDelegate = CaptureDelegate()
 
@@ -544,6 +700,46 @@ private var paused = false
 private var shuttingDown = false
 private var restartingCapture = false
 private var lastMicrophoneDeviceID = AVCaptureDevice.default(for: .audio)?.uniqueID
+
+@available(macOS 15.0, *)
+private func makeOutputs() {
+    if dualChannel {
+        micOutput = CaptureOutput(
+            source: 0, channels: 1, clock: clock, levels: levels,
+            timeline: micTimeline,
+            onAudio: { position, floats in processor.pushMic(positionSamples: position, samples: floats) }
+        )
+        systemOutput = CaptureOutput(
+            source: 1, channels: 2, clock: clock, levels: levels,
+            timeline: systemTimeline,
+            onAudio: { position, floats in processor.pushSystem(positionSamples: position, samples: floats) }
+        )
+    } else {
+        if captureMic {
+            micOutput = CaptureOutput(
+                source: 0, channels: 1, clock: clock, levels: levels,
+                timeline: micTimeline,
+                onAudio: { position, floats in legacyMicSink?.consume(floats, positionSamples: position) }
+            )
+        }
+        if captureSystem {
+            systemOutput = CaptureOutput(
+                source: 1, channels: 2, clock: clock, levels: levels,
+                timeline: systemTimeline,
+                onAudio: { position, floats in legacySystemSink?.consume(floats, positionSamples: position) }
+            )
+        }
+    }
+}
+
+/// Re-bases both track timelines on the processing pipeline's hand-over
+/// position. Called before every capture (re)start so device switches,
+/// pauses and unexpected SCK stops never rewind the shared timeline.
+private func rebaseTimelines() {
+    let base = processor.prepareForRestart()
+    micTimeline.timeline.beginRun(baseSamples: base)
+    systemTimeline.timeline.beginRun(baseSamples: base)
+}
 
 @available(macOS 15.0, *)
 func createCaptureStream() async throws -> SCStream {
@@ -562,11 +758,12 @@ func createCaptureStream() async throws -> SCStream {
     configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
     configuration.queueDepth = 3
 
+    makeOutputs()
     let stream = SCStream(filter: filter, configuration: configuration, delegate: captureDelegate)
-    if captureSystem {
+    if captureSystem, let systemOutput {
         try stream.addStreamOutput(systemOutput, type: .audio, sampleHandlerQueue: DispatchQueue(label: "app.lynse.capture.system"))
     }
-    if configuration.captureMicrophone {
+    if configuration.captureMicrophone, let micOutput {
         try stream.addStreamOutput(micOutput, type: .microphone, sampleHandlerQueue: DispatchQueue(label: "app.lynse.capture.mic"))
     }
     try stream.addStreamOutput(videoOutput, type: .screen, sampleHandlerQueue: DispatchQueue(label: "app.lynse.capture.video"))
@@ -576,6 +773,7 @@ func createCaptureStream() async throws -> SCStream {
 @available(macOS 15.0, *)
 func startCapture(event: String = "ready") async {
     guard !shuttingDown else { return }
+    rebaseTimelines()
     do {
         let stream = try await createCaptureStream()
         try await stream.startCapture()
@@ -584,6 +782,7 @@ func startCapture(event: String = "ready") async {
             "event": event,
             "microphone": microphonePermission() == "granted",
             "systemAudio": CGPreflightScreenCaptureAccess(),
+            "dualChannel": dualChannel,
         ]
         if let id = lastMicrophoneDeviceID, let device = AVCaptureDevice(uniqueID: id) {
             readyPayload["microphoneCaptureDeviceID"] = id
@@ -609,7 +808,6 @@ func restartCapture(reason: String) {
     guard !paused, !shuttingDown, !restartingCapture else { return }
     restartingCapture = true
     emit(["event": "diagnostic", "message": reason])
-    echoGate?.reset()
     let stream = captureStream
     captureStream = nil
     Task {
@@ -661,7 +859,6 @@ levelTimer.setEventHandler {
         "mic": mic,
         "system": system,
         "elapsedMs": clock.elapsedMs(),
-        "micSuppressed": echoGate?.isSuppressed ?? false,
     ])
 }
 levelTimer.resume()
@@ -705,18 +902,40 @@ let shutdown: () -> Void = {
     levelTimer.cancel()
     deviceTimer.cancel()
     parentTimer.cancel()
-    micSink.close()
-    systemSink.close()
-    socketWriter.close()
-    emit(["event": "stopped", "elapsedMs": clock.elapsedMs()])
+    // Drain in order: capture stops delivering, the pipeline flushes its
+    // echo-cancel and resampler tails, then writers close on a complete
+    // timeline so the final words survive.
     let stream = captureStream
     captureStream = nil
     Task {
         if let stream { try? await stream.stopCapture() }
-        exit(0)
+        DispatchQueue.main.async {
+            finishAndExit()
+        }
     }
 }
 shutdownHandler = shutdown
+
+/// Closes every writer on the processing queue's turn and exits.
+private func finishAndExit() {
+    processor.flush()
+    micRecognition.close()
+    if dualChannel || captureSystem {
+        systemRecognition.close()
+    }
+    micRawWav?.close()
+    systemRawWav?.close()
+    legacyMicSink?.close()
+    legacySystemSink?.close()
+    if dualChannel {
+        let engine = processor.aecActive ? AecProcessor.engineId : "none"
+        TrackManifest.dualChannel(engine: engine, degraded: processor.snapshotDegradedIntervals())
+            .write(to: outputDirectory)
+    }
+    socketWriter.close()
+    emit(["event": "stopped", "elapsedMs": clock.elapsedMs()])
+    exit(0)
+}
 
 let termSignal = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
 let intSignal = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
@@ -727,5 +946,7 @@ intSignal.setEventHandler(handler: shutdown)
 termSignal.resume()
 intSignal.resume()
 
-Task { await startCapture() }
+if #available(macOS 15.0, *) {
+    Task { await startCapture() }
+}
 RunLoop.main.run()

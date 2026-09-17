@@ -22,6 +22,9 @@ import {
   QWEN3_MODELS,
   QWEN3_MODEL_LABELS,
   DEFAULT_QWEN3_MODEL,
+  MOSS_MODELS,
+  MOSS_MODEL_LABELS,
+  DEFAULT_MOSS_MODEL,
   providerModelId,
 } from "../workspace/local-transcription";
 import type { LocalHotwordPackage } from "../workspace/types";
@@ -31,6 +34,7 @@ import type { LocalHotwordPackage } from "../workspace/types";
  *  deserialize but the engine must be re-selected. */
 const ENGINE_OPTIONS: { value: SttEngine; labelKey: string }[] = [
   { value: "qwen3", labelKey: "settings.stt_engine_qwen3" },
+  { value: "moss", labelKey: "settings.stt_engine_moss" },
   { value: "whisper", labelKey: "settings.stt_engine_whisper" },
   { value: "vibeasr", labelKey: "settings.stt_engine_vibeasr" },
   { value: "mlx", labelKey: "settings.stt_engine_mlx" },
@@ -68,6 +72,12 @@ function providerForEngine(engine: SttEngine, prev?: SttProviderConfig): SttProv
         provider: "mlx",
         model: prev?.provider === "mlx" ? prev.model ?? "whisper-large-v3-turbo" : "whisper-large-v3-turbo",
         hotword_package_id: prev?.provider === "mlx" ? prev.hotword_package_id ?? null : null,
+      };
+    case "moss":
+      return {
+        provider: "moss",
+        model: prev?.provider === "moss" ? prev.model ?? DEFAULT_MOSS_MODEL : DEFAULT_MOSS_MODEL,
+        hotword_package_id: prev?.provider === "moss" ? prev.hotword_package_id ?? null : null,
       };
   }
 }
@@ -259,6 +269,25 @@ function EngineFields({
               {QWEN3_MODELS.map((id) => (
                 <option key={id} value={id}>
                   {QWEN3_MODEL_LABELS[id]}
+                </option>
+              ))}
+            </select>
+          </div>
+        </>
+      )}
+      {config.provider === "moss" && (
+        <>
+          <p className="text-2xs text-muted-foreground">{t("settings.stt_moss_hint")}</p>
+          <div className="space-y-1">
+            <Label className="text-2xs">{t("settings.stt_moss_model")}</Label>
+            <select
+              value={config.model ?? DEFAULT_MOSS_MODEL}
+              onChange={(event) => onChange({ ...config, model: event.target.value })}
+              className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
+            >
+              {MOSS_MODELS.map((id) => (
+                <option key={id} value={id}>
+                  {MOSS_MODEL_LABELS[id]}
                 </option>
               ))}
             </select>

@@ -1,0 +1,9 @@
+# Pinned upstream snapshots for the AEC3 echo-cancellation engine.
+# webrtc-audio-processing 1.3 — Debian pristine orig tarball of the
+# freedesktop PulseAudio packaging (identical content tree to the
+# freedesktop.org release tarball).
+95552fc17faa0202133707bbb3727e8c2cf64d4266fe31bfdb2298d769c1db75  webrtc-audio-processing-1.3.tar.gz
+# abseil-cpp 20230125.1 — the exact version pinned by upstream's abseil wrap.
+81311c17599b3712069ded20cca09a62ab0bf2a89dfa16993786c8782b7ed145  abseil-cpp-20230125.1.tar.gz
+# meson build overlay for abseil from meson wrapdb (abseil-cpp_20230125.1-4).
+112ee72052049d930396c2778fc1c6e184137905dd75d60a97dcfc386426610d  abseil-cpp_20230125.1-4_patch.zip

@@ -27,6 +27,8 @@ import { FloatingMarkdownToolbar } from "./center-panel/markdown-toolbar";
 import { DeleteConfirmDialog } from "./delete-confirm-dialog";
 import { AudioPlayer } from "./audio-player";
 import type { AudioPlayerHandle } from "./audio-player";
+import { getDesktopLiveTranslationApi } from "../live-translation/desktop-api";
+import type { RecordingTrackManifest } from "./types";
 import { getSpeakerColor } from "@lynse/ui/lib/speaker";
 import { getDisplayTitle, type EditedTitleState } from "./title-edit-state";
 import {
@@ -269,6 +271,52 @@ export function ContentPanel() {
   } = useFileConclusions(selectedItemId);
   const { data: transcription, isLoading: transLoading } = useFileTranscription(selectedItemId);
   const { data: audioUrl } = useFileAudioUrl(selectedItemId);
+  // Dual-channel recordings: per-track listening (全部／本机／远端) and the
+  // echo-cancellation status banner.
+  const [trackFilter, setTrackFilter] = useState<"all" | "mic" | "system">("all");
+  const [trackAudioUrl, setTrackAudioUrl] = useState<string | null>(null);
+  const [reprocessing, setReprocessing] = useState(false);
+  const selectedTrackManifest = useMemo(() => {
+    const manifest = transcription?.trackManifest as RecordingTrackManifest | undefined;
+    if (!manifest?.tracks?.length) return null;
+    const has = (id: string) => manifest.tracks.some((track) => track.id === id);
+    return has("mic_processed") && has("system_processed") ? manifest : null;
+  }, [transcription]);
+  const selectedAecDegraded = isLocalFileId(selectedItemId) && !!transcription?.aecDegraded;
+  const selectedTrackStatuses = transcription?.trackStatuses as
+    | Partial<Record<"mic" | "system", { status: string; error?: string }>>
+    | undefined;
+  const selectedLiveSessionId =
+    (transcription as { liveSessionId?: string } | undefined)?.liveSessionId ?? null;
+
+  useEffect(() => {
+    setTrackFilter("all");
+    setTrackAudioUrl(null);
+  }, [selectedItemId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const entry = selectedTrackManifest?.tracks.find((track) =>
+      track.id === (trackFilter === "mic" ? "mic_processed" : "system_processed")
+    );
+    if (trackFilter === "all" || !selectedItemId || !entry) {
+      setTrackAudioUrl(null);
+      return;
+    }
+    getDesktopLocalTranscriptionApi()
+      ?.getTrackAudioUrl(selectedItemId, entry.file)
+      .then((url) => {
+        if (!cancelled) setTrackAudioUrl(url ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setTrackAudioUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [trackFilter, selectedItemId, selectedTrackManifest]);
+
+  const playerAudioUrl = trackFilter === "all" ? (audioUrl as string | null) : (trackAudioUrl ?? (audioUrl as string | null));
   const updateConclusion = useUpdateConclusion();
   const deleteConclusion = useDeleteConclusion();
   const rerunSummary = useRerunSummary();
@@ -511,6 +559,39 @@ export function ContentPanel() {
         });
       },
     });
+  }, [refreshLocalQueries, selectedItemId]);
+
+  const handleReprocessRecording = useCallback(async () => {
+    if (!selectedItemId || !selectedLiveSessionId) return;
+    setReprocessing(true);
+    try {
+      await getDesktopLiveTranslationApi()?.reprocess(selectedLiveSessionId);
+      refreshLocalQueries(selectedItemId);
+    } catch (error) {
+      setLocalRetryError(error instanceof Error ? error.message : String(error));
+      refreshLocalQueries(selectedItemId);
+    } finally {
+      setReprocessing(false);
+    }
+  }, [refreshLocalQueries, selectedItemId, selectedLiveSessionId]);
+
+  const handleRetryTrack = useCallback(async (track: "mic" | "system") => {
+    if (!selectedItemId) return;
+    setRetryingLocalFileIds((current) => new Set(current).add(selectedItemId));
+    refreshLocalQueries(selectedItemId);
+    try {
+      await getDesktopLocalTranscriptionApi()?.retry(selectedItemId, { track });
+      refreshLocalQueries(selectedItemId);
+    } catch (error) {
+      setLocalRetryError(error instanceof Error ? error.message : String(error));
+      refreshLocalQueries(selectedItemId);
+    } finally {
+      setRetryingLocalFileIds((current) => {
+        const next = new Set(current);
+        next.delete(selectedItemId);
+        return next;
+      });
+    }
   }, [refreshLocalQueries, selectedItemId]);
 
   const handleDeleteLocalTranscription = useCallback(async () => {
@@ -950,12 +1031,67 @@ export function ContentPanel() {
 
                     {contentTab === "transcription" && (
                       <div className="flex flex-col flex-1 min-h-0 space-y-3">
+                        {/* Per-track listening for dual-channel recordings */}
+                        {isLocalSelectedItem && selectedTrackManifest && playerAudioUrl && (
+                          <div className="flex w-full shrink-0 flex-wrap items-center gap-1.5">
+                            {([
+                              ["all", t("workspace.track_all")],
+                              ["mic", t("workspace.track_local")],
+                              ["system", t("workspace.track_remote")],
+                            ] as const).map(([value, label]) => (
+                              <button
+                                key={value}
+                                type="button"
+                                onClick={() => setTrackFilter(value)}
+                                className={`rounded-full px-2.5 py-0.5 text-xs transition-colors ${
+                                  trackFilter === value
+                                    ? "bg-accent text-accent-foreground"
+                                    : "bg-muted/60 text-muted-foreground hover:bg-accent/40"
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {/* Echo-cancellation degraded: honest status + repair entry */}
+                        {isLocalSelectedItem && selectedAecDegraded && (
+                          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-foreground">
+                            <span>{t("workspace.aec_degraded_banner")}</span>
+                            {selectedLiveSessionId && (
+                              <button
+                                type="button"
+                                disabled={reprocessing}
+                                onClick={handleReprocessRecording}
+                                className="rounded-md bg-accent px-2 py-0.5 text-xs text-accent-foreground disabled:opacity-60"
+                              >
+                                {reprocessing ? t("workspace.reprocessing") : t("workspace.reprocess")}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {/* A track's offline transcription failed: targeted retry */}
+                        {isLocalSelectedItem &&
+                          (["mic", "system"] as const)
+                            .filter((track) => selectedTrackStatuses?.[track]?.status === "failed")
+                            .map((track) => (
+                              <button
+                                key={track}
+                                type="button"
+                                onClick={() => handleRetryTrack(track)}
+                                className="w-full shrink-0 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-left text-xs text-foreground hover:bg-destructive/20"
+                              >
+                                {(track === "mic" ? t("workspace.track_local") : t("workspace.track_remote")) +
+                                  " · " +
+                                  t("workspace.retry_track")}
+                              </button>
+                            ))}
                         {/* Audio player — always visible when audio URL exists */}
-                        {audioUrl && (
+                        {playerAudioUrl && (
                           <div className="w-full shrink-0">
                             <AudioPlayer
                               ref={audioPlayerRef}
-                              src={audioUrl as string}
+                              src={playerAudioUrl}
                               highlightTimeMs={highlightTimeMs}
                               onEdit={isLocalSelectedItem ? handleEditSelectedAudio : undefined}
                             />

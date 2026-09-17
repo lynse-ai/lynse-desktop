@@ -9,7 +9,7 @@ import type {
   WorkspaceItem,
 } from "./types";
 
-export type SttEngine = "qwen3" | "funasr" | "whisper" | "vibeasr" | "mlx";
+export type SttEngine = "qwen3" | "funasr" | "whisper" | "vibeasr" | "mlx" | "moss";
 
 export type WhisperModel = "small-q5_1" | "medium-q5_0" | "large-v3-turbo-q5_0";
 
@@ -32,6 +32,14 @@ export const QWEN3_MODEL_LABELS: Record<Qwen3Model, string> = {
 };
 export const DEFAULT_QWEN3_MODEL: Qwen3Model = "qwen3-asr-1.7b-8bit";
 
+/** MOSS-Transcribe-Diarize catalog ids (must mirror the Rust `STT_MODELS`). */
+export type MossModel = "moss-transcribe-8bit";
+export const MOSS_MODELS: MossModel[] = ["moss-transcribe-8bit"];
+export const MOSS_MODEL_LABELS: Record<MossModel, string> = {
+  "moss-transcribe-8bit": "MOSS-Transcribe-Diarize 0.9B（说话人分离，MLX 8-bit，~1.1 GiB）",
+};
+export const DEFAULT_MOSS_MODEL: MossModel = "moss-transcribe-8bit";
+
 export type SttProviderConfig =
   | { provider: "qwen3"; model?: Qwen3Model | string; hotword_package_id?: string | null }
   | { provider: "funasr"; expected_speakers?: number | null; hotword_package_id?: string | null }
@@ -43,7 +51,8 @@ export type SttProviderConfig =
       hotword_package_id?: string | null;
     }
   | { provider: "vibeasr"; hotword_package_id?: string | null }
-  | { provider: "mlx"; model?: string; hotword_package_id?: string | null };
+  | { provider: "mlx"; model?: string; hotword_package_id?: string | null }
+  | { provider: "moss"; model?: MossModel | string; hotword_package_id?: string | null };
 
 export type TranscribeConfig = {
   default?: SttProviderConfig | null;
@@ -92,7 +101,9 @@ export interface DesktopLocalTranscriptionApi {
   transcribe: (audioPath: string, options?: LocalTranscriptionOptions) => Promise<LocalTranscriptionRecord>;
   list: () => Promise<LocalTranscriptionRecord[]>;
   get: (id: string) => Promise<LocalTranscriptionRecord | null>;
-  retry: (id: string) => Promise<LocalTranscriptionRecord>;
+  retry: (id: string, options?: { track?: "mic" | "system" }) => Promise<unknown>;
+  /** Audio URL for one track file of a dual-channel recording. */
+  getTrackAudioUrl: (id: string, file: string) => Promise<string>;
   delete: (id: string) => Promise<void>;
   getAudioUrl: (id: string) => Promise<string | null>;
   listSttModels: () => Promise<{ models: SttModelInfo[] }>;
@@ -155,6 +166,12 @@ export function localRecordToTranscription(record: LocalTranscriptionRecord): Fi
     fileId: record.id,
     taskId: `local-${record.engine}`,
     content: transcriptText,
+    // Dual-channel metadata surfaces in the detail panel (per-track
+    // listening, degraded banner, targeted retries).
+    trackManifest: record.trackManifest,
+    aecDegraded: record.aecDegraded,
+    trackStatuses: record.trackStatuses,
+    liveSessionId: record.liveSessionId,
     records: segments.map((segment) => ({
       id: segment.id,
       speakerName: normalizeLocalSpeakerName(segment.speakerName ?? segment.speaker, segment.rawSpeaker),
@@ -250,6 +267,13 @@ export function migrateSttProviderConfig(value: unknown): SttProviderConfig | nu
       hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
     };
   }
+  if (provider === "moss") {
+    return {
+      provider: "moss",
+      model: (record.model as MossModel | string | undefined) ?? DEFAULT_MOSS_MODEL,
+      hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
+    };
+  }
   // Legacy: a bare funasr object (or a config without a `provider` tag) maps to FunASR.
   return {
     provider: "funasr",
@@ -293,6 +317,8 @@ export function providerModelId(config: SttProviderConfig): string {
       return VIBEVOICE_MODEL_ID;
     case "mlx":
       return config.model ?? "whisper-large-v3-turbo";
+    case "moss":
+      return config.model ?? DEFAULT_MOSS_MODEL;
   }
 }
 

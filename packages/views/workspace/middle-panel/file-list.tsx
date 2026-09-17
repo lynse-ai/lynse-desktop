@@ -245,7 +245,7 @@ export function FileList() {
 
   return (
     <div
-      className="relative flex h-full shrink-0 flex-col border-r border-border/50 bg-background/95"
+      className="relative flex h-full shrink-0 flex-col bg-background/95"
       style={{ width: fileListWidth }}
     >
       {/* Left window-drag region — absolute overlay so it doesn't shrink the

@@ -16,6 +16,7 @@ import type {
   VaultSyncProgress,
 } from "@lynse/views/workspace";
 import type {
+  AudioDevicesSnapshot,
   CompletedLiveSession,
   DesktopLiveTranslationApi,
   LivePermissionStatus,
@@ -321,7 +322,10 @@ export async function installTauriBridge(): Promise<void> {
       transcribe: (audioPath: string, options?: unknown) => command("local_transcription_transcribe", { audioPath, options }),
       list: () => command("local_transcription_list"),
       get: (id: string) => command("local_transcription_get", { id }),
-      retry: (id: string) => command("local_transcription_retry", { id }),
+      retry: (id: string, options?: { track?: "mic" | "system" }) =>
+        command("local_transcription_retry", { id, options }),
+      getTrackAudioUrl: (id: string, file: string) =>
+        command<string>("local_transcription_track_audio_url", { id, file }),
       delete: (id: string) => command("local_transcription_delete", { id }),
       getAudioUrl: (id: string) => command("local_transcription_audio_url", { id }),
       listSttModels: () => command<{ models: SttModelInfo[] }>("local_stt_model_status"),
@@ -369,6 +373,7 @@ export async function installTauriBridge(): Promise<void> {
       saveProviderConfig: async (config) => saveLiveTranslationProviderConfig(config),
       permissions: () => command<LivePermissionStatus>("live_translation_permissions"),
       requestPermission: (kind) => command<LivePermissionStatus>("live_translation_request_permission", { kind }),
+      audioDevices: () => command<AudioDevicesSnapshot>("live_translation_audio_devices"),
       start: (request: LiveStartRequest) => command<LiveTranslationSnapshot>("live_translation_start", { request }),
       pause: () => command<LiveTranslationSnapshot>("live_translation_pause"),
       resume: (request: LiveResumeRequest) => command<LiveTranslationSnapshot>("live_translation_resume", { request }),
@@ -379,6 +384,8 @@ export async function installTauriBridge(): Promise<void> {
       discard: (sessionId) => command<void>("live_translation_discard", { sessionId }),
       listRecoveries: () => command<LiveRecoverySummary[]>("live_translation_recoveries"),
       recover: (sessionId) => command<CompletedLiveSession>("live_translation_recover", { sessionId }),
+      reprocess: (sessionId: string) =>
+        command<Record<string, unknown>>("live_translation_reprocess", { sessionId }),
       showSubtitles: (show) => command<void>("live_translation_show_subtitles", { show }),
       showMainWindow: () => command<void>("live_translation_show_main"),
       // Hide the main window (close-to-tray). Rust shows the recording island

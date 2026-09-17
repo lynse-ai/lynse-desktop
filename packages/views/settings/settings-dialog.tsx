@@ -47,6 +47,7 @@ import { AccountCard } from "./account-card";
 import { StorageCard } from "./storage-card";
 import { SttConfigSection } from "./stt-config-section";
 import { LiveTranslationConfigCard } from "./live-translation-config-card";
+import { RecordingDevicesCard } from "./recording-devices-card";
 import { AutoRecordConfigCard } from "./auto-record-config-card";
 import { VaultConfigCard } from "./vault-config-card";
 import { WebdavSyncConfigCard } from "./webdav-sync-config-card";
@@ -59,7 +60,7 @@ export const SETTINGS_DIALOG_CONTENT_CLASS =
 // right (WeChat-style settings).
 export const SETTINGS_NAV_CLASS =
   "w-40 shrink-0 space-y-0.5 overflow-y-auto border-e bg-muted/30 p-2 sm:w-48";
-export const SETTINGS_BODY_CLASS = "min-h-0 flex-1 overflow-y-auto";
+export const SETTINGS_BODY_CLASS = "min-h-0 min-w-0 flex-1 overflow-y-auto";
 
 type ThemeOption = "light" | "dark" | "system";
 
@@ -277,7 +278,12 @@ export function SettingsDialog({
       id: "live_translation",
       label: t("settings.live_translation"),
       icon: Languages,
-      content: <LiveTranslationConfigCard />,
+      content: (
+        <div className="space-y-4">
+          <LiveTranslationConfigCard />
+          <RecordingDevicesCard />
+        </div>
+      ),
     });
   }
 
@@ -456,7 +462,7 @@ export function SettingsDialog({
           <DialogTitle>{t("nav.settings")}</DialogTitle>
         </DialogHeader>
 
-        <div className="flex min-h-0">
+        <div className="flex min-h-0 min-w-0">
           <nav className={SETTINGS_NAV_CLASS} aria-label={t("nav.settings")}>
             {sections.map((section) => {
               const isActive = section.id === activeSection?.id;

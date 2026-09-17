@@ -73,7 +73,7 @@ export function ChatPanel() {
   };
 
   return (
-    <aside className="relative flex h-full flex-col overflow-hidden border-l border-border bg-background">
+    <aside className="relative flex h-full flex-col overflow-hidden bg-background">
       {/* Header */}
       <div className="flex shrink-0 flex-col border-b border-border" style={{ padding: "8px 12px", gap: 6 }}>
         <div className="flex items-center gap-2">

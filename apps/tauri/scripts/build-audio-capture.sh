@@ -18,8 +18,14 @@ STAMP="$DEST_DIR/.audio-capture.stamp"
 
 mkdir -p "$DEST_DIR"
 
+# The vendored AEC3 engine (and the C bridge in dsp/) feeds the link step, so
+# its build must happen first and its inputs participate in the change stamp.
+bash "$SCRIPT_DIR/build-webrtc-aec.sh"
+DSP_FLAGS="$(bash "$SOURCE_DIR/scripts/dsp-link-flags.sh")"
+
 SOURCE_HASH=$(
-  find "$SOURCE_DIR" -path "$SOURCE_DIR/.build" -prune -o -type f \( -name '*.swift' -o -name 'Package.swift' -o -name 'Info.plist' \) -print0 \
+  find "$SOURCE_DIR" \( -path "$SOURCE_DIR/.build" -o -path "$SOURCE_DIR/vendor/src" -o -path "$SOURCE_DIR/vendor/build" \) -prune -o \
+    -type f \( -name '*.swift' -o -name '*.cc' -o -name '*.h' -o -name 'Package.swift' -o -name 'Info.plist' -o -name 'SHA256SUMS' \) -print0 \
     | sort -z \
     | xargs -0 shasum -a 256 \
     | shasum -a 256 \
@@ -33,7 +39,7 @@ fi
 
 (
   cd "$SOURCE_DIR"
-  swift build -c release --arch "$(uname -m)"
+  swift build -c release --arch "$(uname -m)" $DSP_FLAGS
 )
 
 cp "$SOURCE_DIR/.build/release/lynse-audio-capture" "$DEST"

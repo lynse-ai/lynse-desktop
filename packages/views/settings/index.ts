@@ -22,3 +22,4 @@ export {
   type WebdavSyncProgress,
   type WebdavSyncSummary,
 } from "./webdav-sync";
+export { RecordingDevicesCard } from "./recording-devices-card";

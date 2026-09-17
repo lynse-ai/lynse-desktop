@@ -44,3 +44,31 @@ jobs:
       # and STT sidecars, which only exist in release.yml's environment. CI
       # covers the frontend via typecheck/lint/test; desktop bundling is
       # validated on tagged releases.
+
+  windows-audio:
+    name: Windows capture engine check
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/tauri/src-tauri
+
+      # The dual-track capture engine (WASAPI loopback + mic through the
+      # shared echo-canceller ABI) is Windows-gated code the macOS CI box
+      # never compiles; this job is its compile gate. The aec3 feature stays
+      # OFF here — the vendored WebRTC static library is a deliberate
+      # post-acceptance switch (scripts/build-lynse-aec3.ps1).
+      - name: cargo check
+        working-directory: apps/tauri/src-tauri
+        run: cargo check
+
+      - name: cargo test (audio contract)
+        working-directory: apps/tauri/src-tauri
+        run: cargo test --lib audio_contract

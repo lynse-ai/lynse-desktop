@@ -12,6 +12,13 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[features]
+# Statically link the shared WebRTC AEC3 library (`lynse_webrtc_aec`) for the
+# dual-track echo canceller. Off by default: the correlation-gate fallback is
+# built in and needs no C++ toolchain. Windows release builds enable this once
+# the static library is vendored (see scripts/build-lynse-aec3.ps1).
+aec3 = []
+
 [profile.release]
 strip = "none"
 
@@ -64,14 +71,25 @@ objc2-av-foundation = { version = "0.3", features = ["AVCaptureDevice", "AVMedia
 block2 = "0.6"
 
 # Windows-only: microphone capture for live translation (stage 1), plus the
-# WASAPI session enumeration behind the meeting detector.
+# WASAPI session enumeration behind the meeting detector. The dual-track
+# meeting capture engine talks to WASAPI directly (loopback + RAW-mode mic).
 [target.'cfg(target_os = "windows")'.dependencies]
 cpal = "0.15"
 windows = { version = "0.61", features = [
+    "Win32_Devices_FunctionDiscovery",
     "Win32_Foundation",
     "Win32_Media_Audio",
+    "Win32_Media_Multimedia",
+    "Win32_Security",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_Performance",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_Variant",
+    "Win32_UI_Shell_PropertiesSystem",
 ] }
+# Direct dep so `windows::core::implement`'s expanded paths resolve (the
+# IMMNotificationClient callback).
+windows-core = "0.61"

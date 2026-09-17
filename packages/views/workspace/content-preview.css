@@ -13,7 +13,9 @@
   max-width: 52em;
   margin-inline: auto;
 
-  font-size: 1rem;
+  /* Body copy sits one Tailwind step below the UI's 1rem; every size inside
+     this scope (code, tables, lists) is em-relative and scales from here. */
+  font-size: 0.9375rem;
   font-weight: 300;
   line-height: 1.65;
   color: var(--foreground);
@@ -268,6 +270,11 @@
   border: 1px solid var(--border);
   padding: 0.5em 0.75em;
   text-align: left;
+  /* Auto table layout shrinks CJK columns toward min-content (one character)
+     when a sibling column hogs the row, breaking words like 「待确认」 mid-word.
+     The floor keeps short cells (labels, 「发言人 3」 even with a full-width
+     space) on a single line while long cells still wrap normally. */
+  min-width: 6.5em;
 }
 
 .content-preview-inner th {
@@ -664,7 +671,7 @@
 
 :root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner {
   /* Runtime-adjustable typography variables */
-  --vm-font-size: 1rem;
+  --vm-font-size: 0.9375rem;
   --vm-mono-size: 0.85em;
   --vm-line-height: 1.65;
   --vm-block-spacing: 1em;
@@ -841,7 +848,7 @@
 :root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner td {
   border: 1px solid var(--vm-border);
   padding: 4px 10px;
-  min-width: 3em;
+  min-width: 6.5em;
 }
 
 :root:is([data-editor-theme="white"],[data-editor-theme="paper"],[data-editor-theme="mint"],[data-editor-theme="sepia"],[data-editor-theme="night"],[data-editor-theme="solarized"]) .content-preview-inner th {

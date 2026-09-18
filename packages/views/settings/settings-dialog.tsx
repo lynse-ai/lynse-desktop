@@ -23,6 +23,7 @@ import {
   CalendarDays,
   Cloud,
   Bot,
+  Briefcase,
   Captions,
   Info,
 } from "../icons";
@@ -52,6 +53,7 @@ import { AutoRecordConfigCard } from "./auto-record-config-card";
 import { VaultConfigCard } from "./vault-config-card";
 import { WebdavSyncConfigCard } from "./webdav-sync-config-card";
 import { FeishuConfigCard } from "../feishu/feishu-config-card";
+import { WorkBuddyConfigCard } from "./workbuddy-config-card";
 // Fixed width AND height so switching sections never resizes the window —
 // each section scrolls inside the same body pane.
 export const SETTINGS_DIALOG_CONTENT_CLASS =
@@ -70,6 +72,7 @@ type SettingsSectionId =
   | "auto_record"
   | "sync"
   | "feishu"
+  | "workbuddy"
   | "stt"
   | "about";
 
@@ -319,6 +322,15 @@ export function SettingsDialog({
       content: <FeishuConfigCard />,
     });
   }
+
+  // WorkBuddy authorization is plain backend HTTP plus the system browser, so
+  // it is available everywhere the user is signed in — no desktop API gate.
+  sections.push({
+    id: "workbuddy",
+    label: t("workbuddy.title"),
+    icon: Briefcase,
+    content: <WorkBuddyConfigCard />,
+  });
 
   if (hasLocalTranscription) {
     sections.push({

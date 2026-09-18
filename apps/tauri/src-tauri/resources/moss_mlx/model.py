@@ -14,6 +14,12 @@ from .adaptor import VQAdaptor, time_merge
 from .audio_tower import AudioTower
 from .lm import build_lm
 
+# 30 s tower chunks per forward. A 90-minute session is ~180 chunks; feeding
+# them as one batch transiently holds every encoder layer's activations for
+# the whole recording at once. Results are identical because chunks are
+# independent batch rows.
+AUDIO_TOWER_BATCH = 16
+
 
 class MossModel(nn.Module):
     def __init__(self, config: dict):
@@ -43,7 +49,14 @@ class MossModel(nn.Module):
         concatenated BEFORE the merge, exactly like the reference
         (each chunk contributes token_lengths[i] merged tokens).
         """
-        feats = self.audio_tower(mel.astype(self.audio_tower.conv1.weight.dtype))
+        dtype = self.audio_tower.conv1.weight.dtype
+        feats_parts = []
+        for i in range(0, mel.shape[0], AUDIO_TOWER_BATCH):
+            feats = self.audio_tower(mel[i : i + AUDIO_TOWER_BATCH].astype(dtype))
+            mx.eval(feats)
+            feats_parts.append(feats)
+        mx.clear_cache()
+        feats = mx.concatenate(feats_parts, axis=0)
         parts = [feats[i, : token_lengths[i] * 4] for i in range(feats.shape[0])]
         merged = time_merge(mx.concatenate(parts, axis=0), int(self.config["audio_merge_size"]))
         return self.adaptor(merged)

@@ -1,8 +1,12 @@
 """Greedy generation with streaming segment parsing.
 
 Prefill takes full prompt embeddings (text-before + audio-span + text-after)
-so audio never passes through the token embedding table. Decode is a plain
-argmax loop over the mlx-lm KV cache, stopping at <|im_end|>.
+so audio never passes through the token embedding table. It runs through
+mlx-lm's ``generate_step``, which feeds the prompt to the KV cache in 2048-
+token slices and computes logits only for the final position — a naive
+whole-sequence forward would materialize a (seq_len x vocab) logits tensor
+(tens of GB for a 90-minute session). Decode is a plain argmax loop over the
+mlx-lm KV cache, stopping at <|im_end|>.
 """
 
 from __future__ import annotations
@@ -87,23 +91,39 @@ def generate(
     eos_id: int,
     max_new_tokens: int = 16384,
     on_segment=None,
+    prefill_progress=None,
+    progress=None,
 ) -> list[int]:
-    """Greedy decode. Returns generated token ids (excluding EOS)."""
+    """Greedy decode. Returns generated token ids (excluding EOS).
+
+    ``prefill_progress(processed, total)`` fires per prefill slice,
+    ``progress(step, max_new_tokens)`` fires per decoded token.
+    """
+    from mlx_lm.generate import generate_step
     from mlx_lm.models.cache import make_prompt_cache
 
     prompt = build_prompt_embeds(model, before_ids, span_ids, audio_embeds, after_ids)
     cache = make_prompt_cache(model.lm)
-    logits = model.lm(None, cache=cache, input_embeddings=prompt)
-    token = int(mx.argmax(logits[:, -1, :], axis=-1).item())
 
     generated: list[int] = []
     streamer = SegmentStreamer(tokenizer, on_segment) if on_segment is not None else None
-    while token != eos_id and len(generated) < max_new_tokens:
+    steps = generate_step(
+        mx.array([], mx.int32),  # token ids unused; embeddings carry the prompt
+        model.lm,
+        max_tokens=max_new_tokens,
+        prompt_cache=cache,
+        input_embeddings=prompt[0],
+        prompt_progress_callback=prefill_progress,
+    )
+    for token, _ in steps:
+        token = int(token)
+        if token == eos_id:
+            break
         generated.append(token)
         if streamer is not None:
             streamer.feed(token)
-        logits = model.lm(mx.array([[token]]), cache=cache)
-        token = int(mx.argmax(logits[:, -1, :], axis=-1).item())
+        if progress is not None:
+            progress(len(generated), max_new_tokens)
     if streamer is not None:
         streamer.close()
     return generated

@@ -68,6 +68,7 @@ export {
   Columns2,         // Split mode
   PanelLeft,        // Collapse / expand left sidebar
   Bot,              // AI Chat / AI assistant
+  Briefcase,        // WorkBuddy integration
 
   // ── Markdown Toolbar ─────────────────────────────────
   Bold,             // Bold mark

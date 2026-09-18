@@ -24,7 +24,7 @@ import { authErrorText } from "./auth-errors";
  * default the API client itself falls back to (core/config).
  */
 const SERVER_PRESETS = [
-  { url: "http://119.97.160.133:10060", labelKey: "auth.api_config_server_test" },
+  { url: "https://gapp.lynse.cn", labelKey: "auth.api_config_server_test" },
   { url: DEFAULT_API_URL, labelKey: "auth.api_config_server_prod" },
 ] as const;
 

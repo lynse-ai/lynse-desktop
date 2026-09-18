@@ -153,6 +153,14 @@ def prepare_wav(path: str) -> str:
     return wav
 
 
+def _mem_report() -> str:
+    import mlx.core as mx
+
+    active = mx.get_active_memory() / 2**30
+    cached = mx.get_cache_memory() / 2**30
+    return f"active={active:.2f}G cache={cached:.2f}G"
+
+
 def transcribe(model_path: str, wav_path: str) -> dict:
     import wave
 
@@ -173,14 +181,30 @@ def transcribe(model_path: str, wav_path: str) -> dict:
     assert sr == 16000 and waveform.ndim == 1
 
     feats, lengths = processor.features(waveform)
+    print(
+        f"[moss] audio {duration:.0f}s -> {feats.shape[0]} tower chunks, "
+        f"{sum(lengths)} audio tokens, max_new_tokens={max_new_tokens}",
+        file=sys.stderr,
+    )
     before, span, after = processor.encode_prompt_split(sum(lengths))
     audio_embeds = model.audio_embeds(feats, lengths)
     mx.eval(audio_embeds)
+    mx.clear_cache()
+    print(f"[moss] audio embeds ready ({_mem_report()})", file=sys.stderr)
+
+    def log_prefill(processed: int, total: int) -> None:
+        print(f"[moss] prefill {processed}/{total}", file=sys.stderr)
+
+    def log_progress(step: int, total: int) -> None:
+        if step % 500 == 0:
+            print(f"[moss] decode {step}/{total}, {_mem_report()}", file=sys.stderr)
 
     ids = generate(
         model, processor.tokenizer, before, span, audio_embeds, after,
         eos_id=config["eos_token_id"], max_new_tokens=max_new_tokens,
+        prefill_progress=log_prefill, progress=log_progress,
     )
+    print(f"[moss] generated {len(ids)} tokens ({_mem_report()})", file=sys.stderr)
     text = processor.tokenizer.decode(ids)
 
     from moss_mlx.transcript_parser import parse_transcript

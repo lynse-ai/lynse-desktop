@@ -234,7 +234,9 @@ export function useRecordingSession(): UseRecordingSessionReturn {
         return;
       }
 
-      // Start in pure recording mode — no provider or API key required.
+      // Capture first, always with no provider attached. Recognition is only
+      // ever layered on afterwards, and only because the user pre-armed the
+      // Captions toggle (`selectMode` stores that intent while idle).
       const sourceLanguage = "zh";
       const started = await api.start({
         sessionId: crypto.randomUUID(),

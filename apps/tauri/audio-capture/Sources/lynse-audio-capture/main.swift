@@ -10,6 +10,10 @@ import ScreenCaptureKit
 
 private let targetSampleRate = 48_000.0
 private let recognitionSampleRate = 16_000.0
+/// Full-bandwidth playback mix archived beside the recognition tracks. Named
+/// by the Rust persist path (`live_translation::MASTER_TRACK_FILE`); it is a
+/// derived artifact, so it is deliberately not one of the `tracks.json` tracks.
+private let masterTrackName = "master.wav"
 private let controlLock2 = NSLock()
 private let microphonePermissionMessage = "缺少麦克风权限。请在“系统设置 → 隐私与安全性 → 麦克风”中允许 Lynse，然后重新启动应用。"
 private let systemAudioPermissionMessage = "缺少“屏幕与系统音频录制”权限。请在“系统设置 → 隐私与安全性 → 屏幕与系统音频录制”中允许 Lynse Audio Capture，然后重新启动 Lynse。"
@@ -105,9 +109,11 @@ if let processDirectory = argumentValue("--process") {
 
     let processedWav: WavWriter
     let system16kWav: WavWriter
+    let replayMasterWav: WavWriter
     do {
         processedWav = try WavWriter(path: directory.appendingPathComponent("mic_processed.wav").path, sampleRate: 16_000, channels: 1)
         system16kWav = try WavWriter(path: directory.appendingPathComponent("system.wav").path, sampleRate: 16_000, channels: 1)
+        replayMasterWav = try WavWriter(path: directory.appendingPathComponent(masterTrackName).path, sampleRate: 48_000, channels: 2)
     } catch {
         emitError("重新处理失败：\(error.localizedDescription)")
         exit(5)
@@ -119,6 +125,9 @@ if let processDirectory = argumentValue("--process") {
     }
     processor.onSystem16k = { startMs, samples in
         system16kWav.write(samples: samples, firstFrameElapsedMs: startMs)
+    }
+    processor.onMaster48k = { startMs, samples in
+        replayMasterWav.write(samples: samples, firstFrameElapsedMs: startMs)
     }
 
     let chunk = DualChannelProcessor.processingRate / 50  // 20 ms
@@ -144,6 +153,7 @@ if let processDirectory = argumentValue("--process") {
     processor.flush()
     processedWav.close()
     system16kWav.close()
+    replayMasterWav.close()
 
     let degraded = processor.snapshotDegradedIntervals()
     TrackManifest.dualChannel(
@@ -418,24 +428,29 @@ private final class RecognitionSink {
 private final class LegacySink {
     let source: UInt8
     let recognition: RecognitionSink
+    /// 48 kHz archive of exactly what the device delivered, written before the
+    /// decimation that serves recognition. Nil when no master is being kept.
+    let master: WavWriter?
     var decimator = Decimator48to16()
     let queue: DispatchQueue
 
-    init(source: UInt8, name: String, recognition: RecognitionSink) {
+    init(source: UInt8, name: String, recognition: RecognitionSink, master: WavWriter?) {
         self.source = source
         self.recognition = recognition
+        self.master = master
         queue = DispatchQueue(label: "app.lynse.capture.legacy.\(name)")
     }
 
     func consume(_ floats: [Float], positionSamples: Int64) {
         queue.async {
+            if let master = self.master {
+                let startMs = UInt64(max(0, positionSamples) * 1_000 / Int64(targetSampleRate))
+                master.write(samples: pcm16(fromFloats: floats), firstFrameElapsedMs: startMs)
+            }
             let decimated = self.decimator.decimate(floats)
             guard !decimated.isEmpty else { return }
             let startMs = UInt64(Float(positionSamples) / 48.0)
-            let samples = decimated.map { value -> Int16 in
-                let clamped = max(-1.0, min(1.0, value))
-                return Int16(clamping: Int((clamped * 32_767).rounded()))
-            }
+            let samples = pcm16(fromFloats: decimated)
             self.recognition.consume(samples, firstFrameElapsedMs: startMs)
         }
     }
@@ -444,12 +459,10 @@ private final class LegacySink {
         queue.sync {
             let tail = self.decimator.flush()
             if !tail.isEmpty {
-                recognition.consume(tail.map { value -> Int16 in
-                    let clamped = max(-1.0, min(1.0, value))
-                    return Int16(clamping: Int((clamped * 32_767).rounded()))
-                }, firstFrameElapsedMs: UInt64.max)  // contiguous: assembler appends
+                recognition.consume(pcm16(fromFloats: tail), firstFrameElapsedMs: UInt64.max)  // contiguous: assembler appends
             }
             recognition.close()
+            master?.close()
         }
     }
 }
@@ -632,6 +645,7 @@ private var micRecognition: RecognitionSink!
 private var systemRecognition: RecognitionSink!
 private var micRawWav: WavWriter?
 private var systemRawWav: WavWriter?
+private var masterWav: WavWriter?
 private var legacyMicSink: LegacySink?
 private var legacySystemSink: LegacySink?
 
@@ -647,6 +661,7 @@ do {
         )
         micRawWav = try WavWriter(path: outputDirectory.appendingPathComponent("mic_raw.wav").path, sampleRate: 48_000, channels: 1)
         systemRawWav = try WavWriter(path: outputDirectory.appendingPathComponent("system_raw.wav").path, sampleRate: 48_000, channels: 2)
+        masterWav = try WavWriter(path: outputDirectory.appendingPathComponent(masterTrackName).path, sampleRate: 48_000, channels: 2)
         legacyMicSink = nil
         legacySystemSink = nil
 
@@ -662,6 +677,9 @@ do {
         processor.onSystem16k = { startMs, samples in
             systemRecognition.consume(samples, firstFrameElapsedMs: startMs)
         }
+        processor.onMaster48k = { startMs, samples in
+            masterWav?.write(samples: samples, firstFrameElapsedMs: startMs)
+        }
     } else {
         micRecognition = RecognitionSink(
             source: 0, name: "mic", socket: socketWriter,
@@ -671,13 +689,29 @@ do {
             source: 1, name: "system", socket: socketWriter,
             wav: try WavWriter(path: outputDirectory.appendingPathComponent("system.wav").path, sampleRate: 16_000, channels: 1)
         )
+        // Single-source sessions still archive at 48 kHz: the 16 kHz
+        // recognition track is not something anyone wants to listen back to.
+        // The dual-source rollback path gets no master — summing an
+        // un-cancelled microphone into the system mix would just replay the
+        // room's own output, so persist falls back to the 16 kHz mixdown.
+        let legacyMasterChannels: UInt16? = captureMic != captureSystem ? (captureSystem ? 2 : 1) : nil
+        var legacyMaster: WavWriter?
+        if let channels = legacyMasterChannels {
+            legacyMaster = try WavWriter(path: outputDirectory.appendingPathComponent(masterTrackName).path, sampleRate: 48_000, channels: channels)
+        }
         if captureMic {
-            legacyMicSink = LegacySink(source: 0, name: "mic", recognition: micRecognition)
+            legacyMicSink = LegacySink(
+                source: 0, name: "mic", recognition: micRecognition,
+                master: legacyMaster
+            )
         } else {
             legacyMicSink = nil
         }
         if captureSystem {
-            legacySystemSink = LegacySink(source: 1, name: "system", recognition: systemRecognition)
+            legacySystemSink = LegacySink(
+                source: 1, name: "system", recognition: systemRecognition,
+                master: legacyMaster
+            )
         } else {
             legacySystemSink = nil
         }
@@ -925,6 +959,7 @@ private func finishAndExit() {
     }
     micRawWav?.close()
     systemRawWav?.close()
+    masterWav?.close()
     legacyMicSink?.close()
     legacySystemSink?.close()
     if dualChannel {

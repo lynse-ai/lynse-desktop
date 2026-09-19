@@ -277,7 +277,6 @@ pub(crate) async fn audio_editor_merge(
                 "-i".to_owned(), list.to_string_lossy().into_owned(),
                 "-c:a".to_owned(), "aac".to_owned(),
                 "-b:a".to_owned(), "192k".to_owned(),
-                "-ar".to_owned(), "44100".to_owned(),
                 output.to_string_lossy().into_owned(),
             ];
             run_ffmpeg(app, job_id, &args)?;
@@ -348,7 +347,8 @@ pub(crate) async fn audio_editor_enhance_voice(
             "-y".to_owned(),
             "-i".to_owned(), input.to_string_lossy().into_owned(),
             "-af".to_owned(), filter.to_owned(),
-            "-ar".to_owned(), "44100".to_owned(),
+            // No `-ar`: resampling a 16 kHz recording up to 44.1 kHz invents no
+            // detail and only inflates the file the user then streams.
             "-c:a".to_owned(), "aac".to_owned(),
             "-b:a".to_owned(), "192k".to_owned(),
             output.to_string_lossy().into_owned(),

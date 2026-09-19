@@ -65,15 +65,24 @@ impl CardOpusDecoder {
     }
 
     fn decode_packet(&mut self, packet: &[u8]) -> Vec<i16> {
-        // A lost BLE chunk can corrupt packet boundaries; libopus then returns
-        // an error and we substitute 20 ms of silence to keep the timeline.
-        const SAMPLES_PER_PACKET: usize = OUTPUT_SAMPLE_RATE as usize / 50; // 20 ms
+        // Sized for the longest packet Opus allows (120 ms, stereo). The old
+        // 20 ms assumption was smaller than the 40 ms default the card
+        // negotiates, so every packet failed the decode and was replaced by
+        // silence — a "successful" transfer with nothing in it.
+        const MAX_SAMPLES_PER_PACKET: usize =
+            OUTPUT_SAMPLE_RATE as usize * 120 / 1000 * 2;
+        // ≈2 compressed bytes per millisecond of audio (see `OpusFormat`).
+        let packet_ms = (self.frame_bytes.max(1) as usize / 2).min(120);
         let channels = if self.stereo { 2 } else { 1 };
-        let mut output = [0i16; SAMPLES_PER_PACKET * 2];
+        let mut output = [0i16; MAX_SAMPLES_PER_PACKET];
         let decoded = self
             .decoder
             .decode(packet, &mut output, false)
-            .unwrap_or(SAMPLES_PER_PACKET * channels);
+            // A lost BLE chunk can corrupt packet boundaries; libopus then
+            // returns an error and we substitute this packet's own duration of
+            // silence to keep the timeline.
+            .unwrap_or(packet_ms * OUTPUT_SAMPLE_RATE as usize / 1000 * channels)
+            .min(MAX_SAMPLES_PER_PACKET);
         if self.stereo {
             stereo_to_mono(&output[..decoded]).into_iter().collect()
         } else {
@@ -97,7 +106,10 @@ pub fn stereo_to_mono(interleaved: &[i16]) -> Vec<i16> {
 pub fn write_wav(path: &Path, mono: &[i16]) -> std::io::Result<()> {
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
-    let data_bytes = (mono.len() * 2) as u32;
+    // A cast would wrap silently past 4 GB and hand back a header that claims
+    // the recording is shorter than it is.
+    let data_bytes = u32::try_from(mono.len() * 2)
+        .map_err(|_| std::io::Error::other("recording is too large for WAV"))?;
     writer.write_all(b"RIFF")?;
     writer.write_all(&(36 + data_bytes).to_le_bytes())?;
     writer.write_all(b"WAVE")?;
@@ -111,9 +123,8 @@ pub fn write_wav(path: &Path, mono: &[i16]) -> std::io::Result<()> {
     writer.write_all(&16u16.to_le_bytes())?; // bits per sample
     writer.write_all(b"data")?;
     writer.write_all(&data_bytes.to_le_bytes())?;
-    for sample in mono {
-        writer.write_all(&sample.to_le_bytes())?;
-    }
+    let pcm: Vec<u8> = mono.iter().flat_map(|sample| sample.to_le_bytes()).collect();
+    writer.write_all(&pcm)?;
     writer.flush()
 }
 

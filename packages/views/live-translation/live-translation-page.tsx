@@ -335,19 +335,37 @@ export function LiveTranslationPage() {
       setProviderConfig(freshConfig);
       const savedProviderConfig = await api.saveProviderConfig(freshConfig);
       setProviderConfig(savedProviderConfig);
-      const credentials = await requestRealtimeSession({
-        sourceLanguage,
-        targetLanguage,
-        epoch: 0,
-      }, savedProviderConfig);
+      // Capture starts first and stands on its own: minting recognition
+      // credentials before the recording exists meant one unreachable provider
+      // (or one revoked key) cost the user the whole meeting. Same-language
+      // target means "just record" — nothing is attached.
+      const sessionId = crypto.randomUUID();
       await api.start({
-        sessionId: credentials.sessionId,
-        title: `${t("live_translation.record_title")} ${new Date().toLocaleString()}`,
+        sessionId,
+        title: `${t("recording_mode.record_title")} ${new Date().toLocaleString()}`,
         sourceLanguage,
-        targetLanguage,
-        epoch: credentials.epoch,
-        connections: credentials.connections,
+        targetLanguage: sourceLanguage,
+        epoch: 0,
+        connections: [],
       });
+      if (targetLanguage !== sourceLanguage) {
+        try {
+          const credentials = await requestRealtimeSession(
+            { sourceLanguage, targetLanguage, sessionId, epoch: 1 },
+            savedProviderConfig,
+          );
+          await api.setMode({
+            sessionId,
+            sourceLanguage,
+            targetLanguage,
+            epoch: credentials.epoch,
+            connections: credentials.connections,
+          });
+        } catch (error) {
+          // The recording keeps running; live text is simply unavailable.
+          toast.warning(String(error));
+        }
+      }
       // Maximize the transcript area as soon as a session starts.
       setSettingsCollapsed(true);
     } catch (error) {

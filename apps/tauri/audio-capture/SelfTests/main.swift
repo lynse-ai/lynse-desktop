@@ -333,6 +333,40 @@ private func testLegacyPassthroughLeavesAudioUntouched() {
     expect(processed.count >= rate16(rate) - 4, "passthrough must keep the full timeline")
 }
 
+/// The playback master is the archive people actually listen back to, so it
+/// must be stereo at the processing rate with each source at unity gain — the
+/// old 16 kHz mixdown averaged the two tracks and cost both of them 6 dB.
+private func testMasterMixdownIsStereoAtUnityGain() {
+    let rate = DualChannelProcessor.processingRate
+    let chunk = rate / 100
+    var master: [Int16] = []
+    var startTimes: [UInt64] = []
+    let lock = NSLock()
+    let processor = DualChannelProcessor(enableAec: false)
+    processor.onMaster48k = { startMs, samples in
+        lock.lock()
+        master += samples
+        startTimes.append(startMs)
+        lock.unlock()
+    }
+    let micLevel: Float = 0.25
+    let systemLevel: Float = 0.25
+    for offset in stride(from: 0, to: rate / 2, by: chunk) {
+        processor.pushMic(positionSamples: Int64(offset), samples: [Float](repeating: micLevel, count: chunk))
+        processor.pushSystem(positionSamples: Int64(offset), samples: stereo([Float](repeating: systemLevel, count: chunk)))
+    }
+    processor.flush()
+    expect(master.count == rate, "one stereo frame per 10 ms of the timeline (got \(master.count))")
+    expect(startTimes == Array(stride(from: UInt64(0), to: 500, by: 10)), "master must advance 10 ms per frame, got \(startTimes.prefix(3))")
+    let expected = Int16(((micLevel + systemLevel) * 32_767).rounded())
+    expect(master.max() == expected, "sources sum at unity gain (\(expected)), never averaged to half")
+    var index = 0
+    while index < master.count {
+        expect(master[index] == master[index + 1], "mic is summed equally into L and R")
+        index += 2
+    }
+}
+
 private func testRestartHandsOverTheTimelineBase() {
     let processor = DualChannelProcessor(enableAec: true)
     let chunk = DualChannelProcessor.processingRate / 100
@@ -363,6 +397,7 @@ testFinalPartialBufferIsPadded()
 testTimelineAnchorsOnFirstPresentationTimestamp()
 testTimelineRestartContinuesWithoutRewinding()
 testDecimatorKeepsPassbandAmplitudeAcrossChunkSizes()
+testMasterMixdownIsStereoAtUnityGain()
 if AecProcessor.isAvailable {
     testEchoCancellerSuppressesSyntheticEcho()
     testMissingReferenceDegradesInsteadOfMuting()

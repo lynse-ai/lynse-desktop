@@ -71,6 +71,15 @@ public extension Array where Element == Int16 {
     }
 }
 
+/// Clamping float → PCM16 conversion shared by every track path. The master
+/// mixdown sums two sources, so it can exceed full scale and the clamp matters.
+public func pcm16(fromFloats samples: [Float]) -> [Int16] {
+    samples.map { value in
+        let clamped = max(-1.0, min(1.0, value))
+        return Int16(clamping: Int((clamped * 32_767).rounded()))
+    }
+}
+
 public extension FixedWidthInteger {
     func saturatingMultiply(_ other: Self) -> Self {
         let (value, overflow) = multipliedReportingOverflow(by: other)

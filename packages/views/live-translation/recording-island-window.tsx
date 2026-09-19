@@ -96,12 +96,11 @@ export function RecordingIslandWindow() {
     void api?.setIslandExpanded(true).catch(() => {});
     setDrawerMounted(true);
     setDrawerOpen(true);
-    // Pulling the drawer down signals "I want to read the transcript": make
-    // sure the session is actually transcribing. Pure-recording sessions get
-    // switched into live transcription; already-live sessions stay as they
-    // are. A collapsed pill means the user just wants to record — no switch.
-    if (view.targetLanguage === view.sourceLanguage) void applyLiveMode("none");
-  }, [api, drawerOpen, collapseDrawer, view.targetLanguage, view.sourceLanguage, applyLiveMode]);
+    // Opening the drawer only shows the transcript the session is already
+    // producing. Attaching recognition here would silently open a cloud
+    // stream the user never asked for — the language picker in the drawer is
+    // the explicit way in.
+  }, [api, drawerOpen, collapseDrawer]);
 
   // Fold the drawer back up when the session winds down.
   useEffect(() => {

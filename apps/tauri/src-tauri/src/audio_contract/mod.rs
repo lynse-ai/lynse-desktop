@@ -4,15 +4,24 @@
 // Everything a finished session leaves on disk is described by one versioned
 // manifest (`manifest.json`) next to the track files:
 //
-//   mic.wav        16 kHz mono s16 — microphone after echo processing (the
-//                  recognition + default-playback track; on macOS today this
-//                  is the unprocessed capture, see the manifest's `processing`
-//                  field per track)
+//   mic.wav        16 kHz mono s16 — microphone as captured (single-source and
+//                  rollback sessions; recognition only)
+//   mic_processed.wav
+//                  16 kHz mono s16 — microphone after echo processing
+//                  (dual-channel sessions; recognition only)
 //   system.wav     16 kHz mono s16 — system mixdown as recognised
-//   mic_raw.wav    device-rate raw microphone capture (Windows only; macOS
-//                  archives raw audio in mic.wav/system.wav)
-//   system_raw.wav device-rate raw loopback capture (Windows only)
+//   mic_raw.wav    device-rate raw microphone capture (macOS dual-channel and
+//                  Windows; the macOS legacy path archives into mic.wav)
+//   system_raw.wav device-rate raw loopback capture
+//   master.wav     48 kHz stereo s16 — the PLAYBACK mixdown (echo-cancelled
+//                  microphone summed into the system track at unity gain). A
+//                  derived artifact like the end-time-named playback file, so
+//                  it is not a `tracks.json` entry; macOS writes it, the
+//                  Windows engine does not yet.
 //   manifest.json  this contract
+//
+// The 16 kHz tracks exist because recognition consumes 16 kHz; they cap at
+// 8 kHz bandwidth and must never be what a person listens back to.
 //
 // All tracks live on one timeline of milliseconds relative to the recording
 // start. Pauses freeze the timeline (the pause is padded with silence in the

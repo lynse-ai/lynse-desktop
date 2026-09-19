@@ -525,17 +525,15 @@ impl CaptureEngine {
         }
         if sources.mic {
             let thread_shared = shared.clone();
-            // When the AEC thread is active it owns mic_processed.wav.
-            let recognition = if sources.system {
+            // Only the AEC thread takes the mic away from `mic.wav`, and only
+            // when it actually runs: without `aec_enabled` the rollback layout
+            // (`dual_legacy`) carries plain `mic.wav` and has no `mic_raw.wav`.
+            let recognition = if dual {
                 None
             } else {
                 Some(find_writer("mic.wav"))
             };
-            let raw = if sources.system {
-                Some(find_writer("mic_raw.wav"))
-            } else {
-                None
-            };
+            let raw = dual.then(|| find_writer("mic_raw.wav"));
             spawn(&engine.handles, "lynse-capture-mic", move || {
                 run_stream_thread(thread_shared, recognition, raw, SourceKind::Mic)
             })?;

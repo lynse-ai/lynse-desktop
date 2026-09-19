@@ -10,7 +10,7 @@
 //! samples without quantisation; recognition tracks are 16-bit PCM.
 
 use std::fs::{File, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -211,6 +211,154 @@ pub fn repair_header(path: &Path, format: &WavFormat) -> Result<(), String> {
     file.sync_all().map_err(|error| error.to_string())
 }
 
+/// What a WAV file actually holds: the chunk walk gives the real `data`
+/// offset (a canonical 44-byte header is *not* assumed) and the payload is
+/// clamped to the bytes on disk, so a track whose writer was killed before
+/// `close` still reads back at full length instead of as zero samples.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WavInfo {
+    pub format: WavFormat,
+    pub data_offset: u64,
+    /// Payload bytes actually readable — the header's claim, clamped to the
+    /// size on disk.
+    pub data_bytes: u64,
+    /// What the `data` chunk header declares, before that clamp. Differs from
+    /// `data_bytes` exactly when the header lies.
+    pub declared_bytes: u64,
+}
+
+impl WavInfo {
+    /// Payload frames (per-channel sample groups) available to read.
+    pub fn frames(&self) -> u64 {
+        let frame_bytes = self.frame_bytes();
+        if frame_bytes == 0 {
+            return 0;
+        }
+        self.data_bytes / frame_bytes as u64
+    }
+
+    pub fn frame_bytes(&self) -> usize {
+        self.format.channels.max(1) as usize * (self.format.bits_per_sample / 8) as usize
+    }
+
+    /// Whether the header sizes still describe the file (a writer that reached
+    /// `close` patched them; one that was killed did not).
+    pub fn header_matches_contents(&self, file_len: u64) -> bool {
+        self.data_offset + self.declared_bytes == file_len
+    }
+}
+
+/// Parse RIFF/WAVE chunks. Returns `Err` for anything that is not a PCM or
+/// IEEE-float WAV we can read; `Ok` clamps a bogus `data` size to the file.
+/// Only the header region is read — an hour of 48 kHz stereo must not be
+/// slurped into memory to learn its format.
+pub fn inspect(path: &Path) -> Result<WavInfo, String> {
+    let file_len = std::fs::metadata(path).map_err(|error| error.to_string())?.len();
+    let mut prefix = Vec::with_capacity(INSPECT_PREFIX_BYTES);
+    File::open(path)
+        .map_err(|error| error.to_string())?
+        .take(INSPECT_PREFIX_BYTES as u64)
+        .read_to_end(&mut prefix)
+        .map_err(|error| error.to_string())?;
+    inspect_bytes(&prefix, file_len).ok_or_else(|| format!("not a readable WAV: {}", path.display()))
+}
+
+/// Bytes of header region [`inspect`] reads before giving up on the chunk walk.
+const INSPECT_PREFIX_BYTES: usize = 64 * 1024;
+
+/// Repairs the canonical header a capture writer never got to patch: the
+/// sidecar is killed when draining takes longer than the finalize budget, and
+/// its WAV files then hold full PCM behind a zero-length `data` chunk. Only
+/// files that already use the 44-byte layout are touched, so foreign WAVs are
+/// left alone. Returns whether the file was rewritten.
+pub fn repair_if_stale(path: &Path) -> Result<bool, String> {
+    let info = inspect(path)?;
+    if info.format.sample_format != "int" {
+        // A raw float track is not one of the killed writers' files.
+        return Ok(false);
+    }
+    let file_len = std::fs::metadata(path).map_err(|error| error.to_string())?.len();
+    // Only the canonical 44-byte layout is rewritten; anything with extra
+    // chunks ahead of `data` belongs to another tool and stays untouched.
+    if info.data_offset != 44 || info.header_matches_contents(file_len) {
+        return Ok(false);
+    }
+    repair_header(path, &info.format)?;
+    Ok(true)
+}
+
+fn inspect_bytes(bytes: &[u8], file_len: u64) -> Option<WavInfo> {
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+    // RIFF payload size as declared; placeholders and torn writes are handled
+    // by the clamp against the real file length.
+    let declared_riff = u32::from_le_bytes(bytes[4..8].try_into().ok()?) as u64;
+    let riff_end = declared_riff.saturating_add(8).min(file_len).max(12);
+    let prefix_len = bytes.len() as u64;
+    let mut cursor = 12usize;
+    let mut format: Option<WavFormat> = None;
+    let mut data: Option<(u64, u64)> = None;
+    while (cursor as u64) + 8 <= prefix_len {
+        let chunk_id = &bytes[cursor..cursor + 4];
+        let size = u32::from_le_bytes(bytes[cursor + 4..cursor + 8].try_into().ok()?) as u64;
+        let payload = (cursor + 8) as u64;
+        // Never trust a declared size to stay inside the bytes we hold or the
+        // span the RIFF header claims.
+        let end = (payload + size).min(riff_end).min(prefix_len).max(payload);
+        if chunk_id == b"fmt " {
+            if end - payload < 16 {
+                return None;
+            }
+            let head = &bytes[payload as usize..end as usize];
+            let tag = u16::from_le_bytes(head[0..2].try_into().ok()?);
+            let channels = u16::from_le_bytes(head[2..4].try_into().ok()?);
+            let sample_rate = u32::from_le_bytes(head[4..8].try_into().ok()?);
+            let bits = u16::from_le_bytes(head[14..16].try_into().ok()?);
+            let sample_format = match tag {
+                1 => "int",
+                3 => "float",
+                // WAVE_FORMAT_EXTENSIBLE: the real codec lives at byte 24.
+                0xFFFE if head.len() >= 25 => match head[24] {
+                    1 => "int",
+                    3 => "float",
+                    _ => return None,
+                },
+                _ => return None,
+            };
+            if channels == 0 || sample_rate == 0 {
+                return None;
+            }
+            format = Some(WavFormat {
+                sample_rate,
+                channels,
+                bits_per_sample: bits,
+                sample_format,
+            });
+        } else if chunk_id == b"data" {
+            // The raw declared size, unclamped: the difference against what the
+            // file actually holds is how a lying header gets detected.
+            data = Some((payload, size));
+        }
+        // Chunks are word-aligned; an odd size carries one pad byte.
+        cursor = payload as usize + size as usize + (size as usize & 1);
+    }
+    let format = format?;
+    let (offset, declared) = data?;
+    let actual = file_len.saturating_sub(offset);
+    Some(WavInfo {
+        format,
+        data_offset: offset,
+        declared_bytes: declared,
+        // A header that was never patched (declared 0) still yields its audio.
+        data_bytes: if declared == 0 || declared > actual {
+            actual
+        } else {
+            declared
+        },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,6 +434,127 @@ mod tests {
         let bytes = std::fs::read(&path).unwrap();
         let data_bytes = u32::from_le_bytes(bytes[40..44].try_into().unwrap());
         assert_eq!(data_bytes, 640);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn chunk(id: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(id);
+        out.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        out.extend_from_slice(payload);
+        if payload.len() % 2 == 1 {
+            out.push(0);
+        }
+        out
+    }
+
+    fn riff(chunks: &[Vec<u8>]) -> Vec<u8> {
+        let payload: Vec<u8> = chunks.iter().flatten().copied().collect();
+        let mut out = b"RIFF".to_vec();
+        out.extend_from_slice(&((payload.len() + 4) as u32).to_le_bytes());
+        out.extend_from_slice(b"WAVE");
+        out.extend(payload);
+        out
+    }
+
+    fn fmt_chunk(rate: u32, channels: u16, bits: u16, tag: u16) -> Vec<u8> {
+        let mut head = Vec::new();
+        head.extend_from_slice(&tag.to_le_bytes());
+        head.extend_from_slice(&channels.to_le_bytes());
+        head.extend_from_slice(&rate.to_le_bytes());
+        head.extend_from_slice(&(rate * channels as u32 * bits as u32 / 8).to_le_bytes());
+        head.extend_from_slice(&(channels * bits / 8).to_le_bytes());
+        head.extend_from_slice(&bits.to_le_bytes());
+        chunk(b"fmt ", &head)
+    }
+
+    #[test]
+    fn inspect_walkes_chunks_instead_of_assuming_44_bytes() {
+        // A LIST chunk ahead of fmt/data shifts the payload off byte 44.
+        let bytes = riff(&[
+            chunk(b"LIST", b"INFO"),
+            fmt_chunk(48_000, 2, 16, 1),
+            chunk(b"data", &[1, 0, 2, 0, 3, 0, 4, 0]),
+        ]);
+        let info = inspect_bytes(&bytes, bytes.len() as u64).expect("parses");
+        assert_eq!(info.data_offset, 44 + 12);
+        assert_eq!(info.data_bytes, 8);
+        assert_eq!(info.frames(), 2);
+        assert_eq!(info.format.sample_rate, 48_000);
+        assert_eq!(info.format.channels, 2);
+        assert_eq!(info.format.sample_format, "int");
+        assert!(info.header_matches_contents(bytes.len() as u64));
+    }
+
+    #[test]
+    fn inspect_recovers_a_header_the_writer_never_patched() {
+        let dir = temp_dir("inspect-killed");
+        let path = dir.join("mic.wav");
+        let writer = WavTrackWriter::recognition(&path).unwrap();
+        writer.write_i16_at(0, &[1, 2, 3, 4]).unwrap();
+        drop(writer); // killed before close: `data` still declares 0 bytes
+        let file_len = std::fs::metadata(&path).unwrap().len();
+        let info = inspect(&path).unwrap();
+        assert_eq!(info.data_bytes, 8, "payload must be read from disk size");
+        assert_eq!(info.declared_bytes, 0, "the header still lies");
+        assert!(!info.header_matches_contents(file_len));
+        assert_eq!(info.format, WavFormat::RECOGNITION);
+        assert!(repair_if_stale(&path).unwrap());
+        let repaired = inspect(&path).unwrap();
+        assert_eq!(repaired.data_bytes, 8, "repair keeps the audio");
+        assert!(repaired.header_matches_contents(file_len));
+        assert!(!repair_if_stale(&path).unwrap(), "repair is idempotent");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn repair_leaves_a_well_formed_track_alone() {
+        let dir = temp_dir("repair-clean");
+        let path = dir.join("mic.wav");
+        let writer = WavTrackWriter::recognition(&path).unwrap();
+        writer.write_i16_at(0, &vec![3i16; 320]).unwrap();
+        writer.close().unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert!(!repair_if_stale(&path).unwrap());
+        assert_eq!(before, std::fs::read(&path).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inspect_reads_a_closed_recognition_track() {
+        let dir = temp_dir("inspect-clean");
+        let path = dir.join("mic.wav");
+        let writer = WavTrackWriter::recognition(&path).unwrap();
+        writer.write_i16_at(0, &vec![5i16; 320]).unwrap();
+        writer.close().unwrap();
+        let info = inspect(&path).unwrap();
+        assert_eq!(info.data_offset, 44);
+        assert_eq!(info.data_bytes, 640);
+        assert_eq!(info.frames(), 320);
+        assert!(info.header_matches_contents(std::fs::metadata(&path).unwrap().len()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn inspect_flags_float_tracks_and_rejects_junk() {
+        let dir = temp_dir("inspect-misc");
+        let float_path = dir.join("system_raw.wav");
+        let format = WavFormat {
+            sample_rate: 48_000,
+            channels: 2,
+            bits_per_sample: 32,
+            sample_format: "float",
+        };
+        let writer = WavTrackWriter::raw(&float_path, format).unwrap();
+        writer.write_f32_at(0, &[0.5, -0.5]).unwrap();
+        writer.close().unwrap();
+        let info = inspect(&float_path).unwrap();
+        assert_eq!(info.format.sample_format, "float");
+        assert_eq!(info.frame_bytes(), 8);
+
+        let junk = dir.join("junk.wav");
+        std::fs::write(&junk, b"not a wav at all").unwrap();
+        assert!(inspect(&junk).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

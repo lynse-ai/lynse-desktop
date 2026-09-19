@@ -2693,7 +2693,7 @@ async fn finalize_session(app: AppHandle, session: Arc<LiveSession>) {
     }
 }
 
-use crate::audio_contract::manifest::TrackManifest;
+use crate::audio_contract::wav::{inspect as inspect_wav, WavFormat, WavInfo};
 
 /// Makes sure `mic_processed.wav` exists for a dual-channel session,
 /// reprocessing the raw tracks through the sidecar when the processed file
@@ -2773,6 +2773,14 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
     .find(|path| path.exists())
     .unwrap_or_else(|| session.directory.join("mic.wav"));
     let system = session.directory.join("system.wav");
+    // The sidecar archives a full-bandwidth stereo mixdown next to the
+    // 16 kHz recognition tracks; it is the master whenever it exists.
+    let master = session.directory.join(MASTER_TRACK_FILE);
+    // A sidecar that outlived the finalize budget is killed before it can
+    // patch its headers — fix that first so every later reader (this mixdown,
+    // the per-track picker, the reprocessor, `local-media://`) sees the real
+    // duration.
+    repair_capture_headers(&session.directory);
     // Name the mixed-down playback file after the recording's end time
     // (local clock, precise to the second) — this is the name shown in the
     // completion dialog and carried by the cloud upload, not an internal
@@ -2782,6 +2790,7 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
         .directory
         .join(format!("{}.wav", ended_at.format("%Y%m%d_%H%M%S")));
     build_playback_wav(
+        master.exists().then_some(master.as_path()),
         mic.exists().then_some(mic.as_path()),
         system.exists().then_some(system.as_path()),
         &playback,
@@ -2936,112 +2945,209 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
     })
 }
 
+/// Full-bandwidth mixdown the capture side writes beside the recognition
+/// tracks. A derived artifact like the playback file, so — deliberately — it
+/// is not one of the frozen capture tracks in `tracks.json`.
+pub(crate) const MASTER_TRACK_FILE: &str = "master.wav";
+
+/// Every WAV a session directory can hold. Raw tracks belong here: a sidecar
+/// killed by the finalize budget leaves *all* of them with an unpatched header,
+/// and the Swift `--process` reprocessor reads the raws through a reader that
+/// refuses a zero-length `data` chunk — an unrepaired `mic_raw.wav` makes
+/// reprocessing fail *after* it has already deleted the finished tracks.
+const CAPTURE_TRACK_FILES: [&str; 6] = [
+    MASTER_TRACK_FILE,
+    "mic.wav",
+    "mic_processed.wav",
+    "system.wav",
+    "mic_raw.wav",
+    "system_raw.wav",
+];
+
+/// Repairs headers for tracks whose writer was killed before `close`. Missing
+/// or unparseable files are skipped — persist must still produce a recording
+/// out of whatever survived.
+fn repair_capture_headers(directory: &Path) {
+    for name in CAPTURE_TRACK_FILES {
+        let path = directory.join(name);
+        if !path.exists() {
+            continue;
+        }
+        match crate::audio_contract::wav::repair_if_stale(&path) {
+            Ok(true) => log::warn!("repaired WAV header: {}", path.display()),
+            Ok(false) => {}
+            Err(error) => log::debug!("no WAV header to repair at {}: {error}", path.display()),
+        }
+    }
+}
+
+/// One archived WAV whose payload is long enough to be worth playing.
+fn playback_source(path: &Path) -> Option<(PathBuf, WavInfo)> {
+    let info = inspect_wav(path).ok()?;
+    (info.frames() > 0).then_some((path.to_path_buf(), info))
+}
+
+/// Builds the file the user plays back.
+///
+/// Preference order is a quality order: the sidecar's 48 kHz `master.wav`
+/// already mixes echo-cancelled microphone and system audio at full bandwidth,
+/// so it is copied verbatim (payload only — the header is rewritten to match
+/// the bytes on disk). Without a master, the 16 kHz recognition tracks are
+/// summed here, which is what pre-48 kHz recordings did.
 fn build_playback_wav(
+    master: Option<&Path>,
     mic: Option<&Path>,
     system: Option<&Path>,
     output: &Path,
 ) -> CommandResult<()> {
-    // Single-source sessions (mic only / system only — the common case) are
-    // already valid 16 kHz mono WAVs: stream-copy instead of decoding and
-    // re-encoding every sample.
-    let no_audio = "no captured audio was written".to_owned();
-    match (mic, system) {
-        (Some(source), None) | (None, Some(source)) => {
-            if fs::metadata(source).map_err(|error| error.to_string())?.len() <= 44 {
-                return Err(no_audio);
+    if let Some((path, info)) = master.and_then(playback_source) {
+        return copy_payload(&path, &info, output);
+    }
+    let tracks = [mic, system]
+        .into_iter()
+        .flatten()
+        .filter_map(playback_source)
+        .collect::<Vec<_>>();
+    match tracks.as_slice() {
+        [] => Err("no captured audio was written".to_owned()),
+        // Single-source sessions are already complete WAVs.
+        [(path, info)] => copy_payload(path, info, output),
+        _ => {
+            let (first, second) = (&tracks[0], &tracks[1]);
+            // Sample-wise summation only means something for two tracks on the
+            // same clock; mismatched rates fall back to the longer one.
+            if first.1.format == second.1.format {
+                mix_payload(first, second, output)
+            } else {
+                let longest = if track_duration_ms(&first.1) >= track_duration_ms(&second.1) {
+                    first
+                } else {
+                    second
+                };
+                log::warn!(
+                    "playback tracks disagree on format, keeping the longer one: {}",
+                    longest.0.display()
+                );
+                copy_payload(&longest.0, &longest.1, output)
             }
-            fs::copy(source, output).map_err(|error| error.to_string())?;
-            return Ok(());
         }
-        (None, None) => return Err(no_audio),
-        _ => {}
     }
-    let (mic, system) = (mic.unwrap(), system.unwrap());
+}
 
-    // Streaming mixdown in 64 KB chunks: memory stays flat for hour-long
-    // meetings instead of holding three whole-file sample buffers in RAM.
-    let mic_data_len = wav_data_len(mic)?;
-    let system_data_len = wav_data_len(system)?;
-    if mic_data_len == 0 && system_data_len == 0 {
-        return Err(no_audio);
-    }
-    let length_samples = usize::try_from(mic_data_len.max(system_data_len) / 2)
-        .map_err(|_| "recording is too large for WAV")?;
-    let mut mic_reader = BufReader::new(File::open(mic).map_err(|error| error.to_string())?);
-    let mut system_reader = BufReader::new(File::open(system).map_err(|error| error.to_string())?);
-    // Skip the 44-byte WAV headers so only PCM data enters the mix.
-    mic_reader
-        .seek(SeekFrom::Start(44))
-        .map_err(|error| error.to_string())?;
-    system_reader
-        .seek(SeekFrom::Start(44))
-        .map_err(|error| error.to_string())?;
+fn track_duration_ms(info: &WavInfo) -> u64 {
+    info.frames().saturating_mul(1_000) / u64::from(info.format.sample_rate.max(1))
+}
+
+/// Streams one track's payload into `output` behind a freshly written header.
+fn copy_payload(path: &Path, info: &WavInfo, output: &Path) -> CommandResult<()> {
+    let reader = open_payload(path, info)?;
     let mut out = BufWriter::new(File::create(output).map_err(|error| error.to_string())?);
-    write_wav_header(&mut out, length_samples)?;
-    let mut mic_chunk = vec![0u8; MIX_CHUNK_BYTES];
-    let mut system_chunk = vec![0u8; MIX_CHUNK_BYTES];
+    write_wav_header_for(&mut out, info.frames(), &info.format)?;
+    std::io::copy(&mut reader.take(info.data_bytes), &mut out).map_err(|error| error.to_string())?;
+    out.flush().map_err(|error| error.to_string())
+}
+
+fn open_payload(path: &Path, info: &WavInfo) -> CommandResult<BufReader<File>> {
+    let mut reader =
+        BufReader::new(File::open(path).map_err(|error| error.to_string())?);
+    reader
+        .seek(SeekFrom::Start(info.data_offset))
+        .map_err(|error| error.to_string())?;
+    Ok(reader)
+}
+
+/// Streaming mixdown of two same-format PCM16 tracks in ~64 KB chunks: memory
+/// stays flat for hour-long meetings. Frames are summed with saturation, never
+/// averaged — averaging cost every track 6 dB for no benefit.
+fn mix_payload(first: &(PathBuf, WavInfo), second: &(PathBuf, WavInfo), output: &Path) -> CommandResult<()> {
+    let format = first.1.format;
+    let frame_bytes = first.1.frame_bytes();
+    if format.bits_per_sample != 16 || frame_bytes == 0 {
+        return copy_payload(&first.0, &first.1, output);
+    }
+    let frames = first.1.frames().max(second.1.frames());
+    let mut left = open_payload(&first.0, &first.1)?;
+    let mut right = open_payload(&second.0, &second.1)?;
+    let mut out = BufWriter::new(File::create(output).map_err(|error| error.to_string())?);
+    write_wav_header_for(&mut out, frames, &format)?;
+
+    let frames_per_chunk = (MIX_CHUNK_BYTES / frame_bytes).max(1);
+    let mut left_bytes = vec![0u8; frames_per_chunk * frame_bytes];
+    let mut right_bytes = vec![0u8; frames_per_chunk * frame_bytes];
+    let mut mixed = Vec::with_capacity(left_bytes.len());
+    let mut left_remaining = first.1.data_bytes;
+    let mut right_remaining = second.1.data_bytes;
     loop {
-        let mic_read = read_chunk(&mut mic_reader, &mut mic_chunk)?;
-        let system_read = read_chunk(&mut system_reader, &mut system_chunk)?;
-        let valid_samples = mic_read.max(system_read) & !1; // keep i16 pairing
-        if valid_samples == 0 {
+        let left_read = read_limited(&mut left, &mut left_bytes, &mut left_remaining)?;
+        let right_read = read_limited(&mut right, &mut right_bytes, &mut right_remaining)?;
+        let usable = left_read.max(right_read) & !1; // keep i16 pairing
+        if usable == 0 {
             break;
         }
-        let mut chunk_out = Vec::with_capacity(valid_samples * 2);
-        for index in (0..valid_samples).step_by(2) {
-            let mic = if index + 1 < mic_read {
-                i16::from_le_bytes([mic_chunk[index], mic_chunk[index + 1]]) as i32
-            } else {
-                0
-            };
-            let system = if index + 1 < system_read {
-                i16::from_le_bytes([system_chunk[index], system_chunk[index + 1]]) as i32
-            } else {
-                0
-            };
-            let sample = if mic_read == 0 {
-                system
-            } else if system_read == 0 {
-                mic
-            } else {
-                (mic + system) / 2
-            };
-            chunk_out.extend_from_slice(&(sample.clamp(i16::MIN as i32, i16::MAX as i32) as i16).to_le_bytes());
+        mixed.clear();
+        for index in (0..usable).step_by(2) {
+            let a = sample_at(&left_bytes, left_read, index);
+            let b = sample_at(&right_bytes, right_read, index);
+            let sum = a.saturating_add(b).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            mixed.extend_from_slice(&sum.to_le_bytes());
         }
-        out.write_all(&chunk_out).map_err(|error| error.to_string())?;
+        out.write_all(&mixed).map_err(|error| error.to_string())?;
     }
-    out.flush().map_err(|error| error.to_string())?;
-    Ok(())
+    out.flush().map_err(|error| error.to_string())
 }
 
-/// Data-chunk byte length of a 44-byte-header PCM16 WAV.
+/// i16 at `index` of a little-endian buffer, or silence past its end.
+fn sample_at(bytes: &[u8], readable: usize, index: usize) -> i32 {
+    if index + 1 < readable {
+        i16::from_le_bytes([bytes[index], bytes[index + 1]]) as i32
+    } else {
+        0
+    }
+}
+
+/// Data-chunk byte length of a WAV, tolerant of a header the writer never
+/// patched (a killed sidecar declares 0 and still holds every sample).
 fn wav_data_len(path: &Path) -> CommandResult<u64> {
-    let len = fs::metadata(path).map_err(|error| error.to_string())?.len();
-    Ok(len.saturating_sub(44))
+    Ok(inspect_wav(path)?.data_bytes)
 }
 
-/// Reads a full buffer, tolerating a short final chunk. Returns bytes read.
-fn read_chunk(reader: &mut BufReader<File>, buffer: &mut [u8]) -> CommandResult<usize> {
+/// Reads a full buffer, tolerating a short final chunk and never crossing the
+/// end of the declared `data` chunk. Returns bytes read.
+fn read_limited(
+    reader: &mut BufReader<File>,
+    buffer: &mut [u8],
+    remaining: &mut u64,
+) -> CommandResult<usize> {
+    let want = (buffer.len() as u64).min(*remaining) as usize;
+    if want == 0 {
+        return Ok(0);
+    }
     let mut filled = 0;
-    while filled < buffer.len() {
-        match reader.read(&mut buffer[filled..]) {
+    while filled < want {
+        match reader.read(&mut buffer[filled..want]) {
             Ok(0) => break,
             Ok(count) => filled += count,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error.to_string()),
         }
     }
+    *remaining = remaining.saturating_sub(filled as u64);
     Ok(filled)
 }
 
 /// Chunk size for the streaming mixdown (32 768 samples = 64 KB of PCM16).
 const MIX_CHUNK_BYTES: usize = 64 * 1024;
 
-/// Writes the 44-byte canonical PCM16 mono 16 kHz WAV header. `data_samples`
-/// is the sample count of the data chunk.
-fn write_wav_header<W: Write>(out: &mut W, data_samples: usize) -> CommandResult<()> {
-    let data_bytes = u32::try_from(data_samples.saturating_mul(2))
+/// Writes a canonical 44-byte PCM16 WAV header for `frames` frames of
+/// `format`. Playback masters must describe what they actually hold: a 48 kHz
+/// stereo master and a 16 kHz mono recognition mixdown share this code.
+fn write_wav_header_for<W: Write>(out: &mut W, frames: u64, format: &WavFormat) -> CommandResult<()> {
+    debug_assert!(format.sample_format == "int");
+    let bytes_per_frame = u64::from(format.channels) * u64::from(format.bits_per_sample) / 8;
+    let data_bytes = u32::try_from(frames.saturating_mul(bytes_per_frame))
         .map_err(|_| "recording is too large for WAV")?;
+    let channels = u32::from(format.channels);
+    let bits = u32::from(format.bits_per_sample);
     out.write_all(b"RIFF").map_err(|error| error.to_string())?;
     out.write_all(&(36 + data_bytes).to_le_bytes())
         .map_err(|error| error.to_string())?;
@@ -3051,20 +3157,26 @@ fn write_wav_header<W: Write>(out: &mut W, data_samples: usize) -> CommandResult
         .map_err(|error| error.to_string())?;
     out.write_all(&1u16.to_le_bytes())
         .map_err(|error| error.to_string())?;
-    out.write_all(&1u16.to_le_bytes())
+    out.write_all(&format.channels.to_le_bytes())
         .map_err(|error| error.to_string())?;
-    out.write_all(&16_000u32.to_le_bytes())
+    out.write_all(&format.sample_rate.to_le_bytes())
         .map_err(|error| error.to_string())?;
-    out.write_all(&32_000u32.to_le_bytes())
+    out.write_all(&(format.sample_rate * channels * bits / 8).to_le_bytes())
         .map_err(|error| error.to_string())?;
-    out.write_all(&2u16.to_le_bytes())
+    out.write_all(&(format.channels * format.bits_per_sample / 8).to_le_bytes())
         .map_err(|error| error.to_string())?;
-    out.write_all(&16u16.to_le_bytes())
+    out.write_all(&format.bits_per_sample.to_le_bytes())
         .map_err(|error| error.to_string())?;
     out.write_all(b"data").map_err(|error| error.to_string())?;
     out.write_all(&data_bytes.to_le_bytes())
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// Writes the 44-byte canonical PCM16 mono 16 kHz WAV header. `data_samples`
+/// is the sample count of the data chunk.
+fn write_wav_header<W: Write>(out: &mut W, data_samples: usize) -> CommandResult<()> {
+    write_wav_header_for(out, data_samples as u64, &WavFormat::RECOGNITION)
 }
 
 pub(crate) fn write_pcm16_wav(path: &Path, samples: &[i16]) -> CommandResult<()> {
@@ -3101,17 +3213,11 @@ pub fn live_translation_finalize_local(
             return Err("invalid live translation session id".to_owned());
         }
         let directory = recovery_root(&app)?.join(session_id);
-        // Every capture-side source file goes: cloud holds the default
-        // playback mix, and the raws' whole point (local reprocessing)
-        // belongs to the local-only phase. Removing them here also caps the
-        // storage the dual-track layout costs.
-        for name in [
-            "mic.wav",
-            "system.wav",
-            "mic_raw.wav",
-            "system_raw.wav",
-            "mic_processed.wav",
-        ] {
+        // The 16 kHz recognition tracks go: cloud holds the playback mix, and
+        // they are derivable from what stays. The raw captures and the 48 kHz
+        // master do NOT go — they are the only full-bandwidth audio in the
+        // session, and reprocessing (or a future better engine) needs them.
+        for name in ["mic.wav", "system.wav", "mic_processed.wav"] {
             let path = directory.join(name);
             if path.exists() {
                 fs::remove_file(path).map_err(|error| error.to_string())?;
@@ -3185,9 +3291,14 @@ pub async fn live_translation_reprocess(
         if !mic_raw.exists() || !system_raw.exists() {
             return Err("这份录音没有保留原始音轨，无法重新处理".to_owned());
         }
+        // Repair the raws *before* anything is deleted: the sidecar reads them
+        // through a WAV reader that rejects an unpatched zero-length `data`
+        // chunk, so a torn header here would fail the rebuild after the good
+        // outputs were already gone.
+        repair_capture_headers(&directory);
         // Force a full rebuild: drop the previous processed outputs first so
         // a stale file can never short-circuit the engine run.
-        for name in ["mic_processed.wav", "system.wav"] {
+        for name in ["mic_processed.wav", "system.wav", MASTER_TRACK_FILE] {
             let path = directory.join(name);
             if path.exists() {
                 fs::remove_file(path).map_err(|error| error.to_string())?;
@@ -3210,7 +3321,9 @@ pub async fn live_translation_reprocess(
             .to_owned();
         let playback_path = PathBuf::from(&playback);
         let system = directory.join("system.wav");
+        let master = directory.join(MASTER_TRACK_FILE);
         build_playback_wav(
+            master.exists().then_some(master.as_path()),
             processed.exists().then_some(processed.as_path()),
             system.exists().then_some(system.as_path()),
             &playback_path,
@@ -3330,12 +3443,22 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
             segment.translated_final = true;
         }
     }
-    let duration_ms = [directory.join("mic.wav"), directory.join("system.wav")]
-        .into_iter()
-        .filter_map(|path| fs::metadata(path).ok())
-        .map(|metadata| metadata.len().saturating_sub(44).saturating_mul(1_000) / 32_000)
-        .max()
-        .unwrap_or_default();
+    // Longest real track wins, at whatever rate it was archived: the 48 kHz
+    // master and the 16 kHz recognition tracks are not interchangeable, and a
+    // byte-count guess would price the master at three times its length.
+    let duration_ms = [
+        MASTER_TRACK_FILE,
+        "mic_processed.wav",
+        "mic.wav",
+        "system.wav",
+    ]
+    .into_iter()
+    .map(|name| directory.join(name))
+    .filter_map(|path| inspect_wav(&path).ok())
+    .filter(|info| info.frames() > 0)
+    .map(|info| track_duration_ms(&info))
+    .max()
+    .unwrap_or_default();
     // Recovered sessions may come from either pipeline; detect from the
     // track files the sidecar managed to write.
     let dual_channel = directory.join("mic_processed.wav").exists()
@@ -4335,7 +4458,7 @@ mod tests {
     }
 
     #[test]
-    fn build_playback_wav_copies_single_source_and_mixes_dual_sources() {
+    fn build_playback_wav_copies_single_source_and_sums_dual_sources() {
         let directory = std::env::temp_dir().join(format!("lynse-mix-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
 
@@ -4343,24 +4466,133 @@ mod tests {
         let mic = directory.join("mic.wav");
         write_pcm16_wav(&mic, &[100, -200, 300]).unwrap();
         let playback = directory.join("playback.wav");
-        build_playback_wav(Some(&mic), None, &playback).unwrap();
+        build_playback_wav(None, Some(&mic), None, &playback).unwrap();
         let copied = fs::read(&playback).unwrap();
         let original = fs::read(&mic).unwrap();
         assert_eq!(copied, original, "single source must copy byte-for-byte");
 
-        // Dual source: samples are averaged, clamped, and the shorter stream
-        // is padded with silence past its end.
+        // Dual source: samples are summed (never averaged — averaging cost both
+        // tracks 6 dB), clamped at full scale, and the shorter stream is padded
+        // with silence past its end.
         let system = directory.join("system.wav");
         write_pcm16_wav(&system, &[100, 100, i16::MAX, i16::MAX]).unwrap();
-        build_playback_wav(Some(&mic), Some(&system), &playback).unwrap();
+        build_playback_wav(None, Some(&mic), Some(&system), &playback).unwrap();
         let bytes = fs::read(&playback).unwrap();
         let data = &bytes[44..];
         let sample = |index: usize| i16::from_le_bytes([data[index * 2], data[index * 2 + 1]]);
         assert_eq!(data.len() / 2, 4, "output spans the longer source");
-        assert_eq!(sample(0), 100, "(100 + 100) / 2");
-        assert_eq!(sample(1), -50, "(-200 + 100) / 2");
-        assert_eq!(sample(2), ((300 + i16::MAX as i32) / 2) as i16);
-        assert_eq!(sample(3), ((i16::MAX as i32) / 2) as i16, "beyond mic's end it is silence, so the system tail plays at half gain");
+        assert_eq!(sample(0), 200, "100 + 100, at unity gain");
+        assert_eq!(sample(1), -100);
+        assert_eq!(sample(2), i16::MAX, "300 + i16::MAX saturates instead of folding");
+        assert_eq!(sample(3), i16::MAX, "past mic's end the system tail keeps full gain");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn repair_capture_headers_fixes_the_raw_tracks_too() {
+        // A killed sidecar leaves every track with a zero-length `data` chunk.
+        // The reprocessor reads the raws through a reader that rejects that, so
+        // repairing only the finished tracks would fail reprocessing *after* it
+        // deleted them.
+        let directory =
+            std::env::temp_dir().join(format!("lynse-repair-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let format = crate::audio_contract::wav::WavFormat {
+            sample_rate: 48_000,
+            channels: 1,
+            bits_per_sample: 16,
+            sample_format: "int",
+        };
+        let torn = vec![directory.join(MASTER_TRACK_FILE), directory.join("mic_raw.wav"), directory.join("system_raw.wav")];
+        for path in &torn {
+            let writer = crate::audio_contract::wav::WavTrackWriter::raw(path, format).unwrap();
+            writer.write_i16_at(0, &vec![42i16; 480]).unwrap();
+            drop(writer); // never closed — header stays a placeholder
+            let bytes = fs::read(path).unwrap();
+            assert_eq!(&bytes[40..44], &0u32.to_le_bytes());
+        }
+
+        repair_capture_headers(&directory);
+
+        for path in &torn {
+            let info = crate::audio_contract::wav::inspect(path).unwrap();
+            assert_eq!(info.frames(), 480, "{} lost audio", path.display());
+            assert!(
+                info.header_matches_contents(fs::metadata(path).unwrap().len()),
+                "{} header still lies",
+                path.display()
+            );
+        }
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn build_playback_wav_prefers_the_48k_master_over_the_recognition_tracks() {
+        let directory = std::env::temp_dir().join(format!("lynse-master-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+
+        let format = crate::audio_contract::wav::WavFormat {
+            sample_rate: 48_000,
+            channels: 2,
+            bits_per_sample: 16,
+            sample_format: "int",
+        };
+        let master = directory.join(MASTER_TRACK_FILE);
+        let writer = crate::audio_contract::wav::WavTrackWriter::raw(&master, format).unwrap();
+        // Two stereo frames: (1000, 2000) then (3000, 4000).
+        writer.write_i16_at(0, &[1000, 2000, 3000, 4000]).unwrap();
+        writer.close().unwrap();
+
+        let mic = directory.join("mic.wav");
+        write_pcm16_wav(&mic, &[1, 2, 3]).unwrap();
+        let system = directory.join("system.wav");
+        write_pcm16_wav(&system, &[4, 5, 6]).unwrap();
+
+        let playback = directory.join("playback.wav");
+        build_playback_wav(
+            Some(&master),
+            Some(&mic),
+            Some(&system),
+            &playback,
+        )
+        .unwrap();
+        let info = crate::audio_contract::wav::inspect(&playback).unwrap();
+        assert_eq!(info.format, format, "master keeps its bandwidth");
+        assert_eq!(info.frames(), 2);
+        let bytes = fs::read(&playback).unwrap();
+        let expected: Vec<u8> = [1000i16, 2000, 3000, 4000]
+            .into_iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect();
+        assert_eq!(&bytes[44..], &expected[..], "payload must be the master, not the 16k tracks");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn build_playback_wav_recovers_a_track_whose_header_was_never_patched() {
+        let directory = std::env::temp_dir().join(format!("lynse-stale-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+
+        // The sidecar was killed before close(): 320 samples behind a header
+        // that still declares zero data bytes.
+        let mic = directory.join("mic.wav");
+        let writer =
+            crate::audio_contract::wav::WavTrackWriter::recognition(&mic).unwrap();
+        writer.write_i16_at(0, &vec![500i16; 320]).unwrap();
+        drop(writer);
+        let raw = fs::read(&mic).unwrap();
+        assert_eq!(&raw[40..44], &0u32.to_le_bytes(), "header stays unpatched");
+
+        let playback = directory.join("playback.wav");
+        build_playback_wav(None, Some(&mic), None, &playback).unwrap();
+        let info = crate::audio_contract::wav::inspect(&playback).unwrap();
+        assert_eq!(info.frames(), 320, "audio must survive the torn header");
+        let bytes = fs::read(&playback).unwrap();
+        assert_eq!(
+            u32::from_le_bytes(bytes[40..44].try_into().unwrap()),
+            640,
+            "the written header is honest"
+        );
         let _ = fs::remove_dir_all(directory);
     }
 }

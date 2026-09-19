@@ -36,6 +36,11 @@ public final class DualChannelProcessor {
     public var onMicProcessed16k: ((_ firstFrameElapsedMs: UInt64, _ samples: [Int16]) -> Void)?
     /// System audio at 16 kHz mono (recognition socket + `system.wav`).
     public var onSystem16k: ((_ firstFrameElapsedMs: UInt64, _ samples: [Int16]) -> Void)?
+    /// Playback master at 48 kHz stereo: echo-cancelled microphone summed into
+    /// the system mixdown, both channels carrying the mic so it stays centred.
+    /// This is the full-bandwidth archive — the 16 kHz tracks above exist for
+    /// recognition only and cap out at 8 kHz.
+    public var onMaster48k: ((_ firstFrameElapsedMs: UInt64, _ samples: [Int16]) -> Void)?
 
     private let queue = DispatchQueue(label: "app.lynse.capture.dualchannel")
     private let aec: AecProcessor?
@@ -54,6 +59,7 @@ public final class DualChannelProcessor {
     private var delayHintMs = 0
     private var micOutputCount = 0
     private var systemOutputCount = 0
+    private var masterOutputCount = 0
     private var framesSinceSystemEnqueue = 0
     private var framesSinceMicEnqueue = 0
     private var flushing = false
@@ -128,6 +134,7 @@ public final class DualChannelProcessor {
             delayHintMs = 0
             micOutputCount = 0
             systemOutputCount = 0
+            masterOutputCount = 0
             framesSinceSystemEnqueue = 0
             framesSinceMicEnqueue = 0
             aec?.reset()
@@ -341,24 +348,23 @@ public final class DualChannelProcessor {
         }
         emitMicProcessed(near)
         emit16k(reference16k, outputCount: &systemOutputCount, sink: onSystem16k)
+        emitMaster(near: near, systemStereo: system.samples)
     }
 
     private func emitMicWithoutReference(_ mic: Track.Frame) {
+        var near = mic.samples
         if let aec {
             // Feed a silent reference so the engine keeps its internal block
             // alignment; the near audio passes through uncancelled and the
             // interval is recorded as degraded.
-            var near = mic.samples
             _ = aec.processReference([Float](repeating: 0, count: AecProcessor.frameSamples))
             _ = aec.processNear(&near, delayHintMs: 0)
             markDegraded(startMs: ms(mic.position), endMs: ms(mic.position + Int64(DualChannelProcessor.frameSamples)))
-            emitMicProcessed(near)
-        } else {
-            if engineUnavailable {
-                markDegraded(startMs: ms(mic.position), endMs: ms(mic.position + Int64(DualChannelProcessor.frameSamples)))
-            }
-            emitMicProcessed(mic.samples)
+        } else if engineUnavailable {
+            markDegraded(startMs: ms(mic.position), endMs: ms(mic.position + Int64(DualChannelProcessor.frameSamples)))
         }
+        emitMicProcessed(near)
+        emitMaster(near: near, systemStereo: [])
     }
 
     private func emitMicProcessed(_ samples48k: [Float]) {
@@ -369,6 +375,31 @@ public final class DualChannelProcessor {
     private func emitSystem(_ system: Track.Frame) {
         let decimated = systemDecimator.decimate(downmixToMono(system.samples))
         emit16k(decimated, outputCount: &systemOutputCount, sink: onSystem16k)
+        emitMaster(near: [], systemStereo: system.samples)
+    }
+
+    /// One 10 ms master frame: the microphone summed into both system channels,
+    /// which keeps it centred while the system mixdown keeps its own stereo
+    /// image. Unity gain — the old `/2` mixdown cost both sources 6 dB for
+    /// nothing. `toInt16` saturates, which only bites when both sources are
+    /// simultaneously near full scale.
+    private func emitMaster(near: [Float], systemStereo: [Float]) {
+        guard onMaster48k != nil else { return }
+        let frameSamples = DualChannelProcessor.frameSamples
+        let channels = DualChannelProcessor.systemChannels
+        var interleaved = [Float](repeating: 0, count: frameSamples * channels)
+        for index in 0..<frameSamples {
+            let mic = index < near.count ? near[index] : 0
+            let left = index * channels < systemStereo.count ? systemStereo[index * channels] : 0
+            let right = index * channels + 1 < systemStereo.count ? systemStereo[index * channels + 1] : 0
+            interleaved[index * channels] = mic + left
+            interleaved[index * channels + 1] = mic + right
+        }
+        let samples = toInt16(interleaved)
+        let startOutput = masterOutputCount
+        masterOutputCount += samples.count / channels
+        let startMs = UInt64((Double(startOutput) * 1_000.0 / Double(DualChannelProcessor.processingRate)).rounded(.down))
+        onMaster48k?(startMs, samples)
     }
 
     private func emit16k(_ samples: [Float], outputCount: inout Int, sink: ((_ firstFrameElapsedMs: UInt64, _ samples: [Int16]) -> Void)?) {
@@ -396,10 +427,7 @@ public final class DualChannelProcessor {
     }
 
     private func toInt16(_ samples: [Float]) -> [Int16] {
-        samples.map { value in
-            let clamped = max(-1.0, min(1.0, value))
-            return Int16(clamping: Int((clamped * 32_767).rounded()))
-        }
+        pcm16(fromFloats: samples)
     }
 
     private func ms(_ positionSamples: Int64) -> UInt64 {

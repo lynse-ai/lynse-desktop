@@ -10,7 +10,7 @@ import {
 } from "./webdav-sync";
 
 declare global {
-  // eslint-disable-next-line no-var
+   
   var desktopAPI: Record<string, unknown> | undefined;
 }
 

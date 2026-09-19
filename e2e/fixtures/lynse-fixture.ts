@@ -32,7 +32,7 @@ export async function openChat(page: import("@playwright/test").Page, serverUrl:
   await page.goto("/chat");
   // The composer placeholder is a stable render proof for the chat page.
   await expect(
-    page.getByPlaceholder("Ask about your recordings, meetings..."),
+    page.getByPlaceholder("Ask about your recordings, meetings"),
   ).toBeVisible({ timeout: 20_000 });
 }
 

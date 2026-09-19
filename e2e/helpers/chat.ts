@@ -7,7 +7,7 @@ import type { ChatScript } from "../fixtures/chat-script";
 /** ── Selectors (English locale labels; see packages/views/locales/en.ts) ── */
 
 export const chatSelectors = {
-  composer: 'textarea[placeholder="Ask about your recordings, meetings..."]',
+  composer: 'textarea[placeholder^="Ask about your recordings, meetings"]',
   send: { role: "button", name: "Send" },
   stop: { role: "button", name: "Stop" },
   historyToggle: { role: "button", name: "Chat history" },

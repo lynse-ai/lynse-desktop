@@ -34,9 +34,11 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      # TODO: add `pnpm lint` once ESLint is wired up in the workspace —
-      # current lint scripts reference an eslint binary that no package
-      # declares as a dependency (inherited from the Multica template).
+      # Repo-wide flat config (eslint.config.mjs); turbo fans out to the
+      # per-package `eslint .` scripts.
+      - name: Lint
+        run: pnpm lint
+
       - name: Test
         run: pnpm test
 
@@ -44,6 +46,62 @@ jobs:
       # and STT sidecars, which only exist in release.yml's environment. CI
       # covers the frontend via typecheck/lint/test; desktop bundling is
       # validated on tagged releases.
+
+  e2e:
+    name: E2E (Playwright, chat + smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      # e2e/ is deliberately outside the pnpm workspace and owns its lockfile.
+      - name: Install e2e dependencies
+        working-directory: e2e
+        run: pnpm install --frozen-lockfile --ignore-workspace
+
+      - name: Install Playwright Chromium
+        working-directory: e2e
+        run: pnpm exec playwright install --with-deps chromium
+
+      # `pnpm test` reuses the config's webServer block, which starts
+      # `pnpm dev:web` on :3000 and points every test at a per-case local
+      # mock backend — no real backend or login involved.
+      - name: Run Playwright suite (web renderer)
+        working-directory: e2e
+        run: pnpm test
+
+      # Desktop renderer: vite --mode e2e installs the Tauri IPC shim
+      # (apps/tauri/src/e2e/tauri-shim.ts) so the real Tauri UI boots in
+      # Chromium against the same mock backend.
+      - name: Run Playwright suite (desktop renderer)
+        working-directory: e2e
+        run: pnpm test:desktop
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report/
+            e2e/desktop-report/
+            e2e/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
 
   windows-audio:
     name: Windows capture engine check

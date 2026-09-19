@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { PollChatTransport } from "../workspace/chat-transport";
+import { isBotChannelActive } from "../plugins/channel-plugin-gate";
 import { trackTurn } from "./turns";
 import { getBotToken, getDesktopBotsApi, type BotIncomingMessage } from "./types";
 
@@ -232,6 +233,8 @@ export function BotAgent() {
       if (event.senderType !== "user") return;
       if (event.messageType !== "text") return;
       if (!event.text.trim()) return;
+      // Plugin gate: unanswered channels (plugin uninstalled/disabled) stay silent.
+      if (!isBotChannelActive(event.channel)) return;
       // Groups: only answer when the message @-mentions the bot.
       if (event.chatType === "group" && !event.mentionedBot) return;
       if (!remember(event.eventId || event.messageId)) return;

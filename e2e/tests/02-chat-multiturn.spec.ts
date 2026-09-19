@@ -61,7 +61,7 @@ test.describe("history restore after reload", () => {
     await page.waitForTimeout(1_500);
     // Reload — the persisted history must survive.
     await page.reload();
-    await expect(page.getByPlaceholder("Ask about your recordings, meetings...")).toBeVisible({
+    await expect(page.getByPlaceholder("Ask about your recordings, meetings")).toBeVisible({
       timeout: 20_000,
     });
     await expectAssistantSaid(page, fullText(script.turns[4]!));

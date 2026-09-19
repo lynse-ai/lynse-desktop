@@ -21,7 +21,7 @@ import { useAudioEditorStore } from "../audio-editor/store";
 import { useNavigation } from "../navigation";
 import { TAB_BAR_HEIGHT } from "./layout-constants";
 import { api } from "@lynse/core/api/client";
-import { pushMeetingSummaryToFeishu } from "../feishu/feishu-push";
+import { emitPluginEvent } from "../plugins";
 import { SummaryMarkdownEditor } from "./summary-editor";
 import { FloatingMarkdownToolbar } from "./center-panel/markdown-toolbar";
 import { DeleteConfirmDialog } from "./delete-confirm-dialog";
@@ -721,12 +721,13 @@ export function ContentPanel() {
         title: (displayTitle ?? "").trim(),
         href: "/notes",
       });
-      // Feishu bot: when enabled, push the finished summary card to the
-      // configured group (no-op on web / when the bot is off). A freshly
-      // produced conclusion rides along; reruns fall back to fetching the
-      // newest one.
-      void pushMeetingSummaryToFeishu({
-        fileId,
+      // Host domain event: when enabled, the Feishu plugin pushes the finished
+      // summary card to the configured group (no-op on web / when off). A
+      // freshly produced conclusion rides along; reruns fall back to fetching
+      // the newest one.
+      emitPluginEvent("transcription-completed", {
+        recordId: fileId,
+        source: "cloud",
         title: (displayTitle ?? "").trim(),
         summary: options?.conclusion?.conclusionText ?? null,
       });
@@ -1507,7 +1508,7 @@ function highlightHtml(code: string): string {
     // Color the style tags themselves
     let out = `<span style="color:${SH_COLORS.tag}">${openTag.replace(/(&lt;\/?)(\w+)/g, `$1<span style="color:${SH_COLORS.tag}">$2</span>`)}</span>`;
     // Highlight CSS content
-    let css = cssBody
+    const css = cssBody
       // CSS variable declarations --xxx:
       .replace(/(--[a-zA-Z0-9_-]+)(\s*:)/g, `<span style="color:${SH_COLORS.cssVar}">$1</span>$2`)
       // var(--xxx) references
@@ -1528,7 +1529,7 @@ function highlightHtml(code: string): string {
   result = result.replace(/(&lt;\/?)([a-zA-Z][a-zA-Z0-9-]*)([\s\S]*?)(&gt;)/g, (_, open, tag, attrs, close) => {
     // Skip if already highlighted (inside style block)
     if (open.includes("span")) return _;
-    let highlightedAttrs = attrs
+    const highlightedAttrs = attrs
       // Attribute name
       .replace(/\b([a-zA-Z][a-zA-Z0-9-:]*)(=)/g, `<span style="color:${SH_COLORS.attr}">$1</span>$2`)
       // Attribute value (double-quoted)

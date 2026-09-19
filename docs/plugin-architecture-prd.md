@@ -1,6 +1,7 @@
 # PRD：Lynse 桌面端插件化架构与插件社区
 
 > 版本：v0.5（草案，待评审）
+> **实施状态（2026-09-18）：P0–P5 全部落地**——插件地基、WorkBuddy/飞书两个功能插件、转写模型社区（FunASR/WhisperX/Qwen3，MOSS 延后）、WhisperX 新引擎（Rust 适配器 + Python 桥接，cargo check 通过，端到端转写待真机回归）、远程目录已上线（`plugins/catalog.json` 已发布并 curl 验证）。P6 可选项（routes 贡献点、ContentKind.Plugins）暂缓。灰度开关：`featureFlags.pluginMarketplace`。
 > 日期：2026-09-18
 > 范围：`apps/tauri` 桌面端（`packages/views` / `packages/core` 共享层同步改造）
 > 关联文档：`docs/auto-update.md`（CloudBase 托管目录）、`docs/superpowers/specs/2026-07-04-offline-funasr-transcription-design.md`
@@ -426,3 +427,22 @@ interface SttModelDescriptor {
 6. **模型插件远程上新**：P6 的远程目录是否同时下发「现有引擎的新模型」条目，实现不发版上新模型（纯数据，Rust 侧 `STT_MODELS` 合并远程条目放行；远程条目必须携带完整描述符，`minAppVersion` 不满足时对旧 App 直接隐藏该条目而非置灰）；需要新适配参数或新引擎仍必须发版。若确认，P6 增加 Rust 目录合并远程条目的工作（约 +1 天）。
 7. **WhisperX 说话人分离的模型分发**：pyannote 分离模型在 HuggingFace 有许可门控（用户需接受条款 + token）。三选一：① 引导用户填自己的 HF token；② 我方核对许可条款后经 CloudBase 代理托管分发；③ 首版 WhisperX 只上转写 + 对齐，分离功能后置。
 8. **Qwen3 是否保留在社区清单**：本 PRD 按保留处理（现役默认引擎、低配机选项已可用）；若社区首批只想突出 FunASR + WhisperX，可将 Qwen3 移出清单，已装用户不受影响。
+
+---
+
+## 13. 真机验收记录（2026-09-19，dev 环境 com.lynse.sparknote）
+
+> 方式：`pnpm dev:desktop` 运行 + 日志取证 + 与 Rust 命令同参的桥接直调 + 组件测试（jsdom 真事件）。本机截屏/AppleScript TCC 授权受限，像素级 UI 点击不可用，社区卡片交互以组件测试取证。
+
+| 验收项 | 结果 | 证据 |
+|---|---|---|
+| P3 停用后重启不自启 | ✅ | 注入测试凭据（enabled=true）重启 → 日志 `[feishu] bot enabled at startup — starting WS session`；翻转为 enabled=false（即 onDisable 持久化的状态）重启 → `[feishu] bot disabled at startup — not starting`，WS 零启动 |
+| P3 停用/启用/迁移前端接线 | ✅ | 组件测试 8 项全绿：onDisable → saveConfig(enabled=false)+stop；无凭据 onEnable 不落标志不启动；有凭据则翻转并 start；migrate 探测配置 |
+| P3 运行中停用 → WS 瞬时断开 | ⚠️ 部分 | stop() 调用已由组件测试断言；「在线→断开」瞬态需真实飞书凭据 + UI 点击，本会话无法驱动，留待日常使用观察 |
+| P4 FunASR 下载+转写 | ✅ | 按 `local_stt_download_model` 同参直调桥接：模型（1.13GB）下载到应用真实目录并产生 `.ready`（社区卡片判定已安装的依据）；测试语音转写全文正确（RTF 0.113，词级时间戳 + CAM++ 说话人） |
+| P4 社区模型卡交互 | ✅ | 组件测试：下载按钮路由到 `downloadSttModel(funasr, funasr-paraformer)`；默认引擎引用中的模型删除被 toast 阻止且不调删除命令；无引用时正常删除 |
+| P5 WhisperX 端到端 | ✅ | python3.12 venv + 桥接直调：模型下载（HF 源失败自动回退镜像，生效）→ CPU 推理 → 测试语音全文正确（`各位好 今天下午三点我们在会议室开产品评审会议 请准时参加`，词级对齐 0.03–7.22s），输出 JSON 契约与 Rust `normalize_whisper_output` 一致 |
+| P5 真机缺陷与修复 | ✅ | 缺陷：系统 `python3`(3.14) 无 whisperx/ctranslate2 兼容轮子，venv 创建后 pip 失败。修复：`ensure_whisperx_venv` 按 python3.12→3.11→3.13→python3 顺序选择解释器（已在 dev 实例验证重建） |
+| 可观测性补强 | ✅ | feishu `spawn` 此前对「自启」与「不自启」均静默，无法验收——已补两条 info 日志（与既有 `enabled but not starting` 同风格） |
+
+环境备注：测试凭据已清理、密钥文件恢复原状；FunASR 模型（~1.1GB）保留在应用模型目录（可在设置 → 存储管理清除）；仓库根新增 `.venv-whisperx`（1.3GB）/`.venv-funasr`（1.4GB）——均被 `.gitignore`（`.venv-*/`）忽略，且是 Rust dev 回退路径，开发实例会自动采用。

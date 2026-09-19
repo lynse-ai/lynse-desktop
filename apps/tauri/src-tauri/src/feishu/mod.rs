@@ -274,10 +274,16 @@ pub fn spawn(app: AppHandle) {
         }
     };
     if !config.enabled || config.app_id.trim().is_empty() {
+        // Observable in the file log so "why didn't my bot connect after a
+        // restart" has an answer (the settings card gates on the same flag).
+        log::info!("[feishu] bot disabled at startup — not starting");
         return;
     }
     match secret(&app) {
-        Ok(_) => start_bot(&app),
+        Ok(_) => {
+            log::info!("[feishu] bot enabled at startup — starting WS session");
+            start_bot(&app);
+        }
         Err(error) => log::warn!("[feishu] enabled but not starting: {error}"),
     }
 }

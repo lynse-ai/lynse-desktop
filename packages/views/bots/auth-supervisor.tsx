@@ -6,6 +6,7 @@ import { useAuthStore } from "@lynse/core/auth";
 
 import { botConfigKey } from "./config";
 import { abortAllTurns } from "./turns";
+import { isBotChannelActive } from "../plugins/channel-plugin-gate";
 import { BOT_CHANNELS, getDesktopBotsApi } from "./types";
 
 /**
@@ -42,6 +43,7 @@ export function BotAuthSupervisor() {
     if (!isAuthenticated) {
       abortAllTurns();
       for (const channel of BOT_CHANNELS) {
+        if (!isBotChannelActive(channel)) continue;
         api.stop(channel, "logged_out").catch(() => undefined);
       }
       return;
@@ -50,6 +52,7 @@ export function BotAuthSupervisor() {
 
     // Fresh login: restore enabled channels and refresh cached configs.
     for (const channel of BOT_CHANNELS) {
+      if (!isBotChannelActive(channel)) continue;
       api
         .config(channel)
         .then((config) => {

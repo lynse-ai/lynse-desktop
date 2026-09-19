@@ -146,6 +146,11 @@ const QWEN_ENDPOINT_KEY = "lynse_live_translation_qwen_endpoint";
 const QWEN_API_KEY = "lynse_live_translation_qwen_api_key";
 const VOLC_ENDPOINT_KEY = "lynse_live_translation_volc_endpoint";
 const VOLC_API_KEY = "lynse_live_translation_volc_api_key";
+const TENCENT_ENDPOINT_KEY = "lynse_live_translation_tencent_endpoint";
+const TENCENT_APP_ID_KEY = "lynse_live_translation_tencent_app_id";
+const TENCENT_SECRET_ID_KEY = "lynse_live_translation_tencent_secret_id";
+const TENCENT_SECRET_KEY = "lynse_live_translation_tencent_secret_key";
+const TENCENT_ENGINE_KEY = "lynse_live_translation_tencent_engine";
 /** iLiveData 说话人识别的最大说话人数；"0" 表示关闭说话人识别。 */
 const ILIVEDATA_MAX_SPEAKERS_KEY = "lynse_live_translation_ilivedata_max_speakers";
 /** 默认开启说话人识别，上限 2 人（自己 + 对方）。设为 0 则关闭。 */
@@ -166,10 +171,12 @@ const DEFAULT_QWEN_ENDPOINT =
   "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-livetranslate-flash-realtime";
 const DEFAULT_VOLC_ENDPOINT =
   "wss://openspeech.bytedance.com/api/v4/ast/v2/translate";
+const DEFAULT_TENCENT_ENDPOINT = "wss://asr.cloud.tencent.com/asr/v2";
 const DIRECT_LIVE_TRANSLATION_PROVIDERS = new Set<LiveTranslationProvider>([
   "ilivedata_direct",
   "qwen",
   "volc",
+  "tencent",
 ]);
 const LEGACY_ILIVEDATA_RTVT_ENDPOINT =
   "wss://rtvt-bj-test.ilivedata.com/gate/websocket";
@@ -199,6 +206,7 @@ async function getLiveTranslationProviderConfig(): Promise<LiveTranslationProvid
     refreshSecret(ILIVEDATA_SECRET_KEY),
     refreshSecret(QWEN_API_KEY),
     refreshSecret(VOLC_API_KEY),
+    refreshSecret(TENCENT_SECRET_KEY),
   ]);
   return {
     provider: DIRECT_LIVE_TRANSLATION_PROVIDERS.has(
@@ -222,6 +230,13 @@ async function getLiveTranslationProviderConfig(): Promise<LiveTranslationProvid
     volc: {
       endpoint: savedVolcEndpoint?.trim() || DEFAULT_VOLC_ENDPOINT,
       apiKey: secureStorage.getItem(VOLC_API_KEY) ?? "",
+    },
+    tencent: {
+      endpoint: window.localStorage.getItem(TENCENT_ENDPOINT_KEY)?.trim() || DEFAULT_TENCENT_ENDPOINT,
+      appId: window.localStorage.getItem(TENCENT_APP_ID_KEY) ?? "",
+      secretId: window.localStorage.getItem(TENCENT_SECRET_ID_KEY) ?? "",
+      secretKey: secureStorage.getItem(TENCENT_SECRET_KEY) ?? "",
+      engineType: window.localStorage.getItem(TENCENT_ENGINE_KEY) ?? "",
     },
   };
 }
@@ -248,6 +263,13 @@ function saveLiveTranslationProviderConfig(
     volc: {
       endpoint: config.volc.endpoint.trim() || DEFAULT_VOLC_ENDPOINT,
       apiKey: config.volc.apiKey.trim(),
+    },
+    tencent: {
+      endpoint: config.tencent?.endpoint?.trim() || DEFAULT_TENCENT_ENDPOINT,
+      appId: config.tencent?.appId?.trim() ?? "",
+      secretId: config.tencent?.secretId?.trim() ?? "",
+      secretKey: config.tencent?.secretKey?.trim() ?? "",
+      engineType: config.tencent?.engineType?.trim() ?? "",
     },
   };
   window.localStorage.setItem(LIVE_TRANSLATION_PROVIDER_KEY, normalized.provider);
@@ -276,6 +298,15 @@ function saveLiveTranslationProviderConfig(
     secureStorage.setItem(VOLC_API_KEY, normalized.volc.apiKey);
   } else {
     secureStorage.removeItem(VOLC_API_KEY);
+  }
+  window.localStorage.setItem(TENCENT_ENDPOINT_KEY, normalized.tencent.endpoint);
+  window.localStorage.setItem(TENCENT_APP_ID_KEY, normalized.tencent.appId);
+  window.localStorage.setItem(TENCENT_SECRET_ID_KEY, normalized.tencent.secretId);
+  window.localStorage.setItem(TENCENT_ENGINE_KEY, normalized.tencent.engineType);
+  if (normalized.tencent.secretKey) {
+    secureStorage.setItem(TENCENT_SECRET_KEY, normalized.tencent.secretKey);
+  } else {
+    secureStorage.removeItem(TENCENT_SECRET_KEY);
   }
   return normalized;
 }

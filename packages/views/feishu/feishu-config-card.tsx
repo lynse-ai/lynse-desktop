@@ -66,6 +66,57 @@ export function FeishuConfigCard() {
     setForm((previous) => ({ ...previous, ...config }));
   }, [config]);
 
+  // Poll the device-grant session while the dialog is open; success arrives
+  // with the credentials already saved (secret in the keychain, bot started).
+  // Stays above the `if (!feishu) return null` guard — hooks must run in the
+  // same order on every render, and the body already tolerates a missing
+  // client/session.
+  useEffect(() => {
+    const session = registration;
+    if (!feishu || !session) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const fallbackIntervalMs = Math.max(session.intervalSecs, 1) * 1000;
+    let intervalMs = fallbackIntervalMs;
+    const deadline = Date.now() + session.expiresInSecs * 1000;
+
+    function fail(key: string, error?: string) {
+      stopped = true;
+      setRegisterError({ key, error });
+    }
+
+    async function tick() {
+      if (stopped || !feishu) return;
+      try {
+        const result = await feishu.registerPoll();
+        intervalMs = Math.max(result.intervalSecs * 1000, fallbackIntervalMs);
+        if (result.status === "success" && result.config) {
+          stopped = true;
+          qc.setQueryData(botConfigKey("feishu"), result.config);
+          setForm((previous) => ({ ...previous, ...result.config! }));
+          setSecret("");
+          toast.success(t("feishu.register_success"));
+          setRegistration(null);
+          return;
+        }
+        if (result.status === "denied") return fail("feishu.register_denied");
+        if (result.status === "expired") return fail("feishu.register_expired");
+        if (result.status === "failed") return fail("feishu.register_failed", result.error ?? "");
+      } catch {
+        /* transport hiccup — keep trying until the confirmation URL expires */
+      }
+      if (Date.now() >= deadline) return fail("feishu.register_expired");
+      if (!stopped) timer = setTimeout(tick, intervalMs);
+    }
+
+    timer = setTimeout(tick, intervalMs);
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- restart only on a fresh session
+  }, [feishu, registration, t]);
+
   if (!feishu) return null;
 
   function update(patch: Partial<FeishuConfig>) {
@@ -194,54 +245,6 @@ export function FeishuConfigCard() {
       /* clipboard unavailable — the open-link button still works */
     }
   }
-
-  // Poll the device-grant session while the dialog is open; success arrives
-  // with the credentials already saved (secret in the keychain, bot started).
-  useEffect(() => {
-    const session = registration;
-    if (!feishu || !session) return;
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const fallbackIntervalMs = Math.max(session.intervalSecs, 1) * 1000;
-    let intervalMs = fallbackIntervalMs;
-    const deadline = Date.now() + session.expiresInSecs * 1000;
-
-    function fail(key: string, error?: string) {
-      stopped = true;
-      setRegisterError({ key, error });
-    }
-
-    async function tick() {
-      if (stopped || !feishu) return;
-      try {
-        const result = await feishu.registerPoll();
-        intervalMs = Math.max(result.intervalSecs * 1000, fallbackIntervalMs);
-        if (result.status === "success" && result.config) {
-          stopped = true;
-          qc.setQueryData(botConfigKey("feishu"), result.config);
-          setForm((previous) => ({ ...previous, ...result.config! }));
-          setSecret("");
-          toast.success(t("feishu.register_success"));
-          setRegistration(null);
-          return;
-        }
-        if (result.status === "denied") return fail("feishu.register_denied");
-        if (result.status === "expired") return fail("feishu.register_expired");
-        if (result.status === "failed") return fail("feishu.register_failed", result.error ?? "");
-      } catch {
-        /* transport hiccup — keep trying until the confirmation URL expires */
-      }
-      if (Date.now() >= deadline) return fail("feishu.register_expired");
-      if (!stopped) timer = setTimeout(tick, intervalMs);
-    }
-
-    timer = setTimeout(tick, intervalMs);
-    return () => {
-      stopped = true;
-      if (timer) clearTimeout(timer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- restart only on a fresh session
-  }, [feishu, registration, t]);
 
   return (
     <ChannelCardShell

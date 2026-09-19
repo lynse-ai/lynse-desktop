@@ -1,3 +1,4 @@
+use crate::tencent_asr;
 use crate::volc_ast;
 use crate::{now, remove_store_value, save_store_value, update_store_value, CommandResult};
 use futures_util::{SinkExt, StreamExt};
@@ -175,6 +176,10 @@ pub struct ConnectionDescriptor {
     provider: Option<String>,
     #[serde(default)]
     api_key: Option<String>,
+    /// Provider-specific credentials that don't fit the single-key model —
+    /// the Tencent ASR provider carries secretId/secretKey/engineType here.
+    #[serde(default)]
+    extra: Option<HashMap<String, String>>,
 }
 
 /// Which on-the-wire protocol a translation connection speaks. All providers
@@ -188,6 +193,10 @@ enum LiveProvider {
     Qwen,
     /// Volcengine AST v4: protobuf over binary websocket frames.
     Volc,
+    /// Tencent Cloud real-time ASR: raw PCM frames over a URL-signed
+    /// websocket, JSON result frames back. Recognition only — the service
+    /// has no translation leg.
+    Tencent,
 }
 
 impl LiveProvider {
@@ -195,6 +204,7 @@ impl LiveProvider {
         match name {
             Some("qwen") => Self::Qwen,
             Some("volc") => Self::Volc,
+            Some("tencent") => Self::Tencent,
             _ => Self::Direct,
         }
     }
@@ -1100,6 +1110,15 @@ fn spawn_connections(
         let app = app.clone();
         let session = session.clone();
         let provider = LiveProvider::from_name(connection.provider.as_deref());
+        let tencent_credentials = match &provider {
+            LiveProvider::Tencent => {
+                let empty = HashMap::new();
+                Some(tencent_asr::TencentCredentials::from_extra(
+                    connection.extra.as_ref().unwrap_or(&empty),
+                )?)
+            }
+            _ => None,
+        };
         let handle = tauri::async_runtime::spawn(async move {
             websocket_loop(
                 app,
@@ -1111,6 +1130,7 @@ fn spawn_connections(
                 receiver,
                 provider,
                 connection.api_key.clone(),
+                tencent_credentials,
             )
             .await;
         });
@@ -1141,6 +1161,14 @@ fn validate_connections(connections: &[ConnectionDescriptor]) -> CommandResult<(
             }
             LiveProvider::Volc if api_key.is_empty() => {
                 return Err("火山同声传译需要填写 Access Key".to_owned());
+            }
+            LiveProvider::Tencent => {
+                // Fail fast on credential shape before any audio flows; the
+                // same parse happens again in the connection loop.
+                let empty = HashMap::new();
+                tencent_asr::TencentCredentials::from_extra(
+                    connection.extra.as_ref().unwrap_or(&empty),
+                )?;
             }
             _ => {}
         }
@@ -1197,6 +1225,7 @@ async fn websocket_loop(
     mut receiver: UnboundedReceiver<WsCommand>,
     provider: LiveProvider,
     api_key: Option<String>,
+    tencent_credentials: Option<tencent_asr::TencentCredentials>,
 ) {
     let is_qwen = provider == LiveProvider::Qwen;
     let is_volc = provider == LiveProvider::Volc;
@@ -1240,6 +1269,33 @@ async fn websocket_loop(
                 break;
             }
         };
+        // Tencent authenticates through the URL itself and binds the signature
+        // to a one-shot voice_id, so every attempt signs a fresh URL; reusing
+        // one would make every reconnect after the first a hard failure.
+        if provider == LiveProvider::Tencent {
+            let credentials = tencent_credentials
+                .as_ref()
+                .expect("tencent provider without parsed credentials");
+            match tencent_asr::build_signed_url(&url, credentials) {
+                Ok(signed) => {
+                    request = match signed.as_str().into_client_request() {
+                        Ok(request) => request,
+                        Err(error) => {
+                            emit_error(
+                                &app,
+                                Some(source),
+                                format!("实时翻译连接地址无效：{error}"),
+                            );
+                            break;
+                        }
+                    };
+                }
+                Err(error) => {
+                    emit_error(&app, Some(source), error);
+                    break;
+                }
+            }
+        }
         if is_qwen {
             if let Some(key) = api_key.as_ref() {
                 if let Ok(value) = HeaderValue::from_str(&format!("Bearer {}", key.trim())) {
@@ -1355,6 +1411,9 @@ async fn websocket_loop(
                 // Volcengine is paced in 100 ms chunks (matching the vendor
                 // reference client), so 20 ms capture frames are coalesced here.
                 let mut volc_pending: Vec<u8> = Vec::with_capacity(volc_ast::CHUNK_BYTES);
+                // Tencent is paced in 40 ms chunks (the vendor-recommended
+                // frame size) through the same coalescing pattern.
+                let mut tencent_pending: Vec<u8> = Vec::with_capacity(tencent_asr::CHUNK_BYTES);
                 // `*SubtitleEnd` events may close an utterance without repeating
                 // its text, so remember the last streamed value per track.
                 let mut volc_last_source = String::new();
@@ -1402,6 +1461,23 @@ async fn websocket_loop(
                                             emit_error(&app, Some(source), format!("发送音频失败：{error}"));
                                             break;
                                         }
+                                    } else if provider == LiveProvider::Tencent {
+                                        tencent_pending.extend_from_slice(&payload);
+                                        let mut failed = None;
+                                        while tencent_pending.len() >= tencent_asr::CHUNK_BYTES {
+                                            let rest = tencent_pending.split_off(tencent_asr::CHUNK_BYTES);
+                                            let chunk = std::mem::replace(&mut tencent_pending, rest);
+                                            if let Err(error) =
+                                                writer.send(Message::Binary(chunk.into())).await
+                                            {
+                                                failed = Some(error);
+                                                break;
+                                            }
+                                        }
+                                        if let Some(error) = failed {
+                                            emit_error(&app, Some(source), format!("发送音频失败：{error}"));
+                                            break;
+                                        }
                                     } else if let Err(error) = writer.send(Message::Binary(payload.into())).await {
                                         emit_error(&app, Some(source), format!("发送音频失败：{error}"));
                                         break;
@@ -1429,6 +1505,18 @@ async fn websocket_loop(
                                         qwen_finishing = true;
                                         finishing =
                                             Some(tokio::time::Instant::now() + Duration::from_secs(5));
+                                    } else if provider == LiveProvider::Tencent {
+                                        // Tencent has no end-of-audio frame: flush
+                                        // the tail and close; the server answers
+                                        // with its final results before dropping
+                                        // the connection.
+                                        if !tencent_pending.is_empty() {
+                                            let chunk = std::mem::take(&mut tencent_pending);
+                                            let _ = writer.send(Message::Binary(chunk.into())).await;
+                                        }
+                                        let _ = writer.close().await;
+                                        finishing =
+                                            Some(tokio::time::Instant::now() + Duration::from_secs(3));
                                     } else {
                                         let _ = writer
                                             .send(Message::Text(r#"{"method":"voiceEnd"}"#.into()))
@@ -1454,15 +1542,61 @@ async fn websocket_loop(
                                         emit_stream_state(&app, source, "closed", epoch);
                                         return;
                                     }
-                                    handle_provider_message(
-                                        &app,
-                                        &session,
-                                        source,
-                                        epoch,
-                                        stream_offset_ms,
-                                        text.as_ref(),
-                                        is_qwen,
-                                    );
+                                    if provider == LiveProvider::Tencent {
+                                        match serde_json::from_str::<tencent_asr::AsrResponse>(
+                                            text.as_ref(),
+                                        ) {
+                                            Ok(response) => {
+                                                if response.code != 0 {
+                                                    let detail = if response.message.is_empty() {
+                                                        format!("状态码 {}", response.code)
+                                                    } else {
+                                                        response.message.clone()
+                                                    };
+                                                    emit_error(
+                                                        &app,
+                                                        Some(source),
+                                                        format!(
+                                                            "腾讯实时识别错误（{}）：{detail}",
+                                                            response.code
+                                                        ),
+                                                    );
+                                                    break;
+                                                }
+                                                if response.is_final == 1 {
+                                                    // The server considers the speech
+                                                    // over and is about to close; the
+                                                    // reconnect loop keeps the stream
+                                                    // alive for the next utterance.
+                                                    break;
+                                                }
+                                                if let Some(result) = &response.result {
+                                                    handle_tencent_result(
+                                                        &app,
+                                                        &session,
+                                                        source,
+                                                        epoch,
+                                                        stream_offset_ms,
+                                                        result,
+                                                        &response.message_id,
+                                                    );
+                                                }
+                                            }
+                                            Err(error) => {
+                                                log::warn!("tencent-asr: 无法解析响应：{error}");
+                                            }
+                                        }
+                                    } else {
+                                        handle_provider_message(
+                                            &app,
+                                            &session,
+                                            source,
+                                            epoch,
+                                            stream_offset_ms,
+                                            text.as_ref(),
+                                            is_qwen,
+                                        );
+                                    }
                                 }
                                 Some(Ok(Message::Binary(frame))) if is_volc => {
                                     last_inbound = tokio::time::Instant::now();
@@ -1747,6 +1881,53 @@ fn handle_volc_response(
         is_final,
         String::new(),
         Some(*speaker_index),
+        &text,
+    );
+    emit_provider_emission(app, emission);
+}
+
+/// Route one Tencent ASR result frame onto the shared live-segment model.
+///
+/// The service recognises only — there is no translation leg — so every frame
+/// updates the recognized track. `slice_type` 2 closes the sentence; start and
+/// interim frames carry the rolling text for the open utterance. Timestamps
+/// are milliseconds relative to this connection's audio, the same shape the
+/// Volcengine path rebases via `stream_offset_ms`.
+#[allow(clippy::too_many_arguments)]
+fn handle_tencent_result(
+    app: &AppHandle,
+    session: &LiveSession,
+    source: AudioSource,
+    epoch: u32,
+    epoch_offset_ms: u64,
+    result: &tencent_asr::AsrResult,
+    message_id: &str,
+) {
+    let text = result.voice_text.clone();
+    if text.trim().is_empty() {
+        return;
+    }
+    let is_final = result.slice_type == 2;
+    // Before the first timestamped frame we fall back to the capture clock,
+    // the same approximation the Volcengine and Qwen paths use.
+    let start_ms = if result.start_time > 0 {
+        epoch_offset_ms.saturating_add(result.start_time as u64)
+    } else {
+        epoch_offset_ms.saturating_add(session.last_elapsed_ms.load(Ordering::Relaxed))
+    };
+    let end_ms = (result.end_time > 0)
+        .then(|| epoch_offset_ms.saturating_add(result.end_time as u64));
+    let emission = ingest_provider_text(
+        session,
+        source,
+        epoch,
+        None,
+        start_ms,
+        end_ms,
+        true,
+        is_final,
+        message_id.to_owned(),
+        None,
         &text,
     );
     emit_provider_emission(app, emission);
@@ -3925,12 +4106,14 @@ mod tests {
                 url: "wss://example.test/mic".to_owned(),
                 provider: None,
                 api_key: None,
+                extra: None,
             },
             ConnectionDescriptor {
                 source: AudioSource::System,
                 url: "wss://example.test/system".to_owned(),
                 provider: None,
                 api_key: None,
+                extra: None,
             },
         ];
         assert!(validate_connections(&valid).is_ok());
@@ -3941,6 +4124,7 @@ mod tests {
             url: "ws://example.test/mic".to_owned(),
             provider: None,
             api_key: None,
+            extra: None,
         }];
         assert!(validate_connections(&insecure).is_err());
     }
@@ -3952,6 +4136,7 @@ mod tests {
             url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-livetranslate-flash-realtime".to_owned(),
             provider: Some("qwen".to_owned()),
             api_key: None,
+            extra: None,
         }];
         assert!(validate_connections(&missing_key).is_err());
         let with_key = vec![ConnectionDescriptor {
@@ -3959,6 +4144,7 @@ mod tests {
             url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-livetranslate-flash-realtime".to_owned(),
             provider: Some("qwen".to_owned()),
             api_key: Some("sk-test".to_owned()),
+            extra: None,
         }];
         assert!(validate_connections(&with_key).is_ok());
     }
@@ -3970,6 +4156,7 @@ mod tests {
             url: volc_ast::DEFAULT_ENDPOINT.to_owned(),
             provider: Some("volc".to_owned()),
             api_key: None,
+            extra: None,
         }];
         assert!(validate_connections(&missing_key).is_err());
         let with_key = vec![ConnectionDescriptor {
@@ -3977,8 +4164,33 @@ mod tests {
             url: volc_ast::DEFAULT_ENDPOINT.to_owned(),
             provider: Some("volc".to_owned()),
             api_key: Some("access-test".to_owned()),
+            extra: None,
         }];
         assert!(validate_connections(&with_key).is_ok());
+    }
+
+    #[test]
+    fn requires_tencent_credentials_in_extra() {
+        let base_url = "wss://asr.cloud.tencent.com/asr/v2/125000000";
+        let missing = vec![ConnectionDescriptor {
+            source: AudioSource::Mic,
+            url: base_url.to_owned(),
+            provider: Some("tencent".to_owned()),
+            api_key: None,
+            extra: None,
+        }];
+        assert!(validate_connections(&missing).is_err());
+        let mut map = HashMap::new();
+        map.insert("secretId".to_owned(), "AKID".to_owned());
+        map.insert("secretKey".to_owned(), "key".to_owned());
+        let with_creds = vec![ConnectionDescriptor {
+            source: AudioSource::Mic,
+            url: base_url.to_owned(),
+            provider: Some("tencent".to_owned()),
+            api_key: None,
+            extra: Some(map),
+        }];
+        assert!(validate_connections(&with_creds).is_ok());
     }
 
     #[test]

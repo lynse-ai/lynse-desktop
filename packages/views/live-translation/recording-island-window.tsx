@@ -176,7 +176,7 @@ export function RecordingIslandWindow() {
       cleanup?.();
     };
     // Deliberately subscribe once per `api` instance.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [api]);
 
   return (

@@ -51,6 +51,14 @@ mod audio_contract;
 #[cfg(target_os = "windows")]
 mod windows_capture;
 mod volc_ast;
+// Wire protocol for the Tencent Cloud real-time ASR provider (URL signing +
+// result frames), mirroring `volc_ast`. Platform-independent so its tests run
+// everywhere.
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows")),
+    allow(dead_code)
+)]
+mod tencent_asr;
 mod webdav;
 mod storage;
 mod content_migration;
@@ -349,6 +357,16 @@ pub(crate) fn moss_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
     Ok(resources.join("moss_transcribe.py"))
 }
 
+/// Resource path to the WhisperX bridge, mirroring [`moss_script_path`].
+pub(crate) fn whisperx_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/whisperx_transcribe.py");
+    if development.exists() {
+        return Ok(development);
+    }
+    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
+    Ok(resources.join("whisperx_transcribe.py"))
+}
+
 /// Ensure `mlx-qwen3-asr` (+ its vendored ffmpeg helper) is importable in the
 /// MLX venv, pip-installing on first use. The shared venv is created by
 /// [`ensure_mlx_venv`], which predates the Qwen3 engine — installs that already
@@ -470,6 +488,54 @@ pub(crate) fn ensure_mlx_venv(app: &AppHandle) -> CommandResult<String> {
         .map_err(|error| format!("安装 mlx-whisper 失败：{error}"))?;
     if !install.success() {
         return Err("安装 mlx-whisper 失败（请检查网络，或手动安装到 .venv-mlx）".to_owned());
+    }
+    Ok(python.to_string_lossy().into_owned())
+}
+
+/// Ensure a usable WhisperX venv exists, creating one (and `pip install`-ing
+/// `whisperx`, which pulls torch/ctranslate2/faster-whisper, plus
+/// `imageio-ffmpeg`) on first use. Returns the python path. Kept separate from
+/// the MLX venv: the CPU torch stack is large and unrelated to MLX wheels.
+///
+/// Interpreter selection matters: whisperx pins `ctranslate2` versions that
+/// ship no wheels for the newest CPython (3.14 fails as of 2026-09), so we
+/// prefer the newest interpreter that is *known-compatible* (3.12/3.11/3.13)
+/// and only fall back to the system `python3`.
+pub(crate) fn ensure_whisperx_venv(app: &AppHandle) -> CommandResult<String> {
+    if let Ok(value) = env::var("LYNSE_WHISPERX_PYTHON") {
+        return Ok(value);
+    }
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../.venv-whisperx/bin/python");
+    if development.exists() {
+        return Ok(development.to_string_lossy().into_owned());
+    }
+    let venv = app_data_dir(app)?.join("whisperx-venv");
+    let python = venv.join("bin/python");
+    if python.exists() {
+        return Ok(python.to_string_lossy().into_owned());
+    }
+
+    let interpreter = ["python3.12", "python3.11", "python3.13", "python3"]
+        .into_iter()
+        .find(|candidate| Command::new(candidate).arg("--version").output().map(|output| output.status.success()).unwrap_or(false))
+        .ok_or("未找到可用的 python3 解释器（whisperx 需要 3.10–3.13）")?;
+
+    log::info!("[stt] 创建 WhisperX 虚拟环境（{interpreter}）：{}", venv.display());
+    fs::create_dir_all(&venv).map_err(|error| error.to_string())?;
+    let status = Command::new(interpreter)
+        .args(["-m", "venv", venv.to_string_lossy().as_ref()])
+        .status()
+        .map_err(|error| format!("无法创建 WhisperX 虚拟环境：{error}"))?;
+    if !status.success() {
+        return Err("创建 WhisperX 虚拟环境失败".to_owned());
+    }
+    let pip = venv.join("bin/pip");
+    let install = Command::new(&pip)
+        .args(["install", "--quiet", "--disable-pip-version-check", "whisperx", "imageio-ffmpeg"])
+        .status()
+        .map_err(|error| format!("安装 whisperx 失败：{error}"))?;
+    if !install.success() {
+        return Err("安装 whisperx 失败（请检查网络，或手动安装到 .venv-whisperx）".to_owned());
     }
     Ok(python.to_string_lossy().into_owned())
 }
@@ -745,6 +811,15 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         provider: "mlx",
         id: "whisper-large-v3-turbo",
         label: "MLX-Whisper large-v3-turbo（本地·Apple Silicon，~1.5 GiB）",
+        size_bytes: 0,
+        download_url: "",
+        sha256: "",
+        files: &[],
+    },
+    SttModelEntry {
+        provider: "whisperx",
+        id: "whisperx-latest",
+        label: "WhisperX large-v3（本地·CPU，转写 + 词级对齐，~3 GiB）",
         size_bytes: 0,
         download_url: "",
         sha256: "",
@@ -1581,6 +1656,7 @@ fn create_queued_record(app: &AppHandle, audio_path: &str, options: Option<&Valu
         stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
         stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
         stt::ProviderConfig::Moss(config) => config.model.as_deref().unwrap_or(stt::MOSS_DEFAULT_MODEL_ID),
+        stt::ProviderConfig::WhisperX(_) => stt::WHISPERX_DEFAULT_MODEL_ID,
     };
     Ok(json!({
         "id": format!("local:{}", Uuid::new_v4()),
@@ -1775,6 +1851,7 @@ fn transcribe_single_track(
         stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
         stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
         stt::ProviderConfig::Moss(config) => config.model.as_deref().unwrap_or(stt::MOSS_DEFAULT_MODEL_ID),
+        stt::ProviderConfig::WhisperX(_) => stt::WHISPERX_DEFAULT_MODEL_ID,
     });
     ensure_model_installed(app, provider.engine(), model_id)?;
     let directory = engine_model_dir(app, provider.engine(), model_id)?;
@@ -2100,6 +2177,7 @@ fn transcribe_inspiration(app: &AppHandle, mut record: Value, audio_path: PathBu
         stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
         stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
         stt::ProviderConfig::Moss(config) => config.model.as_deref().unwrap_or(stt::MOSS_DEFAULT_MODEL_ID),
+        stt::ProviderConfig::WhisperX(_) => stt::WHISPERX_DEFAULT_MODEL_ID,
     };
     if !model_is_installed(app, provider.engine(), model_id) {
         return patch_status("unavailable", Some("本地 ASR 模型未安装，请先在设置中下载语音识别模型"));
@@ -2490,7 +2568,7 @@ fn local_stt_download_model(
     }
     let result = (|| {
         let entry = stt_model_entry(&provider, &model_id)?;
-        if provider == "funasr" || provider == "mlx" || provider == "qwen3" || provider == "moss" {
+        if provider == "funasr" || provider == "mlx" || provider == "qwen3" || provider == "moss" || provider == "whisperx" {
             // FunASR, MLX and Qwen3 download through their Python helpers rather
             // than a fixed URL. Their size is unknown, so we only signal an
             // indeterminate download.
@@ -2521,6 +2599,24 @@ fn local_stt_download_model(
                     directory.to_string_lossy().into_owned(),
                     "--model".to_owned(),
                     stt::qwen3_hf_repo(&model_id).to_owned(),
+                    "--region".to_owned(),
+                    detect_net_region().to_owned(),
+                ];
+                if let Err(error) = run_mlx(&app, &python, &args, &directory) {
+                    emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
+                    return Err(error);
+                }
+            } else if provider == "whisperx" {
+                let directory = engine_model_dir(&app, &provider, &model_id)?;
+                fs::create_dir_all(&directory).ok();
+                let python = ensure_whisperx_venv(&app)?;
+                let args = vec![
+                    whisperx_script_path(&app)?.to_string_lossy().into_owned(),
+                    "--download-models".to_owned(),
+                    "--model-dir".to_owned(),
+                    directory.to_string_lossy().into_owned(),
+                    "--model".to_owned(),
+                    stt::whisperx_hf_repo(&model_id).to_owned(),
                     "--region".to_owned(),
                     detect_net_region().to_owned(),
                 ];

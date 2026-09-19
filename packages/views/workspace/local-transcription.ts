@@ -9,7 +9,7 @@ import type {
   WorkspaceItem,
 } from "./types";
 
-export type SttEngine = "qwen3" | "funasr" | "whisper" | "vibeasr" | "mlx" | "moss";
+export type SttEngine = "qwen3" | "funasr" | "whisper" | "whisperx" | "vibeasr" | "mlx" | "moss";
 
 export type WhisperModel = "small-q5_1" | "medium-q5_0" | "large-v3-turbo-q5_0";
 
@@ -22,6 +22,12 @@ export const WHISPER_MODEL_LABELS: Record<WhisperModel, string> = {
 export const DEFAULT_WHISPER_MODEL: WhisperModel = "large-v3-turbo-q5_0";
 export const VIBEVOICE_MODEL_ID = "vibeasr-bitnet-1.5b";
 export const FUNASR_MODEL_ID = "funasr-paraformer";
+
+/** WhisperX catalog ids (must mirror the Rust `STT_MODELS`). First cut runs
+ * transcription + word alignment; diarization ships once the pyannote model
+ * distribution is settled (PRD §12 Q7). */
+export type WhisperXModel = "whisperx-latest";
+export const WHISPERX_MODEL_ID: WhisperXModel = "whisperx-latest";
 
 /** Qwen3-ASR model catalog ids (must mirror the Rust `STT_MODELS`). */
 export type Qwen3Model = "qwen3-asr-1.7b-8bit" | "qwen3-asr-0.6b-4bit";
@@ -43,6 +49,7 @@ export const DEFAULT_MOSS_MODEL: MossModel = "moss-transcribe-8bit";
 export type SttProviderConfig =
   | { provider: "qwen3"; model?: Qwen3Model | string; hotword_package_id?: string | null }
   | { provider: "funasr"; expected_speakers?: number | null; hotword_package_id?: string | null }
+  | { provider: "whisperx"; expected_speakers?: number | null; hotword_package_id?: string | null }
   | {
       provider: "whisper";
       model?: WhisperModel;
@@ -274,6 +281,13 @@ export function migrateSttProviderConfig(value: unknown): SttProviderConfig | nu
       hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
     };
   }
+  if (provider === "whisperx") {
+    return {
+      provider: "whisperx",
+      expected_speakers: (record.expected_speakers as number | null | undefined) ?? null,
+      hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
+    };
+  }
   // Legacy: a bare funasr object (or a config without a `provider` tag) maps to FunASR.
   return {
     provider: "funasr",
@@ -311,6 +325,8 @@ export function providerModelId(config: SttProviderConfig): string {
       return config.model ?? DEFAULT_QWEN3_MODEL;
     case "funasr":
       return FUNASR_MODEL_ID;
+    case "whisperx":
+      return WHISPERX_MODEL_ID;
     case "whisper":
       return config.model ?? DEFAULT_WHISPER_MODEL;
     case "vibeasr":

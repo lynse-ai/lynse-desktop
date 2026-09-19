@@ -5,7 +5,7 @@ import type {
   LiveConnectionDescriptor,
   LiveTranslationProviderConfig,
 } from "./types";
-import { DEFAULT_QWEN_ENDPOINT, DEFAULT_VOLC_AST_ENDPOINT } from "./types";
+import { DEFAULT_QWEN_ENDPOINT, DEFAULT_TENCENT_ASR_ENDPOINT, DEFAULT_VOLC_AST_ENDPOINT } from "./types";
 
 /** Expand the capture-source mode into the connection source list. Unused
  * sources get no websocket, so a "system"-only session pays for one stream
@@ -51,6 +51,9 @@ export async function requestRealtimeSession(
   }
   if (providerConfig?.provider === "volc") {
     return requestVolcRealtimeSession(request, providerConfig);
+  }
+  if (providerConfig?.provider === "tencent") {
+    return requestTencentRealtimeSession(request, providerConfig);
   }
   const response = await api().post<RawRealtimeSessionResponse>(
     "/api/business/translate/realtime/session",
@@ -161,6 +164,68 @@ async function requestVolcRealtimeSession(
     epoch: request.epoch,
     connections,
   };
+}
+
+/**
+ * Tencent Cloud real-time ASR authenticates through the URL itself (the query
+ * string is HMAC-signed), and every websocket (re)connect needs a fresh
+ * signature. The frontend therefore hands over only the base endpoint plus
+ * the credentials; the Rust connection loop builds and signs the per-connect
+ * URL. Tencent recognises but does not translate — a translation target is
+ * ignored (the config card says so).
+ */
+async function requestTencentRealtimeSession(
+  request: RealtimeSessionRequest,
+  config: LiveTranslationProviderConfig,
+): Promise<RealtimeSessionCredentials> {
+  const sessionId = request.sessionId ?? crypto.randomUUID();
+  const endpoint = config.tencent.endpoint.trim() || DEFAULT_TENCENT_ASR_ENDPOINT;
+  if (!endpoint.startsWith("wss://")) {
+    throw new Error("腾讯 WebSocket 地址必须使用 wss://");
+  }
+  const appId = config.tencent.appId.trim();
+  if (!appId) {
+    throw new Error("腾讯实时识别需要填写 AppID");
+  }
+  const secretId = config.tencent.secretId.trim();
+  const secretKey = config.tencent.secretKey.trim();
+  if (!secretId || !secretKey) {
+    throw new Error("腾讯实时识别需要填写 SecretId 与 SecretKey");
+  }
+  const engineType = tencentEngineType(request.sourceLanguage, config.tencent.engineType);
+  const base = `${endpoint.replace(/\/+$/, "")}/${encodeURIComponent(appId)}`;
+  const connections: LiveConnectionDescriptor[] = audioModeSources(
+    config.audioSource,
+  ).map((source) => ({
+    source,
+    url: base,
+    provider: "tencent",
+    extra: { secretId, secretKey, engineType },
+  }));
+  return {
+    sessionId,
+    epoch: request.epoch,
+    connections,
+  };
+}
+
+/** Resolve the Tencent engine type for a Lynse source language. An explicit
+ * setting wins; otherwise a fixed engine is derived from the language (the
+ * service has no auto-detect). Languages without a dedicated engine fall
+ * back to Mandarin — callers should override the engine for them. */
+export function tencentEngineType(sourceLanguage: string, configured?: string): string {
+  const explicit = configured?.trim();
+  if (explicit) return explicit;
+  switch (sourceLanguage) {
+    case "zh-yue":
+      return "16k_zh-PY";
+    case "en":
+      return "16k_en";
+    case "ja":
+      return "16k_ja";
+    default:
+      return "16k_zh";
+  }
 }
 
 export async function createILiveDataToken(

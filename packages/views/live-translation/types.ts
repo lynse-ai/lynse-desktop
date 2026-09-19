@@ -7,7 +7,8 @@ export type LiveTranslationProvider =
   | "lynse_backend"
   | "ilivedata_direct"
   | "qwen"
-  | "volc";
+  | "volc"
+  | "tencent";
 
 /** Which capture streams the sidecar records. "both" keeps the legacy
  * dual-stream behaviour; "system" is the transcribe-a-playing-video case
@@ -39,6 +40,16 @@ export interface LiveTranslationProviderConfig {
     apiKey: string;
     endpoint: string;
   };
+  tencent: {
+    /** 腾讯云账号 AppID（拼接在 WebSocket 路径末尾）。 */
+    appId: string;
+    /** 腾讯云访问密钥 SecretId / SecretKey（控制台「访问管理 → API 密钥」）。 */
+    secretId: string;
+    secretKey: string;
+    /** 识别引擎类型，如 16k_zh / 16k_en / 16k_ja / 16k_zh-PY；留空按源语言推导。 */
+    engineType: string;
+    endpoint: string;
+  };
 }
 
 export const DEFAULT_QWEN_ENDPOINT =
@@ -46,6 +57,9 @@ export const DEFAULT_QWEN_ENDPOINT =
 
 export const DEFAULT_VOLC_AST_ENDPOINT =
   "wss://openspeech.bytedance.com/api/v4/ast/v2/translate";
+
+export const DEFAULT_TENCENT_ASR_ENDPOINT =
+  "wss://asr.cloud.tencent.com/asr/v2";
 
 export type LiveTranslationState =
   | "idle"
@@ -100,6 +114,10 @@ export interface LiveConnectionDescriptor {
   url: string;
   provider?: LiveTranslationProvider;
   apiKey?: string;
+  /** Provider-specific credentials that don't fit the single-key model.
+   * Tencent ASR carries secretId/secretKey/engineType here so the Rust
+   * connection loop can re-sign the URL on every (re)connect. */
+  extra?: Record<string, string>;
 }
 
 export interface LiveStartRequest {

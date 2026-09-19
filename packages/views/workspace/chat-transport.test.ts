@@ -145,6 +145,83 @@ describe("extractConfirmFromText", () => {
     const confirm = extractConfirmFromText("请选择操作:\nA) 重启设备\nB) 暂不处理");
     expect(confirm?.options.map((o) => o.value)).toEqual(["重启设备", "暂不处理"]);
   });
+
+  it("detects bracketed, fullwidth-paren and circled-key menus", () => {
+    const bracketed = extractConfirmFromText("选择:\n[A] 导出 PDF\n[B] 导出 Word");
+    expect(bracketed?.options.map((o) => o.value)).toEqual(["导出 PDF", "导出 Word"]);
+
+    const fullwidth = extractConfirmFromText("（A）同意\n（B）拒绝");
+    expect(fullwidth?.options.map((o) => o.value)).toEqual(["同意", "拒绝"]);
+
+    const circled = extractConfirmFromText("请确认:\n① 全部删除\n② 仅删附件\n③ 取消");
+    expect(circled?.options.map((o) => o.value)).toEqual(["全部删除", "仅删附件", "取消"]);
+  });
+
+  it("rejects malformed or ambiguous menus", () => {
+    // Keys must be strictly sequential from the first key.
+    expect(extractConfirmFromText("选一个:\nA) 甲\nC) 乙")).toBeNull();
+    expect(extractConfirmFromText("选一个:\nB) 甲\nC) 乙")).toBeNull();
+    // A single line is not a menu.
+    expect(extractConfirmFromText("1) 只有这一项")).toBeNull();
+    // More than 8 options is prose, not a menu.
+    expect(
+      extractConfirmFromText("列表:\nA) 1\nB) 2\nC) 3\nD) 4\nE) 5\nF) 6\nG) 7\nH) 8\nI) 9"),
+    ).toBeNull();
+    // Ordinary prose without list markers.
+    expect(extractConfirmFromText("今天天气不错，我们去爬山吧，顺便带上午饭和水。")).toBeNull();
+    // Note: the <6-character length guard is unreachable for real menus —
+    // two options plus a newline are always ≥7 characters — so there is no
+    // valid "too short" case to pin here.
+  });
+
+  // KNOWN MISFIRE (2026-09-19): the bare-number branch treats any 2-8 line
+  // sequentially numbered list as a choice menu, so ordinary assistant answers
+  // that use "1. … 2. …" pop a confirm card. This test pins the CURRENT
+  // behavior so the eventual heuristic fix flips it deliberately, not silently.
+  it("KNOWN ISSUE: plain numbered lists are (wrongly) read as menus", () => {
+    const numbered = extractConfirmFromText(
+      "提高会议效率的建议：\n1. 会前发议程\n2. 限制参会人数\n3. 会后跟进",
+    );
+    expect(numbered).not.toBeNull();
+    expect(numbered?.options.map((o) => o.value)).toEqual(["会前发议程", "限制参会人数", "会后跟进"]);
+  });
+
+  /** Deterministic PRNG so CI failures reproduce exactly. */
+  function mulberry32(seed: number): () => number {
+    let a = seed >>> 0;
+    return () => {
+      a |= 0;
+      a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  it("fuzz: valid menus are always detected and broken ones never are", () => {
+    const rand = mulberry32(20260919);
+    const words = ["确认", "取消", "导出", "删除", "重试", "稍后", "覆盖", "跳过", "继续", "终止"];
+    const pick = () => words[Math.floor(rand() * words.length)]!;
+
+    for (let i = 0; i < 150; i++) {
+      const count = 2 + Math.floor(rand() * 5); // 2..6 options
+      const decor = ["A) ", "（A）", "[A] ", "A、", "A."][Math.floor(rand() * 5)]!;
+      const key = (n: number) => String.fromCharCode(65 + n);
+
+      const items = Array.from({ length: count }, (_, n) => `${decor.replace("A", key(n))}${pick()}`);
+      const valid = extractConfirmFromText(`请选择:\n${items.join("\n")}`);
+      expect(valid, `valid menu case ${i}: ${items.join(" / ")}`).not.toBeNull();
+      expect(valid?.options).toHaveLength(count);
+
+      // Swap two adjacent keys — sequential order breaks, detection must fail.
+      const broken = [...items];
+      [broken[0], broken[1]] = [broken[1]!, broken[0]!];
+      expect(
+        extractConfirmFromText(`请选择:\n${broken.join("\n")}`),
+        `broken menu case ${i}: ${broken.join(" / ")}`,
+      ).toBeNull();
+    }
+  });
 });
 
 describe("PollChatTransport", () => {

@@ -4,13 +4,10 @@ import { useState, useEffect } from "react";
 import { Label } from "@lynse/ui/components/ui/label";
 import { Input } from "@lynse/ui/components/ui/input";
 import { Button } from "@lynse/ui/components/ui/button";
-import { Progress, ProgressValue } from "@lynse/ui/components/ui/progress";
-import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Loader2, Plus, Trash2 } from "../icons";
 import {
   type DesktopLocalTranscriptionApi,
-  type SttDownloadProgress,
   type SttEngine,
   type SttModelInfo,
   type SttProviderConfig,
@@ -25,16 +22,18 @@ import {
   MOSS_MODELS,
   MOSS_MODEL_LABELS,
   DEFAULT_MOSS_MODEL,
-  providerModelId,
+  findModelStatus,
 } from "../workspace/local-transcription";
 import type { LocalHotwordPackage } from "../workspace/types";
 
 /** Engine id -> translation key, resolved at render time so the labels follow the UI locale.
  *  FunASR is retired from the list (Qwen3-ASR replaces it); stored funasr configs still
- *  deserialize but the engine must be re-selected. */
+ *  deserialize but the engine must be re-selected. Model download lives in the
+ *  plugin community (Settings → Plugins) — this section only configures. */
 const ENGINE_OPTIONS: { value: SttEngine; labelKey: string }[] = [
   { value: "qwen3", labelKey: "settings.stt_engine_qwen3" },
   { value: "moss", labelKey: "settings.stt_engine_moss" },
+  { value: "whisperx", labelKey: "settings.stt_engine_whisperx" },
   { value: "whisper", labelKey: "settings.stt_engine_whisper" },
   { value: "vibeasr", labelKey: "settings.stt_engine_vibeasr" },
   { value: "mlx", labelKey: "settings.stt_engine_mlx" },
@@ -53,6 +52,12 @@ function providerForEngine(engine: SttEngine, prev?: SttProviderConfig): SttProv
         provider: "funasr",
         expected_speakers: prev?.provider === "funasr" ? prev.expected_speakers ?? null : null,
         hotword_package_id: prev?.provider === "funasr" ? prev.hotword_package_id ?? null : null,
+      };
+    case "whisperx":
+      return {
+        provider: "whisperx",
+        expected_speakers: prev?.provider === "whisperx" ? prev.expected_speakers ?? null : null,
+        hotword_package_id: prev?.provider === "whisperx" ? prev.hotword_package_id ?? null : null,
       };
     case "whisper":
       return {
@@ -108,136 +113,44 @@ function HotwordSelect({
   );
 }
 
-function ModelManager({
-  model,
-  busy,
-  progress,
-  onDownload,
-  onDelete,
+/** One-line install status for the model backing the selected engine config.
+ *  Download/uninstall lives in the plugin community — this either confirms
+ *  "installed" or offers the deep link over. */
+function ModelStatusHint({
+  config,
+  models,
+  onBrowseModels,
 }: {
-  model: SttModelInfo | undefined;
-  busy: boolean;
-  progress: SttDownloadProgress | null;
-  onDownload: () => void;
-  onDelete: () => void;
+  config: SttProviderConfig;
+  models: SttModelInfo[];
+  onBrowseModels?: () => void;
 }) {
   const { t } = useTranslation();
-  if (!model) {
-    return <p className="text-2xs text-muted-foreground">{t("settings.stt_no_models")}</p>;
+  const model = findModelStatus(models, config);
+  if (model?.status === "installed") {
+    return (
+      <p className="text-2xs leading-relaxed text-muted-foreground">
+        ✓ {t("settings.stt_status_installed")}
+      </p>
+    );
   }
-  const installed = model.status === "installed";
-  const isThisDownloading =
-    !!progress && progress.provider === model.provider && progress.modelId === model.id;
-  const phase = progress?.phase;
-  const isError = phase === "error";
-  const isDone = phase === "done";
-  const isRuntimePhase =
-    phase === "runtime_downloading" || phase === "runtime_verifying" || phase === "runtime_installing";
-  const statusText = isError
-    ? t("settings.stt_status_download_failed")
-    : isThisDownloading
-      ? isRuntimePhase
-        ? phase === "runtime_downloading"
-          ? t("settings.stt_status_runtime_downloading")
-          : phase === "runtime_verifying"
-            ? t("settings.stt_status_runtime_verifying")
-            : t("settings.stt_status_runtime_installing")
-        : phase === "verifying"
-          ? t("settings.stt_status_verifying")
-          : t("settings.stt_status_downloading")
-      : installed
-        ? t("settings.stt_status_installed")
-        : t("settings.stt_status_not_installed");
   return (
-    <div className="mt-2 rounded bg-background p-2">
-      <div className="flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <p className="truncate text-2xs font-medium">{model.label}</p>
-          <p className="truncate text-2xs text-muted-foreground">{model.modelDir}</p>
-        </div>
-        <span
-          className={cn(
-            "shrink-0 rounded-full px-2 py-0.5 text-2xs",
-            isError ? "bg-destructive/10 text-destructive" : "bg-muted text-muted-foreground",
-          )}
-        >
-          {statusText}
-        </span>
-      </div>
-
-      {isThisDownloading && !isError && !isDone ? <DownloadProgress progress={progress} /> : null}
-
-      {isError && progress?.error ? (
-        <p className="mt-2 text-2xs text-destructive">{progress.error}</p>
-      ) : null}
-
-      <div className="mt-2 flex flex-wrap gap-2">
-        <Button
-          type="button"
-          size="sm"
-          className="h-7 text-xs"
-          onClick={onDownload}
-          disabled={busy || installed || isThisDownloading}
-        >
-          {busy && !isThisDownloading ? <Loader2 className="mr-1.5 size-3 animate-spin" /> : null}
-          {t("settings.stt_download_model")}
-        </Button>
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-2xs text-muted-foreground">
+        {t("settings.stt_status_not_installed")}
+      </span>
+      {onBrowseModels && (
         <Button
           type="button"
           size="sm"
           variant="outline"
-          className="h-7 text-xs"
-          onClick={onDelete}
-          disabled={busy || !installed || isThisDownloading}
+          className="h-6 px-2 text-2xs"
+          onClick={onBrowseModels}
         >
-          <Trash2 className="mr-1.5 size-3" />
-          {t("settings.stt_delete_model")}
+          {t("settings.stt_browse_models")}
         </Button>
-      </div>
+      )}
     </div>
-  );
-}
-
-const DOWNLOAD_PHASE_KEYS: Partial<Record<SttDownloadProgress["phase"], string>> = {
-  preparing: "settings.stt_status_preparing",
-  verifying: "settings.stt_status_verifying",
-  runtime_downloading: "settings.stt_status_runtime_downloading",
-  runtime_verifying: "settings.stt_status_runtime_verifying",
-  runtime_installing: "settings.stt_status_runtime_installing",
-};
-
-/** Translation key for the current download phase. */
-function downloadPhaseKey(phase: SttDownloadProgress["phase"]): string {
-  return DOWNLOAD_PHASE_KEYS[phase] ?? "settings.stt_status_downloading";
-}
-
-/** Live download progress for a single model. Shows a determinate bar with a
- *  percentage when the total size is known, or an indeterminate sweep for
- *  unknown-size downloads (e.g. FunASR). */
-function DownloadProgress({ progress }: { progress: SttDownloadProgress | null }) {
-  const { t } = useTranslation();
-  if (!progress) return null;
-  if (progress.percent === null) {
-    // Indeterminate: the sweep by itself reads as "working", and the label
-    // keeps the `preparing` phase from looking like a frozen click.
-    return (
-      <div className="mt-2">
-        <div className="relative h-1 w-full overflow-hidden rounded-full bg-muted">
-          <div className="absolute inset-y-0 left-0 h-full w-1/3 rounded-full bg-primary animate-[stt-download-sweep_1.4s_ease-in-out_infinite]" />
-        </div>
-        <div className="mt-1 text-2xs text-muted-foreground">
-          {t(downloadPhaseKey(progress.phase))}
-        </div>
-      </div>
-    );
-  }
-  return (
-    <Progress value={progress.percent} className="mt-2 flex-col items-stretch gap-1">
-      <div className="flex items-center justify-between text-2xs text-muted-foreground">
-        <span>{t(downloadPhaseKey(progress.phase))}</span>
-        <ProgressValue className="text-2xs" />
-      </div>
-    </Progress>
   );
 }
 
@@ -251,7 +164,7 @@ function EngineFields({
   onChange: (next: SttProviderConfig) => void;
 }) {
   const { t } = useTranslation();
-  const speakers = config.provider === "funasr" || config.provider === "whisper"
+  const speakers = config.provider === "funasr" || config.provider === "whisper" || config.provider === "whisperx"
     ? config.expected_speakers ?? null
     : null;
   return (
@@ -300,6 +213,9 @@ function EngineFields({
       {config.provider === "vibeasr" && (
         <p className="text-2xs text-muted-foreground">{t("settings.stt_vibeasr_hint")}</p>
       )}
+      {config.provider === "whisperx" && (
+        <p className="text-2xs text-muted-foreground">{t("settings.stt_whisperx_hint")}</p>
+      )}
       {config.provider === "whisper" && (
         <>
           <div className="space-y-1">
@@ -326,7 +242,7 @@ function EngineFields({
           </label>
         </>
       )}
-      {(config.provider === "funasr" || config.provider === "whisper") && (
+      {(config.provider === "funasr" || config.provider === "whisper" || config.provider === "whisperx") && (
         <div className="space-y-1">
           <Label className="text-2xs">{t("settings.stt_expected_speakers")}</Label>
           <Input
@@ -364,50 +280,43 @@ type LangEntry = { language: string; config: SttProviderConfig };
 
 export function SttConfigSection({
   api,
-  models,
-  modelBusy,
-  modelError,
-  downloadProgress,
-  onDownloadModel,
-  onDeleteModel,
   hotwordPackages,
+  onBrowseModels,
 }: {
   api: DesktopLocalTranscriptionApi;
-  models: SttModelInfo[];
-  modelBusy: boolean;
-  modelError: string | null;
-  downloadProgress: SttDownloadProgress | null;
-  onDownloadModel: (provider: SttEngine, modelId: string) => void;
-  onDeleteModel: (provider: SttEngine, modelId: string) => void;
   hotwordPackages: LocalHotwordPackage[];
+  onBrowseModels?: () => void;
 }) {
   const { t } = useTranslation();
   const [config, setConfig] = useState<TranscribeConfig | null>(null);
+  const [models, setModels] = useState<SttModelInfo[]>([]);
   const [langEntries, setLangEntries] = useState<LangEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     let active = true;
-    api
-      .getSttConfig()
-      .then((loaded) => {
-        if (!active) return;
-        setConfig(loaded);
-        setLangEntries(
-          Object.entries(loaded.per_language ?? {}).map(([language, cfg]) => ({
-            language,
-            config: cfg,
-          })),
-        );
-      })
-      .catch((e: unknown) =>
-        active && setError(e instanceof Error ? e.message : t("settings.stt_load_failed")),
+    // Config + model statuses load together; statuses only feed the inline
+    // "installed?" hints (download/uninstall lives in the plugin community).
+    api.getSttConfig().then((loaded) => {
+      if (!active) return;
+      setConfig(loaded);
+      setLangEntries(
+        Object.entries(loaded.per_language ?? {}).map(([language, cfg]) => ({
+          language,
+          config: cfg,
+        })),
       );
+    }).catch((e: unknown) =>
+      active && setError(e instanceof Error ? e.message : t("settings.stt_load_failed")),
+    );
+    api.listSttModels().then((loaded) => {
+      if (active) setModels(loaded.models);
+    }).catch(() => undefined);
     return () => {
       active = false;
     };
-  }, [api]);
+  }, [api, t]);
 
   async function handleSave() {
     if (!config) return;
@@ -440,8 +349,6 @@ export function SttConfigSection({
   }
 
   const defaultConfig: SttProviderConfig = config.default ?? { provider: "qwen3", model: DEFAULT_QWEN3_MODEL };
-  const defaultModelId = providerModelId(defaultConfig);
-  const defaultModel = models.find((m) => m.provider === defaultConfig.provider && m.id === defaultModelId);
 
   function updateDefault(next: SttProviderConfig) {
     setConfig((current) => (current ? { ...current, default: next } : current));
@@ -453,7 +360,6 @@ export function SttConfigSection({
 
   return (
     <div className="space-y-3">
-      <style>{`@keyframes stt-download-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }`}</style>
       <div className="space-y-1">
         <Label className="text-2xs">{t("settings.stt_engine_default")}</Label>
         <select
@@ -468,12 +374,10 @@ export function SttConfigSection({
           ))}
         </select>
         <EngineFields config={defaultConfig} hotwordPackages={hotwordPackages} onChange={updateDefault} />
-        <ModelManager
-          model={defaultModel}
-          busy={modelBusy}
-          progress={downloadProgress}
-          onDownload={() => onDownloadModel(defaultConfig.provider, defaultModelId)}
-          onDelete={() => onDeleteModel(defaultConfig.provider, defaultModelId)}
+        <ModelStatusHint
+          config={defaultConfig}
+          models={models}
+          onBrowseModels={onBrowseModels}
         />
       </div>
 
@@ -501,8 +405,6 @@ export function SttConfigSection({
         )}
 
         {langEntries.map((entry, index) => {
-          const modelId = providerModelId(entry.config);
-          const model = models.find((m) => m.provider === entry.config.provider && m.id === modelId);
           return (
             <div key={index} className="space-y-2 rounded bg-background p-2">
               <div className="flex items-center gap-2">
@@ -551,19 +453,16 @@ export function SttConfigSection({
                   setLangEntries((list) => list.map((item, i) => (i === index ? { ...item, config: next } : item)))
                 }
               />
-              <ModelManager
-                model={model}
-                busy={modelBusy}
-                progress={downloadProgress}
-                onDownload={() => onDownloadModel(entry.config.provider, modelId)}
-                onDelete={() => onDeleteModel(entry.config.provider, modelId)}
+              <ModelStatusHint
+                config={entry.config}
+                models={models}
+                onBrowseModels={onBrowseModels}
               />
             </div>
           );
         })}
       </div>
 
-      {modelError && <p className="text-2xs text-destructive">{modelError}</p>}
       {error && <p className="mt-2 text-2xs text-destructive">{error}</p>}
 
       <Button type="button" size="sm" className="mt-1 h-7 text-xs" onClick={handleSave} disabled={saving}>

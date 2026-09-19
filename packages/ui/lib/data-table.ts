@@ -8,6 +8,10 @@ import type * as React from "react";
 // the inline width for these columns until the user explicitly resizes them,
 // then the resized width wins.
 declare module "@tanstack/react-table" {
+  // TS2428 forces the type parameters to mirror TanStack's declaration
+  // names exactly, so the unused-parameter underscore convention can't
+  // apply here.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   interface ColumnMeta<TData extends RowData, TValue> {
     grow?: boolean;
   }

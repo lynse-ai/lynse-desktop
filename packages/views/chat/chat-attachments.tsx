@@ -38,7 +38,6 @@ export function ChatAttachments({
           return (
             <figure key={key} className="overflow-hidden rounded-xl border border-border bg-card">
               <a href={href} target="_blank" rel="noreferrer" className="block bg-muted/20">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={attachment.thumbnailUrl || attachment.url || href}
                   alt={name}
@@ -150,7 +149,6 @@ export function ChatAttachmentTray({
           title={draft.status === "error" ? t("chat.attachment_failed") : draft.name}
         >
           {draft.kind === "image" && draft.previewUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element -- local object URL preview
             <img
               src={draft.previewUrl}
               alt={draft.name}

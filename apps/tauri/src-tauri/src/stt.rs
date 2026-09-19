@@ -8,8 +8,8 @@
 //! per transcription request.
 
 use crate::{
-    ensure_mlx_venv, mlx_script_path, normalize_funasr_output, parse_funasr_json, run_funasr, run_mlx,
-    script_path, CommandResult,
+    ensure_mlx_venv, ensure_whisperx_venv, mlx_script_path, normalize_funasr_output,
+    parse_funasr_json, run_funasr, run_mlx, script_path, whisperx_script_path, CommandResult,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -103,6 +103,9 @@ pub fn model_file_name(provider: &str, model_id: &str) -> Option<String> {
         "mlx" => None,
         // MOSS (converted MLX weights) downloads via its Python bridge too.
         "moss" => None,
+        // WhisperX (faster-whisper CTranslate2 weights + wav2vec2 aligner)
+        // downloads via its Python bridge as well.
+        "whisperx" => None,
         _ => None,
     }
 }
@@ -192,6 +195,27 @@ pub fn moss_hf_repo(model_id: &str) -> &'static str {
     }
 }
 
+/// WhisperX (faster-whisper on CTranslate2) — the local CPU engine.
+/// Transcription + best-effort word alignment; speaker diarization stays out
+/// until the pyannote distribution channel is settled (PRD §12 Q7).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WhisperXProviderConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_speakers: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hotword_package_id: Option<String>,
+}
+
+/// Catalog id of the model used when a WhisperX config names none.
+pub const WHISPERX_DEFAULT_MODEL_ID: &str = "whisperx-latest";
+
+/// HF repo backing a WhisperX catalog id (CTranslate2 weights).
+pub fn whisperx_hf_repo(model_id: &str) -> &'static str {
+    match model_id {
+        _ => "Systran/faster-whisper-large-v3",
+    }
+}
+
 /// Single source of truth for provider config. Serialized as a tagged enum so
 /// future engines can be added without breaking stored configs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,6 +228,8 @@ pub enum ProviderConfig {
     Mlx(MlxProviderConfig),
     Qwen3(Qwen3ProviderConfig),
     Moss(MossProviderConfig),
+    #[serde(rename = "whisperx")]
+    WhisperX(WhisperXProviderConfig),
 }
 
 impl Default for ProviderConfig {
@@ -221,6 +247,7 @@ impl ProviderConfig {
             ProviderConfig::Mlx(_) => "mlx",
             ProviderConfig::Qwen3(_) => "qwen3",
             ProviderConfig::Moss(_) => "moss",
+            ProviderConfig::WhisperX(_) => "whisperx",
         }
     }
 
@@ -232,6 +259,7 @@ impl ProviderConfig {
             ProviderConfig::Mlx(config) => config.hotword_package_id.as_deref(),
             ProviderConfig::Qwen3(config) => config.hotword_package_id.as_deref(),
             ProviderConfig::Moss(config) => config.hotword_package_id.as_deref(),
+            ProviderConfig::WhisperX(config) => config.hotword_package_id.as_deref(),
         }
     }
 
@@ -243,6 +271,7 @@ impl ProviderConfig {
             ProviderConfig::Mlx(_) => None,
             ProviderConfig::Qwen3(_) => None,
             ProviderConfig::Moss(_) => None,
+            ProviderConfig::WhisperX(config) => config.expected_speakers,
         }
     }
 
@@ -252,6 +281,7 @@ impl ProviderConfig {
         match self {
             ProviderConfig::Funasr(config) => config.expected_speakers = expected,
             ProviderConfig::Whisper(config) => config.expected_speakers = expected,
+            ProviderConfig::WhisperX(config) => config.expected_speakers = expected,
             ProviderConfig::VibeVoice(_) | ProviderConfig::Mlx(_) | ProviderConfig::Qwen3(_)
             | ProviderConfig::Moss(_) => {}
         }
@@ -267,6 +297,7 @@ impl ProviderConfig {
             ProviderConfig::Mlx(config) => config.hotword_package_id = package_id,
             ProviderConfig::Qwen3(config) => config.hotword_package_id = package_id,
             ProviderConfig::Moss(config) => config.hotword_package_id = package_id,
+            ProviderConfig::WhisperX(config) => config.hotword_package_id = package_id,
         }
     }
 
@@ -278,6 +309,7 @@ impl ProviderConfig {
             ProviderConfig::Mlx(_) => &MlxAdapter,
             ProviderConfig::Qwen3(_) => &Qwen3Adapter,
             ProviderConfig::Moss(_) => &MossAdapter,
+            ProviderConfig::WhisperX(_) => &WhisperXAdapter,
         }
     }
 }
@@ -935,6 +967,95 @@ impl BatchSttAdapter for MossAdapter {
             &crate::moss_script_path(app)?,
             request,
             model_id,
+        )
+    }
+}
+
+/// WhisperX (faster-whisper on CTranslate2) — the local CPU engine. Runs the
+/// `whisperx_transcribe.py` bridge through a dedicated venv (`whisperx` pulls
+/// torch/ctranslate2/faster-whisper at creation; imageio-ffmpeg vendors the
+/// decoder); no shared STT runtime and no Apple Silicon requirement — but
+/// like the other local engines it ships for macOS builds first.
+///
+/// First cut (PRD §12 Q7 pending): segments stay single-speaker — pyannote
+/// diarization is not wired. `--context` is accepted for bridge parity; the
+/// model has no bias input and hotword correction remains the engine-agnostic
+/// Rust-side post-process.
+pub struct WhisperXAdapter;
+
+impl WhisperXAdapter {
+    /// Bridge-agnostic pipeline: build args, spawn the Python bridge, parse
+    /// and normalize its transcript. Free of the `AppHandle` so tests can run
+    /// the real subprocess against a mock Tauri runtime.
+    pub(crate) fn transcribe_via_bridge(
+        python: &str,
+        script: &Path,
+        request: &SttRequest,
+        model_id: &str,
+    ) -> CommandResult<SttOutput> {
+        let output_json = request.model_directory.join("whisperx-output.json");
+        let mut args = vec![
+            script.to_string_lossy().into_owned(),
+            request.audio_path.clone(),
+            "--model-dir".to_owned(),
+            request.model_directory.to_string_lossy().into_owned(),
+            "--model".to_owned(),
+            whisperx_hf_repo(model_id).to_owned(),
+            "--region".to_owned(),
+            crate::detect_net_region().to_owned(),
+            "--output".to_owned(),
+            output_json.to_string_lossy().into_owned(),
+        ];
+        if !request.hotword.is_empty() {
+            args.extend(["--context".to_owned(), request.hotword.trim().to_owned()]);
+        }
+
+        crate::run_python_with_model_cache(python, &args, &request.model_directory)?;
+
+        let parsed: Value = {
+            let content = std::fs::read_to_string(&output_json).map_err(|error| error.to_string())?;
+            serde_json::from_str(&content).map_err(|error| error.to_string())?
+        };
+        let mut segments = normalize_whisper_output(&parsed);
+
+        // v1: single-speaker. pyannote diarization can be wired in later.
+        for segment in &mut segments {
+            if let Some(object) = segment.as_object_mut() {
+                object.insert("speakerId".to_owned(), json!("spk-1"));
+                object.insert("speakerName".to_owned(), json!("发言人1"));
+                object.insert("rawSpeaker".to_owned(), json!("0"));
+            }
+        }
+
+        let text = segments
+            .iter()
+            .filter_map(|segment| segment.get("text").and_then(Value::as_str))
+            .collect::<String>();
+        Ok(SttOutput { text, segments })
+    }
+}
+
+impl BatchSttAdapter for WhisperXAdapter {
+    fn engine(&self) -> &'static str {
+        "whisperx"
+    }
+
+    fn transcribe(&self, app: &tauri::AppHandle, request: &SttRequest) -> CommandResult<SttOutput> {
+        if std::env::consts::OS != "macos" {
+            return Err("WhisperX 引擎目前仅支持 macOS。请在设置中改用其他引擎。".to_owned());
+        }
+
+        let ProviderConfig::WhisperX(_) = &request.provider else {
+            return Err("WhisperX 适配器收到非 WhisperX 配置".to_owned());
+        };
+
+        let python = ensure_whisperx_venv(app)?;
+
+        Self::transcribe_via_bridge(
+            &python,
+            &whisperx_script_path(app)?,
+            request,
+            WHISPERX_DEFAULT_MODEL_ID,
         )
     }
 }

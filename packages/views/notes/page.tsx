@@ -33,7 +33,7 @@ import {
   useVaultConfig,
 } from "../workspace/note-vault";
 import { isNoteUnread, markNoteSeen, useSeenMap } from "./seen";
-import { useFeishuTranscriptionCompletedWatcher } from "../feishu/feishu-push";
+import { useEmitTranscriptionCompleted } from "../plugins/transcription-events";
 import { useAudioEditorStore } from "../audio-editor/store";
 import { useNavigation } from "../navigation";
 import { useTranslation } from "@lynse/core/i18n/react";
@@ -495,9 +495,9 @@ export function NotesPage() {
     [filteredFiles],
   );
   const { data: transStatus } = useTranscriptionStatus(cloudVisibleIds);
-  // Feishu bot: a cloud transcription that completes while the notes page is
-  // open pushes its summary card to the configured group (no-op when off).
-  useFeishuTranscriptionCompletedWatcher(
+  // Host domain event: a cloud transcription that completes while the notes
+  // page is open is emitted for plugin subscribers (e.g. Feishu summary push).
+  useEmitTranscriptionCompleted(
     transStatus,
     useCallback(
       (fileId: string) => filteredFiles.find((f) => f.id === fileId)?.title,

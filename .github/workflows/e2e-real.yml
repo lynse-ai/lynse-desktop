@@ -1,0 +1,117 @@
+name: E2E Real Backend
+
+# P6 real-backend profile: one live AI chat turn against the production API,
+# with every chat sessionId rewritten to a per-run id so the backend's
+# Langfuse (lynclaw) traces can be pulled per run.
+#
+# Opt-in only — real turns consume the account's AI quota. Trigger from the
+# Actions tab after setting repo secrets:
+#   LYNSE_E2E_TOKEN   — a valid access token for the target API
+#   (LANGFUSE_HOST / LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are optional;
+#    without them the run still validates the UI but skips trace correlation)
+#
+# For a nightly cadence, add:
+#   schedule:
+#     - cron: "0 19 * * *"   # 03:00 CST
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: "Target Lynse API"
+        required: false
+        default: "https://api.lynse.cn"
+      run_id:
+        description: "Correlation id (default: e2e-real-<date>-<rand>)"
+        required: false
+
+concurrency:
+  group: e2e-real
+  cancel-in-progress: false
+
+jobs:
+  real-chat:
+    name: Real-backend AI chat smoke
+    runs-on: ubuntu-latest
+    env:
+      HAS_TOKEN: ${{ secrets.LYNSE_E2E_TOKEN != '' }}
+    steps:
+      - name: Skip when no token secret is configured
+        if: env.HAS_TOKEN != 'true'
+        run: |
+          echo "LYNSE_E2E_TOKEN secret is not set — nothing to do."
+          echo "Add it under Settings → Secrets → Actions to enable this workflow."
+          exit 0
+
+      - name: Checkout
+        if: env.HAS_TOKEN == 'true'
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        if: env.HAS_TOKEN == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - name: Setup Node
+        if: env.HAS_TOKEN == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install workspace dependencies
+        if: env.HAS_TOKEN == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Install e2e dependencies
+        if: env.HAS_TOKEN == 'true'
+        working-directory: e2e
+        run: pnpm install --frozen-lockfile --ignore-workspace
+
+      - name: Install Playwright Chromium
+        if: env.HAS_TOKEN == 'true'
+        working-directory: e2e
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run real-backend chat smoke
+        if: env.HAS_TOKEN == 'true'
+        working-directory: e2e
+        env:
+          LYNSE_E2E_TOKEN: ${{ secrets.LYNSE_E2E_TOKEN }}
+          LYNSE_E2E_API_URL: ${{ inputs.api_url || 'https://api.lynse.cn' }}
+          LYNSE_RUN_ID: ${{ inputs.run_id }}
+        run: pnpm test:real
+
+      - name: Langfuse trace report
+        if: env.HAS_TOKEN == 'true'
+        working-directory: e2e
+        env:
+          LYNSE_RUN_ID: ${{ inputs.run_id }}
+          LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+        run: |
+          RID="${LYNSE_RUN_ID:-}"
+          # The spec prints and records its id; recover the first tagged
+          # sessionId from the mapping file when the workflow did not pin one.
+          if [ -z "$RID" ] && [ -f test-results/langfuse-session-ids.json ]; then
+            FIRST=$(node -e "const m=require('./test-results/langfuse-session-ids.json');console.log(Object.entries(m).find(([k])=>k!=='__next')?.[1]??'')")
+            RID="$FIRST"
+          fi
+          if [ -n "$RID" ]; then
+            node scripts/langfuse-report.mjs --run-id "$RID" --out test-results
+          else
+            echo "No session mapping recorded — skipping Langfuse report."
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-real-artifacts
+          path: |
+            e2e/real-report/
+            e2e/test-results/
+          retention-days: 7
+          if-no-files-found: ignore

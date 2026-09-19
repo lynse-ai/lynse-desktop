@@ -41,6 +41,7 @@ import { useLiveTranslation } from "./use-live-translation";
 import {
   DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
   DEFAULT_QWEN_ENDPOINT,
+  DEFAULT_TENCENT_ASR_ENDPOINT,
   DEFAULT_VOLC_AST_ENDPOINT,
   type CompletedLiveSession,
   type LiveAudioSourceMode,
@@ -87,6 +88,13 @@ export function LiveTranslationPage() {
     volc: {
       endpoint: DEFAULT_VOLC_AST_ENDPOINT,
       apiKey: "",
+    },
+    tencent: {
+      endpoint: DEFAULT_TENCENT_ASR_ENDPOINT,
+      appId: "",
+      secretId: "",
+      secretKey: "",
+      engineType: "",
     },
   });
   const [providerConfigLoaded, setProviderConfigLoaded] = useState(false);
@@ -183,6 +191,12 @@ export function LiveTranslationPage() {
         return Boolean(providerConfig.qwen.apiKey.trim());
       case "volc":
         return Boolean(providerConfig.volc.apiKey.trim());
+      case "tencent":
+        return Boolean(
+          providerConfig.tencent.appId.trim()
+          && providerConfig.tencent.secretId.trim()
+          && providerConfig.tencent.secretKey.trim(),
+        );
       default:
         return true;
     }
@@ -281,6 +295,16 @@ export function LiveTranslationPage() {
     setProviderConfig((current) => ({
       ...current,
       volc: { ...current.volc, [field]: value },
+    }));
+  }
+
+  function updateTencentConfig(
+    field: keyof LiveTranslationProviderConfig["tencent"],
+    value: string,
+  ) {
+    setProviderConfig((current) => ({
+      ...current,
+      tencent: { ...current.tencent, [field]: value },
     }));
   }
 
@@ -484,6 +508,7 @@ export function LiveTranslationPage() {
               <option value="ilivedata_direct">{t("live_translation.provider_ilivedata_direct")}</option>
               <option value="qwen">{t("live_translation.provider_qwen")}</option>
               <option value="volc">{t("live_translation.provider_volc")}</option>
+              <option value="tencent">{t("live_translation.provider_tencent")}</option>
             </select>
             {providerConfig.provider === "ilivedata_direct" && (
               <div className="space-y-2 rounded-lg border border-border bg-card p-3">
@@ -617,6 +642,90 @@ export function LiveTranslationPage() {
                     disabled={active}
                     className="h-8 text-xs"
                     placeholder={DEFAULT_VOLC_AST_ENDPOINT}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 w-full text-xs"
+                  onClick={saveProviderConfig}
+                  disabled={active || savingProviderConfig}
+                >
+                  {savingProviderConfig ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                  {t("live_translation.save_provider_config")}
+                </Button>
+              </div>
+            )}
+            {providerConfig.provider === "tencent" && (
+              <div className="space-y-2 rounded-lg border border-border bg-card p-3">
+                <p className="text-2xs leading-relaxed text-warning-text">
+                  {t("live_translation.tencent_hint")}
+                </p>
+                <div className="space-y-1.5">
+                  <Label htmlFor="tencent-app-id" className="text-2xs">
+                    {t("live_translation.provider_tencent_app_id")}
+                  </Label>
+                  <Input
+                    id="tencent-app-id"
+                    value={providerConfig.tencent.appId}
+                    onChange={(event) => updateTencentConfig("appId", event.target.value)}
+                    disabled={active}
+                    className="h-8 text-xs"
+                    inputMode="numeric"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="tencent-secret-id" className="text-2xs">
+                    {t("live_translation.provider_tencent_secret_id")}
+                  </Label>
+                  <Input
+                    id="tencent-secret-id"
+                    value={providerConfig.tencent.secretId}
+                    onChange={(event) => updateTencentConfig("secretId", event.target.value)}
+                    disabled={active}
+                    className="h-8 text-xs"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="tencent-secret-key" className="text-2xs">
+                    {t("live_translation.provider_tencent_secret_key")}
+                  </Label>
+                  <Input
+                    id="tencent-secret-key"
+                    type="password"
+                    value={providerConfig.tencent.secretKey}
+                    onChange={(event) => updateTencentConfig("secretKey", event.target.value)}
+                    disabled={active}
+                    className="h-8 text-xs"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="tencent-engine" className="text-2xs">
+                    {t("live_translation.provider_tencent_engine")}
+                  </Label>
+                  <Input
+                    id="tencent-engine"
+                    value={providerConfig.tencent.engineType}
+                    onChange={(event) => updateTencentConfig("engineType", event.target.value)}
+                    disabled={active}
+                    className="h-8 text-xs"
+                    placeholder="16k_zh"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="tencent-endpoint" className="text-2xs">
+                    {t("live_translation.provider_websocket_endpoint")}
+                  </Label>
+                  <Input
+                    id="tencent-endpoint"
+                    value={providerConfig.tencent.endpoint}
+                    onChange={(event) => updateTencentConfig("endpoint", event.target.value)}
+                    disabled={active}
+                    className="h-8 text-xs"
+                    placeholder={DEFAULT_TENCENT_ASR_ENDPOINT}
                   />
                 </div>
                 <Button

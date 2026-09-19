@@ -7,6 +7,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 async function bootstrap() {
+  // Playwright E2E: emulate the Tauri IPC surface in a plain browser (vite
+  // --mode e2e) so the real bridge and app boot unmodified. Never active in
+  // dev or packaged builds.
+  if (import.meta.env.MODE === "e2e" || import.meta.env.VITE_LYNSE_E2E === "1") {
+    const { installE2EShim } = await import("./e2e/tauri-shim");
+    installE2EShim();
+  }
   const windowKind = new URLSearchParams(window.location.search).get("window");
   // Transparent floating windows must render the webview body transparent too,
   // otherwise the theme background shows through as a square frame.

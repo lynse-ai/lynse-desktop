@@ -16,6 +16,7 @@ import { SettingsDialog, useWebdavAutoSync } from "@lynse/views/settings";
 import { AboutWindow } from "@lynse/views/about";
 import { FeedbackWindow } from "@lynse/views/feedback";
 import { BotAgent, BotAuthSupervisor } from "@lynse/views/bots";
+import { PluginHost } from "@lynse/views/plugins";
 import { AudioEditorPage } from "@lynse/views/audio-editor";
 import {
   LiveSubtitleOverlay,
@@ -194,6 +195,9 @@ function AppShell() {
           Rust bot long connection — headless, works with any page open or the
           window hidden. */}
       <BotAgent />
+      {/* Headless plugin subscribers (event listeners) for installed + enabled
+          plugins; renders nothing until a plugin contributes one. */}
+      <PluginHost />
       {/* Starts/stops a recording when the Rust meeting detector spots a
           whitelisted meeting app doing audio (user opt-in from Settings). */}
       {featureFlags.autoRecord && <MeetingAutoRecordAgent />}

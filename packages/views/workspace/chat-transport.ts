@@ -343,7 +343,7 @@ export class PollChatTransport implements ChatTransport {
     const startedAt = Date.now();
     // Show the first pending caption right away (submit itself can take
     // seconds on busy retries) — the bubble reads as "working" from the click.
-    let stage = this.emitPendingStages(startedAt, -1, onEvent);
+    const stage = this.emitPendingStages(startedAt, -1, onEvent);
     if (this.cancelled) return;
 
     let taskId: string;

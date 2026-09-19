@@ -30,7 +30,6 @@ export function AssistantAvatar({ size = 28, className, interactive = true }: As
   ].join(" ");
 
   const image = (
-    // eslint-disable-next-line @next/next/no-img-element
     <img
       key={avatar.id}
       src={avatar.src}

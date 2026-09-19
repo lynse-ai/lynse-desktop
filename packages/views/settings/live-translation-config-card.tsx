@@ -12,6 +12,7 @@ import type {
   LiveTranslationProvider,
   LiveTranslationProviderConfig,
 } from "../live-translation/types";
+import { DEFAULT_TENCENT_ASR_ENDPOINT } from "../live-translation/types";
 
 /**
  * Selectable max-speaker counts for iLiveData diarization. `0` (rendered as
@@ -79,6 +80,16 @@ export function LiveTranslationConfigCard() {
     setSaved(false);
   }
 
+  function updateTencent(
+    field: keyof LiveTranslationProviderConfig["tencent"],
+    value: string,
+  ) {
+    setConfig((c) =>
+      c ? { ...c, tencent: { ...c.tencent, [field]: value } } : c,
+    );
+    setSaved(false);
+  }
+
   function updateILiveData(
     field: keyof LiveTranslationProviderConfig["ilivedata"],
     value: string,
@@ -114,6 +125,7 @@ export function LiveTranslationConfigCard() {
   const isQwen = config.provider === "qwen";
   const isILiveData = config.provider === "ilivedata_direct";
   const isVolc = config.provider === "volc";
+  const isTencent = config.provider === "tencent";
 
   return (
     <Card>
@@ -141,8 +153,78 @@ export function LiveTranslationConfigCard() {
             </option>
             <option value="qwen">{t("live_translation.provider_qwen")}</option>
             <option value="volc">{t("live_translation.provider_volc")}</option>
+            <option value="tencent">{t("live_translation.provider_tencent")}</option>
           </select>
         </div>
+
+        {isTencent && (
+          <div className="space-y-2 rounded-lg border border-border bg-card p-3">
+            <p className="text-2xs leading-relaxed text-warning-text">
+              {t("live_translation.tencent_hint")}
+            </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="lt-tencent-app-id" className="text-2xs">
+                {t("live_translation.provider_tencent_app_id")}
+              </Label>
+              <Input
+                id="lt-tencent-app-id"
+                inputMode="numeric"
+                value={config.tencent.appId}
+                onChange={(e) => updateTencent("appId", e.target.value)}
+                className="h-8 text-xs"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="lt-tencent-secret-id" className="text-2xs">
+                {t("live_translation.provider_tencent_secret_id")}
+              </Label>
+              <Input
+                id="lt-tencent-secret-id"
+                autoComplete="off"
+                value={config.tencent.secretId}
+                onChange={(e) => updateTencent("secretId", e.target.value)}
+                className="h-8 text-xs"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="lt-tencent-secret-key" className="text-2xs">
+                {t("live_translation.provider_tencent_secret_key")}
+              </Label>
+              <Input
+                id="lt-tencent-secret-key"
+                type="password"
+                autoComplete="off"
+                value={config.tencent.secretKey}
+                onChange={(e) => updateTencent("secretKey", e.target.value)}
+                className="h-8 text-xs"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="lt-tencent-engine" className="text-2xs">
+                {t("live_translation.provider_tencent_engine")}
+              </Label>
+              <Input
+                id="lt-tencent-engine"
+                placeholder="16k_zh"
+                value={config.tencent.engineType}
+                onChange={(e) => updateTencent("engineType", e.target.value)}
+                className="h-8 text-xs"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="lt-tencent-endpoint" className="text-2xs">
+                {t("live_translation.provider_websocket_endpoint")}
+              </Label>
+              <Input
+                id="lt-tencent-endpoint"
+                placeholder={DEFAULT_TENCENT_ASR_ENDPOINT}
+                value={config.tencent.endpoint}
+                onChange={(e) => updateTencent("endpoint", e.target.value)}
+                className="h-8 text-xs"
+              />
+            </div>
+          </div>
+        )}
 
         {isVolc && (
           <div className="space-y-2 rounded-lg border border-border bg-card p-3">

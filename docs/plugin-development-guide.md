@@ -1,8 +1,15 @@
 # Lynse 插件开发指南
 
-> 版本：v0.1（2026-09-18）｜配套 PRD：`docs/plugin-architecture-prd.md` v0.5
+> 版本：v0.2（2026-09-18）｜配套 PRD：`docs/plugin-architecture-prd.md` v0.5
 > 读者：想为 Lynse 桌面端开发插件的开发者。
-> 状态说明：本文是插件体系的**目标契约**，随 P0–P2 实现逐步校准。文中标注「【已存在】」「【P0 落地】」「【规划】」区分现状与计划；引用已存在机制时给出真实代码路径。
+> 状态：**P0–P5 已实现**（`packages/views/plugins/`）。本文描述与代码对齐；标注「【已存在】」「【规划】」区分现状与计划，引用已存在机制时给出真实代码路径。
+
+## 实现要点（与代码的差异说明）
+
+- 模块全部位于 `packages/views/plugins/`（PRD 原计划 core+views 分层，因 manifest 持有 React 组件收敛到 views）；
+- manifest 字段为 `nameKey` / `descriptionKey`（i18n key），不是明文；
+- 迁移探测从 `PluginHost` 挂载 effect 触发（Tauri 桥接在 main.tsx 主体安装，import 期探测拿不到 desktopAPI）；
+- 模型插件目录见 `plugins/transcription-models.tsx`（FunASR/WhisperX/Qwen3×2；MOSS 延后），远程目录 `plugins/catalog.ts` 拉 CloudBase `plugins/catalog.json`（失败静默）。
 
 ---
 
@@ -48,8 +55,8 @@ export default definePlugin({
   kind: "app",
   version: "1.0.0",
   minAppVersion: "1.1.0",
-  name: "plugins.hello.name",        // i18n key，不是明文
-  description: "plugins.hello.description",
+  nameKey: "plugins.hello.name",     // i18n key，不是明文
+  descriptionKey: "plugins.hello.description",
   icon: "Sparkles",                  // 必须是 packages/views/icons.ts 已有图标名
   category: "tool",                  // transcription | integration | assistant | sync | tool
   platforms: ["desktop", "web"],     // 仅桌面的插件写 ["desktop"]
@@ -60,11 +67,10 @@ export default definePlugin({
     settingsSection: {
       id: "hello",
       titleKey: "plugins.hello.title",
-      icon: "Sparkles",
       order: 500,                    // 核心分区 < 400；about 固定 900
-      component: lazy(() => import("./settings-section")),  // 必须懒加载
+      component: HelloSettings,      // 实现期直引组件；懒加载优化后置
     },
-    // sidebarItem?: { key, labelKey, icon, path },   【规划 P6】
+    // sidebarItem?: { key, labelKey, icon, path },   【规划】
     // eventSubscriptions?: ["transcription-completed"],  见 §4.4
   },
   lifecycle: {

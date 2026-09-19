@@ -1,0 +1,24 @@
+{
+  "catalogVersion": "1.0.0",
+  "updatedAt": "2026-09-18",
+  "plugins": [
+    {
+      "id": "lynse.model.moss-transcribe-8bit",
+      "name": "MOSS-Transcribe-Diarize",
+      "description": "Local speaker-diarization engine (MLX 8-bit). Arriving after quantization and adaptation wrap up.",
+      "comingSoon": true
+    },
+    {
+      "id": "lynse.plugin.recording-card",
+      "name": "Recording Card",
+      "description": "NewView Bluetooth recording card: scan, live feed and file transfer.",
+      "comingSoon": true
+    },
+    {
+      "id": "lynse.plugin.webdav-sync",
+      "name": "WebDAV Sync",
+      "description": "Two-way sync of notes and recordings to your own WebDAV server.",
+      "comingSoon": true
+    }
+  ]
+}

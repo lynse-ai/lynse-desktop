@@ -71,6 +71,20 @@ export async function startMockServer(script?: ChatScript): Promise<MockServer> 
       const path = url.pathname;
       const ctx = await readCtx(req, url);
 
+      // The desktop-renderer E2E hits this server directly from a plain
+      // (CORS-enforcing) browser, so every answer must be cross-origin.
+      // The API client sends credentials, so the origin must be echoed back
+      // exactly — `*` is rejected by the browser for credentialed requests.
+      res.setHeader("Access-Control-Allow-Origin", req.headers.origin ?? "*");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Allow-Headers", "content-type, authorization, x-lynse-api-url, x-api-key, x-client-platform");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      if (ctx.method === "OPTIONS") {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
+
       if (ctx.method === "POST" && path === CHAT_POLL_PATH) {
         handleChatSubmit(ctx, tasks, res, () => {
           const sessionId = String(ctx.body.sessionId ?? "default");

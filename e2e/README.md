@@ -10,17 +10,52 @@ cd e2e
 pnpm install --ignore-workspace        # 首次
 pnpm exec playwright install chromium  # 首次
 
-pnpm test            # 全量（自动拉起 pnpm dev:web，若 3000 端口空闲）
+pnpm test            # Web 渲染器全量（自动拉起 pnpm dev:web，若 3000 端口空闲）
 pnpm test:headed     # 有头模式观察
 pnpm test:chat       # 只跑 AI 助手
+pnpm test:desktop    # 桌面渲染器套件（真实 Tauri UI + IPC shim）
+pnpm test:all        # 两套全跑
 pnpm report          # HTML 报告
 ```
 
 - **不需要真实后端、不需要登录**：测试为每个用例启动本地 mock 后端
   （`fixtures/mock-server.ts`），通过 `localStorage.lynse_api_url` 让 Next 的
   `/api/proxy` 转发到它。SSE 流式对话由 `scripts/*.json` 剧本驱动，逐 chunk
-  真实推送。
+  真实推送。mock 后端已开启 CORS（回显 origin），桌面渲染器可直连。
 - 若端口 3000 已有 dev server 在跑，Playwright 会直接复用。
+
+## 桌面渲染器套件（tests-desktop/）
+
+驱动**真实 Tauri UI**：`apps/tauri` 以 `--mode e2e` 启动 vite（端口 5183），
+`apps/tauri/src/e2e/tauri-shim.ts` 模拟 Tauri IPC（`__TAURI_INTERNALS__` +
+钥匙串 vault + 事件总线），真实的 `installTauriBridge()` 与整个应用原样启动，
+API 直连 mock 后端。打包产物绝不包含该分支。
+
+```bash
+pnpm test:desktop     # playwright.desktop.config.ts，webServer 自动拉起 vite
+```
+
+- 登录态同样通过 localStorage 种 token（shim 的 keychain 会正常迁移它）。
+- `90-visual.spec.ts` 是视觉回归基线（平台相关，CI 跳过）；更新基线：
+  `pnpm test:desktop 90-visual --update-snapshots`。
+
+## 真实后端联测（tests-real/ + Langfuse）
+
+`pnpm test:real` 走 web 渲染器（Next 代理）直连**真实 API**（默认
+`https://api.lynse.cn`）跑一轮真实 AI 对话。每次运行把对话 sessionId 改写为
+运行 ID（默认 `e2e-real-<日期>-<rand>`），后端 lynclaw 会把它写进 Langfuse
+trace 的 sessionId —— 用报告脚本拉取归因：
+
+```bash
+LYNSE_E2E_TOKEN=<token> pnpm test:real
+node scripts/langfuse-report.mjs --run-id <运行ID>   # 生成 test-results/langfuse-report.{md,json}
+```
+
+- Langfuse 凭据从环境变量或本目录 `.env.langfuse`（已 gitignore）读取；
+  形如 `LANGFUSE_HOST / LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY`。
+- 没配 `LYNSE_E2E_TOKEN` 时整套自动跳过（exit 0），CI 可无条件包含。
+- CI 入口：`.github/workflows/e2e-real.yml`（仅手动触发；需配置同名仓库
+  secrets）。刻意不加定时——真实对话消耗账号 AI 配额。
 
 ## 目录
 

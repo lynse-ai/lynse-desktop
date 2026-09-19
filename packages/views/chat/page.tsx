@@ -442,7 +442,7 @@ export function ChatPage() {
             animate={{ x: 0 }}
             exit={reduceMotion ? { opacity: 0 } : { x: "-100%" }}
             transition={{ duration: 0.18, ease: "easeOut" }}
-            className="absolute bottom-0 left-0 top-14 flex w-56 flex-col border-r border-border/60"
+            className="absolute bottom-0 left-0 top-14 z-20 flex w-56 flex-col border-r border-border/60"
           >
             <ChatHistorySidebar
               conversations={conversations}

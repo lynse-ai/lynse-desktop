@@ -147,6 +147,9 @@ export {
   QrCode,           // App-scanned QR-code sign-in entry
   KeyRound,         // API-key sign-in entry
 
+  // ── Plugins ──────────────────────────────────────────
+  Puzzle,           // Plugins community (Settings → Plugins)
+
   // ── Audio Editor ─────────────────────────────────────
   Scissors,         // Trim selection
   Combine,          // Merge multiple audios
@@ -167,3 +170,5 @@ export const ICON_SM = "size-3.5";
 export const ICON_MD = "size-4";
 export const ICON_LG = "size-5";
 export const ICON_XL = "size-6";
+
+export type { LucideIcon } from "lucide-react";

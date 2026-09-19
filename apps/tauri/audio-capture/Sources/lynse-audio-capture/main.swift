@@ -119,7 +119,9 @@ if let processDirectory = argumentValue("--process") {
         exit(5)
     }
 
-    let processor = DualChannelProcessor(enableAec: true)
+    // Reprocessing must not silently change the canceller setting: it rebuilds
+    // what live capture would have produced, so it obeys the same `--aec` flag.
+    let processor = DualChannelProcessor(enableAec: arguments.contains("--aec"))
     processor.onMicProcessed16k = { startMs, samples in
         processedWav.write(samples: samples, firstFrameElapsedMs: startMs)
     }
@@ -189,11 +191,20 @@ case "mic": (captureMic, captureSystem) = (true, false)
 case "system": (captureMic, captureSystem) = (false, true)
 default: (captureMic, captureSystem) = (true, true)
 }
-// Dual-channel recording: raw tracks + AEC on the microphone. `--aec` is the
-// feature switch — without it the sidecar runs the legacy 16 kHz pipeline
-// (rollback keeps reading new-format recordings, it only affects new ones).
+// Dual-track layout: raw 48 kHz tracks + the 48 kHz master, which needs the
+// two streams paired on one timeline. `--aec` is a *separate* switch on top of
+// it: with both sources but without `--aec` the pairing, raw archive and master
+// all still happen and only the canceller is bypassed, so echo cancellation can
+// be A/B-compared against the same bandwidth and the same mixdown. Without both
+// sources the sidecar falls back to the legacy 16 kHz pipeline.
 let aecRequested = arguments.contains("--aec")
-let dualChannel = aecRequested && captureMic && captureSystem
+let dualChannel = captureMic && captureSystem
+let aecEnabled = dualChannel && aecRequested
+/// Microphone capture API. Core Audio (`AVAudioEngine`) is the default and the
+/// one every other macOS recorder uses; ScreenCaptureKit's `.microphone` tap
+/// goes through the screen-recording stack. `--mic-sck` keeps the old path
+/// reachable so the two can be A/B-compared on the same room.
+let micViaCoreAudio = captureMic && !arguments.contains("--mic-sck")
 
 guard !captureMic || microphonePermission() == "granted" else {
     emitError(microphonePermissionMessage)
@@ -398,6 +409,16 @@ private final class RecognitionSink {
         }
     }
 
+    /// The flush tail of a stream: continues where the last chunk stopped, so
+    /// neither the track writer nor the frame assembler is handed a fake
+    /// timestamp to work that out from.
+    func consumeContiguous(_ samples: [Int16]) {
+        queue.async {
+            self.wav.writeContiguous(samples: samples)
+            self.send(self.assembler.appendContiguous(samples: samples))
+        }
+    }
+
     func close() {
         queue.sync {
             send(assembler.finish())
@@ -459,7 +480,7 @@ private final class LegacySink {
         queue.sync {
             let tail = self.decimator.flush()
             if !tail.isEmpty {
-                recognition.consume(pcm16(fromFloats: tail), firstFrameElapsedMs: UInt64.max)  // contiguous: assembler appends
+                recognition.consumeContiguous(pcm16(fromFloats: tail))
             }
             recognition.close()
             master?.close()
@@ -596,6 +617,127 @@ private final class CaptureOutput: NSObject, SCStreamOutput {
     }
 }
 
+// ───────────────────────────────────────────────────────────────
+// Microphone through the system capture API (AVAudioEngine → Core Audio).
+//
+// ScreenCaptureKit's `.microphone` output taps the device through the
+// screen-recording stack; this is the path every other macOS recorder takes,
+// including Voice Memos, and it is the reference this pipeline is held
+// against. Voice processing stays explicitly off so the archived microphone
+// track is driver audio and nothing else — the canceller (when enabled) is
+// ours, and it must not be stacked on a vendor one.
+//
+// Buffers carry host (mach) time, the same clock ScreenCaptureKit stamps its
+// presentation times with, so the microphone and system tracks stay aligned on
+// one timeline even though they now come from two different APIs.
+// ───────────────────────────────────────────────────────────────
+@available(macOS 15.0, *)
+private final class MicEngineCapture {
+    private let engine = AVAudioEngine()
+    private let timeline: TimelineBox
+    private let levels: LevelState
+    private let onAudio: (_ positionSamples: Int64, _ floats: [Float]) -> Void
+    private var converter: AVAudioConverter?
+    private var converterKey = ""
+    private(set) var isRunning = false
+
+    init(timeline: TimelineBox, levels: LevelState,
+         onAudio: @escaping (_ positionSamples: Int64, _ floats: [Float]) -> Void) {
+        self.timeline = timeline
+        self.levels = levels
+        self.onAudio = onAudio
+    }
+
+    /// Host seconds of the shared clock both capture APIs are stamped against.
+    static func hostSeconds() -> Double {
+        hostClockSeconds()
+    }
+
+    func start() throws {
+        guard !isRunning else { return }
+        let input = engine.inputNode
+        let format = input.inputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            throw NSError(domain: "LynseCapture", code: 6,
+                          userInfo: [NSLocalizedDescriptionKey: "麦克风输入格式不可用。"])
+        }
+        try? input.setVoiceProcessingEnabled(false)
+        input.installTap(onBus: 0, bufferSize: 480, format: format) { [weak self] buffer, when in
+            self?.deliver(buffer, hostSeconds: AVAudioTime.seconds(forHostTime: when.hostTime))
+        }
+        engine.prepare()
+        do {
+            try engine.start()
+            isRunning = true
+        } catch {
+            input.removeTap(onBus: 0)
+            throw error
+        }
+    }
+
+    func stop() {
+        guard isRunning else { return }
+        isRunning = false
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+    }
+
+    private func deliver(_ buffer: AVAudioPCMBuffer, hostSeconds rawSeconds: Double) {
+        let frames = Int(buffer.frameLength)
+        guard frames > 0, buffer.format.channelCount > 0 else { return }
+        // Some drivers hand back no host time; the wall clock is the same mach
+        // clock, so falling back keeps positions monotonic instead of dropping.
+        let seconds = rawSeconds > 0 ? rawSeconds : Self.hostSeconds()
+        let floats: [Float]
+        if buffer.format.sampleRate == targetSampleRate, buffer.format.channelCount == 1,
+           let data = buffer.floatChannelData {
+            floats = Array(UnsafeBufferPointer(start: data[0], count: frames))
+        } else if let converted = convert(buffer) {
+            floats = converted
+        } else {
+            return
+        }
+        guard let position = timeline.position(firstSampleSeconds: seconds) else { return }
+        levels.record(source: 0, samples: floats)
+        onAudio(position, floats)
+    }
+
+    /// Any input format → 48 kHz mono Float32.
+    private func convert(_ buffer: AVAudioPCMBuffer) -> [Float]? {
+        let source = buffer.format
+        let key = "\(source.sampleRate)-\(source.channelCount)-\(source.commonFormat.rawValue)"
+        if converter == nil || converterKey != key {
+            guard let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: targetSampleRate,
+                                             channels: 1, interleaved: false),
+                  let incoming = AVAudioFormat(commonFormat: source.commonFormat,
+                                               sampleRate: source.sampleRate,
+                                               channels: source.channelCount,
+                                               interleaved: source.isInterleaved)
+            else { return nil }
+            converter = AVAudioConverter(from: incoming, to: target)
+            converterKey = key
+        }
+        guard let converter else { return nil }
+        let target = converter.outputFormat
+        let ratio = targetSampleRate / max(1, source.sampleRate)
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio + 64)
+        guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return nil }
+        var error: NSError?
+        var supplied = false
+        let status = converter.convert(to: out, error: &error) { _, state in
+            if supplied {
+                state.pointee = .noDataNow
+                return nil
+            }
+            supplied = true
+            state.pointee = .haveData
+            return buffer
+        }
+        guard status != .error, out.frameLength > 0, let channels = out.floatChannelData else { return nil }
+        return Array(UnsafeBufferPointer(start: channels[0], count: Int(out.frameLength)))
+    }
+}
+
 @available(macOS 15.0, *)
 private final class NoopVideoOutput: NSObject, SCStreamOutput {
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {}
@@ -639,7 +781,7 @@ private final class TimelineBox {
 private let micTimeline = TimelineBox()
 private let systemTimeline = TimelineBox()
 
-private let processor = DualChannelProcessor(enableAec: dualChannel)
+private let processor = DualChannelProcessor(enableAec: aecEnabled)
 
 private var micRecognition: RecognitionSink!
 private var systemRecognition: RecognitionSink!
@@ -725,6 +867,9 @@ do {
 
 private var micOutput: CaptureOutput!
 private var systemOutput: CaptureOutput!
+/// The microphone feed when it comes from Core Audio instead of
+/// ScreenCaptureKit — exactly one of the two is live.
+private var micEngine: MicEngineCapture?
 
 private let videoOutput = NoopVideoOutput()
 private let captureDelegate = CaptureDelegate()
@@ -737,33 +882,53 @@ private var lastMicrophoneDeviceID = AVCaptureDevice.default(for: .audio)?.uniqu
 
 @available(macOS 15.0, *)
 private func makeOutputs() {
-    if dualChannel {
-        micOutput = CaptureOutput(
-            source: 0, channels: 1, clock: clock, levels: levels,
-            timeline: micTimeline,
-            onAudio: { position, floats in processor.pushMic(positionSamples: position, samples: floats) }
-        )
-        systemOutput = CaptureOutput(
-            source: 1, channels: 2, clock: clock, levels: levels,
-            timeline: systemTimeline,
-            onAudio: { position, floats in processor.pushSystem(positionSamples: position, samples: floats) }
-        )
-    } else {
-        if captureMic {
-            micOutput = CaptureOutput(
-                source: 0, channels: 1, clock: clock, levels: levels,
-                timeline: micTimeline,
-                onAudio: { position, floats in legacyMicSink?.consume(floats, positionSamples: position) }
-            )
-        }
-        if captureSystem {
-            systemOutput = CaptureOutput(
-                source: 1, channels: 2, clock: clock, levels: levels,
-                timeline: systemTimeline,
-                onAudio: { position, floats in legacySystemSink?.consume(floats, positionSamples: position) }
-            )
+    // The microphone arrives from one API at a time and is then handed to
+    // whichever pipeline owns the session; the system feed always comes from
+    // ScreenCaptureKit.
+    let pushMic: (Int64, [Float]) -> Void = { position, floats in
+        if dualChannel {
+            processor.pushMic(positionSamples: position, samples: floats)
+        } else {
+            legacyMicSink?.consume(floats, positionSamples: position)
         }
     }
+    let pushSystem: (Int64, [Float]) -> Void = { position, floats in
+        if dualChannel {
+            processor.pushSystem(positionSamples: position, samples: floats)
+        } else {
+            legacySystemSink?.consume(floats, positionSamples: position)
+        }
+    }
+    if captureMic {
+        if micViaCoreAudio {
+            micEngine = MicEngineCapture(timeline: micTimeline, levels: levels, onAudio: pushMic)
+            micOutput = nil
+        } else {
+            micOutput = CaptureOutput(
+                source: 0, channels: 1, clock: clock, levels: levels,
+                timeline: micTimeline, onAudio: pushMic
+            )
+            micEngine = nil
+        }
+    } else {
+        micEngine = nil
+        micOutput = nil
+    }
+    if captureSystem {
+        systemOutput = CaptureOutput(
+            source: 1, channels: 2, clock: clock, levels: levels,
+            timeline: systemTimeline, onAudio: pushSystem
+        )
+    } else {
+        systemOutput = nil
+    }
+}
+
+/// Seconds on the mach host clock — the clock both ScreenCaptureKit
+/// presentation times and Core Audio tap timestamps are stamped against, which
+/// is what lets two different capture APIs share one sample timeline.
+private func hostClockSeconds() -> Double {
+    CMTimeGetSeconds(CMClockGetTime(CMClockGetHostTimeClock()))
 }
 
 /// Re-bases both track timelines on the processing pipeline's hand-over
@@ -771,8 +936,12 @@ private func makeOutputs() {
 /// pauses and unexpected SCK stops never rewind the shared timeline.
 private func rebaseTimelines() {
     let base = processor.prepareForRestart()
-    micTimeline.timeline.beginRun(baseSamples: base)
-    systemTimeline.timeline.beginRun(baseSamples: base)
+    // Pin both tracks to the same host-clock instant: the microphone may come
+    // from Core Audio while the system feed comes from ScreenCaptureKit, and
+    // unanchored each would zero on its own first callback.
+    let anchor = hostClockSeconds()
+    micTimeline.timeline.beginRun(baseSamples: base, anchorSeconds: anchor)
+    systemTimeline.timeline.beginRun(baseSamples: base, anchorSeconds: anchor)
 }
 
 @available(macOS 15.0, *)
@@ -785,7 +954,7 @@ func createCaptureStream() async throws -> SCStream {
     configuration.excludesCurrentProcessAudio = true
     configuration.sampleRate = 48_000
     configuration.channelCount = 2
-    configuration.captureMicrophone = captureMic && microphonePermission() == "granted"
+    configuration.captureMicrophone = captureMic && !micViaCoreAudio && microphonePermission() == "granted"
     configuration.microphoneCaptureDeviceID = AVCaptureDevice.default(for: .audio)?.uniqueID
     configuration.width = 2
     configuration.height = 2
@@ -812,11 +981,21 @@ func startCapture(event: String = "ready") async {
         let stream = try await createCaptureStream()
         try await stream.startCapture()
         captureStream = stream
+        // The microphone runs on its own API, so it starts beside the stream
+        // rather than through it. `makeOutputs` replaced the object on restart,
+        // so nothing else is holding the previous tap.
+        if let micEngine {
+            try micEngine.start()
+        }
         var readyPayload: [String: Any] = [
             "event": event,
             "microphone": microphonePermission() == "granted",
             "systemAudio": CGPreflightScreenCaptureAccess(),
             "dualChannel": dualChannel,
+            // Which capture API and canceller actually ran — the log is the
+            // only place an A/B comparison of the two can be audited later.
+            "microphoneApi": micViaCoreAudio ? "coreaudio" : "screencapturekit",
+            "aec": aecEnabled,
         ]
         if let id = lastMicrophoneDeviceID, let device = AVCaptureDevice(uniqueID: id) {
             readyPayload["microphoneCaptureDeviceID"] = id
@@ -846,6 +1025,9 @@ func restartCapture(reason: String) {
     captureStream = nil
     Task {
         if let stream { try? await stream.stopCapture() }
+        // Release the input device before the new capture re-opens it, or two
+        // taps would deliver into one timeline.
+        micEngine?.stop()
         try? await Task.sleep(nanoseconds: 250_000_000)
         lastMicrophoneDeviceID = AVCaptureDevice.default(for: .audio)?.uniqueID
         restartingCapture = false
@@ -865,6 +1047,7 @@ func pauseCapture() {
     paused = true
     allowIdleSystemSleep()
     clock.pause()
+    micEngine?.stop()   // the microphone is not part of the stream; stop it too
     let stream = captureStream
     captureStream = nil
     Task {
@@ -952,6 +1135,7 @@ shutdownHandler = shutdown
 
 /// Closes every writer on the processing queue's turn and exits.
 private func finishAndExit() {
+    micEngine?.stop()
     processor.flush()
     micRecognition.close()
     if dualChannel || captureSystem {

@@ -518,6 +518,16 @@ fn emit_stream_state(app: &AppHandle, source: AudioSource, state: &str, epoch: u
     );
 }
 
+/// Echo cancellation switch for the capture pipeline. Currently **off**: the
+/// canceller left periodic 10 ms / 20 ms discontinuities in the archived audio
+/// (block-length artifacts in the played file — exactly the "颤抖/咔哒" report),
+/// so the 48 kHz master is produced from the unprocessed capture until that is
+/// resolved. `LYNSE_AEC=1` re-attaches it without a rebuild; live capture, the
+/// Windows engine and offline reprocessing all read this one switch.
+pub(crate) fn aec_enabled() -> bool {
+    matches!(std::env::var("LYNSE_AEC").as_deref(), Ok("1"))
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn sidecar_command(app: &AppHandle) -> CommandResult<Command> {
     let path = crate::stt::sidecar_path(app, "audio-capture")?;
@@ -864,7 +874,7 @@ pub async fn live_translation_start(
             .arg(&sources_argument)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        if session.dual_channel {
+        if session.dual_channel && aec_enabled() {
             command.arg("--aec");
         }
         let mut child = match command.spawn() {
@@ -876,9 +886,10 @@ pub async fn live_translation_start(
             }
         };
         log::info!(
-            "Live translation capture spawned: session={} socket={} sources={sources_argument}",
+            "Live translation capture spawned: session={} socket={} sources={sources_argument} aec={}",
             session.session_id,
-            session.socket_path.display()
+            session.socket_path.display(),
+            if aec_enabled() { "on" } else { "off" }
         );
         let stdout = child
             .stdout
@@ -911,8 +922,11 @@ pub async fn live_translation_start(
             raw_mic: true,
             // The dual_channel=false rollback runs the legacy pipeline: no
             // AEC bridge, no raw tracks (matches macOS `--sources` without
-            // `--aec`).
-            aec_enabled: session.dual_channel,
+            // `--aec`). NOTE: unlike the macOS sidecar, the Windows engine
+            // still couples raw tracks to the canceller, so switching AEC off
+            // there also drops back to the 16 kHz layout — split it the same
+            // way before trusting a Windows A/B comparison.
+            aec_enabled: session.dual_channel && aec_enabled(),
         };
         thread::spawn(move || {
             if let Err(error) = start_windows_capture(&win_app, &win_session, win_config) {
@@ -2721,6 +2735,9 @@ pub(crate) fn ensure_dual_channel_processed(app: &AppHandle, directory: &Path) -
             .arg(directory)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if aec_enabled() {
+            command.arg("--aec");
+        }
         match command.spawn() {
             Ok(mut child) => {
                 let deadline = Instant::now() + Duration::from_secs(300);

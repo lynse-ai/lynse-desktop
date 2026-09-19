@@ -38,6 +38,17 @@ public final class WavWriter {
         }
     }
 
+    /// Appends behind what is already on disk, with no timeline positioning.
+    /// The flush tail of a stream needs this: positioning it by timestamp
+    /// would either pad the file to an absurd length or trap on the conversion.
+    public func writeContiguous(samples: [Int16]) {
+        lock.withLock {
+            guard !closed, !samples.isEmpty else { return }
+            try? handle.write(contentsOf: samples.withUnsafeBytesData())
+            sampleFrames += UInt64(samples.count / Int(channels))
+        }
+    }
+
     public func close() {
         lock.withLock {
             guard !closed else { return }

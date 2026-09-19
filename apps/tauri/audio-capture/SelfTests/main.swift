@@ -8,6 +8,32 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
     }
 }
 
+/// The flush tail must be appended contiguously. Callers used to pass
+/// `UInt64.max` as a "keep going" timestamp, and the gap arithmetic trapped
+/// converting it to `Int` — which killed every single-microphone session at
+/// shutdown, before the writers could patch their headers.
+private func testContiguousTailNeverTraps() {
+    var assembler = PCMFrameAssembler()
+    var frames = assembler.append(samples: [Int16](repeating: 7, count: 320), chunkStartMs: 0)
+    expect(frames.count == 1, "first chunk yields one frame")
+    frames = assembler.appendContiguous(samples: [Int16](repeating: 9, count: 640))
+    expect(frames.count == 2, "contiguous append yields both frames (got \(frames.count))")
+    expect(frames[0].elapsedMs == 20, "contiguous append continues the timeline, got \(frames[0].elapsedMs)")
+    // An out-of-range timestamp must clamp, not trap.
+    frames = assembler.append(samples: [Int16](repeating: 5, count: 320), chunkStartMs: UInt64.max)
+    expect(frames.count == 1, "a bogus timestamp still produces a frame instead of crashing")
+}
+
+private func testTimelineNeverRunsBehindItsPinnedAnchor() {
+    var timeline = SampleTimeline(sampleRate: 48_000, baseSamples: 1_000)
+    timeline.beginRun(baseSamples: 1_000, anchorSeconds: 100.0)
+    // Core Audio can hand back a buffer stamped slightly before the rebase.
+    let early = timeline.position(firstSampleSeconds: 99.99)
+    let onTime = timeline.position(firstSampleSeconds: 100.02)
+    expect(early == 1_000, "a pre-anchor buffer lands at the base, not below it (got \(String(describing: early)))")
+    expect(onTime == 1_000 + 960, "positions after the anchor advance normally (got \(String(describing: onTime)))")
+}
+
 private func testArbitraryBuffersBecomeExactFrames() {
     var assembler = PCMFrameAssembler()
     var frames: [PCMFrame] = []
@@ -391,6 +417,8 @@ private func testRestartHandsOverTheTimelineBase() {
 }
 
 runDelayProbe()
+testContiguousTailNeverTraps()
+testTimelineNeverRunsBehindItsPinnedAnchor()
 testArbitraryBuffersBecomeExactFrames()
 testCaptureGapIsSilent()
 testFinalPartialBufferIsPadded()

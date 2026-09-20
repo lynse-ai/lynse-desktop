@@ -4,7 +4,7 @@ import { useState, useMemo, useCallback } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useLiveTranslation } from "./use-live-translation";
-import { audioModeSources, requestRealtimeSession } from "./api";
+import { audioModeSources, realtimeEngineLabel, requestRealtimeSession } from "./api";
 import type {
   LiveConnectionDescriptor,
   LivePermissionStatus,
@@ -187,6 +187,13 @@ export function useRecordingSession(): UseRecordingSessionReturn {
         connections: credentials.connections,
       });
       setMode("live");
+      // Confirm WHICH engine this session actually attached — read from the
+      // connection URL, not from the settings screen, so a stale saved
+      // endpoint can never masquerade as the selected one.
+      const engineUrl = credentials.connections[0]?.url;
+      if (engineUrl) {
+        toast(t("live_translation.engine_attached", { engine: realtimeEngineLabel(engineUrl) }));
+      }
       return true;
     } catch (error) {
       toast.warning(String(error));

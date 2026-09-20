@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::async_runtime::JoinHandle;
+use tauri::webview::PageLoadEvent;
 use tauri::{
     AppHandle, Emitter, LogicalPosition, Manager, State, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
@@ -50,6 +51,12 @@ const SILENCE_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 /// Mic peak amplitude (0..1, measured per 200 ms window) below which the room
 /// counts as silent. Speech and ordinary handling noise sit well above this.
 const MIC_SILENCE_LEVEL: f32 = 0.02;
+
+/// How long a fresh session may stay in "connecting" before the start is
+/// declared failed with a user-facing reason. Normally the capture engine (or
+/// the macOS sidecar) reports ready within a couple of seconds; a wedged
+/// audio device otherwise leaves the UI spinning forever with no explanation.
+const CAPTURE_START_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// A healthy realtime stream carries provider traffic constantly (interim
 /// results during speech, keepalive frames otherwise). After this long without
@@ -746,6 +753,29 @@ pub async fn live_translation_start(
         request.sources_argument(),
         request.title.trim()
     );
+    #[cfg(target_os = "windows")]
+    {
+        // Say WHY a start cannot proceed when the machine has no usable audio
+        // endpoint for a requested source; the WASAPI probe would otherwise
+        // surface (at best) a raw HRESULT string in a corner Alert.
+        let devices = crate::windows_capture::enumerate_devices();
+        let mut missing: Vec<&str> = Vec::new();
+        if request.wants_mic() && devices.inputs.is_empty() {
+            missing.push("麦克风");
+        }
+        if request.wants_system() && devices.outputs.is_empty() {
+            missing.push("扬声器/耳机");
+        }
+        if !missing.is_empty() {
+            log::warn!(
+                "Live translation start rejected: no audio device (missing {missing:?})"
+            );
+            return Err(format!(
+                "未检测到可用的{}，无法开始录音。请在 Windows「设置 → 系统 → 声音」中启用音频设备后重试。",
+                missing.join(" 和 ")
+            ));
+        }
+    }
     #[cfg(target_os = "macos")]
     {
         // First, surface the native TCC prompts so the OS dialog actually
@@ -950,6 +980,10 @@ pub async fn live_translation_start(
         };
         thread::spawn(move || {
             if let Err(error) = start_windows_capture(&win_app, &win_session, win_config) {
+                // The error string is the only record of WHY the engine
+                // refused — without this line a failed start is invisible
+                // in the logs (the UI event alone proved easy to miss).
+                log::error!("Windows capture failed to start: {error}");
                 voice_end(&win_session);
                 emit_error(&win_app, None, error);
             }
@@ -961,6 +995,7 @@ pub async fn live_translation_start(
         .lock()
         .map_err(|_| "live session lock is poisoned")? = Some(session.clone());
     spawn_silence_watchdog(app.clone(), session.clone());
+    spawn_capture_start_watchdog(app.clone(), session.clone());
     set_card_feed_target(&session);
     emit_snapshot(&app, &session);
     // The island is the tray-side control surface: only pop it when the main
@@ -1207,7 +1242,33 @@ fn validate_connections(connections: &[ConnectionDescriptor]) -> CommandResult<(
             _ => {}
         }
     }
+    // Record which upstream endpoints this session will actually dial. The
+    // query string is reduced to `model=` so signed one-shot parameters
+    // (Tencent signature, iLiveData token) never reach the log, while the
+    // Qwen realtime model name stays visible — misdirected model versus
+    // rejected API key is the first fork in diagnosing a connect 401.
+    for connection in connections {
+        log::info!(
+            "Live translation endpoint attached: source={:?} provider={} url={}",
+            connection.source,
+            connection.provider.as_deref().unwrap_or("backend"),
+            endpoint_log_label(&connection.url),
+        );
+    }
     Ok(())
+}
+
+/// Redact a connection URL for logging: keep the address and the `model=`
+/// query parameter, drop every other query entry (signed one-shot values).
+fn endpoint_log_label(url: &str) -> String {
+    let (base, query) = match url.split_once('?') {
+        Some((base, query)) => (base, query),
+        None => return url.to_owned(),
+    };
+    match query.split('&').find_map(|pair| pair.strip_prefix("model=")) {
+        Some(model) => format!("{base}?model={model}"),
+        None => base.to_owned(),
+    }
 }
 
 /// Resolve the language pair sent to Volcengine AST.
@@ -2664,6 +2725,54 @@ fn spawn_silence_watchdog(app: AppHandle, session: Arc<LiveSession>) {
     });
 }
 
+/// Start watchdog: a session that never leaves "connecting" — the capture
+/// engine wedged inside a WASAPI call, or failed before the event pump ever
+/// ran — would otherwise spin in the UI forever with no explanation. After
+/// [`CAPTURE_START_TIMEOUT`] the session is failed with a user-facing reason.
+/// A capture thread wedged inside a COM call cannot be killed and leaks for
+/// the process lifetime, but the session slot frees so the user can retry.
+fn spawn_capture_start_watchdog(app: AppHandle, session: Arc<LiveSession>) {
+    tauri::async_runtime::spawn(async move {
+        let deadline = Instant::now() + CAPTURE_START_TIMEOUT;
+        loop {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let state = session.state.lock().expect("live state lock").clone();
+            match state.as_str() {
+                "connecting" if Instant::now() < deadline => {}
+                "connecting" => break,
+                _ => return,
+            }
+        }
+        log::error!(
+            "Live translation capture start timed out after {:?} (session={})",
+            CAPTURE_START_TIMEOUT,
+            session.session_id
+        );
+        let manager = app.state::<LiveTranslationManager>();
+        let taken = manager
+            .session
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take());
+        match taken {
+            Some(current) if Arc::ptr_eq(&current, &session) => {}
+            _ => return,
+        }
+        // Signals a still-alive capture thread to wind down; one wedged
+        // inside a COM call cannot observe this (see the function comment).
+        session.capture_stop.store(false, Ordering::Relaxed);
+        clear_card_feed_target();
+        session.set_state("failed");
+        emit_snapshot(&app, &session);
+        set_recording_island_visible(&app, false);
+        emit_error(
+            &app,
+            None,
+            "启动录音超时：音频设备没有响应。请检查系统声音设置或插拔音频设备后重试。",
+        );
+    });
+}
+
 /// Drain the capture sidecar, persist the finished session and announce it.
 /// Runs in the background after `live_translation_stop` has acked.
 async fn finalize_session(app: AppHandle, session: Arc<LiveSession>) {
@@ -3546,6 +3655,13 @@ const RECORDING_ISLAND_EXPANDED_HEIGHT: f64 = 480.0;
 /// the in-flight animation thread bail on its next frame.
 static ISLAND_ANIMATION_GENERATION: AtomicU64 = AtomicU64::new(0);
 
+/// Windows WebView2 quirk (same one that hid the About/feedback popups): a
+/// window created hidden and shown before its page finishes loading can stay
+/// invisible for good. The island is created hidden and its first reveal can
+/// race the page load, so the reveal defers to the page-load hook there.
+static ISLAND_WEBVIEW_READY: AtomicBool = AtomicBool::new(false);
+static ISLAND_PENDING_REVEAL: AtomicBool = AtomicBool::new(false);
+
 /// Quintic ease-out — the "scroll snaps down" curve: a fast departure that
 /// settles silky-smooth into place.
 fn ease_out_quint(t: f64) -> f64 {
@@ -3564,12 +3680,15 @@ fn ease_in_out_cubic(t: f64) -> f64 {
 /// Steps the island window height towards `target_height` with an eased curve,
 /// re-anchored to wherever the window currently is each frame. The webview
 /// reflows live under the native vibrancy, so the frosted surface and the
-/// transcript drawer unroll downward together.
+/// transcript drawer unroll downward together — or upward on Windows, where
+/// `bottom_anchor` pins the pill's bottom edge above the taskbar and the
+/// height change moves the top edge instead.
 fn animate_island_height(
     window: WebviewWindow,
     target_height: f64,
     expand: bool,
     generation: u64,
+    bottom_anchor: Option<f64>,
 ) {
     let scale = window.scale_factor().unwrap_or(1.0);
     let Ok(size) = window.inner_size() else {
@@ -3591,6 +3710,7 @@ fn animate_island_height(
         };
         let height = from_height + (target_height - from_height) * eased;
         let _ = window.set_size(tauri::LogicalSize::new(width, height));
+        keep_island_bottom(&window, bottom_anchor);
         if linear >= 1.0 || ISLAND_ANIMATION_GENERATION.load(Ordering::Relaxed) != generation {
             return;
         }
@@ -3598,47 +3718,118 @@ fn animate_island_height(
     }
 }
 
-/// Positions the island pill directly below the menu-bar tray icon (top-right
-/// of the screen) so it reads as a companion of the status item. Falls back
-/// to top-centre when the tray rect is unavailable.
+/// Positions the island pill next to the tray icon: on macOS directly below
+/// the menu-bar status item (top-right, unrolling downward); on Windows just
+/// above the taskbar's tray area (bottom-right, unrolling upward — the
+/// dynamic island on the opposite screen edge). Falls back to the screen
+/// centre (macOS) / right edge (Windows) when the tray rect is unavailable.
 fn position_recording_island(app: &AppHandle, window: &tauri::WebviewWindow) {
     let Some(monitor) = app.primary_monitor().ok().flatten() else {
         return;
     };
     let factor = monitor.scale_factor() as f64;
-    let (mut x, mut y) = {
-        let tray_x = monitor.position().x as f64 / factor;
-        let tray_y = monitor.position().y as f64 / factor;
-        let w = monitor.size().width as f64 / factor;
-        (tray_x + (w - RECORDING_ISLAND_WIDTH) / 2.0, tray_y + 4.0)
-    };
-    if let Some(tray) = app.tray_by_id("main-tray") {
-        if let Ok(Some(rect)) = tray.rect() {
-            // Tray rect comes back as a dpi enum; normalise both arms to
-            // logical pixels so the window position math stays consistent.
-            let tray_x = match &rect.position {
-                tauri::Position::Physical(p) => p.x as f64 / factor,
-                tauri::Position::Logical(l) => l.x,
-            };
-            let tray_y = match &rect.position {
-                tauri::Position::Physical(p) => p.y as f64 / factor,
-                tauri::Position::Logical(l) => l.y,
-            };
-            let tray_w = match &rect.size {
-                tauri::Size::Physical(s) => s.width as f64 / factor,
-                tauri::Size::Logical(s) => s.width,
-            };
-            let tray_h = match &rect.size {
-                tauri::Size::Physical(s) => s.height as f64 / factor,
-                tauri::Size::Logical(s) => s.height,
-            };
-            // Right-align the island under the status item; keep it on
-            // screen for edge-of-menu-bar placements.
-            x = (tray_x + tray_w - RECORDING_ISLAND_WIDTH).max(0.0);
-            y = tray_y + tray_h + 4.0;
+
+    #[cfg(target_os = "windows")]
+    {
+        // The work area excludes the taskbar, so its bottom edge is exactly
+        // where the island's full-height bottom should rest.
+        let work_area = monitor.work_area();
+        let left = work_area.position.x as f64 / factor;
+        let right = (work_area.position.x + work_area.size.width as i32) as f64 / factor;
+        let bottom = (work_area.position.y + work_area.size.height as i32) as f64 / factor;
+        let mut x = right - RECORDING_ISLAND_WIDTH - 8.0;
+        if let Some(tray) = app.tray_by_id("main-tray") {
+            if let Ok(Some(rect)) = tray.rect() {
+                let tray_left = match &rect.position {
+                    tauri::Position::Physical(p) => p.x as f64 / factor,
+                    tauri::Position::Logical(l) => l.x,
+                };
+                let tray_w = match &rect.size {
+                    tauri::Size::Physical(s) => s.width as f64 / factor,
+                    tauri::Size::Logical(s) => s.width,
+                };
+                // Right-align the island with the tray icons, clamped to the
+                // work area for exotic taskbar placements.
+                x = (tray_left + tray_w - RECORDING_ISLAND_WIDTH).max(left);
+            }
         }
+        let y = bottom - 4.0 - RECORDING_ISLAND_HEIGHT;
+        let _ = window.set_position(LogicalPosition::new(x, y));
     }
-    let _ = window.set_position(LogicalPosition::new(x, y));
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let (mut x, mut y) = {
+            let tray_x = monitor.position().x as f64 / factor;
+            let tray_y = monitor.position().y as f64 / factor;
+            let w = monitor.size().width as f64 / factor;
+            (tray_x + (w - RECORDING_ISLAND_WIDTH) / 2.0, tray_y + 4.0)
+        };
+        if let Some(tray) = app.tray_by_id("main-tray") {
+            if let Ok(Some(rect)) = tray.rect() {
+                // Tray rect comes back as a dpi enum; normalise both arms to
+                // logical pixels so the window position math stays consistent.
+                let tray_x = match &rect.position {
+                    tauri::Position::Physical(p) => p.x as f64 / factor,
+                    tauri::Position::Logical(l) => l.x,
+                };
+                let tray_y = match &rect.position {
+                    tauri::Position::Physical(p) => p.y as f64 / factor,
+                    tauri::Position::Logical(l) => l.y,
+                };
+                let tray_w = match &rect.size {
+                    tauri::Size::Physical(s) => s.width as f64 / factor,
+                    tauri::Size::Logical(s) => s.width,
+                };
+                let tray_h = match &rect.size {
+                    tauri::Size::Physical(s) => s.height as f64 / factor,
+                    tauri::Size::Logical(s) => s.height,
+                };
+                // Right-align the island under the status item; keep it on
+                // screen for edge-of-menu-bar placements.
+                x = (tray_x + tray_w - RECORDING_ISLAND_WIDTH).max(0.0);
+                y = tray_y + tray_h + 4.0;
+            }
+        }
+        let _ = window.set_position(LogicalPosition::new(x, y));
+    }
+}
+
+/// Logical Y of the island window's BOTTOM edge — just above the Windows
+/// taskbar. `None` on macOS, where the island hangs from the menu bar by its
+/// top edge instead and never needs bottom-anchoring.
+fn island_bottom_anchor(app: &AppHandle) -> Option<f64> {
+    #[cfg(target_os = "windows")]
+    {
+        let monitor = app.primary_monitor().ok().flatten()?;
+        let factor = monitor.scale_factor() as f64;
+        let work_area = monitor.work_area();
+        let bottom = (work_area.position.y + work_area.size.height as i32) as f64 / factor;
+        Some(bottom - 4.0)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        None
+    }
+}
+
+/// Keeps the island's bottom edge pinned to `bottom_y` (logical) at its
+/// current x, whatever its height is at the moment. No-op on macOS (anchor
+/// is `None` there): the top-anchored window just grows downward natively.
+fn keep_island_bottom(window: &tauri::WebviewWindow, bottom_y: Option<f64>) {
+    let Some(bottom_y) = bottom_y else {
+        return;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let Ok(pos) = window.outer_position() else {
+        return;
+    };
+    let height = window
+        .inner_size()
+        .map(|size| size.height as f64 / scale)
+        .unwrap_or(0.0);
+    let _ = window.set_position(LogicalPosition::new(pos.x as f64 / scale, bottom_y - height));
 }
 
 /// True when the main window is on screen: visible and not Dock-minimized.
@@ -3660,6 +3851,9 @@ pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
         if visible {
             reveal_recording_island(app, &window);
         } else {
+            // Drop any reveal still queued behind the page load, so a session
+            // that ended before the webview was ready never pops the island.
+            ISLAND_PENDING_REVEAL.store(false, Ordering::Release);
             let _ = window.hide();
         }
         return;
@@ -3682,9 +3876,20 @@ pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
     // The pill renders its own rounded shadow inside the transparent
     // webview; the system window shadow would trace a rectangle around it.
     .shadow(false)
-    // Created hidden: `reveal_recording_island` below unrolls it under the
-    // tray icon instead of popping in at full size.
-    .visible(false);
+    // Created hidden: `reveal_recording_island` below unrolls it at the tray
+    // anchor instead of popping in at full size.
+    .visible(false)
+    .on_page_load(|window, payload| {
+        if payload.event() == PageLoadEvent::Finished {
+            ISLAND_WEBVIEW_READY.store(true, Ordering::Release);
+            // A reveal requested while the page was still loading (Windows
+            // gate below) replays now that showing is safe.
+            if ISLAND_PENDING_REVEAL.swap(false, Ordering::AcqRel) {
+                let app = window.app_handle().clone();
+                reveal_recording_island(&app, &window);
+            }
+        }
+    });
     let window = match builder.build() {
         Ok(window) => window,
         Err(error) => {
@@ -3702,14 +3907,22 @@ pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
     reveal_recording_island(app, &window);
 }
 
-/// The island's entrance: snap back below the tray icon (even if the user
+/// The island's entrance: snap back to the tray anchor (even if the user
 /// dragged the pill elsewhere previously), show as a thin sliver hugging the
-/// status bar, then unroll to full height with the drawer's quintic ease —
-/// the capsule reads as growing straight out of the status-bar icon, directly
-/// above which the window is anchored. Any in-flight drawer animation is
+/// tray, then unroll to full height with the quintic ease — macOS reads it as
+/// the capsule growing out of the status bar (downward), Windows as it
+/// sprouting up from the taskbar tray area. Any in-flight drawer animation is
 /// superseded via the shared generation token.
 fn reveal_recording_island(app: &AppHandle, window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    if !ISLAND_WEBVIEW_READY.load(Ordering::Acquire) {
+        // Page not loaded yet — showing now risks the invisible-window
+        // quirk. The page-load hook replays this reveal when safe.
+        ISLAND_PENDING_REVEAL.store(true, Ordering::Release);
+        return;
+    }
     position_recording_island(app, window);
+    let bottom_anchor = island_bottom_anchor(app);
     let scale = window.scale_factor().unwrap_or(1.0);
     let Ok(size) = window.inner_size() else {
         let _ = window.show();
@@ -3721,21 +3934,28 @@ fn reveal_recording_island(app: &AppHandle, window: &tauri::WebviewWindow) {
     let target_height = (size.height as f64 / scale).max(RECORDING_ISLAND_HEIGHT);
     let generation = ISLAND_ANIMATION_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
     let _ = window.set_size(tauri::LogicalSize::new(width, 12.0));
+    // Bottom-anchored hosts (Windows) must start the sliver at its final
+    // bottom edge, or the first animation frames would jump it downward.
+    keep_island_bottom(window, bottom_anchor);
     let _ = window.show();
     let window = window.clone();
-    thread::spawn(move || animate_island_height(window, target_height, true, generation));
+    thread::spawn(move || {
+        animate_island_height(window, target_height, true, generation, bottom_anchor)
+    });
 }
 
 /// Grows or shrinks the recording-island window between the compact pill and
-/// the expanded live-transcript drawer. The window is top-anchored under the
-/// tray icon, so expanding always unfolds downward, dynamic-island style. The
-/// height change is eased over ~1/3 of a second (see `animate_island_height`)
-/// instead of snapping, so the drawer reads as a scroll unrolling.
+/// the expanded live-transcript drawer. The window is tray-anchored, so
+/// expanding unfolds away from the screen edge it is pinned to — downward on
+/// macOS (menu bar), upward on Windows (taskbar). The height change is eased
+/// over ~1/3 of a second (see `animate_island_height`) instead of snapping,
+/// so the drawer reads as a scroll unrolling.
 #[tauri::command]
 pub fn live_translation_expand_island(app: AppHandle, expand: bool) -> CommandResult<()> {
     let Some(window) = app.get_webview_window("recording-island") else {
         return Ok(());
     };
+    let bottom_anchor = island_bottom_anchor(&app);
     let generation = ISLAND_ANIMATION_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
     let target_height = if expand {
         RECORDING_ISLAND_EXPANDED_HEIGHT
@@ -3744,7 +3964,9 @@ pub fn live_translation_expand_island(app: AppHandle, expand: bool) -> CommandRe
     };
     // The animation runs off the command thread and returns immediately, so
     // the frontend can mount the drawer while the window is still unrolling.
-    thread::spawn(move || animate_island_height(window, target_height, expand, generation));
+    thread::spawn(move || {
+        animate_island_height(window, target_height, expand, generation, bottom_anchor)
+    });
     Ok(())
 }
 
@@ -4297,7 +4519,7 @@ mod tests {
     fn requires_api_key_for_qwen_connections() {
         let missing_key = vec![ConnectionDescriptor {
             source: AudioSource::Mic,
-            url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-livetranslate-flash-realtime".to_owned(),
+            url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.8-livetranslate-flash-realtime".to_owned(),
             provider: Some("qwen".to_owned()),
             api_key: None,
             extra: None,
@@ -4305,7 +4527,7 @@ mod tests {
         assert!(validate_connections(&missing_key).is_err());
         let with_key = vec![ConnectionDescriptor {
             source: AudioSource::Mic,
-            url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-livetranslate-flash-realtime".to_owned(),
+            url: "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.8-livetranslate-flash-realtime".to_owned(),
             provider: Some("qwen".to_owned()),
             api_key: Some("sk-test".to_owned()),
             extra: None,

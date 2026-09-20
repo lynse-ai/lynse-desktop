@@ -9,6 +9,51 @@ export type AppUpdateInfo = {
   publishedAt?: string | null;
 };
 
+/**
+ * The stable updater manifest on Tencent CloudBase static hosting — the same
+ * file tauri-plugin-updater polls first (endpoints live in
+ * `apps/tauri/src-tauri/tauri.conf.json`). Fetched directly so the About page
+ * can show the release notes even when there is nothing to update: the
+ * updater plugin only surfaces the notes body when an update is available.
+ * The hosting gateway reflects the request origin in CORS and serves
+ * no-store, so the read is always fresh.
+ */
+const UPDATES_MANIFEST_URL =
+  "https://lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com/updates/latest.json";
+
+export interface LatestReleaseNotes {
+  version: string;
+  notes: string;
+  pubDate?: string;
+}
+
+/**
+ * Read the published release notes from CloudBase. Resolves null when the
+ * manifest is unreachable, malformed, or has no notes — callers just hide
+ * the notes block, which must never block the page.
+ */
+export async function fetchLatestReleaseNotes(): Promise<LatestReleaseNotes | null> {
+  try {
+    const res = await fetch(UPDATES_MANIFEST_URL);
+    if (!res.ok) return null;
+    const body = (await res.json()) as {
+      version?: unknown;
+      notes?: unknown;
+      pub_date?: unknown;
+    };
+    const version = typeof body.version === "string" ? body.version : null;
+    const notes = typeof body.notes === "string" ? body.notes.trim() : "";
+    if (!version || !notes) return null;
+    return {
+      version,
+      notes,
+      pubDate: typeof body.pub_date === "string" ? body.pub_date : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Serializable download/install progress reported by the desktop bridge. */
 export type UpdateDownloadProgress = {
   event: "started" | "progress" | "finished";

@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { api } from "@lynse/core/api";
 import type {
+  ChatAssistant,
   ChatMessage,
   ChatStreamEvent,
   ChatConfirm,
@@ -13,8 +14,19 @@ import {
   extractConfirmFromText,
   type ChatTransport,
 } from "../chat-transport";
+import {
+  WorkBuddyChatTransport,
+  fetchWorkBuddyThreadSlice,
+  isWorkBuddyAuthError,
+} from "../workbuddy-chat-transport";
 import { redactMeetingIds } from "../meeting-id-redact";
-import { conversationTitle, loadChatHistory, saveChatHistory } from "../chat-history";
+import {
+  conversationTitle,
+  loadAssistantChoice,
+  loadChatHistory,
+  saveAssistantChoice,
+  saveChatHistory,
+} from "../chat-history";
 import { toast } from "sonner";
 import { useNotificationStore } from "../../notifications/use-notification-store";
 
@@ -172,6 +184,20 @@ function makeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** The single continuous WorkBuddy thread (locally: newest one wins). */
+function latestWorkBuddyConversation(conversations: ChatConversation[]): ChatConversation | undefined {
+  return conversations
+    .filter((c) => c.provider === "workbuddy")
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+}
+
+/** Newest cloud conversation, for restoring the panel/page's cloud view. */
+function latestCloudConversation(conversations: ChatConversation[]): ChatConversation | undefined {
+  return conversations
+    .filter((c) => c.provider !== "workbuddy")
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+}
+
 function readLynseToken(): string | null {
   // The shared client holds the live session token — on desktop the token
   // lives in the OS keychain, so localStorage is only a web fallback.
@@ -225,6 +251,10 @@ interface ChatStoreState {
   isLoading: boolean;
   conversations: ChatConversation[];
   activeConversationId: string | null;
+  /** Which assistant the chat page is talking to ("小灵助手" or WorkBuddy). */
+  activeAssistant: ChatAssistant;
+  /** Cloud conversation to restore when switching back from WorkBuddy. */
+  lastCloudConversationId: string | null;
   pendingConfirm: { messageId: string; confirm: ChatConfirm } | null;
   /** Conversations with a reply currently streaming (active + background). */
   workingConversationIds: string[];
@@ -237,11 +267,15 @@ interface ChatStoreState {
   setUserId: (userId: string) => void;
   hydrate: () => void;
   setChatVisible: (visible: boolean) => void;
+  setActiveAssistant: (assistant: ChatAssistant) => void;
+  /** Pull newer WorkBuddy thread messages from the server into local history. */
+  syncWorkBuddyThread: () => Promise<void>;
   sendMessage: (
     content: string,
     fileIds?: string | string[],
     userSpecifiedFile?: boolean,
     attachments?: ChatAttachment[],
+    opts?: { assistant?: ChatAssistant },
   ) => void;
   answerConfirm: (messageId: string, value: string) => void;
   dismissConfirm: (messageId: string) => void;
@@ -441,7 +475,10 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
               [conversationId]: (s.unreadCounts[conversationId] ?? 0) + 1,
             },
           }));
-          if (get().chatVisible === 0) toast.success("AI 助手已完成回复");
+          if (get().chatVisible === 0) {
+            const doneProvider = get().conversations.find((c) => c.id === conversationId)?.provider;
+            toast.success(doneProvider === "workbuddy" ? "Work buddy 已完成回复" : "小灵助手已完成回复");
+          }
           // Mirror into the unified notification center (drives the Bell badge).
           const convTitle = (get().conversations.find((c) => c.id === conversationId)?.title ?? "").trim();
           const unread = get().unreadCounts[conversationId] ?? 1;
@@ -461,11 +498,41 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         writeMessage((m) => ({ ...m, confirm: evt.confirm }));
         if (isActive()) set({ pendingConfirm: { messageId: assistantId, confirm: evt.confirm } });
         break;
+      case "workbuddy_seen": {
+        // Mirror the server message id onto the local message so thread
+        // catch-ups skip what a live turn already rendered.
+        if (evt.role === "assistant") {
+          writeMessage((m) => ({ ...m, serverId: evt.serverId }));
+          break;
+        }
+        const markLastUser = (list: ChatMessage[]) => {
+          for (let i = list.length - 1; i >= 0; i -= 1) {
+            if (list[i]!.role === "user") {
+              return list.map((m, index) =>
+                index === i && !m.serverId ? { ...m, serverId: evt.serverId } : m,
+              );
+            }
+          }
+          return list;
+        };
+        if (isActive()) setMessages(markLastUser);
+        else {
+          setConversations((prev) =>
+            prev.map((c) =>
+              c.id === conversationId ? { ...c, messages: markLastUser(c.messages) } : c,
+            ),
+          );
+        }
+        break;
+      }
       case "error":
         writeMessage((m) => ({
           ...m,
-          content: m.content || `Error: ${evt.message}`,
+          // An authorization failure renders its own inline authorize card —
+          // keep the placeholder content clean instead of "Error: <key>".
+          content: evt.workbuddyAuthRequired ? m.content : m.content || `Error: ${evt.message}`,
           error: true,
+          workbuddyAuthRequired: evt.workbuddyAuthRequired || m.workbuddyAuthRequired,
           status: undefined,
         }));
         break;
@@ -478,16 +545,17 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     userSpecifiedFile = false,
     attachments?: ChatAttachment[],
     confirmToken?: string | null,
+    opts?: { assistant?: ChatAssistant },
   ) => {
     if (!content.trim()) return;
     const userId = get().userId;
+    const assistant = opts?.assistant ?? get().activeAssistant;
     const fileIds = Array.isArray(fileIdsInput) ? fileIdsInput : fileIdsInput ? [fileIdsInput] : [];
     // Mentioned notes/groups scope retrieval just like a selected file does.
     const hasContextFiles = userSpecifiedFile || fileIds.length > 0;
 
-    let conversationId = get().activeConversationId;
     // One in-flight turn per conversation…
-    if (conversationId && runs.has(conversationId)) return;
+    if (get().activeConversationId && runs.has(get().activeConversationId!)) return;
     // …and at most MAX_CONCURRENT_CHATS conversations streaming at once. Check
     // before creating a new conversation so a rejected send leaves no empty
     // conversation behind.
@@ -496,21 +564,49 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       return;
     }
 
-    if (!conversationId) {
-      const now = Date.now();
-      conversationId = makeId("conversation");
-      const conversation: ChatConversation = {
-        id: conversationId,
-        title: conversationTitle(content),
-        messages: [],
-        provider: "cloud",
-        createdAt: now,
-        updatedAt: now,
-      };
-      set((s) => ({
-        activeConversationId: conversationId,
-        conversations: [conversation, ...s.conversations],
-      }));
+    // Resolve the turn's conversation. WorkBuddy is a single continuous
+    // thread: reuse it when it exists instead of starting a new conversation.
+    let conversationId = get().activeConversationId;
+    const currentConv = get().conversations.find((c) => c.id === conversationId);
+    const currentMatches =
+      assistant === "workbuddy"
+        ? currentConv?.provider === "workbuddy"
+        : currentConv != null && currentConv.provider !== "workbuddy";
+    if (conversationId && currentMatches) {
+      // keep the current conversation
+    } else {
+      // A null active id means "new chat" — always start a fresh conversation.
+      // A non-null id whose provider belongs to the OTHER assistant (the
+      // right-panel stays pinned to the cloud channel) resolves that side's
+      // thread instead.
+      const existing = conversationId
+        ? assistant === "workbuddy"
+          ? latestWorkBuddyConversation(get().conversations)
+          : (get().lastCloudConversationId != null
+              ? get().conversations.find(
+                  (c) => c.id === get().lastCloudConversationId && c.provider !== "workbuddy",
+                )
+              : undefined) ?? latestCloudConversation(get().conversations)
+        : undefined;
+      if (existing) {
+        conversationId = existing.id;
+        set({ activeConversationId: conversationId, messages: existing.messages });
+      } else {
+        const now = Date.now();
+        conversationId = makeId("conversation");
+        const conversation: ChatConversation = {
+          id: conversationId,
+          title: conversationTitle(content),
+          messages: [],
+          provider: assistant === "workbuddy" ? "workbuddy" : "cloud",
+          createdAt: now,
+          updatedAt: now,
+        };
+        set((s) => ({
+          activeConversationId: conversationId,
+          conversations: [conversation, ...s.conversations],
+        }));
+      }
     }
 
     const assistantId = makeId("assistant");
@@ -532,7 +628,8 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
     set({ isLoading: true });
 
-    const transport = new PollChatTransport();
+    const transport: ChatTransport =
+      assistant === "workbuddy" ? new WorkBuddyChatTransport() : new PollChatTransport();
     const controller = new AbortController();
     runs.set(conversationId, { conversationId, assistantId, transport, controller });
     syncRunState();
@@ -595,9 +692,13 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         recordPerf(timing.completed);
         // Poll has no partial content: a stopped turn leaves an empty
         // placeholder bubble that would otherwise spin "thinking" forever —
-        // drop it (keep it when anything, e.g. an error text, was written).
+        // drop it (keep it when anything, e.g. an error text or the
+        // WorkBuddy authorize card, was written into it).
         const emptyPlaceholder = (m: ChatMessage) =>
-          m.id === assistantId && m.role === "assistant" && !m.content;
+          m.id === assistantId &&
+          m.role === "assistant" &&
+          !m.content &&
+          !m.workbuddyAuthRequired;
         setMessages((prev) => prev.filter((m) => !emptyPlaceholder(m)));
         setConversations((prev) =>
           prev.map((c) =>
@@ -626,6 +727,8 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     isLoading: false,
     conversations: [],
     activeConversationId: null,
+    activeAssistant: "lynse",
+    lastCloudConversationId: null,
     pendingConfirm: null,
     workingConversationIds: [],
     unreadCounts: {},
@@ -645,6 +748,122 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         activeConversationId: history.activeConversationId,
         messages: active?.messages ?? [],
       });
+      // Restore the persisted assistant choice; WorkBuddy comes back with its
+      // own thread on screen and a background catch-up for missed replies.
+      const assistant = loadAssistantChoice(userId);
+      if (assistant === "workbuddy") {
+        const wb = latestWorkBuddyConversation(history.conversations);
+        set({
+          activeAssistant: "workbuddy",
+          lastCloudConversationId: history.activeConversationId,
+          activeConversationId: wb?.id ?? null,
+          messages: wb?.messages ?? [],
+        });
+        void get().syncWorkBuddyThread();
+      }
+    },
+
+    setActiveAssistant: (assistant) => {
+      if (assistant === get().activeAssistant) return;
+      saveAssistantChoice(get().userId, assistant);
+      if (assistant === "workbuddy") {
+        // Remember where the cloud view was so switching back restores it.
+        const currentConv = get().conversations.find((c) => c.id === get().activeConversationId);
+        const lastCloudId =
+          currentConv && currentConv.provider !== "workbuddy"
+            ? currentConv.id
+            : get().lastCloudConversationId;
+        const wb = latestWorkBuddyConversation(get().conversations);
+        set({
+          activeAssistant: "workbuddy",
+          lastCloudConversationId: lastCloudId,
+          activeConversationId: wb?.id ?? null,
+          messages: wb?.messages ?? [],
+          pendingConfirm: null,
+        });
+        void get().syncWorkBuddyThread();
+      } else {
+        const cloudId = get().lastCloudConversationId;
+        const conv = cloudId
+          ? get().conversations.find((c) => c.id === cloudId && c.provider !== "workbuddy")
+          : undefined;
+        set({
+          activeAssistant: "lynse",
+          activeConversationId: conv?.id ?? null,
+          messages: conv?.messages ?? [],
+          pendingConfirm: null,
+        });
+      }
+    },
+
+    syncWorkBuddyThread: async () => {
+      if (get().activeAssistant !== "workbuddy") return;
+      // A live turn owns the thread view; its own polling covers new messages.
+      const inFlight = latestWorkBuddyConversation(get().conversations);
+      if (inFlight && runs.has(inFlight.id)) return;
+      let entries;
+      try {
+        entries = await fetchWorkBuddyThreadSlice();
+      } catch (error) {
+        if (!isWorkBuddyAuthError(error)) {
+          console.warn("[workbuddy-chat] thread sync failed", error);
+        }
+        return;
+      }
+      if (entries.length === 0) return;
+      const current = get();
+      if (current.activeAssistant !== "workbuddy") return;
+      let conv = latestWorkBuddyConversation(current.conversations);
+      const known = new Set((conv?.messages ?? []).map((m) => m.serverId));
+      const fresh = entries.filter((entry) => {
+        if (known.has(entry.serverId)) return false;
+        // User messages sent from this app before server ids were mirrored
+        // carry none — match by identical content so they don't double up.
+        if (
+          entry.role === "user" &&
+          (conv?.messages ?? []).some(
+            (m) => m.role === "user" && !m.serverId && m.content.trim() === entry.content.trim(),
+          )
+        ) {
+          return false;
+        }
+        return true;
+      });
+      if (fresh.length === 0) return;
+      if (!conv) {
+        const now = Date.now();
+        const firstUser = entries.find((entry) => entry.role === "user");
+        conv = {
+          id: makeId("conversation"),
+          title: conversationTitle(firstUser?.content || "Work buddy"),
+          messages: [],
+          provider: "workbuddy",
+          createdAt: now,
+          updatedAt: now,
+        };
+        set((s) => ({ conversations: [conv!, ...s.conversations] }));
+      }
+      const mapped: ChatMessage[] = fresh.map((entry) => ({
+        id: makeId("wb"),
+        role: entry.role,
+        content: entry.content,
+        timestamp: entry.timestamp,
+        serverId: entry.serverId,
+        attachments: entry.attachments.length ? entry.attachments : undefined,
+      }));
+      const merged = [...(conv.messages ?? []), ...mapped].sort((a, b) => a.timestamp - b.timestamp);
+      const convId = conv.id;
+      // When the thread is on screen the `messages` buffer must move too —
+      // the persist subscriber would otherwise overwrite the merge. A null
+      // active id (no local thread yet) activates the recovered one.
+      const shouldActivate = get().activeConversationId == null;
+      set((s) => ({
+        activeConversationId: shouldActivate ? convId : s.activeConversationId,
+        messages: shouldActivate || s.activeConversationId === convId ? merged : s.messages,
+        conversations: s.conversations.map((c) =>
+          c.id === convId ? { ...c, messages: merged, updatedAt: Date.now() } : c,
+        ),
+      }));
     },
 
     setChatVisible: (visible) => {
@@ -663,9 +882,9 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       }
     },
 
-    sendMessage: (content, fileIds, userSpecifiedFile, attachments) => {
+    sendMessage: (content, fileIds, userSpecifiedFile, attachments, opts) => {
       if (!content.trim()) return;
-      runSend(content, fileIds, userSpecifiedFile, attachments);
+      runSend(content, fileIds, userSpecifiedFile, attachments, undefined, opts);
     },
 
     answerConfirm: (messageId, value) => {
@@ -695,7 +914,9 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     clearMessages: () => {
       // Start a new chat. Any running turn keeps streaming in the background
       // and writes into its own conversation — the user can stop it from the
-      // composer after switching back to that conversation.
+      // composer after switching back to that conversation. WorkBuddy has a
+      // single continuous server thread, so "new chat" does not apply there.
+      if (get().activeAssistant === "workbuddy") return;
       set({
         activeConversationId: null,
         messages: [],
@@ -710,6 +931,12 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       if (conversationId === get().activeConversationId) return;
       const conversation = get().conversations.find((c) => c.id === conversationId);
       if (!conversation) return;
+      // Picking the WorkBuddy thread is an assistant switch, not a
+      // conversation switch — it carries its own provider everywhere.
+      if (conversation.provider === "workbuddy") {
+        get().setActiveAssistant("workbuddy");
+        return;
+      }
       // Opening a conversation marks its replies read. Switching never
       // interrupts streams — every run writes into its own conversation.
       set((s) => {

@@ -8,6 +8,25 @@
 > the history (that commit documents a `vA.B.C(N)` build-counter tag
 > convention), so they are not listed either.
 
+## 1.0.6 (2026-09-20)
+
+### New Features
+
+- WorkBuddy joins the chat page. The assistant picker at the top now reads 小灵助手 and switches to Work buddy, and the conversation runs through your authorized WorkBuddy account — ask it for a document and it arrives as an attachment in the reply. When authorization is missing, the chat itself walks you through it instead of sending you to settings.
+- The About page shows what's new: the published release notes are read from the update source (CloudBase) and displayed next to the version, so checking for updates also tells you what you would be getting.
+
+### Changed
+
+- Live translation switches to the qwen3.8-livetranslate-flash-realtime model; older sessions keep working through the migration, and a toast confirms which engine is actually serving the session.
+- The voice-enhancement control on the recording page is a real switch now, with a slash-marked icon for the off state instead of a caption toggle.
+
+### Fixed
+
+- Windows: the About and Feedback windows that sometimes failed to appear now surface an error toast and fall back to the in-app dialog / feedback board instead of doing nothing.
+- Windows: the recording island anchors above the taskbar and grows upward — capsule at the bottom edge, live transcript unfolding above it, mirroring the macOS layout.
+- Live translation reports capture-layer failures (missing microphone, wedged engine) as a toast before recording starts, so the reason is visible rather than buried in the corner alert.
+- Windows capture logging gained step markers (probe results, track writers opened) so a start that hangs on one machine can be told apart from a start that fails.
+
 ## 1.0.5 (2026-09-20)
 
 ### New Features

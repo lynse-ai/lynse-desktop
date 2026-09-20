@@ -1,13 +1,15 @@
 "use client";
 
-import { Fragment } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
 import {
+  fetchLatestReleaseNotes,
   getAppInfoSync,
   getDesktopAppApi,
   openAppUpdateDialog,
   useAppUpdate,
+  type LatestReleaseNotes,
 } from "../app-update";
 import { openLogsFolder, openReportProblemDialog } from "../diagnostics";
 import { LYNSE_APP_ICON_SRC } from "./app-icon";
@@ -46,6 +48,22 @@ export function AboutContent() {
   const hasUpdate = Boolean(update?.hasUpdate);
   const year = new Date().getFullYear();
 
+  // "What's new" block: read straight from the CloudBase updater manifest so
+  // the page can show the current release's notes without waiting for a
+  // pending update (the updater plugin only exposes notes then). Desktop
+  // only — the manifest's CORS whitelist is not guaranteed for web origins.
+  const [latestNotes, setLatestNotes] = useState<LatestReleaseNotes | null>(null);
+  useEffect(() => {
+    if (!isDesktop) return;
+    let cancelled = false;
+    void fetchLatestReleaseNotes().then((notes) => {
+      if (!cancelled) setLatestNotes(notes);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isDesktop]);
+
   const links = [
     { label: t("about.website"), url: WEBSITE_URL },
     { label: t("about.terms"), url: TERMS_URL },
@@ -82,6 +100,22 @@ export function AboutContent() {
             ? t("settings.checking_update")
             : t("settings.check_update")}
       </Button>
+
+      {/* What's new in the published release, straight from the updater
+          manifest on CloudBase. Hidden silently when unreachable. */}
+      {latestNotes && (
+        <div className="mt-4 w-full max-w-xs rounded-lg border border-border/60 bg-muted/30 px-3.5 py-3 text-left">
+          <p className="text-2xs font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
+            {t("about.release_notes")}
+            <span className="ms-1.5 font-normal tabular-nums tracking-normal">
+              v{latestNotes.version}
+            </span>
+          </p>
+          <p className="mt-1.5 whitespace-pre-line text-2xs leading-5 text-muted-foreground">
+            {latestNotes.notes}
+          </p>
+        </div>
+      )}
 
       {/* Legal links, separated by hairlines like a native About panel. */}
       <div className="mt-6 flex items-center text-xs text-muted-foreground">

@@ -35,7 +35,7 @@ import {
   Square,
   Volume2,
 } from "../icons";
-import { requestRealtimeSession } from "./api";
+import { realtimeEngineLabel, requestRealtimeSession } from "./api";
 import { useNavigation } from "../navigation";
 import { useLiveTranslation } from "./use-live-translation";
 import {
@@ -361,6 +361,11 @@ export function LiveTranslationPage() {
             epoch: credentials.epoch,
             connections: credentials.connections,
           });
+          // Confirm the engine actually attached, read from the connection URL.
+          const engineUrl = credentials.connections[0]?.url;
+          if (engineUrl) {
+            toast(t("live_translation.engine_attached", { engine: realtimeEngineLabel(engineUrl) }));
+          }
         } catch (error) {
           // The recording keeps running; live text is simply unavailable.
           toast.warning(String(error));
@@ -439,6 +444,11 @@ export function LiveTranslationPage() {
         epoch: credentials.epoch,
         connections: credentials.connections,
       });
+      // Confirm the engine actually attached, read from the connection URL.
+      const engineUrl = credentials.connections[0]?.url;
+      if (engineUrl) {
+        toast(t("live_translation.engine_attached", { engine: realtimeEngineLabel(engineUrl) }));
+      }
     } catch (error) {
       toast.error(t("live_translation.resume_failed"), { description: String(error) });
     } finally {

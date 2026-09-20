@@ -53,7 +53,7 @@ export interface LiveTranslationProviderConfig {
 }
 
 export const DEFAULT_QWEN_ENDPOINT =
-  "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-livetranslate-flash-realtime";
+  "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.8-livetranslate-flash-realtime";
 
 export const DEFAULT_VOLC_AST_ENDPOINT =
   "wss://openspeech.bytedance.com/api/v4/ast/v2/translate";

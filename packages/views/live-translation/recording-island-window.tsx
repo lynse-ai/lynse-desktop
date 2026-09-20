@@ -6,7 +6,7 @@ import { initI18n } from "@lynse/core/i18n";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { DynamicIsland } from "./dynamic-island";
 import { IslandTranscriptDrawer } from "./island-transcript-drawer";
-import { requestRealtimeSession } from "./api";
+import { realtimeEngineLabel, requestRealtimeSession } from "./api";
 import { RESOURCES } from "../locales";
 import { useLiveTranslation } from "./use-live-translation";
 import type { LiveConnectionDescriptor, LiveTranslationTrayAction } from "./types";
@@ -70,6 +70,11 @@ export function RecordingIslandWindow() {
           epoch: credentials.epoch,
           connections: credentials.connections,
         });
+        // Confirm the engine actually attached, read from the connection URL.
+        const engineUrl = credentials.connections[0]?.url;
+        if (engineUrl) {
+          toast(t("live_translation.engine_attached", { engine: realtimeEngineLabel(engineUrl) }));
+        }
       } catch (error) {
         toast.warning(String(error));
       }

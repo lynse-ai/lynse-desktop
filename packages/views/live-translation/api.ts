@@ -16,6 +16,19 @@ export function audioModeSources(mode: LiveAudioSourceMode | undefined): LiveAud
   return ["mic", "system"];
 }
 
+/** Human-readable identity of the endpoint a session is actually about to
+ * dial: the `model` query parameter when present (Qwen realtime), otherwise
+ * the host. Derived from the connection URL itself — never from the saved
+ * config — so the confirmation shown to the user is what will really run. */
+export function realtimeEngineLabel(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return parsed.searchParams.get("model") ?? parsed.host;
+  } catch {
+    return url;
+  }
+}
+
 interface RealtimeSessionRequest {
   workspaceId?: string;
   sourceLanguage: string;

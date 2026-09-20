@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   ArrowDown,
   ArrowUp,
   BookOpen,
+  Briefcase,
   CalendarDays,
   Check,
   ChevronLeft,
@@ -18,9 +19,11 @@ import {
   Image,
   ListChecks,
   ListOrdered,
+  Loader2,
   Mic,
   Pencil,
   Plus,
+  RefreshCw,
   Sparkles,
   Square,
 } from "../icons";
@@ -29,6 +32,13 @@ import { Textarea } from "@lynse/ui/components/ui/textarea";
 import { StreamingMarkdown } from "@lynse/ui/markdown";
 import { AssistantAvatar } from "../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
+import {
+  getWorkBuddyToken,
+  isWorkBuddyNotBoundError,
+  pollWorkBuddyAuthorization,
+  startWorkBuddyAuthorization,
+} from "@lynse/core/auth/workbuddy";
+import { openExternalUrl, getDesktopAppApi } from "../app-update";
 import { useChat } from "../workspace/hooks/use-chat";
 import { useNotes } from "../workspace/hooks/use-files";
 import { useFolders } from "../workspace/hooks/use-folders";
@@ -43,6 +53,7 @@ import {
   type AttachmentDraft,
 } from "./chat-attachment-upload";
 import { ChatHistorySidebar } from "./chat-history-sidebar";
+import { AssistantSwitcher } from "./assistant-switcher";
 import { MentionChips, MentionPicker } from "./chat-mention-picker";
 import {
   activeMentions,
@@ -133,6 +144,7 @@ export function ChatPage() {
     isLoading,
     conversations,
     activeConversationId,
+    activeAssistant,
     workingConversationIds,
     sendMessage,
     clearMessages,
@@ -141,8 +153,87 @@ export function ChatPage() {
     pendingConfirm,
     answerConfirm,
     dismissConfirm,
+    setActiveAssistant,
   } = useChat({ persistHistory: true });
+  const isWorkBuddy = activeAssistant === "workbuddy";
+  // Active conversation's provider drives the per-message label/avatar (one
+  // conversation never mixes providers, so a single lookup covers the buffer).
+  const activeProvider = useMemo(
+    () => conversations.find((c) => c.id === activeConversationId)?.provider,
+    [conversations, activeConversationId],
+  );
   const streamingMessageId = isLoading ? messages[messages.length - 1]?.id : undefined;
+
+  // ── WorkBuddy authorization state ───────────────────────
+  // The thread needs an authorized ticket; the chat page offers the same
+  // browser authorization flow the settings card runs, inline.
+  const [wbAuth, setWbAuth] = useState<"unknown" | "ok" | "no">("unknown");
+  const [wbAuthorizing, setWbAuthorizing] = useState(false);
+  const wbCancelPollRef = useRef(false);
+
+  const checkWorkBuddyAuth = useCallback(() => {
+    let cancelled = false;
+    getWorkBuddyToken()
+      .then((info) => {
+        if (!cancelled) setWbAuth(info.authorized && !info.expired ? "ok" : "no");
+      })
+      .catch((error: unknown) => {
+        // Unbound is the normal first-run state, not an error.
+        if (!cancelled && !isWorkBuddyNotBoundError(error)) console.warn("[workbuddy-chat] auth check failed", error);
+        if (!cancelled) setWbAuth("no");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (activeAssistant !== "workbuddy") return;
+    return checkWorkBuddyAuth();
+  }, [activeAssistant, checkWorkBuddyAuth]);
+
+  // A turn that failed on authorization flips the banner on immediately.
+  useEffect(() => {
+    if (isWorkBuddy && messages.some((m) => m.workbuddyAuthRequired)) setWbAuth("no");
+  }, [messages, isWorkBuddy]);
+
+  // Leaving the page cancels a running authorization poll.
+  useEffect(
+    () => () => {
+      wbCancelPollRef.current = true;
+    },
+    [],
+  );
+
+  const startWorkBuddyAuthorize = useCallback(async () => {
+    if (wbAuthorizing) return;
+    try {
+      const { authorizeUrl } = await startWorkBuddyAuthorization();
+      if (getDesktopAppApi()) openExternalUrl(authorizeUrl);
+      else window.open(authorizeUrl, "_blank", "noopener");
+      setWbAuthorizing(true);
+      wbCancelPollRef.current = false;
+      try {
+        await pollWorkBuddyAuthorization({ isCancelled: () => wbCancelPollRef.current });
+        setWbAuth("ok");
+      } catch (error) {
+        if (!wbCancelPollRef.current) {
+          console.warn("[workbuddy-chat] authorization did not complete", error);
+          setWbAuth("no");
+        }
+      } finally {
+        setWbAuthorizing(false);
+      }
+    } catch (error) {
+      console.warn("[workbuddy-chat] could not start authorization", error);
+    }
+  }, [wbAuthorizing]);
+
+  const cancelWorkBuddyAuthorize = useCallback(() => {
+    wbCancelPollRef.current = true;
+    setWbAuthorizing(false);
+  }, []);
+
   // Floating quick prompts above the composer: the prompts users type most
   // often, one click to send. The first/third/fifth entries are the cards
   // that used to sit in the middle of the empty state — moved down here.
@@ -238,6 +329,8 @@ export function ChatPage() {
    * must survive a re-detection of the very same token (see `dismissed`).
    */
   const syncMentionDetection = (value: string, caret: number) => {
+    // The WorkBuddy thread has no local note/group context to mention.
+    if (isWorkBuddy) return;
     const detection = detectMentionTrigger(value, caret);
     setMentionState((prev) => {
       if (!detection) {
@@ -340,6 +433,14 @@ export function ChatPage() {
   const handleSend = (content = input) => {
     const trimmedContent = content.trim();
     if (!trimmedContent || isLoading) return;
+    if (isWorkBuddy) {
+      // The WorkBuddy thread has no local context channel (mentions, files):
+      // the turn is plain text, authorization is a precondition.
+      if (wbAuth === "no" || wbAuthorizing) return;
+      sendMessage(trimmedContent);
+      setInput("");
+      return;
+    }
     // Wait for in-flight uploads — sending without their fileIds would lose
     // the attachment context silently.
     if (hasUploadingAttachments) return;
@@ -398,14 +499,18 @@ export function ChatPage() {
         data-tauri-drag-region
       >
         <div className="flex min-w-0 flex-1 items-center justify-center gap-2 pl-24" data-tauri-drag-region>
-          <span className="truncate text-13 font-semibold tracking-tight text-foreground">
-            {t("chat.page_title")}
-          </span>
+          <AssistantSwitcher
+            activeAssistant={activeAssistant}
+            onSelect={setActiveAssistant}
+            disabled={isLoading}
+          />
           {isLoading && (
             <span className="size-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true" />
           )}
         </div>
         <div className="flex items-center gap-1" data-tauri-drag-region={false}>
+          {!isWorkBuddy && (
+            <>
           <Button
             variant="ghost"
             size="icon"
@@ -431,11 +536,13 @@ export function ChatPage() {
             <Plus className="size-3.5" />
             {t("chat.new_chat")}
           </Button>
+            </>
+          )}
         </div>
       </header>
 
       <AnimatePresence initial={false}>
-        {historyOpen && (
+        {!isWorkBuddy && historyOpen && (
           <motion.aside
             key="history"
             initial={reduceMotion ? false : { x: "-100%" }}
@@ -445,7 +552,7 @@ export function ChatPage() {
             className="absolute bottom-0 left-0 top-14 z-20 flex w-56 flex-col border-r border-border/60"
           >
             <ChatHistorySidebar
-              conversations={conversations}
+              conversations={conversations.filter((c) => c.provider !== "workbuddy")}
               activeConversationId={activeConversationId}
               workingConversationIds={workingConversationIds}
               onSelect={selectConversation}
@@ -461,8 +568,66 @@ export function ChatPage() {
           onScroll={handleListScroll}
           className={`${historyOpen ? "ml-56" : "ml-0"} h-full overflow-y-auto overscroll-contain transition-[margin] duration-150`}
         >
+        {isWorkBuddy && wbAuth !== "ok" && (
+          <div className="mx-auto w-full max-w-4xl px-6 pt-6">
+            <div className="flex items-start gap-3 rounded-xl border border-border bg-card px-4 py-3.5">
+              <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
+                <Briefcase className="size-4 text-primary" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-foreground">
+                  {t("chat.assistant_workbuddy")}
+                </p>
+                <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                  {t("chat.workbuddy_not_authorized")}
+                </p>
+                <div className="mt-2.5 flex items-center gap-2">
+                  {wbAuthorizing ? (
+                    <>
+                      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Loader2 className="size-3 animate-spin" />
+                        {t("chat.workbuddy_authorize_waiting")}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs text-muted-foreground"
+                        onClick={cancelWorkBuddyAuthorize}
+                      >
+                        {t("workbuddy.authorize_cancel")}
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button size="sm" className="h-7 px-3 text-xs" onClick={() => void startWorkBuddyAuthorize()}>
+                        {t("chat.workbuddy_authorize")}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs text-muted-foreground"
+                        onClick={checkWorkBuddyAuth}
+                      >
+                        <RefreshCw className="size-3" />
+                        {t("chat.workbuddy_recheck")}
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
         {messages.length === 0 && !isLoading ? (
-          <EmptyChat />
+          isWorkBuddy ? (
+            <EmptyChat
+              icon={<Briefcase className="size-10 text-primary/70" />}
+              title={t("chat.assistant_workbuddy")}
+              hint={t("chat.workbuddy_history_hint")}
+            />
+          ) : (
+            <EmptyChat />
+          )
         ) : (
           <div className="lyse-chat-column mx-auto w-full max-w-4xl space-y-6 px-6 py-6">
             {messages.map((message) =>
@@ -494,16 +659,25 @@ export function ChatPage() {
                 </div>
               ) : (
                 <article key={message.id} className="group flex items-start gap-3">
-                  <AssistantAvatar size={36} className="mt-0.5 shrink-0" />
+                  {activeProvider === "workbuddy" ? (
+                    <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
+                      <Briefcase className="size-4 text-primary" />
+                    </span>
+                  ) : (
+                    <AssistantAvatar size={36} className="mt-0.5 shrink-0" />
+                  )}
                   <div className="min-w-0 flex-1">
                     <div className="mb-1.5 text-2xs font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
-                      {t("chat.ai_assistant")}
+                      {activeProvider === "workbuddy"
+                        ? t("chat.assistant_workbuddy")
+                        : t("chat.assistant_lynse")}
                     </div>
                     <AssistantMessage
                       message={message}
                       isStreaming={message.id === streamingMessageId}
                       copied={copiedMessageId === message.id}
                       onCopy={() => handleCopy(message.id, message.content)}
+                      onAuthorizeWorkBuddy={() => void startWorkBuddyAuthorize()}
                     />
                   </div>
                 </article>
@@ -535,13 +709,15 @@ export function ChatPage() {
         className={`${historyOpen ? "ml-56" : "ml-0"} pointer-events-none shrink-0 bg-background/95 pb-3 pt-2 transition-[margin] duration-150 dark:bg-background/75 dark:backdrop-blur-xl`}
       >
         <div className="lyse-chat-column pointer-events-auto mx-auto w-full max-w-4xl px-6">
-          <QuickPromptStrip
-            prompts={quickPrompts}
-            onSelect={(prompt) => handleSend(prompt)}
-            disabled={isLoading}
-          />
+          {!isWorkBuddy && (
+            <QuickPromptStrip
+              prompts={quickPrompts}
+              onSelect={(prompt) => handleSend(prompt)}
+              disabled={isLoading}
+            />
+          )}
           <div className="relative rounded-xl border border-input bg-white p-2 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.035)] transition-[border-color,box-shadow] duration-150 focus-within:border-neutral-400 focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.04),0_0_0_3px_rgba(0,0,0,0.04)] dark:bg-card dark:shadow-[0_10px_35px_rgba(0,0,0,0.28)] dark:focus-within:border-white/20 dark:focus-within:shadow-[0_10px_35px_rgba(0,0,0,0.28),0_0_0_3px_rgba(255,255,255,0.05)]">
-            {mentionDetection && (
+            {!isWorkBuddy && mentionDetection && (
               <div className="absolute bottom-full left-0 right-0 z-30 mb-2">
                 <MentionPicker
                   trigger={mentionDetection.trigger}
@@ -552,7 +728,7 @@ export function ChatPage() {
                 />
               </div>
             )}
-            <MentionChips mentions={activeChips} onRemove={removeMention} />
+            {!isWorkBuddy && <MentionChips mentions={activeChips} onRemove={removeMention} />}
             {/* Attachment upload is not implemented yet; entry points hidden until it ships. */}
             <Textarea
               ref={textareaRef}
@@ -626,7 +802,9 @@ export function ChatPage() {
                   ? t("chat.responding")
                   : hasUploadingAttachments
                     ? t("chat.attachment_uploading")
-                    : t("chat.input_hint")}
+                    : isWorkBuddy
+                      ? t("chat.input_hint_workbuddy")
+                      : t("chat.input_hint")}
               </span>
               {isLoading ? (
                 <Button
@@ -646,7 +824,11 @@ export function ChatPage() {
                   size="icon"
                   className="size-8 bg-foreground text-background shadow-[0_1px_2px_rgba(0,0,0,0.12)] transition-[background-color,box-shadow] hover:bg-foreground/85 hover:shadow-[0_2px_7px_rgba(0,0,0,0.12)] disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none dark:bg-primary dark:text-primary-foreground dark:hover:bg-primary/90"
                   onClick={() => handleSend()}
-                  disabled={!input.trim() || hasUploadingAttachments}
+                  disabled={
+                    !input.trim() ||
+                    hasUploadingAttachments ||
+                    (isWorkBuddy && (wbAuth === "no" || wbAuthorizing))
+                  }
                   title={t("chat.send")}
                   aria-label={t("chat.send")}
                 >
@@ -788,17 +970,25 @@ function QuickPromptStrip({
   );
 }
 
-function EmptyChat() {
+function EmptyChat({
+  icon,
+  title,
+  hint,
+}: {
+  icon?: ReactNode;
+  title?: string;
+  hint?: string;
+} = {}) {
   const { t } = useTranslation();
 
   return (
     <div className="relative mx-auto flex min-h-full w-full max-w-4xl flex-col items-center justify-center overflow-hidden px-6 py-8 text-center">
-      <AssistantAvatar size={112} className="relative mb-4" />
+      {icon ?? <AssistantAvatar size={112} className="relative mb-4" />}
       <h1 className="relative text-xl font-semibold tracking-tight text-foreground">
-        {t("chat.welcome_title")}
+        {title ?? t("chat.welcome_title")}
       </h1>
       <p className="relative mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-        {t("chat.page_description")}
+        {hint ?? t("chat.page_description")}
       </p>
     </div>
   );
@@ -809,9 +999,17 @@ interface AssistantMessageProps {
   isStreaming: boolean;
   copied: boolean;
   onCopy: () => void;
+  /** Shown on a WorkBuddy auth-failure bubble instead of the error text. */
+  onAuthorizeWorkBuddy?: () => void;
 }
 
-function AssistantMessage({ message, isStreaming, copied, onCopy }: AssistantMessageProps) {
+function AssistantMessage({
+  message,
+  isStreaming,
+  copied,
+  onCopy,
+  onAuthorizeWorkBuddy,
+}: AssistantMessageProps) {
   const { t } = useTranslation();
   // The poll transport types the answer out itself; `revealedAt` only drives
   // the staggered entrance of attachments / support link after the text lands.
@@ -819,40 +1017,60 @@ function AssistantMessage({ message, isStreaming, copied, onCopy }: AssistantMes
 
   return (
     <>
-      {message.thinking && (
-        <div className="mb-2">
-          <ThinkingBlock text={message.thinking} active={message.thinkingActive} />
-        </div>
-      )}
-
-      {!!message.toolUses?.length && (
-        <div className="mb-2">
-          <ToolActivity tools={message.toolUses} />
-        </div>
-      )}
-
-      {message.error ? (
-        <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm leading-6 text-destructive">
-          {message.content}
-        </div>
-      ) : message.content ? (
-        <div className="rounded-2xl rounded-tl-md border border-border bg-card px-4 py-3.5 text-sm leading-6 text-foreground shadow-sm">
-          <StreamingMarkdown content={message.content} isStreaming={isStreaming} mode="minimal" />
-        </div>
-      ) : message.status ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span className="size-1.5 animate-pulse rounded-full bg-current" />
-          <WaitingText status={message.status} />
+      {message.workbuddyAuthRequired ? (
+        <div className="rounded-xl border border-border bg-card px-4 py-3">
+          <p className="text-sm font-medium text-foreground">{t("chat.assistant_workbuddy")}</p>
+          <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+            {t("chat.workbuddy_not_authorized")}
+          </p>
+          {onAuthorizeWorkBuddy && (
+            <Button
+              size="sm"
+              className="mt-2.5 h-7 px-3 text-xs"
+              onClick={onAuthorizeWorkBuddy}
+            >
+              {t("chat.workbuddy_authorize")}
+            </Button>
+          )}
         </div>
       ) : (
-        <ThinkingIndicator />
-      )}
+        <>
+          {message.thinking && (
+            <div className="mb-2">
+              <ThinkingBlock text={message.thinking} active={message.thinkingActive} />
+            </div>
+          )}
 
-      {message.content && message.status && (
-        <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span className="size-1.5 animate-pulse rounded-full bg-current" />
-          <WaitingText status={message.status} />
-        </div>
+          {!!message.toolUses?.length && (
+            <div className="mb-2">
+              <ToolActivity tools={message.toolUses} />
+            </div>
+          )}
+
+          {message.error ? (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm leading-6 text-destructive">
+              {message.content}
+            </div>
+          ) : message.content ? (
+            <div className="rounded-2xl rounded-tl-md border border-border bg-card px-4 py-3.5 text-sm leading-6 text-foreground shadow-sm">
+              <StreamingMarkdown content={message.content} isStreaming={isStreaming} mode="minimal" />
+            </div>
+          ) : message.status ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <span className="size-1.5 animate-pulse rounded-full bg-current" />
+              <WaitingText status={message.status} />
+            </div>
+          ) : (
+            <ThinkingIndicator />
+          )}
+
+          {message.content && message.status && (
+            <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="size-1.5 animate-pulse rounded-full bg-current" />
+              <WaitingText status={message.status} />
+            </div>
+          )}
+        </>
       )}
 
       <div

@@ -15,7 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
-import { audioModeSources, requestRealtimeSession } from "./api";
+import { audioModeSources, realtimeEngineLabel, requestRealtimeSession } from "./api";
 import { useLiveTranslation } from "./use-live-translation";
 import type {
   DesktopLiveTranslationApi,
@@ -169,6 +169,11 @@ export function useQuickRecording() {
           }
         }
         await api.resume({ sessionId: view.sessionId, epoch, connections });
+        // Confirm the engine actually attached, read from the connection URL.
+        const engineUrl = connections[0]?.url;
+        if (engineUrl) {
+          toast(t("live_translation.engine_attached", { engine: realtimeEngineLabel(engineUrl) }));
+        }
       } else {
         await api.pause();
       }

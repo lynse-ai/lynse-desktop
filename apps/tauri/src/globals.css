@@ -114,6 +114,13 @@ html.recording-island-window #root {
   background: transparent;
 }
 
+/* Windows pins the island above the taskbar and grows it upward, so the
+   capsule flips: the pill hugs the pinned bottom edge while the live-transcript
+   drawer unfolds above it (macOS unrolls downward from the menu bar). */
+html.recording-island-window-bottom .island-surface {
+  flex-direction: column-reverse;
+}
+
 /* ── Recording island (floating capsule + live-transcript drawer) ──
    Rust installs a native NSVisualEffectView (popover material) behind the
    island webview, so the surface is genuinely frosted over whatever is on

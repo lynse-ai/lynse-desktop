@@ -36,6 +36,7 @@ import {
   Captions,
   CaptionsOff,
   Speech,
+  SpeechOff,
   EyeOff,
   Loader2,
   Mic,
@@ -627,25 +628,25 @@ function RecordingStage({
           <span>{statusLabel}</span>
           {/* Microphone speech enhancement — on the status line, right of the
               centre text, because it is a property of the recording that is
-              about to happen rather than a transport control. */}
+              about to happen rather than a transport control. The icon itself
+              carries the state: Speech = on, slashed SpeechOff = off. */}
           <Tooltip>
             <TooltipTrigger
               render={
-                <span className="ml-1.5 flex items-center gap-1.5">
-                  <Speech
-                    className={cn(
-                      "size-4 transition-colors",
-                      enhanced ? "text-foreground" : "text-muted-foreground/60",
-                    )}
-                  />
-                  <Switch
-                    size="sm"
-                    checked={enhanced}
-                    onCheckedChange={() => onToggleEnhance()}
-                    disabled={busy || stopping}
-                    aria-label={t("recording_mode.voice_enhance")}
-                  />
-                </span>
+                <button
+                  type="button"
+                  onClick={() => onToggleEnhance()}
+                  disabled={busy || stopping}
+                  aria-pressed={enhanced}
+                  aria-label={t("recording_mode.voice_enhance")}
+                  className="ml-1.5 flex size-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+                >
+                  {enhanced ? (
+                    <Speech className="size-4 text-foreground" />
+                  ) : (
+                    <SpeechOff className="size-4" />
+                  )}
+                </button>
               }
             />
             <TooltipContent>

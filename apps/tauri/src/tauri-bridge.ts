@@ -168,6 +168,9 @@ function readAudioSourceMode(): AudioSourceMode {
 /** Written by builds that still supported the legacy (App Key) console. */
 const LEGACY_VOLC_APP_KEY = "lynse_live_translation_volc_app_key";
 const DEFAULT_QWEN_ENDPOINT =
+  "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.8-livetranslate-flash-realtime";
+/** Written by builds that shipped the qwen3.5 realtime model. */
+const LEGACY_QWEN_ENDPOINT =
   "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-livetranslate-flash-realtime";
 const DEFAULT_VOLC_ENDPOINT =
   "wss://openspeech.bytedance.com/api/v4/ast/v2/translate";
@@ -224,7 +227,12 @@ async function getLiveTranslationProviderConfig(): Promise<LiveTranslationProvid
       maxSpeakers: normalizeMaxSpeakers(readMaxSpeakers()),
     },
     qwen: {
-      endpoint: savedQwenEndpoint?.trim() || DEFAULT_QWEN_ENDPOINT,
+      // A saved endpoint still naming the retired qwen3.5 model migrates
+      // silently to the new default; anything else the user typed is kept.
+      endpoint:
+        savedQwenEndpoint?.trim() && savedQwenEndpoint.trim() !== LEGACY_QWEN_ENDPOINT
+          ? savedQwenEndpoint.trim()
+          : DEFAULT_QWEN_ENDPOINT,
       apiKey: secureStorage.getItem(QWEN_API_KEY) ?? "",
     },
     volc: {

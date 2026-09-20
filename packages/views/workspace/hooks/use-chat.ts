@@ -20,6 +20,7 @@ export function useChat(_options?: UseChatOptions) {
   const isLoading = useChatStore((s) => s.isLoading);
   const conversations = useChatStore((s) => s.conversations);
   const activeConversationId = useChatStore((s) => s.activeConversationId);
+  const activeAssistant = useChatStore((s) => s.activeAssistant);
   const pendingConfirm = useChatStore((s) => s.pendingConfirm);
   const workingConversationIds = useChatStore((s) => s.workingConversationIds);
   const unreadCount = useChatStore((s) =>
@@ -31,6 +32,8 @@ export function useChat(_options?: UseChatOptions) {
   const stopStreaming = useChatStore((s) => s.stopStreaming);
   const answerConfirm = useChatStore((s) => s.answerConfirm);
   const dismissConfirm = useChatStore((s) => s.dismissConfirm);
+  const setActiveAssistant = useChatStore((s) => s.setActiveAssistant);
+  const syncWorkBuddyThread = useChatStore((s) => s.syncWorkBuddyThread);
 
   const userId = useAuthStore((s) => s.user?.id ?? "user");
   useEffect(() => {
@@ -48,6 +51,7 @@ export function useChat(_options?: UseChatOptions) {
     isLoading,
     conversations,
     activeConversationId,
+    activeAssistant,
     workingConversationIds,
     unreadCount,
     sendMessage,
@@ -57,5 +61,7 @@ export function useChat(_options?: UseChatOptions) {
     pendingConfirm,
     answerConfirm,
     dismissConfirm,
+    setActiveAssistant,
+    syncWorkBuddyThread,
   };
 }

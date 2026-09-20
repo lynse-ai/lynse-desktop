@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import i18next from "i18next";
+import { toast } from "sonner";
 import { getDesktopAppApi } from "../app-update";
 import { isTauri } from "../layout/use-maximized";
 
@@ -52,7 +53,13 @@ export function openAboutWindow(): void {
   const api = isTauri ? getDesktopAppApi() : null;
   if (api?.openAboutWindow) {
     const title = i18next.isInitialized ? i18next.t("about.title") : "Lynse";
-    void api.openAboutWindow(title);
+    // Never swallow a failed host command: the OS window failing to appear
+    // (a real bug report on Windows) must stay diagnosable, so surface the
+    // error and fall back to the in-app dialog.
+    api.openAboutWindow(title).catch((error) => {
+      toast.error(String(error));
+      setAboutDialogOpen(true);
+    });
     return;
   }
   setAboutDialogOpen(true);

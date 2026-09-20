@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildILiveDataWebSocketUrl,
   createILiveDataToken,
+  realtimeEngineLabel,
   requestRealtimeSession,
   tencentEngineType,
 } from "./api";
@@ -135,5 +136,22 @@ describe("iLiveData direct authentication", () => {
       targetLanguage: "en",
       userId: "test",
     })).toThrow("wss://");
+  });
+});
+
+describe("realtimeEngineLabel", () => {
+  it("prefers the model query parameter over the host", () => {
+    expect(realtimeEngineLabel(DEFAULT_QWEN_ENDPOINT)).toBe(
+      "qwen3.8-livetranslate-flash-realtime",
+    );
+  });
+
+  it("falls back to the host and survives signed query strings", () => {
+    expect(
+      realtimeEngineLabel(
+        "wss://asr.cloud.tencent.com/asr/v2/125000000?signature=abc&engine=16k_zh",
+      ),
+    ).toBe("asr.cloud.tencent.com");
+    expect(realtimeEngineLabel("not a url")).toBe("not a url");
   });
 });

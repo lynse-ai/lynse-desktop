@@ -418,6 +418,14 @@ impl CaptureEngine {
         } else {
             None
         };
+        // Step markers: a start that never reaches Ready has no event-pump
+        // logging yet, so these lines are the only way to tell WHICH call
+        // (probe / writer / thread spawn) hung or failed on a given machine.
+        log::info!(
+            "capture probes ok: mic={}, system={}",
+            describe_probe(mic_probe.as_ref()),
+            describe_probe(system_probe.as_ref()),
+        );
 
         let (events_tx, events_rx) = channel();
         let started_at = crate::now();
@@ -486,6 +494,11 @@ impl CaptureEngine {
         } else if sources.mic {
             writers.push(open_writer("mic.wav", RECOGNITION_SAMPLE_RATE, 1)?);
         }
+        log::info!(
+            "track writers opened: {} file(s) in {}",
+            writers.len(),
+            shared.directory.display()
+        );
 
         let engine = Self {
             shared: shared.clone(),
@@ -553,6 +566,10 @@ impl CaptureEngine {
             })?;
         }
 
+        log::info!(
+            "capture threads spawned: {}",
+            engine.handles.lock().map(|handles| handles.len()).unwrap_or(0)
+        );
         shared.emit(EngineEvent::Ready {
             mic: mic_probe.map(|(info, _)| info),
             system: system_probe.map(|(info, _)| info),
@@ -691,6 +708,20 @@ fn probe_device(
         as_requested: endpoint.as_deref().map(|id| id == opened.device_id).unwrap_or(true),
     };
     Ok((info, opened.format))
+}
+
+/// Compact per-source identity for the start logs.
+fn describe_probe(probe: Option<&(DeviceInfo, StreamFormat)>) -> String {
+    match probe {
+        Some((info, format)) => format!(
+            "{} [{} Hz, {} ch, {}]",
+            info.name,
+            format.sample_rate,
+            format.channels,
+            if info.raw_mode { "raw" } else { "shared" }
+        ),
+        None => "off".to_owned(),
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

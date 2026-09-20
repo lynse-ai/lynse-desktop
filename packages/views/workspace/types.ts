@@ -283,19 +283,36 @@ export interface ChatMessage {
   humanSupportLink?: ChatHumanSupportLink;
   /**
    * When the finished answer landed (poll delivers the whole turn at once).
-   * The UI plays its two-phase reveal (text fades in, attachments follow)
+   * The UI plays its two-phase reveal (text first, attachments follow)
    * only while this timestamp is fresh, so history and conversation switches
    * never replay the animation. Stripped before persisting.
    */
   revealedAt?: number;
+  /**
+   * WorkBuddy thread: the server-side message id this local message mirrors.
+   * Catch-up syncs dedupe against it so a reply is never appended twice.
+   */
+  serverId?: string;
+  /**
+   * The turn failed because WorkBuddy is not authorized (or the ticket
+   * expired). Renders an inline authorize card instead of the error text.
+   */
+  workbuddyAuthRequired?: boolean;
 }
 
 /**
  * Which backend serves a chat session. `"qoder"` is legacy: conversations
  * stored by the removed Qoder Cloud Agent channel keep the marker so old
- * histories still load; everything now runs on the cloud channel.
+ * histories still load; everything now runs on the cloud channel. `"workbuddy"`
+ * is the single continuous WorkBuddy local-assistant thread.
  */
-export type ChatProvider = "cloud" | "qoder";
+export type ChatProvider = "cloud" | "qoder" | "workbuddy";
+
+/**
+ * Which assistant the chat UI is talking to: the Lynse cloud channel
+ * ("小灵助手") or the user's authorized WorkBuddy local assistant.
+ */
+export type ChatAssistant = "lynse" | "workbuddy";
 
 /** Legacy resume state kept only so stored Qoder conversations still parse. */
 export interface QoderChatSessionState {
@@ -374,7 +391,13 @@ export type ChatStreamEvent =
       attachments?: ChatAttachment[];
       humanSupportLink?: ChatHumanSupportLink;
     }
-  | { type: "error"; message: string }
+  | { type: "error"; message: string; /** True when the fix is re-authorizing WorkBuddy. */ workbuddyAuthRequired?: boolean }
+  /**
+   * WorkBuddy transport: a server history message is now mirrored by a local
+   * message (the assistant placeholder for "assistant", the just-sent user
+   * message for "user"). The server id lets thread catch-ups dedupe.
+   */
+  | { type: "workbuddy_seen"; serverId: string; role: "user" | "assistant" }
   | { type: "confirm"; confirm: ChatConfirm };
 
 /** Stable identity for one conversation turn series. */

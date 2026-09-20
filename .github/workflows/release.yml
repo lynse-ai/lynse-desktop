@@ -178,6 +178,30 @@ jobs:
             echo "::warning::CLOUDBASE_API_KEY secret is not set — the updater stays on GitHub Releases and the mirror-cloudbase job will be skipped."
           fi
 
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        shell: bash
+        # The updater surfaces this text in-app: tauri-action copies the
+        # release body into latest.json's `notes`, which the About page and
+        # update dialog render. Falls back to the old one-liner when the
+        # CHANGELOG has no section for the tagged version.
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          BODY=$(awk -v ver="$VERSION" '
+            $0 ~ "^## " ver "( |$)" { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md | cat -s | sed -e '/./,$!d')
+          if [ -z "$BODY" ]; then
+            BODY="Lynse desktop — Windows (msi) and macOS (dmg)."
+          fi
+          {
+            echo "body<<NOTES_EOF"
+            echo "$BODY"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -205,7 +229,7 @@ jobs:
           args: ${{ matrix.args }}
           tagName: ${{ github.ref_name }}
           releaseName: "Lynse ${{ github.ref_name }}"
-          releaseBody: "Lynse desktop — Windows (msi) and macOS (dmg)."
+          releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: false
           prerelease: false
           includeRelease: true

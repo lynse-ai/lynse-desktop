@@ -22,6 +22,11 @@ async function bootstrap() {
   }
   if (windowKind === "recording-island") {
     document.documentElement.classList.add("recording-island-window");
+    // Windows anchors the island above the taskbar and grows it upward, so
+    // the capsule flips: pill hugs the bottom edge, drawer unfolds above it.
+    if (/Windows/i.test(navigator.userAgent)) {
+      document.documentElement.classList.add("recording-island-window-bottom");
+    }
   }
 
   // Frontend failures (uncaught errors, rejections, console.error/warn) flow

@@ -1,6 +1,7 @@
-import type { ChatConversation, ChatMessage } from "./types";
+import type { ChatAssistant, ChatConversation, ChatMessage } from "./types";
 
 const CHAT_HISTORY_STORAGE_PREFIX = "lynse_ai_chat_history_v1";
+const ASSISTANT_STORAGE_PREFIX = "lynse_chat_assistant_v1";
 
 export interface StoredChatHistory {
   activeConversationId: string | null;
@@ -28,7 +29,9 @@ function isConversation(value: unknown): value is ChatConversation {
   return (
     typeof conversation.id === "string" &&
     typeof conversation.title === "string" &&
-    (conversation.provider === "cloud" || conversation.provider === "qoder") &&
+    (conversation.provider === "cloud" ||
+      conversation.provider === "qoder" ||
+      conversation.provider === "workbuddy") &&
     typeof conversation.createdAt === "number" &&
     typeof conversation.updatedAt === "number" &&
     Array.isArray(conversation.messages) &&
@@ -54,6 +57,31 @@ export function conversationTitle(firstMessage: string): string {
   const title = firstMessage.trim().replace(/\s+/g, " ");
   if (!title) return "新对话";
   return title.length > 36 ? `${title.slice(0, 36)}…` : title;
+}
+
+/** Persisted chat assistant choice ("小灵助手" vs WorkBuddy), per user. */
+export function loadAssistantChoice(userId: string): ChatAssistant {
+  if (typeof window === "undefined") return "lynse";
+  try {
+    return window.localStorage.getItem(`${ASSISTANT_STORAGE_PREFIX}:${userId || "user"}`) ===
+      "workbuddy"
+      ? "workbuddy"
+      : "lynse";
+  } catch {
+    return "lynse";
+  }
+}
+
+export function saveAssistantChoice(userId: string, assistant: ChatAssistant): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(
+      `${ASSISTANT_STORAGE_PREFIX}:${userId || "user"}`,
+      assistant,
+    );
+  } catch {
+    // An unavailable local store must not block the switch.
+  }
 }
 
 export function loadChatHistory(userId: string): StoredChatHistory {

@@ -15,6 +15,7 @@ use std::time::Duration;
 use tauri::http::{header, Request, Response, StatusCode};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
+use tauri::webview::PageLoadEvent;
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
@@ -3658,6 +3659,10 @@ fn open_about_window(app: AppHandle, title: Option<String>) -> CommandResult<()>
     }
     // Created hidden and positioned before the reveal, so the popup never
     // flashes at the screen origin before settling over the main window.
+    // The reveal itself waits for the page-load-finished event on Windows:
+    // a hidden-created WebView2 window shown before its page is ready can
+    // stay invisible for good (about/feedback were reported never popping
+    // up on Windows). macOS keeps the proven immediate reveal.
     let window = WebviewWindowBuilder::new(
         &app,
         "about",
@@ -3669,11 +3674,20 @@ fn open_about_window(app: AppHandle, title: Option<String>) -> CommandResult<()>
     .maximizable(false)
     .minimizable(false)
     .visible(false)
+    .on_page_load(|window, payload| {
+        if payload.event() == PageLoadEvent::Finished {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    })
     .build()
     .map_err(|error| format!("failed to create about window: {error}"))?;
     center_window_over_main(&app, &window, ABOUT_WINDOW_WIDTH, ABOUT_WINDOW_HEIGHT);
-    let _ = window.show();
-    let _ = window.set_focus();
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
     Ok(())
 }
 
@@ -3690,6 +3704,7 @@ fn open_feedback_window(app: AppHandle, title: Option<String>) -> CommandResult<
     }
     // Created hidden and positioned before the reveal, so the popup never
     // flashes at the screen origin before settling over the main window.
+    // Same Windows page-load-gated reveal as the About window above.
     let window = WebviewWindowBuilder::new(
         &app,
         "feedback",
@@ -3701,11 +3716,20 @@ fn open_feedback_window(app: AppHandle, title: Option<String>) -> CommandResult<
     .maximizable(false)
     .minimizable(false)
     .visible(false)
+    .on_page_load(|window, payload| {
+        if payload.event() == PageLoadEvent::Finished {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    })
     .build()
     .map_err(|error| format!("failed to create feedback window: {error}"))?;
     center_window_over_main(&app, &window, FEEDBACK_WINDOW_WIDTH, FEEDBACK_WINDOW_HEIGHT);
-    let _ = window.show();
-    let _ = window.set_focus();
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
     Ok(())
 }
 

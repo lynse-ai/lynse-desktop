@@ -53,6 +53,18 @@ function stubDesktopApi(api: Record<string, unknown>) {
   (window as unknown as { desktopAPI?: unknown }).desktopAPI = api;
 }
 
+/**
+ * First hit of a `getAllBy*` query. Catalog rows are ordered, so tests reach
+ * for index 0; `noUncheckedIndexedAccess` types that as possibly undefined,
+ * and a missing element is a failed expectation rather than something to
+ * cast away.
+ */
+function firstMatch(elements: HTMLElement[]): HTMLElement {
+  const element = elements[0];
+  if (!element) throw new Error("expected at least one matching element");
+  return element;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   usePluginStore.setState({ entries: {} });
@@ -92,7 +104,7 @@ describe("feishu plugin lifecycle (P3)", () => {
     // The persisted flag is what suppresses the Rust auto-start on the next
     // launch — it must flip off before/independently of stopping the socket.
     expect(feishuApi.saveConfig).toHaveBeenCalledTimes(1);
-    expect(feishuApi.saveConfig.mock.calls[0][0]).toMatchObject({ enabled: false });
+    expect(feishuApi.saveConfig).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
     expect(feishuApi.stop).toHaveBeenCalledTimes(1);
   });
 
@@ -120,7 +132,7 @@ describe("feishu plugin lifecycle (P3)", () => {
     feishuApi.saveConfig.mockResolvedValue({});
     feishuApi.start.mockResolvedValue({ state: "connecting" });
     await feishuBotPlugin.lifecycle!.onEnable!();
-    expect(feishuApi.saveConfig.mock.calls[0][0]).toMatchObject({ enabled: true });
+    expect(feishuApi.saveConfig).toHaveBeenCalledWith(expect.objectContaining({ enabled: true }));
     expect(feishuApi.start).toHaveBeenCalledTimes(1);
   });
 
@@ -200,8 +212,8 @@ describe("community model card uninstall guard (P4)", () => {
     await screen.findByText("settings.stt_status_installed");
 
     // Two clicks: arm the destructive confirm, then confirm. The funasr row
-    // is first in the catalog, hence getAllByText(...)[0].
-    fireEvent.click(screen.getAllByText("settings.stt_delete_model")[0]);
+    // is first in the catalog, hence firstMatch(getAllByText(...)).
+    fireEvent.click(firstMatch(screen.getAllByText("settings.stt_delete_model")));
     fireEvent.click(screen.getByText("plugins.action.uninstall_confirm"));
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
@@ -217,7 +229,7 @@ describe("community model card uninstall guard (P4)", () => {
     render(<PluginCommunitySection />);
 
     await screen.findByText("settings.stt_status_installed");
-    fireEvent.click(screen.getAllByText("settings.stt_delete_model")[0]);
+    fireEvent.click(firstMatch(screen.getAllByText("settings.stt_delete_model")));
     fireEvent.click(screen.getByText("plugins.action.uninstall_confirm"));
 
     await waitFor(() => expect(localApi.deleteSttModel).toHaveBeenCalledTimes(1));
@@ -233,7 +245,7 @@ describe("community model card uninstall guard (P4)", () => {
     render(<PluginCommunitySection />);
 
     await screen.findAllByText("settings.stt_status_not_installed");
-    fireEvent.click(screen.getAllByText("settings.stt_download_model")[0]);
+    fireEvent.click(firstMatch(screen.getAllByText("settings.stt_download_model")));
     await waitFor(() =>
       expect(localApi.downloadSttModel).toHaveBeenCalledWith("funasr", "funasr-paraformer"),
     );

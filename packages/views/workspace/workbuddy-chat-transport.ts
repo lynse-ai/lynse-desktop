@@ -205,7 +205,10 @@ export class WorkBuddyChatTransport implements ChatTransport {
       }
       // A failed baseline read must not block the send; the echo matcher
       // below still keeps a concurrent foreign reply from being replayed.
-      console.warn("[workbuddy-chat] baseline read failed, continuing", error);
+      console.warn(
+        "[workbuddy-chat] baseline read failed, continuing:",
+        error instanceof Error ? error.message : String(error),
+      );
     }
     if (this.cancelled || signal?.aborted) return;
 
@@ -219,7 +222,10 @@ export class WorkBuddyChatTransport implements ChatTransport {
         return;
       }
     } catch (error) {
-      console.error("[workbuddy-chat] send failed", error);
+      console.error(
+        "[workbuddy-chat] send failed:",
+        error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error),
+      );
       if (!this.cancelled) {
         onEvent(
           isWorkBuddyAuthError(error)

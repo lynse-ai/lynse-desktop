@@ -596,37 +596,6 @@ function RecordingStage({
           className="block text-6xl font-medium tracking-tight tabular-nums text-foreground"
         />
         <div className="mt-1.5 flex items-center justify-center gap-2 text-sm text-muted-foreground">
-          {/* Microphone speech enhancement — a person speaking, because it
-              only ever touches the microphone track. */}
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  type="button"
-                  onClick={onToggleEnhance}
-                  disabled={busy || stopping}
-                  aria-pressed={enhanced}
-                  aria-label={t("recording_mode.voice_enhance")}
-                  className={cn(
-                    "flex size-7 items-center justify-center rounded-full transition-colors hover:bg-muted",
-                    enhanced
-                      ? "text-foreground"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  <Speech className="size-4" />
-                </button>
-              }
-            />
-            <TooltipContent>
-              {t("recording_mode.voice_enhance")}
-              <span className="block text-2xs text-muted-foreground/70">
-                {recording
-                  ? t("recording_mode.voice_enhance_pending")
-                  : t("recording_mode.voice_enhance_hint")}
-              </span>
-            </TooltipContent>
-          </Tooltip>
           {/* Captions toggle — the way into the live-transcript pane (the
               live pane's header hosts the matching CaptionsOff way back) */}
           <Tooltip>
@@ -656,6 +625,38 @@ function RecordingStage({
             )}
           />
           <span>{statusLabel}</span>
+          {/* Microphone speech enhancement — on the status line, right of the
+              centre text, because it is a property of the recording that is
+              about to happen rather than a transport control. */}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span className="ml-1.5 flex items-center gap-1.5">
+                  <Speech
+                    className={cn(
+                      "size-4 transition-colors",
+                      enhanced ? "text-foreground" : "text-muted-foreground/60",
+                    )}
+                  />
+                  <Switch
+                    size="sm"
+                    checked={enhanced}
+                    onCheckedChange={() => onToggleEnhance()}
+                    disabled={busy || stopping}
+                    aria-label={t("recording_mode.voice_enhance")}
+                  />
+                </span>
+              }
+            />
+            <TooltipContent>
+              {t("recording_mode.voice_enhance")}
+              <span className="block text-2xs text-muted-foreground/70">
+                {recording
+                  ? t("recording_mode.voice_enhance_pending")
+                  : t("recording_mode.voice_enhance_hint")}
+              </span>
+            </TooltipContent>
+          </Tooltip>
         </div>
       </motion.div>
 

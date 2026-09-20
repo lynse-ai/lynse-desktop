@@ -61,6 +61,7 @@ mod volc_ast;
 )]
 mod tencent_asr;
 mod webdav;
+mod workbuddy;
 mod storage;
 mod content_migration;
 mod window_effects;
@@ -3971,6 +3972,7 @@ pub fn run() {
             storage::storage_usage, storage::storage_reveal, storage::storage_clear,
             webdav::webdav_config_get, webdav::webdav_config_save, webdav::webdav_set_password,
             webdav::webdav_test_connection, webdav::webdav_sync_now, webdav::webdav_put_notes,
+            workbuddy::workbuddy_openapi,
             feishu::feishu_config_get, feishu::feishu_config_save, feishu::feishu_config_reset,
             bots::bot_config_get, bots::bot_config_save, bots::bot_reset, bots::bot_start,
             bots::bot_stop, bots::bot_state,

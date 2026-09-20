@@ -136,6 +136,39 @@ export async function pollWorkBuddyAuthorization(
 
 let cachedTicket: { accessToken: string; expiresAtMs: number } | null = null;
 
+/**
+ * Host-injected HTTP relay for the direct OpenAPI calls below. Desktop shells
+ * wire this to a Tauri command (reqwest) because www.workbuddy.cn serves no
+ * CORS headers for the `tauri://localhost` origin, so WebView `fetch` is
+ * blocked. Core stays host-agnostic: without a relay (web) the calls fall
+ * back to plain `fetch` with the same wire shape.
+ */
+export interface WorkBuddyHttpRelayRequest {
+  /** Path under the OpenAPI base, leading slash, query string included. */
+  path: string;
+  method: string;
+  /** Serialized JSON body, when present. */
+  body?: string;
+  accessToken: string;
+}
+
+export interface WorkBuddyHttpRelayResponse {
+  /** Upstream HTTP status, verbatim (401s included). */
+  status: number;
+  /** Raw response body text; the caller parses it. */
+  body: string;
+}
+
+let httpRelay:
+  | ((req: WorkBuddyHttpRelayRequest) => Promise<WorkBuddyHttpRelayResponse>)
+  | null = null;
+
+export function setWorkBuddyHttpRelay(
+  relay: ((req: WorkBuddyHttpRelayRequest) => Promise<WorkBuddyHttpRelayResponse>) | null,
+): void {
+  httpRelay = relay;
+}
+
 function parseExpiresAtMs(expiresAt?: string): number {
   if (!expiresAt) return 0;
   const ms = Date.parse(expiresAt.replace(" ", "T"));
@@ -164,25 +197,32 @@ export async function getWorkBuddyAccessToken(): Promise<string> {
 
 /**
  * Call the WorkBuddy OpenAPI directly (`https://www.workbuddy.cn/openapi/v2/...`)
- * with the authorized token. A 401 triggers exactly one ticket refresh through
- * the Lynse backend and one retry; when the refresh itself fails the not-bound
- * key surfaces so the caller can send the user through authorization again.
+ * with the authorized token — through the injected relay when the host
+ * provides one (desktop), else plain `fetch` (web). A 401 triggers exactly
+ * one ticket refresh through the Lynse backend and one retry; when the
+ * refresh itself fails the not-bound key surfaces so the caller can send the
+ * user through authorization again.
  */
 export async function callWorkBuddyOpenApi<T>(
   path: string,
   init: { method?: "GET" | "POST" | "PUT" | "DELETE"; body?: unknown } = {},
 ): Promise<T> {
-  const request = async (accessToken: string): Promise<Response> =>
-    fetch(`${WORKBUDDY_OPENAPI_BASE}${path}`, {
+  const body = init.body ? JSON.stringify(init.body) : undefined;
+  const send = (accessToken: string): Promise<{ status: number; body: string }> => {
+    if (httpRelay) {
+      return httpRelay({ path, method: init.method ?? "GET", body, accessToken });
+    }
+    return fetch(`${WORKBUDDY_OPENAPI_BASE}${path}`, {
       method: init.method ?? "GET",
       headers: {
-        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...(body ? { "Content-Type": "application/json" } : {}),
         Authorization: `Bearer ${accessToken}`,
       },
-      body: init.body ? JSON.stringify(init.body) : undefined,
-    });
+      body,
+    }).then(async (res) => ({ status: res.status, body: await res.text() }));
+  };
 
-  let res = await request(await getWorkBuddyAccessToken());
+  let res = await send(await getWorkBuddyAccessToken());
   if (res.status === 401) {
     cachedTicket = null;
     const info = await refreshWorkBuddyToken();
@@ -193,10 +233,10 @@ export async function callWorkBuddyOpenApi<T>(
       accessToken: info.accessToken,
       expiresAtMs: parseExpiresAtMs(info.expiresAt),
     };
-    res = await request(info.accessToken);
+    res = await send(info.accessToken);
   }
-  if (!res.ok) {
+  if (res.status < 200 || res.status >= 300) {
     throw new Error(`WorkBuddy OpenAPI request failed (${res.status})`);
   }
-  return (await res.json()) as T;
+  return JSON.parse(res.body) as T;
 }

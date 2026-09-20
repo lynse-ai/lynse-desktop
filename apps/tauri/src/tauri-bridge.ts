@@ -7,6 +7,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { setApiTransportMode } from "@lynse/core/api/client";
+import { setWorkBuddyHttpRelay } from "@lynse/core/auth/workbuddy";
 import { hydrateSecrets, refreshSecret, secureStorage } from "./secure-storage";
 import type {
   SttDownloadProgress,
@@ -327,6 +328,12 @@ export async function installTauriBridge(): Promise<void> {
   // Keep WKWebView's fetch implementation. Routing every fetch through the
   // Tauri HTTP IPC bridge can monopolize the renderer on macOS.
   setApiTransportMode("direct");
+
+  // WorkBuddy OpenAPI calls must leave the WebView: the WorkBuddy API serves
+  // no CORS headers for the tauri origin, so renderer fetch dies as "Load
+  // failed". Relay them through the reqwest-backed Rust command; the token
+  // and its refresh flow stay in core.
+  setWorkBuddyHttpRelay((req) => invoke("workbuddy_openapi", { req }));
 
   await getCurrentWebview().listen<LiveTranslationTrayAction>(
     LIVE_TRANSLATION_TRAY_EVENT,

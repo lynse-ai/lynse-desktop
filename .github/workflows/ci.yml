@@ -123,6 +123,17 @@ jobs:
       # never compiles; this job is its compile gate. The aec3 feature stays
       # OFF here — the vendored WebRTC static library is a deliberate
       # post-acceptance switch (scripts/build-lynse-aec3.ps1).
+      #
+      # tauri.conf.json bundles `resources/sidecars/audio-capture`, and that
+      # path is gitignored, so the build script aborts before a single crate
+      # compiles without it. The capture sidecar is macOS-only (Windows
+      # captures in-process via WASAPI), and this script writes the packaging
+      # placeholder on any non-Darwin host — the same thing the release build
+      # does before `tauri build`.
+      - name: Materialise audio-capture resource
+        shell: bash
+        run: bash apps/tauri/scripts/build-audio-capture.sh
+
       - name: cargo check
         working-directory: apps/tauri/src-tauri
         run: cargo check

@@ -8,6 +8,12 @@
 > the history (that commit documents a `vA.B.C(N)` build-counter tag
 > convention), so they are not listed either.
 
+## 1.0.7 (2026-09-20)
+
+### Fixed
+
+- Windows: the recording island (capsule and expanded transcript drawer) was see-through — the translucent surface assumes a native frosted material that only exists on macOS, and without it the desktop showed straight through with no blur. The surface now falls back to a near-opaque card whenever the native material is absent.
+
 ## 1.0.6 (2026-09-20)
 
 ### New Features

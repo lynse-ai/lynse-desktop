@@ -123,14 +123,18 @@ html.recording-island-window-bottom .island-surface {
 
 /* ── Recording island (floating capsule + live-transcript drawer) ──
    Rust installs a native NSVisualEffectView (popover material) behind the
-   island webview, so the surface is genuinely frosted over whatever is on
-   screen. The themed wash on top keeps text on-palette while still letting
-   the frost through; without vibrancy it falls back to a near-opaque card. */
+   island webview on macOS, so the surface is genuinely frosted over whatever
+   is on screen. The themed wash on top keeps text on-palette while still
+   letting the frost through; without vibrancy it falls back to a near-opaque
+   card. The fallback matches by absence of the vibrancy attribute rather
+   than `="none"`: on Windows (and the web) the attribute is never set at
+   all — index.html and syncWindowEffects only touch it on macOS — and no
+   native material exists there, so the 72% wash must not stand. */
 .island-surface {
   background: color-mix(in srgb, var(--background) 72%, transparent);
 }
 
-html[data-window-effects="none"] .island-surface {
+html:not([data-window-effects="vibrancy"]) .island-surface {
   background: color-mix(in srgb, var(--background) 96%, transparent);
 }
 

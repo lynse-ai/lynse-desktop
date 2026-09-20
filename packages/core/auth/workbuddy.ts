@@ -181,13 +181,25 @@ export interface WorkBuddyProfile {
   avatar?: string;
 }
 
+const firstStringField = (data: Record<string, unknown>, keys: string[]): string | undefined => {
+  for (const key of keys) {
+    const value = data[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+};
+
 /**
  * `GET /user/profile` — the WorkBuddy user's nickname and avatar. Tolerates
  * both the documented bare-object shape and a `{ code, data }` envelope;
- * a nonzero envelope code surfaces as an error.
+ * a nonzero envelope code surfaces as an error. Avatar key spellings vary
+ * across platform versions, so the common variants are accepted.
  */
 export async function getWorkBuddyProfile(): Promise<WorkBuddyProfile> {
   const body = await callWorkBuddyOpenApi<unknown>("/user/profile");
+  // TEMP diagnostics: the real avatar field name has not been verified
+  // against a populated account yet — demote/remove once confirmed.
+  console.warn("[workbuddy] /user/profile raw:", JSON.stringify(body));
   const root = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
   if (typeof root.code === "number" && root.code !== 0) {
     throw new Error(
@@ -200,8 +212,22 @@ export async function getWorkBuddyProfile(): Promise<WorkBuddyProfile> {
     root.data && typeof root.data === "object" ? root.data : root
   ) as Record<string, unknown>;
   return {
-    nickname: typeof data.nickname === "string" ? data.nickname : undefined,
-    avatar: typeof data.avatar === "string" ? data.avatar : undefined,
+    nickname: firstStringField(data, ["nickname", "nickName", "name", "userName"]),
+    avatar: firstStringField(data, [
+      "avatar",
+      "avatarUrl",
+      "avatar_url",
+      "headImg",
+      "headImgUrl",
+      "head_img",
+      "head_img_url",
+      "face",
+      "faceUrl",
+      "photo",
+      "photoUrl",
+      "image",
+      "icon",
+    ]),
   };
 }
 

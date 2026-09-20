@@ -1,5 +1,92 @@
 # Changelog
 
+> The 1.0.0 – 1.0.4 entries below were backfilled on 2026-09-20 from tag and
+> release history — those four releases shipped without CHANGELOG entries. The
+> v1.0.3 release commit squashed ~113 files into a single commit, so its entry
+> is coarser than the ones around it. 1.0.0 shipped as the commit
+> `release: v1.0.0(1)` and was never tagged; 1.0.1 and 1.0.2 appear nowhere in
+> the history (that commit documents a `vA.B.C(N)` build-counter tag
+> convention), so they are not listed either.
+
+## 1.0.5 (2026-09-20)
+
+### New Features
+
+- Playback audio is a real master now. Each recording writes `master.wav` — 48 kHz stereo, the echo-cancelled microphone folded into the system audio at unity gain with the voice centred — and it is what playback and upload use. The 16 kHz tracks go back to what they were always meant to be: input for recognition only, not something you listen to.
+- Speech enhancement on the microphone path (WebRTC noise suppression + high-pass), reached from a switch beside the start-recording line. Off by default, because archiving faithfully was judged more useful than archiving quietly: mild suppression measures ≈13.8 dB less noise floor for ≈2.8 dB of near-end level, aggressive ≈19.7 dB for ≈3.8 dB. The raw tracks are never touched by it, so a recording can be reprocessed with enhancement off afterwards. Applies to the microphone only — system audio is a digital source and suppression would only damage it.
+- The microphone is captured through the same Core Audio path as the system's own recorder (via `AVAudioEngine`); ScreenCaptureKit keeps just the system audio. The old capture route stays reachable behind `--mic-sck` for A/B comparison on one machine.
+- Plugin architecture: engines and integrations register through a plugin host with install/enable lifecycle hooks and migrations, surfaced in a community section of settings — including model cards that refuse to delete a model the default engine still references.
+- Local transcription grows three routes: the MOSS engine on MLX, a WhisperX engine, and Tencent Cloud real-time recognition as a streaming provider. WorkBuddy joins the sign-in methods.
+- Dual-channel echo-cancelled recording is in place on both platforms (raw 48 kHz tracks + a processed recognition track, with a `tracks.json` manifest that Windows and macOS read the same way).
+
+### Changed
+
+- Echo cancellation defaults to off on macOS (`LYNSE_AEC=1` to enable) until it passes a listening acceptance: measured against silent system audio it removed only ~1 dB of echo while leaving processing artefacts in the archive, and the capture without it showed zero clipping, no impulse events and a self-consistent timeline.
+
+### Performance
+
+- MOSS-on-MLX transcription runs chunked prefill and batched audio-tower forward passes, which is what makes long recordings fit in memory; generation reports per-token progress instead of going quiet.
+
+### Fixed
+
+- Every single-microphone recording used to crash on finalize, so its WAV header was never written back and the file played as an unknown length. The gap arithmetic that trapped has been replaced with a real sequential-append interface, and absurd timestamps are now treated as callback jitter rather than as licence to pad in gigabytes of silence.
+- Card recordings decoded their Opus payload against a 20 ms buffer while devices negotiate 40 ms, so every packet failed to decode and became silence — the upload "succeeded" with empty content. The decode buffer covers 120 ms.
+- WAV reading walks the chunk list instead of assuming a 44-byte header, and tracks declared length separately from on-disk length, so a header left with a zero-length data section (killed mid-finalize) self-heals before persist and before offline reprocessing. Raw tracks are covered too — they were the case where reprocessing failed *after* deleting the finished output.
+- Cloud sync keeps the raw tracks and the master and clears only the 16 kHz recognition tracks, instead of deleting the 48 kHz audio along with any chance to reprocess.
+- Windows: switching echo cancellation off no longer panics looking for `mic_raw.wav` and no longer leaves `mic.wav` open but unwritten.
+- The audio editor stops upsampling 16 kHz sources to 44.1 kHz.
+- Recording no longer silently attaches recognition: opening the Dynamic Island drawer no longer switches the session to live, the recording page starts capture before minting credentials, and an unreachable provider is now a toast rather than an empty meeting.
+- Interpolation placeholders in every locale were corrected to the `{{ }}` form, so counted and named strings stop rendering their placeholders.
+
+## 1.0.4 (2026-09-14)
+
+### New Features
+
+- Sign-in options and a redesigned login page: phone with SMS code, QR code, and WeChat. The API configuration page replaced a hand-typed server URL with a test/production preset selection that applies to the running session and persists.
+- Feishu (Lark) bot integration: long-connection setup with read/write config, start/stop and a connection test; answers stream into cards as a typewriter effect, and a one-click reset clears the secret and restores defaults so the bot can be re-registered. The app secret is kept in secure storage.
+- An audio editing page: cut, merge and silence removal, with export able to overwrite the original recording.
+- Storage management, to see what is on disk and open the storage location directly.
+- Qwen3-ASR on MLX becomes the default local transcription engine, installed into the MLX environment on first use; note, audio and capture content converge on one storage root with a migration for existing data.
+- A help-and-feedback window in the app, in all five languages.
+- Theme follows the system by default and the native window appearance is kept in sync; gateway `{ code, msg }` error wrappers are decoded into readable messages instead of raw payloads.
+
+### Changed
+
+- In-app updates and the STT runtime archives are served from Tencent CloudBase static hosting with GitHub Releases as fallback, because GitHub downloads are blocked or throttled from mainland China; the release workflow mirrors both to CloudBase and rewrites `latest.json`.
+- An API-key login entry is available in development builds only, and the endpoint fallback chain is saved address → build-time environment → production default.
+- A recording session with no transcript text is saved as `recorded` rather than being mislabelled as finished.
+- Bot events were folded into one channel event stream with a `reason` alongside each status; live-transcription playback files are named by the time the recording ended.
+
+### Fixed
+
+- macOS App Store signing: nested executables are signed with stable identifiers and the audio-capture helper gets `app-sandbox` + `inherit`, so the sandboxed build launches.
+- Build-number parsing is hardened so a corrupted plist cannot leak XML into the interface, and the screen-recording / system-audio usage descriptions match macOS 15+.
+
+## 1.0.3 (2026-09-10)
+
+### New Features
+
+- Meeting auto-record: a platform meeting detector (macOS and Windows) starts a recording when a meeting starts, configured from a settings card.
+- QR-code sign-in, global search across the library, and a weather card on the home page.
+- A Playwright end-to-end suite with a mock server and scripted scenarios covering chat, navigation and recording flows.
+
+### Changed
+
+- The chat transport and chat store were reworked around multi-turn history and streaming; the markdown vault mirror was extended accordingly.
+- The Apple build number is decoupled from the version string — decimal and auto-incremented.
+
+### Fixed
+
+- Mind-map images render again in summaries (a bogus URI scheme was stripped and the markdown image syntax dropped); summary content padding tightened.
+
+## 1.0.0 (2026-09-09)
+
+### New Features
+
+- An editorial typography system for notes and summaries, with switchable themes.
+- A frosted-glass float dock that keeps transport controls available while the window is hidden.
+- The desktop app moves from 0.x to 1.x versioning.
+
 ## 0.1.33 (2026-09-07)
 
 ### New Features

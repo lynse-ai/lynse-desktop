@@ -34,10 +34,9 @@ export const featureFlags = {
  *                     form only; no phone/WeChat login.
  *
  * Distribution convention (user-facing): everything served from the CloudBase
- * update source is an OFFICIAL build; GitHub Releases carry the DEBUG-channel
- * builds as the fallback. Today's release workflow builds the "github"
- * channel, so flipping the updater artifacts to official means building that
- * channel in CI (see .github/workflows/release.yml).
+ * update source is an OFFICIAL build — the release workflow builds this
+ * channel and mirrors the artifacts there (see .github/workflows/release.yml).
+ * GitHub Releases host the same official artifacts as the fallback source.
  *
  * Each app shell calls `configureBuildChannel` at startup with its own env
  * (`NEXT_PUBLIC_BUILD_CHANNEL` on web, `VITE_BUILD_CHANNEL` in Tauri), so the

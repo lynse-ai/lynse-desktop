@@ -206,7 +206,11 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Public-release channel: API-key login only (no phone/WeChat).
+          # DEBUG channel (API-key login only, no phone/WeChat) — GitHub
+          # Releases carry the debug builds. The OFFICIAL build (正式版, with
+          # phone/WeChat login) is the "testflight" channel packaged by
+          # apps/tauri/scripts/build-appstore.sh; convention: CloudBase-served
+          # updates are official builds, GitHub release assets are debug.
           VITE_BUILD_CHANNEL: github
           # audiopus_sys (opus codec) vendors a CMakeLists.txt with an old
           # cmake_minimum_required, which CMake 4.x on the runners rejects.

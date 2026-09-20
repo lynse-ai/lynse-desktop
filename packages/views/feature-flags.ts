@@ -27,10 +27,17 @@ export const featureFlags = {
 /**
  * Build channel, selected at packaging time via an env var:
  *
- *   - "github"      — public release (default). Login page shows the API-key
+ *   - "testflight"  — the OFFICIAL build (正式版). Login page carries the full
+ *                     sign-in surface: phone + SMS code and WeChat QR-code.
+ *                     Packaged locally by `apps/tauri/scripts/build-appstore.sh`.
+ *   - "github"      — the DEBUG channel build. Login page shows the API-key
  *                     form only; no phone/WeChat login.
- *   - "testflight"  — internal distribution. Login page adds phone + SMS code
- *                     and WeChat QR-code sign-in.
+ *
+ * Distribution convention (user-facing): everything served from the CloudBase
+ * update source is an OFFICIAL build; GitHub Releases carry the DEBUG-channel
+ * builds as the fallback. Today's release workflow builds the "github"
+ * channel, so flipping the updater artifacts to official means building that
+ * channel in CI (see .github/workflows/release.yml).
  *
  * Each app shell calls `configureBuildChannel` at startup with its own env
  * (`NEXT_PUBLIC_BUILD_CHANNEL` on web, `VITE_BUILD_CHANNEL` in Tauri), so the

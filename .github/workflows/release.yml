@@ -87,35 +87,6 @@ jobs:
           fi
           test -s "$RUNNER_TEMP/tone.wav" && echo "ffmpeg conversion OK"
 
-      - name: Package STT runtime archive
-        shell: bash
-        run: |
-          set -euo pipefail
-          SIDECARS=apps/tauri/src-tauri/resources/sidecars
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            FILES=("whisper.exe" "vibeasr.exe" "ffmpeg.exe" "ffprobe.exe")
-            ARCHIVE="lynse-stt-runtime-windows-x86_64.tar.gz"
-            SHA_ENV="LYNSE_RUNTIME_SHA_WINDOWS_X86_64"
-          else
-            FILES=("whisper" "vibeasr" "ffmpeg" "ffprobe")
-            ARCHIVE="lynse-stt-runtime-macos-aarch64.tar.gz"
-            SHA_ENV="LYNSE_RUNTIME_SHA_MACOS_AARCH64"
-          fi
-          # NOTE: write the archive with a *relative* path (workspace root), not
-          # $RUNNER_TEMP. On Windows Git Bash, $RUNNER_TEMP expands to a drive
-          # path like `D:\a\_temp` which MSYS `tar` misinterprets as a remote
-          # host ("Cannot connect to D:"), breaking the Windows build. A
-          # relative path avoids that and is resolved correctly by tar,
-          # certutil/shasum, and `gh release upload` alike.
-          tar -czf "$ARCHIVE" -C "$SIDECARS" "${FILES[@]}"
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            SHA=$(certutil -hashfile "$ARCHIVE" SHA256 | grep -v ":" | tr -d ' \r\n' | tr 'A-Z' 'a-z')
-          else
-            SHA=$(shasum -a 256 "$ARCHIVE" | cut -d' ' -f1)
-          fi
-          echo "$SHA_ENV=$SHA" >> "$GITHUB_ENV"
-          echo "Packaged $ARCHIVE (sha256=$SHA)"
-
       - name: Detect Apple signing secrets (macOS)
         # Developer ID signing + notarization is opt-in via six APPLE_*
         # secrets (see README/secrets checklist). They must stay *absent*
@@ -238,18 +209,6 @@ jobs:
           prerelease: false
           includeRelease: true
           includeUpdater: true
-
-      - name: Upload STT runtime archive
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            ARCHIVE="lynse-stt-runtime-windows-x86_64.tar.gz"
-          else
-            ARCHIVE="lynse-stt-runtime-macos-aarch64.tar.gz"
-          fi
-          gh release upload "${{ github.ref_name }}" "$ARCHIVE" --clobber
 
   mirror-cloudbase:
     name: Mirror updater artifacts to CloudBase hosting

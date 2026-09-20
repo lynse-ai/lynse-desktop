@@ -51,6 +51,17 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install macOS sidecar build tools
+        if: runner.os == 'macOS'
+        # `beforeBuildCommand` compiles the capture sidecar, which links the
+        # vendored WebRTC AEC3 engine: scripts/build-webrtc-aec.sh drives that
+        # build through meson + ninja (the source tarballs are vendored in-tree
+        # and checksum-pinned, so nothing is fetched at build time). Neither
+        # tool is preinstalled on the runner, and without them the whole macOS
+        # leg dies in beforeBuildCommand — libtool, used to merge the static
+        # library, does ship with the Xcode command line tools.
+        run: brew install meson ninja
+
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 

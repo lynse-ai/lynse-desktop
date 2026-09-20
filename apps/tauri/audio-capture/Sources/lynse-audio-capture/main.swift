@@ -90,6 +90,17 @@ private func argumentValue(_ name: String) -> String? {
 // recordings (crash recovery, or the "重新处理" entry point).
 // Usage: lynse-audio-capture --process <session-dir>
 // ───────────────────────────────────────────────────────────────
+/// Speech enhancement level for the microphone path: `--enhance 0|1|2`
+/// (off / mild / aggressive). Only the near-end is touched — the system track
+/// is a digital source and suppressing it would only damage it.
+let enhancementLevel: AecProcessor.Enhancement = {
+    switch argumentValue("--enhance").flatMap(Int.init) {
+    case .some(2): return .aggressive
+    case .some(1): return .mild
+    default: return .off
+    }
+}()
+
 if let processDirectory = argumentValue("--process") {
     guard #available(macOS 15.0, *) else {
         emitError("离线重新处理需要 macOS 15 或更高版本。")
@@ -121,7 +132,7 @@ if let processDirectory = argumentValue("--process") {
 
     // Reprocessing must not silently change the canceller setting: it rebuilds
     // what live capture would have produced, so it obeys the same `--aec` flag.
-    let processor = DualChannelProcessor(enableAec: arguments.contains("--aec"))
+    let processor = DualChannelProcessor(enableAec: arguments.contains("--aec"), enhancement: enhancementLevel)
     processor.onMicProcessed16k = { startMs, samples in
         processedWav.write(samples: samples, firstFrameElapsedMs: startMs)
     }
@@ -781,7 +792,7 @@ private final class TimelineBox {
 private let micTimeline = TimelineBox()
 private let systemTimeline = TimelineBox()
 
-private let processor = DualChannelProcessor(enableAec: aecEnabled)
+private let processor = DualChannelProcessor(enableAec: aecEnabled, enhancement: enhancementLevel)
 
 private var micRecognition: RecognitionSink!
 private var systemRecognition: RecognitionSink!
@@ -996,6 +1007,10 @@ func startCapture(event: String = "ready") async {
             // only place an A/B comparison of the two can be audited later.
             "microphoneApi": micViaCoreAudio ? "coreaudio" : "screencapturekit",
             "aec": aecEnabled,
+            "enhancement": enhancementLevel.rawValue,
+            // Enhancement only reaches the microphone through the canceller's
+            // APM instance, so a session without AEC cannot have it either.
+            "enhancementActive": aecEnabled && enhancementLevel != .off,
         ]
         if let id = lastMicrophoneDeviceID, let device = AVCaptureDevice(uniqueID: id) {
             readyPayload["microphoneCaptureDeviceID"] = id

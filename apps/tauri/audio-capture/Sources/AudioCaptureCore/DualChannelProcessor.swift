@@ -92,15 +92,22 @@ public final class DualChannelProcessor {
         case system
     }
 
-    public init(enableAec: Bool) {
+    public init(enableAec: Bool, enhancement: AecProcessor.Enhancement = .off) {
         if enableAec, let aec = AecProcessor() {
             self.aec = aec
             engineUnavailable = false
+            // Enhancement rides the microphone only: the system track is a
+            // digital source and noise-suppressing it just damages it.
+            aec.setEnhancement(enhancement)
+            self.enhancement = enhancement
         } else {
             self.aec = nil
             engineUnavailable = enableAec
         }
     }
+
+    /// The enhancement level actually applied (`.off` when no engine).
+    public private(set) var enhancement: AecProcessor.Enhancement = .off
 
     /// True when the engine is present and dual-channel processing is live.
     public var aecActive: Bool { aec != nil }

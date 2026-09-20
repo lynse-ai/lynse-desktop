@@ -18,21 +18,36 @@ webrtc::StreamConfig config_for(int rate) {
     return webrtc::StreamConfig(rate, kChannels);
 }
 
-rtc::scoped_refptr<webrtc::AudioProcessing> create_apm() {
-    rtc::scoped_refptr<webrtc::AudioProcessing> apm = webrtc::AudioProcessingBuilder().Create();
-    if (apm == nullptr) return nullptr;
+// Speech enhancement levels exposed through the C ABI. The default is `off`:
+// the microphone signal then keeps its level and timbre, which is what the
+// archive wants. `mild` and `aggressive` add WebRTC's noise suppressor and the
+// DC/high-pass stage on top of the canceller.
+constexpr int kEnhanceOff = 0;
+constexpr int kEnhanceMild = 1;
+constexpr int kEnhanceAggressive = 2;
+
+webrtc::AudioProcessing::Config apm_config_for(int enhancement) {
     webrtc::AudioProcessing::Config config;
-    // Only the echo canceller runs: no AGC, no extra noise suppression and no
-    // separate high-pass stage, so the microphone signal keeps its level and
-    // timbre and quiet near-end speech is not damaged.
     config.echo_canceller.enabled = true;
     config.echo_canceller.mobile_mode = false;
     config.echo_canceller.export_linear_aec_output = false;
+    // Never the gain controllers: they ride the whole recording up and down
+    // and destroy quiet speech, which reads as pumping rather than as cleanup.
     config.gain_controller1.enabled = false;
     config.gain_controller2.enabled = false;
-    config.noise_suppression.enabled = false;
-    config.high_pass_filter.enabled = false;
-    apm->ApplyConfig(config);
+    const bool on = enhancement != kEnhanceOff;
+    config.high_pass_filter.enabled = on;
+    config.noise_suppression.enabled = on;
+    config.noise_suppression.level = enhancement == kEnhanceAggressive
+                                         ? webrtc::AudioProcessing::Config::NoiseSuppression::Level::kHigh
+                                         : webrtc::AudioProcessing::Config::NoiseSuppression::Level::kModerate;
+    return config;
+}
+
+rtc::scoped_refptr<webrtc::AudioProcessing> create_apm(int enhancement) {
+    rtc::scoped_refptr<webrtc::AudioProcessing> apm = webrtc::AudioProcessingBuilder().Create();
+    if (apm == nullptr) return nullptr;
+    apm->ApplyConfig(apm_config_for(enhancement));
     return apm;
 }
 
@@ -43,6 +58,9 @@ struct lynse_aec {
     webrtc::StreamConfig stream_config;
     int sample_rate = 0;
     int frame_samples = 0;
+    /// Speech enhancement level currently applied; re-created instances must
+    /// restore it or a device switch would silently drop the user's setting.
+    int enhancement = 0;
     float *reverse_buffer = nullptr;
     float *near_buffer = nullptr;
 
@@ -54,7 +72,7 @@ struct lynse_aec {
 
 lynse_aec_t *lynse_aec_create(int sample_rate_hz) {
     if (!is_supported_rate(sample_rate_hz)) return nullptr;
-    rtc::scoped_refptr<webrtc::AudioProcessing> apm = create_apm();
+    rtc::scoped_refptr<webrtc::AudioProcessing> apm = create_apm(kEnhanceOff);
     if (apm == nullptr) return nullptr;
 
     lynse_aec *aec = new (std::nothrow) lynse_aec();
@@ -98,12 +116,20 @@ int lynse_aec_process_near(lynse_aec_t *aec, float *samples, int frame_count, in
     return 0;
 }
 
+int lynse_aec_set_enhancement(lynse_aec_t *aec, int level) {
+    if (aec == nullptr) return -1;
+    if (level < kEnhanceOff || level > kEnhanceAggressive) return -2;
+    aec->apm->ApplyConfig(apm_config_for(level));
+    aec->enhancement = level;
+    return 0;
+}
+
 void lynse_aec_reset(lynse_aec_t *aec) {
     if (aec == nullptr) return;
     // APM has no public reset; swapping in a fresh instance is the canonical
     // way (mirrors what PulseAudio does on stream changes) and is cheap
     // enough for the rare device-switch path.
-    rtc::scoped_refptr<webrtc::AudioProcessing> fresh = create_apm();
+    rtc::scoped_refptr<webrtc::AudioProcessing> fresh = create_apm(aec->enhancement);
     if (fresh == nullptr) return;
     aec->apm = std::move(fresh);
 }

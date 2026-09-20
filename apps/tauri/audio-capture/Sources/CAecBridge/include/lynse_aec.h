@@ -40,6 +40,12 @@ int lynse_aec_process_reverse(lynse_aec_t *aec, const float *samples, int frame_
 /// Returns 0 on success, negative on API misuse.
 int lynse_aec_process_near(lynse_aec_t *aec, float *samples, int frame_count, int delay_ms);
 
+/// Toggle speech enhancement (WebRTC noise suppression + high-pass filter) on
+/// the near-end microphone path. Safe at any time; applies from the next frame
+/// and survives `lynse_aec_reset`. Levels: 0 off, 1 mild, 2 aggressive.
+/// Returns 0 on success, negative on API misuse.
+int lynse_aec_set_enhancement(lynse_aec_t *aec, int level);
+
 /// Drop all learned state (echo path estimate, delay alignment). Use after a
 /// capture restart or device switch.
 void lynse_aec_reset(lynse_aec_t *aec);

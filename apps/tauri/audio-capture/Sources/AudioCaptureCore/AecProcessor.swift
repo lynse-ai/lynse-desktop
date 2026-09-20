@@ -8,6 +8,15 @@ import Foundation
 /// Thread safety: callers serialize access (the capture pipeline runs on one
 /// processing queue).
 public final class AecProcessor {
+    /// Microphone-path speech enhancement. `off` keeps the capture exactly as
+    /// the driver delivered it; the other levels add WebRTC noise suppression
+    /// and the DC/high-pass stage on top of the canceller.
+    public enum Enhancement: Int32 {
+        case off = 0
+        case mild = 1
+        case aggressive = 2
+    }
+
     public static let processingRate = 48_000
     /// Samples in one 10 ms engine frame at the processing rate.
     public static let frameSamples = processingRate / 100
@@ -50,6 +59,13 @@ public final class AecProcessor {
             lynse_aec_process_near(handle, buffer.baseAddress, Int32(buffer.count), delayHintMs)
         }
         return result == 0
+    }
+
+    /// Applies or removes speech enhancement on the near-end path. Safe at any
+    /// time; takes effect from the next frame and survives `reset()`.
+    @discardableResult
+    public func setEnhancement(_ level: Enhancement) -> Bool {
+        lynse_aec_set_enhancement(handle, level.rawValue) == 0
     }
 
     /// Drops all learned state (echo path, delay alignment).

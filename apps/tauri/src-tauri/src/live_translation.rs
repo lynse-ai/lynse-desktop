@@ -236,6 +236,12 @@ pub struct StartRequest {
     /// only affects new recordings, existing dual-format ones keep loading.
     #[serde(default)]
     dual_channel: Option<bool>,
+    /// Speech enhancement on the microphone path (noise suppression +
+    /// high-pass). Absent means off. It rides the canceller's audio-processing
+    /// module, so it takes effect on the dual-channel path; the raw capture
+    /// tracks stay untouched either way and can be reprocessed later.
+    #[serde(default)]
+    voice_enhancement: Option<bool>,
 }
 
 impl StartRequest {
@@ -432,6 +438,8 @@ struct LiveSession {
     /// echo de-duplication (real-time overlaps stay visible) and persists the
     /// track manifest with the recording.
     dual_channel: bool,
+    /// Microphone speech enhancement requested for this session.
+    voice_enhancement: bool,
     /// False for mic-only sessions: no system mixdown is captured.
     wants_system: bool,
     /// Last instant the session saw evidence of voice — a recognized provider
@@ -518,14 +526,14 @@ fn emit_stream_state(app: &AppHandle, source: AudioSource, state: &str, epoch: u
     );
 }
 
-/// Echo cancellation switch for the capture pipeline. Currently **off**: the
-/// canceller left periodic 10 ms / 20 ms discontinuities in the archived audio
-/// (block-length artifacts in the played file — exactly the "颤抖/咔哒" report),
-/// so the 48 kHz master is produced from the unprocessed capture until that is
-/// resolved. `LYNSE_AEC=1` re-attaches it without a rebuild; live capture, the
-/// Windows engine and offline reprocessing all read this one switch.
+/// Echo cancellation on the microphone path. On by default; `LYNSE_AEC=0`
+/// bypasses the canceller while still archiving the raw 48 kHz tracks and the
+/// master, so an A/B comparison stays one environment variable away. Live
+/// capture, the Windows engine and offline reprocessing all read this switch —
+/// they must not disagree, or reprocessing would rewrite a session's audio in
+/// a shape capture never produced.
 pub(crate) fn aec_enabled() -> bool {
-    matches!(std::env::var("LYNSE_AEC").as_deref(), Ok("1"))
+    !matches!(std::env::var("LYNSE_AEC").as_deref(), Ok("0"))
 }
 
 #[cfg(target_os = "macos")]
@@ -831,6 +839,7 @@ pub async fn live_translation_start(
         // Cross-platform feature switch: macOS gates `--aec` on it; Windows
         // gates the AEC bridge + raw tracks (see CaptureConfig::aec_enabled).
         dual_channel: request.dual_channel.unwrap_or(true),
+        voice_enhancement: request.voice_enhancement.unwrap_or(false),
         last_voice_at: Mutex::new(Instant::now()),
         auto_stopped_silence: AtomicBool::new(false),
         directory,
@@ -876,6 +885,17 @@ pub async fn live_translation_start(
             .stderr(Stdio::piped());
         if session.dual_channel && aec_enabled() {
             command.arg("--aec");
+            if session.voice_enhancement {
+                // 1 = mild. The aggressive level is reachable later through the
+                // same argument; a toggle is enough for the UI for now.
+                command.arg("--enhance").arg("1");
+            }
+        } else if session.voice_enhancement {
+            log::warn!(
+                "voice enhancement requested but the canceller is inactive (session={} dual_channel={}); skipping",
+                session.session_id,
+                session.dual_channel
+            );
         }
         let mut child = match command.spawn() {
             Ok(child) => child,
@@ -3503,6 +3523,9 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
         capture_stop: Arc::new(AtomicBool::new(true)),
         wants_mic: true,
         dual_channel,
+        // Recovery replays whatever the sidecar already archived; enhancement is a
+        // capture-time decision and cannot be applied retroactively.
+        voice_enhancement: false,
         last_voice_at: Mutex::new(Instant::now()),
         auto_stopped_silence: AtomicBool::new(false),
     };
@@ -4030,6 +4053,7 @@ mod tests {
             wants_mic: true,
             wants_system: true,
             dual_channel: false,
+            voice_enhancement: false,
             last_voice_at: Mutex::new(Instant::now()),
             auto_stopped_silence: AtomicBool::new(false),
             directory: std::env::temp_dir(),

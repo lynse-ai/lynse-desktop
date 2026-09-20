@@ -49,6 +49,8 @@ export interface UseRecordingSessionReturn {
   bookmarked: boolean;
   /** Whether live translation (target-language output) is enabled inside live mode. */
   translationEnabled: boolean;
+  /** Microphone speech enhancement, read when the next recording starts. */
+  voiceEnhancement: boolean;
 
   // ── view snapshot shortcuts ──
   sessionId: string | undefined;
@@ -71,6 +73,8 @@ export interface UseRecordingSessionReturn {
   setBookmarked: (v: boolean) => void;
   /** Turn live translation on/off. Applied live via `setMode` while a session runs. */
   setTranslationEnabled: (enabled: boolean) => Promise<void>;
+  /** Flip microphone speech enhancement for the next recording. */
+  toggleVoiceEnhancement: () => void;
   /** Re-point the translation direction (source/target). Applies live via
    *  setMode when a session is running; otherwise stores the intent. */
   setDirection: (source: string, target: string) => Promise<boolean>;
@@ -91,6 +95,10 @@ export function useRecordingSession(): UseRecordingSessionReturn {
   const [translationEnabled, setTranslationFlag] = useState(
     Boolean(view.targetLanguage && view.targetLanguage !== "none"),
   );
+  // Microphone speech enhancement. Off by default: the archive is meant to be
+  // faithful, and enhancement trades ~3 dB of near-end level for ~14 dB of
+  // noise floor. It is read when a recording starts.
+  const [voiceEnhancement, setVoiceEnhancementFlag] = useState(false);
 
   // ── derived values ──
   // Treat any non-idle, non-stopping session as "recording" so the Start button
@@ -246,6 +254,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
         epoch: 0,
         connections: [],
         audioSources,
+        voiceEnhancement,
       });
 
       // If the user picked live mode before starting, attempt to switch
@@ -263,7 +272,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     } finally {
       setBusy(false);
     }
-  }, [api, recording, ensurePermissions, mode, switchMode, t, view.state]);
+  }, [api, recording, ensurePermissions, mode, switchMode, voiceEnhancement, t, view.state]);
 
   // ── pause / resume ----------------------------------------------
   const togglePause = useCallback(async () => {
@@ -299,6 +308,14 @@ export function useRecordingSession(): UseRecordingSessionReturn {
       setBusy(false);
     }
   }, [api, view.sessionId, view.state, view.epoch, view.sourceLanguage, activeMode, translationEnabled, targetLanguage]);
+
+  // ── microphone speech enhancement -------------------------------
+  // Applies to the recording that starts next: the canceller's audio-processing
+  // module is configured when capture spins up, and switching it mid-run would
+  // leave one file with two different noise floors.
+  const toggleVoiceEnhancement = useCallback(() => {
+    setVoiceEnhancementFlag((current) => !current);
+  }, []);
 
   // ── mode selector -----------------------------------------------
   const selectMode = useCallback(async (next: RecordMode) => {
@@ -368,6 +385,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     blocked,
     bookmarked,
     translationEnabled,
+    voiceEnhancement,
     sessionId: view.sessionId,
     elapsedMs: view.elapsedMs,
     micLevel: view.micLevel,
@@ -382,6 +400,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     selectMode,
     setBookmarked,
     setTranslationEnabled,
+    toggleVoiceEnhancement,
     setDirection,
   };
 }

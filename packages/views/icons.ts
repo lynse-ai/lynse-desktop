@@ -118,6 +118,7 @@ export {
   VolumeX,          // Volume off / mute
   Captions,         // Live transcription toggle
   CaptionsOff,      // Live transcription toggle (off / exit state)
+  Speech,           // Microphone speech-enhancement toggle (a person speaking)
   Languages,        // Live translation switch (speech → translated text)
 
   // ── Actions (extra) ──────────────────────────────────

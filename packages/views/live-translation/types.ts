@@ -135,6 +135,10 @@ export interface LiveStartRequest {
   /** Windows: pin the system mixdown to this render endpoint id. Omitted
    * follows the OS default. */
   systemDeviceId?: string;
+  /** Speech enhancement on the microphone path (noise suppression + high-pass).
+   * A capture-time decision: it applies to the recording that is about to
+   * start, never retroactively. Raw tracks are archived unprocessed either way. */
+  voiceEnhancement?: boolean;
 }
 
 /** One selectable WASAPI endpoint, as surfaced by the device pickers. */

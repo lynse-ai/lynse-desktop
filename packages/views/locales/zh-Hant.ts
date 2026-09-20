@@ -856,6 +856,7 @@ const zhHant = {
     authorize: "授權 WorkBuddy",
     reauthorize: "重新授權",
     refresh: "重新整理狀態",
+    nickname_label: "暱稱",
     account_label: "授權帳號",
     scope_label: "授權範圍",
     expires_label: "有效期至",
@@ -921,6 +922,18 @@ const zhHant = {
       qwen3Small: {
         name: "Qwen3-ASR 0.6B（4-bit）",
         description: "極速檔，適合低配機器，MLX 4-bit，約 0.6 GiB。",
+      },
+      whisperTurbo: {
+        name: "Whisper large-v3-turbo（q5_0）",
+        description: "Windows 預設引擎與跨平台通用檔：macOS 走 Metal，Windows 走 Vulkan，無獨顯自動回退 CPU。約 574 MB。",
+      },
+      whisperMedium: {
+        name: "Whisper medium（q5_0）",
+        description: "精度與速度平衡，約 539 MB。",
+      },
+      whisperSmall: {
+        name: "Whisper small（q5_1）",
+        description: "輕量極速檔，約 190 MB。",
       },
     },
   },

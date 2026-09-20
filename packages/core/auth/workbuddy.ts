@@ -175,6 +175,36 @@ function parseExpiresAtMs(expiresAt?: string): number {
   return Number.isNaN(ms) ? 0 : ms;
 }
 
+/** WorkBuddy user profile (`user.profile.readable`). */
+export interface WorkBuddyProfile {
+  nickname?: string;
+  avatar?: string;
+}
+
+/**
+ * `GET /user/profile` — the WorkBuddy user's nickname and avatar. Tolerates
+ * both the documented bare-object shape and a `{ code, data }` envelope;
+ * a nonzero envelope code surfaces as an error.
+ */
+export async function getWorkBuddyProfile(): Promise<WorkBuddyProfile> {
+  const body = await callWorkBuddyOpenApi<unknown>("/user/profile");
+  const root = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
+  if (typeof root.code === "number" && root.code !== 0) {
+    throw new Error(
+      typeof root.msg === "string" && root.msg
+        ? `WorkBuddy profile error: ${root.msg}`
+        : `WorkBuddy profile error (${root.code})`,
+    );
+  }
+  const data = (
+    root.data && typeof root.data === "object" ? root.data : root
+  ) as Record<string, unknown>;
+  return {
+    nickname: typeof data.nickname === "string" ? data.nickname : undefined,
+    avatar: typeof data.avatar === "string" ? data.avatar : undefined,
+  };
+}
+
 /**
  * In-memory access token for direct WorkBuddy OpenAPI calls, refreshed through
  * the Lynse backend when missing or close to expiry. Never persisted — the

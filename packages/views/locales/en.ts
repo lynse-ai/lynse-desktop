@@ -859,6 +859,7 @@ const en = {
     authorize: "Authorize WorkBuddy",
     reauthorize: "Re-authorize",
     refresh: "Refresh status",
+    nickname_label: "Nickname",
     account_label: "Account",
     scope_label: "Scope",
     expires_label: "Expires",
@@ -924,6 +925,18 @@ const en = {
       qwen3Small: {
         name: "Qwen3-ASR 0.6B (4-bit)",
         description: "Fastest tier for low-memory machines — MLX 4-bit, ~0.6 GiB.",
+      },
+      whisperTurbo: {
+        name: "Whisper large-v3-turbo (q5_0)",
+        description: "The Windows default engine and cross-platform general tier: Metal on macOS, Vulkan on Windows, automatic CPU fallback without a GPU. ~574 MB.",
+      },
+      whisperMedium: {
+        name: "Whisper medium (q5_0)",
+        description: "Balanced accuracy and speed, ~539 MB.",
+      },
+      whisperSmall: {
+        name: "Whisper small (q5_1)",
+        description: "Lightweight and fast, ~190 MB.",
       },
     },
   },

@@ -858,6 +858,7 @@ const ko = {
     authorize: "WorkBuddy 인증",
     reauthorize: "다시 인증",
     refresh: "상태 새로고침",
+    nickname_label: "닉네임",
     account_label: "인증 계정",
     scope_label: "권한 범위",
     expires_label: "만료일",
@@ -923,6 +924,18 @@ const ko = {
       qwen3Small: {
         name: "Qwen3-ASR 0.6B(4-bit)",
         description: "최속. 저사양 기기용. MLX 4-bit, 약 0.6 GiB.",
+      },
+      whisperTurbo: {
+        name: "Whisper large-v3-turbo(q5_0)",
+        description: "Windows 기본 엔진, 크로스 플랫폼: macOS는 Metal, Windows는 Vulkan, GPU가 없으면 자동으로 CPU로 대체. 약 574 MB.",
+      },
+      whisperMedium: {
+        name: "Whisper medium(q5_0)",
+        description: "정확도와 속도의 균형. 약 539 MB.",
+      },
+      whisperSmall: {
+        name: "Whisper small(q5_1)",
+        description: "경량·최속. 약 190 MB.",
       },
     },
   },

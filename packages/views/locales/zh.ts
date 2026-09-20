@@ -857,6 +857,7 @@ const zh = {
     authorize: "授权 WorkBuddy",
     reauthorize: "重新授权",
     refresh: "刷新状态",
+    nickname_label: "昵称",
     account_label: "授权账号",
     scope_label: "授权范围",
     expires_label: "有效期至",
@@ -922,6 +923,18 @@ const zh = {
       qwen3Small: {
         name: "Qwen3-ASR 0.6B（4-bit）",
         description: "极速档，适合低配机器，MLX 4-bit，约 0.6 GiB。",
+      },
+      whisperTurbo: {
+        name: "Whisper large-v3-turbo（q5_0）",
+        description: "Windows 默认引擎与跨平台通用档：macOS 走 Metal，Windows 走 Vulkan，无独显自动回退 CPU。约 574 MB。",
+      },
+      whisperMedium: {
+        name: "Whisper medium（q5_0）",
+        description: "精度与速度平衡，约 539 MB。",
+      },
+      whisperSmall: {
+        name: "Whisper small（q5_1）",
+        description: "轻量极速档，约 190 MB。",
       },
     },
   },

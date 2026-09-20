@@ -6,12 +6,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/u
 import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
 import {
+  getWorkBuddyProfile,
   getWorkBuddyToken,
   isWorkBuddyNotBoundError,
   pollWorkBuddyAuthorization,
   startWorkBuddyAuthorization,
   WORKBUDDY_ERROR,
   WorkBuddyPollTimeoutError,
+  type WorkBuddyProfile,
   type WorkBuddyTokenInfo,
 } from "@lynse/core/auth/workbuddy";
 import { Briefcase, Loader2, RefreshCw } from "../icons";
@@ -55,6 +57,8 @@ export function WorkBuddyConfigCard() {
   const { t } = useTranslation();
   const isDesktop = !!getDesktopAppApi();
   const [info, setInfo] = useState<WorkBuddyTokenInfo | null>(null);
+  /** WorkBuddy user profile (nickname/avatar), loaded when bound. */
+  const [profile, setProfile] = useState<WorkBuddyProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<WorkBuddyErrorCopy | null>(null);
   /** Non-null while the browser authorization is in flight and being polled. */
@@ -81,6 +85,26 @@ export function WorkBuddyConfigCard() {
   useEffect(() => {
     void loadStatus();
   }, [loadStatus]);
+
+  // Profile rides on the same ticket; refetch whenever the binding changes
+  // (first load, re-authorize, disconnect). Failure just hides the row.
+  useEffect(() => {
+    if (!info?.authorized) {
+      setProfile(null);
+      return;
+    }
+    let cancelled = false;
+    getWorkBuddyProfile()
+      .then((profile) => {
+        if (!cancelled) setProfile(profile);
+      })
+      .catch((error: unknown) => {
+        console.warn("[workbuddy] profile fetch failed:", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [info?.authorized, info?.accessToken]);
 
   // Leaving the settings page cancels a running poll.
   useEffect(
@@ -163,6 +187,24 @@ export function WorkBuddyConfigCard() {
 
         {bound && info && (
           <div className="space-y-1.5 rounded-md border bg-muted/30 p-2.5">
+            {(profile?.nickname || profile?.avatar) && (
+              <div className="flex items-center justify-between gap-3">
+                <span className="shrink-0 text-2xs text-muted-foreground">
+                  {t("workbuddy.nickname_label")}
+                </span>
+                <span className="flex min-w-0 items-center gap-1.5 text-2xs">
+                  {profile?.avatar && (
+                    <img
+                      src={profile.avatar}
+                      alt=""
+                      className="size-4 shrink-0 rounded-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  )}
+                  <span className="truncate">{profile?.nickname || "—"}</span>
+                </span>
+              </div>
+            )}
             <div className="flex items-center justify-between gap-3">
               <span className="shrink-0 text-2xs text-muted-foreground">
                 {t("workbuddy.account_label")}

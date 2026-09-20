@@ -859,6 +859,7 @@ const ja = {
     authorize: "WorkBuddy を認証",
     reauthorize: "再認証",
     refresh: "状態を更新",
+    nickname_label: "ニックネーム",
     account_label: "認証アカウント",
     scope_label: "認証スコープ",
     expires_label: "有効期限",
@@ -924,6 +925,18 @@ const ja = {
       qwen3Small: {
         name: "Qwen3-ASR 0.6B（4-bit）",
         description: "最速。低メモリ機向け。MLX 4-bit、約 0.6 GiB。",
+      },
+      whisperTurbo: {
+        name: "Whisper large-v3-turbo（q5_0）",
+        description: "Windows の既定エンジン、クロスプラットフォーム対応：macOS は Metal、Windows は Vulkan、GPU なしでは自動で CPU にフォールバック。約 574 MB。",
+      },
+      whisperMedium: {
+        name: "Whisper medium（q5_0）",
+        description: "精度と速度のバランス型。約 539 MB。",
+      },
+      whisperSmall: {
+        name: "Whisper small（q5_1）",
+        description: "軽量・最速タイプ。約 190 MB。",
       },
     },
   },

@@ -14,7 +14,7 @@ import { featureFlags } from "../feature-flags";
 import { NotificationList } from "../notifications/notification-list";
 import { SettingsDialog } from "../settings/settings-dialog";
 import { UserProfileDropdown } from "./user-profile-dropdown";
-import { isTauri } from "./use-maximized";
+import { isMacDesktop } from "./use-maximized";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -117,10 +117,12 @@ export function LynseSidebar() {
       <aside
         className={cn(
           "lyse-sidebar flex h-full w-[68px] shrink-0 flex-col items-center bg-sidebar pb-2",
-          // On desktop the macOS traffic lights overlay the window top (bottom
+          // Only macOS overlays the traffic lights on the window top (bottom
           // edge ≈ 39px) — keep the avatar below with clear breathing room.
-          // Web has no lights and keeps the tighter padding.
-          isTauri ? "pt-[54px]" : "pt-10"
+          // Windows/Linux desktops have a native title bar and no lights over
+          // the rail, and the web has none either — both keep the tighter
+          // padding.
+          isMacDesktop ? "pt-[54px]" : "pt-10"
         )}
         data-tauri-drag-region
       >

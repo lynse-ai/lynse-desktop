@@ -14,6 +14,15 @@ export const isTauri =
   ).__TAURI_INTERNALS__;
 
 /**
+ * Desktop on macOS — the only desktop platform whose window overlays the
+ * traffic lights on the webview (Windows/Linux desktops keep their native
+ * title bar instead). Top paddings that clear the lights key off this;
+ * other desktops use the tighter web paddings.
+ */
+export const isMacDesktop =
+  isTauri && /Mac/i.test(navigator.platform || navigator.userAgent);
+
+/**
  * Tracks the main window's maximized/fullscreen state and reflects it onto
  * `<html data-maximized="true|false">` so layout CSS can adapt to wide/large
  * windows (e.g. center the reading column instead of letting it stretch

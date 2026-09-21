@@ -3431,6 +3431,12 @@ fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
 }
 
 fn migrate_electron_data(app: &AppHandle) -> CommandResult<()> {
+    // The source layout (`~/Library/Application Support/Lynse`) only exists
+    // on macOS; elsewhere HOME is not even a standard env var, so running
+    // this would log a bogus migration error on every launch.
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
     let target = app_data_dir(app)?;
     let marker = target.join(".electron-data-migrated");
     if marker.exists() {
@@ -3958,6 +3964,15 @@ pub fn run() {
     }));
 
     tauri::Builder::default()
+        // Must be registered first: a second launch (the user re-clicks the
+        // shortcut while the app lives closed-to-tray) focuses the existing
+        // instance instead of stacking another process. All instances share
+        // one WebView2 browser process on Windows, and stacked instances
+        // destabilise it — a plausible contributor to the app "quitting
+        // itself" mid-recording seen on Windows.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            show_main_window(app);
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
@@ -4033,6 +4048,13 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                // All windows destroyed is what makes Tauri exit the app with
+                // no other trace (e.g. a WebView2 browser-process crash takes
+                // every webview window down at once) — log it so the "app
+                // quit itself" sequence is diagnosable from the log file.
+                log::warn!("window destroyed: {}", window.label());
+            }
             // Closing the main window must not destroy it: the process stays
             // alive in the tray, and a destroyed window can never be reopened
             // from the tray menu or the Dock. Hide instead — the standard
@@ -4181,6 +4203,27 @@ pub fn run() {
             // stay out of sight without this handler.
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen { .. } => show_main_window(app),
+            // `code: None` means the exit was requested because the last
+            // window was destroyed — not an explicit quit. A WebView2
+            // browser-process crash destroys every webview window at once
+            // and would otherwise end the process and kill an in-flight
+            // recording (the Windows "app quits itself" symptom). The
+            // capture session lives entirely in Rust (WASAPI threads +
+            // recovery writers), so the process survives, and the island
+            // window is re-created as the on-screen control surface with
+            // working pause/stop buttons.
+            tauri::RunEvent::ExitRequested { code, api, .. } => {
+                log::info!("Exit requested (explicit code: {code:?})");
+                if code.is_none() && app.state::<LiveTranslationManager>().has_active_session() {
+                    log::error!(
+                        "Blocking app exit: all windows were destroyed while a recording \
+                         session is active — keeping the capture alive (webview crash recovery)"
+                    );
+                    api.prevent_exit();
+                    live_translation::set_recording_island_visible(app, true);
+                }
+            }
+            tauri::RunEvent::Exit => log::info!("App exiting"),
             _ => {}
         });
 }

@@ -8,6 +8,18 @@
 > the history (that commit documents a `vA.B.C(N)` build-counter tag
 > convention), so they are not listed either.
 
+## 1.0.8 (2026-09-21)
+
+### New Features
+
+- Windows local transcription gets a GPU path: the whisper engine ships with a Vulkan-enabled runtime archive (vulkan-1.dll included), the default local STT engine is now chosen per platform, and whisper models are installable from the plugin marketplace.
+- The Settings card shows the WorkBuddy profile (nickname and avatar, first-letter placeholder when no avatar is set). WorkBuddy OpenAPI traffic now runs through the desktop relay — the endpoint returns no CORS headers, so webview calls could never reach it directly.
+
+### Fixed
+
+- Windows: the app could quit by itself mid-recording. When every webview window was destroyed at once (a WebView2 browser-process crash does exactly that), Tauri exited the process silently and the recording died with it. An active recording now blocks that exit and re-creates the island window as the on-screen control surface; a second app launch focuses the running instance instead of stacking another hidden process, and window-destroy/exit events are logged so any recurrence is diagnosable from the log file.
+- Windows: the sidebar's top padding no longer reserves space for the macOS traffic lights it does not have.
+
 ## 1.0.7 (2026-09-20)
 
 ### Fixed

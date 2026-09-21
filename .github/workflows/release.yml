@@ -69,7 +69,7 @@ jobs:
         # inside the runtime archive so end users need no separate Vulkan
         # runtime install. The SDK provides the headers, import lib and glslc
         # shader compiler the ggml Vulkan backend builds against.
-        uses: humbletim/install-vulkan-sdk@v2
+        uses: humbletim/install-vulkan-sdk@v1.2
         with:
           version: latest
           cache: true

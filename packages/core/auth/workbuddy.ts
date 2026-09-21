@@ -197,9 +197,8 @@ const firstStringField = (data: Record<string, unknown>, keys: string[]): string
  */
 export async function getWorkBuddyProfile(): Promise<WorkBuddyProfile> {
   const body = await callWorkBuddyOpenApi<unknown>("/user/profile");
-  // TEMP diagnostics: the real avatar field name has not been verified
-  // against a populated account yet — demote/remove once confirmed.
-  console.warn("[workbuddy] /user/profile raw:", JSON.stringify(body));
+  // Verified live (2026-09-21): the response is the bare documented shape
+  // `{"nickname":"…","avatar":""}` — avatar is "" when the account has none.
   const root = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
   if (typeof root.code === "number" && root.code !== 0) {
     throw new Error(

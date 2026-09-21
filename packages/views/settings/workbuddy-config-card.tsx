@@ -193,13 +193,19 @@ export function WorkBuddyConfigCard() {
                   {t("workbuddy.nickname_label")}
                 </span>
                 <span className="flex min-w-0 items-center gap-1.5 text-2xs">
-                  {profile?.avatar && (
+                  {profile?.avatar ? (
                     <img
                       src={profile.avatar}
                       alt=""
                       className="size-4 shrink-0 rounded-full object-cover"
                       referrerPolicy="no-referrer"
                     />
+                  ) : (
+                    // No avatar on the WorkBuddy side (API returns "") — show
+                    // the nickname initial so the slot stays visible.
+                    <span className="flex size-4 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[8px] font-semibold leading-none text-primary">
+                      {(profile?.nickname ?? "W").slice(0, 1).toUpperCase()}
+                    </span>
                   )}
                   <span className="truncate">{profile?.nickname || "—"}</span>
                 </span>

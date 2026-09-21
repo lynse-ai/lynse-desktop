@@ -71,10 +71,14 @@ build_whisper() {
   cp "$bin" "$target"
   if [[ "$IS_WINDOWS" -eq 1 && " ${gpu_opts[*]} " == *" -DGGML_VULKAN=ON "* && -n "${VULKAN_SDK:-}" ]]; then
     local loader
-    for loader in "$VULKAN_SDK/Lib/vulkan-1.dll" "$VULKAN_SDK/Bin/vulkan-1.dll"; do
+    for loader in "$VULKAN_SDK/Lib/vulkan-1.dll" "$VULKAN_SDK/Bin/vulkan-1.dll" "/c/Windows/System32/vulkan-1.dll"; do
+      # The SDK's own Bin/Lib dirs ship the loader in some SDK versions only;
+      # the silent installer always drops one into System32, so that is the
+      # last-resort source. The runtime archive's completeness gate in
+      # release.yml fails the build when none of these existed.
       if [[ -f "$loader" ]]; then
         cp "$loader" "$SIDECARS/"
-        echo "    vulkan-1.dll -> sidecars"
+        echo "    vulkan-1.dll -> sidecars (from $loader)"
         break
       fi
     done

@@ -69,10 +69,26 @@ jobs:
         # inside the runtime archive so end users need no separate Vulkan
         # runtime install. The SDK provides the headers, import lib and glslc
         # shader compiler the ggml Vulkan backend builds against.
-        uses: humbletim/install-vulkan-sdk@v1.2
-        with:
-          version: latest
-          cache: true
+        #
+        # The humbletim/install-vulkan-sdk action unpacks the installer with
+        # 7z, but since SDK 1.4.313 the official Windows installer appends its
+        # payloads AFTER the 7z stream ("data after the end of archive"), so
+        # only the bootstrap tools unpack — Include/ and Lib/ are missing and
+        # CMake's FindVulkan fails (upstream issues #21/#25). Run the official
+        # installer silently instead: it produces the standard
+        # C:\VulkanSDK\<ver>\{Include,Lib,Bin} layout and exports VULKAN_SDK
+        # for the CMake configure and the fetch-sidecars loader copy.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Invoke-WebRequest -Uri 'https://vulkan.lunarg.com/sdk/latest/windows.txt' -UseBasicParsing).Content.Trim()
+          Write-Host "Installing Vulkan SDK $version"
+          Invoke-WebRequest -Uri "https://sdk.lunarg.com/sdk/download/$version/windows/vulkan_sdk.exe" -OutFile vulkan_sdk.exe
+          $p = Start-Process -FilePath .\vulkan_sdk.exe -Wait -PassThru -ArgumentList '--accept-licenses','--default-answer','--confirm-command','install'
+          if ($p.ExitCode -ne 0) { throw "Vulkan SDK installer exited with $($p.ExitCode)" }
+          $sdk = "C:\VulkanSDK\$version"
+          if (-not (Test-Path "$sdk/Include/vulkan/vulkan.h")) { throw "Vulkan SDK headers missing at $sdk" }
+          Add-Content $env:GITHUB_ENV "VULKAN_SDK=$sdk"
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile

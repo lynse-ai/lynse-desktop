@@ -355,9 +355,14 @@ export function TodoEditSheet({
       toast.success(t("todo.added_to_calendar"));
       onCalendarAdded();
     } catch (err) {
+      // Tauri v2 rejects command errors with the raw error *string*, not an
+      // Error object — `err.message` is undefined there and the Rust detail
+      // would be lost.
+      const message = typeof err === "string" ? err : err instanceof Error ? err.message : "";
+      console.error("[Todo] add to system calendar failed:", err);
       setCalendarError(
-        err instanceof Error && err.message
-          ? `${t("todo.calendar_add_failed")}${err.message}`
+        message
+          ? `${t("todo.calendar_add_failed")}${message}`
           : t("todo.calendar_add_failed"),
       );
     } finally {

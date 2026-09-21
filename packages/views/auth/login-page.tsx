@@ -23,7 +23,7 @@ import {
   smsSessionFromLogin,
 } from "@lynse/core/auth/sms";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { ChevronRight, KeyRound, Loader2, QrCode } from "../icons";
+import { ArrowRight, ChevronRight, KeyRound, Loader2, QrCode } from "../icons";
 import { getDesktopAppApi, openExternalUrl } from "../app-update";
 import { hasDevApiAuth, hasPasswordlessAuth } from "../feature-flags";
 import { PRIVACY_URL, TERMS_URL } from "../about/links";
@@ -31,7 +31,7 @@ import { WechatIcon } from "./wechat-icon";
 import { authErrorText } from "./auth-errors";
 import { ApiAuthPanel } from "./api-auth-panel";
 import { LYNSE_LOGO_SRC } from "./lynse-logo";
-import { LOGIN_BG_SRC } from "./login-bg";
+import { LYNSE_SPLASH_SRC } from "./splash-image";
 
 /** Login QR panel phases. "expired"/"error" offer a manual refresh. */
 type QrPhase = "creating" | "ready" | "scanned" | "expired" | "error";
@@ -284,13 +284,20 @@ export function LoginPage() {
   return (
     /* Locked to the viewport with no page scroll: the column is sized to fit
        the minimum window (600px), and an overflow scrollbar on the login
-       face reads as a glitch. */
-    <main className="relative flex h-dvh flex-col items-center overflow-hidden bg-background px-6">
-      {/* Ambient wallpaper backdrop (swap recipe in login-bg.ts) behind a
-          vertical gradient scrim: heavier at the top and bottom where copy
-          sits, lighter mid-frame so the artwork keeps its drama. */}
+       face reads as a glitch. The `dark` class is forced, not theme-driven:
+       the launch artwork is a black B&W image, so the whole face — tokens,
+       pills, inverted logo — renders in its dark palette in every theme, and
+       the hand-off from the AuthGate splash (same artwork) is seamless.
+       text-foreground is re-declared here because <Input> carries no color
+       class of its own and would otherwise inherit body's light-theme
+       charcoal (invisible on the dark pills). */
+    <main className="dark relative flex h-dvh overflow-hidden bg-[#050505] text-foreground">
+      {/* Launch artwork backdrop — the same image the AuthGate splash shows
+          (swap recipe in splash-image.ts) — behind a vertical scrim (copy
+          legibility top/bottom) plus a horizontal one rising from the right,
+          where the form column sits over the artwork's dark half. */}
       <img
-        src={LOGIN_BG_SRC}
+        src={LYNSE_SPLASH_SRC}
         alt=""
         aria-hidden
         className="pointer-events-none absolute inset-0 h-full w-full select-none object-cover"
@@ -299,16 +306,30 @@ export function LoginPage() {
         aria-hidden
         className="absolute inset-0 bg-gradient-to-b from-background/70 via-background/25 to-background/90"
       />
-
-      <img
-        src={LYNSE_LOGO_SRC}
-        alt="Lynse"
-        className="relative mt-[15vh] h-10 w-auto dark:invert"
+      <div
+        aria-hidden
+        className="absolute inset-0 bg-gradient-to-l from-background/60 via-background/15 to-transparent"
       />
 
-      {/* Generous air below the wordmark — the bare column reads calmer and
-          more premium than a cramped form. */}
-      <div className="relative mt-24 w-full max-w-xs">
+      {/* Right-hand form column: the portrait owns the left half, the form
+          lives on the right. Brand block = wordmark + the brand taglines,
+          kept locale-independent like the wordmark itself. */}
+      <div className="relative z-10 ml-auto flex h-full w-full max-w-md flex-col justify-center pl-6 pr-[6vw]">
+        <div className="flex w-fit flex-col items-center self-center">
+          <img
+            src={LYNSE_LOGO_SRC}
+            alt="Lynse"
+            className="h-9 w-auto dark:invert"
+          />
+          <p className="mt-5 text-lg font-medium tracking-[0.4em] text-foreground">
+            记录 · 思考 · 进化
+          </p>
+          <p className="mt-2 text-xs tracking-[0.35em] text-muted-foreground">
+            CAPTURE. THINK. EVOLVE.
+          </p>
+        </div>
+
+        <div className="mt-12 w-full">
         {view === "more" ? (
           /* ── More ways to sign in ─────────────────────── */
           <div className="space-y-4">
@@ -411,7 +432,7 @@ export function LoginPage() {
               {/* ── Sign-in + agreement ────────────────────── */}
               <Button
                 size="sm"
-                className="mt-10 h-12 w-full rounded-full text-sm font-medium"
+                className="relative mt-10 h-12 w-full rounded-full bg-gradient-to-r from-[color-mix(in_oklab,var(--primary)_55%,white)] to-primary text-sm font-medium text-primary-foreground hover:opacity-90"
                 disabled={loginDisabled}
                 onClick={() => handleSmsLogin()}
               >
@@ -423,11 +444,14 @@ export function LoginPage() {
                 ) : (
                   t("auth.sms_login_btn")
                 )}
+                {!smsSubmitting && (
+                  <ArrowRight className="absolute right-5 top-1/2 size-4 -translate-y-1/2" />
+                )}
               </Button>
               {smsError && (
-                <p className="mt-3 text-center text-xs text-destructive">{smsError}</p>
+                <p className="mt-3 text-left text-xs text-destructive">{smsError}</p>
               )}
-              <div className="mt-4 flex items-start justify-center gap-2">
+              <div className="mt-4 flex items-start gap-2">
                 <button
                   type="button"
                   role="checkbox"
@@ -437,7 +461,7 @@ export function LoginPage() {
                     agreed ? "border-primary bg-primary" : "border-muted-foreground/60"
                   }`}
                 />
-                <p className="text-2xs leading-relaxed text-muted-foreground text-pretty">
+                <p className="text-left text-2xs leading-relaxed text-muted-foreground text-pretty">
                   {t("auth.agree_prefix")}
                   <button
                     type="button"
@@ -535,39 +559,42 @@ export function LoginPage() {
         {error && <p className="mt-3 text-center text-xs text-destructive">{error}</p>}
       </div>
 
-      {/* ── More ways to sign in (phone view) / WeChat wait state ── */}
-      {passwordless && (view === "phone" || wechatWaiting) && (
-        <div className="relative mt-auto w-full max-w-xs pb-10 pt-12">
-          {wechatWaiting ? (
-            <div className="space-y-1.5 text-center">
-              <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                <Loader2 className="size-3.5 animate-spin" />
-                {t("auth.wechat_waiting_scan")}
-              </p>
-              <p className="text-2xs leading-relaxed text-muted-foreground">
-                {t("auth.wechat_waiting_hint")}
-              </p>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-7 text-xs"
-                onClick={handleCancelWechatLogin}
+        {/* ── More ways to sign in (phone view) / WeChat wait state,
+            pinned to the window's bottom edge, right-aligned like the
+            column above ── */}
+        {passwordless && (view === "phone" || wechatWaiting) && (
+          <div className="absolute inset-x-0 bottom-10 px-6 pr-[6vw]">
+            {wechatWaiting ? (
+              <div className="space-y-1.5 text-center">
+                <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  {t("auth.wechat_waiting_scan")}
+                </p>
+                <p className="text-2xs leading-relaxed text-muted-foreground">
+                  {t("auth.wechat_waiting_hint")}
+                </p>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs"
+                  onClick={handleCancelWechatLogin}
+                >
+                  {t("auth.wechat_cancel")}
+                </Button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setView("more")}
+                className="ml-auto flex items-center gap-1 text-2xs text-muted-foreground transition-colors hover:text-foreground"
               >
-                {t("auth.wechat_cancel")}
-              </Button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setView("more")}
-              className="flex w-full items-center justify-center gap-1 text-2xs text-muted-foreground transition-colors hover:text-foreground"
-            >
-              {t("auth.more_login")}
-              <ChevronRight className="size-3" />
-            </button>
-          )}
-        </div>
-      )}
+                {t("auth.more_login")}
+                <ChevronRight className="size-3" />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
     </main>
   );

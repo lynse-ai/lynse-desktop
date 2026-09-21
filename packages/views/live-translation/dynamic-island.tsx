@@ -102,12 +102,14 @@ export function DynamicIsland({
         data-tauri-drag-region
         className="group flex h-11 shrink-0 items-center gap-2 px-3"
       >
-        {/* Red pulse dot */}
+        {/* Red pulse dot — turns warning while a stream error is up (e.g.
+            the engine connection is down): the pill has no room for the
+            message itself, the expanded drawer shows it. */}
         <span
           data-tauri-drag-region
           className={cn(
             "size-2 shrink-0 rounded-full",
-            paused ? "bg-warning" : "bg-destructive animate-pulse",
+            paused ? "bg-warning" : view.lastError ? "bg-warning animate-pulse" : "bg-destructive animate-pulse",
           )}
         />
 

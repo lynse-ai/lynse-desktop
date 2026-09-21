@@ -9,9 +9,11 @@
 # pinned; bump them deliberately when upgrading.
 set -euo pipefail
 
-# Pinned upstream revisions (override via env if needed).
+# Pinned upstream revisions (override via env if needed). WHISPER_REF is a
+# release tag, not master: the GPU backend flags below (and the loader-DLL
+# layout) are only guaranteed against a fixed tree.
 VIBEASR_REF="${VIBEASR_REF:-main}"
-WHISPER_REF="${WHISPER_REF:-master}"
+WHISPER_REF="${WHISPER_REF:-v1.9.4}"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SIDECARS="$ROOT/apps/tauri/src-tauri/resources/sidecars"
@@ -31,14 +33,34 @@ build_whisper() {
   # --recursive: whisper.cpp vendors ggml as a git submodule (third_party/ggml);
   # a shallow clone alone leaves it empty and cmake's add_subdirectory fails.
   git clone --depth 1 --branch "$WHISPER_REF" --recursive https://github.com/ggerganov/whisper.cpp "$src"
-  local metal_opt
+  # GPU backends are a compile-time property: the shipped binary carries one
+  # backend per platform and uses it with zero user configuration (whisper.cpp
+  # falls back to CPU on its own when no Vulkan device is present).
+  #   macOS   -> Metal; ggml embeds the metallib into the binary
+  #              (GGML_METAL_EMBED_LIBRARY), so the single-file sidecar works.
+  #   Windows -> Vulkan (one binary covers NVIDIA / AMD / Intel) with an AVX2
+  #              portable baseline; the Vulkan loader DLL is shipped next to
+  #              the binary so machines without the runtime installed still
+  #              get GPU acceleration.
+  # CoreML is deliberately not enabled: current whisper.cpp hard-fails model
+  # load when the compiled-in CoreML encoder finds no <model>.mlmodelc asset
+  # next to the weights, and we do not ship those assets (yet).
+  local gpu_opts=()
   if [[ "$IS_WINDOWS" -eq 1 ]]; then
-    metal_opt="-DWHISPER_METAL=0"
+    if [[ -n "${VULKAN_SDK:-}" && -d "$VULKAN_SDK" ]] || command -v vulkaninfo >/dev/null 2>&1; then
+      gpu_opts=(-DGGML_VULKAN=ON)
+    else
+      echo "    WARNING: VULKAN_SDK not found — building whisper.cpp CPU-only"
+    fi
+    # AVX2 portable baseline (implied FMA/F16C on MSVC): GGML_NATIVE=OFF keeps
+    # the binary off the build machine's instruction set; AVX512 stays off so
+    # older CPUs never hit an illegal-instruction crash.
+    gpu_opts+=(-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_AVX512=OFF)
   else
-    metal_opt="-DWHISPER_METAL=on"
+    gpu_opts=(-DGGML_METAL=ON)
   fi
   cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release \
-    -DWHISPER_COREML=0 -DBUILD_SHARED_LIBS=OFF $metal_opt
+    -DBUILD_SHARED_LIBS=OFF "${gpu_opts[@]}"
   cmake --build "$src/build" --config Release -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
   local bin
   bin="$(find "$src/build" -type f \( -name 'whisper-cli' -o -name 'whisper-cli.exe' \) | head -n1)"
@@ -47,6 +69,16 @@ build_whisper() {
   local target="$SIDECARS/whisper"
   [[ "$name" == *.exe ]] && target="$SIDECARS/whisper.exe"
   cp "$bin" "$target"
+  if [[ "$IS_WINDOWS" -eq 1 && " ${gpu_opts[*]} " == *" -DGGML_VULKAN=ON "* && -n "${VULKAN_SDK:-}" ]]; then
+    local loader
+    for loader in "$VULKAN_SDK/Lib/vulkan-1.dll" "$VULKAN_SDK/Bin/vulkan-1.dll"; do
+      if [[ -f "$loader" ]]; then
+        cp "$loader" "$SIDECARS/"
+        echo "    vulkan-1.dll -> sidecars"
+        break
+      fi
+    done
+  fi
   rm -rf "$src"
   echo "    whisper -> $(basename "$target")"
 }

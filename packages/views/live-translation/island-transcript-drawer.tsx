@@ -164,8 +164,23 @@ export function IslandTranscriptDrawer({
         onScroll={handleScroll}
         className="min-h-0 flex-1 overflow-y-auto px-4 pb-2"
       >
+        {/* Engine/connection problems surface here — the compact pill gives
+            no room for a message, and "recording but nothing appears" is
+            exactly when the user opens the drawer asking why. */}
+        {view.lastError && (
+          <div className="mb-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2">
+            <p className="break-words text-2xs font-medium leading-relaxed text-destructive">
+              {view.lastError}
+            </p>
+          </div>
+        )}
         {segments.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center text-center">
+          <div
+            className={cn(
+              "flex flex-col items-center justify-center text-center",
+              !view.lastError && "h-full",
+            )}
+          >
             <p className="text-xs font-medium text-foreground/70">
               {t("live_translation.empty_title")}
             </p>

@@ -15,9 +15,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
   if (isLoading) {
-    // Full-bleed launch artwork ("MAKE IT LAST." — waveform breathing into
-    // the Lynse mark) so the cold start reads as the product, not a stalled
-    // blank page. Branding lives inside the image, bottom-right.
+    // Full-bleed launch artwork (profile breathing a waveform into an
+    // orbital constellation against a dark planet arc) so the cold start
+    // reads as the product, not a stalled blank page. No branding is baked
+    // into this variant — the brief loading face stays pure artwork.
     return (
       <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#050505]">
         <img

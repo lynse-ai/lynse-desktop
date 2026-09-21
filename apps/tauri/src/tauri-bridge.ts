@@ -8,7 +8,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { setApiTransportMode } from "@lynse/core/api/client";
 import { setWorkBuddyHttpRelay } from "@lynse/core/auth/workbuddy";
-import { hydrateSecrets, refreshSecret, secureStorage } from "./secure-storage";
+import { hydrateSecrets, refreshSecret, removeSecret, secureStorage, setSecret } from "./secure-storage";
 import type {
   SttDownloadProgress,
   SttModelInfo,
@@ -250,9 +250,9 @@ async function getLiveTranslationProviderConfig(): Promise<LiveTranslationProvid
   };
 }
 
-function saveLiveTranslationProviderConfig(
+async function saveLiveTranslationProviderConfig(
   config: LiveTranslationProviderConfig,
-): LiveTranslationProviderConfig {
+): Promise<LiveTranslationProviderConfig> {
   const normalized: LiveTranslationProviderConfig = {
     provider: config.provider,
     audioSource:
@@ -290,32 +290,32 @@ function saveLiveTranslationProviderConfig(
     String(normalized.ilivedata.maxSpeakers ?? 0),
   );
   if (normalized.ilivedata.secretKey) {
-    secureStorage.setItem(ILIVEDATA_SECRET_KEY, normalized.ilivedata.secretKey);
+    await setSecret(ILIVEDATA_SECRET_KEY, normalized.ilivedata.secretKey);
   } else {
-    secureStorage.removeItem(ILIVEDATA_SECRET_KEY);
+    await removeSecret(ILIVEDATA_SECRET_KEY);
   }
   window.localStorage.setItem(QWEN_ENDPOINT_KEY, normalized.qwen.endpoint);
   if (normalized.qwen.apiKey) {
-    secureStorage.setItem(QWEN_API_KEY, normalized.qwen.apiKey);
+    await setSecret(QWEN_API_KEY, normalized.qwen.apiKey);
   } else {
-    secureStorage.removeItem(QWEN_API_KEY);
+    await removeSecret(QWEN_API_KEY);
   }
   window.localStorage.setItem(VOLC_ENDPOINT_KEY, normalized.volc.endpoint);
   // The legacy console is no longer supported; drop any App Key left behind.
   window.localStorage.removeItem(LEGACY_VOLC_APP_KEY);
   if (normalized.volc.apiKey) {
-    secureStorage.setItem(VOLC_API_KEY, normalized.volc.apiKey);
+    await setSecret(VOLC_API_KEY, normalized.volc.apiKey);
   } else {
-    secureStorage.removeItem(VOLC_API_KEY);
+    await removeSecret(VOLC_API_KEY);
   }
   window.localStorage.setItem(TENCENT_ENDPOINT_KEY, normalized.tencent.endpoint);
   window.localStorage.setItem(TENCENT_APP_ID_KEY, normalized.tencent.appId);
   window.localStorage.setItem(TENCENT_SECRET_ID_KEY, normalized.tencent.secretId);
   window.localStorage.setItem(TENCENT_ENGINE_KEY, normalized.tencent.engineType);
   if (normalized.tencent.secretKey) {
-    secureStorage.setItem(TENCENT_SECRET_KEY, normalized.tencent.secretKey);
+    await setSecret(TENCENT_SECRET_KEY, normalized.tencent.secretKey);
   } else {
-    secureStorage.removeItem(TENCENT_SECRET_KEY);
+    await removeSecret(TENCENT_SECRET_KEY);
   }
   return normalized;
 }

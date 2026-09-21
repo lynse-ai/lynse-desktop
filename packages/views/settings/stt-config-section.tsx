@@ -25,6 +25,7 @@ import {
   findModelStatus,
 } from "../workspace/local-transcription";
 import type { LocalHotwordPackage } from "../workspace/types";
+import { isMacDesktop } from "../layout/use-maximized";
 
 /** Engine id -> translation key, resolved at render time so the labels follow the UI locale.
  *  FunASR is retired from the list (Qwen3-ASR replaces it); stored funasr configs still
@@ -38,6 +39,20 @@ const ENGINE_OPTIONS: { value: SttEngine; labelKey: string }[] = [
   { value: "vibeasr", labelKey: "settings.stt_engine_vibeasr" },
   { value: "mlx", labelKey: "settings.stt_engine_mlx" },
 ];
+
+/** Engines selectable on this desktop. Only the whisper.cpp sidecar runtime
+ *  ships outside macOS — the MLX/venv-bound engines hard-error there on
+ *  first transcription, so they are hidden rather than selectable. */
+const VISIBLE_ENGINE_OPTIONS = isMacDesktop
+  ? ENGINE_OPTIONS
+  : ENGINE_OPTIONS.filter((option) => option.value === "whisper");
+
+/** Platform-aware stand-in for an unset `config.default` — mirrors the Rust
+ *  `ProviderConfig::default()` (Qwen3 on Apple Silicon, whisper elsewhere). */
+const defaultProviderConfig = (): SttProviderConfig =>
+  isMacDesktop
+    ? { provider: "qwen3", model: DEFAULT_QWEN3_MODEL }
+    : { provider: "whisper", model: DEFAULT_WHISPER_MODEL };
 
 function providerForEngine(engine: SttEngine, prev?: SttProviderConfig): SttProviderConfig {
   switch (engine) {
@@ -348,7 +363,7 @@ export function SttConfigSection({
     );
   }
 
-  const defaultConfig: SttProviderConfig = config.default ?? { provider: "qwen3", model: DEFAULT_QWEN3_MODEL };
+  const defaultConfig: SttProviderConfig = config.default ?? defaultProviderConfig();
 
   function updateDefault(next: SttProviderConfig) {
     setConfig((current) => (current ? { ...current, default: next } : current));
@@ -367,7 +382,7 @@ export function SttConfigSection({
           onChange={(event) => changeDefaultEngine(event.target.value as SttEngine)}
           className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
         >
-          {ENGINE_OPTIONS.map((option) => (
+          {VISIBLE_ENGINE_OPTIONS.map((option) => (
             <option key={option.value} value={option.value}>
               {t(option.labelKey)}
             </option>
@@ -390,7 +405,7 @@ export function SttConfigSection({
             variant="outline"
             className="h-6 px-2 text-xs"
             onClick={() =>
-              setLangEntries((list) => [...list, { language: "", config: { provider: "qwen3", model: DEFAULT_QWEN3_MODEL } }])
+              setLangEntries((list) => [...list, { language: "", config: defaultProviderConfig() }])
             }
           >
             <Plus className="mr-1 size-3" />
@@ -440,7 +455,7 @@ export function SttConfigSection({
                 }
                 className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
               >
-                {ENGINE_OPTIONS.map((option) => (
+                {VISIBLE_ENGINE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
                     {t(option.labelKey)}
                   </option>

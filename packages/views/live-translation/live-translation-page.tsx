@@ -101,6 +101,11 @@ export function LiveTranslationPage() {
   const [savingProviderConfig, setSavingProviderConfig] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const pendingTrayActionRef = useRef<LiveTranslationTrayAction | null>(null);
+  // True once the user edited a provider field on this page without saving.
+  // start() re-reads the keychain before connecting; without this flag that
+  // refetch would silently replace the user's typed-but-unsaved key with the
+  // vault's older value — which is then the key that goes to the provider.
+  const configDirtyRef = useRef(false);
   const trayActionHandlerRef = useRef<(action: LiveTranslationTrayAction) => void>(
     () => undefined,
   );
@@ -247,6 +252,7 @@ export function LiveTranslationPage() {
     setSavingProviderConfig(true);
     try {
       setProviderConfig(await api.saveProviderConfig(providerConfig));
+      configDirtyRef.current = false;
       toast.success(t("live_translation.provider_config_saved"));
     } catch (error) {
       toast.error(String(error));
@@ -263,6 +269,7 @@ export function LiveTranslationPage() {
       setProviderConfig(
         await api.saveProviderConfig({ ...providerConfig, audioSource: mode }),
       );
+      configDirtyRef.current = false;
     } catch (error) {
       toast.error(String(error));
     }
@@ -272,6 +279,7 @@ export function LiveTranslationPage() {
     field: keyof LiveTranslationProviderConfig["ilivedata"],
     value: string,
   ) {
+    configDirtyRef.current = true;
     setProviderConfig((current) => ({
       ...current,
       ilivedata: { ...current.ilivedata, [field]: value },
@@ -282,6 +290,7 @@ export function LiveTranslationPage() {
     field: keyof LiveTranslationProviderConfig["qwen"],
     value: string,
   ) {
+    configDirtyRef.current = true;
     setProviderConfig((current) => ({
       ...current,
       qwen: { ...current.qwen, [field]: value },
@@ -292,6 +301,7 @@ export function LiveTranslationPage() {
     field: keyof LiveTranslationProviderConfig["volc"],
     value: string,
   ) {
+    configDirtyRef.current = true;
     setProviderConfig((current) => ({
       ...current,
       volc: { ...current.volc, [field]: value },
@@ -302,6 +312,7 @@ export function LiveTranslationPage() {
     field: keyof LiveTranslationProviderConfig["tencent"],
     value: string,
   ) {
+    configDirtyRef.current = true;
     setProviderConfig((current) => ({
       ...current,
       tencent: { ...current.tencent, [field]: value },
@@ -329,12 +340,19 @@ export function LiveTranslationPage() {
     setBusy(true);
     setCompleted(null);
     try {
-      // Re-read credentials from the OS keychain so a key changed since the
-      // page mounted (or edited outside the app) takes effect without a restart.
+      // Re-read credentials from the OS keychain so a key changed outside the
+      // app (or saved from the settings dialog) takes effect without a
+      // restart. But when the user edited fields on THIS page, the on-screen
+      // values are the newest intent — including a key typed moments ago that
+      // hasn't been saved yet. Letting the refetch win in that case sent the
+      // vault's stale key to the provider (401) right after the user pasted
+      // the new one.
       const freshConfig = await api.getProviderConfig().catch(() => providerConfig);
-      setProviderConfig(freshConfig);
-      const savedProviderConfig = await api.saveProviderConfig(freshConfig);
+      const effectiveConfig = configDirtyRef.current ? providerConfig : freshConfig;
+      setProviderConfig(effectiveConfig);
+      const savedProviderConfig = await api.saveProviderConfig(effectiveConfig);
       setProviderConfig(savedProviderConfig);
+      configDirtyRef.current = false;
       // Capture starts first and stands on its own: minting recognition
       // credentials before the recording exists meant one unreachable provider
       // (or one revoked key) cost the user the whole meeting. Same-language

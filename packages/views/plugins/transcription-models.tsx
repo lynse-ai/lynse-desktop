@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/ui/card";
+import { Progress } from "@lynse/ui/components/ui/progress";
+import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
   type DesktopLocalTranscriptionApi,
@@ -27,9 +29,11 @@ import type { PluginManifest } from "./types";
  * existing download pipeline on first use and is not user-visible.
  *
  * Community lineup (PRD v0.5): FunASR latest + WhisperX latest first, Qwen3
- * both tiers retained. MOSS waits until quantization/adaptation lands; the
- * legacy whisper/vibeasr/mlx tiers stay functional for existing installs but
- * are not listed.
+ * both tiers retained, plus the whisper.cpp tiers — whisper is the only local
+ * engine shipped on Windows (Vulkan-enabled sidecar) so its models must be
+ * installable there; on macOS the sidecar runs on Metal. MOSS waits until
+ * quantization/adaptation lands; the vibeasr/mlx tiers stay functional for
+ * existing installs but are not listed.
  */
 
 export interface TranscriptionModelEntry {
@@ -72,6 +76,30 @@ export const TRANSCRIPTION_MODEL_CATALOG: TranscriptionModelEntry[] = [
     modelId: "qwen3-asr-0.6b-4bit",
     nameKey: "plugins.models.qwen3Small.name",
     descriptionKey: "plugins.models.qwen3Small.description",
+    badges: [],
+  },
+  {
+    pluginId: "lynse.model.whisper-large-v3-turbo-q5_0",
+    engine: "whisper",
+    modelId: "large-v3-turbo-q5_0",
+    nameKey: "plugins.models.whisperTurbo.name",
+    descriptionKey: "plugins.models.whisperTurbo.description",
+    badges: ["recommended"],
+  },
+  {
+    pluginId: "lynse.model.whisper-medium-q5_0",
+    engine: "whisper",
+    modelId: "medium-q5_0",
+    nameKey: "plugins.models.whisperMedium.name",
+    descriptionKey: "plugins.models.whisperMedium.description",
+    badges: [],
+  },
+  {
+    pluginId: "lynse.model.whisper-small-q5_1",
+    engine: "whisper",
+    modelId: "small-q5_1",
+    nameKey: "plugins.models.whisperSmall.name",
+    descriptionKey: "plugins.models.whisperSmall.description",
     badges: [],
   },
 ];
@@ -137,6 +165,14 @@ const BADGE_LABEL_KEYS: Record<TranscriptionModelEntry["badges"][number], string
   diarization: "plugins.models.badge_diarization",
   voiceprint: "plugins.models.badge_voiceprint",
 };
+
+/** Human-readable download byte counts: GiB for model-scale artifacts,
+ * MB for the smaller whisper tiers. */
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MB`;
+  return `${Math.round(bytes / 1024)} KB`;
+}
 
 /**
  * The 转写模型 category of the plugin community: download / delete offline
@@ -259,9 +295,10 @@ export function TranscriptionModelsSection({
             progress.phase !== "error" &&
             progress.phase !== "done";
           const busyHere = busy || isThisDownloading;
-          const percent =
-            progress && isThisDownloading && progress.percent !== null
-              ? `${Math.round(progress.percent)}%`
+          const percent = isThisDownloading && progress ? progress.percent : null;
+          const bytesLabel =
+            isThisDownloading && progress && progress.totalBytes > 0
+              ? `${formatBytes(progress.receivedBytes)} / ${formatBytes(progress.totalBytes)}`
               : null;
           return (
             <div key={entry.pluginId} className="flex items-start gap-3 rounded-md border bg-background p-2.5">
@@ -292,10 +329,19 @@ export function TranscriptionModelsSection({
                   {t(entry.descriptionKey)}
                 </p>
                 {isThisDownloading && (
-                  <p className="mt-1 text-2xs text-muted-foreground">
-                    {t("settings.stt_status_downloading")}
-                    {percent ? ` · ${percent}` : ""}
-                  </p>
+                  <div className="mt-1.5">
+                    {/* Indeterminate (null percent) pulses until the first
+                        real progress tick from the download pipeline. */}
+                    <Progress
+                      value={percent ?? 0}
+                      className={cn("h-1.5", percent === null && "animate-pulse")}
+                    />
+                    <p className="mt-1 text-2xs text-muted-foreground">
+                      {t("settings.stt_status_downloading")}
+                      {percent !== null ? ` · ${Math.round(percent)}%` : ""}
+                      {bytesLabel ? ` · ${bytesLabel}` : ""}
+                    </p>
+                  </div>
                 )}
                 {isThisDownloading && progress?.phase === "runtime_downloading" && (
                   <p className="text-2xs text-muted-foreground">

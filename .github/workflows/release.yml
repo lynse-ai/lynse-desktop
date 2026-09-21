@@ -62,6 +62,18 @@ jobs:
         # library, does ship with the Xcode command line tools.
         run: brew install meson ninja
 
+      - name: Install Vulkan SDK (Windows whisper build)
+        if: runner.os == 'Windows'
+        # The Windows whisper.cpp sidecar is compiled with GGML_VULKAN: one
+        # binary serves NVIDIA / AMD / Intel GPUs, and vulkan-1.dll is shipped
+        # inside the runtime archive so end users need no separate Vulkan
+        # runtime install. The SDK provides the headers, import lib and glslc
+        # shader compiler the ggml Vulkan backend builds against.
+        uses: humbletim/install-vulkan-sdk@v2
+        with:
+          version: latest
+          cache: true
+
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
@@ -86,6 +98,39 @@ jobs:
             "$SIDECARS/ffmpeg" -f lavfi -i "sine=frequency=1000:duration=1" -ar 16000 -ac 1 -c:a pcm_s16le "$RUNNER_TEMP/tone.wav"
           fi
           test -s "$RUNNER_TEMP/tone.wav" && echo "ffmpeg conversion OK"
+
+      - name: Package STT runtime archive
+        id: runtime
+        # The on-demand shared runtime (lib.rs ensure_runtime_available) is
+        # downloaded at first offline-model install from the GitHub release /
+        # CloudBase mirror. The archive SHA is stamped into the app binary via
+        # GITHUB_ENV → option_env! (LYNSE_RUNTIME_SHA_*); the mirror-cloudbase
+        # job re-uploads the archive to CloudBase together with the installers.
+        # Runs BEFORE the Tauri build so the SHA is visible to the Rust build.
+        shell: bash
+        run: |
+          set -euo pipefail
+          SIDECARS=apps/tauri/src-tauri/resources/sidecars
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            PLATFORM=macos-aarch64
+            SHA_VAR=LYNSE_RUNTIME_SHA_MACOS_AARCH64
+          else
+            PLATFORM=windows-x86_64
+            SHA_VAR=LYNSE_RUNTIME_SHA_WINDOWS_X86_64
+          fi
+          # Hard gate: a Windows archive without the Vulkan loader would pass
+          # the client's completeness check but silently run CPU-only.
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            test -s "$SIDECARS/vulkan-1.dll" \
+              || { echo "::error::vulkan-1.dll missing from sidecars — the whisper build went out CPU-only"; exit 1; }
+          fi
+          ARCHIVE="lynse-stt-runtime-$PLATFORM.tar.gz"
+          tar -czf "$ARCHIVE" -C "$SIDECARS" .
+          SHA=$(sha256sum "$ARCHIVE" | cut -d' ' -f1)
+          echo "$SHA_VAR=$SHA" >> "$GITHUB_ENV"
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+          echo "packaged $ARCHIVE (sha256 $SHA)"
+          ls -la "$ARCHIVE"
 
       - name: Detect Apple signing secrets (macOS)
         # Developer ID signing + notarization is opt-in via six APPLE_*
@@ -209,6 +254,29 @@ jobs:
           prerelease: false
           includeRelease: true
           includeUpdater: true
+
+      - name: Upload STT runtime archive to the release
+        # Tag builds only (workflow_dispatch has no release to attach to).
+        # The mirror-cloudbase job downloads every release asset, so the
+        # archive is mirrored to updates/<tag>/ on CloudBase automatically —
+        # the layout lib.rs runtime_mirror_url() expects.
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" "${{ steps.runtime.outputs.archive }}" \
+            --repo "${{ github.repository }}" --clobber
+
+      - name: Upload STT runtime archive as workflow artifact
+        # Dispatch builds: attach the archive to the workflow run so a Windows
+        # installer + matching runtime can be tested without cutting a tag.
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.runtime.outputs.archive }}
+          path: ${{ steps.runtime.outputs.archive }}
+          if-no-files-found: error
 
   mirror-cloudbase:
     name: Mirror updater artifacts to CloudBase hosting

@@ -8,7 +8,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@lynse/ui/components/ui/dropdown-menu";
-import { Bot, Briefcase, Check, ChevronDown } from "../icons";
+import { Bot, Check, ChevronDown, WorkBuddy } from "../icons";
 import type { ChatAssistant } from "../workspace/types";
 
 /**
@@ -30,7 +30,7 @@ export function AssistantSwitcher({
 
   const options: { id: ChatAssistant; label: string; icon: typeof Bot }[] = [
     { id: "lynse", label: t("chat.assistant_lynse"), icon: Bot },
-    { id: "workbuddy", label: t("chat.assistant_workbuddy"), icon: Briefcase },
+    { id: "workbuddy", label: t("chat.assistant_workbuddy"), icon: WorkBuddy },
   ];
   const current = options.find((option) => option.id === activeAssistant) ?? options[0]!;
 

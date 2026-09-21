@@ -592,7 +592,9 @@ export function useDeleteFiles() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (fileIds: string[]) =>
-      api().delete<unknown>(`/api/business/file/delete?fileIds=${fileIds.join(",")}`),
+      // The backend declares folderIds as a REQUIRED request param; omitting it
+      // throws server-side and surfaces as the opaque "system.error.busy".
+      api().delete<unknown>(`/api/business/file/delete?fileIds=${fileIds.join(",")}&folderIds=`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["files"] });
       qc.invalidateQueries({ queryKey: ["notes"] });

@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 #[cfg(target_os = "macos")]
-use highlandcows_eventkit::{CalendarEvent, CalendarStore};
+use highlandcows_eventkit::{CalendarEvent, CalendarStore, EventKitError};
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -9,7 +9,8 @@ use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::http::{header, Request, Response, StatusCode};
@@ -250,21 +251,54 @@ fn add_todo_to_system_calendar(
     let (start, end) = calendar_event_times(start_at, end_at)?;
     let notes = source.map(|value| format!("来自 Lynse 待办\n来源：{value}"));
 
-    let store = CalendarStore::builder().connect().map_err(|error| error.to_string())?;
+    let store = CalendarStore::builder()
+        .connect()
+        .map_err(|error| format!("无法连接系统日历：{error}"))?;
     // Full access, not write-only: on macOS 14+ defaultCalendarForNewEvents
     // only resolves under full access — under write-only it returns nil and
     // every save fails with "no default Calendar configured".
-    let access = store.authorize().map_err(|error| error.to_string())?;
+    log::info!("[calendar] EventKit authorization status: {:?}", CalendarStore::authorization_status());
+    let access = store.authorize().map_err(|error| {
+        log::error!("[calendar] EventKit authorization failed: {error}");
+        match error {
+            EventKitError::AuthorizationDenied => {
+                "系统日历权限已被拒绝，请在 系统设置 → 隐私与安全性 → 日历 中允许 Lynse".to_owned()
+            }
+            EventKitError::AuthorizationRestricted => "日历访问被系统策略限制".to_owned(),
+            other => format!("无法获取日历权限：{other}"),
+        }
+    })?;
+    // defaultCalendarForNewEvents can still be nil under full access when no
+    // default is configured in Calendar.app; fall back to the first writable
+    // calendar instead of failing the save.
+    let calendar_identifier = match store.default_calendar(&access) {
+        Ok(Some(cal)) => Some(cal.calendar_identifier),
+        Ok(None) => {
+            let writable = store
+                .lists(&access)
+                .ok()
+                .and_then(|cals| cals.into_iter().find(|cal| cal.allows_content_modifications));
+            match writable {
+                Some(cal) => {
+                    log::info!("[calendar] no default calendar configured, falling back to: {}", cal.title);
+                    Some(cal.calendar_identifier)
+                }
+                None => return Err("日历中没有任何可写入的日历，请先在 日历 App 中添加账户或日历".to_owned()),
+            }
+        }
+        Err(error) => return Err(format!("无法读取系统日历列表：{error}")),
+    };
     let event_id = store.save(&CalendarEvent {
         identifier: None,
         title: event_title,
         notes,
-        calendar_identifier: None,
+        calendar_identifier,
         start_date: Some(start),
         end_date: Some(end),
         is_all_day: false,
         location: None,
-    }, &access).map_err(|error| error.to_string())?;
+    }, &access).map_err(|error| format!("保存日历事件失败：{error}"))?;
+    log::info!("[calendar] event saved: {event_id}");
 
     let mut patch = Map::new();
     patch.insert("calendarEventId".to_owned(), json!(event_id));
@@ -750,7 +784,8 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         provider: "qwen3",
         id: "qwen3-asr-1.7b-8bit",
         label: "Qwen3-ASR 1.7B（本地·Apple Silicon MLX 8-bit，推荐，~2 GiB）",
-        size_bytes: 0,
+        // Approximate download totals (see run_python_model_download_with_progress).
+        size_bytes: 2 * 1024 * 1024 * 1024,
         download_url: "",
         sha256: "",
         files: &[],
@@ -759,7 +794,7 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         provider: "qwen3",
         id: "qwen3-asr-0.6b-4bit",
         label: "Qwen3-ASR 0.6B（本地·Apple Silicon MLX 4-bit，极速，~0.6 GiB）",
-        size_bytes: 0,
+        size_bytes: 644_245_094,
         download_url: "",
         sha256: "",
         files: &[],
@@ -768,7 +803,7 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         provider: "moss",
         id: "moss-transcribe-8bit",
         label: "MOSS-Transcribe-Diarize 0.9B（本地·说话人分离·时间戳，Apple Silicon MLX 8-bit，~1.1 GiB）",
-        size_bytes: 0,
+        size_bytes: 1_181_116_006,
         download_url: "",
         sha256: "",
         files: &[],
@@ -813,7 +848,7 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         provider: "mlx",
         id: "whisper-large-v3-turbo",
         label: "MLX-Whisper large-v3-turbo（本地·Apple Silicon，~1.5 GiB）",
-        size_bytes: 0,
+        size_bytes: 1_610_612_736,
         download_url: "",
         sha256: "",
         files: &[],
@@ -822,7 +857,7 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         provider: "whisperx",
         id: "whisperx-latest",
         label: "WhisperX large-v3（本地·CPU，转写 + 词级对齐，~3 GiB）",
-        size_bytes: 0,
+        size_bytes: 3_221_225_472,
         download_url: "",
         sha256: "",
         files: &[],
@@ -1484,6 +1519,71 @@ fn emit_download_progress(
             "error": error,
         }),
     );
+}
+
+/// Recursively sum file sizes under `path` (0 when it does not exist yet).
+fn directory_size(path: &Path) -> u64 {
+    fn walk(dir: &Path, total: &mut u64) {
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            match entry.file_type() {
+                Ok(file_type) if file_type.is_dir() => walk(&entry.path(), total),
+                Ok(_) => {
+                    if let Ok(meta) = entry.metadata() {
+                        *total += meta.len();
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+    }
+    let mut total = 0;
+    walk(path, &mut total);
+    total
+}
+
+/// Run one Python-bridge model download while polling its target directory.
+/// The Python bridges block on `.output()`, so the snapshot downloads
+/// (HuggingFace / ModelScope) have no streamable progress — but both caches
+/// land under `--model-dir` (`HF_HOME`/`MODELSCOPE_CACHE` point there), which
+/// makes the directory's on-disk size an honest downloaded-bytes proxy. The
+/// catalog total is an approximation, so the percent is capped at 99 until
+/// the command's own `done`/`error` event settles the bar.
+fn run_python_model_download_with_progress(
+    app: &AppHandle,
+    provider: &str,
+    model_id: &str,
+    directory: &Path,
+    total_bytes: u64,
+    run: impl FnOnce() -> CommandResult<String>,
+) -> CommandResult<String> {
+    let stop = Arc::new(AtomicBool::new(false));
+    let poller = {
+        let app = app.clone();
+        let provider = provider.to_owned();
+        let model_id = model_id.to_owned();
+        let directory = directory.to_path_buf();
+        let stop = Arc::clone(&stop);
+        thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                let received = directory_size(&directory);
+                let percent = if total_bytes > 0 {
+                    Some(
+                        ((received.min(total_bytes) as f64 / total_bytes as f64) * 100.0).min(99.0)
+                            as u32,
+                    )
+                } else {
+                    None
+                };
+                emit_download_progress(&app, &provider, &model_id, received, total_bytes, percent, "downloading", None);
+                thread::sleep(Duration::from_millis(500));
+            }
+        })
+    };
+    let result = run();
+    stop.store(true, Ordering::Relaxed);
+    let _ = poller.join();
+    result
 }
 
 fn resolve_provider(app: &AppHandle, language: Option<&str>, per_note: Option<&stt::ProviderConfig>) -> stt::ProviderConfig {
@@ -2570,10 +2670,12 @@ fn local_stt_download_model(
     }
     let result = (|| {
         let entry = stt_model_entry(&provider, &model_id)?;
+        let total_bytes = entry.size_bytes;
         if provider == "funasr" || provider == "mlx" || provider == "qwen3" || provider == "moss" || provider == "whisperx" {
             // FunASR, MLX and Qwen3 download through their Python helpers rather
-            // than a fixed URL. Their size is unknown, so we only signal an
-            // indeterminate download.
+            // than a fixed URL. The indeterminate event makes the UI react at
+            // once; run_python_model_download_with_progress then streams real
+            // byte progress once the snapshot download starts writing files.
             emit_download_progress(&app, &provider, &model_id, 0, 0, None, "downloading", None);
             if provider == "mlx" {
                 let directory = engine_model_dir(&app, &provider, &model_id)?;
@@ -2585,7 +2687,14 @@ fn local_stt_download_model(
                     "--model-dir".to_owned(),
                     directory.to_string_lossy().into_owned(),
                 ];
-                if let Err(error) = run_mlx(&app, &python, &args, &directory) {
+                if let Err(error) = run_python_model_download_with_progress(
+                    &app,
+                    &provider,
+                    &model_id,
+                    &directory,
+                    total_bytes,
+                    || run_mlx(&app, &python, &args, &directory),
+                ) {
                     emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
                     return Err(error);
                 }
@@ -2604,7 +2713,14 @@ fn local_stt_download_model(
                     "--region".to_owned(),
                     detect_net_region().to_owned(),
                 ];
-                if let Err(error) = run_mlx(&app, &python, &args, &directory) {
+                if let Err(error) = run_python_model_download_with_progress(
+                    &app,
+                    &provider,
+                    &model_id,
+                    &directory,
+                    total_bytes,
+                    || run_mlx(&app, &python, &args, &directory),
+                ) {
                     emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
                     return Err(error);
                 }
@@ -2622,7 +2738,14 @@ fn local_stt_download_model(
                     "--region".to_owned(),
                     detect_net_region().to_owned(),
                 ];
-                if let Err(error) = run_mlx(&app, &python, &args, &directory) {
+                if let Err(error) = run_python_model_download_with_progress(
+                    &app,
+                    &provider,
+                    &model_id,
+                    &directory,
+                    total_bytes,
+                    || run_mlx(&app, &python, &args, &directory),
+                ) {
                     emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
                     return Err(error);
                 }
@@ -2641,7 +2764,14 @@ fn local_stt_download_model(
                     "--region".to_owned(),
                     detect_net_region().to_owned(),
                 ];
-                if let Err(error) = run_mlx(&app, &python, &args, &directory) {
+                if let Err(error) = run_python_model_download_with_progress(
+                    &app,
+                    &provider,
+                    &model_id,
+                    &directory,
+                    total_bytes,
+                    || run_mlx(&app, &python, &args, &directory),
+                ) {
                     emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
                     return Err(error);
                 }
@@ -2653,7 +2783,14 @@ fn local_stt_download_model(
                     "--model-dir".to_owned(),
                     directory.to_string_lossy().into_owned(),
                 ];
-                if let Err(error) = run_funasr(&app, &args, &directory) {
+                if let Err(error) = run_python_model_download_with_progress(
+                    &app,
+                    &provider,
+                    &model_id,
+                    &directory,
+                    total_bytes,
+                    || run_funasr(&app, &args, &directory),
+                ) {
                     emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
                     return Err(error);
                 }

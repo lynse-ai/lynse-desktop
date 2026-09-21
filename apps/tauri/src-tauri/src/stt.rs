@@ -234,7 +234,14 @@ pub enum ProviderConfig {
 
 impl Default for ProviderConfig {
     fn default() -> Self {
-        ProviderConfig::Qwen3(Qwen3ProviderConfig::default())
+        // Qwen3-ASR (MLX) is the primary local engine on Apple Silicon. Every
+        // other platform only ships the whisper.cpp sidecar, so default there
+        // instead of an engine that hard-errors on first use.
+        if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            ProviderConfig::Qwen3(Qwen3ProviderConfig::default())
+        } else {
+            ProviderConfig::Whisper(WhisperProviderConfig::default())
+        }
     }
 }
 
@@ -365,6 +372,39 @@ pub(crate) fn runtime_platform_dir() -> &'static str {
 /// The four binaries that together make up a complete shared STT runtime.
 pub(crate) const RUNTIME_BINARIES: &[&str] = &["whisper", "vibeasr", "ffmpeg", "ffprobe"];
 
+/// Windows-only non-binary file shipped in the runtime archive: the Vulkan
+/// loader DLL bundled next to `whisper.exe` so the Vulkan-enabled build gets
+/// GPU acceleration without a separately installed Vulkan runtime.
+pub(crate) const RUNTIME_WINDOWS_EXTRA: &[&str] = &["vulkan-1.dll"];
+
+/// On-disk names a complete runtime must contain on `is_windows`. vibeasr is
+/// not required on Windows: its sidecar never launched there (missing MinGW
+/// runtime DLLs) and the engine is retired — requiring it would make the
+/// shipped archive permanently "incomplete". The Vulkan loader takes its
+/// place as the Windows-specific file.
+pub(crate) fn required_runtime_names(is_windows: bool) -> Vec<String> {
+    let bases: &[&str] = if is_windows {
+        &["whisper", "ffmpeg", "ffprobe"]
+    } else {
+        RUNTIME_BINARIES
+    };
+    let mut names: Vec<String> = bases
+        .iter()
+        .map(|base| sidecar_binary_name_for(base, is_windows))
+        .collect();
+    if is_windows {
+        names.extend(RUNTIME_WINDOWS_EXTRA.iter().map(|name| name.to_string()));
+    }
+    names
+}
+
+fn file_present(dir: &Path, name: &str) -> bool {
+    match std::fs::metadata(dir.join(name)) {
+        Ok(meta) => meta.is_file() && meta.len() > 0,
+        Err(_) => false,
+    }
+}
+
 /// `true` only when every runtime binary exists in `dir` as a non-empty file.
 /// Prevents a half-downloaded runtime from being treated as installed.
 pub(crate) fn runtime_is_complete(dir: &Path) -> bool {
@@ -379,15 +419,11 @@ pub(crate) fn runtime_is_complete(dir: &Path) -> bool {
     binaries_present(&dev)
 }
 
-/// True when every shared runtime binary exists in `dir` as a non-empty file.
+/// True when every required runtime file exists in `dir` as a non-empty file.
 fn binaries_present(dir: &Path) -> bool {
-    RUNTIME_BINARIES.iter().all(|base| {
-        let path = dir.join(sidecar_binary_name_for(base, cfg!(target_os = "windows")));
-        match std::fs::metadata(&path) {
-            Ok(meta) => meta.is_file() && meta.len() > 0,
-            Err(_) => false,
-        }
-    })
+    required_runtime_names(cfg!(target_os = "windows"))
+        .iter()
+        .all(|name| file_present(dir, name))
 }
 
 /// Directory of the on-demand shared runtime for `version` (e.g. `v0.1.14`)
@@ -1119,6 +1155,40 @@ mod tests {
     }
 
     #[test]
+    fn required_runtime_names_drop_vibeasr_and_add_loader_on_windows() {
+        let macos = required_runtime_names(false);
+        assert_eq!(
+            macos,
+            vec![
+                "whisper".to_owned(),
+                "vibeasr".to_owned(),
+                "ffmpeg".to_owned(),
+                "ffprobe".to_owned()
+            ]
+        );
+        let windows = required_runtime_names(true);
+        assert_eq!(
+            windows,
+            vec![
+                "whisper.exe".to_owned(),
+                "ffmpeg.exe".to_owned(),
+                "ffprobe.exe".to_owned(),
+                "vulkan-1.dll".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn default_provider_follows_platform_engine_availability() {
+        let default = ProviderConfig::default();
+        if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            assert!(matches!(default, ProviderConfig::Qwen3(_)));
+        } else {
+            assert!(matches!(default, ProviderConfig::Whisper(_)));
+        }
+    }
+
+    #[test]
     fn runtime_platform_dir_names() {
         let dir = runtime_platform_dir();
         assert!(
@@ -1147,12 +1217,9 @@ mod tests {
             assert!(!runtime_is_complete(&tmp));
         }
 
-        // Four zero-byte files -> still incomplete (same dev-fallback caveat).
-        for base in RUNTIME_BINARIES {
-            let _ = std::fs::write(
-                tmp.join(sidecar_binary_name_for(base, cfg!(target_os = "windows"))),
-                [],
-            );
+        // Zero-byte required files -> still incomplete (same dev-fallback caveat).
+        for name in required_runtime_names(cfg!(target_os = "windows")) {
+            let _ = std::fs::write(tmp.join(&name), []);
         }
         if !dev_fallback_active {
             assert!(
@@ -1161,16 +1228,13 @@ mod tests {
             );
         }
 
-        // Four non-empty files -> complete.
-        for base in RUNTIME_BINARIES {
-            let _ = std::fs::write(
-                tmp.join(sidecar_binary_name_for(base, cfg!(target_os = "windows"))),
-                b"dummy",
-            );
+        // Non-empty required files -> complete.
+        for name in required_runtime_names(cfg!(target_os = "windows")) {
+            let _ = std::fs::write(tmp.join(&name), b"dummy");
         }
         assert!(
             runtime_is_complete(&tmp),
-            "four valid binaries must count as complete"
+            "all required runtime files valid must count as complete"
         );
 
         let _ = std::fs::remove_dir_all(&tmp);

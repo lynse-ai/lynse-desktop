@@ -1,6 +1,6 @@
 import { definePlugin } from "../registry";
 import { WorkBuddyConfigCard } from "../../settings/workbuddy-config-card";
-import { Briefcase } from "../../icons";
+import { WorkBuddy as WorkBuddyIcon } from "../../icons";
 
 /**
  * WorkBuddy assistant — the first plugin contributed to the community
@@ -16,7 +16,7 @@ export const workbuddyPlugin = definePlugin({
   minAppVersion: "1.0.4",
   nameKey: "plugins.workbuddy.name",
   descriptionKey: "plugins.workbuddy.description",
-  icon: Briefcase,
+  icon: WorkBuddyIcon,
   category: "assistant",
   platforms: ["desktop", "web"],
   permissions: ["network:backend", "network:workbuddy.cn"],

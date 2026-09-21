@@ -16,7 +16,7 @@ import {
   type WorkBuddyProfile,
   type WorkBuddyTokenInfo,
 } from "@lynse/core/auth/workbuddy";
-import { Briefcase, Loader2, RefreshCw } from "../icons";
+import { Loader2, RefreshCw, WorkBuddy } from "../icons";
 import { getDesktopAppApi, openExternalUrl } from "../app-update";
 
 /**
@@ -119,6 +119,10 @@ export function WorkBuddyConfigCard() {
     setError(null);
     try {
       const { authorizeUrl } = await startWorkBuddyAuthorization();
+      // TEMP diagnostics: the backend's authorize URL scope param broke the
+      // callback (error.missing.parameters) after the scope change — remove
+      // once the server-side scope format is confirmed.
+      console.warn("[workbuddy] authorizeUrl:", authorizeUrl);
       if (isDesktop) {
         // The authorize page must open outside the app shell.
         openExternalUrl(authorizeUrl);
@@ -156,7 +160,7 @@ export function WorkBuddyConfigCard() {
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-xs">
-          <Briefcase className="size-3.5" />
+          <WorkBuddy className="size-3.5" />
           {t("workbuddy.title")}
           <span
             className={

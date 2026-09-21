@@ -6,7 +6,6 @@ import {
   ArrowDown,
   ArrowUp,
   BookOpen,
-  Briefcase,
   CalendarDays,
   Check,
   ChevronLeft,
@@ -26,6 +25,7 @@ import {
   RefreshCw,
   Sparkles,
   Square,
+  WorkBuddy,
 } from "../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Textarea } from "@lynse/ui/components/ui/textarea";
@@ -572,7 +572,7 @@ export function ChatPage() {
           <div className="mx-auto w-full max-w-4xl px-6 pt-6">
             <div className="flex items-start gap-3 rounded-xl border border-border bg-card px-4 py-3.5">
               <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
-                <Briefcase className="size-4 text-primary" />
+                <WorkBuddy className="size-4 text-primary" />
               </span>
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-foreground">
@@ -621,7 +621,7 @@ export function ChatPage() {
         {messages.length === 0 && !isLoading ? (
           isWorkBuddy ? (
             <EmptyChat
-              icon={<Briefcase className="size-10 text-primary/70" />}
+              icon={<WorkBuddy className="size-10 text-primary/70" />}
               title={t("chat.assistant_workbuddy")}
               hint={t("chat.workbuddy_history_hint")}
             />
@@ -661,7 +661,7 @@ export function ChatPage() {
                 <article key={message.id} className="group flex items-start gap-3">
                   {activeProvider === "workbuddy" ? (
                     <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
-                      <Briefcase className="size-4 text-primary" />
+                      <WorkBuddy className="size-4 text-primary" />
                     </span>
                   ) : (
                     <AssistantAvatar size={36} className="mt-0.5 shrink-0" />

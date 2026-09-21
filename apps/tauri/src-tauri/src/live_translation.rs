@@ -1833,6 +1833,19 @@ async fn websocket_loop(
                     "Live translation stream {source:?} connect timed out after {LIVE_CONNECT_TIMEOUT:?} (streak {failure_streak}, session={})",
                     session.session_id
                 );
+                // A timeout emits nothing by itself — without this the user
+                // stares at a recording that produces no text and no error.
+                // Surface only the first failure of a streak; the banner
+                // clears on recovery via the streamState "connected" event.
+                if failure_streak == 1 {
+                    emit_error(
+                        &app,
+                        Some(source),
+                        format!(
+                            "实时翻译连接超时（{LIVE_CONNECT_TIMEOUT:?} 无响应），正在重试。"
+                        ),
+                    );
+                }
             }
         }
         tokio::time::sleep(live_reconnect_backoff(failure_streak)).await;

@@ -57,15 +57,13 @@ async function vaultLoad(): Promise<Record<string, string>> {
   }
 }
 
-function vaultPersist(map: Record<string, string>): void {
+async function vaultPersist(map: Record<string, string>): Promise<void> {
   const keys = Object.keys(map);
   if (keys.length === 0) {
-    void secureDelete(VAULT_ACCOUNT).catch(() => undefined);
+    await secureDelete(VAULT_ACCOUNT);
     return;
   }
-  void secureSet(VAULT_ACCOUNT, JSON.stringify(map)).catch((error) =>
-    console.error("[secure-storage] failed to persist vault", error),
-  );
+  await secureSet(VAULT_ACCOUNT, JSON.stringify(map));
 }
 
 /**
@@ -85,7 +83,11 @@ let vaultWriteChain: Promise<void> = Promise.resolve();
 function vaultMutate(mutator: (vault: Record<string, string>) => boolean): Promise<void> {
   const run = vaultWriteChain.then(async () => {
     const vault = await vaultLoad();
-    if (mutator(vault)) vaultPersist(vault);
+    // Await the keychain write itself so the promise resolves only once the
+    // vault is durable — callers that surface failures to the user (config
+    // saves) must not be told "saved" while the IPC write is still in flight
+    // or has already failed.
+    if (mutator(vault)) await vaultPersist(vault);
   });
   // Keep the chain alive even if a write rejects, so later writes still run.
   vaultWriteChain = run.catch(() => undefined);
@@ -158,6 +160,45 @@ export async function refreshSecret(account: string): Promise<string | null> {
   const value = vault[account] ?? null;
   if (value != null) secretCache.set(account, value);
   return value;
+}
+
+/**
+ * Persist (or clear) one secret and resolve only after the keychain write has
+ * actually landed — or reject with the underlying error.
+ *
+ * The synchronous `StorageAdapter.setItem` can't surface keychain failures
+ * (its fire-and-forget persistence is the right trade-off for the auth token),
+ * but configuration forms must know whether the save really happened before
+ * telling the user it did. A swallowed write failure here meant the settings
+ * panel claimed success while the recording start re-read the OLD key from
+ * the vault and got a 401 from the provider.
+ */
+export async function setSecret(key: string, value: string): Promise<void> {
+  if (!SECRET_KEYS.has(key)) {
+    if (typeof window !== "undefined") window.localStorage.setItem(key, value);
+    return;
+  }
+  secretCache.set(key, value);
+  await vaultMutate((vault) => {
+    if (vault[key] === value) return false;
+    vault[key] = value;
+    return true;
+  });
+  if (typeof window !== "undefined") window.localStorage.removeItem(key);
+}
+
+export async function removeSecret(key: string): Promise<void> {
+  if (!SECRET_KEYS.has(key)) {
+    if (typeof window !== "undefined") window.localStorage.removeItem(key);
+    return;
+  }
+  secretCache.delete(key);
+  await vaultMutate((vault) => {
+    if (!(key in vault)) return false;
+    delete vault[key];
+    return true;
+  });
+  if (typeof window !== "undefined") window.localStorage.removeItem(key);
 }
 
 /**

@@ -12,6 +12,7 @@ const SECRET_KEYS = new Set([
   "lynse_live_translation_ilivedata_secret_key",
   "lynse_live_translation_qwen_api_key",
   "lynse_live_translation_volc_api_key",
+  "lynse_live_translation_tencent_secret_key",
   "lynse_feishu_app_secret",
 ]);
 
@@ -25,12 +26,15 @@ const VAULT_ACCOUNT = "lynse_secrets_v1";
 
 const secretCache = new Map<string, string>();
 
+/**
+ * Read one raw entry. Absence resolves to null; a keychain failure (locked
+ * keychain, ACL denial, IPC error) REJECTS. Swallowing failures into null
+ * used to make an unreadable vault indistinguishable from an empty one, which
+ * corrupted the vault on writes and silently served stale cached keys to the
+ * providers — the "saved the key but still get 401" class of bugs.
+ */
 async function secureGet(account: string): Promise<string | null> {
-  try {
-    return await invoke<string | null>("secure_get_secret", { account });
-  } catch {
-    return null;
-  }
+  return await invoke<string | null>("secure_get_secret", { account });
 }
 
 async function secureSet(account: string, value: string): Promise<void> {
@@ -38,11 +42,18 @@ async function secureSet(account: string, value: string): Promise<void> {
 }
 
 async function secureDelete(account: string): Promise<void> {
-  try {
-    await invoke("secure_delete_secret", { account });
-  } catch {
-    /* entry may already be missing */
-  }
+  await invoke("secure_delete_secret", { account });
+}
+
+/**
+ * Atomically set (`value`) or remove (`null`) one entry inside the vault.
+ * The read-modify-write runs in Rust under a process-wide lock, so writes
+ * from different webview windows (main window config panel, recording island
+ * refreshing the auth token) can no longer overwrite each other — a window's
+ * promise chain only orders its own writes.
+ */
+async function vaultUpdateEntry(account: string, value: string | null): Promise<void> {
+  await invoke("secure_update_vault_entry", { account, value });
 }
 
 async function vaultLoad(): Promise<Record<string, string>> {
@@ -67,13 +78,13 @@ async function vaultPersist(map: Record<string, string>): Promise<void> {
 }
 
 /**
- * Serialized read-modify-write of the keychain vault. Every mutation goes
- * through this promise chain so concurrent `setItem`/`removeItem` calls can't
- * clobber each other, and — crucially — each write reloads the vault from the
- * keychain first instead of trusting the in-memory cache. The cache is only
- * fully populated after `hydrateSecrets()` finishes; a naive "serialize cache →
- * overwrite vault" would destroy any secret still missing from the cache (e.g.
- * a token written by login while hydration is still in flight).
+ * Serialized read-modify-write of the keychain vault, for multi-key mutations.
+ * Every mutation goes through this promise chain so concurrent calls can't
+ * interleave within this window, and each write reloads the vault from the
+ * keychain first instead of trusting the in-memory cache. A vault READ failure
+ * rejects the mutation — persisting a map built on an empty read would wipe
+ * every secret not in that read. Single-entry mutations should prefer
+ * `vaultUpdateEntry`, which serializes across ALL windows in Rust.
  *
  * The mutator returns whether it actually changed anything. A no-op mutation
  * skips the write entirely, because persisting an unchanged vault would touch
@@ -105,7 +116,16 @@ function vaultMutate(mutator: (vault: Record<string, string>) => boolean): Promi
  * legacy per-key keychain entries are folded into the vault and deleted.
  */
 export async function hydrateSecrets(): Promise<void> {
-  const vault = await vaultLoad();
+  // An unreadable vault must abort hydration before any write: continuing on
+  // an empty read would migrate legacy entries into a vault that overwrites
+  // and destroys whatever the keychain failed to hand back.
+  let vault: Record<string, string>;
+  try {
+    vault = await vaultLoad();
+  } catch (error) {
+    console.error("[secure-storage] keychain vault unreadable, skipping hydration", error);
+    return;
+  }
   // If the vault already exists, skip the legacy per-key reads entirely —
   // those entries were migrated away, and reading them would only cost IPC.
   const vaultSeeded = Object.keys(vault).length > 0;
@@ -113,7 +133,7 @@ export async function hydrateSecrets(): Promise<void> {
 
   for (const key of SECRET_KEYS) {
     if (!vaultSeeded) {
-      const legacyEntry = await secureGet(key);
+      const legacyEntry = await secureGet(key).catch(() => null);
       if (legacyEntry != null) {
         vault[key] = legacyEntry;
         changed = true;
@@ -154,10 +174,22 @@ export async function hydrateSecrets(): Promise<void> {
  * it. Used at connection time so a key changed in the Keychain takes effect
  * immediately without restarting the app (the startup hydration only runs
  * once and would otherwise keep serving a stale value).
+ *
+ * Read failures REJECT rather than falling back to the cache: handing a
+ * caller the stale cached credential after a keychain failure is exactly how
+ * a correct-looking config produced provider 401s with no visible cause. The
+ * error is logged first so it lands in the same file as the rest of the
+ * session's diagnostics.
  */
 export async function refreshSecret(account: string): Promise<string | null> {
-  const vault = await vaultLoad();
-  const value = vault[account] ?? null;
+  let value: string | null;
+  try {
+    const vault = await vaultLoad();
+    value = vault[account] ?? null;
+  } catch (error) {
+    console.error(`[secure-storage] failed to re-read ${account} from the keychain`, error);
+    throw error;
+  }
   if (value != null) secretCache.set(account, value);
   return value;
 }
@@ -179,11 +211,7 @@ export async function setSecret(key: string, value: string): Promise<void> {
     return;
   }
   secretCache.set(key, value);
-  await vaultMutate((vault) => {
-    if (vault[key] === value) return false;
-    vault[key] = value;
-    return true;
-  });
+  await vaultUpdateEntry(key, value);
   if (typeof window !== "undefined") window.localStorage.removeItem(key);
 }
 
@@ -193,11 +221,7 @@ export async function removeSecret(key: string): Promise<void> {
     return;
   }
   secretCache.delete(key);
-  await vaultMutate((vault) => {
-    if (!(key in vault)) return false;
-    delete vault[key];
-    return true;
-  });
+  await vaultUpdateEntry(key, null);
   if (typeof window !== "undefined") window.localStorage.removeItem(key);
 }
 
@@ -220,11 +244,9 @@ export const secureStorage: StorageAdapter = {
       return;
     }
     secretCache.set(key, value);
-    void vaultMutate((vault) => {
-      if (vault[key] === value) return false;
-      vault[key] = value;
-      return true;
-    }).catch((error) => console.error(`[secure-storage] failed to persist ${key}`, error));
+    vaultUpdateEntry(key, value).catch((error) =>
+      console.error(`[secure-storage] failed to persist ${key}`, error),
+    );
     if (typeof window !== "undefined") window.localStorage.removeItem(key);
   },
   removeItem(key: string): void {
@@ -233,11 +255,9 @@ export const secureStorage: StorageAdapter = {
       return;
     }
     secretCache.delete(key);
-    void vaultMutate((vault) => {
-      if (!(key in vault)) return false;
-      delete vault[key];
-      return true;
-    }).catch(() => undefined);
+    vaultUpdateEntry(key, null).catch((error) =>
+      console.error(`[secure-storage] failed to remove ${key}`, error),
+    );
     if (typeof window !== "undefined") window.localStorage.removeItem(key);
   },
 };

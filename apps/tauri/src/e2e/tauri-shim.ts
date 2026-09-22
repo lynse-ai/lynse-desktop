@@ -85,6 +85,21 @@ function defaultInvoke(cmd: string, args: Record<string, unknown>): unknown {
     }
     return null;
   }
+  if (cmd === "secure_update_vault_entry") {
+    // Same semantics as the Rust command: set (string) or remove (null) one
+    // entry inside the vault map.
+    const account = typeof args.account === "string" ? args.account : "";
+    if (account) {
+      const vault = readVault();
+      if (typeof args.value === "string") {
+        vault[account] = args.value;
+      } else {
+        delete vault[account];
+      }
+      writeVault(vault);
+    }
+    return null;
+  }
   if (cmd === "get_app_info") return { version: "0.0.0-e2e", build: "1", platform: "macos" };
   if (cmd === "window_effects_mode") return "none";
   if (cmd === "live_translation_state") return IDLE_LIVE_SNAPSHOT;

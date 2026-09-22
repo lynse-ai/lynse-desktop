@@ -3107,7 +3107,6 @@ const SECRET_SERVICE: &str = "com.lynse.sparknote";
 
 /// Single keychain entry that holds every secret as a JSON map. Kept in sync
 /// with `VAULT_ACCOUNT` in `src/secure-storage.ts`.
-#[cfg(debug_assertions)]
 const SECRET_VAULT_ACCOUNT: &str = "lynse_secrets_v1";
 
 /// Per-key entries written by builds that predate the single-vault layout. Only
@@ -3299,6 +3298,52 @@ fn secure_get_secret(app: AppHandle, account: String) -> CommandResult<Option<St
 #[tauri::command]
 fn secure_delete_secret(app: AppHandle, account: String) -> CommandResult<()> {
     secret_delete(&app, &account)
+}
+
+/// Process-wide lock for vault read-modify-write cycles. Every webview window
+/// (main, recording island, subtitle overlay) invokes into this same process,
+/// so this mutex — not the frontend's per-window promise chain — is what stops
+/// two windows writing different secrets from losing each other's writes.
+static SECRET_VAULT_LOCK: Mutex<()> = Mutex::new(());
+
+/// Atomically set (`Some`) or remove (`None`) one entry inside the single
+/// vault JSON map. The read-modify-write runs under `SECRET_VAULT_LOCK` and a
+/// failed vault read rejects the whole command — never persist a map built on
+/// an empty read, which would silently wipe every other secret.
+#[tauri::command]
+fn secure_update_vault_entry(
+    app: AppHandle,
+    account: String,
+    value: Option<String>,
+) -> CommandResult<()> {
+    let _guard = SECRET_VAULT_LOCK
+        .lock()
+        .map_err(|_| "secret vault lock is poisoned")?;
+    let raw = secret_get(&app, SECRET_VAULT_ACCOUNT)?;
+    let mut vault: Map<String, Value> = match raw.as_deref() {
+        Some(raw) => serde_json::from_str(raw).unwrap_or_default(),
+        None => Map::new(),
+    };
+    let changed = match &value {
+        Some(value) => {
+            let changed = vault.get(&account).and_then(Value::as_str) != Some(value.as_str());
+            if changed {
+                vault.insert(account.clone(), Value::String(value.clone()));
+            }
+            changed
+        }
+        None => vault.remove(&account).is_some(),
+    };
+    if !changed {
+        // Skipping the write keeps launches from touching the keychain item
+        // and re-triggering macOS' authorization prompt for nothing.
+        return Ok(());
+    }
+    if vault.is_empty() {
+        return secret_delete(&app, SECRET_VAULT_ACCOUNT);
+    }
+    let raw = serde_json::to_string(&vault).map_err(|error| error.to_string())?;
+    secret_set(&app, SECRET_VAULT_ACCOUNT, &raw)
 }
 
 fn media_response_body(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
@@ -4144,6 +4189,7 @@ pub fn run() {
             feishu::feishu_register_begin, feishu::feishu_register_poll,
             feishu::feishu_register_cancel,
             secure_set_secret, secure_get_secret, secure_delete_secret,
+            secure_update_vault_entry,
             get_app_info,
             open_about_window,
             open_feedback_window,

@@ -73,6 +73,11 @@ const LIVE_RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(15);
 /// Wi-Fi still re-associating after wake) fails fast into the retry path
 /// instead of hanging for the OS default (~75 s).
 const LIVE_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Inbound traffic only clears the reconnect backoff once the connection has
+/// lived this long. A gate that accepts the handshake, emits one frame and
+/// dies (bad key, unknown model) must keep the streak growing — otherwise it
+/// zeroes the streak every cycle and the stream spins at 500 ms forever.
+const LIVE_CONNECTION_GRACE: Duration = Duration::from_secs(2);
 
 pub(crate) fn decode_audio_header(
     header: &[u8; AUDIO_HEADER_BYTES],
@@ -520,13 +525,22 @@ fn emit_snapshot(app: &AppHandle, session: &LiveSession) {
 }
 
 fn emit_error(app: &AppHandle, source: Option<AudioSource>, message: impl Into<String>) {
+    let message = message.into();
+    // The event is transient UI state; the file log is the durable record
+    // bug reports are pasted from. Never let a surfaced failure be invisible
+    // there — every connect/close/provider failure funnels through here.
+    log::warn!("Live translation error source={source:?}: {message}");
     let _ = app.emit(
         LIVE_EVENT,
-        json!({ "type": "error", "source": source, "message": message.into() }),
+        json!({ "type": "error", "source": source, "message": message }),
     );
 }
 
 fn emit_stream_state(app: &AppHandle, source: AudioSource, state: &str, epoch: u32) {
+    // "connecting" is logged per attempt inside the websocket loop.
+    if state != "connecting" {
+        log::info!("Live translation stream {source:?} now {state} (epoch {epoch})");
+    }
     let _ = app.emit(
         LIVE_EVENT,
         json!({ "type": "streamState", "source": source, "state": state, "epoch": epoch }),
@@ -1208,6 +1222,33 @@ fn spawn_connections(
     Ok(())
 }
 
+/// True when a credential contains characters outside printable ASCII.
+/// Zero-width spaces and other invisible characters ride along when keys are
+/// copied out of chat apps or PDFs, and they silently break either the
+/// websocket auth header (HeaderValue rejects non-visible ASCII — the header
+/// is then skipped without a word) or the provider-side signature. Failing at
+/// start with a nameable cause beats a mystery 401 from the provider.
+fn credential_has_invisible_chars(value: &str) -> bool {
+    value
+        .chars()
+        .any(|ch| !(0x21..=0x7e).contains(&(ch as u32)))
+}
+
+/// Masked key fingerprint for logs: enough to tell WHICH stored key a session
+/// is using (first 6 chars + length) without leaking the secret — the first
+/// question when a provider rejects auth is "is the app even holding the key
+/// I entered?".
+fn credential_fingerprint(value: Option<&str>) -> String {
+    match value.map(str::trim).filter(|key| !key.is_empty()) {
+        Some(key) => format!(
+            "{}…(len {})",
+            key.chars().take(6).collect::<String>(),
+            key.chars().count()
+        ),
+        None => "none".to_owned(),
+    }
+}
+
 fn validate_connections(connections: &[ConnectionDescriptor]) -> CommandResult<()> {
     let mut sources = HashSet::new();
     for connection in connections {
@@ -1224,6 +1265,11 @@ fn validate_connections(connections: &[ConnectionDescriptor]) -> CommandResult<(
             return Err("translation connection must use wss://".to_owned());
         }
         let api_key = connection.api_key.as_deref().unwrap_or("").trim();
+        if credential_has_invisible_chars(api_key) {
+            return Err(
+                "引擎密钥包含不可见字符（复制时可能带入了隐藏字符），请删除后重新输入。".to_owned(),
+            );
+        }
         match LiveProvider::from_name(connection.provider.as_deref()) {
             LiveProvider::Qwen if api_key.is_empty() => {
                 return Err("Qwen 翻译引擎需要填写 DashScope API Key".to_owned());
@@ -1235,9 +1281,15 @@ fn validate_connections(connections: &[ConnectionDescriptor]) -> CommandResult<(
                 // Fail fast on credential shape before any audio flows; the
                 // same parse happens again in the connection loop.
                 let empty = HashMap::new();
-                tencent_asr::TencentCredentials::from_extra(
-                    connection.extra.as_ref().unwrap_or(&empty),
-                )?;
+                let extra = connection.extra.as_ref().unwrap_or(&empty);
+                if let Some((name, _)) =
+                    extra.iter().find(|(_, value)| credential_has_invisible_chars(value.trim()))
+                {
+                    return Err(format!(
+                        "腾讯引擎凭证 {name} 包含不可见字符（复制时可能带入了隐藏字符），请删除后重新输入。"
+                    ));
+                }
+                tencent_asr::TencentCredentials::from_extra(extra)?;
             }
             _ => {}
         }
@@ -1249,10 +1301,11 @@ fn validate_connections(connections: &[ConnectionDescriptor]) -> CommandResult<(
     // rejected API key is the first fork in diagnosing a connect 401.
     for connection in connections {
         log::info!(
-            "Live translation endpoint attached: source={:?} provider={} url={}",
+            "Live translation endpoint attached: source={:?} provider={} url={} key={}",
             connection.source,
             connection.provider.as_deref().unwrap_or("backend"),
             endpoint_log_label(&connection.url),
+            credential_fingerprint(connection.api_key.as_deref()),
         );
     }
     Ok(())
@@ -1525,11 +1578,29 @@ async fn websocket_loop(
                 // reconnect when the probe goes unanswered.
                 let mut last_inbound = tokio::time::Instant::now();
                 let mut pinged_at: Option<tokio::time::Instant> = None;
+                // When this connection was established. Inbound traffic only
+                // resets the failure streak once the connection has lived a
+                // moment — a gate that accepts the handshake, emits one frame
+                // and dies (bad key, unknown model) would otherwise zero the
+                // streak every cycle and spin at 500 ms forever.
+                let connected_at = tokio::time::Instant::now();
+                // Per-connection leg proofs: the first inbound provider frame
+                // and the first forwarded audio chunk separate "capture never
+                // feeds the socket" from "the gate accepted and went silent" —
+                // the two failure shapes a reconnect-only log cannot tell apart.
+                let mut first_frame_logged = false;
+                let mut audio_forward_logged = false;
                 loop {
                     tokio::select! {
                         command = receiver.recv(), if finishing.is_none() => {
                             match command {
                                 Some(WsCommand::Audio(payload)) => {
+                                    if !audio_forward_logged {
+                                        audio_forward_logged = true;
+                                        log::info!(
+                                            "Live translation stream {source:?} forwarding captured audio"
+                                        );
+                                    }
                                     if is_qwen {
                                         let event = json!({
                                             "type": "input_audio_buffer.append",
@@ -1625,11 +1696,21 @@ async fn websocket_loop(
                         incoming = reader.next() => {
                             match incoming {
                                 Some(Ok(Message::Text(text))) => {
-                                    // Provider traffic proves the connection is
-                                    // healthy and clears the reconnect backoff.
                                     last_inbound = tokio::time::Instant::now();
                                     pinged_at = None;
-                                    failure_streak = 0;
+                                    if connected_at.elapsed() >= LIVE_CONNECTION_GRACE {
+                                        failure_streak = 0;
+                                    }
+                                    if !first_frame_logged {
+                                        first_frame_logged = true;
+                                        // The first frame names the gate's very
+                                        // first word — session ack, in-band
+                                        // auth/model error, or nothing at all.
+                                        log::info!(
+                                            "Live translation stream {source:?} provider first frame: {}",
+                                            text.chars().take(200).collect::<String>()
+                                        );
+                                    }
                                     if is_qwen && qwen_finishing
                                         && text.contains("\"session.finished\"")
                                     {
@@ -1662,10 +1743,15 @@ async fn websocket_loop(
                                                     // The server considers the speech
                                                     // over and is about to close; the
                                                     // reconnect loop keeps the stream
-                                                    // alive for the next utterance.
+                                                    // alive for the next utterance. A
+                                                    // final result proves the pipeline
+                                                    // works — clear the streak so the
+                                                    // next utterance redials promptly.
+                                                    failure_streak = 0;
                                                     break;
                                                 }
                                                 if let Some(result) = &response.result {
+                                                    failure_streak = 0;
                                                     handle_tencent_result(
                                                         &app,
                                                         &session,
@@ -1681,22 +1767,29 @@ async fn websocket_loop(
                                                 log::warn!("tencent-asr: 无法解析响应：{error}");
                                             }
                                         }
-                                    } else {
-                                        handle_provider_message(
-                                            &app,
-                                            &session,
-                                            source,
-                                            epoch,
-                                            stream_offset_ms,
-                                            text.as_ref(),
-                                            is_qwen,
-                                        );
+                                    } else if handle_provider_message(
+                                        &app,
+                                        &session,
+                                        source,
+                                        epoch,
+                                        stream_offset_ms,
+                                        text.as_ref(),
+                                        is_qwen,
+                                    ) {
+                                        // A real result on a fresh connection is
+                                        // full proof of health — clear the streak
+                                        // even inside the connection grace window
+                                        // (short utterances on Tencent close and
+                                        // redial within seconds, by design).
+                                        failure_streak = 0;
                                     }
                                 }
                                 Some(Ok(Message::Binary(frame))) if is_volc => {
                                     last_inbound = tokio::time::Instant::now();
                                     pinged_at = None;
-                                    failure_streak = 0;
+                                    if connected_at.elapsed() >= LIVE_CONNECTION_GRACE {
+                                        failure_streak = 0;
+                                    }
                                     match volc_ast::decode_response(&frame) {
                                         Ok(response) => match response.event {
                                             volc_ast::EVENT_SESSION_FINISHED => {
@@ -1739,12 +1832,30 @@ async fn websocket_loop(
                                         }
                                     }
                                 }
-                                Some(Ok(Message::Close(_))) | None => {
+                                Some(Ok(Message::Close(frame))) => {
                                     if finishing.is_some() {
                                         emit_stream_state(&app, source, "closed", epoch);
                                         return;
                                     }
-                                    emit_error(&app, Some(source), "翻译连接由服务端关闭，正在重连。");
+                                    // The close code is often the only hint a
+                                    // provider gives (1006 = TCP died mid-flight,
+                                    // 4xxx = policy/auth rejection at the gate).
+                                    let detail = frame
+                                        .map(|frame| format!("（code={} {}）", frame.code, frame.reason))
+                                        .unwrap_or_default();
+                                    emit_error(
+                                        &app,
+                                        Some(source),
+                                        format!("翻译连接由服务端关闭{detail}，正在重连。"),
+                                    );
+                                    break;
+                                }
+                                None => {
+                                    if finishing.is_some() {
+                                        emit_stream_state(&app, source, "closed", epoch);
+                                        return;
+                                    }
+                                    emit_error(&app, Some(source), "翻译连接中断，正在重连。");
                                     break;
                                 }
                                 Some(Ok(_)) => {
@@ -1752,7 +1863,9 @@ async fn websocket_loop(
                                     // count as a liveness proof.
                                     last_inbound = tokio::time::Instant::now();
                                     pinged_at = None;
-                                    failure_streak = 0;
+                                    if connected_at.elapsed() >= LIVE_CONNECTION_GRACE {
+                                        failure_streak = 0;
+                                    }
                                 }
                                 Some(Err(error)) => {
                                     emit_error(&app, Some(source), format!("翻译连接中断：{error}"));
@@ -1877,6 +1990,11 @@ fn save_recovery_segments(session: &LiveSession, segments: &[LiveSegment]) {
     }
 }
 
+/// Apply one provider text frame. Returns true when the frame carried an
+/// actual recognition/translation result that was ingested — as opposed to
+/// session bookkeeping — which the connection loop treats as full proof the
+/// provider pipeline works, regardless of how long the connection has lived.
+#[allow(clippy::too_many_arguments)]
 fn handle_provider_message(
     app: &AppHandle,
     session: &LiveSession,
@@ -1885,13 +2003,45 @@ fn handle_provider_message(
     epoch_offset_ms: u64,
     text: &str,
     is_qwen: bool,
-) {
+) -> bool {
     let emission = if is_qwen {
+        // DashScope reports bad keys, unknown models and invalid session
+        // configs as an in-band `error` event and then drops the socket —
+        // without surfacing it, the stream cycles connect→error→close every
+        // second with no trace of why anywhere in the log.
+        if let Some(reason) = qwen_error_reason(text) {
+            emit_error(&app, Some(source), format!("Qwen 实时引擎错误：{reason}"));
+            return false;
+        }
         apply_qwen_message(session, source, epoch, epoch_offset_ms, text)
     } else {
         apply_provider_message(session, source, epoch, epoch_offset_ms, text)
     };
+    let got_result = emission.is_some();
     emit_provider_emission(app, emission);
+    got_result
+}
+
+/// Extract a human-readable reason from a Qwen realtime `error` event, or
+/// None when the frame is anything else. The payload is either flat
+/// (`{type, code, message}`) or nested (`{type, error: {code, message}}`)
+/// depending on the endpoint.
+fn qwen_error_reason(text: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(text).ok()?;
+    if value.get("type").and_then(Value::as_str) != Some("error") {
+        return None;
+    }
+    let error = value.get("error").unwrap_or(&value);
+    let code = value_string(error, "code").or_else(|| value_string(error, "type"));
+    let message = value_string(error, "message")
+        .or_else(|| value_string(&value, "message"))
+        .unwrap_or_default();
+    match (code, message.is_empty()) {
+        (Some(code), false) => Some(format!("{code}：{message}")),
+        (Some(code), true) => Some(code),
+        (None, false) => Some(message),
+        (None, true) => Some(text.chars().take(200).collect()),
+    }
 }
 
 fn emit_provider_emission(app: &AppHandle, emission: Option<ProviderEmission>) {

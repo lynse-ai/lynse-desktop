@@ -95,8 +95,8 @@ export function MeetingAutoRecordAgent() {
       await api.start({
         sessionId,
         title: `${t("auto_record.session_title", { app: appName })} · ${new Date(event.detectedAt).toLocaleString()}`,
-        sourceLanguage: "zh",
-        targetLanguage: "zh",
+        sourceLanguage: cfg?.sourceLanguage || "zh",
+        targetLanguage: cfg?.sourceLanguage || "zh",
         epoch: 0,
         connections: [],
         audioSources: sources,

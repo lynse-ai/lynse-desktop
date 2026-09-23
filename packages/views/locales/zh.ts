@@ -104,6 +104,12 @@ const zh = {
         provider_tencent_secret_key: "SecretKey",
         provider_tencent_engine: "识别引擎（16k_zh / 16k_en / 16k_ja / 16k_zh-PY）",
         tencent_hint: "使用腾讯云实时语音识别，仅转写、不做翻译，目标语言会被忽略；凭证保存在系统 Keychain。引擎留空时按源语言推导（中/粤/英/日），其他语言请手动填写引擎 ID。",
+    provider_custom: "自定义（DashScope 兼容）",
+    custom_hint: "面向任何兼容 DashScope Realtime 协议的服务：填写接入点、模型名称与 API Key 即可直连。凭据保存在系统 Keychain。",
+    provider_custom_model: "模型名称",
+    provider_custom_api_key: "API Key",
+    provider_custom_asr_model: "识别模型（可选）",
+    provider_custom_asr_model_hint: "留空使用默认 qwen3-asr-flash-realtime；仅当你的服务使用不同的识别模型名称时填写。",
 
     provider_pid: "项目 PID",
     provider_secret_key: "HMAC Secret Key",

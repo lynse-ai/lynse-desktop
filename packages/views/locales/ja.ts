@@ -106,6 +106,12 @@ const ja = {
         provider_tencent_secret_key: "SecretKey",
         provider_tencent_engine: "認識エンジン（16k_zh / 16k_en / 16k_ja / 16k_zh-PY）",
         tencent_hint: "Tencent Cloud リアルタイム音声認識を使用します。文字起こしのみで翻訳は行わず、翻訳先言語は無視されます。認証情報はシステム Keychain に保存されます。エンジンを空欄にするとソース言語（中/粤/英/日）から推定します。それ以外の言語はエンジン ID を手動入力してください。",
+    provider_custom: "カスタム（DashScope 互換）",
+    custom_hint: "DashScope Realtime プロトコルに互換性のあるサービスに接続できます。エンドポイント・モデル名・API Key を入力するだけです。認証情報はシステムの Keychain に保存されます。",
+    provider_custom_model: "モデル名",
+    provider_custom_api_key: "API Key",
+    provider_custom_asr_model: "認識モデル（任意）",
+    provider_custom_asr_model_hint: "空欄の場合はデフォルトの qwen3-asr-flash-realtime を使用します。サービスが別の ASR モデル名を使う場合のみ入力してください。",
 
     provider_pid: "プロジェクト PID",
     provider_secret_key: "HMAC Secret Key",

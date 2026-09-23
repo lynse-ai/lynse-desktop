@@ -116,7 +116,7 @@ export function useQuickRecording() {
       // first and then lands on the recording page. Recording itself stays
       // decoupled from the page — the island answers while the main window
       // is hidden, so the user can browse anywhere afterwards.
-      const sourceLanguage = "zh";
+      const sourceLanguage = cfg?.sourceLanguage || "zh";
       await api.start({
         sessionId: crypto.randomUUID(),
         title: `${t("recording_mode.record_title")} ${new Date().toLocaleString()}`,
@@ -155,7 +155,7 @@ export function useQuickRecording() {
         let connections: LiveConnectionDescriptor[] = [];
         if (target !== "none") {
           const config = await api.getProviderConfig().catch(() => null);
-          if (config?.provider) {
+          if (config?.activeProvider) {
             connections =
               (await requestRealtimeSession(
                 {

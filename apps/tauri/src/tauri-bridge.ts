@@ -8,7 +8,18 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { setApiTransportMode } from "@lynse/core/api/client";
 import { setWorkBuddyHttpRelay } from "@lynse/core/auth/workbuddy";
-import { hydrateSecrets, refreshSecret, removeSecret, secureStorage, setSecret } from "./secure-storage";
+import { hydrateSecrets, refreshSecret, registerSecretKeys, removeSecret, secureStorage, setSecret } from "./secure-storage";
+import {
+  collectLegacyLiveTranslationSnapshot,
+  getProvider,
+  LEGACY_VOLC_APP_KEY,
+  listProviders,
+  listSecretVaultKeys,
+  migrateLegacyProviderSettings,
+  parsePersistedSettings,
+  secretVaultKey,
+} from "@lynse/views/live-translation";
+import type { PersistedLiveTranslationSettings } from "@lynse/views/live-translation";
 import type {
   SttDownloadProgress,
   SttModelInfo,
@@ -26,7 +37,6 @@ import type {
   LiveSetModeRequest,
   LiveStartRequest,
   LiveTranslationEvent,
-  LiveTranslationProvider,
   LiveTranslationProviderConfig,
   LiveTranslationSnapshot,
   LiveTranslationTrayAction,
@@ -46,10 +56,6 @@ import type {
   DesktopStorageApi,
   WebdavSyncProgress,
 } from "@lynse/views/settings";
-import {
-  DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
-  normalizeMaxSpeakers,
-} from "@lynse/views/live-translation";
 import type {
   DesktopRecordingCardApi,
   RecordingCardEvent,
@@ -139,186 +145,116 @@ function command<T>(name: string, payload?: Record<string, unknown>): Promise<T>
   return invoke<T>(name, payload);
 }
 
-const LIVE_TRANSLATION_PROVIDER_KEY = "lynse_live_translation_provider";
-const ILIVEDATA_ENDPOINT_KEY = "lynse_live_translation_ilivedata_endpoint";
-const ILIVEDATA_PID_KEY = "lynse_live_translation_ilivedata_pid";
-const ILIVEDATA_SECRET_KEY = "lynse_live_translation_ilivedata_secret_key";
-const QWEN_ENDPOINT_KEY = "lynse_live_translation_qwen_endpoint";
-const QWEN_API_KEY = "lynse_live_translation_qwen_api_key";
-const VOLC_ENDPOINT_KEY = "lynse_live_translation_volc_endpoint";
-const VOLC_API_KEY = "lynse_live_translation_volc_api_key";
-const TENCENT_ENDPOINT_KEY = "lynse_live_translation_tencent_endpoint";
-const TENCENT_APP_ID_KEY = "lynse_live_translation_tencent_app_id";
-const TENCENT_SECRET_ID_KEY = "lynse_live_translation_tencent_secret_id";
-const TENCENT_SECRET_KEY = "lynse_live_translation_tencent_secret_key";
-const TENCENT_ENGINE_KEY = "lynse_live_translation_tencent_engine";
-/** iLiveData 说话人识别的最大说话人数；"0" 表示关闭说话人识别。 */
-const ILIVEDATA_MAX_SPEAKERS_KEY = "lynse_live_translation_ilivedata_max_speakers";
-/** 默认开启说话人识别，上限 2 人（自己 + 对方）。设为 0 则关闭。 */
-const DEFAULT_ILIVEDATA_MAX_SPEAKERS = 2;
-/** 录音采集来源模式：both（默认双流）/ mic（仅麦克风）/ system（仅系统音频）。 */
-const AUDIO_SOURCE_KEY = "lynse_live_translation_audio_source";
+/**
+ * Live-translation provider settings v2 — registry-driven storage.
+ *
+ * Non-secret field values persist as one JSON blob in localStorage; secrets
+ * go to the OS-keychain vault under `lynse_live_translation_<provider>_<field>`
+ * (the same keys the pre-registry layout used, so existing credentials keep
+ * resolving). Which fields exist and which of them are secrets is derived
+ * from the provider plugin registry — adding a provider adds storage paths
+ * without touching this file.
+ */
+const LIVE_TRANSLATION_SETTINGS_V2_KEY = "lynse_live_translation_settings_v2";
 type AudioSourceMode = "both" | "mic" | "system";
 
-/** Read the persisted capture-source mode; anything unexpected falls back to
- * the legacy dual-stream behaviour. */
-function readAudioSourceMode(): AudioSourceMode {
-  const saved = window.localStorage.getItem(AUDIO_SOURCE_KEY);
-  return saved === "mic" || saved === "system" ? saved : "both";
+// Register the providers' vault key paths before any read/write so a plugin
+// secret is never silently downgraded to localStorage by secure-storage.
+registerSecretKeys(listSecretVaultKeys());
+
+/** Read the v2 blob, migrating the legacy per-field localStorage keys into it
+ * on the first launch after this refactor. Legacy keys stay on disk for one
+ * version as a rollback path; the blob is authoritative from here on. */
+function loadPersistedLiveTranslationSettings(): PersistedLiveTranslationSettings {
+  const parsed = parsePersistedSettings(
+    window.localStorage.getItem(LIVE_TRANSLATION_SETTINGS_V2_KEY),
+  );
+  if (parsed) return parsed;
+  const migrated = migrateLegacyProviderSettings(
+    collectLegacyLiveTranslationSnapshot((key) => window.localStorage.getItem(key)),
+  );
+  window.localStorage.setItem(LIVE_TRANSLATION_SETTINGS_V2_KEY, JSON.stringify(migrated));
+  return migrated;
 }
-/** Written by builds that still supported the legacy (App Key) console. */
-const LEGACY_VOLC_APP_KEY = "lynse_live_translation_volc_app_key";
-const DEFAULT_QWEN_ENDPOINT =
-  "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.8-livetranslate-flash-realtime";
-/** Written by builds that shipped the qwen3.5 realtime model. */
-const LEGACY_QWEN_ENDPOINT =
-  "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.5-livetranslate-flash-realtime";
-const DEFAULT_VOLC_ENDPOINT =
-  "wss://openspeech.bytedance.com/api/v4/ast/v2/translate";
-const DEFAULT_TENCENT_ENDPOINT = "wss://asr.cloud.tencent.com/asr/v2";
-const DIRECT_LIVE_TRANSLATION_PROVIDERS = new Set<LiveTranslationProvider>([
-  "ilivedata_direct",
-  "qwen",
-  "volc",
-  "tencent",
-]);
-const LEGACY_ILIVEDATA_RTVT_ENDPOINT =
-  "wss://rtvt-bj-test.ilivedata.com/gate/websocket";
+
+/** Merge the persisted blob with the vault's secret values into the flat
+ * value map the UI edits and the connection builders consume. */
+function toProviderConfig(settings: PersistedLiveTranslationSettings): LiveTranslationProviderConfig {
+  const values: Record<string, Record<string, string>> = {};
+  for (const plugin of listProviders()) {
+    const entry: Record<string, string> = {};
+    for (const field of plugin.fields) {
+      entry[field.key] = field.secret
+        ? secureStorage.getItem(secretVaultKey(plugin, field)) ?? ""
+        : settings.fields[plugin.id]?.[field.key] ?? "";
+    }
+    values[plugin.id] = entry;
+  }
+  return {
+    activeProvider: getProvider(settings.activeProvider)
+      ? settings.activeProvider
+      : "lynse_backend",
+    audioSource: settings.audioSource,
+    sourceLanguage: settings.sourceLanguage,
+    targetLanguage: settings.targetLanguage,
+    values,
+  };
+}
+
+async function getLiveTranslationProviderConfig(): Promise<LiveTranslationProviderConfig> {
+  // Re-read secrets from the OS keychain on every fetch so a key changed
+  // outside the app (or after startup) takes effect without a restart.
+  await Promise.all(listSecretVaultKeys().map((key) => refreshSecret(key)));
+  return toProviderConfig(loadPersistedLiveTranslationSettings());
+}
+
+async function saveLiveTranslationProviderConfig(
+  config: LiveTranslationProviderConfig,
+): Promise<LiveTranslationProviderConfig> {
+  const fields: PersistedLiveTranslationSettings["fields"] = {};
+  for (const plugin of listProviders()) {
+    const stored: Record<string, string> = {};
+    for (const field of plugin.fields) {
+      const value = config.values[plugin.id]?.[field.key]?.trim() ?? "";
+      if (field.secret) {
+        // An emptied secret field removes the vault entry — clearing a key
+        // in the form really unsets it.
+        if (value) {
+          await setSecret(secretVaultKey(plugin, field), value);
+        } else {
+          await removeSecret(secretVaultKey(plugin, field));
+        }
+      } else {
+        stored[field.key] = value;
+      }
+    }
+    fields[plugin.id] = stored;
+  }
+  const normalized: PersistedLiveTranslationSettings = {
+    version: 2,
+    activeProvider: getProvider(config.activeProvider)
+      ? config.activeProvider
+      : "lynse_backend",
+    audioSource:
+      config.audioSource === "mic" || config.audioSource === "system"
+        ? config.audioSource
+        : "both",
+    sourceLanguage: config.sourceLanguage?.trim() || undefined,
+    targetLanguage: config.targetLanguage?.trim() || undefined,
+    fields,
+  };
+  window.localStorage.setItem(LIVE_TRANSLATION_SETTINGS_V2_KEY, JSON.stringify(normalized));
+  // The legacy console is no longer supported; drop any App Key left behind.
+  window.localStorage.removeItem(LEGACY_VOLC_APP_KEY);
+  return toProviderConfig(normalized);
+}
+
 const LIVE_TRANSLATION_TRAY_EVENT = "live-translation-tray-action";
 const LIVE_TRANSLATION_TRAY_NAVIGATE_EVENT = "lynse:live-translation-tray-action";
 const pendingLiveTranslationTrayActions: LiveTranslationTrayAction[] = [];
 const liveTranslationTrayListeners = new Set<
   (action: LiveTranslationTrayAction) => void
 >();
-
-/** Read the persisted max-speaker setting; absent or corrupt values fall back safely. */
-function readMaxSpeakers(): number {
-  const saved = window.localStorage.getItem(ILIVEDATA_MAX_SPEAKERS_KEY);
-  if (saved == null) return DEFAULT_ILIVEDATA_MAX_SPEAKERS;
-  const parsed = Number.parseInt(saved, 10);
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
-
-async function getLiveTranslationProviderConfig(): Promise<LiveTranslationProviderConfig> {
-  const savedProvider = window.localStorage.getItem(LIVE_TRANSLATION_PROVIDER_KEY);
-  const savedEndpoint = window.localStorage.getItem(ILIVEDATA_ENDPOINT_KEY);
-  const savedQwenEndpoint = window.localStorage.getItem(QWEN_ENDPOINT_KEY);
-  const savedVolcEndpoint = window.localStorage.getItem(VOLC_ENDPOINT_KEY);
-  // Re-read secrets from the OS keychain on every fetch so a key changed
-  // outside the app (or after startup) takes effect without a restart.
-  await Promise.all([
-    refreshSecret(ILIVEDATA_SECRET_KEY),
-    refreshSecret(QWEN_API_KEY),
-    refreshSecret(VOLC_API_KEY),
-    refreshSecret(TENCENT_SECRET_KEY),
-  ]);
-  return {
-    provider: DIRECT_LIVE_TRANSLATION_PROVIDERS.has(
-      savedProvider as LiveTranslationProvider,
-    )
-      ? (savedProvider as LiveTranslationProvider)
-      : "lynse_backend",
-    audioSource: readAudioSourceMode(),
-    ilivedata: {
-      endpoint: savedEndpoint && savedEndpoint !== LEGACY_ILIVEDATA_RTVT_ENDPOINT
-        ? savedEndpoint
-        : DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
-      pid: window.localStorage.getItem(ILIVEDATA_PID_KEY) ?? "",
-      secretKey: secureStorage.getItem(ILIVEDATA_SECRET_KEY) ?? "",
-      maxSpeakers: normalizeMaxSpeakers(readMaxSpeakers()),
-    },
-    qwen: {
-      // A saved endpoint still naming the retired qwen3.5 model migrates
-      // silently to the new default; anything else the user typed is kept.
-      endpoint:
-        savedQwenEndpoint?.trim() && savedQwenEndpoint.trim() !== LEGACY_QWEN_ENDPOINT
-          ? savedQwenEndpoint.trim()
-          : DEFAULT_QWEN_ENDPOINT,
-      apiKey: secureStorage.getItem(QWEN_API_KEY) ?? "",
-    },
-    volc: {
-      endpoint: savedVolcEndpoint?.trim() || DEFAULT_VOLC_ENDPOINT,
-      apiKey: secureStorage.getItem(VOLC_API_KEY) ?? "",
-    },
-    tencent: {
-      endpoint: window.localStorage.getItem(TENCENT_ENDPOINT_KEY)?.trim() || DEFAULT_TENCENT_ENDPOINT,
-      appId: window.localStorage.getItem(TENCENT_APP_ID_KEY) ?? "",
-      secretId: window.localStorage.getItem(TENCENT_SECRET_ID_KEY) ?? "",
-      secretKey: secureStorage.getItem(TENCENT_SECRET_KEY) ?? "",
-      engineType: window.localStorage.getItem(TENCENT_ENGINE_KEY) ?? "",
-    },
-  };
-}
-
-async function saveLiveTranslationProviderConfig(
-  config: LiveTranslationProviderConfig,
-): Promise<LiveTranslationProviderConfig> {
-  const normalized: LiveTranslationProviderConfig = {
-    provider: config.provider,
-    audioSource:
-      config.audioSource === "mic" || config.audioSource === "system"
-        ? config.audioSource
-        : "both",
-    ilivedata: {
-      endpoint: config.ilivedata.endpoint.trim() || DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
-      pid: config.ilivedata.pid.trim(),
-      secretKey: config.ilivedata.secretKey.trim(),
-      maxSpeakers: normalizeMaxSpeakers(config.ilivedata.maxSpeakers),
-    },
-    qwen: {
-      endpoint: config.qwen.endpoint.trim() || DEFAULT_QWEN_ENDPOINT,
-      apiKey: config.qwen.apiKey.trim(),
-    },
-    volc: {
-      endpoint: config.volc.endpoint.trim() || DEFAULT_VOLC_ENDPOINT,
-      apiKey: config.volc.apiKey.trim(),
-    },
-    tencent: {
-      endpoint: config.tencent?.endpoint?.trim() || DEFAULT_TENCENT_ENDPOINT,
-      appId: config.tencent?.appId?.trim() ?? "",
-      secretId: config.tencent?.secretId?.trim() ?? "",
-      secretKey: config.tencent?.secretKey?.trim() ?? "",
-      engineType: config.tencent?.engineType?.trim() ?? "",
-    },
-  };
-  window.localStorage.setItem(LIVE_TRANSLATION_PROVIDER_KEY, normalized.provider);
-  window.localStorage.setItem(AUDIO_SOURCE_KEY, normalized.audioSource ?? "both");
-  window.localStorage.setItem(ILIVEDATA_ENDPOINT_KEY, normalized.ilivedata.endpoint);
-  window.localStorage.setItem(ILIVEDATA_PID_KEY, normalized.ilivedata.pid);
-  window.localStorage.setItem(
-    ILIVEDATA_MAX_SPEAKERS_KEY,
-    String(normalized.ilivedata.maxSpeakers ?? 0),
-  );
-  if (normalized.ilivedata.secretKey) {
-    await setSecret(ILIVEDATA_SECRET_KEY, normalized.ilivedata.secretKey);
-  } else {
-    await removeSecret(ILIVEDATA_SECRET_KEY);
-  }
-  window.localStorage.setItem(QWEN_ENDPOINT_KEY, normalized.qwen.endpoint);
-  if (normalized.qwen.apiKey) {
-    await setSecret(QWEN_API_KEY, normalized.qwen.apiKey);
-  } else {
-    await removeSecret(QWEN_API_KEY);
-  }
-  window.localStorage.setItem(VOLC_ENDPOINT_KEY, normalized.volc.endpoint);
-  // The legacy console is no longer supported; drop any App Key left behind.
-  window.localStorage.removeItem(LEGACY_VOLC_APP_KEY);
-  if (normalized.volc.apiKey) {
-    await setSecret(VOLC_API_KEY, normalized.volc.apiKey);
-  } else {
-    await removeSecret(VOLC_API_KEY);
-  }
-  window.localStorage.setItem(TENCENT_ENDPOINT_KEY, normalized.tencent.endpoint);
-  window.localStorage.setItem(TENCENT_APP_ID_KEY, normalized.tencent.appId);
-  window.localStorage.setItem(TENCENT_SECRET_ID_KEY, normalized.tencent.secretId);
-  window.localStorage.setItem(TENCENT_ENGINE_KEY, normalized.tencent.engineType);
-  if (normalized.tencent.secretKey) {
-    await setSecret(TENCENT_SECRET_KEY, normalized.tencent.secretKey);
-  } else {
-    await removeSecret(TENCENT_SECRET_KEY);
-  }
-  return normalized;
-}
 
 export async function installTauriBridge(): Promise<void> {
   // Load credentials from the OS keychain into the in-memory cache before the

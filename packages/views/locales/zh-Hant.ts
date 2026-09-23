@@ -104,6 +104,12 @@ const zhHant = {
         provider_tencent_secret_key: "SecretKey",
         provider_tencent_engine: "識別引擎（16k_zh / 16k_en / 16k_ja / 16k_zh-PY）",
         tencent_hint: "使用騰訊雲即時語音識別，僅轉寫、不做翻譯，目標語言會被忽略；憑證保存在系統 Keychain。引擎留空時按源語言推導（中/粵/英/日），其他語言請手動填寫引擎 ID。",
+    provider_custom: "自訂（DashScope 相容）",
+    custom_hint: "適用於任何相容 DashScope Realtime 協定的服務：填入接入點、模型名稱與 API Key 即可直連。憑證保存在系統 Keychain。",
+    provider_custom_model: "模型名稱",
+    provider_custom_api_key: "API Key",
+    provider_custom_asr_model: "識別模型（可選）",
+    provider_custom_asr_model_hint: "留空使用預設 qwen3-asr-flash-realtime；僅當你的服務使用不同的識別模型名稱時填寫。",
 
     provider_pid: "專案 PID",
     provider_secret_key: "HMAC Secret Key",

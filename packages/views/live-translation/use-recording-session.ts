@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useLiveTranslation } from "./use-live-translation";
@@ -100,6 +100,24 @@ export function useRecordingSession(): UseRecordingSessionReturn {
   // noise floor. It is read when a recording starts.
   const [voiceEnhancement, setVoiceEnhancementFlag] = useState(false);
 
+  // Seed the direction pickers from the persisted preference so the last-used
+  // source language survives page remounts (the snapshot above is idle on a
+  // fresh mount and would otherwise reset the pickers to zh).
+  useEffect(() => {
+    if (!api) return;
+    let cancelled = false;
+    api.getProviderConfig()
+      .then((cfg) => {
+        if (cancelled) return;
+        if (cfg.sourceLanguage) setSourceLanguage(cfg.sourceLanguage);
+        if (cfg.targetLanguage) setTargetLanguage(cfg.targetLanguage);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [api]);
+
   // ── derived values ──
   // Treat any non-idle, non-stopping session as "recording" so the Start button
   // never shows while a session is actually active (e.g. during the brief
@@ -146,12 +164,14 @@ export function useRecordingSession(): UseRecordingSessionReturn {
   // ── attach / detach transcription or translation live ------------
   const switchMode = useCallback(async (
     next: RecordMode,
-    opts?: { sessionId?: string; translation?: boolean },
+    opts?: { sessionId?: string; translation?: boolean; source?: string },
   ): Promise<boolean> => {
     if (!api) return false;
     const sid = opts?.sessionId ?? view.sessionId;
     if (!sid) return false;
-    const source = view.sourceLanguage ?? "zh";
+    // Explicit source (e.g. right after start, before the Rust snapshot has
+    // caught up) wins; mid-session calls read the live session state.
+    const source = opts?.source ?? view.sourceLanguage ?? "zh";
 
     // Pure recording: detach any cloud connection.
     if (next === "record") {
@@ -171,7 +191,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     const target = (opts?.translation ?? translationEnabled) ? targetLanguage : "none";
     try {
       const cfg = await api.getProviderConfig().catch(() => null);
-      if (!cfg || !cfg.provider) {
+      if (!cfg || !cfg.activeProvider) {
         toast.warning(t("recording_mode.switch_need_provider"));
         return false;
       }
@@ -251,8 +271,9 @@ export function useRecordingSession(): UseRecordingSessionReturn {
 
       // Capture first, always with no provider attached. Recognition is only
       // ever layered on afterwards, and only because the user pre-armed the
-      // Captions toggle (`selectMode` stores that intent while idle).
-      const sourceLanguage = "zh";
+      // Captions toggle (`selectMode` stores that intent while idle). The
+      // source language is the direction the user picked in the header —
+      // never a hard-coded default.
       const started = await api.start({
         sessionId: crypto.randomUUID(),
         title: `${t("recording_mode.record_title")} ${new Date().toLocaleString()}`,
@@ -267,7 +288,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
       // If the user picked live mode before starting, attempt to switch
       // immediately; fall back to pure recording on failure.
       if (mode !== "record") {
-        const ok = await switchMode(mode, { sessionId: started.sessionId });
+        const ok = await switchMode(mode, { sessionId: started.sessionId, source: sourceLanguage });
         if (!ok) setMode("record");
       } else {
         setMode("record");
@@ -279,7 +300,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     } finally {
       setBusy(false);
     }
-  }, [api, recording, ensurePermissions, mode, switchMode, voiceEnhancement, t, view.state]);
+  }, [api, recording, ensurePermissions, mode, switchMode, voiceEnhancement, sourceLanguage, t, view.state]);
 
   // ── pause / resume ----------------------------------------------
   const togglePause = useCallback(async () => {
@@ -291,7 +312,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
         let connections: LiveConnectionDescriptor[] = [];
         if (activeMode !== "record") {
           const cfg = await api.getProviderConfig().catch(() => null);
-          if (cfg && cfg.provider) {
+          if (cfg && cfg.activeProvider) {
             const target = translationEnabled ? targetLanguage : "none";
             connections =
               (await requestRealtimeSession(
@@ -339,6 +360,20 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     setSourceLanguage(source);
     setTargetLanguage(target);
     setTranslationFlag(target !== "none");
+    // Persist the direction so every start entry point (tray, float dock,
+    // meeting auto-record) reads the same source language on the next start.
+    void (async () => {
+      try {
+        const cfg = await api.getProviderConfig();
+        await api.saveProviderConfig({
+          ...cfg,
+          sourceLanguage: source,
+          targetLanguage: target === "none" ? cfg.targetLanguage : target,
+        });
+      } catch {
+        // A failed preference write must not break the direction switch.
+      }
+    })();
     if (!recording) {
       return true;
     }
@@ -346,7 +381,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     if (!sid) return false;
     try {
       const cfg = await api.getProviderConfig().catch(() => null);
-      if (!cfg || !cfg.provider) {
+      if (!cfg || !cfg.activeProvider) {
         toast.warning(t("recording_mode.switch_need_provider"));
         return false;
       }

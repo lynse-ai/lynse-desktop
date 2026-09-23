@@ -105,6 +105,12 @@ const ko = {
         provider_tencent_secret_key: "SecretKey",
         provider_tencent_engine: "인식 엔진(16k_zh / 16k_en / 16k_ja / 16k_zh-PY)",
         tencent_hint: "Tencent Cloud 실시간 음성 인식을 사용합니다. 받아쓰기만 하며 번역은 하지 않고 대상 언어는 무시됩니다. 자격 증명은 시스템 Keychain에 저장됩니다. 엔진을 비워 두면 소스 언어(중/월/영/일)에서 자동 지정되며, 다른 언어는 엔진 ID를 직접 입력해야 합니다.",
+    provider_custom: "사용자 지정(DashScope 호환)",
+    custom_hint: "DashScope Realtime 프로토콜과 호환되는 모든 서비스에 연결할 수 있습니다. 엔드포인트, 모델 이름, API Key만 입력하면 됩니다. 자격 증명은 시스템 Keychain에 저장됩니다.",
+    provider_custom_model: "모델 이름",
+    provider_custom_api_key: "API Key",
+    provider_custom_asr_model: "인식 모델(선택)",
+    provider_custom_asr_model_hint: "비워 두면 기본값 qwen3-asr-flash-realtime을 사용합니다. 서비스가 다른 ASR 모델 이름을 사용하는 경우에만 입력하세요.",
 
     provider_pid: "프로젝트 PID",
     provider_secret_key: "HMAC Secret Key",

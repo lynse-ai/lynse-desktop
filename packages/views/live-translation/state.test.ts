@@ -75,4 +75,39 @@ describe("live translation reducer", () => {
     });
     expect(state.lastError).toBe("音频采集失败");
   });
+
+  it("resets per-stream state when a new session's snapshot arrives", () => {
+    let state = initialLiveTranslationState();
+    state = reduceLiveTranslationEvent(state, {
+      type: "state",
+      snapshot: { state: "recording", sessionId: "session-a", epoch: 0, elapsedMs: 0, micLevel: 0, systemLevel: 0, segments: [] },
+    });
+    state = reduceLiveTranslationEvent(state, {
+      type: "streamState",
+      source: "mic",
+      state: "connected",
+      epoch: 0,
+    });
+    expect(state.streamStates.mic).toBe("connected");
+    // A new session starts dialing again: the previous session's stream
+    // states (and echo-gate flag) must not bleed into it.
+    state = reduceLiveTranslationEvent(state, {
+      type: "state",
+      snapshot: { state: "connecting", sessionId: "session-b", epoch: 1, elapsedMs: 0, micLevel: 0, systemLevel: 0, segments: [] },
+    });
+    expect(state.streamStates).toEqual({});
+    expect(state.micSuppressed).toBe(false);
+    // Snapshots within the same session keep whatever the streams reported.
+    state = reduceLiveTranslationEvent(state, {
+      type: "streamState",
+      source: "system",
+      state: "connected",
+      epoch: 1,
+    });
+    state = reduceLiveTranslationEvent(state, {
+      type: "state",
+      snapshot: { state: "recording", sessionId: "session-b", epoch: 1, elapsedMs: 1_000, micLevel: 0, systemLevel: 0, segments: [] },
+    });
+    expect(state.streamStates.system).toBe("connected");
+  });
 });

@@ -1,5 +1,3 @@
-use crate::tencent_asr;
-use crate::volc_ast;
 use crate::{now, remove_store_value, save_store_value, update_store_value, CommandResult};
 use futures_util::{SinkExt, StreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
@@ -24,11 +22,7 @@ use tauri::{
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
-use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
-use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
-use base64::Engine as _;
 
 // `Sample` is needed as a trait bound on `feed_samples` (a function signature),
 // so the import must be at module scope — a `use` inside the function body is
@@ -194,33 +188,10 @@ pub struct ConnectionDescriptor {
     extra: Option<HashMap<String, String>>,
 }
 
-/// Which on-the-wire protocol a translation connection speaks. All providers
-/// converge on the same `LiveSegment` model; only framing and auth differ.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LiveProvider {
-    /// iLiveData-style JSON with a `method` discriminator. Also used by the
-    /// Lynse backend relay, which mirrors that protocol.
-    Direct,
-    /// Qwen Live Translate (DashScope) JSON event stream.
-    Qwen,
-    /// Volcengine AST v4: protobuf over binary websocket frames.
-    Volc,
-    /// Tencent Cloud real-time ASR: raw PCM frames over a URL-signed
-    /// websocket, JSON result frames back. Recognition only — the service
-    /// has no translation leg.
-    Tencent,
-}
-
-impl LiveProvider {
-    fn from_name(name: Option<&str>) -> Self {
-        match name {
-            Some("qwen") => Self::Qwen,
-            Some("volc") => Self::Volc,
-            Some("tencent") => Self::Tencent,
-            _ => Self::Direct,
-        }
-    }
-}
+/// Wire-protocol adapters, one per on-the-wire translation protocol. All
+/// providers converge on the same `LiveSegment` model; only framing and auth
+/// differ. Selected per connection descriptor by `protocols::protocol_for`.
+mod protocols;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -378,6 +349,11 @@ struct RecoveryManifest {
     source_language: String,
     target_language: String,
     started_at: String,
+    /// Provider of the translation connections attached at start. Absent in
+    /// manifests written before the field existed; defaults to the generic
+    /// label on recovery instead of failing the read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -461,6 +437,11 @@ struct LiveSession {
     /// Set by the silence watchdog when it stops the session, so the
     /// completed payload can tell the UI why the recording ended.
     auto_stopped_silence: AtomicBool,
+    /// Provider name of the translation connections currently attached
+    /// (`None` for pure recording / the backend relay). Recorded so the
+    /// persisted record names the engine that actually produced the
+    /// transcript instead of a hard-coded label.
+    attached_provider: Mutex<Option<String>>,
     directory: PathBuf,
     socket_path: PathBuf,
 }
@@ -886,6 +867,7 @@ pub async fn live_translation_start(
         voice_enhancement: request.voice_enhancement.unwrap_or(false),
         last_voice_at: Mutex::new(Instant::now()),
         auto_stopped_silence: AtomicBool::new(false),
+        attached_provider: Mutex::new(None),
         directory,
         socket_path: {
             #[cfg(target_os = "macos")]
@@ -904,6 +886,7 @@ pub async fn live_translation_start(
         source_language: session.source_language.read().expect("live source language").clone(),
         target_language: session.target_language.read().expect("live target language").clone(),
         started_at: session.started_at.clone(),
+        provider: connections_provider(&request.connections),
     };
     fs::write(
         session.directory.join("session.json"),
@@ -1012,11 +995,15 @@ pub async fn live_translation_start(
     spawn_capture_start_watchdog(app.clone(), session.clone());
     set_card_feed_target(&session);
     emit_snapshot(&app, &session);
-    // The island is the tray-side control surface: only pop it when the main
-    // window is out of sight (hidden to the tray or Dock-minimized). While the
-    // main window is on screen, the recording page and the in-app float dock
-    // own the controls, and the island would just duplicate them.
-    if !main_window_visible(&app) {
+    // The island webview is the only receiver for the tray's pause/stop
+    // actions, so it must exist for the session's whole life. Pop it when the
+    // main window is out of sight (hidden to the tray or Dock-minimized);
+    // otherwise create it hidden — no duplicate pill on screen while the
+    // recording page and the in-app float dock own the controls, but the tray
+    // keeps a live receiver either way.
+    if main_window_visible(&app) {
+        ensure_recording_island_window(&app);
+    } else {
         set_recording_island_visible(&app, true);
     }
     Ok(session.snapshot())
@@ -1168,6 +1155,19 @@ fn clear_connections(session: &LiveSession) {
         .clear();
 }
 
+/// Provider name for a connection set — the same rule `spawn_connections`
+/// uses to stamp `LiveSession::attached_provider` and the recovery manifest.
+/// The first connection speaks for the session (sources share one provider);
+/// a descriptor without a provider name is the backend relay.
+fn connections_provider(connections: &[ConnectionDescriptor]) -> Option<String> {
+    connections.first().map(|first| {
+        first
+            .provider
+            .clone()
+            .unwrap_or_else(|| "lynse_backend".to_owned())
+    })
+}
+
 fn spawn_connections(
     app: &AppHandle,
     session: &Arc<LiveSession>,
@@ -1187,21 +1187,28 @@ fn spawn_connections(
         .handles
         .lock()
         .map_err(|_| "live handles lock is poisoned")?;
+    // Remember which provider the transcript is actually coming from, before
+    // the descriptors are consumed by the loop below.
+    if let Some(provider) = connections_provider(&connections) {
+        *session
+            .attached_provider
+            .lock()
+            .expect("live provider lock") = Some(provider);
+    }
     for connection in connections {
         let (sender, receiver) = unbounded_channel();
         routes.insert(connection.source, sender);
         let app = app.clone();
         let session = session.clone();
-        let provider = LiveProvider::from_name(connection.provider.as_deref());
-        let tencent_credentials = match &provider {
-            LiveProvider::Tencent => {
-                let empty = HashMap::new();
-                Some(tencent_asr::TencentCredentials::from_extra(
-                    connection.extra.as_ref().unwrap_or(&empty),
-                )?)
-            }
-            _ => None,
-        };
+        // Transcript-only mode is baked into the adapter at spawn: it decides
+        // whether the provider is asked for a (fake) translation target.
+        let transcript_only = session
+            .target_language
+            .read()
+            .expect("live target language")
+            .as_str()
+            == "none";
+        let adapter = protocols::protocol_for(&connection, transcript_only)?;
         let handle = tauri::async_runtime::spawn(async move {
             websocket_loop(
                 app,
@@ -1211,9 +1218,7 @@ fn spawn_connections(
                 epoch_offset_ms,
                 connection.url,
                 receiver,
-                provider,
-                connection.api_key.clone(),
-                tencent_credentials,
+                adapter,
             )
             .await;
         });
@@ -1270,29 +1275,8 @@ fn validate_connections(connections: &[ConnectionDescriptor]) -> CommandResult<(
                 "引擎密钥包含不可见字符（复制时可能带入了隐藏字符），请删除后重新输入。".to_owned(),
             );
         }
-        match LiveProvider::from_name(connection.provider.as_deref()) {
-            LiveProvider::Qwen if api_key.is_empty() => {
-                return Err("Qwen 翻译引擎需要填写 DashScope API Key".to_owned());
-            }
-            LiveProvider::Volc if api_key.is_empty() => {
-                return Err("火山同声传译需要填写 Access Key".to_owned());
-            }
-            LiveProvider::Tencent => {
-                // Fail fast on credential shape before any audio flows; the
-                // same parse happens again in the connection loop.
-                let empty = HashMap::new();
-                let extra = connection.extra.as_ref().unwrap_or(&empty);
-                if let Some((name, _)) =
-                    extra.iter().find(|(_, value)| credential_has_invisible_chars(value.trim()))
-                {
-                    return Err(format!(
-                        "腾讯引擎凭证 {name} 包含不可见字符（复制时可能带入了隐藏字符），请删除后重新输入。"
-                    ));
-                }
-                tencent_asr::TencentCredentials::from_extra(extra)?;
-            }
-            _ => {}
-        }
+        let adapter = protocols::protocol_for(connection, false)?;
+        adapter.validate()?;
     }
     // Record which upstream endpoints this session will actually dial. The
     // query string is reduced to `model=` so signed one-shot parameters
@@ -1324,22 +1308,6 @@ fn endpoint_log_label(url: &str) -> String {
     }
 }
 
-/// Resolve the language pair sent to Volcengine AST.
-///
-/// AST always translates, so Lynse's two special values need mapping:
-/// `auto` source switches on server-side language detection, and the
-/// transcript-only target (`none`) is satisfied by requesting *some* valid
-/// target and dropping the translation subtitles on arrival.
-fn volc_languages(source: &str, target: &str) -> (String, String, bool) {
-    let detect = source.is_empty() || source == "auto";
-    let source_language = if detect { String::new() } else { source.to_owned() };
-    let target_language = if target.is_empty() || target == "none" {
-        if source_language == "zh" { "en" } else { "zh" }.to_owned()
-    } else {
-        target.to_owned()
-    };
-    (source_language, target_language, detect)
-}
 
 /// Drop the audio that piled up in the channel while a stream was down, so a
 /// reconnect resumes live speech instead of dumping minutes of stale audio at
@@ -1362,7 +1330,6 @@ fn live_reconnect_backoff(streak: u32) -> Duration {
         .min(LIVE_RECONNECT_BACKOFF_MAX)
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn websocket_loop(
     app: AppHandle,
     session: Arc<LiveSession>,
@@ -1371,22 +1338,8 @@ async fn websocket_loop(
     epoch_offset_ms: u64,
     url: String,
     mut receiver: UnboundedReceiver<WsCommand>,
-    provider: LiveProvider,
-    api_key: Option<String>,
-    tencent_credentials: Option<tencent_asr::TencentCredentials>,
+    mut adapter: Box<dyn protocols::LiveProtocol + Send>,
 ) {
-    let is_qwen = provider == LiveProvider::Qwen;
-    let is_volc = provider == LiveProvider::Volc;
-    // Volcengine bills translation per session and always emits a translation
-    // track; in transcript-only mode we still ask for one and simply drop the
-    // translation subtitles.
-    let volc_transcript_only = is_volc
-        && session
-            .target_language
-            .read()
-            .expect("live target language")
-            .as_str()
-            == "none";
     // Consecutive failed (re)connect attempts. Resets as soon as the provider
     // sends any traffic, so a long session only pays the backoff while the
     // network is actually broken — and never stops trying while the session
@@ -1417,54 +1370,13 @@ async fn websocket_loop(
                 break;
             }
         };
-        // Tencent authenticates through the URL itself and binds the signature
-        // to a one-shot voice_id, so every attempt signs a fresh URL; reusing
-        // one would make every reconnect after the first a hard failure.
-        if provider == LiveProvider::Tencent {
-            let credentials = tencent_credentials
-                .as_ref()
-                .expect("tencent provider without parsed credentials");
-            match tencent_asr::build_signed_url(&url, credentials) {
-                Ok(signed) => {
-                    request = match signed.as_str().into_client_request() {
-                        Ok(request) => request,
-                        Err(error) => {
-                            emit_error(
-                                &app,
-                                Some(source),
-                                format!("实时翻译连接地址无效：{error}"),
-                            );
-                            break;
-                        }
-                    };
-                }
-                Err(error) => {
-                    emit_error(&app, Some(source), error);
-                    break;
-                }
-            }
-        }
-        if is_qwen {
-            if let Some(key) = api_key.as_ref() {
-                if let Ok(value) = HeaderValue::from_str(&format!("Bearer {}", key.trim())) {
-                    request.headers_mut().insert(AUTHORIZATION, value);
-                }
-            }
-        }
-        // Volcengine AST v4 authenticates on the websocket upgrade header. The
-        // new Volcengine console issues a single API Key sent as `X-Api-Key`.
-        if is_volc {
-            if let Some(key) = api_key.as_ref() {
-                if let Ok(value) = HeaderValue::from_str(key.trim()) {
-                    request.headers_mut().insert("x-api-key", value);
-                }
-            }
-            if let Ok(value) = HeaderValue::from_str(volc_ast::RESOURCE_ID) {
-                request.headers_mut().insert("x-api-resource-id", value);
-            }
-            if let Ok(value) = HeaderValue::from_str(&uuid::Uuid::new_v4().to_string()) {
-                request.headers_mut().insert("x-api-connect-id", value);
-            }
+        // Provider auth rides on the upgrade: Tencent re-signs the URL per
+        // attempt (one-shot voice_id), DashScope sends its Bearer key and
+        // Volcengine its X-Api-Key headers. A prepare failure is a config
+        // error that reconnecting cannot fix — stop the stream for good.
+        if let Err(error) = adapter.prepare_request(&url, &mut request) {
+            emit_error(&app, Some(source), error);
+            break;
         }
         let connect = tokio::time::timeout(
             LIVE_CONNECT_TIMEOUT,
@@ -1484,93 +1396,42 @@ async fn websocket_loop(
                     stream_offset_ms = session.last_elapsed_ms.load(Ordering::Relaxed);
                 }
                 let (mut writer, mut reader) = socket.split();
-                // For Qwen, configure translation and/or source-language ASR
-                // right after the handshake. `none` is Lynse's transcript-only
-                // mode: keep real-time ASR active without requesting translation.
-                if is_qwen {
-                    let source_lang = session
-                        .source_language
-                        .read()
-                        .expect("live source language")
-                        .clone();
-                    let target_lang = session
-                        .target_language
-                        .read()
-                        .expect("live target language")
-                        .clone();
-                    let transcript_only = target_lang == "none";
-                    let mut session_cfg = json!({
-                        "modalities": ["text"],
-                        "input_audio_format": "pcm",
-                    });
-                    if !transcript_only {
-                        session_cfg["translation"] = json!({ "language": target_lang });
-                    }
-                    if source_lang != "auto" || transcript_only {
-                        let mut transcription = json!({
-                            "model": "qwen3-asr-flash-realtime",
-                        });
-                        if source_lang != "auto" {
-                            transcription["language"] = json!(source_lang);
-                        }
-                        session_cfg["input_audio_transcription"] = transcription;
-                    }
-                    let update = json!({
-                        "type": "session.update",
-                        "event_id": format!("evt_{}", uuid::Uuid::new_v4()),
-                        "session": session_cfg,
-                    })
-                    .to_string();
-                    if let Err(error) = writer.send(Message::Text(update.into())).await {
-                        emit_error(&app, Some(source), format!("发送 Qwen 会话配置失败：{error}"));
-                        break;
-                    }
-                }
-                // Volcengine AST opens a session with an explicit StartSession
-                // frame. Websocket ordering guarantees the server processes it
-                // before any audio, so we can stream straight away instead of
-                // blocking on the SessionStarted acknowledgement.
-                let volc_source_lang = session
-                    .source_language
-                    .read()
-                    .expect("live source language")
-                    .clone();
-                let volc_target_lang = session
-                    .target_language
-                    .read()
-                    .expect("live target language")
-                    .clone();
-                let (volc_source_language, volc_target_language, volc_detect) =
-                    volc_languages(&volc_source_lang, &volc_target_lang);
-                let volc_config = volc_ast::SessionConfig {
-                    session_id: uuid::Uuid::new_v4().to_string(),
-                    mode: "s2t".to_owned(),
-                    source_language: volc_source_language,
-                    target_language: volc_target_language,
-                    detect_source_language: volc_detect,
+                // Provider session setup right after the handshake (DashScope
+                // `session.update`, Volc `StartSession`). Send failures redial.
+                let ctx = protocols::ProtocolCtx {
+                    session: &session,
+                    source,
+                    epoch,
+                    epoch_offset_ms: stream_offset_ms,
                 };
-                if is_volc {
-                    let frame = volc_ast::encode_start_session(&volc_config);
-                    if let Err(error) = writer.send(Message::Binary(frame.into())).await {
-                        emit_error(&app, Some(source), format!("开启火山翻译会话失败：{error}"));
+                match adapter.on_connected(&ctx) {
+                    Ok(frames) => {
+                        let mut setup_failed = false;
+                        for (frame, label) in frames {
+                            let sent = match frame {
+                                protocols::Outbound::Text(text) => {
+                                    writer.send(Message::Text(text.into())).await
+                                }
+                                protocols::Outbound::Binary(bytes) => {
+                                    writer.send(Message::Binary(bytes.into())).await
+                                }
+                            };
+                            if let Err(error) = sent {
+                                emit_error(&app, Some(source), format!("{label}：{error}"));
+                                setup_failed = true;
+                                break;
+                            }
+                        }
+                        if setup_failed {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        emit_error(&app, Some(source), error);
                         break;
                     }
                 }
-                // Volcengine is paced in 100 ms chunks (matching the vendor
-                // reference client), so 20 ms capture frames are coalesced here.
-                let mut volc_pending: Vec<u8> = Vec::with_capacity(volc_ast::CHUNK_BYTES);
-                // Tencent is paced in 40 ms chunks (the vendor-recommended
-                // frame size) through the same coalescing pattern.
-                let mut tencent_pending: Vec<u8> = Vec::with_capacity(tencent_asr::CHUNK_BYTES);
-                // `*SubtitleEnd` events may close an utterance without repeating
-                // its text, so remember the last streamed value per track.
-                let mut volc_last_source = String::new();
-                let mut volc_last_translation = String::new();
-                // 1-based speaker index for diarization, derived from the
-                // `spk_chg` marker on source subtitle Start events.
-                let mut volc_speaker_index: u32 = 1;
                 let mut finishing: Option<tokio::time::Instant> = None;
-                let mut qwen_finishing = false;
                 // Liveness tracking: a half-open TCP path (connection severed
                 // without a FIN — e.g. the network dropped while the machine
                 // was asleep) never produces a read error on its own, so after
@@ -1590,7 +1451,7 @@ async fn websocket_loop(
                 // the two failure shapes a reconnect-only log cannot tell apart.
                 let mut first_frame_logged = false;
                 let mut audio_forward_logged = false;
-                loop {
+                'connection: loop {
                     tokio::select! {
                         command = receiver.recv(), if finishing.is_none() => {
                             match command {
@@ -1601,95 +1462,36 @@ async fn websocket_loop(
                                             "Live translation stream {source:?} forwarding captured audio"
                                         );
                                     }
-                                    if is_qwen {
-                                        let event = json!({
-                                            "type": "input_audio_buffer.append",
-                                            "audio": BASE64_ENGINE.encode(&payload),
-                                        })
-                                        .to_string();
-                                        if let Err(error) = writer.send(Message::Text(event.into())).await {
-                                            emit_error(&app, Some(source), format!("发送音频失败：{error}"));
-                                            break;
-                                        }
-                                    } else if is_volc {
-                                        volc_pending.extend_from_slice(&payload);
-                                        let mut failed = None;
-                                        while volc_pending.len() >= volc_ast::CHUNK_BYTES {
-                                            let rest = volc_pending.split_off(volc_ast::CHUNK_BYTES);
-                                            let chunk = std::mem::replace(&mut volc_pending, rest);
-                                            let frame = volc_ast::encode_task_request(&volc_config, &chunk);
-                                            if let Err(error) = writer.send(Message::Binary(frame.into())).await {
-                                                failed = Some(error);
-                                                break;
+                                    for frame in adapter.encode_audio(&payload) {
+                                        let sent = match frame {
+                                            protocols::Outbound::Text(text) => {
+                                                writer.send(Message::Text(text.into())).await
                                             }
-                                        }
-                                        if let Some(error) = failed {
-                                            emit_error(&app, Some(source), format!("发送音频失败：{error}"));
-                                            break;
-                                        }
-                                    } else if provider == LiveProvider::Tencent {
-                                        tencent_pending.extend_from_slice(&payload);
-                                        let mut failed = None;
-                                        while tencent_pending.len() >= tencent_asr::CHUNK_BYTES {
-                                            let rest = tencent_pending.split_off(tencent_asr::CHUNK_BYTES);
-                                            let chunk = std::mem::replace(&mut tencent_pending, rest);
-                                            if let Err(error) =
-                                                writer.send(Message::Binary(chunk.into())).await
-                                            {
-                                                failed = Some(error);
-                                                break;
+                                            protocols::Outbound::Binary(bytes) => {
+                                                writer.send(Message::Binary(bytes.into())).await
                                             }
-                                        }
-                                        if let Some(error) = failed {
+                                        };
+                                        if let Err(error) = sent {
                                             emit_error(&app, Some(source), format!("发送音频失败：{error}"));
-                                            break;
+                                            break 'connection;
                                         }
-                                    } else if let Err(error) = writer.send(Message::Binary(payload.into())).await {
-                                        emit_error(&app, Some(source), format!("发送音频失败：{error}"));
-                                        break;
                                     }
                                 }
                                 Some(WsCommand::VoiceEnd) | None => {
-                                    if is_volc {
-                                        // Flush the tail of the capture buffer, then
-                                        // let the server drain and close the session.
-                                        if !volc_pending.is_empty() {
-                                            let chunk = std::mem::take(&mut volc_pending);
-                                            let frame = volc_ast::encode_task_request(&volc_config, &chunk);
-                                            let _ = writer.send(Message::Binary(frame.into())).await;
-                                        }
-                                        let frame = volc_ast::encode_finish_session(&volc_config);
-                                        let _ = writer.send(Message::Binary(frame.into())).await;
-                                        finishing =
-                                            Some(tokio::time::Instant::now() + Duration::from_secs(5));
-                                    } else if is_qwen {
-                                        let _ = writer
-                                            .send(Message::Text(
-                                                r#"{"type":"session.finish","event_id":"evt_finish"}"#.into(),
-                                            ))
-                                            .await;
-                                        qwen_finishing = true;
-                                        finishing =
-                                            Some(tokio::time::Instant::now() + Duration::from_secs(5));
-                                    } else if provider == LiveProvider::Tencent {
-                                        // Tencent has no end-of-audio frame: flush
-                                        // the tail and close; the server answers
-                                        // with its final results before dropping
-                                        // the connection.
-                                        if !tencent_pending.is_empty() {
-                                            let chunk = std::mem::take(&mut tencent_pending);
-                                            let _ = writer.send(Message::Binary(chunk.into())).await;
-                                        }
-                                        let _ = writer.close().await;
-                                        finishing =
-                                            Some(tokio::time::Instant::now() + Duration::from_secs(3));
-                                    } else {
-                                        let _ = writer
-                                            .send(Message::Text(r#"{"method":"voiceEnd"}"#.into()))
-                                            .await;
-                                        finishing =
-                                            Some(tokio::time::Instant::now() + Duration::from_secs(3));
+                                    let (frames, grace) = adapter.finish();
+                                    for frame in frames {
+                                        let sent = match frame {
+                                            protocols::Outbound::Text(text) => {
+                                                writer.send(Message::Text(text.into())).await
+                                            }
+                                            protocols::Outbound::Binary(bytes) => {
+                                                writer.send(Message::Binary(bytes.into())).await
+                                            }
+                                        };
+                                        let _ = sent;
                                     }
+                                    finishing =
+                                        Some(tokio::time::Instant::now() + grace);
                                 }
                             }
                         }
@@ -1711,124 +1513,74 @@ async fn websocket_loop(
                                             text.chars().take(200).collect::<String>()
                                         );
                                     }
-                                    if is_qwen && qwen_finishing
-                                        && text.contains("\"session.finished\"")
-                                    {
+                                    // DashScope acknowledges `session.finish`
+                                    // with a `session.finished` event; on it,
+                                    // close for real instead of reconnecting.
+                                    if finishing.is_some() && adapter.is_finish_ack(text.as_ref()) {
                                         let _ = writer.close().await;
                                         emit_stream_state(&app, source, "closed", epoch);
                                         return;
                                     }
-                                    if provider == LiveProvider::Tencent {
-                                        match serde_json::from_str::<tencent_asr::AsrResponse>(
-                                            text.as_ref(),
-                                        ) {
-                                            Ok(response) => {
-                                                if response.code != 0 {
-                                                    let detail = if response.message.is_empty() {
-                                                        format!("状态码 {}", response.code)
-                                                    } else {
-                                                        response.message.clone()
-                                                    };
-                                                    emit_error(
-                                                        &app,
-                                                        Some(source),
-                                                        format!(
-                                                            "腾讯实时识别错误（{}）：{detail}",
-                                                            response.code
-                                                        ),
-                                                    );
-                                                    break;
-                                                }
-                                                if response.is_final == 1 {
-                                                    // The server considers the speech
-                                                    // over and is about to close; the
-                                                    // reconnect loop keeps the stream
-                                                    // alive for the next utterance. A
-                                                    // final result proves the pipeline
-                                                    // works — clear the streak so the
-                                                    // next utterance redials promptly.
-                                                    failure_streak = 0;
-                                                    break;
-                                                }
-                                                if let Some(result) = &response.result {
-                                                    failure_streak = 0;
-                                                    handle_tencent_result(
-                                                        &app,
-                                                        &session,
-                                                        source,
-                                                        epoch,
-                                                        stream_offset_ms,
-                                                        result,
-                                                        &response.message_id,
-                                                    );
-                                                }
-                                            }
-                                            Err(error) => {
-                                                log::warn!("tencent-asr: 无法解析响应：{error}");
-                                            }
-                                        }
-                                    } else if handle_provider_message(
-                                        &app,
-                                        &session,
+                                    let ctx = protocols::ProtocolCtx {
+                                        session: &session,
                                         source,
                                         epoch,
-                                        stream_offset_ms,
-                                        text.as_ref(),
-                                        is_qwen,
-                                    ) {
+                                        epoch_offset_ms: stream_offset_ms,
+                                    };
+                                    match adapter.handle_text(&app, &ctx, text.as_ref()) {
+                                        protocols::InboundOutcome::Ignored => {}
                                         // A real result on a fresh connection is
                                         // full proof of health — clear the streak
                                         // even inside the connection grace window
                                         // (short utterances on Tencent close and
                                         // redial within seconds, by design).
-                                        failure_streak = 0;
+                                        protocols::InboundOutcome::GotResult => {
+                                            failure_streak = 0;
+                                        }
+                                        protocols::InboundOutcome::GotResultAndRedial => {
+                                            failure_streak = 0;
+                                            break 'connection;
+                                        }
+                                        protocols::InboundOutcome::Redial(message) => {
+                                            emit_error(&app, Some(source), message);
+                                            break 'connection;
+                                        }
+                                        protocols::InboundOutcome::StreamFinished => {
+                                            let _ = writer.close().await;
+                                            emit_stream_state(&app, source, "closed", epoch);
+                                            return;
+                                        }
                                     }
                                 }
-                                Some(Ok(Message::Binary(frame))) if is_volc => {
+                                Some(Ok(Message::Binary(frame))) => {
                                     last_inbound = tokio::time::Instant::now();
                                     pinged_at = None;
                                     if connected_at.elapsed() >= LIVE_CONNECTION_GRACE {
                                         failure_streak = 0;
                                     }
-                                    match volc_ast::decode_response(&frame) {
-                                        Ok(response) => match response.event {
-                                            volc_ast::EVENT_SESSION_FINISHED => {
-                                                let _ = writer.close().await;
-                                                emit_stream_state(&app, source, "closed", epoch);
-                                                return;
-                                            }
-                                            volc_ast::EVENT_SESSION_FAILED
-                                            | volc_ast::EVENT_SESSION_CANCELED => {
-                                                let detail = if response.message.is_empty() {
-                                                    format!("状态码 {}", response.status_code)
-                                                } else {
-                                                    response.message.clone()
-                                                };
-                                                emit_error(
-                                                    &app,
-                                                    Some(source),
-                                                    format!(
-                                                        "火山翻译会话失败（{}）：{detail}",
-                                                        volc_ast::describe_event(response.event)
-                                                    ),
-                                                );
-                                                break;
-                                            }
-                                            _ => handle_volc_response(
-                                                &app,
-                                                &session,
-                                                source,
-                                                epoch,
-                                                stream_offset_ms,
-                                                &response,
-                                                volc_transcript_only,
-                                                &mut volc_last_source,
-                                                &mut volc_last_translation,
-                                                &mut volc_speaker_index,
-                                            ),
-                                        },
-                                        Err(error) => {
-                                            log::warn!("volc-ast: 无法解析响应帧：{error}");
+                                    let ctx = protocols::ProtocolCtx {
+                                        session: &session,
+                                        source,
+                                        epoch,
+                                        epoch_offset_ms: stream_offset_ms,
+                                    };
+                                    match adapter.handle_binary(&app, &ctx, frame.as_ref()) {
+                                        protocols::InboundOutcome::Ignored => {}
+                                        protocols::InboundOutcome::GotResult => {
+                                            failure_streak = 0;
+                                        }
+                                        protocols::InboundOutcome::GotResultAndRedial => {
+                                            failure_streak = 0;
+                                            break 'connection;
+                                        }
+                                        protocols::InboundOutcome::Redial(message) => {
+                                            emit_error(&app, Some(source), message);
+                                            break 'connection;
+                                        }
+                                        protocols::InboundOutcome::StreamFinished => {
+                                            let _ = writer.close().await;
+                                            emit_stream_state(&app, source, "closed", epoch);
+                                            return;
                                         }
                                     }
                                 }
@@ -1848,7 +1600,7 @@ async fn websocket_loop(
                                         Some(source),
                                         format!("翻译连接由服务端关闭{detail}，正在重连。"),
                                     );
-                                    break;
+                                    break 'connection;
                                 }
                                 None => {
                                     if finishing.is_some() {
@@ -1856,7 +1608,7 @@ async fn websocket_loop(
                                         return;
                                     }
                                     emit_error(&app, Some(source), "翻译连接中断，正在重连。");
-                                    break;
+                                    break 'connection;
                                 }
                                 Some(Ok(_)) => {
                                     // Ping/Pong and other framing traffic also
@@ -1869,7 +1621,7 @@ async fn websocket_loop(
                                 }
                                 Some(Err(error)) => {
                                     emit_error(&app, Some(source), format!("翻译连接中断：{error}"));
-                                    break;
+                                    break 'connection;
                                 }
                             }
                         }
@@ -1889,10 +1641,10 @@ async fn websocket_loop(
                                     session.session_id
                                 );
                                 emit_error(&app, Some(source), "实时转写连接无响应，正在重连。");
-                                break;
+                                break 'connection;
                             }
                             if writer.send(Message::Ping(Vec::new().into())).await.is_err() {
-                                break;
+                                break 'connection;
                             }
                             pinged_at = Some(tokio::time::Instant::now());
                         }
@@ -1965,19 +1717,6 @@ async fn websocket_loop(
     }
 }
 
-fn value_string(value: &Value, key: &str) -> Option<String> {
-    match value.get(key) {
-        Some(Value::String(value)) => Some(value.clone()),
-        Some(Value::Number(value)) => Some(value.to_string()),
-        _ => None,
-    }
-}
-
-fn value_u64(value: &Value, key: &str) -> u64 {
-    value_string(value, key)
-        .and_then(|value| value.parse().ok())
-        .unwrap_or_default()
-}
 
 enum ProviderEmission {
     Segment(LiveSegment),
@@ -1987,60 +1726,6 @@ enum ProviderEmission {
 fn save_recovery_segments(session: &LiveSession, segments: &[LiveSegment]) {
     if let Ok(data) = serde_json::to_vec_pretty(segments) {
         let _ = fs::write(session.directory.join("segments.json"), data);
-    }
-}
-
-/// Apply one provider text frame. Returns true when the frame carried an
-/// actual recognition/translation result that was ingested — as opposed to
-/// session bookkeeping — which the connection loop treats as full proof the
-/// provider pipeline works, regardless of how long the connection has lived.
-#[allow(clippy::too_many_arguments)]
-fn handle_provider_message(
-    app: &AppHandle,
-    session: &LiveSession,
-    source: AudioSource,
-    epoch: u32,
-    epoch_offset_ms: u64,
-    text: &str,
-    is_qwen: bool,
-) -> bool {
-    let emission = if is_qwen {
-        // DashScope reports bad keys, unknown models and invalid session
-        // configs as an in-band `error` event and then drops the socket —
-        // without surfacing it, the stream cycles connect→error→close every
-        // second with no trace of why anywhere in the log.
-        if let Some(reason) = qwen_error_reason(text) {
-            emit_error(&app, Some(source), format!("Qwen 实时引擎错误：{reason}"));
-            return false;
-        }
-        apply_qwen_message(session, source, epoch, epoch_offset_ms, text)
-    } else {
-        apply_provider_message(session, source, epoch, epoch_offset_ms, text)
-    };
-    let got_result = emission.is_some();
-    emit_provider_emission(app, emission);
-    got_result
-}
-
-/// Extract a human-readable reason from a Qwen realtime `error` event, or
-/// None when the frame is anything else. The payload is either flat
-/// (`{type, code, message}`) or nested (`{type, error: {code, message}}`)
-/// depending on the endpoint.
-fn qwen_error_reason(text: &str) -> Option<String> {
-    let value: Value = serde_json::from_str(text).ok()?;
-    if value.get("type").and_then(Value::as_str) != Some("error") {
-        return None;
-    }
-    let error = value.get("error").unwrap_or(&value);
-    let code = value_string(error, "code").or_else(|| value_string(error, "type"));
-    let message = value_string(error, "message")
-        .or_else(|| value_string(&value, "message"))
-        .unwrap_or_default();
-    match (code, message.is_empty()) {
-        (Some(code), false) => Some(format!("{code}：{message}")),
-        (Some(code), true) => Some(code),
-        (None, false) => Some(message),
-        (None, true) => Some(text.chars().take(200).collect()),
     }
 }
 
@@ -2059,137 +1744,6 @@ fn emit_provider_emission(app: &AppHandle, emission: Option<ProviderEmission>) {
     }
 }
 
-/// Route one Volcengine AST subtitle event onto the shared live-segment model.
-///
-/// AST publishes two parallel tracks per utterance — source recognition
-/// (`SourceSubtitle*`) and translation (`TranslationSubtitle*`) — which map
-/// directly onto Lynse's (recognized, translated) segment pair. The `*End`
-/// events close an utterance but do not always repeat its text, so the last
-/// streamed value for each track is carried forward.
-#[allow(clippy::too_many_arguments)]
-fn handle_volc_response(
-    app: &AppHandle,
-    session: &LiveSession,
-    source: AudioSource,
-    epoch: u32,
-    epoch_offset_ms: u64,
-    response: &volc_ast::Response,
-    transcript_only: bool,
-    last_source: &mut String,
-    last_translation: &mut String,
-    speaker_index: &mut u32,
-) {
-    // Volcengine AST flags a speaker change on the *source* subtitle Start
-    // event. Only the source track carries it (the translation Start repeats
-    // the same flag for the same utterance), so we count on the source track
-    // only to avoid double-incrementing the speaker index.
-    if response.event == volc_ast::EVENT_SOURCE_SUBTITLE_START && response.spk_chg {
-        *speaker_index += 1;
-    }
-    let Some(subtitle) = volc_ast::classify_subtitle(response.event) else {
-        return;
-    };
-    let (is_recognized, is_final) = match subtitle {
-        volc_ast::Subtitle::Source { is_final } => (true, is_final),
-        volc_ast::Subtitle::Translation { is_final } => {
-            if transcript_only {
-                return;
-            }
-            (false, is_final)
-        }
-    };
-    let carry = if is_recognized {
-        last_source
-    } else {
-        last_translation
-    };
-    let text = if response.text.is_empty() {
-        carry.clone()
-    } else {
-        response.text.clone()
-    };
-    if text.trim().is_empty() {
-        return;
-    }
-    if is_final {
-        carry.clear();
-    } else {
-        *carry = text.clone();
-    }
-
-    // AST reports utterance bounds in milliseconds from the start of the
-    // session; before the first timestamped event we fall back to the capture
-    // clock, the same approximation the Qwen provider uses.
-    let start_ms = if response.start_time > 0 {
-        epoch_offset_ms.saturating_add(response.start_time as u64)
-    } else {
-        epoch_offset_ms.saturating_add(session.last_elapsed_ms.load(Ordering::Relaxed))
-    };
-    let end_ms =
-        (response.end_time > 0).then(|| epoch_offset_ms.saturating_add(response.end_time as u64));
-
-    let emission = ingest_provider_text(
-        session,
-        source,
-        epoch,
-        None,
-        start_ms,
-        end_ms,
-        is_recognized,
-        is_final,
-        String::new(),
-        Some(*speaker_index),
-        &text,
-    );
-    emit_provider_emission(app, emission);
-}
-
-/// Route one Tencent ASR result frame onto the shared live-segment model.
-///
-/// The service recognises only — there is no translation leg — so every frame
-/// updates the recognized track. `slice_type` 2 closes the sentence; start and
-/// interim frames carry the rolling text for the open utterance. Timestamps
-/// are milliseconds relative to this connection's audio, the same shape the
-/// Volcengine path rebases via `stream_offset_ms`.
-#[allow(clippy::too_many_arguments)]
-fn handle_tencent_result(
-    app: &AppHandle,
-    session: &LiveSession,
-    source: AudioSource,
-    epoch: u32,
-    epoch_offset_ms: u64,
-    result: &tencent_asr::AsrResult,
-    message_id: &str,
-) {
-    let text = result.voice_text.clone();
-    if text.trim().is_empty() {
-        return;
-    }
-    let is_final = result.slice_type == 2;
-    // Before the first timestamped frame we fall back to the capture clock,
-    // the same approximation the Volcengine and Qwen paths use.
-    let start_ms = if result.start_time > 0 {
-        epoch_offset_ms.saturating_add(result.start_time as u64)
-    } else {
-        epoch_offset_ms.saturating_add(session.last_elapsed_ms.load(Ordering::Relaxed))
-    };
-    let end_ms = (result.end_time > 0)
-        .then(|| epoch_offset_ms.saturating_add(result.end_time as u64));
-    let emission = ingest_provider_text(
-        session,
-        source,
-        epoch,
-        None,
-        start_ms,
-        end_ms,
-        true,
-        is_final,
-        message_id.to_owned(),
-        None,
-        &text,
-    );
-    emit_provider_emission(app, emission);
-}
 
 /// Apply the recognized/translated text from a provider message to a segment,
 /// honouring the "final results win, interim results are ignored once final"
@@ -2218,11 +1772,6 @@ fn apply_method_text(segment: &mut LiveSegment, method: &str, text: &str) {
     }
 }
 
-/// Timestamps at or above this bound cannot be session-relative offsets — as
-/// elapsed ms it would mean a recording over 11 days long — so they must be
-/// absolute Unix epoch ms (the 2001 era onward). iLiveData reports utterance
-/// `startTs`/`endTs` this way; other providers report ms since stream open.
-const ABSOLUTE_TIMESTAMP_MS: u64 = 1_000_000_000_000;
 
 fn wall_clock_ms() -> u64 {
     SystemTime::now()
@@ -2231,158 +1780,6 @@ fn wall_clock_ms() -> u64 {
         .unwrap_or_default()
 }
 
-/// Map a provider timestamp onto the recording-relative timeline. Absolute
-/// epoch ms are rebased against the session's wall-clock start; relative
-/// offsets keep the stream-attach anchor (`epoch_offset_ms`).
-fn rebase_provider_timestamp(raw: u64, wall_start_ms: u64, epoch_offset_ms: u64) -> u64 {
-    if raw >= ABSOLUTE_TIMESTAMP_MS {
-        raw.saturating_sub(wall_start_ms)
-    } else {
-        epoch_offset_ms.saturating_add(raw)
-    }
-}
-
-fn apply_provider_message(
-    session: &LiveSession,
-    source: AudioSource,
-    epoch: u32,
-    epoch_offset_ms: u64,
-    text: &str,
-) -> Option<ProviderEmission> {
-    let Ok(value) = serde_json::from_str::<Value>(text) else {
-        return None;
-    };
-    let Some(method) = value.get("method").and_then(Value::as_str) else {
-        return None;
-    };
-    if !matches!(
-        method,
-        "recognizedResult" | "recognizedTempResult" | "translatedResult" | "translatedTempResult"
-    ) {
-        return None;
-    }
-    let is_recognized = matches!(method, "recognizedResult" | "recognizedTempResult");
-    let is_final_method = matches!(method, "recognizedResult" | "translatedResult");
-    let stream_id = value_string(&value, "streamId");
-    let wall_start_ms = session.wall_start_ms.load(Ordering::Relaxed);
-    let start_ms = rebase_provider_timestamp(
-        value_u64(&value, "startTs"),
-        wall_start_ms,
-        epoch_offset_ms,
-    );
-    let raw_end = value_u64(&value, "endTs");
-    let end_ms =
-        (raw_end > 0).then(|| rebase_provider_timestamp(raw_end, wall_start_ms, epoch_offset_ms));
-    let incoming = value_string(&value, if is_recognized { "asr" } else { "trans" })
-        .unwrap_or_default();
-    if incoming.is_empty() {
-        return None;
-    }
-    // Utterance key: prefer the provider task id, fall back to the start
-    // timestamp (stable per utterance for most providers).
-    let task_id = value_string(&value, "taskId")
-        .unwrap_or_else(|| value_u64(&value, "startTs").to_string());
-    // iLiveData diarization: every result carries `SpeakerId` as a JSON number,
-    // with -1 meaning "not recognised" (diarization disabled, or the engine has
-    // not settled on a speaker yet). Normalise the provider's 0-based id onto
-    // the same 1-based speaker index the Volcengine path uses.
-    let speaker = value
-        .get("SpeakerId")
-        .and_then(Value::as_i64)
-        .filter(|id| *id >= 0)
-        .map(|id| (id as u32).saturating_add(1));
-    ingest_provider_text(
-        session,
-        source,
-        epoch,
-        stream_id,
-        start_ms,
-        end_ms,
-        is_recognized,
-        is_final_method,
-        task_id,
-        speaker,
-        &incoming,
-    )
-}
-
-/// Apply the recognized/translated text from a Qwen realtime-translation event
-/// to a segment. Qwen's protocol is event-driven (`session.update` + streaming
-/// `input_audio_buffer.append` audio) rather than iLiveData's binary-PCM +
-/// `method`-field shape, but the resulting (source-recognition, translation)
-/// pair maps onto the same live-segment model, so we reuse the shared ingest.
-fn apply_qwen_message(
-    session: &LiveSession,
-    source: AudioSource,
-    epoch: u32,
-    epoch_offset_ms: u64,
-    text: &str,
-) -> Option<ProviderEmission> {
-    let Ok(value) = serde_json::from_str::<Value>(text) else {
-        return None;
-    };
-    let event_type = value.get("type").and_then(Value::as_str)?;
-    let (is_recognized, is_final, content) = classify_qwen_event(event_type, &value)?;
-    if content.is_empty() {
-        return None;
-    }
-    // Qwen auto-detects utterance boundaries, so we approximate the utterance
-    // start with the latest captured audio time on this source.
-    let start_ms = epoch_offset_ms.saturating_add(session.last_elapsed_ms.load(Ordering::Relaxed));
-    ingest_provider_text(
-        session,
-        source,
-        epoch,
-        None,
-        start_ms,
-        None,
-        is_recognized,
-        is_final,
-        String::new(),
-        None,
-        &content,
-    )
-}
-
-/// Map a Qwen realtime-translation event type to (is_recognized, is_final,
-/// text). Source recognition arrives via `input_audio_transcription.*`; the
-/// translated text arrives via `response.text.*` (text-only) or
-/// `response.audio_transcript.*` (text+audio) — both carry the same translated
-/// string, so either family is accepted.
-fn classify_qwen_event(event_type: &str, value: &Value) -> Option<(bool, bool, String)> {
-    if event_type.contains("input_audio_transcription") {
-        let text = event_text(value);
-        return if event_type.ends_with(".completed") {
-            Some((true, true, text))
-        } else if event_type.ends_with(".text") {
-            Some((true, false, text))
-        } else {
-            None
-        };
-    }
-    if event_type.contains("response.text") || event_type.contains("response.audio_transcript") {
-        let text = event_text(value);
-        return if event_type.ends_with(".done") {
-            Some((false, true, text))
-        } else if event_type.ends_with(".delta") {
-            Some((false, false, text))
-        } else {
-            None
-        };
-    }
-    None
-}
-
-/// Extract the streamed text from a Qwen event. The field name varies by event
-/// family (`text` / `delta` / `transcript` / `content`), so try each in order.
-fn event_text(value: &Value) -> String {
-    for key in ["text", "delta", "transcript", "content"] {
-        if let Some(text) = value.get(key).and_then(Value::as_str) {
-            return text.to_owned();
-        }
-    }
-    String::new()
-}
 
 /// Shared utterance-ingest core used by both the iLiveData and Qwen providers:
 /// coalesce the (source-recognition, translation) pair onto a single live
@@ -2610,7 +2007,11 @@ fn containment(left: &[String], right: &[String]) -> f32 {
 // platform-safe constant so the call sites compile on both targets.
 #[cfg(target_os = "macos")]
 const SIGNAL_PAUSE: i32 = libc::SIGUSR1;
+// Pause branches to the in-process engine call on Windows, so the placeholder
+// constant has no reader there — it exists to keep the shared call sites
+// compiling.
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 const SIGNAL_PAUSE: i32 = 0;
 #[cfg(target_os = "macos")]
 const SIGNAL_RESUME: i32 = libc::SIGUSR2;
@@ -2674,10 +2075,14 @@ pub async fn live_translation_pause(
     {
         return Err("session is not recording".to_owned());
     }
-    session.set_state("paused");
-    signal_child(&session, SIGNAL_PAUSE)?;
+    // Signal the sidecar BEFORE flipping the visible state: a missed signal
+    // (sidecar crashed or wedged) must leave the session "recording" so the
+    // UI can retry, instead of showing a paused pill over a microphone that
+    // is still hot. Windows flips first instead — pausing there is an
+    // in-process engine call whose outcome is immediately observable.
     #[cfg(target_os = "windows")]
     {
+        session.set_state("paused");
         // In-process engine: pausing is stopping the feed, not signalling a
         // sidecar — effective immediately.
         let _ = with_windows_engine(|engine| engine.pause());
@@ -2687,6 +2092,8 @@ pub async fn live_translation_pause(
     }
     #[cfg(target_os = "macos")]
     {
+        signal_child(&session, SIGNAL_PAUSE)?;
+        session.set_state("paused");
         // The sidecar needs a moment to fully stop its capture streams.
         voice_end(&session);
         emit_snapshot(&app, &session);
@@ -2723,9 +2130,13 @@ pub async fn live_translation_resume(
     let offset = session.last_elapsed_ms.load(Ordering::Relaxed);
     session.epoch.store(request.epoch, Ordering::Relaxed);
     session.epoch_offset_ms.store(offset, Ordering::Relaxed);
+    // Resume capture BEFORE attaching the new websocket loops: if the sidecar
+    // misses the resume signal, the session stays "paused" with no provider
+    // streams dialing against a frozen capture — the old order (attach, then
+    // signal) stranded "connecting" sessions whenever the signal failed.
+    signal_child(&session, SIGNAL_RESUME)?;
     session.set_state("connecting");
     spawn_connections(&app, &session, request.epoch, offset, request.connections)?;
-    signal_child(&session, SIGNAL_RESUME)?;
     #[cfg(target_os = "windows")]
     {
         // The engine rebuilds its streams and re-anchors the timeline; the
@@ -3070,6 +2481,26 @@ pub(crate) fn ensure_dual_channel_processed(
     Ok(())
 }
 
+/// Engine metadata for the persisted record, derived from the provider that
+/// was actually attached. The legacy build hard-coded the iLiveData label no
+/// matter which engine produced the transcript.
+fn engine_labels(attached: Option<&str>) -> (String, String) {
+    match attached {
+        Some("qwen") => ("qwen_livetranslate".to_owned(), "qwen-livetranslate".to_owned()),
+        // A user-configured DashScope-compatible service (the custom provider).
+        Some("dashscope") => ("dashscope_realtime".to_owned(), "dashscope-realtime".to_owned()),
+        Some("volc") => ("volc_ast".to_owned(), "volc-ast".to_owned()),
+        Some("tencent") => ("tencent_asr".to_owned(), "tencent-asr".to_owned()),
+        // The backend relay mirrors the iLiveData RTVT wire protocol, and a
+        // pure recording has no transcript engine to name.
+        None | Some("lynse_backend") | Some("ilivedata_direct") => {
+            ("ilivedata_rtvt".to_owned(), "ilivedata-rtvt".to_owned())
+        }
+        // Unknown names pass through so a future provider stays identifiable.
+        Some(other) => (other.to_owned(), other.to_owned()),
+    }
+}
+
 fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<CompletedSession> {
     // Dual-source sessions name the processed mic track `mic_processed.wav`
     // (frozen track table); single-source mic sessions and the current macOS
@@ -3204,6 +2635,13 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
     let completed_at = now();
     let source_language = session.source_language.read().expect("live source language").clone();
     let target_language = session.target_language.read().expect("live target language").clone();
+    let (engine, model_id) = engine_labels(
+        session
+            .attached_provider
+            .lock()
+            .expect("live provider lock")
+            .as_deref(),
+    );
     // `completed` is reserved for sessions that actually produced transcript
     // text. A pure recording (no transcription connection attached, or nothing
     // recognized) persists as `recorded` so the UI never shows a transcription
@@ -3224,8 +2662,8 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
             "status": status,
             "progressPhase": status,
             "durationMs": duration_ms,
-            "engine": "ilivedata_rtvt",
-            "modelId": "ilivedata-rtvt",
+            "engine": engine,
+            "modelId": model_id,
             "language": source_language,
             "targetLanguage": target_language,
             "liveSessionId": session.session_id,
@@ -3595,7 +3033,30 @@ pub async fn live_translation_reprocess(
     let record_id = format!("local:live:{session_id}");
     tauri::async_runtime::spawn_blocking(move || {
         let directory = recovery_root(&app)?.join(&session_id);
-        let mic_raw = directory.join("mic_raw.wav");
+        // The in-engine AEC reprocessor only exists on macOS so far. Refuse
+        // here, BEFORE the stale-output deletion inside `run_reprocess` — a
+        // reprocess must never destroy the finished tracks it cannot rebuild.
+        #[cfg(target_os = "macos")]
+        {
+            run_reprocess(app, directory, record_id)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (directory, record_id);
+            Err("重新处理暂不支持当前平台，请更新 Lynse 以获得该功能".to_owned())
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[cfg(target_os = "macos")]
+fn run_reprocess(
+    app: AppHandle,
+    directory: std::path::PathBuf,
+    record_id: String,
+) -> CommandResult<Value> {
+    let mic_raw = directory.join("mic_raw.wav");
         let system_raw = directory.join("system_raw.wav");
         if !mic_raw.exists() || !system_raw.exists() {
             return Err("这份录音没有保留原始音轨，无法重新处理".to_owned());
@@ -3659,12 +3120,9 @@ pub async fn live_translation_reprocess(
         patch.insert("error".to_owned(), Value::Null);
         update_store_value(&app, "local-transcriptions", &record_id, patch)?
             .ok_or("recording not found")?;
-        log::info!("Reprocessed dual-channel recording session={session_id}");
-        Ok(crate::get_store_value(&app, "local-transcriptions", &record_id)?
-            .ok_or("recording not found")?)
-    })
-    .await
-    .map_err(|error| error.to_string())?
+        log::info!("Reprocessed dual-channel recording session={record_id}");
+        crate::get_store_value(&app, "local-transcriptions", &record_id)?
+            .ok_or_else(|| "recording not found".to_owned())
 }
 
 #[tauri::command]
@@ -3699,6 +3157,15 @@ pub fn live_translation_recoveries(
         if active_session_id.as_deref() == Some(manifest.session_id.as_str()) {
             continue;
         }
+        // A directory that already produced its `local-transcriptions` record
+        // is saved, not stranded — the session directory (and its session.json)
+        // deliberately outlives persist as the recording's storage. Without
+        // this filter every past recording would resurface as "recoverable"
+        // and recovering it would duplicate the record.
+        let record_id = format!("local:live:{}", manifest.session_id);
+        if crate::get_store_value(&app, "local-transcriptions", &record_id)?.is_some() {
+            continue;
+        }
         recoveries.push(RecoverySummary {
             session_id: manifest.session_id,
             title: manifest.title,
@@ -3727,6 +3194,15 @@ pub async fn live_translation_recover(
         return Err(
             "finish the active live translation before recovering another session".to_owned(),
         );
+    }
+    // Defense in depth against double-recovery: a session that already has its
+    // record is saved — recovering it again would duplicate the entry (the
+    // recoveries listing filters these, but a stale client could still ask).
+    {
+        let record_id = format!("local:live:{session_id}");
+        if crate::get_store_value(&app, "local-transcriptions", &record_id)?.is_some() {
+            return Err("this recording has already been saved".to_owned());
+        }
     }
     tauri::async_runtime::spawn_blocking(move || recover_session(&app, &session_id))
         .await
@@ -3800,6 +3276,7 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
         voice_enhancement: false,
         last_voice_at: Mutex::new(Instant::now()),
         auto_stopped_silence: AtomicBool::new(false),
+        attached_provider: Mutex::new(manifest.provider.clone()),
     };
     persist_session(app, &session)
 }
@@ -4024,6 +3501,30 @@ pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
     if !visible {
         return;
     }
+    let window = match build_recording_island_window(app) {
+        Ok(window) => window,
+        Err(error) => {
+            log::error!("Failed to create recording island window: {error}");
+            return;
+        }
+    };
+    reveal_recording_island(app, &window);
+}
+
+/// Creates the island webview WITHOUT showing it. The window (once created)
+/// survives session stop — only hidden — so one pre-creation at session start
+/// guarantees the tray's pause/stop/resume events always have a frontend
+/// receiver, even while the main window owns the screen.
+pub fn ensure_recording_island_window(app: &AppHandle) {
+    if app.get_webview_window("recording-island").is_some() {
+        return;
+    }
+    if let Err(error) = build_recording_island_window(app) {
+        log::error!("Failed to pre-create recording island window: {error}");
+    }
+}
+
+fn build_recording_island_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
     let builder = WebviewWindowBuilder::new(
         app,
         "recording-island",
@@ -4039,7 +3540,7 @@ pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
     // The pill renders its own rounded shadow inside the transparent
     // webview; the system window shadow would trace a rectangle around it.
     .shadow(false)
-    // Created hidden: `reveal_recording_island` below unrolls it at the tray
+    // Created hidden: `reveal_recording_island` unrolls it at the tray
     // anchor instead of popping in at full size.
     .visible(false)
     .on_page_load(|window, payload| {
@@ -4053,13 +3554,7 @@ pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
             }
         }
     });
-    let window = match builder.build() {
-        Ok(window) => window,
-        Err(error) => {
-            log::error!("Failed to create recording island window: {error}");
-            return;
-        }
-    };
+    let window = builder.build()?;
     // Native frosted glass behind the webview: the pill reads as a translucent
     // capsule over whatever is on screen, not a solid card.
     if let Err(error) =
@@ -4067,7 +3562,7 @@ pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
     {
         log::error!("Failed to apply recording island effects: {error}");
     }
-    reveal_recording_island(app, &window);
+    Ok(window)
 }
 
 /// The island's entrance: snap back to the tray anchor (even if the user
@@ -4415,6 +3910,52 @@ async fn wait_windows_capture_done() {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tencent_asr;
+    use crate::volc_ast;
+    use protocols::LiveProtocol as _;
+
+    /// Drive the direct protocol's message handler the way the connection
+    /// loop does, for the ingest-semantics tests below.
+    fn direct_message(
+        session: &LiveSession,
+        source: AudioSource,
+        epoch: u32,
+        offset_ms: u64,
+        text: &str,
+    ) -> Option<ProviderEmission> {
+        protocols::direct::apply_provider_message(
+            &protocols::ProtocolCtx {
+                session,
+                source,
+                epoch,
+                epoch_offset_ms: offset_ms,
+            },
+            text,
+        )
+    }
+
+    /// Drive the DashScope protocol's message handler the way the connection
+    /// loop does, for the ingest-semantics tests below.
+    #[allow(clippy::too_many_arguments)]
+    fn qwen_message(
+        session: &LiveSession,
+        source: AudioSource,
+        epoch: u32,
+        offset_ms: u64,
+        text: &str,
+        transcript_only: bool,
+    ) -> Option<ProviderEmission> {
+        protocols::dashscope::apply_qwen_message(
+            &protocols::ProtocolCtx {
+                session,
+                source,
+                epoch,
+                epoch_offset_ms: offset_ms,
+            },
+            text,
+            transcript_only,
+        )
+    }
 
     fn live_session() -> LiveSession {
         LiveSession {
@@ -4425,6 +3966,7 @@ mod tests {
             started_at: now(),
             state: Mutex::new("recording".to_owned()),
             epoch: AtomicU32::new(0),
+            attached_provider: Mutex::new(None),
             epoch_offset_ms: AtomicU64::new(0),
             last_elapsed_ms: AtomicU64::new(0),
             wall_start_ms: AtomicU64::new(0),
@@ -4610,7 +4152,7 @@ mod tests {
         })
         .to_string();
         let Some(ProviderEmission::Segments(segments)) =
-            apply_provider_message(&session, AudioSource::Mic, 0, 0, &text)
+            direct_message(&session, AudioSource::Mic, 0, 0, &text)
         else {
             panic!("expected a segments emission");
         };
@@ -4630,7 +4172,7 @@ mod tests {
         })
         .to_string();
         let Some(ProviderEmission::Segments(segments)) =
-            apply_provider_message(&session, AudioSource::Mic, 0, 3_000, &text)
+            direct_message(&session, AudioSource::Mic, 0, 3_000, &text)
         else {
             panic!("expected a segments emission");
         };
@@ -4746,26 +4288,26 @@ mod tests {
     fn maps_lynse_language_selection_to_volc_pair() {
         // `auto` turns on server-side detection and leaves the source empty.
         assert_eq!(
-            volc_languages("auto", "en"),
+            protocols::volc::volc_languages("auto", "en"),
             (String::new(), "en".to_owned(), true),
         );
         // Transcript-only still needs a valid target; pick one that differs
         // from the source so AST never rejects the pair.
         assert_eq!(
-            volc_languages("zh", "none"),
+            protocols::volc::volc_languages("zh", "none"),
             ("zh".to_owned(), "en".to_owned(), false),
         );
         assert_eq!(
-            volc_languages("en", "none"),
+            protocols::volc::volc_languages("en", "none"),
             ("en".to_owned(), "zh".to_owned(), false),
         );
         // Auto + transcript-only: empty source is not `zh`, so target is `zh`.
         assert_eq!(
-            volc_languages("auto", "none"),
+            protocols::volc::volc_languages("auto", "none"),
             (String::new(), "zh".to_owned(), true),
         );
         assert_eq!(
-            volc_languages("ja", "zh"),
+            protocols::volc::volc_languages("ja", "zh"),
             ("ja".to_owned(), "zh".to_owned(), false),
         );
     }
@@ -4778,10 +4320,10 @@ mod tests {
         let recognized_final = r#"{"method":"recognizedResult","streamId":"9","taskId":"3","startTs":"20","endTs":"80","asr":"最终"}"#;
         let translated_final = r#"{"method":"translatedResult","streamId":"9","taskId":"3","startTs":"20","endTs":"80","trans":"final"}"#;
 
-        apply_provider_message(&session, AudioSource::Mic, 2, 5_000, recognized_temp).unwrap();
-        apply_provider_message(&session, AudioSource::Mic, 2, 5_000, translated_temp).unwrap();
-        apply_provider_message(&session, AudioSource::Mic, 2, 5_000, recognized_final).unwrap();
-        apply_provider_message(&session, AudioSource::Mic, 2, 5_000, translated_final).unwrap();
+        direct_message(&session, AudioSource::Mic, 2, 5_000, recognized_temp).unwrap();
+        direct_message(&session, AudioSource::Mic, 2, 5_000, translated_temp).unwrap();
+        direct_message(&session, AudioSource::Mic, 2, 5_000, recognized_final).unwrap();
+        direct_message(&session, AudioSource::Mic, 2, 5_000, translated_final).unwrap();
 
         let segments = session.segments.lock().unwrap();
         assert_eq!(segments.len(), 1);
@@ -4801,9 +4343,9 @@ mod tests {
         let m1 = r#"{"method":"recognizedTempResult","streamId":"9","taskId":"a1","startTs":"20","endTs":"0","asr":"你好"}"#;
         let m2 = r#"{"method":"recognizedTempResult","streamId":"9","taskId":"a2","startTs":"20","endTs":"0","asr":"你好世界"}"#;
         let m3 = r#"{"method":"recognizedResult","streamId":"9","taskId":"a3","startTs":"20","endTs":"80","asr":"你好世界大家好"}"#;
-        apply_provider_message(&session, AudioSource::Mic, 0, 0, m1).unwrap();
-        apply_provider_message(&session, AudioSource::Mic, 0, 0, m2).unwrap();
-        apply_provider_message(&session, AudioSource::Mic, 0, 0, m3).unwrap();
+        direct_message(&session, AudioSource::Mic, 0, 0, m1).unwrap();
+        direct_message(&session, AudioSource::Mic, 0, 0, m2).unwrap();
+        direct_message(&session, AudioSource::Mic, 0, 0, m3).unwrap();
         let segments = session.segments.lock().unwrap();
         assert_eq!(
             segments.len(),
@@ -4821,8 +4363,8 @@ mod tests {
         let session = live_session();
         let u1 = r#"{"method":"recognizedResult","streamId":"9","taskId":"a1","startTs":"20","endTs":"80","asr":"你好世界"}"#;
         let u2 = r#"{"method":"recognizedTempResult","streamId":"9","taskId":"b1","startTs":"200","endTs":"0","asr":"今天天气真好"}"#;
-        apply_provider_message(&session, AudioSource::Mic, 0, 0, u1).unwrap();
-        apply_provider_message(&session, AudioSource::Mic, 0, 0, u2).unwrap();
+        direct_message(&session, AudioSource::Mic, 0, 0, u1).unwrap();
+        direct_message(&session, AudioSource::Mic, 0, 0, u2).unwrap();
         let segments = session.segments.lock().unwrap();
         assert_eq!(segments.len(), 2, "a new utterance must open a new segment");
     }
@@ -4836,9 +4378,9 @@ mod tests {
         let interim = r#"{"method":"recognizedTempResult","streamId":"9","taskId":"a1","startTs":"20","endTs":"0","asr":"一、二三四，五六七"}"#;
         let final1 = r#"{"method":"recognizedResult","streamId":"9","taskId":"a2","startTs":"20","endTs":"80","asr":"一、二三四，五六七。"}"#;
         let final2 = r#"{"method":"recognizedResult","streamId":"9","taskId":"a3","startTs":"20","endTs":"80","asr":"一、二三四，五六七。"}"#;
-        apply_provider_message(&session, AudioSource::Mic, 0, 0, interim).unwrap();
-        apply_provider_message(&session, AudioSource::Mic, 0, 0, final1).unwrap();
-        apply_provider_message(&session, AudioSource::Mic, 0, 0, final2).unwrap();
+        direct_message(&session, AudioSource::Mic, 0, 0, interim).unwrap();
+        direct_message(&session, AudioSource::Mic, 0, 0, final1).unwrap();
+        direct_message(&session, AudioSource::Mic, 0, 0, final2).unwrap();
         let segments = session.segments.lock().unwrap();
         assert_eq!(
             segments.len(),
@@ -4858,9 +4400,9 @@ mod tests {
         let m1 = r#"{"method":"recognizedTempResult","streamId":"9","taskId":"a1","startTs":"20","endTs":"0","asr":"hello world foo"}"#;
         let m2 = r#"{"method":"recognizedTempResult","streamId":"9","taskId":"a2","startTs":"20","endTs":"0","asr":"hello world bar"}"#;
         let m3 = r#"{"method":"recognizedResult","streamId":"9","taskId":"a3","startTs":"20","endTs":"80","asr":"hello world bar baz"}"#;
-        apply_provider_message(&session, AudioSource::Mic, 0, 0, m1).unwrap();
-        apply_provider_message(&session, AudioSource::Mic, 0, 0, m2).unwrap();
-        apply_provider_message(&session, AudioSource::Mic, 0, 0, m3).unwrap();
+        direct_message(&session, AudioSource::Mic, 0, 0, m1).unwrap();
+        direct_message(&session, AudioSource::Mic, 0, 0, m2).unwrap();
+        direct_message(&session, AudioSource::Mic, 0, 0, m3).unwrap();
         let segments = session.segments.lock().unwrap();
         assert_eq!(segments.len(), 1, "corrections must refresh the same card");
         assert_eq!(segments[0].recognized_text, "hello world bar baz");
@@ -5020,5 +4562,163 @@ mod tests {
             "the written header is honest"
         );
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn engine_labels_name_the_provider_that_ran() {
+        assert_eq!(
+            engine_labels(Some("qwen")),
+            ("qwen_livetranslate".to_owned(), "qwen-livetranslate".to_owned())
+        );
+        assert_eq!(
+            engine_labels(Some("volc")),
+            ("volc_ast".to_owned(), "volc-ast".to_owned())
+        );
+        assert_eq!(
+            engine_labels(Some("tencent")),
+            ("tencent_asr".to_owned(), "tencent-asr".to_owned())
+        );
+        // The backend relay mirrors the iLiveData wire protocol, so a session
+        // without direct-provider credentials keeps the historical label.
+        assert_eq!(
+            engine_labels(None),
+            ("ilivedata_rtvt".to_owned(), "ilivedata-rtvt".to_owned())
+        );
+        assert_eq!(
+            engine_labels(Some("lynse_backend")),
+            ("ilivedata_rtvt".to_owned(), "ilivedata-rtvt".to_owned())
+        );
+    }
+
+    #[test]
+    fn unknown_provider_tags_are_rejected_instead_of_falling_back() {
+        let mystery = ConnectionDescriptor {
+            source: AudioSource::Mic,
+            url: "wss://example.test/mic".to_owned(),
+            provider: Some("mystery".to_owned()),
+            api_key: None,
+            extra: None,
+        };
+        let error = validate_connections(std::slice::from_ref(&mystery)).unwrap_err();
+        assert!(error.contains("mystery"), "unexpected error: {error}");
+        assert!(protocols::protocol_for(&mystery, false).is_err());
+        // Untagged and the legacy/direct aliases all route to the plain JSON
+        // protocol, exactly like the pre-refactor dispatch.
+        for tag in [None, Some("direct"), Some("ilivedata_direct"), Some("lynse_backend")] {
+            let connection = ConnectionDescriptor {
+                source: AudioSource::Mic,
+                url: "wss://example.test/mic".to_owned(),
+                provider: tag.map(str::to_owned),
+                api_key: None,
+                extra: None,
+            };
+            assert!(protocols::protocol_for(&connection, false).is_ok());
+        }
+    }
+
+    #[test]
+    fn dashscope_session_setup_honours_the_asr_model_override() {
+        let session = live_session();
+        *session.source_language.write().unwrap() = "zh".to_owned();
+        let extra = |asr_model: &str| {
+            let mut map = std::collections::HashMap::new();
+            map.insert("asrModel".to_owned(), asr_model.to_owned());
+            map
+        };
+        fn ctx_for(session: &LiveSession) -> protocols::ProtocolCtx<'_> {
+            protocols::ProtocolCtx {
+                session,
+                source: AudioSource::Mic,
+                epoch: 0,
+                epoch_offset_ms: 0,
+            }
+        }
+        let frames_for = |extra: std::collections::HashMap<String, String>| {
+            let mut protocol =
+                protocols::dashscope::DashScopeProtocol::new("sk-test".to_owned(), extra, false);
+            protocol.on_connected(&ctx_for(&session)).unwrap()
+        };
+
+        // Default: the stock qwen3 ASR model name rides in session.update.
+        let frames = frames_for(Default::default());
+        let setup = match &frames[0].0 {
+            protocols::Outbound::Text(text) => text.clone(),
+            protocols::Outbound::Binary(_) => panic!("expected a text frame"),
+        };
+        assert!(setup.contains("qwen3-asr-flash-realtime"), "{setup}");
+
+        // A DashScope-compatible service can override the recognition model.
+        let frames = frames_for(extra("my-asr-v2"));
+        let setup = match &frames[0].0 {
+            protocols::Outbound::Text(text) => text.clone(),
+            protocols::Outbound::Binary(_) => panic!("expected a text frame"),
+        };
+        assert!(setup.contains("my-asr-v2"), "{setup}");
+        assert!(!setup.contains("qwen3-asr-flash-realtime"), "{setup}");
+    }
+
+    #[test]
+    fn engine_labels_name_custom_dashscope_services() {
+        let (engine, model_id) = engine_labels(Some("dashscope"));
+        assert_eq!(engine, "dashscope_realtime");
+        assert_eq!(model_id, "dashscope-realtime");
+    }
+
+    #[test]
+    fn connections_provider_reads_the_first_descriptor() {
+        let direct = vec![ConnectionDescriptor {
+            source: AudioSource::Mic,
+            url: "wss://example.invalid".to_owned(),
+            provider: Some("volc".to_owned()),
+            api_key: Some("key".to_owned()),
+            extra: None,
+        }];
+        assert_eq!(
+            connections_provider(&direct).as_deref(),
+            Some("volc"),
+            "the first connection speaks for the session"
+        );
+        // A descriptor without a provider name is the backend relay.
+        let relayed = vec![ConnectionDescriptor {
+            source: AudioSource::Mic,
+            url: "wss://example.invalid".to_owned(),
+            provider: None,
+            api_key: None,
+            extra: None,
+        }];
+        assert_eq!(connections_provider(&relayed).as_deref(), Some("lynse_backend"));
+        assert_eq!(connections_provider(&[]), None, "pure recording has no engine");
+    }
+
+    #[test]
+    fn qwen_translation_target_maps_unsupported_codes() {
+        assert_eq!(protocols::dashscope::qwen_translation_target("zh"), "zh");
+        assert_eq!(protocols::dashscope::qwen_translation_target("pt"), "pt");
+        assert_eq!(protocols::dashscope::qwen_translation_target("zh-TW"), "zh", "Chinese variants degrade to Mandarin");
+        assert_eq!(protocols::dashscope::qwen_translation_target("zh-yue"), "zh");
+        assert_eq!(protocols::dashscope::qwen_translation_target("tl"), "en", "unsupported codes fall back to English");
+    }
+
+    #[test]
+    fn qwen_transcript_only_drops_translation_but_keeps_recognition() {
+        let session = live_session();
+        // The fake-target translation leg must never surface as text.
+        let delta = r#"{"type":"response.text.delta","delta":"hello"}"#;
+        assert!(
+            qwen_message(&session, AudioSource::Mic, 0, 0, delta, true).is_none(),
+            "translation delta must be dropped in transcript-only mode"
+        );
+        let done = r#"{"type":"response.audio_transcript.done","transcript":"hello"}"#;
+        assert!(
+            qwen_message(&session, AudioSource::Mic, 0, 0, done, true).is_none(),
+            "translation final must be dropped in transcript-only mode"
+        );
+        // Recognition is the whole point of transcript-only mode.
+        let recognized =
+            r#"{"type":"conversation.item.input_audio_transcription.completed","text":"你好世界"}"#;
+        let emission = qwen_message(&session, AudioSource::Mic, 0, 0, recognized, true);
+        assert!(emission.is_some(), "recognition must survive transcript-only mode");
+        // With translation requested for real, the same translation frame lands.
+        assert!(qwen_message(&session, AudioSource::Mic, 0, 0, delta, false).is_some());
     }
 }

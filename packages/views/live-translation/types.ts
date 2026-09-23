@@ -3,9 +3,27 @@ export type LiveAudioSource = "mic" | "system";
 export const DEFAULT_ILIVEDATA_RTVT_ENDPOINT =
   "wss://rtvt-cn-app.ilivedata.com/gate/websocket";
 
-export type LiveTranslationProvider =
-  | "lynse_backend"
-  | "ilivedata_direct"
+export const DEFAULT_QWEN_ENDPOINT =
+  "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.8-livetranslate-flash-realtime";
+
+export const DEFAULT_VOLC_AST_ENDPOINT =
+  "wss://openspeech.bytedance.com/api/v4/ast/v2/translate";
+
+export const DEFAULT_TENCENT_ASR_ENDPOINT =
+  "wss://asr.cloud.tencent.com/asr/v2";
+
+/**
+ * Wire-protocol tag each provider plugin stamps onto its connection
+ * descriptors; the Rust websocket loop dispatches on it. Plugin ids are
+ * richer than protocols — the built-in Qwen plugin and the user-configured
+ * custom plugin both speak the DashScope protocol ("qwen" is the legacy tag,
+ * kept so persisted-record engine labels stay continuous; "dashscope" is the
+ * generic name). Absent tag (backend-minted URLs) means the plain JSON
+ * `method` protocol.
+ */
+export type LiveTranslationProtocol =
+  | "direct"
+  | "dashscope"
   | "qwen"
   | "volc"
   | "tencent";
@@ -15,51 +33,40 @@ export type LiveTranslationProvider =
  * (the mic would only duplicate the video audio as echo). */
 export type LiveAudioSourceMode = "both" | "mic" | "system";
 
+/**
+ * Provider settings v2 — registry-driven. Non-secret field values are keyed
+ * by plugin id and field key; secrets never live here (they are merged into
+ * the runtime config by the bridge on read and split out again on save).
+ */
 export interface LiveTranslationProviderConfig {
-  provider: LiveTranslationProvider;
+  /** Plugin id of the provider sessions attach to ("lynse_backend", "qwen",
+   * "tencent", "custom", ...). Unknown ids fall back to the backend relay. */
+  activeProvider: string;
   /** Capture-source mode; persisted alongside the provider credentials so
    * the start request and the connection builder read the same setting. */
   audioSource?: LiveAudioSourceMode;
-  ilivedata: {
-    endpoint: string;
-    pid: string;
-    secretKey: string;
-    /**
-     * Maximum speaker count for iLiveData RTVT diarization.
-     * `0` (or undefined) disables speaker recognition entirely; when enabled
-     * the valid range is 2..5 (the API requires a value greater than 1).
-     */
-    maxSpeakers?: number;
-  };
-  qwen: {
-    apiKey: string;
-    endpoint: string;
-  };
-  volc: {
-    /** 火山引擎控制台获取的 API Key，作为 X-Api-Key 发送。 */
-    apiKey: string;
-    endpoint: string;
-  };
-  tencent: {
-    /** 腾讯云账号 AppID（拼接在 WebSocket 路径末尾）。 */
-    appId: string;
-    /** 腾讯云访问密钥 SecretId / SecretKey（控制台「访问管理 → API 密钥」）。 */
-    secretId: string;
-    secretKey: string;
-    /** 识别引擎类型，如 16k_zh / 16k_en / 16k_ja / 16k_zh-PY；留空按源语言推导。 */
-    engineType: string;
-    endpoint: string;
-  };
+  /** Preferred translation direction. Persisted so every start entry point
+   * (recording page, tray, float dock, meeting auto-record) honors the
+   * user's chosen source language instead of hard-coding one. */
+  sourceLanguage?: string;
+  targetLanguage?: string;
+  /** All field values (secrets included) per plugin id, keyed by field key. */
+  values: Record<string, Record<string, string>>;
 }
 
-export const DEFAULT_QWEN_ENDPOINT =
-  "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.8-livetranslate-flash-realtime";
-
-export const DEFAULT_VOLC_AST_ENDPOINT =
-  "wss://openspeech.bytedance.com/api/v4/ast/v2/translate";
-
-export const DEFAULT_TENCENT_ASR_ENDPOINT =
-  "wss://asr.cloud.tencent.com/asr/v2";
+/**
+ * What actually persists: the settings blob in localStorage. Identical to
+ * the runtime config minus the secret values.
+ */
+export interface PersistedLiveTranslationSettings {
+  version: 2;
+  activeProvider: string;
+  audioSource: LiveAudioSourceMode;
+  sourceLanguage?: string;
+  targetLanguage?: string;
+  /** Non-secret field values per plugin id. */
+  fields: Record<string, Record<string, string>>;
+}
 
 export type LiveTranslationState =
   | "idle"
@@ -112,7 +119,10 @@ export interface LivePermissionStatus {
 export interface LiveConnectionDescriptor {
   source: LiveAudioSource;
   url: string;
-  provider?: LiveTranslationProvider;
+  /** Wire-protocol tag for the Rust connection loop (see
+   * `LiveTranslationProtocol`). Absent means the plain JSON protocol the
+   * Lynse backend relay mints URLs for. */
+  provider?: LiveTranslationProtocol;
   apiKey?: string;
   /** Provider-specific credentials that don't fit the single-key model.
    * Tencent ASR carries secretId/secretKey/engineType here so the Rust

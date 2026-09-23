@@ -26,6 +26,10 @@ async function ensurePermissions(
   }
 }
 
+/** Stable sonner toast id, so repeated recovery scans replace the existing
+ *  prompt instead of stacking duplicates. */
+const RECOVERY_TOAST_ID = "live-recording-recovery";
+
 /**
  * Headless tray-action agent living in the main window.
  *
@@ -71,7 +75,11 @@ export function RecordingTrayAgent() {
         return;
       }
 
-      const sourceLanguage = "zh";
+      // Source language comes from the persisted direction preference (the
+      // recording page's header pickers keep it updated) so a tray-started
+      // session attaches recognition with the language the user actually
+      // speaks, not a hard-coded default.
+      const sourceLanguage = cfg?.sourceLanguage || "zh";
       await api.start({
         sessionId: crypto.randomUUID(),
         title: `${t("recording_mode.record_title")} ${new Date().toLocaleString()}`,
@@ -151,6 +159,65 @@ export function RecordingTrayAgent() {
       cleanup?.();
     };
   }, [api, queryClient, t]);
+
+  // Crash / persist-failure recovery: a session whose final save never ran
+  // (app quit mid-recording, disk error) stays on disk as a recoverable
+  // directory. Nothing else surfaces those, so this always-mounted agent
+  // checks at startup and after any error event, and offers one-click
+  // recovery — the recovered session opens in the same completion dialog as
+  // a normal stop. The prompt persists until acted on: the stranded audio
+  // should not quietly rot behind a timed-out toast.
+  useEffect(() => {
+    if (!api) return;
+    let disposed = false;
+    let eventCleanup: (() => void) | undefined;
+    const check = async () => {
+      let recoveries: Awaited<ReturnType<typeof api.listRecoveries>>;
+      try {
+        recoveries = await api.listRecoveries();
+      } catch {
+        return; // bridge hiccup — retried on the next error event
+      }
+      if (disposed || recoveries.length === 0) return;
+      const latest = recoveries[0];
+      if (!latest) return;
+      toast(t("live_translation.recovery_title"), {
+        id: RECOVERY_TOAST_ID,
+        description: `${latest.title} — ${t("live_translation.recovery_hint")}`,
+        duration: Infinity,
+        closeButton: true,
+        action: {
+          label: t("live_translation.recover"),
+          onClick: () => {
+            toast.dismiss(RECOVERY_TOAST_ID);
+            void (async () => {
+              try {
+                const session = await api.recover(latest.sessionId);
+                useRecordingCompleteStore.getState().open(session);
+                push("/recording");
+              } catch (error) {
+                toast.error(t("live_translation.recovery_failed"), {
+                  description: String(error),
+                });
+              }
+            })();
+          },
+        },
+      });
+    };
+    void check();
+    void api
+      .onEvent((event) => {
+        if (event.type === "error") void check();
+      })
+      .then((unsub) => {
+        eventCleanup = unsub;
+      });
+    return () => {
+      disposed = true;
+      eventCleanup?.();
+    };
+  }, [api, t, push]);
 
   return null;
 }

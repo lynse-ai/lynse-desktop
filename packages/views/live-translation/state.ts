@@ -33,9 +33,14 @@ export function reduceLiveTranslationEvent(
   event: LiveTranslationEvent,
 ): LiveTranslationViewState {
   if (event.type === "state") {
+    // A brand-new session must not inherit the previous one's per-stream
+    // connection states (or echo-gate flag): stale "connected"/"error"
+    // entries would mislabel the new session's still-dialing streams.
+    const freshSession = event.snapshot.sessionId !== current.sessionId;
     return {
       ...current,
       ...event.snapshot,
+      ...(freshSession ? { streamStates: {}, micSuppressed: false } : {}),
       lastError: event.snapshot.state === "recording" ? undefined : current.lastError,
       lastErrorSource: event.snapshot.state === "recording"
         ? undefined

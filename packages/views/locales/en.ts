@@ -105,6 +105,12 @@ const en = {
         provider_tencent_secret_key: "SecretKey",
         provider_tencent_engine: "Engine (16k_zh / 16k_en / 16k_ja / 16k_zh-PY)",
         tencent_hint: "Uses Tencent Cloud real-time speech recognition — transcription only, no translation; the target language is ignored. Credentials are stored in the system Keychain. With the engine left empty it is derived from the source language (zh/yue/en/ja); other languages need an explicit engine ID.",
+    provider_custom: "Custom (DashScope-compatible)",
+    custom_hint: "Works with any service that speaks the DashScope Realtime protocol: enter an endpoint, a model name and an API Key to connect. Credentials are stored in the system Keychain.",
+    provider_custom_model: "Model name",
+    provider_custom_api_key: "API Key",
+    provider_custom_asr_model: "Recognition model (optional)",
+    provider_custom_asr_model_hint: "Leave empty for the default qwen3-asr-flash-realtime; only set it if your service uses a different ASR model name.",
 
     provider_pid: "Project PID",
     provider_secret_key: "HMAC Secret Key",

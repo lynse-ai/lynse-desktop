@@ -54,7 +54,7 @@ export function RecordingIslandWindow() {
       const source = view.sourceLanguage ?? "zh";
       try {
         const cfg = await api.getProviderConfig().catch(() => null);
-        if (!cfg || !cfg.provider) {
+        if (!cfg || !cfg.activeProvider) {
           toast.warning(t("recording_mode.switch_need_provider"));
           return;
         }
@@ -132,7 +132,7 @@ export function RecordingIslandWindow() {
         let connections: LiveConnectionDescriptor[] = [];
         if (target !== "none") {
           const config = await api.getProviderConfig().catch(() => null);
-          if (config?.provider) {
+          if (config?.activeProvider) {
             connections =
               (await requestRealtimeSession(
                 {

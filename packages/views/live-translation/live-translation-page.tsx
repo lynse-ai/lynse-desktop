@@ -7,8 +7,6 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { IconSwap } from "../icon-swap";
 import { Badge } from "@lynse/ui/components/ui/badge";
 import { Button } from "@lynse/ui/components/ui/button";
-import { Input } from "@lynse/ui/components/ui/input";
-import { Label } from "@lynse/ui/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@lynse/ui/components/ui/popover";
 import {
   Command,
@@ -36,19 +34,16 @@ import {
   Volume2,
 } from "../icons";
 import { realtimeEngineLabel, requestRealtimeSession } from "./api";
+import { ProviderSettings } from "./provider-settings";
+import { isProviderConfigured, resolveProvider } from "./providers";
 import { useNavigation } from "../navigation";
 import { useLiveTranslation } from "./use-live-translation";
-import {
-  DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
-  DEFAULT_QWEN_ENDPOINT,
-  DEFAULT_TENCENT_ASR_ENDPOINT,
-  DEFAULT_VOLC_AST_ENDPOINT,
-  type CompletedLiveSession,
-  type LiveAudioSourceMode,
-  type LivePermissionStatus,
-  type LiveTranslationTrayAction,
-  type LiveTranslationProvider,
-  type LiveTranslationProviderConfig,
+import type {
+  CompletedLiveSession,
+  LiveAudioSourceMode,
+  LivePermissionStatus,
+  LiveTranslationTrayAction,
+  LiveTranslationProviderConfig,
 } from "./types";
 import {
   SOURCE_LANGUAGE_OPTIONS,
@@ -74,28 +69,11 @@ export function LiveTranslationPage() {
   const [subtitlesVisible, setSubtitlesVisible] = useState(false);
   const [settingsCollapsed, setSettingsCollapsed] = useState(false);
   const [completed, setCompleted] = useState<CompletedLiveSession | null>(null);
+  // Empty until the bridge loads; field defaults are applied by the provider
+  // plugins at connection time, so there is nothing to seed here.
   const [providerConfig, setProviderConfig] = useState<LiveTranslationProviderConfig>({
-    provider: "lynse_backend",
-    ilivedata: {
-      endpoint: DEFAULT_ILIVEDATA_RTVT_ENDPOINT,
-      pid: "",
-      secretKey: "",
-    },
-    qwen: {
-      endpoint: DEFAULT_QWEN_ENDPOINT,
-      apiKey: "",
-    },
-    volc: {
-      endpoint: DEFAULT_VOLC_AST_ENDPOINT,
-      apiKey: "",
-    },
-    tencent: {
-      endpoint: DEFAULT_TENCENT_ASR_ENDPOINT,
-      appId: "",
-      secretId: "",
-      secretKey: "",
-      engineType: "",
-    },
+    activeProvider: "lynse_backend",
+    values: {},
   });
   const [providerConfigLoaded, setProviderConfigLoaded] = useState(false);
   const [savingProviderConfig, setSavingProviderConfig] = useState(false);
@@ -181,34 +159,16 @@ export function LiveTranslationPage() {
     [transcriptOnly, view.segments],
   );
   const active = Boolean(view.sessionId) && view.state !== "idle";
-  // Direct providers talk to the vendor from this machine, so their credentials
-  // must be complete before a session can start. The Lynse backend relay needs
-  // no local configuration.
-  const directProviderReady = ((): boolean => {
-    switch (providerConfig.provider) {
-      case "ilivedata_direct":
-        return Boolean(
-          providerConfig.ilivedata.endpoint.trim()
-          && providerConfig.ilivedata.pid.trim()
-          && providerConfig.ilivedata.secretKey.trim(),
-        );
-      case "qwen":
-        return Boolean(providerConfig.qwen.apiKey.trim());
-      case "volc":
-        return Boolean(providerConfig.volc.apiKey.trim());
-      case "tencent":
-        return Boolean(
-          providerConfig.tencent.appId.trim()
-          && providerConfig.tencent.secretId.trim()
-          && providerConfig.tencent.secretKey.trim(),
-        );
-      default:
-        return true;
-    }
-  })();
+  // The active provider plugin decides whether its credentials are complete;
+  // the Lynse backend relay needs no local configuration.
+  const providerReady =
+    providerConfigLoaded
+    && isProviderConfigured(
+      resolveProvider(providerConfig.activeProvider),
+      providerConfig.values[providerConfig.activeProvider],
+    );
   const canStart = !!api
-    && providerConfigLoaded
-    && directProviderReady
+    && providerReady
     && permissions?.microphone === "granted"
     && (!permissions.systemAudioRequired || permissions.systemAudio === "granted")
     && !permissions.restartRequired
@@ -229,16 +189,16 @@ export function LiveTranslationPage() {
     if (permissions.systemAudioRequired && permissions.systemAudio !== "granted") {
       return t("live_translation.start_hint_system_audio");
     }
-    if (!directProviderReady) return t("live_translation.start_hint_provider");
+    if (!providerReady) return t("live_translation.start_hint_provider");
     if (!transcriptOnly && sourceLanguage === targetLanguage) {
       return t("live_translation.start_hint_same_lang");
     }
     return null;
   })();
 
-  async function selectProvider(provider: LiveTranslationProvider) {
+  async function selectProvider(providerId: string) {
     if (!api) return;
-    const next = { ...providerConfig, provider };
+    const next = { ...providerConfig, activeProvider: providerId };
     setProviderConfig(next);
     try {
       setProviderConfig(await api.saveProviderConfig(next));
@@ -275,47 +235,14 @@ export function LiveTranslationPage() {
     }
   }
 
-  function updateILiveDataConfig(
-    field: keyof LiveTranslationProviderConfig["ilivedata"],
-    value: string,
-  ) {
+  function updateProviderField(providerId: string, fieldKey: string, value: string) {
     configDirtyRef.current = true;
     setProviderConfig((current) => ({
       ...current,
-      ilivedata: { ...current.ilivedata, [field]: value },
-    }));
-  }
-
-  function updateQwenConfig(
-    field: keyof LiveTranslationProviderConfig["qwen"],
-    value: string,
-  ) {
-    configDirtyRef.current = true;
-    setProviderConfig((current) => ({
-      ...current,
-      qwen: { ...current.qwen, [field]: value },
-    }));
-  }
-
-  function updateVolcConfig(
-    field: keyof LiveTranslationProviderConfig["volc"],
-    value: string,
-  ) {
-    configDirtyRef.current = true;
-    setProviderConfig((current) => ({
-      ...current,
-      volc: { ...current.volc, [field]: value },
-    }));
-  }
-
-  function updateTencentConfig(
-    field: keyof LiveTranslationProviderConfig["tencent"],
-    value: string,
-  ) {
-    configDirtyRef.current = true;
-    setProviderConfig((current) => ({
-      ...current,
-      tencent: { ...current.tencent, [field]: value },
+      values: {
+        ...current.values,
+        [providerId]: { ...current.values[providerId], [fieldKey]: value },
+      },
     }));
   }
 
@@ -429,10 +356,21 @@ export function LiveTranslationPage() {
       }
       return;
     }
-    if (view.state === "recording") {
-      void pause();
-    } else {
-      toast.info("当前没有正在进行的实时录音");
+    if (action === "pause") {
+      // The tray item is a toggle: pause while recording, resume while paused.
+      if (view.state === "paused") {
+        void resume();
+      } else if (view.state === "recording") {
+        void pause();
+      } else {
+        toast.info("当前没有正在进行的实时录音");
+      }
+      return;
+    }
+    // action === "stop": only a live (or paused) session can stop; stopping
+    // from idle has never been valid here.
+    if (view.state !== "idle" && view.state !== "stopping" && view.state !== "failed") {
+      void stop();
     }
   };
 
@@ -544,249 +482,15 @@ export function LiveTranslationPage() {
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {t("live_translation.provider")}
             </h2>
-            <select
-              value={providerConfig.provider}
-              onChange={(event) => void selectProvider(event.target.value as LiveTranslationProvider)}
+            <ProviderSettings
+              config={providerConfig}
               disabled={active || !providerConfigLoaded}
-              className="h-9 w-full rounded-md border border-input bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
-            >
-              <option value="lynse_backend">{t("live_translation.provider_backend")}</option>
-              <option value="ilivedata_direct">{t("live_translation.provider_ilivedata_direct")}</option>
-              <option value="qwen">{t("live_translation.provider_qwen")}</option>
-              <option value="volc">{t("live_translation.provider_volc")}</option>
-              <option value="tencent">{t("live_translation.provider_tencent")}</option>
-            </select>
-            {providerConfig.provider === "ilivedata_direct" && (
-              <div className="space-y-2 rounded-lg border border-border bg-card p-3">
-                <p className="text-2xs leading-relaxed text-warning-text">
-                  {t("live_translation.direct_test_hint")}
-                </p>
-                <div className="space-y-1.5">
-                  <Label htmlFor="ilivedata-pid" className="text-2xs">
-                    {t("live_translation.provider_pid")}
-                  </Label>
-                  <Input
-                    id="ilivedata-pid"
-                    value={providerConfig.ilivedata.pid}
-                    onChange={(event) => updateILiveDataConfig("pid", event.target.value)}
-                    disabled={active}
-                    className="h-8 text-xs"
-                    inputMode="numeric"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="ilivedata-secret-key" className="text-2xs">
-                    {t("live_translation.provider_secret_key")}
-                  </Label>
-                  <Input
-                    id="ilivedata-secret-key"
-                    type="password"
-                    value={providerConfig.ilivedata.secretKey}
-                    onChange={(event) => updateILiveDataConfig("secretKey", event.target.value)}
-                    disabled={active}
-                    className="h-8 text-xs"
-                    autoComplete="off"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="ilivedata-endpoint" className="text-2xs">
-                    {t("live_translation.provider_websocket_endpoint")}
-                  </Label>
-                  <Input
-                    id="ilivedata-endpoint"
-                    value={providerConfig.ilivedata.endpoint}
-                    onChange={(event) => updateILiveDataConfig("endpoint", event.target.value)}
-                    disabled={active}
-                    className="h-8 text-xs"
-                  />
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-7 w-full text-xs"
-                  onClick={saveProviderConfig}
-                  disabled={active || savingProviderConfig}
-                >
-                  {savingProviderConfig ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                  {t("live_translation.save_provider_config")}
-                </Button>
-              </div>
-            )}
-            {providerConfig.provider === "qwen" && (
-              <div className="space-y-2 rounded-lg border border-border bg-card p-3">
-                <p className="text-2xs leading-relaxed text-warning-text">
-                  {t("live_translation.qwen_hint")}
-                </p>
-                <div className="space-y-1.5">
-                  <Label htmlFor="qwen-api-key" className="text-2xs">
-                    {t("live_translation.provider_qwen_api_key")}
-                  </Label>
-                  <Input
-                    id="qwen-api-key"
-                    type="password"
-                    value={providerConfig.qwen.apiKey}
-                    onChange={(event) => updateQwenConfig("apiKey", event.target.value)}
-                    disabled={active}
-                    className="h-8 text-xs"
-                    autoComplete="off"
-                    placeholder="sk-..."
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="qwen-endpoint" className="text-2xs">
-                    {t("live_translation.provider_qwen_endpoint")}
-                  </Label>
-                  <Input
-                    id="qwen-endpoint"
-                    value={providerConfig.qwen.endpoint}
-                    onChange={(event) => updateQwenConfig("endpoint", event.target.value)}
-                    disabled={active}
-                    className="h-8 text-xs"
-                  />
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-7 w-full text-xs"
-                  onClick={saveProviderConfig}
-                  disabled={active || savingProviderConfig}
-                >
-                  {savingProviderConfig ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                  {t("live_translation.save_provider_config")}
-                </Button>
-              </div>
-            )}
-            {providerConfig.provider === "volc" && (
-              <div className="space-y-2 rounded-lg border border-border bg-card p-3">
-                <p className="text-2xs leading-relaxed text-warning-text">
-                  {t("live_translation.volc_hint")}
-                </p>
-                <div className="space-y-1.5">
-                  <Label htmlFor="volc-api-key" className="text-2xs">
-                    {t("live_translation.provider_volc_api_key")}
-                  </Label>
-                  <Input
-                    id="volc-api-key"
-                    type="password"
-                    value={providerConfig.volc.apiKey}
-                    onChange={(event) => updateVolcConfig("apiKey", event.target.value)}
-                    disabled={active}
-                    className="h-8 text-xs"
-                    autoComplete="off"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="volc-endpoint" className="text-2xs">
-                    {t("live_translation.provider_volc_endpoint")}
-                  </Label>
-                  <Input
-                    id="volc-endpoint"
-                    value={providerConfig.volc.endpoint}
-                    onChange={(event) => updateVolcConfig("endpoint", event.target.value)}
-                    disabled={active}
-                    className="h-8 text-xs"
-                    placeholder={DEFAULT_VOLC_AST_ENDPOINT}
-                  />
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-7 w-full text-xs"
-                  onClick={saveProviderConfig}
-                  disabled={active || savingProviderConfig}
-                >
-                  {savingProviderConfig ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                  {t("live_translation.save_provider_config")}
-                </Button>
-              </div>
-            )}
-            {providerConfig.provider === "tencent" && (
-              <div className="space-y-2 rounded-lg border border-border bg-card p-3">
-                <p className="text-2xs leading-relaxed text-warning-text">
-                  {t("live_translation.tencent_hint")}
-                </p>
-                <div className="space-y-1.5">
-                  <Label htmlFor="tencent-app-id" className="text-2xs">
-                    {t("live_translation.provider_tencent_app_id")}
-                  </Label>
-                  <Input
-                    id="tencent-app-id"
-                    value={providerConfig.tencent.appId}
-                    onChange={(event) => updateTencentConfig("appId", event.target.value)}
-                    disabled={active}
-                    className="h-8 text-xs"
-                    inputMode="numeric"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="tencent-secret-id" className="text-2xs">
-                    {t("live_translation.provider_tencent_secret_id")}
-                  </Label>
-                  <Input
-                    id="tencent-secret-id"
-                    value={providerConfig.tencent.secretId}
-                    onChange={(event) => updateTencentConfig("secretId", event.target.value)}
-                    disabled={active}
-                    className="h-8 text-xs"
-                    autoComplete="off"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="tencent-secret-key" className="text-2xs">
-                    {t("live_translation.provider_tencent_secret_key")}
-                  </Label>
-                  <Input
-                    id="tencent-secret-key"
-                    type="password"
-                    value={providerConfig.tencent.secretKey}
-                    onChange={(event) => updateTencentConfig("secretKey", event.target.value)}
-                    disabled={active}
-                    className="h-8 text-xs"
-                    autoComplete="off"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="tencent-engine" className="text-2xs">
-                    {t("live_translation.provider_tencent_engine")}
-                  </Label>
-                  <Input
-                    id="tencent-engine"
-                    value={providerConfig.tencent.engineType}
-                    onChange={(event) => updateTencentConfig("engineType", event.target.value)}
-                    disabled={active}
-                    className="h-8 text-xs"
-                    placeholder="16k_zh"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="tencent-endpoint" className="text-2xs">
-                    {t("live_translation.provider_websocket_endpoint")}
-                  </Label>
-                  <Input
-                    id="tencent-endpoint"
-                    value={providerConfig.tencent.endpoint}
-                    onChange={(event) => updateTencentConfig("endpoint", event.target.value)}
-                    disabled={active}
-                    className="h-8 text-xs"
-                    placeholder={DEFAULT_TENCENT_ASR_ENDPOINT}
-                  />
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-7 w-full text-xs"
-                  onClick={saveProviderConfig}
-                  disabled={active || savingProviderConfig}
-                >
-                  {savingProviderConfig ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                  {t("live_translation.save_provider_config")}
-                </Button>
-              </div>
-            )}
+              hideLabel
+              onFieldChange={updateProviderField}
+              onProviderChange={(providerId) => void selectProvider(providerId)}
+              onSave={saveProviderConfig}
+              saving={savingProviderConfig}
+            />
           </section>
 
           <section className="mt-6 space-y-3">

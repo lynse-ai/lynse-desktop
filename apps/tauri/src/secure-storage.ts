@@ -12,9 +12,21 @@ const SECRET_KEYS = new Set([
   "lynse_live_translation_ilivedata_secret_key",
   "lynse_live_translation_qwen_api_key",
   "lynse_live_translation_volc_api_key",
+  "lynse_live_translation_tencent_secret_id",
   "lynse_live_translation_tencent_secret_key",
   "lynse_feishu_app_secret",
 ]);
+
+/**
+ * Extend the secret allowlist at runtime. Provider plugins register their
+ * vault keys through this (the desktop bridge derives them from the provider
+ * registry at startup), so a newly added provider's credentials are vaulted
+ * without editing this file — a key missing from the set would otherwise be
+ * silently downgraded to localStorage by `setSecret`.
+ */
+export function registerSecretKeys(keys: readonly string[]): void {
+  for (const key of keys) SECRET_KEYS.add(key);
+}
 
 /**
  * All secrets are stored under ONE keychain entry (a JSON map) instead of one

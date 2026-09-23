@@ -49,7 +49,7 @@ Create one via Xcode → Settings → Accounts → Manage Certificates
 Create it the same way as above."
 
 # --- version -------------------------------------------------------------------
-# Version policy (see .agents/skills/testflight-release/SKILL.md):
+# Version policy:
 # - CFBundleShortVersionString (semver) only moves on planned releases: pass
 #   APP_VERSION=X.Y.Z to set it explicitly across all three manifests. Patch /
 #   test iterations keep the version and raise only the build number.
@@ -90,11 +90,11 @@ echo "$BUILD_NUMBER" > "$BUILD_NUMBER_FILE"
 log "Apple build number: $BUILD_NUMBER"
 
 # --- build -------------------------------------------------------------------
-# App Store / TestFlight packages always ship the "testflight" channel: the
-# login page gates phone-SMS / QR-code / WeChat sign-in behind it
+# App Store / TestFlight packages always ship the "official" channel (正式版):
+# the login page gates phone-SMS / QR-code / WeChat sign-in behind it
 # (feature-flags.ts). Without this the Vite build inlines the default
-# "github" channel and the packaged app only offers the API-key form.
-export VITE_BUILD_CHANNEL=testflight
+# "debug" channel and the packaged app only offers the API-key form.
+export VITE_BUILD_CHANNEL=official
 
 log "Building the Tauri app bundle (updater artifacts disabled for App Store)"
 (cd "$ROOT" && pnpm --filter @lynse/tauri exec tauri build --bundles app \

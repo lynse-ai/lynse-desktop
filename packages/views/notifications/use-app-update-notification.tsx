@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { useAppUpdate } from "../app-update";
+import { TESTFLIGHT_URL, isSandboxedMacApp, useAppUpdate } from "../app-update";
 import { useNotificationStore } from "./use-notification-store";
 
 const APP_UPDATE_ID = "system:app-update";
@@ -26,7 +26,9 @@ export function AppUpdateNotifier() {
         id: APP_UPDATE_ID,
         type: "system",
         title: update.latestVersion ?? "",
-        href: update.releaseUrl ?? "",
+        // Sandboxed (TestFlight) builds can't install in place — send the
+        // click to the TestFlight app instead of the download page.
+        href: isSandboxedMacApp() ? TESTFLIGHT_URL : (update.releaseUrl ?? ""),
         external: true,
         createdAt: existing?.createdAt ?? Date.now(),
         read: existing?.read ?? false,

@@ -40,10 +40,12 @@ import { DesktopNavigationProvider } from "./platform/navigation";
 import { NativeThemeSync } from "./platform/native-theme";
 import { clearAuthSecrets, secureStorage } from "./secure-storage";
 
-// Build channel (github | testflight) + WeChat Open Platform appid, injected
-// by Vite at build time — see apps/tauri/.env.example.
+// Build channel (official | debug) + WeChat Open Platform appid, injected
+// by Vite at build time — see apps/tauri/.env.example. Unset builds are
+// OFFICIAL when packaged (the distributable default) and DEBUG in dev.
 configureBuildChannel(
-  (import.meta.env.VITE_BUILD_CHANNEL as BuildChannel | undefined) ?? "github",
+  (import.meta.env.VITE_BUILD_CHANNEL as BuildChannel | undefined) ??
+    (import.meta.env.PROD ? "official" : "debug"),
 );
 // Dev runs get the API-key sign-in as an extra entry under "more ways to
 // sign in"; packaged builds never ship it.

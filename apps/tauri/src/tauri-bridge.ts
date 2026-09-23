@@ -109,9 +109,19 @@ type DesktopApi = {
   audioEditor: DesktopAudioEditorApi;
   feishu: DesktopFeishuApi;
   bots: DesktopBotsApi;
-  appInfo: { version: string; build?: string | null; platform: string };
+  appInfo: {
+    version: string;
+    build?: string | null;
+    platform: string;
+    /** macOS App Sandbox (TestFlight/App Store) build — updater must not install in place. */
+    sandboxed: boolean;
+  };
   app: {
-    getInfo: () => Promise<{ version: string; platform: string }>;
+    getInfo: () => Promise<{
+      version: string;
+      platform: string;
+      sandboxed: boolean;
+    }>;
     openAboutWindow: (title?: string) => Promise<void>;
     openFeedbackWindow: (title?: string) => Promise<void>;
     openLogsFolder: () => Promise<void>;
@@ -133,8 +143,8 @@ type DesktopApi = {
   };
 }
 
-/** Human-facing fallback link (release page) for "view release" affordances. */
-const RELEASES_PAGE_URL = "https://github.com/lynse-ai/lynse-desktop/releases/latest";
+/** Human-facing fallback link (official site) for "view release" affordances. */
+const RELEASES_PAGE_URL = "https://www.lynse.cn";
 
 // The Update object carries the download/install methods, so it can't cross
 // into the UI as a plain value. Keep it here; the UI only ever sees the
@@ -441,9 +451,15 @@ export async function installTauriBridge(): Promise<void> {
         return unlisten;
       },
     },
-    appInfo: { version: "0.1.0", build: null, platform: "darwin" },
+    appInfo: { version: "0.1.0", build: null, platform: "darwin", sandboxed: false },
     app: {
-      getInfo: () => command<{ version: string; build: string | null; platform: string }>("get_app_info"),
+      getInfo: () =>
+        command<{
+          version: string;
+          build: string | null;
+          platform: string;
+          sandboxed: boolean;
+        }>("get_app_info"),
       // Opens (or focuses) the standalone About window. The localized title
       // is passed in because only the frontend knows the active locale.
       openAboutWindow: (title?: string) =>
@@ -472,7 +488,8 @@ export async function installTauriBridge(): Promise<void> {
         }),
       revealReportFolder: (path: string) => openPath(path),
       // Talks to the tauri-plugin-updater, whose endpoints/pubkey live in
-      // tauri.conf.json; releases are published by release.yml. `check()`
+      // tauri.conf.json; releases are published to CloudBase by
+      // scripts/publish-cloudbase.sh. `check()`
       // returns null when the running version is the latest.
       checkForUpdate: async () => {
         const update = await check();

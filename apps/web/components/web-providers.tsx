@@ -14,10 +14,12 @@ import packageJson from "../package.json";
 
 const WEB_VERSION = packageJson.version || "dev";
 
-// Channel (github | testflight) and the WeChat Open Platform appid are
-// injected at build time; see apps/web/.env.example.
+// Channel (official | debug) and the WeChat Open Platform appid are injected
+// at build time; see apps/web/.env.example. Unset builds are OFFICIAL in
+// production and DEBUG in dev.
 configureBuildChannel(
-  (process.env.NEXT_PUBLIC_BUILD_CHANNEL as BuildChannel | undefined) ?? "github",
+  (process.env.NEXT_PUBLIC_BUILD_CHANNEL as BuildChannel | undefined) ??
+    (process.env.NODE_ENV === "production" ? "official" : "debug"),
 );
 // Dev runs get the API-key sign-in as an extra login-page entry; production
 // builds never ship it.

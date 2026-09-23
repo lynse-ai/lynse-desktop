@@ -75,7 +75,7 @@ build_whisper() {
       # The SDK's own Bin/Lib dirs ship the loader in some SDK versions only;
       # the silent installer always drops one into System32, so that is the
       # last-resort source. The runtime archive's completeness gate in
-      # release.yml fails the build when none of these existed.
+      # publish-cloudbase.sh --build fails the build when none of these existed.
       if [[ -f "$loader" ]]; then
         cp "$loader" "$SIDECARS/"
         echo "    vulkan-1.dll -> sidecars (from $loader)"

@@ -241,9 +241,9 @@ jobs:
           # OFFICIAL channel (正式版): phone + WeChat sign-in included. The
           # artifacts land on GitHub Releases and are mirrored to the
           # CloudBase update source, which is what in-app updates serve.
-          # (The debug "github" channel — API-key login only — is built via
-          # `pnpm build:github`, e.g. for throwaway test builds.)
-          VITE_BUILD_CHANNEL: testflight
+          # (The debug channel — API-key login only — is built via
+          # `pnpm build:debug`, e.g. for throwaway test builds.)
+          VITE_BUILD_CHANNEL: official
           # audiopus_sys (opus codec) vendors a CMakeLists.txt with an old
           # cmake_minimum_required, which CMake 4.x on the runners rejects.
           # Re-allow the legacy policy so the codec builds.

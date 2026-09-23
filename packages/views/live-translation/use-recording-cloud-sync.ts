@@ -13,10 +13,8 @@ import {
 } from "../workspace/sync-upload";
 import { deriveFilename } from "./recording-complete-dialog";
 import { getDesktopLiveTranslationApi } from "./desktop-api";
-import { getDesktopLocalTranscriptionApi } from "../workspace/local-transcription";
 import { useNotificationStore } from "../notifications/use-notification-store";
 import type { CompletedLiveSession } from "./types";
-import type { LocalTranscriptionRecord } from "../workspace/types";
 
 // ───────────────────────────────────────────────────────────────
 // Recording cloud sync.
@@ -137,37 +135,5 @@ export function useRecordingCloudSync() {
     [syncTarget],
   );
 
-  /** Retry the cloud upload for a recording kept local after a failed sync.
-   *  Reuses the persisted fileId so no duplicate cloud record is created;
-   *  throws so the caller can surface the error inline. */
-  const syncLocalRecord = useCallback(
-    async (record: LocalTranscriptionRecord) => {
-      const liveApi = getDesktopLiveTranslationApi();
-      const localApi = getDesktopLocalTranscriptionApi();
-      const sessionId = record.liveSessionId;
-      if (!liveApi || !localApi || !sessionId) {
-        throw new Error("该记录不是实时录音，无法上传到云");
-      }
-      if (!isAuthenticated) {
-        toast.info(t("live_translation.sync_need_login"));
-        return;
-      }
-      const audioUrl = await localApi.getAudioUrl(record.id);
-      if (!audioUrl) throw new Error("本地音频文件不存在或已被清理");
-      await syncTarget(
-        {
-          sessionId,
-          filename: deriveFilename({ playbackPath: record.sourcePath }),
-          audioUrl,
-          durationMs: record.durationMs ?? 0,
-          startedAt: record.startedAt ?? record.createdAt,
-          existingFileId: record.cloudFileId,
-        },
-        { rethrow: true },
-      );
-    },
-    [isAuthenticated, syncTarget, t],
-  );
-
-  return { syncCompletedSession, syncLocalRecord };
+  return { syncCompletedSession };
 }

@@ -1270,15 +1270,17 @@ fn verify_and_install(part: &Path, target: &Path, expected_sha256: &str) -> Comm
 // archive URL and its embedded SHA-256 are version-specific; the SHA is
 // compiled into the client so a tampered/replaced archive fails verification.
 
-/// GitHub repo that hosts the per-platform runtime archives. Keep in sync with
-/// the release workflow that uploads them.
+/// GitHub repo that hosted the per-tag runtime archives before the
+/// CloudBase-only release flow; kept for the fallback candidate list.
 const RUNTIME_REPO: &str = "lynse-ai/lynse-desktop";
 
-/// Tencent CloudBase static hosting mirror serving the same per-tag layout as
-/// the GitHub release (`updates/<tag>/<archive>`). Compiled in from the
-/// release workflow's env; absent in local dev builds, whose candidate list
-/// then starts at GitHub direct.
-const RUNTIME_MIRROR_BASE: Option<&'static str> = option_env!("LYNSE_UPDATES_MIRROR_BASE");
+/// Tencent CloudBase static hosting serving the update artifacts
+/// (`updates/<tag>/<archive>`) — the same source the in-app updater polls.
+/// Releases are published locally (publish-cloudbase.sh), so the mirror is
+/// always present; the GitHub URL and ghproxy-style mirrors below stay in the
+/// candidate list as fallbacks for tags published before that flow.
+const RUNTIME_MIRROR_BASE: &str =
+    "https://lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com/updates";
 
 /// Per-platform runtime archive base name, e.g.
 /// `lynse-stt-runtime-macos-aarch64.tar.gz`.
@@ -1286,9 +1288,8 @@ fn runtime_archive_name() -> String {
     format!("lynse-stt-runtime-{}.tar.gz", stt::runtime_platform_dir())
 }
 
-/// GitHub download URL for this app version's runtime archive — also the
-/// source the CloudBase mirror copies from. Mirrors the git tag exactly (e.g.
-/// `v0.1.15`).
+/// Legacy GitHub download URL for this app version's runtime archive. Mirrors
+/// the git tag exactly (e.g. `v0.1.15`).
 fn runtime_github_url(version: &str) -> String {
     format!(
         "https://github.com/{RUNTIME_REPO}/releases/download/{version}/{}",
@@ -1296,22 +1297,18 @@ fn runtime_github_url(version: &str) -> String {
     )
 }
 
-/// Mirror URL for this version's runtime archive; `None` when the build has
-/// no mirror compiled in.
-fn runtime_mirror_url(version: &str) -> Option<String> {
-    match RUNTIME_MIRROR_BASE {
-        Some(base) if !base.is_empty() => Some(format!("{base}/{version}/{}", runtime_archive_name())),
-        _ => None,
-    }
+/// CloudBase URL for this version's runtime archive.
+fn runtime_mirror_url(version: &str) -> String {
+    format!("{RUNTIME_MIRROR_BASE}/{version}/{}", runtime_archive_name())
 }
 
-/// Same domestic-mirror strategy as model downloads: GitHub Releases is blocked
-/// or throttled from mainland China, so try the CloudBase mirror first, then
-/// the direct GitHub URL, then `ghproxy`-style mirrors. GitHub direct stays in
-/// the list so non-China users and unmirrored old tags are unaffected.
+/// Domestic-friendly download chain: CloudBase first (fast, no quota issues
+/// from mainland China), then the legacy GitHub URL, then `ghproxy`-style
+/// mirrors — the latter two only ever serve tags published before the
+/// CloudBase-only flow.
 fn runtime_download_candidates(version: &str) -> Vec<String> {
     let github = runtime_github_url(version);
-    let mut list: Vec<String> = runtime_mirror_url(version).into_iter().collect();
+    let mut list: Vec<String> = vec![runtime_mirror_url(version)];
     list.push(github.clone());
     for mirror in [
         github.replace("https://github.com/", "https://ghproxy.net/https://github.com/"),
@@ -3535,6 +3532,22 @@ fn bundle_build_number() -> Option<String> {
     None
 }
 
+/// Whether this process runs under the macOS App Sandbox. TestFlight / App
+/// Store signing injects the sandbox entitlement (plus this env marker set by
+/// sandbox initialization) even when the source entitlements never declared
+/// it. A sandboxed app cannot rewrite its own bundle in /Applications, so the
+/// in-app updater's download+install would always fail with EPERM — those
+/// builds must update through the store channel (TestFlight) instead.
+#[cfg(target_os = "macos")]
+fn is_app_sandboxed() -> bool {
+    std::env::var_os("APP_SANDBOX_CONTAINER_ID").is_some()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_app_sandboxed() -> bool {
+    false
+}
+
 #[tauri::command]
 fn get_app_info(app: AppHandle) -> Value {
     let version = app.package_info().version.to_string();
@@ -3544,7 +3557,7 @@ fn get_app_info(app: AppHandle) -> Value {
         "linux" => "linux",
         other => other,
     };
-    json!({ "version": version, "build": bundle_build_number(), "platform": platform })
+    json!({ "version": version, "build": bundle_build_number(), "platform": platform, "sandboxed": is_app_sandboxed() })
 }
 
 /// Reveal the app log folder in the system file manager so users can attach
@@ -4389,13 +4402,12 @@ mod tests {
     fn runtime_download_candidates_order_mirror_then_github_then_proxies() {
         let candidates = runtime_download_candidates("v0.1.15");
         let archive = runtime_archive_name();
-        let mut expected: Vec<String> = Vec::new();
-        if let Some(base) = RUNTIME_MIRROR_BASE.filter(|base| !base.is_empty()) {
-            expected.push(format!("{base}/v0.1.15/{archive}"));
-        }
-        expected.push(format!("https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"));
-        expected.push(format!("https://ghproxy.net/https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"));
-        expected.push(format!("https://mirror.ghproxy.com/https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"));
+        let expected: Vec<String> = vec![
+            format!("{RUNTIME_MIRROR_BASE}/v0.1.15/{archive}"),
+            format!("https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"),
+            format!("https://ghproxy.net/https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"),
+            format!("https://mirror.ghproxy.com/https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"),
+        ];
         assert_eq!(candidates, expected);
     }
 }

@@ -55,7 +55,7 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
   const [uploadPct, setUploadPct] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
   const [dragOver, setDragOver] = useState(false);
-  const [offlineMode, setOfflineMode] = useState(false);
+  const [mode, setMode] = useState<"cloud" | "local">("cloud");
   const [expectedSpeakers, setExpectedSpeakers] = useState("");
   const [selectedHotwordPackageId, setSelectedHotwordPackageId] = useState("");
   const [hotwordPackages, setHotwordPackages] = useState<LocalHotwordPackage[]>([]);
@@ -64,7 +64,7 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
   const transferFile = useTransferFile();
 
   const localApi = getDesktopLocalTranscriptionApi();
-  const useOfflineTranscription = offlineMode && !!localApi;
+  const useOfflineTranscription = mode === "local" && !!localApi;
   const localAudioName = localAudioPath ? localAudioPath.split(/[\\/]/).pop() ?? localAudioPath : "";
   const selectedFileName = useOfflineTranscription ? localAudioName : file?.name ?? "";
   const hasSelectedSource = useOfflineTranscription ? !!localAudioPath : !!file;
@@ -73,7 +73,14 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
 
   useEffect(() => {
     if (!open) return;
-    setOfflineMode(localStorage.getItem(OFFLINE_TRANSCRIPTION_ENABLED_KEY) === "1");
+    // The settings toggle seeds the default; the in-dialog selector can
+    // override it per import and persists back to the same key.
+    setMode(
+      localStorage.getItem(OFFLINE_TRANSCRIPTION_ENABLED_KEY) === "1" &&
+        !!getDesktopLocalTranscriptionApi()
+        ? "local"
+        : "cloud",
+    );
     getDesktopLocalTranscriptionApi()?.listHotwordPackages()
       .then(setHotwordPackages)
       .catch(() => setHotwordPackages([]));
@@ -97,6 +104,22 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
       onOpenChange(nextOpen);
     },
     [isProcessing, reset, onOpenChange],
+  );
+
+  // Per-import engine choice. Persisted to the same key the settings toggle
+  // uses, so the default next time matches the last choice made here.
+  const handleModeChange = useCallback(
+    (next: "cloud" | "local") => {
+      setMode(next);
+      // The modes pick files differently (browser File vs native path);
+      // a selection made in the other mode is unusable, so drop it.
+      setFile(null);
+      setLocalAudioPath(null);
+      if (localApi) {
+        localStorage.setItem(OFFLINE_TRANSCRIPTION_ENABLED_KEY, next === "local" ? "1" : "0");
+      }
+    },
+    [localApi],
   );
 
   // File selection handlers
@@ -227,6 +250,9 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
             file={file}
             localAudioName={localAudioName}
             offlineMode={useOfflineTranscription}
+            canTranscribeLocally={!!localApi}
+            mode={mode}
+            onModeChange={handleModeChange}
             phase={phase}
             errorMsg={errorMsg}
             dragOver={dragOver}
@@ -283,6 +309,10 @@ interface IdleContentProps {
   file: File | null;
   localAudioName: string;
   offlineMode: boolean;
+  /** Desktop only — the web build has no local transcription engine. */
+  canTranscribeLocally: boolean;
+  mode: "cloud" | "local";
+  onModeChange: (mode: "cloud" | "local") => void;
   phase: UploadPhase;
   errorMsg: string;
   dragOver: boolean;
@@ -303,6 +333,9 @@ function IdleContent({
   file,
   localAudioName,
   offlineMode,
+  canTranscribeLocally,
+  mode,
+  onModeChange,
   phase,
   errorMsg,
   dragOver,
@@ -322,6 +355,26 @@ function IdleContent({
 
   return (
     <div className="flex flex-col gap-4">
+      {/* Per-import choice: upload to the cloud (server transcription) or
+          keep the audio on this device (on-device transcription). Desktop
+          only — web has no local engine. */}
+      {canTranscribeLocally && (
+        <div className="grid grid-cols-2 gap-2" role="radiogroup">
+          <ModeOption
+            active={mode === "cloud"}
+            label={t("upload.mode_cloud")}
+            description={t("upload.mode_cloud_desc")}
+            onClick={() => onModeChange("cloud")}
+          />
+          <ModeOption
+            active={mode === "local"}
+            label={t("upload.mode_local")}
+            description={t("upload.mode_local_desc")}
+            onClick={() => onModeChange("local")}
+          />
+        </div>
+      )}
+
       {/* File picker drop zone */}
       <div
         className={cn(
@@ -483,6 +536,40 @@ function ProgressContent({
         </div>
       )}
     </div>
+  );
+}
+
+// ── Mode selector option: cloud upload vs on-device transcription ──
+
+function ModeOption({
+  active,
+  label,
+  description,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  description: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={active}
+      onClick={onClick}
+      className={cn(
+        "flex flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors",
+        active
+          ? "border-primary bg-primary/5"
+          : "border-border/60 hover:border-border hover:bg-muted/30",
+      )}
+    >
+      <span className={cn("text-13 font-medium", active ? "text-foreground" : "text-muted-foreground")}>
+        {label}
+      </span>
+      <span className="text-2xs leading-snug text-muted-foreground">{description}</span>
+    </button>
   );
 }
 

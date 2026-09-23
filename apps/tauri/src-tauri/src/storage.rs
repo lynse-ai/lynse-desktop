@@ -207,17 +207,25 @@ pub fn storage_clear(app: AppHandle, category: String) -> CommandResult<()> {
         }
         "recovery" => {
             let dir = crate::vault::content_dir(&app, ContentKind::Recordings)?;
-            clear_dir_contents(&dir)
+            clear_unsaved_sessions(&app, &dir)
         }
         other => Err(format!("Storage category cannot be cleared: {other}")),
     }
 }
 
-fn clear_dir_contents(dir: &Path) -> CommandResult<()> {
+/// Removes only the session directories that never produced their
+/// `local-transcriptions` record. Saved recordings keep living in this very
+/// directory — it is their storage — so a blanket wipe would destroy the
+/// audio their records (and any pending uploads) still point at.
+fn clear_unsaved_sessions(app: &AppHandle, dir: &Path) -> CommandResult<()> {
     let entries = fs::read_dir(dir).map_err(|error| error.to_string())?;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
+            let record_id = format!("local:live:{}", entry.file_name().to_string_lossy());
+            if crate::get_store_value(app, "local-transcriptions", &record_id)?.is_some() {
+                continue;
+            }
             fs::remove_dir_all(&path).map_err(|error| error.to_string())?;
         } else {
             fs::remove_file(&path).map_err(|error| error.to_string())?;

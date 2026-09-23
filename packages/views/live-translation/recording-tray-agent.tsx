@@ -98,7 +98,15 @@ export function RecordingTrayAgent() {
     void api.onTrayAction((action) => {
       if (action !== "start" || busyRef.current) return;
       busyRef.current = true;
-      void startRecording().finally(() => {
+      // Every failure mode (permission rejection, no audio device on Windows,
+      // sidecar spawn error) must surface as a toast: a tray click with no
+      // on-screen feedback reads as a dead button — the user has no window
+      // open to notice a console error in.
+      void startRecording().catch((error) => {
+        toast.error(t("live_translation.start_failed"), {
+          description: String(error),
+        });
+      }).finally(() => {
         busyRef.current = false;
       });
     }).then((unsub) => {
@@ -165,12 +173,15 @@ export function RecordingTrayAgent() {
   // directory. Nothing else surfaces those, so this always-mounted agent
   // checks at startup and after any error event, and offers one-click
   // recovery — the recovered session opens in the same completion dialog as
-  // a normal stop. The prompt persists until acted on: the stranded audio
-  // should not quietly rot behind a timed-out toast.
+  // a normal stop. The prompt survives unrelated error events until acted
+  // on, but closing it keeps it closed for this app run: a stray provider
+  // error must not resurrect a dismissed prompt. The next run asks again,
+  // since stranded audio should not quietly rot.
   useEffect(() => {
     if (!api) return;
     let disposed = false;
     let eventCleanup: (() => void) | undefined;
+    const dismissed = new Set<string>();
     const check = async () => {
       let recoveries: Awaited<ReturnType<typeof api.listRecoveries>>;
       try {
@@ -178,14 +189,23 @@ export function RecordingTrayAgent() {
       } catch {
         return; // bridge hiccup — retried on the next error event
       }
-      if (disposed || recoveries.length === 0) return;
-      const latest = recoveries[0];
+      if (disposed) return;
+      const latest = recoveries.find(
+        (recovery) => !dismissed.has(recovery.sessionId),
+      );
       if (!latest) return;
+      const fail = (title: string, error: unknown) => {
+        toast.error(title, { description: String(error) });
+        // The audio is still stranded — bring the prompt back so the failed
+        // attempt does not silently retire it for this run.
+        void check();
+      };
       toast(t("live_translation.recovery_title"), {
         id: RECOVERY_TOAST_ID,
         description: `${latest.title} — ${t("live_translation.recovery_hint")}`,
         duration: Infinity,
         closeButton: true,
+        onDismiss: () => dismissed.add(latest.sessionId),
         action: {
           label: t("live_translation.recover"),
           onClick: () => {
@@ -196,9 +216,20 @@ export function RecordingTrayAgent() {
                 useRecordingCompleteStore.getState().open(session);
                 push("/recording");
               } catch (error) {
-                toast.error(t("live_translation.recovery_failed"), {
-                  description: String(error),
-                });
+                fail(t("live_translation.recovery_failed"), error);
+              }
+            })();
+          },
+        },
+        cancel: {
+          label: t("live_translation.recovery_discard"),
+          onClick: () => {
+            toast.dismiss(RECOVERY_TOAST_ID);
+            void (async () => {
+              try {
+                await api.discardRecovery(latest.sessionId);
+              } catch (error) {
+                fail(t("live_translation.recovery_discard_failed"), error);
               }
             })();
           },

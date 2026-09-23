@@ -202,6 +202,8 @@ const zh = {
     recovery_hint: "Lynse 保留了崩溃或异常退出前的双流音频，可重新生成回放并保存。",
     recover: "恢复并保存",
     recovery_failed: "无法恢复录音",
+    recovery_discard: "丢弃录音",
+    recovery_discard_failed: "无法丢弃录音",
     state_idle: "未开始",
     state_requesting_permission: "请求权限",
     state_connecting: "连接中",

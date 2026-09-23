@@ -205,6 +205,8 @@ const ja = {
     recovery_hint: "クラッシュや異常終了前の二系統音声を再構築して保存できます。",
     recover: "復旧して保存",
     recovery_failed: "録音を復旧できません",
+    recovery_discard: "録音を破棄",
+    recovery_discard_failed: "録音を破棄できません",
     state_idle: "待機中",
     state_requesting_permission: "権限を確認中",
     state_connecting: "接続中",

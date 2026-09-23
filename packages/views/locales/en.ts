@@ -204,6 +204,8 @@ const en = {
     recovery_hint: "Dual-stream audio from a crash or unexpected exit can be rebuilt and saved.",
     recover: "Recover and save",
     recovery_failed: "Could not recover recording",
+    recovery_discard: "Discard recording",
+    recovery_discard_failed: "Could not discard recording",
     state_idle: "Idle",
     state_requesting_permission: "Requesting access",
     state_connecting: "Connecting",

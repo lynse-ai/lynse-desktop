@@ -204,6 +204,8 @@ const ko = {
     recovery_hint: "크래시 또는 비정상 종료 전의 듀얼 스트림 오디오를 복구하여 저장할 수 있습니다.",
     recover: "복구 후 저장",
     recovery_failed: "녹음을 복구할 수 없습니다",
+    recovery_discard: "녹음 버리기",
+    recovery_discard_failed: "녹음을 버릴 수 없습니다",
     state_idle: "대기",
     state_requesting_permission: "권한 요청 중",
     state_connecting: "연결 중",

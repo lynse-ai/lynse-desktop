@@ -266,6 +266,62 @@ pub fn inspect(path: &Path) -> Result<WavInfo, String> {
 /// Bytes of header region [`inspect`] reads before giving up on the chunk walk.
 const INSPECT_PREFIX_BYTES: usize = 64 * 1024;
 
+/// Frozen physical format of each track name the capture engines write. The
+/// Swift sidecar and the Windows engine must keep agreeing with this table —
+/// it is what reads a track back when its header is gone. `directory`
+/// disambiguates `master.wav`: the dual-channel and system-only writers
+/// archive it stereo, the legacy mic-only writer mono, told apart by whether
+/// any other track sits beside it.
+pub fn capture_track_format(track: &str, directory: &Path) -> Option<WavFormat> {
+    let raw = |channels: u16| WavFormat {
+        sample_rate: super::PROCESSING_SAMPLE_RATE,
+        channels,
+        bits_per_sample: 16,
+        sample_format: "int",
+    };
+    let format = match track {
+        "mic.wav" | "mic_processed.wav" | "system.wav" => WavFormat::RECOGNITION,
+        "mic_raw.wav" => raw(1),
+        "system_raw.wav" => raw(2),
+        "master.wav" => raw(if directory.join("mic_processed.wav").exists()
+            || directory.join("mic_raw.wav").exists()
+            || directory.join("system.wav").exists()
+        {
+            2
+        } else {
+            1
+        }),
+        _ => return None,
+    };
+    Some(format)
+}
+
+/// Rebuilds the header of a track whose whole 44-byte header region is
+/// zeroed. The Swift sidecar writes that placeholder and only patches it on
+/// a clean `close`, so a sidecar killed by the finalize budget leaves WAVs
+/// without even a RIFF magic — [`inspect`] cannot see them and
+/// [`repair_if_stale`] never reaches them. With the header gone, the frozen
+/// per-track format is the only remaining description of the payload.
+/// Returns whether the header was rewritten.
+pub fn rebuild_zeroed_header(path: &Path, format: &WavFormat) -> Result<bool, String> {
+    let file_len = std::fs::metadata(path).map_err(|error| error.to_string())?.len();
+    if file_len < 44 {
+        return Ok(false);
+    }
+    let mut header = [0u8; 44];
+    File::open(path)
+        .map_err(|error| error.to_string())?
+        .read_exact(&mut header)
+        .map_err(|error| error.to_string())?;
+    // A real WAV — even one of pure digital silence — carries "RIFF" at byte
+    // zero, so an all-zero header region can only be an unpatched placeholder.
+    if header.iter().any(|&byte| byte != 0) {
+        return Ok(false);
+    }
+    repair_header(path, format)?;
+    Ok(true)
+}
+
 /// Repairs the canonical header a capture writer never got to patch: the
 /// sidecar is killed when draining takes longer than the finalize budget, and
 /// its WAV files then hold full PCM behind a zero-length `data` chunk. Only
@@ -517,6 +573,83 @@ mod tests {
         let before = std::fs::read(&path).unwrap();
         assert!(!repair_if_stale(&path).unwrap());
         assert_eq!(before, std::fs::read(&path).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rebuilds_the_swift_sidecars_zeroed_placeholder_header() {
+        // The Swift WavWriter creates its file with 44 zero bytes and patches
+        // a real header only on close; a killed sidecar leaves payload behind
+        // a header with no RIFF magic, which inspect cannot parse at all.
+        let dir = temp_dir("rebuild-zeroed");
+        let path = dir.join("mic_processed.wav");
+        let writer_format = capture_track_format("mic_processed.wav", &dir).unwrap();
+        std::fs::write(&path, {
+            let mut bytes = vec![0u8; 44];
+            bytes.extend_from_slice(&[1, 0, 2, 0, 3, 0, 4, 0]);
+            bytes
+        })
+        .unwrap();
+        assert!(inspect(&path).is_err(), "zeroed header is not a WAV yet");
+        assert!(rebuild_zeroed_header(&path, &writer_format).unwrap());
+        let info = inspect(&path).unwrap();
+        assert_eq!(info.format, WavFormat::RECOGNITION);
+        assert_eq!(info.frames(), 4);
+        assert!(info.header_matches_contents(std::fs::metadata(&path).unwrap().len()));
+        assert!(
+            !rebuild_zeroed_header(&path, &writer_format).unwrap(),
+            "a rebuilt header is no longer all-zero"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rebuild_leaves_real_wavs_and_foreign_files_alone() {
+        let dir = temp_dir("rebuild-skip");
+        let real = dir.join("master.wav");
+        let writer = WavTrackWriter::raw(
+            &real,
+            WavFormat {
+                sample_rate: 48_000,
+                channels: 2,
+                bits_per_sample: 16,
+                sample_format: "int",
+            },
+        )
+        .unwrap();
+        writer.write_i16_at(0, &[9i16, 8]).unwrap();
+        writer.close().unwrap();
+        let format = capture_track_format("master.wav", &dir).unwrap();
+        assert_eq!(format.channels, 1, "no neighbouring track means mono master");
+        assert!(!rebuild_zeroed_header(&real, &format).unwrap());
+
+        let tiny = dir.join("mic_raw.wav");
+        std::fs::write(&tiny, vec![0u8; 10]).unwrap();
+        assert!(!rebuild_zeroed_header(&tiny, &format).unwrap(), "no header region");
+
+        let junk = dir.join("system_raw.wav");
+        std::fs::write(&junk, b"not a wav").unwrap();
+        assert!(!rebuild_zeroed_header(&junk, &format).unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn master_channel_count_follows_the_writers_that_ran() {
+        let dir = temp_dir("master-channels");
+        let format = |name: &str| capture_track_format(name, &dir).unwrap();
+        // Dual-channel sessions always write a mic track beside the master.
+        std::fs::write(dir.join("mic_processed.wav"), vec![0u8; 44]).unwrap();
+        assert_eq!(format("master.wav").channels, 2);
+        std::fs::remove_file(dir.join("mic_processed.wav")).unwrap();
+        // Legacy system-only sessions leave the 16 kHz system track.
+        std::fs::write(dir.join("system.wav"), vec![0u8; 44]).unwrap();
+        assert_eq!(format("master.wav").channels, 2);
+        std::fs::remove_file(dir.join("system.wav")).unwrap();
+        // Legacy mic-only sessions archive a mono master.
+        assert_eq!(format("master.wav").channels, 1);
+        assert_eq!(format("mic_raw.wav").channels, 1);
+        assert_eq!(format("system_raw.wav").channels, 2);
+        assert!(capture_track_format("playback.wav", &dir).is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

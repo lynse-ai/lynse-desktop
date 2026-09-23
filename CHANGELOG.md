@@ -8,6 +8,19 @@
 > the history (that commit documents a `vA.B.C(N)` build-counter tag
 > convention), so they are not listed either.
 
+## 1.1.0 (2026-09-23)
+
+### New Features
+
+- Recordings can now be saved straight to the cloud. Choosing 保存到云 uploads the finished recording directly to cloud storage — the app fetches short-lived STS credentials and pushes the audio itself, so the bytes never detour through the API server — then kicks off server-side transcription and summarization as usual. The recording's start time travels with the upload, so the cloud file list sorts by when the meeting actually happened.
+- A failed cloud upload no longer strands a recording locally forever. The note's detail panel gains an 上传到云 action that re-runs the upload against the same cloud record — retrying never duplicates the file, and a successful retry cleans up the local cache as usual.
+
+### Fixed
+
+- Crash-recovered recordings could fail to open or upload: a capture sidecar killed mid-write left track files with zeroed or missing WAV headers. Headers are now rebuilt from a frozen per-track format table, so every reader (mixdown, per-track picker, reprocessing, playback) sees the real audio again.
+- Clearing the local recordings cache no longer deletes the audio behind saved recordings — only session directories that never produced a note are removed, and pending cloud uploads keep their source file.
+- Tray "start recording" failures (permission denied, no audio device, capture engine error) now surface as a toast instead of reading as a dead click. The crash-recovery prompt stays dismissed for the rest of the app run once closed, and a failed recovery attempt re-prompts instead of silently retiring the stranded audio.
+
 ## 1.0.8 (2026-09-21)
 
 ### New Features

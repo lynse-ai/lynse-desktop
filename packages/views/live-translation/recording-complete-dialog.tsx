@@ -88,8 +88,11 @@ function saveRememberPref(pref: RememberPref): void {
   }
 }
 
-/** Derive a display filename from the completed session. */
-export function deriveFilename(session: CompletedLiveSession): string {
+/** Derive a display filename from a completed session — or from anything
+ *  carrying the playback path (e.g. a local transcription record). */
+export function deriveFilename(
+  session: Pick<CompletedLiveSession, "playbackPath">,
+): string {
   if (session.playbackPath) {
     const parts = session.playbackPath.split(/[/\\]/);
     const last = parts[parts.length - 1];

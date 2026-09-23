@@ -161,6 +161,10 @@ export interface LocalTranscriptionRecord {
   /** Set by the Rust side once the recording is uploaded ("synced") or
    * marked for retry ("pending") — see live_translation_finalize_local. */
   syncStatus?: string;
+  /** Client-generated cloud fileId, persisted before the first upload
+   * attempt so a retry re-runs the sync chain against the same cloud
+   * placeholder instead of duplicating the record. */
+  cloudFileId?: string;
   /** Dual-channel track manifest; absent for legacy single-file recordings. */
   trackManifest?: RecordingTrackManifest;
   /** True when any span of the recording could not be echo-cancelled. */
@@ -439,6 +443,52 @@ export interface PromptTemplateCategory {
 export interface PreSignedUrlVO {
   url: string;
   headers: Record<string, string>;
+  fileId: string;
+}
+
+/** Body shared by POST /api/business/file/sync/pre/create and /sync/pre/sts
+ *  (backend SyncPreUploadReq). `fileId` is generated on the client and must
+ *  be reused across retries of the same recording — create upserts the
+ *  placeholder by it, so a constant id is what keeps re-uploads from
+ *  producing duplicate cloud records. */
+export interface SyncPreUploadReq {
+  fileId: string;
+  /** Saved filename including extension, e.g. "20260923_142501.wav". */
+  saveFilename: string;
+  /** File size in bytes. */
+  fileSize: number;
+  /** Audio duration in whole seconds. */
+  bizDuration: number;
+  contentType?: string;
+  folderId?: string;
+  macAddress?: string;
+  location?: string;
+  /** Audio mode (meeting/call). */
+  mode?: string;
+  teamId?: string;
+  /** Hex md5 of the file content. */
+  md5?: string;
+  /** Recording start time, "yyyy-MM-dd HH:mm:ss" (GMT+8) — the backend
+   *  aligns the file's create time with it on first notify. */
+  recordStartTime?: string;
+  /** Recording marker points, in ms. */
+  recordMarks?: number[];
+}
+
+/** STS temporary credentials returned by POST /api/business/file/sync/pre/sts
+ *  (backend StsTokenVO). The direct upload target is
+ *  `https://{bucket}.{endpoint}/{objectKey}`; `objectKey` (path + server-side
+ *  UUID name) is authoritative — never assembled on the client. */
+export interface StsTokenVO {
+  accessKeyId: string;
+  accessKeySecret: string;
+  securityToken: string;
+  /** ISO8601 instant; the upload must finish (or re-fetch) before it. */
+  expiration: string;
+  bucket: string;
+  /** OSS endpoint without the protocol prefix. */
+  endpoint: string;
+  objectKey: string;
   fileId: string;
 }
 

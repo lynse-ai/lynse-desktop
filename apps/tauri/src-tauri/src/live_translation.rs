@@ -325,6 +325,9 @@ pub struct LiveSnapshot {
 pub struct CompletedSession {
     session_id: String,
     record_id: String,
+    /// RFC3339 recording start time; the cloud-sync upload sends it along
+    /// as `recordStartTime` so the backend can align the file's create time.
+    started_at: String,
     playback_path: String,
     playback_url: String,
     transcript_path: String,
@@ -2676,6 +2679,7 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
     Ok(CompletedSession {
         session_id: session.session_id.clone(),
         record_id: record_id.clone(),
+        started_at: session.started_at.clone(),
         playback_path: playback.to_string_lossy().into_owned(),
         playback_url: format!(
             "local-media://localhost/{}",
@@ -2718,6 +2722,20 @@ fn repair_capture_headers(directory: &Path) {
     for name in CAPTURE_TRACK_FILES {
         let path = directory.join(name);
         if !path.exists() {
+            continue;
+        }
+        // The Swift sidecar's placeholder header is 44 zero bytes, so a killed
+        // sidecar leaves tracks without even a RIFF magic — inspect cannot
+        // parse them and the stale-header repair never reaches them. The
+        // frozen per-track format is the only remaining description.
+        let rebuilt = match crate::audio_contract::wav::capture_track_format(name, directory) {
+            Some(format) => {
+                crate::audio_contract::wav::rebuild_zeroed_header(&path, &format).unwrap_or(false)
+            }
+            None => false,
+        };
+        if rebuilt {
+            log::warn!("rebuilt zeroed WAV header: {}", path.display());
             continue;
         }
         match crate::audio_contract::wav::repair_if_stale(&path) {
@@ -2974,6 +2992,23 @@ pub fn live_translation_finalize_local(
     Ok(())
 }
 
+/// Remember the client-generated cloud fileId for a finished recording so a
+/// retried upload re-runs the sync chain against the same placeholder
+/// (create upserts by fileId) instead of duplicating the cloud record.
+#[tauri::command]
+pub fn live_translation_set_cloud_file_id(
+    app: AppHandle,
+    session_id: String,
+    cloud_file_id: String,
+) -> CommandResult<()> {
+    let record_id = format!("local:live:{session_id}");
+    let mut patch = Map::new();
+    patch.insert("cloudFileId".to_owned(), json!(cloud_file_id));
+    update_store_value(&app, "local-transcriptions", &record_id, patch)?
+        .ok_or("live translation record not found")?;
+    Ok(())
+}
+
 /// Cancel the save of a finished recording: drop the cached
 /// local-transcriptions entry and delete the whole session directory
 /// (the end-time-named playback WAV, raw sources, transcript). Backs the
@@ -3218,6 +3253,10 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
     if manifest.session_id != session_id {
         return Err("recovery manifest does not match its directory".to_owned());
     }
+    // Fix the headers before anything reads the tracks: a killed sidecar's
+    // zeroed placeholders would fail `inspect_wav` below and blank the
+    // duration even though the audio is all there.
+    repair_capture_headers(&directory);
     let mut segments: Vec<LiveSegment> = fs::read(directory.join("segments.json"))
         .ok()
         .and_then(|data| serde_json::from_slice(&data).ok())
@@ -3279,6 +3318,42 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
         attached_provider: Mutex::new(manifest.provider.clone()),
     };
     persist_session(app, &session)
+}
+
+/// Deletes one stranded session directory without recovering it — the other
+/// way out of the recovery prompt, for recordings the user does not want.
+#[tauri::command]
+pub fn live_translation_discard_recovery(
+    app: AppHandle,
+    state: State<LiveTranslationManager>,
+    session_id: String,
+) -> CommandResult<()> {
+    if !valid_session_id(&session_id) {
+        return Err("invalid live translation session id".to_owned());
+    }
+    if state
+        .session
+        .lock()
+        .map_err(|_| "live session lock is poisoned")?
+        .is_some()
+    {
+        // A running (or finalizing) session's directory is still being
+        // written; the listing never offers it, so refuse stale callers too.
+        return Err("cannot discard the active live translation session".to_owned());
+    }
+    // Defense in depth, mirroring `live_translation_recover`: a session with
+    // its record is saved — its directory is the recording's storage.
+    {
+        let record_id = format!("local:live:{session_id}");
+        if crate::get_store_value(&app, "local-transcriptions", &record_id)?.is_some() {
+            return Err("this recording has already been saved".to_owned());
+        }
+    }
+    let directory = recovery_root(&app)?.join(&session_id);
+    if !directory.is_dir() {
+        return Ok(());
+    }
+    fs::remove_dir_all(&directory).map_err(|error| error.to_string())
 }
 
 /// Logical size of the recording-island window. The window hugs the pill
@@ -4491,6 +4566,57 @@ mod tests {
                 path.display()
             );
         }
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn repair_capture_headers_rebuilds_the_swift_sidecars_zeroed_placeholders() {
+        // The Swift WavWriter's placeholder is 44 zero bytes — no RIFF magic
+        // at all — so a killed sidecar's tracks used to be invisible to
+        // recovery for good: `build_playback_wav` saw no readable audio and
+        // every `recover` failed. Rebuilding the frozen per-track header must
+        // make the whole session recoverable again.
+        let directory =
+            std::env::temp_dir().join(format!("lynse-repair-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let mut zeroed = |name: &str, payload_frames: usize, frame_bytes: usize| {
+            let path = directory.join(name);
+            let mut bytes = vec![0u8; 44];
+            bytes.resize(44 + payload_frames * frame_bytes, 0);
+            bytes[44..].iter_mut().enumerate().for_each(|(i, byte)| {
+                *byte = ((i * 7 + 31) & 0xFF) as u8;
+            });
+            fs::write(&path, bytes).unwrap();
+            assert!(
+                crate::audio_contract::wav::inspect(&path).is_err(),
+                "{name} must start unreadable"
+            );
+            path
+        };
+        zeroed(MASTER_TRACK_FILE, 480, 4);
+        zeroed("mic_raw.wav", 480, 2);
+        zeroed("system_raw.wav", 480, 4);
+        zeroed("mic_processed.wav", 1600, 2);
+        zeroed("system.wav", 1600, 2);
+
+        repair_capture_headers(&directory);
+
+        let master = directory.join(MASTER_TRACK_FILE);
+        let info = crate::audio_contract::wav::inspect(&master).unwrap();
+        assert_eq!(info.format.channels, 2, "master beside mic tracks is stereo");
+        assert_eq!(info.frames(), 480);
+        let mic_raw =
+            crate::audio_contract::wav::inspect(&directory.join("mic_raw.wav")).unwrap();
+        assert_eq!(mic_raw.format.sample_rate, 48_000);
+        assert_eq!(mic_raw.format.channels, 1);
+        let mic_processed =
+            crate::audio_contract::wav::inspect(&directory.join("mic_processed.wav")).unwrap();
+        assert_eq!(mic_processed.format.sample_rate, 16_000);
+
+        // The point of the repair: recovery's mixdown now succeeds instead of
+        // failing with "no captured audio was written".
+        let playback = directory.join("playback.wav");
+        build_playback_wav(Some(&master), None, None, &playback).unwrap();
         let _ = fs::remove_dir_all(directory);
     }
 

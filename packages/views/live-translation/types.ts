@@ -186,6 +186,9 @@ export interface LiveSetModeRequest {
 export interface CompletedLiveSession {
   sessionId: string;
   recordId: string;
+  /** RFC3339 recording start time; the cloud sync sends it as
+   *  `recordStartTime` so the backend aligns the file's create time. */
+  startedAt?: string;
   playbackPath: string;
   playbackUrl: string;
   transcriptPath: string;
@@ -232,12 +235,18 @@ export interface DesktopLiveTranslationApi {
   stop: () => Promise<void>;
   getState: () => Promise<LiveTranslationSnapshot>;
   finalizeLocal: (sessionId: string, synced: boolean) => Promise<void>;
+  /** Remember the client-generated cloud fileId for a finished recording so
+   *  a retried cloud sync reuses the same server-side placeholder. */
+  setCloudFileId: (sessionId: string, cloudFileId: string) => Promise<void>;
   /** Cancel the save of a finished recording: delete its local cache
    *  (transcriptions entry + session directory). Backs the completion
    *  dialog's 取消 button. */
   discard: (sessionId: string) => Promise<void>;
   listRecoveries: () => Promise<LiveRecoverySummary[]>;
   recover: (sessionId: string) => Promise<CompletedLiveSession>;
+  /** Delete one stranded crash-recovery session without saving it. Backs
+   *  the recovery prompt's 丢弃 button; refuses saved or active sessions. */
+  discardRecovery: (sessionId: string) => Promise<void>;
   /** Re-run echo cancellation over a recording's raw tracks (detail page's
    *  重新处理 entry). Resolves with the refreshed transcription record. */
   reprocess: (sessionId: string) => Promise<Record<string, unknown>>;

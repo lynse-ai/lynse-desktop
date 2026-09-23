@@ -363,9 +363,12 @@ export async function installTauriBridge(): Promise<void> {
       stop: () => command<void>("live_translation_stop"),
       getState: () => command<LiveTranslationSnapshot>("live_translation_state"),
       finalizeLocal: (sessionId, synced) => command<void>("live_translation_finalize_local", { sessionId, synced }),
+      setCloudFileId: (sessionId, cloudFileId) =>
+        command<void>("live_translation_set_cloud_file_id", { sessionId, cloudFileId }),
       discard: (sessionId) => command<void>("live_translation_discard", { sessionId }),
       listRecoveries: () => command<LiveRecoverySummary[]>("live_translation_recoveries"),
       recover: (sessionId) => command<CompletedLiveSession>("live_translation_recover", { sessionId }),
+      discardRecovery: (sessionId) => command<void>("live_translation_discard_recovery", { sessionId }),
       reprocess: (sessionId: string) =>
         command<Record<string, unknown>>("live_translation_reprocess", { sessionId }),
       showSubtitles: (show) => command<void>("live_translation_show_subtitles", { show }),

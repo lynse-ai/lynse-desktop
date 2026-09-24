@@ -236,6 +236,10 @@ export function useFiles(params: {
         createdAt: String((f as Record<string, unknown>).createTime ?? ""),
         folderId: (f as Record<string, unknown>).folderId as string | undefined,
         tags: parseFileTags(f as Record<string, unknown>),
+        teamId:
+          typeof (f as Record<string, unknown>).teamId === "string"
+            ? ((f as Record<string, unknown>).teamId as string)
+            : undefined,
       }));
       return mergeCloudAndLocalFiles(cloudItems, result.localRecords);
     },
@@ -305,6 +309,7 @@ export function useNotes(params: {
           recordingMode: parseFileRecordingMode(raw),
           durationSeconds: parseFileDurationSeconds(raw),
           contentType: typeof raw.contentType === "string" ? raw.contentType : undefined,
+          teamId: typeof raw.teamId === "string" ? raw.teamId : undefined,
         };
       });
       return mergeCloudAndLocalFiles(cloudItems, result.localRecords);
@@ -439,6 +444,26 @@ export function useDeleteConclusion() {
       api().delete<unknown>(`/api/business/file/conclusion/${encodeURIComponent(conclusionId)}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["file-conclusions"] });
+    },
+  });
+}
+
+/**
+ * Insert a locally produced summary (e.g. an assistant chat reply filed by
+ * the user) as a conclusion of an existing file — no AI task is created and
+ * nothing is pushed. POST /api/business/file/conclusion/insert resolves to
+ * the new conclusionId. Omitting teamId targets a personal file; each call
+ * appends a new conclusion and never overwrites previous ones.
+ */
+export function useInsertConclusion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: { fileId: string; conclusionText: string; teamId?: string }) =>
+      api().post<string>("/api/business/file/conclusion/insert", req),
+    onSuccess: (_conclusionId, req) => {
+      qc.invalidateQueries({ queryKey: ["file-conclusions", req.fileId] });
+      qc.invalidateQueries({ queryKey: ["files"] });
+      qc.invalidateQueries({ queryKey: ["notes"] });
     },
   });
 }

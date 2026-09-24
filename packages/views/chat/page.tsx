@@ -20,6 +20,7 @@ import {
   ListOrdered,
   Loader2,
   Mic,
+  NotePlus,
   Pencil,
   Plus,
   RefreshCw,
@@ -30,6 +31,7 @@ import {
 import { Button } from "@lynse/ui/components/ui/button";
 import { Textarea } from "@lynse/ui/components/ui/textarea";
 import { StreamingMarkdown } from "@lynse/ui/markdown";
+import { toast } from "sonner";
 import { AssistantAvatar } from "../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
@@ -40,9 +42,12 @@ import {
 } from "@lynse/core/auth/workbuddy";
 import { openExternalUrl, getDesktopAppApi } from "../app-update";
 import { useChat } from "../workspace/hooks/use-chat";
-import { useNotes } from "../workspace/hooks/use-files";
+import { useInsertConclusion, useNotes } from "../workspace/hooks/use-files";
 import { useFolders } from "../workspace/hooks/use-folders";
-import { LOCAL_TRANSCRIPTION_FOLDER_ID } from "../workspace/local-transcription";
+import {
+  isLocalFileId,
+  LOCAL_TRANSCRIPTION_FOLDER_ID,
+} from "../workspace/local-transcription";
 import { WaitingText } from "../workspace/hooks/waiting-text";
 import { ConfirmDialog } from "../workspace/ConfirmDialog";
 import { isFreshlyRevealed } from "../workspace/chat-reveal";
@@ -134,6 +139,8 @@ function ThinkingIndicator() {
 export function ChatPage() {
   const [input, setInput] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [insertingMessageId, setInsertingMessageId] = useState<string | null>(null);
+  const [insertedMessageId, setInsertedMessageId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const reduceMotion = useReducedMotion();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -262,6 +269,32 @@ export function ChatPage() {
   const { data: notes } = useNotes({ startTime: "2020-01-01T00:00:00", endTime: mentionRangeEnd });
   const { data: folders } = useFolders();
   const noteList: WorkspaceItem[] = useMemo(() => (Array.isArray(notes) ? notes : []), [notes]);
+
+  // ── "Insert reply into notes" targets ───────────────────
+  // Each assistant reply can be filed as the summary of the note its turn was
+  // about: the target is the single cloud file the user's turn referenced
+  // (mentions / attachments, recorded on the user message at send time). No
+  // context, several files at once, or a local transcription — none of those
+  // resolve to exactly one insertable note, so no button is shown.
+  const insertConclusion = useInsertConclusion();
+  const insertTargets = useMemo(() => {
+    const targets = new Map<string, { fileId: string; teamId?: string }>();
+    let contextFileIds: string[] = [];
+    for (const message of messages) {
+      if (message.role === "user") {
+        contextFileIds = message.fileIds ?? [];
+        continue;
+      }
+      if (contextFileIds.length !== 1) continue;
+      const fileId = contextFileIds[0]!;
+      if (isLocalFileId(fileId)) continue;
+      targets.set(message.id, {
+        fileId,
+        teamId: noteList.find((note) => note.id === fileId)?.teamId,
+      });
+    }
+    return targets;
+  }, [messages, noteList]);
 
   const [mentions, setMentions] = useState<ChatMention[]>([]);
   const [mentionState, setMentionState] = useState<{
@@ -479,6 +512,8 @@ export function ChatPage() {
     resetMentionState();
     clearAttachmentDrafts();
     setCopiedMessageId(null);
+    setInsertedMessageId(null);
+    setInsertingMessageId(null);
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
@@ -489,6 +524,32 @@ export function ChatPage() {
       setCopiedMessageId(messageId);
     } catch {
       // Clipboard permission errors should not interrupt the conversation.
+    }
+  };
+
+  /** File an assistant reply into the referenced note as a new conclusion. */
+  const handleInsertToNote = async (
+    messageId: string,
+    content: string,
+    target: { fileId: string; teamId?: string },
+  ) => {
+    if (insertingMessageId) return;
+    setInsertingMessageId(messageId);
+    try {
+      await insertConclusion.mutateAsync({
+        fileId: target.fileId,
+        teamId: target.teamId,
+        conclusionText: content,
+      });
+      setInsertedMessageId(messageId);
+      toast.success(t("chat.inserted_to_note"));
+    } catch (error) {
+      // Surface the backend's own message (e.g. permission/ownership errors)
+      // when it has one; otherwise fall back to the generic locale string.
+      const detail = error instanceof Error && error.message ? error.message : "";
+      toast.error(detail || t("chat.insert_to_note_failed"));
+    } finally {
+      setInsertingMessageId(null);
     }
   };
 
@@ -677,6 +738,24 @@ export function ChatPage() {
                       isStreaming={message.id === streamingMessageId}
                       copied={copiedMessageId === message.id}
                       onCopy={() => handleCopy(message.id, message.content)}
+                      insertTarget={insertTargets.get(message.id)}
+                      insertState={
+                        insertingMessageId === message.id
+                          ? "inserting"
+                          : insertedMessageId === message.id
+                            ? "inserted"
+                            : "idle"
+                      }
+                      onInsertToNote={
+                        insertTargets.has(message.id)
+                          ? () =>
+                              void handleInsertToNote(
+                                message.id,
+                                message.content,
+                                insertTargets.get(message.id)!,
+                              )
+                          : undefined
+                      }
                       onAuthorizeWorkBuddy={() => void startWorkBuddyAuthorize()}
                     />
                   </div>
@@ -999,6 +1078,15 @@ interface AssistantMessageProps {
   isStreaming: boolean;
   copied: boolean;
   onCopy: () => void;
+  /**
+   * The note this reply can be filed under (single cloud file the turn
+   * referenced). When absent the insert button is not rendered — a summary
+   * must belong to exactly one note, so multi-file or context-less turns
+   * offer nothing to insert into.
+   */
+  insertTarget?: { fileId: string; teamId?: string };
+  insertState?: "idle" | "inserting" | "inserted";
+  onInsertToNote?: () => void;
   /** Shown on a WorkBuddy auth-failure bubble instead of the error text. */
   onAuthorizeWorkBuddy?: () => void;
 }
@@ -1008,6 +1096,9 @@ function AssistantMessage({
   isStreaming,
   copied,
   onCopy,
+  insertTarget,
+  insertState = "idle",
+  onInsertToNote,
   onAuthorizeWorkBuddy,
 }: AssistantMessageProps) {
   const { t } = useTranslation();
@@ -1112,6 +1203,29 @@ function AssistantMessage({
 
       {message.content && !message.error && (
         <div className="mt-2 flex items-center opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+          {insertTarget && onInsertToNote && (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className="text-muted-foreground"
+              disabled={insertState === "inserting"}
+              onClick={onInsertToNote}
+              title={
+                insertState === "inserted" ? t("chat.inserted_to_note") : t("chat.insert_to_note")
+              }
+              aria-label={
+                insertState === "inserted" ? t("chat.inserted_to_note") : t("chat.insert_to_note")
+              }
+            >
+              {insertState === "inserting" ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : insertState === "inserted" ? (
+                <Check className="size-3" />
+              ) : (
+                <NotePlus className="size-3" />
+              )}
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon-xs"

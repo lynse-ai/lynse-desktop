@@ -2386,6 +2386,7 @@ async fn finalize_session(app: AppHandle, session: Arc<LiveSession>) {
     // second, so a short grace keeps the transcript tail without making the
     // completion dialog wait.
     tokio::time::sleep(Duration::from_millis(1_500)).await;
+    log::info!("Persisting recording: session={}", session.session_id);
     let persist_result = tauri::async_runtime::spawn_blocking({
         let app = app.clone();
         let session = session.clone();
@@ -2399,15 +2400,26 @@ async fn finalize_session(app: AppHandle, session: Arc<LiveSession>) {
     );
     match persist_result {
         Ok(Ok(completed)) => {
+            // A saved recording leaves no other trace in the log; without
+            // this line "did the save land?" is unanswerable from a log
+            // alone (the UI events are transient).
+            log::info!(
+                "Recording persisted: session={} playback={} durationMs={}",
+                completed.session_id,
+                completed.playback_path,
+                completed.duration_ms
+            );
             let _ = app.emit(
                 LIVE_EVENT,
                 json!({ "type": "completed", "session": completed }),
             );
         }
         Ok(Err(error)) => {
+            log::error!("Persisting recording failed: {error}");
             emit_error(&app, None, format!("保存录音失败：{error}"));
         }
         Err(error) => {
+            log::error!("Persisting recording panicked: {error}");
             emit_error(&app, None, format!("保存录音失败：{error}"));
         }
     }
@@ -3955,6 +3967,20 @@ fn handle_engine_event(
             if mic > MIC_SILENCE_LEVEL || (session.wants_system && system > MIC_SILENCE_LEVEL) {
                 session.mark_voice_activity();
             }
+            // Forward at the engine's 200 ms cadence: the macOS sidecar's
+            // `levels` lines are what move the page timer/meters while
+            // recording, and this is their Windows equivalent — without it
+            // the page never updates between the Ready and stopping
+            // snapshots.
+            let _ = app.emit(
+                LIVE_EVENT,
+                json!({
+                    "type": "levels",
+                    "mic": mic,
+                    "system": system,
+                    "elapsedMs": session.last_elapsed_ms.load(Ordering::Relaxed),
+                }),
+            );
         }
         EngineEvent::AudioFrame {
             source,

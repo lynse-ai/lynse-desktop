@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatPage } from "./page";
 
 const chat = vi.hoisted(() => ({
-  messages: [],
+  messages: [] as Array<Record<string, unknown>>,
   isLoading: false,
   conversations: [] as Array<Record<string, unknown>>,
   activeConversationId: null as string | null,
@@ -29,6 +29,10 @@ const uploadMock = vi.hoisted(() => ({
   uploadFileToOSS: vi.fn(),
 }));
 
+const insertConclusionMock = vi.hoisted(() => ({
+  mutateAsync: vi.fn(),
+}));
+
 vi.mock("../workspace/hooks/use-chat", () => ({
   useChat: () => chat,
 }));
@@ -36,6 +40,7 @@ vi.mock("../workspace/hooks/use-chat", () => ({
 vi.mock("../workspace/hooks/use-files", () => ({
   useNotes: () => ({ data: mentionData.notes }),
   uploadFileToOSS: uploadMock.uploadFileToOSS,
+  useInsertConclusion: () => insertConclusionMock,
 }));
 
 vi.mock("../workspace/hooks/use-folders", () => ({
@@ -53,6 +58,7 @@ vi.mock("@lynse/ui/markdown", () => ({
 afterEach(() => {
   cleanup();
   chat.isLoading = false;
+  chat.messages = [];
   chat.conversations = [];
   chat.activeConversationId = null;
   chat.sendMessage.mockClear();
@@ -62,6 +68,8 @@ afterEach(() => {
   mentionData.notes = [];
   mentionData.folders = [];
   uploadMock.uploadFileToOSS.mockReset();
+  insertConclusionMock.mutateAsync.mockReset();
+  insertConclusionMock.mutateAsync.mockResolvedValue("conclusion-1");
 });
 
 describe("ChatPage", () => {
@@ -193,5 +201,36 @@ describe("ChatPage", () => {
     // composer shows only the mic placeholder next to it.
     expect(screen.queryByRole("button", { name: "chat.attach_files" })).toBeNull();
     expect(screen.getByRole("button", { name: "chat.microphone" })).toBeTruthy();
+  });
+
+  it("offers insert-into-notes for single-file turns and files the reply via the conclusion API", async () => {
+    mentionData.notes = [
+      { id: "note-1", type: "file", title: "产品评审", createdAt: "", updatedAt: "", teamId: "team-9" },
+    ];
+    chat.messages = [
+      { id: "u1", role: "user", content: "总结 @产品评审", timestamp: 1, fileIds: ["note-1"] },
+      { id: "a1", role: "assistant", content: "# 会议纪要\n\n一、明确排期", timestamp: 2 },
+    ];
+    render(<ChatPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "chat.insert_to_note" }));
+
+    await waitFor(() =>
+      expect(insertConclusionMock.mutateAsync).toHaveBeenCalledWith({
+        fileId: "note-1",
+        teamId: "team-9",
+        conclusionText: "# 会议纪要\n\n一、明确排期",
+      }),
+    );
+  });
+
+  it("hides insert-into-notes when the turn referenced several files", () => {
+    chat.messages = [
+      { id: "u2", role: "user", content: "对比", timestamp: 1, fileIds: ["n1", "n2"] },
+      { id: "a2", role: "assistant", content: "对比结果…", timestamp: 2 },
+    ];
+    render(<ChatPage />);
+
+    expect(screen.queryByRole("button", { name: "chat.insert_to_note" })).toBeNull();
   });
 });

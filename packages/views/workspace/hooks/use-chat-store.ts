@@ -615,6 +615,9 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       role: "user",
       content,
       timestamp: Date.now(),
+      // Remember the turn's context files so reply actions (e.g. filing the
+      // assistant reply as a note summary) can resolve the target note.
+      fileIds: fileIds.length > 0 ? fileIds : undefined,
       // Composer attachments (name/kind only — no hosted URL yet) so the sent
       // bubble shows what was attached.
       attachments: attachments?.length ? attachments : undefined,

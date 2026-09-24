@@ -90,6 +90,7 @@ vi.mock("@lynse/core/i18n/react", () => ({
 }));
 vi.mock("../workspace/hooks/use-files", () => ({
   useNotes: () => ({ data: [] }),
+  useInsertConclusion: () => ({ mutateAsync: vi.fn() }),
 }));
 vi.mock("../workspace/hooks/use-folders", () => ({
   useFolders: () => ({ data: [] }),

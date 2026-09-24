@@ -177,6 +177,21 @@ export const SpeechOff: LucideIcon = createLucideIcon("speech-off", [
   ["path", { d: "m2 2 20 20" }],
 ]);
 
+// lucide 1.41 has no "note with a plus" glyph (NotebookPlus landed in later
+// releases), so compose one: the StickyNote outline with a plus set into the
+// body below the folded corner. Used for "file this reply into my notes".
+export const NotePlus: LucideIcon = createLucideIcon("note-plus", [
+  [
+    "path",
+    {
+      d: "M21 9a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 15 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2z",
+    },
+  ],
+  ["path", { d: "M15 3v5a1 1 0 0 0 1 1h5" }],
+  ["path", { d: "M12 11.5v6" }],
+  ["path", { d: "M9 14.5h6" }],
+]);
+
 // Official WorkBuddy brand mark (workbuddy.cn), kept in full color. The
 // gradient/glow/clipped-badge structure needs nested <defs>, which lucide's
 // flat icon-node format cannot express, so this is a hand-rolled component

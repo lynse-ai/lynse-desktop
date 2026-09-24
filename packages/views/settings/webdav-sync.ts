@@ -8,6 +8,10 @@ import {
   type VaultSectionLabels,
   type VaultSyncNoteRef,
 } from "../workspace/note-vault";
+import {
+  APP_THEME_STORAGE_KEY,
+  applyAppTheme,
+} from "./app-theme";
 
 // ── Bridge types (`window.desktopAPI.webdavSync`, desktop only) ─────────────
 
@@ -36,7 +40,7 @@ export interface WebdavNotesSummary {
 export interface WebdavSettingsBundle {
   schemaVersion: number;
   exportedAt: string;
-  preferences?: { theme?: string; locale?: string };
+  preferences?: { theme?: string; locale?: string; themeCustom?: string };
   /** Non-secret live-translation localStorage entries only. */
   liveTranslation?: Record<string, string>;
   sttConfig?: unknown;
@@ -157,6 +161,8 @@ export async function collectSettingsBundle(
   const preferences: WebdavSettingsBundle["preferences"] = {};
   if (theme) preferences.theme = theme;
   if (locale) preferences.locale = locale;
+  const themeCustom = readLocalStorage(APP_THEME_STORAGE_KEY);
+  if (themeCustom) preferences.themeCustom = themeCustom;
   if (Object.keys(preferences).length > 0) bundle.preferences = preferences;
 
   const liveTranslation: Record<string, string> = {};
@@ -195,6 +201,12 @@ export async function applySettingsBundle(
   if (bundle.preferences?.theme) {
     writeLocalStorage(THEME_STORAGE_KEY, bundle.preferences.theme);
     options?.setTheme?.(bundle.preferences.theme);
+  }
+  if (bundle.preferences?.themeCustom) {
+    // applyAppTheme() re-reads + sanitizes the stored state and repaints the
+    // current mode; the mode flip itself (if any) re-syncs via AppThemeSync.
+    writeLocalStorage(APP_THEME_STORAGE_KEY, bundle.preferences.themeCustom);
+    applyAppTheme();
   }
   if (bundle.preferences?.locale) {
     writeLocalStorage("lynse_locale", bundle.preferences.locale);

@@ -8,6 +8,10 @@
   --content-font-heading: "Inter", "OPPO Sans 4.0", "OPPO Sans", "PingFang SC",
     "Microsoft YaHei", sans-serif;
 
+  /* 内容字体 override (settings appearance panel): falls back to inheriting
+     the UI font stack when no inline --font-content is set on <html>. */
+  font-family: var(--font-content, inherit);
+
   /* Comfortable reading column: ~52 CJK characters per line */
   width: 100%;
   max-width: 52em;

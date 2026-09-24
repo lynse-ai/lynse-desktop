@@ -3,6 +3,7 @@ import App from "./App";
 import "./globals.css";
 import { installTauriBridge } from "./tauri-bridge";
 import { installLogger } from "./logger";
+import { initAppTheme } from "@lynse/views/settings/app-theme";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -33,6 +34,10 @@ async function bootstrap() {
   // into the same log file the Rust side writes, so a bug report only ever
   // needs one folder. Install before the bridge so bridge failures log too.
   installLogger(windowKind ?? "main");
+
+  // Full-fidelity appearance pass (colors, fonts, contrast) before React
+  // mounts; index.html already painted the bare color trio pre-bundle.
+  initAppTheme();
 
   await installTauriBridge();
   syncWindowEffects();

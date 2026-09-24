@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "@lynse/ui/components/ui/sonner";
 import { WebProviders } from "@/components/web-providers";
+import { APP_THEME_BOOT_SNIPPET } from "@lynse/views/settings/app-theme-boot";
 import "./globals.css";
 
 export const viewport: Viewport = {
@@ -33,6 +34,9 @@ export default function RootLayout({
       suppressHydrationWarning
       className="antialiased font-sans h-full"
     >
+      {/* Pre-paint pass of the appearance customization (colors only) so a
+          customized theme never flashes the stock look before hydration. */}
+      <script dangerouslySetInnerHTML={{ __html: APP_THEME_BOOT_SNIPPET }} />
       <body className="h-full overflow-hidden">
         <ThemeProvider>
           <WebProviders>

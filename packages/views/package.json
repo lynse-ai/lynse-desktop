@@ -18,6 +18,8 @@
     "./knowledge-base": "./knowledge-base/index.ts",
     "./chat": "./chat/index.ts",
     "./settings": "./settings/index.ts",
+    "./settings/app-theme": "./settings/app-theme.ts",
+    "./settings/app-theme-boot": "./settings/app-theme-boot.ts",
     "./about": "./about/index.ts",
     "./feedback": "./feedback/index.ts",
     "./files": "./files/index.ts",

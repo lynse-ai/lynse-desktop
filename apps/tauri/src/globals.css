@@ -8,9 +8,10 @@
 /* One step lighter: plain text inherits the variable Light (300) cut of the
    bundled Inter + OPPO Sans pairing (see packages/ui/styles/fonts.css).
    Explicit font-medium / semibold / bold utilities are untouched, so labels
-   and headings keep their hierarchy. */
+   and headings keep their hierarchy. --app-body-weight is the appearance
+   panel's UI-font-weight override (packages/views/settings/app-theme.ts). */
 body {
-  font-weight: 300;
+  font-weight: var(--app-body-weight, 300);
 }
 
 /* ── Native window material (macOS vibrancy, Codex-style shell) ────────────

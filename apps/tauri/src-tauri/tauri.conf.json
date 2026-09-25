@@ -57,6 +57,8 @@
       "resources/qwen3_transcribe.py": "qwen3_transcribe.py",
       "resources/moss_transcribe.py": "moss_transcribe.py",
       "resources/whisperx_transcribe.py": "whisperx_transcribe.py",
+      "resources/mect_voiceprint.py": "mect_voiceprint.py",
+      "resources/antspeaker": "antspeaker",
       "resources/moss_mlx": "moss_mlx",
       "resources/sidecars/audio-capture": "audio-capture"
     },

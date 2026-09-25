@@ -338,6 +338,10 @@ export async function installTauriBridge(): Promise<void> {
       createVoiceprint: (input: unknown) => command("local_transcription_create_voiceprint", { input }),
       updateVoiceprint: (voiceprint: unknown) => command("local_transcription_update_voiceprint", { voiceprint }),
       deleteVoiceprint: (id: string) => command("local_transcription_delete_voiceprint", { id }),
+      getVoiceprintBackendStatus: () =>
+        command<{ backend: string | null; mectInstalled: boolean; campplusAvailable: boolean }>(
+          "local_voiceprint_backend_status",
+        ),
       getSttConfig: () => command<TranscribeConfig>("local_stt_config_get"),
       saveSttConfig: (config: TranscribeConfig) => command<TranscribeConfig>("local_stt_config_save", { config }),
     },

@@ -72,6 +72,21 @@ mod sync_upload;
 use live_translation::LiveTranslationManager;
 
 const VOICEPRINT_MATCH_THRESHOLD: f64 = 0.31;
+/// MECT separates speakers far more sharply than CAM++: calibrated on 4s
+/// utterance chunks, same-speaker pairs scored ≥ 0.73 while impostor pairs
+/// stayed ≤ 0.23. The threshold keeps headroom on both sides of that gap.
+const VOICEPRINT_MATCH_THRESHOLD_MECT: f64 = 0.45;
+/// Backend key stored on each local-voiceprints entry: embeddings from
+/// different models live in different spaces and are only compared within
+/// their own backend (entries written before this field existed are CAM++).
+const VOICEPRINT_BACKEND_CAMPPLUS: &str = "campplus";
+const VOICEPRINT_BACKEND_MECT: &str = "mect";
+/// AntSpeaker/MECT voiceprint model, downloaded as a single checkpoint via
+/// the generic model downloader. Code is Apache-2.0, but the weights are
+/// CC BY-NC-SA 4.0 (non-commercial) — see resources/antspeaker/README.md.
+pub const ANTSPEAKER_PROVIDER: &str = "antspeaker";
+pub const ANTSPEAKER_MODEL_ID: &str = "mect-b2";
+pub const ANTSPEAKER_CHECKPOINT_FILE: &str = "mect_b2_vb2.pt";
 
 struct AppState {
     model_download_in_progress: Mutex<bool>,
@@ -403,6 +418,75 @@ pub(crate) fn whisperx_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
     }
     let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
     Ok(resources.join("whisperx_transcribe.py"))
+}
+
+/// Resource path to the MECT (AntSpeaker) voiceprint bridge, mirroring
+/// [`whisperx_script_path`]. The vendored `antspeaker` package is expected
+/// next to the script so the plain venv python can import it.
+pub(crate) fn mect_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/mect_voiceprint.py");
+    if development.exists() {
+        return Ok(development);
+    }
+    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
+    Ok(resources.join("mect_voiceprint.py"))
+}
+
+/// Directory holding the AntSpeaker/MECT checkpoint downloaded from
+/// HuggingFace (mirrors the per-model layout of the STT engines).
+pub(crate) fn antspeaker_model_dir(app: &AppHandle) -> CommandResult<PathBuf> {
+    engine_model_dir(app, ANTSPEAKER_PROVIDER, ANTSPEAKER_MODEL_ID)
+}
+
+fn antspeaker_checkpoint_path(app: &AppHandle) -> CommandResult<PathBuf> {
+    Ok(antspeaker_model_dir(app)?.join(ANTSPEAKER_CHECKPOINT_FILE))
+}
+
+/// The two embedding backends voiceprints can be enrolled with. MECT is the
+/// stronger model and is preferred whenever its checkpoint is installed;
+/// CAM++ (shipped inside the legacy FunASR bundle) remains the fallback so
+/// existing setups keep working unchanged.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VoiceprintBackend {
+    CampPlus,
+    Mect,
+}
+
+impl VoiceprintBackend {
+    fn key(&self) -> &'static str {
+        match self {
+            VoiceprintBackend::CampPlus => VOICEPRINT_BACKEND_CAMPPLUS,
+            VoiceprintBackend::Mect => VOICEPRINT_BACKEND_MECT,
+        }
+    }
+
+    fn threshold(&self) -> f64 {
+        match self {
+            VoiceprintBackend::CampPlus => VOICEPRINT_MATCH_THRESHOLD,
+            VoiceprintBackend::Mect => VOICEPRINT_MATCH_THRESHOLD_MECT,
+        }
+    }
+
+    fn from_key(key: &str) -> Option<Self> {
+        if key == VOICEPRINT_BACKEND_MECT {
+            return Some(VoiceprintBackend::Mect);
+        }
+        // Entries written before the backend field existed are CAM++.
+        Some(VoiceprintBackend::CampPlus)
+    }
+}
+
+/// Which embedding backend voiceprints should be extracted with right now:
+/// MECT when its checkpoint is present, otherwise CAM++ when the legacy
+/// FunASR bundle is installed. `None` means voiceprint matching is unavailable.
+fn resolve_voiceprint_backend(app: &AppHandle) -> CommandResult<Option<VoiceprintBackend>> {
+    if antspeaker_checkpoint_path(app)?.exists() {
+        return Ok(Some(VoiceprintBackend::Mect));
+    }
+    if model_dir(app)?.join(".ready").exists() {
+        return Ok(Some(VoiceprintBackend::CampPlus));
+    }
+    Ok(None)
 }
 
 /// Ensure `mlx-qwen3-asr` (+ its vendored ffmpeg helper) is importable in the
@@ -864,6 +948,15 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         sha256: "",
         files: &[],
     },
+    SttModelEntry {
+        provider: "antspeaker",
+        id: "mect-b2",
+        label: "MECT-B2 声纹模型（蚂蚁 AntSpeaker·本地说话人识别，~43 MB）",
+        size_bytes: 45_579_637,
+        download_url: "https://huggingface.co/AntResearch/AntSpeaker/resolve/main/mect_b2_vb2.pt",
+        sha256: "e44eae4ceaf1d384d581af949addc238c8fa8b61c22515ad95de1f8cb9ef1791",
+        files: &[],
+    },
 ];
 
 fn stt_model_entry(provider: &str, model_id: &str) -> CommandResult<&'static SttModelEntry> {
@@ -928,10 +1021,11 @@ fn model_is_installed(app: &AppHandle, provider: &str, model_id: &str) -> bool {
         }
     }
     // Whisper/VibeVoice also require the shared on-demand runtime
-    // (whisper, vibeasr, ffmpeg, ffprobe). FunASR, MLX and Qwen3 do not:
-    // FunASR ships its own bundle and the MLX engines run through a
-    // self-contained Python venv with a vendored ffmpeg (imageio-ffmpeg).
-    if provider != "funasr" && provider != "mlx" && provider != "qwen3" && provider != "moss" {
+    // (whisper, vibeasr, ffmpeg, ffprobe). FunASR, MLX, Qwen3 and AntSpeaker
+    // do not: FunASR ships its own bundle, the MLX-family engines run through
+    // a self-contained Python venv with a vendored ffmpeg (imageio-ffmpeg),
+    // and AntSpeaker is a single checkpoint file on the same torch venv.
+    if provider != "funasr" && provider != "mlx" && provider != "qwen3" && provider != "moss" && provider != ANTSPEAKER_PROVIDER {
         let version = format!("v{}", app.package_info().version);
         let runtime = stt::runtime_dir(app, &version);
         if !stt::runtime_is_complete(&runtime) {
@@ -964,18 +1058,25 @@ fn model_status_list(app: &AppHandle) -> CommandResult<Value> {
     Ok(json!({ "models": models }))
 }
 
-/// Assign speaker labels to segments using CAM++ embeddings + greedy
-/// clustering. Used by Whisper's optional speaker separation.
+/// Assign speaker labels to segments by clustering embeddings greedily.
+/// Used by Whisper's optional speaker separation. Prefers the MECT
+/// (AntSpeaker) embeddings when that checkpoint is installed and falls back
+/// to CAM++ otherwise.
 pub(crate) fn assign_campp_speakers(
     app: &AppHandle,
     audio_path: &str,
     segments: &mut [Value],
-    funasr_dir: &Path,
     expected_speakers: Option<u64>,
 ) -> CommandResult<()> {
     if segments.is_empty() {
         return Ok(());
     }
+    let backend = if antspeaker_checkpoint_path(app)?.exists() {
+        VoiceprintBackend::Mect
+    } else {
+        VoiceprintBackend::CampPlus
+    };
+    let threshold = backend.threshold();
     let candidates: Vec<Value> = segments
         .iter()
         .filter_map(|segment| {
@@ -989,8 +1090,7 @@ pub(crate) fn assign_campp_speakers(
             }
         })
         .collect();
-    let embeddings = run_voiceprint_extraction(app, audio_path, &candidates, funasr_dir)?;
-    let threshold = VOICEPRINT_MATCH_THRESHOLD;
+    let embeddings = run_voiceprint_extraction(app, audio_path, &candidates, &backend)?;
     let mut clusters: Vec<Vec<f64>> = Vec::new();
     let mut assignment: HashMap<String, usize> = HashMap::new();
     for candidate in &candidates {
@@ -1609,6 +1709,15 @@ fn record_speaker_key(segment: &Value) -> Option<String> {
         .find_map(|key| segment.get(*key).and_then(Value::as_str).map(ToOwned::to_owned))
 }
 
+/// Backend a stored voiceprint was enrolled with; legacy entries predate the
+/// field and are always CAM++.
+fn voiceprint_backend_of(voiceprint: &Value) -> &'static str {
+    match voiceprint.get("backend").and_then(Value::as_str) {
+        Some(key) => VoiceprintBackend::from_key(key).map_or(VOICEPRINT_BACKEND_CAMPPLUS, |backend| backend.key()),
+        None => VOICEPRINT_BACKEND_CAMPPLUS,
+    }
+}
+
 fn voiceprint_candidates(segments: &[Value]) -> Vec<Value> {
     let mut candidates: HashMap<String, (i64, Value)> = HashMap::new();
     for segment in segments {
@@ -1664,46 +1773,82 @@ fn average_embeddings(embeddings: &[Vec<f64>]) -> Vec<f64> {
     averaged
 }
 
-pub(crate) fn run_voiceprint_extraction(app: &AppHandle, audio_path: &str, candidates: &[Value], directory: &Path) -> CommandResult<HashMap<String, Vec<f64>>> {
+pub(crate) fn run_voiceprint_extraction(app: &AppHandle, audio_path: &str, candidates: &[Value], backend: &VoiceprintBackend) -> CommandResult<HashMap<String, Vec<f64>>> {
     if candidates.is_empty() { return Ok(HashMap::new()) }
     let segments: Vec<Value> = candidates.iter().map(|candidate| json!({
         "id": candidate.get("id").cloned().unwrap_or(Value::Null),
         "startMs": candidate.get("startMs").cloned().unwrap_or(Value::Null),
         "endMs": candidate.get("endMs").cloned().unwrap_or(Value::Null)
     })).collect();
-    let args = vec![
-        script_path(app)?.to_string_lossy().into_owned(), audio_path.to_owned(),
-        "--model-dir".to_owned(), directory.to_string_lossy().into_owned(),
-        "--extract-voiceprint".to_owned(), "--segments-json".to_owned(),
-        serde_json::to_string(&segments).map_err(|error| error.to_string())?
-    ];
-    embeddings_from_stdout(&run_funasr(app, &args, directory)?)
+    // Both bridges run on the same torch venv and speak the same stdout JSON
+    // protocol (run_funasr is the shared python launcher; the MODELSCOPE_CACHE
+    // it sets is simply unused by the MECT bridge).
+    let (arguments, directory) = match backend {
+        VoiceprintBackend::CampPlus => {
+            let directory = model_dir(app)?;
+            let arguments = vec![
+                script_path(app)?.to_string_lossy().into_owned(), audio_path.to_owned(),
+                "--model-dir".to_owned(), directory.to_string_lossy().into_owned(),
+                "--extract-voiceprint".to_owned(), "--segments-json".to_owned(),
+                serde_json::to_string(&segments).map_err(|error| error.to_string())?
+            ];
+            (arguments, directory)
+        }
+        VoiceprintBackend::Mect => {
+            let directory = antspeaker_model_dir(app)?;
+            let arguments = vec![
+                mect_script_path(app)?.to_string_lossy().into_owned(), audio_path.to_owned(),
+                "--checkpoint".to_owned(), directory.join(ANTSPEAKER_CHECKPOINT_FILE).to_string_lossy().into_owned(),
+                "--segments-json".to_owned(),
+                serde_json::to_string(&segments).map_err(|error| error.to_string())?
+            ];
+            (arguments, directory)
+        }
+    };
+    embeddings_from_stdout(&run_funasr(app, &arguments, &directory)?)
 }
 
-fn apply_voiceprints(app: &AppHandle, audio_path: &str, segments: &mut [Value], directory: &Path) -> CommandResult<()> {
-    // Voiceprint matching relies on the FunASR/CAM++ model. If it isn't
-    // installed, skip silently rather than failing a Whisper/VibeVoice job.
-    if !directory.join(".ready").exists() {
-        return Ok(());
-    }
+fn apply_voiceprints(app: &AppHandle, audio_path: &str, segments: &mut [Value], funasr_directory: &Path) -> CommandResult<()> {
     let voiceprints = list_store(app, "local-voiceprints")?;
     if voiceprints.is_empty() || segments.is_empty() { return Ok(()) }
     let candidates = voiceprint_candidates(segments);
-    let embeddings = run_voiceprint_extraction(app, audio_path, &candidates, directory)?;
+    if candidates.is_empty() { return Ok(()) }
+
+    // Embeddings are only comparable within their own model's space, so
+    // voiceprints are grouped by backend and each installed backend with at
+    // least one enrolled voiceprint gets a single extraction pass. A backend
+    // that isn't installed is skipped silently rather than failing a
+    // Whisper/VibeVoice job.
+    let mect_available = antspeaker_checkpoint_path(app)?.exists();
+    let campplus_available = funasr_directory.join(".ready").exists();
     let mut matches = HashMap::new();
-    for candidate in candidates {
-        let Some(id) = candidate.get("id").and_then(Value::as_str) else { continue };
-        let Some(key) = candidate.get("speakerKey").and_then(Value::as_str) else { continue };
-        let Some(embedding) = embeddings.get(id) else { continue };
-        let best = voiceprints.iter().filter_map(|voiceprint| {
-            let reference = voiceprint.get("embedding").and_then(Value::as_array)?
-                .iter().filter_map(Value::as_f64).collect::<Vec<_>>();
-            let score = cosine_similarity(embedding, &reference);
-            Some((score, voiceprint))
-        }).max_by(|left, right| left.0.total_cmp(&right.0));
-        if let Some((score, voiceprint)) = best.filter(|(score, _)| *score >= VOICEPRINT_MATCH_THRESHOLD) {
-            let _ = score;
-            matches.insert(key.to_owned(), voiceprint.clone());
+    for backend in [VoiceprintBackend::Mect, VoiceprintBackend::CampPlus] {
+        let available = match backend {
+            VoiceprintBackend::Mect => mect_available,
+            VoiceprintBackend::CampPlus => campplus_available,
+        };
+        if !available { continue }
+        let references: Vec<Value> = voiceprints.iter()
+            .filter(|voiceprint| voiceprint_backend_of(voiceprint) == backend.key())
+            .cloned().collect();
+        if references.is_empty() { continue }
+
+        let embeddings = run_voiceprint_extraction(app, audio_path, &candidates, &backend)?;
+        for candidate in candidates.iter() {
+            let Some(id) = candidate.get("id").and_then(Value::as_str) else { continue };
+            let Some(key) = candidate.get("speakerKey").and_then(Value::as_str) else { continue };
+            if matches.contains_key(key) { continue }
+            let Some(embedding) = embeddings.get(id) else { continue };
+            let best = references.iter().filter_map(|voiceprint| {
+                let reference = voiceprint.get("embedding").and_then(Value::as_array)?
+                    .iter().filter_map(Value::as_f64).collect::<Vec<_>>();
+                let score = cosine_similarity(embedding, &reference);
+                Some((score, voiceprint))
+            }).max_by(|left, right| left.0.total_cmp(&right.0));
+            if let Some((score, voiceprint)) = best.filter(|(score, _)| *score >= backend.threshold()) {
+                let _ = score;
+                matches.insert(key.to_owned(), voiceprint.clone());
+            }
         }
     }
     for segment in segments {
@@ -2809,10 +2954,13 @@ fn local_stt_download_model(
             // Whisper/VibeVoice require the shared on-demand runtime
             // (whisper, vibeasr, ffmpeg, ffprobe). Download it first if
             // missing; a previously-downloaded model skips the model download
-            // but still ensures the runtime is present.
-            if let Err(error) = ensure_runtime_available(&app, &provider, &model_id) {
-                emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
-                return Err(error);
+            // but still ensures the runtime is present. AntSpeaker is a single
+            // checkpoint on the shared torch venv — no runtime needed.
+            if provider != ANTSPEAKER_PROVIDER {
+                if let Err(error) = ensure_runtime_available(&app, &provider, &model_id) {
+                    emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
+                    return Err(error);
+                }
             }
             if let Err(error) = download_stt_model_file(&app, entry) {
                 emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
@@ -3018,8 +3166,29 @@ fn local_transcription_update_voiceprint(app: AppHandle, mut voiceprint: Value) 
 #[tauri::command]
 fn local_transcription_delete_voiceprint(app: AppHandle, id: String) -> CommandResult<()> { remove_store_value(&app, "local-voiceprints", &id) }
 
+/// Which embedding backend voiceprint matching would use right now — surfaced
+/// in settings so the engine choice behind enroll/match is explicit rather
+/// than implicit (the PRD's "no dark behaviours" rule).
+#[tauri::command]
+fn local_voiceprint_backend_status(app: AppHandle) -> CommandResult<Value> {
+    let mect_installed = antspeaker_checkpoint_path(&app)?.exists();
+    let campplus_available = model_dir(&app)?.join(".ready").exists();
+    let backend = if mect_installed {
+        json!(VOICEPRINT_BACKEND_MECT)
+    } else if campplus_available {
+        json!(VOICEPRINT_BACKEND_CAMPPLUS)
+    } else {
+        Value::Null
+    };
+    Ok(json!({
+        "backend": backend,
+        "mectInstalled": mect_installed,
+        "campplusAvailable": campplus_available,
+    }))
+}
+
 /// `command(async)`: voiceprint extraction spawns a Python process and loads
-/// the CAM++ model, blocking for seconds to minutes.
+/// the embedding model (MECT or CAM++), blocking for seconds to minutes.
 #[tauri::command(async)]
 fn local_transcription_create_voiceprint(app: AppHandle, input: Value) -> CommandResult<Value> {
     let record_id = input.get("sampleRecordId").and_then(Value::as_str).ok_or("Sample record id is required")?;
@@ -3037,11 +3206,9 @@ fn local_transcription_create_voiceprint(app: AppHandle, input: Value) -> Comman
         if start.as_i64()? >= end.as_i64()? { None } else { Some(json!({ "id": id, "startMs": start, "endMs": end })) }
     }).collect();
     if candidates.is_empty() { return Err("Selected segment does not have usable audio timestamps".to_owned()) }
-    let directory = model_dir(&app)?;
-    if !directory.join(".ready").exists() {
-        return Err("Local ASR model is not installed".to_owned());
-    }
-    let embeddings = run_voiceprint_extraction(&app, audio_path, &candidates, &directory)?;
+    let backend = resolve_voiceprint_backend(&app)?
+        .ok_or("本地声纹模型未安装，请先在设置中下载声纹模型")?;
+    let embeddings = run_voiceprint_extraction(&app, audio_path, &candidates, &backend)?;
     let values = candidates.iter().filter_map(|candidate| candidate.get("id").and_then(Value::as_str)).filter_map(|id| embeddings.get(id).cloned()).collect::<Vec<_>>();
     let embedding = average_embeddings(&values);
     if embedding.is_empty() { return Err("Voiceprint embedding extraction failed".to_owned()) }
@@ -3049,6 +3216,7 @@ fn local_transcription_create_voiceprint(app: AppHandle, input: Value) -> Comman
     let voiceprint = json!({
         "id": format!("voiceprint:{}", Uuid::new_v4()), "name": name, "createdAt": timestamp, "updatedAt": timestamp,
         "sampleRecordId": record_id, "sampleSegmentIds": selected_ids, "embedding": embedding,
+        "backend": backend.key(),
         "sampleText": segments.iter().filter_map(|segment| segment.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n")
     });
     save_store_value(&app, "local-voiceprints", voiceprint.clone())?;
@@ -4195,6 +4363,7 @@ pub fn run() {
             local_transcription_save_hotword_package, local_transcription_delete_hotword_package,
             local_transcription_list_voiceprints, local_transcription_create_voiceprint,
             local_transcription_update_voiceprint, local_transcription_delete_voiceprint,
+            local_voiceprint_backend_status,
             local_stt_config_get, local_stt_config_save,
             vault::vault_config_get, vault::vault_config_save, vault::vault_default_path,
             vault::vault_write_note, vault::vault_write_notes, vault::vault_read_note,

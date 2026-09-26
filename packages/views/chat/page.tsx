@@ -1055,6 +1055,11 @@ function AssistantMessage({
             <div className="rounded-2xl rounded-tl-md border border-border bg-card px-4 py-3.5 text-sm leading-6 text-foreground shadow-sm">
               <StreamingMarkdown content={message.content} isStreaming={isStreaming} mode="minimal" />
             </div>
+          ) : message.attachments?.length || message.sources?.length || message.humanSupportLink?.url ? (
+            // Attachment-only reply: the report-PDF turn empties the body
+            // server-side and speaks through attachment cards, which render
+            // below — keep the bubble body empty instead of spinning forever.
+            null
           ) : message.status ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <span className="size-1.5 animate-pulse rounded-full bg-current" />

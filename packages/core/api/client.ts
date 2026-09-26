@@ -3,6 +3,14 @@ type ClientOptions = {
   identity?: { platform?: string; version?: string; os?: string };
 };
 
+/** Per-call request additions beyond the standard fetch init. */
+type RequestOptions = RequestInit & {
+  /** Alternate backend origin for this one call. The AI-assistant chat
+   *  transport uses it to target the dedicated agent server (route B direct
+   *  CloudRun connection) while session credentials stay unchanged. */
+  baseUrl?: string;
+};
+
 // All requests go through /api/proxy to avoid CORS issues.
 // The proxy reads x-lynse-api-url to know where to forward.
 const PROXY_PREFIX = "/api/proxy";
@@ -28,6 +36,10 @@ export class ApiClient {
   // The actual Lynse backend URL — the address the user entered on the
   // login/API-config page (persisted as lynse_api_url). No default here.
   private backendUrl: string;
+  // Optional dedicated origin for the AI assistant (lynse_agent_api_url).
+  // Stored here only as the value the chat transport reads; it never changes
+  // where regular business requests go.
+  private agentBaseUrl: string | null = null;
   private token: string | null = null;
   private apiKey: string | null = null;
   private onUnauthorized?: () => void;
@@ -61,15 +73,28 @@ export class ApiClient {
     return this.backendUrl;
   }
 
+  /** Point the AI assistant at a dedicated backend origin (null = follow the
+   *  main backend). Persisted separately (lynse_agent_api_url); see core/config. */
+  setAgentBaseUrl(url: string | null) {
+    this.agentBaseUrl = url ? url.replace(/\/+$/, "") : null;
+  }
+
+  /** The dedicated AI-assistant origin, or null when unset. */
+  getAgentBaseUrl(): string | null {
+    return this.agentBaseUrl;
+  }
+
   private async request<T>(
     path: string,
-    options: RequestInit = {},
+    options: RequestOptions = {},
   ): Promise<T> {
+    const { baseUrl: overrideBase, ...init } = options;
+    const baseUrl = overrideBase ?? this.backendUrl;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       // Tell the proxy where to forward
-      "X-Lynse-Api-Url": this.backendUrl,
-      ...(options.headers as Record<string, string>),
+      "X-Lynse-Api-Url": baseUrl,
+      ...(init.headers as Record<string, string>),
     };
     if (this.token) {
       headers["Authorization"] = this.token;
@@ -82,10 +107,10 @@ export class ApiClient {
     }
 
     // Route through local proxy
-    const url = apiRequestUrl(this.backendUrl, path);
+    const url = apiRequestUrl(baseUrl, path);
 
     const res = await fetch(url, {
-      ...options,
+      ...init,
       headers,
     });
 
@@ -142,8 +167,8 @@ export class ApiClient {
     return json as T;
   }
 
-  get<T>(path: string) {
-    return this.request<T>(path, { method: "GET" });
+  get<T>(path: string, options?: RequestOptions) {
+    return this.request<T>(path, { method: "GET", ...options });
   }
 
   getWithParams<T>(path: string, params: Record<string, string | number | boolean | undefined>) {
@@ -157,10 +182,11 @@ export class ApiClient {
     return this.request<T>(query ? `${path}?${query}` : path, { method: "GET" });
   }
 
-  post<T>(path: string, body?: unknown) {
+  post<T>(path: string, body?: unknown, options?: RequestOptions) {
     return this.request<T>(path, {
       method: "POST",
       body: body ? JSON.stringify(body) : undefined,
+      ...options,
     });
   }
 
@@ -185,7 +211,8 @@ export class ApiClient {
   /**
    * Stream SSE responses. Calls `onChunk` for each `data:` line received.
    * Returns an AbortController so the caller can cancel the stream. `onComplete`
-   * runs after the response closes or is aborted.
+   * runs after the response closes or is aborted. `options.baseUrl` targets a
+   * different backend origin for this stream (AI-assistant direct connection).
    */
   stream(
     path: string,
@@ -193,19 +220,21 @@ export class ApiClient {
     onChunk: (data: string) => void,
     onError?: (err: Error) => void,
     onComplete?: () => void,
+    options?: { baseUrl?: string },
   ): AbortController {
     const controller = new AbortController();
+    const baseUrl = options?.baseUrl ?? this.backendUrl;
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
-      "X-Lynse-Api-Url": this.backendUrl,
+      "X-Lynse-Api-Url": baseUrl,
     };
     if (this.token) headers["Authorization"] = this.token;
     if (this.apiKey) headers["X-API-Key"] = this.apiKey;
     if (this.identity?.platform) headers["X-Client-Platform"] = this.identity.platform;
 
-    const url = apiRequestUrl(this.backendUrl, path);
+    const url = apiRequestUrl(baseUrl, path);
 
     (async () => {
       try {

@@ -17,6 +17,7 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { isFreshlyRevealed } from "../chat-reveal";
 import { ChatAttachments } from "../../chat/chat-attachments";
 import { ChatHistorySidebar } from "../../chat/chat-history-sidebar";
+import { ThinkingBlock } from "../../chat/chat-reasoning";
 
 export function ChatPanel() {
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
@@ -39,13 +40,17 @@ export function ChatPanel() {
   // The panel is the 小灵助手 surface: it stays on the cloud channel even
   // while the chat page (the only switcher) is parked on WorkBuddy.
   const workbuddyDetached = useChatStore((s) => s.activeAssistant === "workbuddy");
-  const latestCloudConversation = useChatStore((s) =>
-    s.conversations
-      .filter((c) => c.provider !== "workbuddy")
-      .sort((a, b) => b.updatedAt - a.updatedAt)[0],
+  // Zustand v5 compares selector output with Object.is on every snapshot
+  // check: a selector that allocates (filter/sort) never stabilizes and React
+  // re-renders forever. Subscribe to the raw slice, derive outside the hook.
+  const conversations = useChatStore((s) => s.conversations);
+  const cloudConversations = useMemo(
+    () => conversations.filter((c) => c.provider !== "workbuddy"),
+    [conversations],
   );
-  const cloudConversations = useChatStore((s) =>
-    s.conversations.filter((c) => c.provider !== "workbuddy"),
+  const latestCloudConversation = useMemo(
+    () => [...cloudConversations].sort((a, b) => b.updatedAt - a.updatedAt)[0],
+    [cloudConversations],
   );
   const viewMessages = useMemo(
     () => (workbuddyDetached ? latestCloudConversation?.messages ?? [] : messages),
@@ -176,6 +181,13 @@ export function ChatPanel() {
             const revealed = msg.role === "assistant" && isFreshlyRevealed(msg);
             return (
             <div key={msg.id} className={msg.role === "user" ? "flex justify-end" : ""}>
+              {/* The poll transport replays reasoning before the answer: the
+                  block pins open as "thinking", folds when the text starts. */}
+              {msg.role === "assistant" && msg.thinking && (
+                <div className="mb-1.5">
+                  <ThinkingBlock text={msg.thinking} active={msg.thinkingActive} />
+                </div>
+              )}
               <div
                 className={`max-w-[85%] rounded-lg px-3 py-2 text-xs leading-relaxed ${
                   msg.role === "user"
@@ -215,6 +227,10 @@ export function ChatPanel() {
                   <div className="whitespace-pre-wrap break-words text-destructive">{msg.content}</div>
                 ) : msg.content ? (
                   <StreamingMarkdown content={msg.content} isStreaming={isLoading} mode="minimal" />
+                ) : msg.attachments?.length || msg.sources?.length || msg.humanSupportLink?.url ? (
+                  // Attachment-only reply (empty body server-side): the cards
+                  // render below — don't keep "typing" forever.
+                  null
                 ) : msg.status ? (
                   <span className="text-muted-foreground">
                     <WaitingText status={msg.status} />

@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { ApiClient, setApiInstance } from "../api/client";
 import { createAuthStore, getAuthStore, registerAuthStore } from "../auth";
-import { DEFAULT_API_URL } from "../config";
+import { DEFAULT_API_URL, AGENT_API_URL_STORAGE_KEY } from "../config";
 import { defaultStorage } from "./storage";
 import { QueryProvider } from "../provider";
 import { initI18n } from "../i18n";
@@ -42,6 +42,9 @@ export function initCore(
     },
     identity,
   });
+  // The AI assistant can target a dedicated backend (route B direct
+  // CloudRun); absent/empty means it follows the main URL above.
+  apiClient.setAgentBaseUrl(storage.getItem(AGENT_API_URL_STORAGE_KEY));
   setApiInstance(apiClient);
 
   if (!cookieAuth) {

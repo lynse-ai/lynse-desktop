@@ -10,23 +10,43 @@
 import * as React from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
+  Brain,
   Check,
   ChevronDown,
-  FileText,
+  CircleStop,
+  FileSearch,
   Lightbulb,
   Loader2,
   Pencil,
-  Play,
+  Plug,
+  ScrollText,
   Search,
-  Terminal,
+  SquareTerminal,
+  Wrench,
 } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
 import type { ChatToolUse } from "../workspace/types";
 
-export type ToolKind = "think" | "search" | "read" | "edit" | "terminal" | "execute";
+export type ToolKind =
+  | "think"
+  | "search"
+  | "read"
+  | "edit"
+  | "terminal"
+  | "task"
+  | "stop"
+  | "mcp"
+  | "execute";
 
-/** Keyword rules over the raw backend tool name; anything else is "execute". */
+/**
+ * Keyword rules over the raw backend tool name; anything else is "execute".
+ * stop/task sit above read so `stop_task` and `get_task_output` classify by
+ * their intent instead of falling into the `get_`/`_task` substrings.
+ */
 const TOOL_KIND_RULES: Array<[RegExp, ToolKind]> = [
+  [/mcp/i, "mcp"],
+  [/stop|cancel|abort|kill|terminate|停止|取消|终止/i, "stop"],
+  [/task|job|output|poll|log|任务|输出|日志|后台/i, "task"],
   [/think|reason|思考/i, "think"],
   [/search|query|find|list|检索|查询|搜索/i, "search"],
   [/read|fetch|get_|view|读取|查看/i, "read"],
@@ -42,12 +62,15 @@ export function toolKind(name: string): ToolKind {
 }
 
 const KIND_ICON: Record<ToolKind, React.ComponentType<{ className?: string }>> = {
-  think: Lightbulb,
+  think: Brain,
   search: Search,
-  read: FileText,
+  read: FileSearch,
   edit: Pencil,
-  terminal: Terminal,
-  execute: Play,
+  terminal: SquareTerminal,
+  task: ScrollText,
+  stop: CircleStop,
+  mcp: Plug,
+  execute: Wrench,
 };
 
 /** Compact running/done rows for every tool call in the current turn. */

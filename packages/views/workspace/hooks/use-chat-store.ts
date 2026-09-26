@@ -21,6 +21,10 @@ import {
 } from "../workbuddy-chat-transport";
 import { redactMeetingIds } from "../meeting-id-redact";
 import {
+  isEmptyAssistantPlaceholder,
+  stripAttachmentDuplicateImages,
+} from "../chat-message-utils";
+import {
   conversationTitle,
   loadAssistantChoice,
   loadChatHistory,
@@ -447,7 +451,11 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         const detected = extractConfirmFromText(finalContent);
         writeMessage((m) => ({
           ...m,
-          content: redactMeetingIds(finalContent),
+          // Images the attachment cards already render (same signed URL) are
+          // stripped from the body so the picture never shows twice.
+          content: redactMeetingIds(
+            stripAttachmentDuplicateImages(finalContent, evt.attachments),
+          ),
           status: undefined,
           thinkingActive: false,
           toolUses: closeRunningTools(m.toolUses),
@@ -692,13 +700,11 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         recordPerf(timing.completed);
         // Poll has no partial content: a stopped turn leaves an empty
         // placeholder bubble that would otherwise spin "thinking" forever —
-        // drop it (keep it when anything, e.g. an error text or the
-        // WorkBuddy authorize card, was written into it).
+        // drop it. Anything renderable (error text, an attachment-only reply
+        // like the weekly-report PDF whose body is empty server-side, the
+        // WorkBuddy authorize card) keeps the message.
         const emptyPlaceholder = (m: ChatMessage) =>
-          m.id === assistantId &&
-          m.role === "assistant" &&
-          !m.content &&
-          !m.workbuddyAuthRequired;
+          m.id === assistantId && isEmptyAssistantPlaceholder(m);
         setMessages((prev) => prev.filter((m) => !emptyPlaceholder(m)));
         setConversations((prev) =>
           prev.map((c) =>

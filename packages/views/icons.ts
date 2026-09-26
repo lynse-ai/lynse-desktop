@@ -129,6 +129,13 @@ export {
   EyeOff,           // Hide main window into the recording island
   Square,           // Stop streaming
   Terminal,         // Terminal / shell tool activity
+  SquareTerminal,   // Boxed terminal prompt (chat tool activity)
+  Plug,             // MCP tool-call activity
+  Wrench,           // Generic tool-call activity (execute fallback)
+  Brain,            // Thinking / reasoning trace (chat tool activity)
+  FileSearch,       // File read tool activity (chat tool activity)
+  ScrollText,       // Background task output (chat tool activity)
+  CircleStop,       // Stop / cancel task (chat tool activity)
   Cloud,            // Cloud assistant
   Repeat,           // Swap / exchange
   ArrowRight,       // Forward / CTA

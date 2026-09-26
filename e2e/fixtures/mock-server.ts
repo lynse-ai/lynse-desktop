@@ -20,6 +20,32 @@ import type { ChatScript, HttpErrorResponse, ScriptResponse } from "./chat-scrip
 
 const CHAT_POLL_PATH = "/api/business/ai/chat/poll";
 
+/** A 1×1 transparent PNG — enough for the chat <img> card to really load. */
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+
+/** A minimal one-page PDF (structure over content — the iframe just needs to resolve). */
+const MINIMAL_PDF = [
+  "%PDF-1.4",
+  "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj",
+  "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj",
+  "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj",
+  "trailer<</Size 4/Root 1 0 R>>",
+  "%%EOF",
+].join("\n");
+
+/** Static bytes the attachment scripts reference via `{{mock}}/mock-assets/*`. */
+const MOCK_ASSETS: Record<string, { body: Buffer; contentType: string }> = {
+  "/mock-assets/visual-summary.png": {
+    body: Buffer.from(TINY_PNG_BASE64, "base64"),
+    contentType: "image/png",
+  },
+  "/mock-assets/weekly-report.pdf": {
+    body: Buffer.from(MINIMAL_PDF, "utf8"),
+    contentType: "application/pdf",
+  },
+};
+
 /** How long a finished task stays readable before it "expires" (404). */
 const TASK_TTL_MS = 15 * 60_000;
 
@@ -64,6 +90,8 @@ export async function startMockServer(script?: ChatScript): Promise<MockServer> 
   const turnCounters = new Map<string, number>();
   // task_id → submitted turn; the GET serves the result once it is due.
   const tasks = new Map<string, ChatTask>();
+  // Lazy-signed artifacts (mint_url fixtures): artifact_id → URL minted on refresh.
+  const mintUrls = new Map<string, string>();
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -85,6 +113,14 @@ export async function startMockServer(script?: ChatScript): Promise<MockServer> 
         return;
       }
 
+      // Real bytes for the attachment scripts (`{{mock}}/mock-assets/*`).
+      const asset = MOCK_ASSETS[path];
+      if (asset) {
+        res.writeHead(200, { "Content-Type": asset.contentType });
+        res.end(asset.body);
+        return;
+      }
+
       if (ctx.method === "POST" && path === CHAT_POLL_PATH) {
         handleChatSubmit(ctx, tasks, res, () => {
           const sessionId = String(ctx.body.sessionId ?? "default");
@@ -97,7 +133,18 @@ export async function startMockServer(script?: ChatScript): Promise<MockServer> 
 
       if (ctx.method === "GET" && path.startsWith(`${CHAT_POLL_PATH}/`)) {
         const taskId = decodeURIComponent(path.slice(CHAT_POLL_PATH.length + 1));
-        handleChatPoll(taskId, tasks, res);
+        handleChatPoll(taskId, tasks, origin, res, mintUrls);
+        return;
+      }
+
+      // Attachment URL minting (the lazy-sign contract's refresh endpoint):
+      // a 32-hex artifact id registered by a mint_url fixture answers with a
+      // fresh signed URL; unknown ids answer empty, like a failed re-sign.
+      const mintMatch =
+        ctx.method === "POST" && path.match(/^\/api\/attachments\/([0-9a-fA-F]{32})\/download-url$/);
+      if (mintMatch) {
+        const mintUrl = mintUrls.get(mintMatch[1]!);
+        respondJson(res, 200, mintUrl ? { download_url: mintUrl } : {});
         return;
       }
 
@@ -119,14 +166,18 @@ export async function startMockServer(script?: ChatScript): Promise<MockServer> 
 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
+  // Attachment scripts write `{{mock}}` in their URLs; rewrite it to this
+  // run's origin so the browser can actually fetch the scripted assets.
+  const origin = `http://127.0.0.1:${port}`;
 
   return {
-    url: `http://127.0.0.1:${port}`,
+    url: origin,
     port,
     setChatScript(next) {
       chatScript = next;
       turnCounters.clear();
       tasks.clear();
+      mintUrls.clear();
     },
     setJsonRoute(path, body) {
       jsonRoutes.set(path, body);
@@ -208,7 +259,13 @@ function handleChatSubmit(
 }
 
 /** Query a task: `pending` until due, then the complete scripted result. */
-function handleChatPoll(taskId: string, tasks: Map<string, ChatTask>, res: http.ServerResponse) {
+function handleChatPoll(
+  taskId: string,
+  tasks: Map<string, ChatTask>,
+  origin: string,
+  res: http.ServerResponse,
+  mintUrls: Map<string, string>,
+) {
   const task = tasks.get(taskId);
   if (!task || Date.now() - task.submittedAt > TASK_TTL_MS) {
     // Unknown id, process restart, or past TTL — the standard says 404.
@@ -266,6 +323,32 @@ function handleChatPoll(taskId: string, tasks: Map<string, ChatTask>, res: http.
         human_support_link: null,
         confirmation: null,
         error: r.message,
+      });
+      break;
+    }
+    case "attachments": {
+      // Visual-summary / report-PDF turns: the body plus lynclaw-shaped
+      // attachment entries whose `{{mock}}` URLs point at this server.
+      // Entries carrying `mint_url` exercise the CloudBase storage backend's
+      // lazy-signing contract: the payload ships `download_url: ""` and the
+      // client must mint the URL via POST /api/attachments/{id}/download-url.
+      respondJson(res, 200, {
+        task_id: taskId,
+        status: "done",
+        text: r.text,
+        sources: (r.sources ?? []).map((s) => s.title),
+        attachments: r.attachments.map((a) => {
+          if (a.mint_url) {
+            const artifactId = String(a.artifact_id ?? "");
+            if (artifactId) mintUrls.set(artifactId, a.mint_url.replace("{{mock}}", origin));
+            const { mint_url: _mint, ...entry } = a;
+            return { ...entry, download_url: "" };
+          }
+          return { ...a, download_url: a.download_url.replace("{{mock}}", origin) };
+        }),
+        human_support_link: null,
+        confirmation: null,
+        error: null,
       });
       break;
     }

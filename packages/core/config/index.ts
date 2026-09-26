@@ -11,3 +11,15 @@ export const APP_URL =
  * expected pattern."
  */
 export const DEFAULT_API_URL = "https://api.lynse.cn";
+
+/** Storage key for the optional dedicated AI-assistant (agent) backend origin.
+ *  Empty/absent means the assistant rides the main backend gateway. */
+export const AGENT_API_URL_STORAGE_KEY = "lynse_agent_api_url";
+
+/**
+ * Route B preset: the lynclaw agent service deployed on Tencent CloudRun,
+ * connected to directly — no Lynse gateway in between. The service accepts
+ * the Lynse session token and the poll chat contract.
+ */
+export const CLOUDRUN_AGENT_URL =
+  "https://lynclaw-api-319577-10-1401959758.sh.run.tcloudbase.com";

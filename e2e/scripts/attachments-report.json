@@ -1,0 +1,59 @@
+{
+  "name": "attachments-report",
+  "suite": "core",
+  "locale": "zh",
+  "description": "图文总结图片 + 周报 PDF 附件：带正文的图片回合、空正文的 PDF-only 回合，以及 CloudBase 懒签名（download_url 为空、需补签）的图片回合。",
+  "turns": [
+    {
+      "user": "帮我把这场周会做成图文总结",
+      "response": {
+        "type": "attachments",
+        "text": "图文总结已生成。\n\n![灵光记图文总结]({{mock}}/mock-assets/visual-summary.png)",
+        "sources": [{ "title": "产品周会" }],
+        "attachments": [
+          {
+            "artifact_id": "b6e2f1c04a9d4f0eb1c27a3d5e8f90a1",
+            "kind": "image",
+            "filename": "灵光记图文总结-2026-09-26-weekly.png",
+            "mime": "image/png",
+            "download_url": "{{mock}}/mock-assets/visual-summary.png"
+          }
+        ]
+      }
+    },
+    {
+      "user": "生成本周的周报 PDF",
+      "response": {
+        "type": "attachments",
+        "text": "",
+        "attachments": [
+          {
+            "artifact_id": "7c1d8e2fa3b04c5d9e6f708192a3b4c5",
+            "kind": "pdf",
+            "filename": "灵光记周报-2026-09-21_2026-09-27.pdf",
+            "mime": "application/pdf",
+            "download_url": "{{mock}}/mock-assets/weekly-report.pdf"
+          }
+        ]
+      }
+    },
+    {
+      "user": "把第 40 场做成图文总结黑金版",
+      "response": {
+        "type": "attachments",
+        "text": "图文总结已生成。",
+        "sources": [{ "title": "产品周会" }],
+        "attachments": [
+          {
+            "artifact_id": "913b470a137b476b9ced28ae8a216b4c",
+            "kind": "image",
+            "filename": "灵光记图文总结-2026-09-02-lazy.png",
+            "mime": "image/png",
+            "download_url": "",
+            "mint_url": "{{mock}}/mock-assets/visual-summary.png"
+          }
+        ]
+      }
+    }
+  ]
+}

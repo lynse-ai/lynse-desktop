@@ -60,12 +60,47 @@ export interface HttpErrorResponse {
   message: string;
 }
 
+/** One `attachments[]` entry in a scripted done payload (lynclaw shape). */
+export interface MockAttachment {
+  /** lynclaw artifact id (32 hex) — what the client re-signs expired links with. */
+  artifact_id?: string;
+  kind: "pdf" | "image" | "html" | "file" | string;
+  filename: string;
+  mime?: string;
+  /**
+   * Signed download URL. `{{mock}}` is rewritten to the running mock
+   * server's origin, so `/mock-assets/*` points at bytes the browser
+   * can actually load.
+   */
+  download_url: string;
+  /**
+   * Lazy-signing contract (CloudBase storage backend): the poll payload
+   * ships `download_url: ""` and the client must mint the URL via
+   * `POST /api/attachments/{artifact_id}/download-url`, which answers
+   * with this `{{mock}}` URL.
+   */
+  mint_url?: string;
+}
+
+export interface AttachmentsResponse {
+  /**
+   * A reply that arrives as attachment cards — the visual-summary image and
+   * the weekly-report PDF turns. Mirrors lynclaw: a pdf-only turn sends an
+   * empty `text` and speaks through `attachments[]` alone.
+   */
+  type: "attachments";
+  text: string;
+  attachments: MockAttachment[];
+  sources?: ScriptSource[];
+}
+
 export type ScriptResponse =
   | StreamResponse
   | ClarifyResponse
   | ErrorResponse
   | AbortResponse
-  | HttpErrorResponse;
+  | HttpErrorResponse
+  | AttachmentsResponse;
 
 export interface ScriptTurn {
   /** Text typed into the composer. */

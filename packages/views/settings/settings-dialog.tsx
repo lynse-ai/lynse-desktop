@@ -22,6 +22,7 @@ import {
   Captions,
   Info,
   Puzzle,
+  Bot,
 } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
 import {
@@ -41,6 +42,8 @@ import { RecordingDevicesCard } from "./recording-devices-card";
 import { AutoRecordConfigCard } from "./auto-record-config-card";
 import { VaultConfigCard } from "./vault-config-card";
 import { WebdavSyncConfigCard } from "./webdav-sync-config-card";
+import { AgentServerCard } from "./agent-server-card";
+import { WorkBuddyConfigCard } from "./workbuddy-config-card";
 import {
   getSettingsSections,
   PluginCommunitySection,
@@ -60,6 +63,7 @@ type ThemeOption = "light" | "dark" | "system";
 
 type SettingsSectionId =
   | "account"
+  | "ai_assistant"
   | "live_translation"
   | "auto_record"
   | "sync"
@@ -147,6 +151,21 @@ export function SettingsDialog({
     ),
   });
 
+  // AI assistant: where Xiaoling connects (route B direct agent backend) plus
+  // the WorkBuddy account binding, moved in from its former standalone
+  // plugin-contributed section.
+  sections.push({
+    id: "ai_assistant",
+    label: t("settings.ai_assistant"),
+    icon: Bot,
+    content: (
+      <>
+        <AgentServerCard />
+        <WorkBuddyConfigCard />
+      </>
+    ),
+  });
+
   if (getDesktopLiveTranslationApi()) {
     sections.push({
       id: "live_translation",
@@ -185,12 +204,12 @@ export function SettingsDialog({
     });
   }
 
-  // The Feishu and WorkBuddy sections are plugin-contributed (see
-  // plugins/builtin) and appear through the loop below.
+  // The Feishu section is plugin-contributed (see plugins/builtin) and appears
+  // through the loop below; WorkBuddy now lives in the AI assistant section.
 
-  // Plugin-contributed sections (WorkBuddy is the first contributor). With
-  // the marketplace flag off, every available contributor renders
-  // unconditionally — the exact pre-plugin behavior, i.e. the rollback path.
+  // Plugin-contributed sections. With the marketplace flag off, every
+  // available contributor renders unconditionally — the exact pre-plugin
+  // behavior, i.e. the rollback path.
   for (const { manifest, section } of getSettingsSections(pluginEntries, {
     respectInstallState: featureFlags.pluginMarketplace,
   })) {

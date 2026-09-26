@@ -36,28 +36,34 @@ export interface ChatTransport {
  * The lynclaw agent service exposes `POST /api/chat/poll` plus
  * `GET /api/chat/poll/{task_id}` (submit, then short-poll until the full
  * answer is ready — no SSE). The Lynse gateway fronts that service under
- * `/api/business/ai`, the same prefix the old stream endpoint used.
+ * `/api/business/ai`, while the service itself serves the native
+ * `/api/chat/*` routes — so a direct agent connection (route B) uses the
+ * unprefixed paths and the main backend keeps the gateway ones.
  */
-const CHAT_POLL_PATH = "/api/business/ai/chat/poll";
+const GATEWAY_CHAT_POLL_PATH = "/api/business/ai/chat/poll";
+const GATEWAY_CHAT_STREAM_PATH = "/api/business/ai/chat/stream";
+const AGENT_CHAT_POLL_PATH = "/api/chat/poll";
+const AGENT_CHAT_STREAM_PATH = "/api/chat/stream";
 
-const CHAT_STREAM_PATH = "/api/business/ai/chat/stream";
+const chatPollPath = () => (chatAgentBaseUrl() ? AGENT_CHAT_POLL_PATH : GATEWAY_CHAT_POLL_PATH);
+const chatStreamPath = () =>
+  chatAgentBaseUrl() ? AGENT_CHAT_STREAM_PATH : GATEWAY_CHAT_STREAM_PATH;
 
-const chatPollTaskPath = (taskId: string) => `${CHAT_POLL_PATH}/${encodeURIComponent(taskId)}`;
+const chatPollTaskPath = (taskId: string) =>
+  `${chatPollPath()}/${encodeURIComponent(taskId)}`;
 
 /**
- * The managed gateway api.lynse.cn currently serves the stream contract only —
- * the poll endpoint rolls out server by server — so for that host chat leads
- * with SSE and poll is never probed. Every other server always polls.
- * Flip here when the gateway upgrade lands.
+ * Route B: the assistant can be pointed at a dedicated agent backend
+ * (lynse_agent_api_url, set in Settings → AI Assistant) and connect straight
+ * to it — typically the CloudRun-hosted lynclaw service, bypassing the Lynse
+ * gateway. Undefined = ride the main backend like every other business API.
+ * Chat always uses the poll contract; the direct service supports it natively.
  */
-const STREAM_PRIMARY_HOST = "api.lynse.cn";
-
-/** True when the configured backend should use the stream contract. */
-function isStreamPreferredServer(): boolean {
+function chatAgentBaseUrl(): string | undefined {
   try {
-    return new URL(api().getBaseUrl()).host === STREAM_PRIMARY_HOST;
+    return api().getAgentBaseUrl() ?? undefined;
   } catch {
-    return false; // client not initialized or unparsable URL — poll
+    return undefined; // client not initialized — main backend
   }
 }
 
@@ -68,6 +74,15 @@ function isStreamPreferredServer(): boolean {
  */
 export const chatPollTiming = {
   intervalMs: 800,
+  /**
+   * Hot-window cadence used right after submit: tool activity and (when the
+   * backend sends it) partial text concentrate in the first seconds of a
+   * turn, so a tighter 500ms loop makes progress rows and text land sooner.
+   * Still inside the poll standard's advised 500–1000ms band.
+   */
+  intervalFastMs: 500,
+  /** How long (ms) after submit the fast cadence applies before settling. */
+  fastWindowMs: 12_000,
   deadlineMs: 190_000,
   maxNetworkFailures: 5,
   maxSubmitRetries: 2,
@@ -89,9 +104,35 @@ interface ChatPollSubmitResponse {
   user_id?: string;
 }
 
+/**
+ * One tool-activity progress event from the poll payload (`progress_events[]`,
+ * capped at the latest 40). `round_start.content` is the server-localized
+ * status caption ("我去会议记录里翻一翻…"); tool events carry the localized
+ * tool label. Thinking traces and content deltas never appear here.
+ */
+export interface ChatPollProgressEvent {
+  type?: "round_start" | "tool_start" | "tool_end" | string;
+  content?: string;
+  tool?: string;
+  label?: string;
+  round?: number;
+  duration_ms?: number;
+  result_summary?: string;
+  success?: boolean;
+  /** Server-side unix timestamp (seconds). */
+  at?: number;
+}
+
 interface ChatPollTaskResponse {
   status?: "pending" | "done" | "error" | string;
+  /**
+   * The answer text. Required at `done`; OPTIONAL while `pending` — a backend
+   * that includes the answer-so-far turns the poll loop into a true stream
+   * (each growth is emitted as a content delta immediately).
+   */
   text?: string | null;
+  /** Tool-activity progress seen so far; clients diff by list length. */
+  progress_events?: ChatPollProgressEvent[] | null;
   sources?: unknown;
   attachments?: unknown;
   human_support_link?: unknown;
@@ -120,7 +161,50 @@ export function normalizePollAttachment(raw: unknown): ChatAttachment | null {
     type: firstString(r.kind, r.type) ?? undefined,
     url: url ?? undefined,
     downloadUrl: url ?? undefined,
+    expiresAt: firstString(r.expires_at, r.expiresAt) ?? undefined,
   };
+}
+
+/** lynclaw artifact ids are 32 hex chars; other backends' ids don't refresh. */
+const ARTIFACT_ID_RE = /^[0-9a-f]{32}$/i;
+
+/**
+ * Re-sign an expired attachment download link. lynclaw hands out signed URLs
+ * (CloudBase/OSS) that die after ~1h, while chat history keeps rendering the
+ * saved ones — the refresh endpoint mints a fresh signature for the artifact.
+ * Returns the new URL, or null when the attachment is not a lynclaw artifact
+ * (no 32-hex id) or the endpoint is unavailable (e.g. gateway mode). The
+ * caller decides what to do with a null — keep showing the old link.
+ */
+export async function refreshAttachmentUrl(
+  attachment: ChatAttachment,
+  opts: { userId?: string | null; token?: string | null } = {},
+): Promise<string | null> {
+  const artifactId = attachment.id;
+  if (!artifactId || !ARTIFACT_ID_RE.test(artifactId)) return null;
+
+  let token = opts.token ?? null;
+  if (!token) {
+    try {
+      token = api().getToken() ?? null;
+    } catch {
+      token = null; // client not initialized — go without
+    }
+  }
+  const body: Record<string, unknown> = {};
+  if (opts.userId) body.user_id = opts.userId;
+  if (token) body.token = token;
+
+  try {
+    const res = await api().post<Record<string, unknown>>(
+      `/api/attachments/${encodeURIComponent(artifactId)}/download-url`,
+      body,
+      { baseUrl: chatAgentBaseUrl() },
+    );
+    return firstString(res?.download_url, res?.downloadUrl, res?.url);
+  } catch {
+    return null;
+  }
 }
 
 /** Normalize `human_support_link` into a displayable link (null when absent). */
@@ -285,11 +369,37 @@ function submitErrorMessage(error: unknown): string {
   return detail || "发送失败，请稍后重试";
 }
 
-function sleep(ms: number, cancelled: () => boolean): Promise<void> {
+/**
+ * In-flight poll waits that may be cut short. When the app returns to the
+ * foreground mid-turn, mobile/webview runtimes have frozen timers and may
+ * have dropped the socket; waking the current wait makes the next GET —
+ * which carries everything that accumulated while backgrounded — fire
+ * immediately instead of up to one interval late. Only the poll loop's wait
+ * registers here: submit backoff must be respected and the typewriter should
+ * keep its pace.
+ */
+const foregroundWakers = new Set<() => void>();
+
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    for (const wake of [...foregroundWakers]) wake();
+  });
+}
+
+function sleep(ms: number, cancelled: () => boolean, wakeOnForeground = false): Promise<void> {
   return new Promise((resolve) => {
     const started = Date.now();
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      foregroundWakers.delete(finish);
+      resolve();
+    };
+    if (wakeOnForeground) foregroundWakers.add(finish);
     const tick = () => {
-      if (cancelled() || Date.now() - started >= ms) resolve();
+      if (cancelled() || Date.now() - started >= ms) finish();
       else setTimeout(tick, Math.min(50, ms));
     };
     tick();
@@ -307,11 +417,13 @@ export const CHAT_PENDING_STAGE_KEYS = ["thinking", "researching", "composing"] 
 /**
  * HTTP-polling chat transport (the lynclaw poll standard): submit the turn
  * with `POST /api/chat/poll`, receive a `task_id`, then short-poll
- * `GET /api/chat/poll/{task_id}` until the complete answer arrives. There are
- * no incremental events — the `done` payload carries the full text plus
- * sources / attachments / human-support link / confirmation card, so this
- * transport replays the text as client-side typewriter deltas before `done`
- * and stages pending captions while polling.
+ * `GET /api/chat/poll/{task_id}` until the complete answer arrives. While
+ * pending, each payload carries `progress_events[]` — tool-activity states
+ * ("正在调用…") surfaced live as status ticks and tool rows — and MAY carry a
+ * partial `text`, which is streamed out as content deltas the moment it
+ * grows. The `done` payload carries the full text plus sources / attachments
+ * / human-support link / confirmation card; only text not already streamed
+ * is replayed as client-side typewriter deltas.
  */
 export class PollChatTransport implements ChatTransport {
   readonly provider = "cloud" as const;
@@ -320,9 +432,6 @@ export class PollChatTransport implements ChatTransport {
   async send(opts: SendChatOptions): Promise<void> {
     this.cancelled = false;
     opts.signal?.addEventListener("abort", () => this.cancel(), { once: true });
-
-    // The managed gateway leads with SSE (no poll route yet).
-    if (isStreamPreferredServer()) return this.sendViaStream(opts);
 
     const { query, sessionId, fileIds, userSpecifiedFile, token, confirmToken, onEvent } =
       opts;
@@ -350,7 +459,7 @@ export class PollChatTransport implements ChatTransport {
     try {
       taskId = await this.submit(body);
     } catch (error) {
-      console.error("[chat-poll] submit failed", CHAT_POLL_PATH, error);
+      console.error("[chat-poll] submit failed", chatPollPath(), error);
       if (!this.cancelled) onEvent({ type: "error", message: submitErrorMessage(error) });
       return;
     }
@@ -361,20 +470,6 @@ export class PollChatTransport implements ChatTransport {
 
   cancel(): void {
     this.cancelled = true;
-    this.stream?.cancel();
-  }
-
-  /** Stream-contract turn, used on hosts where stream is the primary API. */
-  private stream: StreamChatTransport | null = null;
-
-  private async sendViaStream(opts: SendChatOptions): Promise<void> {
-    const stream = new StreamChatTransport();
-    this.stream = stream;
-    try {
-      await stream.send(opts);
-    } finally {
-      this.stream = null;
-    }
   }
 
   /**
@@ -400,11 +495,13 @@ export class PollChatTransport implements ChatTransport {
   }
 
   private postTurn(body: Record<string, unknown>): Promise<ChatPollSubmitResponse> {
-    return api().post<ChatPollSubmitResponse>(CHAT_POLL_PATH, body);
+    return api().post<ChatPollSubmitResponse>(chatPollPath(), body, {
+      baseUrl: chatAgentBaseUrl(),
+    });
   }
 
   private getTask(path: string): Promise<ChatPollTaskResponse> {
-    return api().get<ChatPollTaskResponse>(path);
+    return api().get<ChatPollTaskResponse>(path, { baseUrl: chatAgentBaseUrl() });
   }
 
   /** POST the turn; on busy (503/429 or the gateway busy key) retry with backoff. */
@@ -434,6 +531,12 @@ export class PollChatTransport implements ChatTransport {
   ): Promise<void> {
     let emittedStage = stage;
     let networkFailures = 0;
+    // Progress events arrive as a full list each poll; this cursor counts how
+    // many have been surfaced so each one emits exactly once.
+    let seenProgress = 0;
+    // How many answer characters have already been streamed from pending
+    // payloads' partial `text`; the done replay only types the remainder.
+    let streamedChars = 0;
     // The first GET fires immediately; later ones wait out the interval.
     let wait = false;
 
@@ -443,7 +546,16 @@ export class PollChatTransport implements ChatTransport {
         return;
       }
       emittedStage = this.emitPendingStages(startedAt, emittedStage, onEvent);
-      if (wait) await sleep(chatPollTiming.intervalMs, () => this.cancelled);
+      if (wait) {
+        const elapsed = Date.now() - startedAt;
+        const interval =
+          elapsed < chatPollTiming.fastWindowMs
+            ? chatPollTiming.intervalFastMs
+            : chatPollTiming.intervalMs;
+        // Foreground return cuts this wait short: the immediate re-GET is
+        // what recovers a turn that kept generating while backgrounded.
+        await sleep(interval, () => this.cancelled, true);
+      }
       wait = true;
       if (this.cancelled) return;
 
@@ -478,42 +590,105 @@ export class PollChatTransport implements ChatTransport {
         return;
       }
       if (data?.status === "done") {
-        await this.emitDone(data, onEvent);
+        seenProgress = this.emitProgressEvents(data, seenProgress, onEvent);
+        await this.emitDone(data, onEvent, streamedChars);
         return;
       }
       if (data?.status === "error") {
+        seenProgress = this.emitProgressEvents(data, seenProgress, onEvent);
         onEvent({ type: "error", message: humanizeBackendError(data.error) || "生成失败，请稍后重试" });
         return;
       }
+      seenProgress = this.emitProgressEvents(data, seenProgress, onEvent);
+      streamedChars = this.emitPendingText(data, streamedChars, onEvent);
       // "pending" (or an unknown status): keep the placeholder spinning.
     }
   }
 
   /**
-   * Poll delivers the whole answer at once, so restore the streaming feel
-   * client-side: replay the finished text as content deltas on a timer
-   * (playback capped by `typewriterMaxMs` so long answers don't crawl).
-   * Cancel stops mid-play and the partial text stays — same as an aborted
-   * SSE stream.
+   * Stream a pending payload's partial `text` the moment it grows. The poll
+   * contract only REQUIRES the full text at `done`; a backend that includes
+   * the answer-so-far while pending gets true streaming behavior here with no
+   * client change (absent field → this is a no-op and the turn stays
+   * caption-only until done, exactly as before). The returned cursor only
+   * ever moves forward so a payload that shrinks can't re-emit old text.
    */
-  private async playTypewriter(text: string, onEvent: SendChatOptions["onEvent"]): Promise<void> {
+  private emitPendingText(
+    data: ChatPollTaskResponse | null,
+    streamed: number,
+    onEvent: SendChatOptions["onEvent"],
+  ): number {
+    const text = typeof data?.text === "string" ? data.text : "";
+    if (text.length <= streamed) return streamed;
+    onEvent({ type: "content", delta: text.slice(streamed) });
+    return text.length;
+  }
+
+  /**
+   * Surface new tool-activity progress events as live status ticks and tool
+   * rows — the poll counterpart of the stream contract's status ticks. Each
+   * poll returns the full event list, so emitting everything past `seen`
+   * makes the replay incremental and idempotent.
+   */
+  private emitProgressEvents(
+    data: ChatPollTaskResponse | null,
+    seen: number,
+    onEvent: SendChatOptions["onEvent"],
+  ): number {
+    const events = Array.isArray(data?.progress_events) ? data!.progress_events! : [];
+    for (let i = seen; i < events.length; i += 1) {
+      const event = events[i]!;
+      const label = firstString(event.label, event.tool);
+      if (event.type === "round_start") {
+        const caption = (event.content ?? "").trim();
+        if (caption) onEvent({ type: "status", text: caption });
+      } else if (event.type === "tool_start" && label) {
+        onEvent({ type: "tool", name: label, state: "running" });
+      } else if (event.type === "tool_end" && label) {
+        onEvent({ type: "tool", name: label, state: "done" });
+      }
+    }
+    return events.length;
+  }
+
+  /**
+   * Poll delivers the whole turn at once, so restore the streaming feel
+   * client-side: replay finished text as deltas on a timer (playback capped
+   * by `maxMs` so long passages don't crawl). Cancel stops mid-play and the
+   * partial text stays — same as an aborted SSE stream.
+   */
+  private async replayText(
+    text: string,
+    maxMs: number,
+    emit: (delta: string) => ChatStreamEvent,
+    onEvent: SendChatOptions["onEvent"],
+  ): Promise<void> {
     if (!text) return;
     const tickMs = Math.max(1, chatPollTiming.typewriterTickMs);
-    const steps = Math.min(
-      text.length,
-      Math.max(1, Math.floor(chatPollTiming.typewriterMaxMs / tickMs)),
-    );
+    const steps = Math.min(text.length, Math.max(1, Math.floor(maxMs / tickMs)));
     const sliceSize = Math.ceil(text.length / steps);
     for (let at = 0; at < text.length; at += sliceSize) {
       if (this.cancelled) return;
-      onEvent({ type: "content", delta: text.slice(at, at + sliceSize) });
+      onEvent(emit(text.slice(at, at + sliceSize)));
       if (at + sliceSize < text.length) await sleep(tickMs, () => this.cancelled);
     }
   }
 
-  private async emitDone(data: ChatPollTaskResponse, onEvent: SendChatOptions["onEvent"]): Promise<void> {
+  private async emitDone(
+    data: ChatPollTaskResponse,
+    onEvent: SendChatOptions["onEvent"],
+    streamedChars = 0,
+  ): Promise<void> {
     const text = typeof data.text === "string" ? data.text : "";
-    await this.playTypewriter(text, onEvent);
+    // Text already streamed from pending payloads is skipped — only the
+    // not-yet-seen tail plays through the typewriter (all of it when the
+    // backend sent no partial text, the common case today).
+    await this.replayText(
+      text.slice(streamedChars),
+      chatPollTiming.typewriterMaxMs,
+      (delta) => ({ type: "content", delta }),
+      onEvent,
+    );
     if (this.cancelled) return;
     const attachments = (Array.isArray(data.attachments) ? data.attachments : [])
       .map(normalizePollAttachment)
@@ -657,9 +832,9 @@ export function parseChatStreamData(payload: string): ChatStreamEvent[] {
 
 /**
  * SSE transport over the pre-poll stream contract (`POST /api/chat/stream`).
- * Used as the automatic fallback when the poll submit proves the backend has
- * no poll route (e.g. production gateways awaiting the upgrade), so the
- * caller can keep treating poll as the primary transport.
+ * Not on the chat hot path — the poll transport is the only production
+ * transport — but kept as a complete implementation of the stream contract
+ * (covered by tests) for backends that only expose it.
  */
 export class StreamChatTransport implements ChatTransport {
   readonly provider = "cloud" as const;
@@ -677,7 +852,7 @@ export class StreamChatTransport implements ChatTransport {
     }
     await new Promise<void>((resolve) => {
       this.controller = api().stream(
-        CHAT_STREAM_PATH,
+        chatStreamPath(),
         body,
         (data) => {
           for (const event of parseChatStreamData(data)) onEvent(event);
@@ -689,6 +864,7 @@ export class StreamChatTransport implements ChatTransport {
           resolve();
         },
         () => resolve(),
+        { baseUrl: chatAgentBaseUrl() },
       );
     });
     this.controller = null;

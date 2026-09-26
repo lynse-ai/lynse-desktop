@@ -353,6 +353,12 @@ export interface ChatAttachment {
   url?: string;
   downloadUrl?: string;
   thumbnailUrl?: string;
+  /**
+   * When the signed download URL expires (server-provided, often absent).
+   * lynclaw signed URLs die after ~1h regardless; `id` (the artifact id)
+   * enables re-signing via the refresh endpoint when that happens.
+   */
+  expiresAt?: string;
 }
 
 /** A single selectable option in a confirmation prompt (a2UI-style). */

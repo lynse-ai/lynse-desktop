@@ -10,6 +10,7 @@ import {
   normalizePollAttachment,
   normalizePollConfirmation,
   parseChatStreamData,
+  refreshAttachmentUrl,
   type SendChatOptions,
 } from "./chat-transport";
 import { ApiError } from "@lynse/core/api";
@@ -20,6 +21,8 @@ const apiMocks = vi.hoisted(() => ({
   get: vi.fn(),
   stream: vi.fn(),
   getBaseUrl: vi.fn(() => "https://api.test.local"),
+  getAgentBaseUrl: vi.fn((): string | null => null),
+  getToken: vi.fn((): string | null => "session-token"),
 }));
 
 vi.mock("@lynse/core/api", async (importOriginal) => {
@@ -31,6 +34,8 @@ vi.mock("@lynse/core/api", async (importOriginal) => {
       get: apiMocks.get,
       stream: apiMocks.stream,
       getBaseUrl: apiMocks.getBaseUrl,
+      getAgentBaseUrl: apiMocks.getAgentBaseUrl,
+      getToken: apiMocks.getToken,
     }),
   };
 });
@@ -42,12 +47,16 @@ afterEach(() => {
 beforeEach(() => {
   // Shrink the waits so suites stay fast; the real defaults live in chatPollTiming.
   chatPollTiming.intervalMs = 1;
+  chatPollTiming.intervalFastMs = 1;
   chatPollTiming.submitRetryDelayMs = 1;
   // One-shot typewriter and a single pending stage keep event sequences
   // simple; dedicated tests below exercise the real slicing and staging.
   chatPollTiming.typewriterTickMs = 1;
   chatPollTiming.typewriterMaxMs = 1;
   chatPollTiming.pendingStageMs = [0];
+  // No dedicated agent backend unless a test opts in (mockReturnValue from a
+  // previous test would otherwise leak past clearAllMocks).
+  apiMocks.getAgentBaseUrl.mockReturnValue(null);
 });
 
 function sendOptions(overrides: Partial<SendChatOptions> = {}): SendChatOptions {
@@ -118,6 +127,7 @@ describe("normalizePollAttachment / normalizeHumanSupportLink", () => {
         kind: "pdf",
         filename: "report.pdf",
         download_url: "https://example.test/report.pdf",
+        expires_at: "2026-09-26T12:00:00Z",
       }),
     ).toEqual({
       id: "abc",
@@ -125,8 +135,18 @@ describe("normalizePollAttachment / normalizeHumanSupportLink", () => {
       type: "pdf",
       url: "https://example.test/report.pdf",
       downloadUrl: "https://example.test/report.pdf",
+      expiresAt: "2026-09-26T12:00:00Z",
     });
     expect(normalizePollAttachment("junk")).toBeNull();
+    // lynclaw's CloudBase storage mode leaves expires_at empty — no field.
+    expect(normalizePollAttachment({ kind: "image", download_url: "https://x/a.png" })).toEqual({
+      id: undefined,
+      name: undefined,
+      type: "image",
+      url: "https://x/a.png",
+      downloadUrl: "https://x/a.png",
+      expiresAt: undefined,
+    });
     expect(normalizePollAttachment({})).toBeNull();
   });
 
@@ -137,6 +157,45 @@ describe("normalizePollAttachment / normalizeHumanSupportLink", () => {
     });
     expect(normalizeHumanSupportLink({ label: "no url" })).toBeUndefined();
     expect(normalizeHumanSupportLink(null)).toBeUndefined();
+  });
+});
+
+describe("refreshAttachmentUrl", () => {
+  const artifactId = "a".repeat(32);
+
+  it("re-signs a lynclaw artifact on its own origin and returns the fresh url", async () => {
+    apiMocks.post.mockResolvedValue({
+      artifact_id: artifactId,
+      download_url: "https://signed.example.com/fresh.png",
+    });
+
+    const url = await refreshAttachmentUrl(
+      { id: artifactId, name: "pic.png", downloadUrl: "https://signed.example.com/stale.png" },
+      { userId: "user-1" },
+    );
+
+    expect(url).toBe("https://signed.example.com/fresh.png");
+    expect(apiMocks.post).toHaveBeenCalledWith(
+      `/api/attachments/${artifactId}/download-url`,
+      { user_id: "user-1", token: "session-token" },
+      { baseUrl: undefined },
+    );
+  });
+
+  it("skips attachments without a lynclaw artifact id", async () => {
+    expect(
+      await refreshAttachmentUrl({ id: "wb-local-1", downloadUrl: "https://x/a.pdf" }),
+    ).toBeNull();
+    expect(await refreshAttachmentUrl({ downloadUrl: "https://x/a.pdf" })).toBeNull();
+    expect(apiMocks.post).not.toHaveBeenCalled();
+  });
+
+  it("returns null when the refresh endpoint fails (keep the old link)", async () => {
+    apiMocks.post.mockRejectedValue(new ApiError(404, '{"detail":"no route"}'));
+
+    const url = await refreshAttachmentUrl({ id: artifactId });
+
+    expect(url).toBeNull();
   });
 });
 
@@ -272,6 +331,149 @@ describe("PollChatTransport", () => {
 
     const confirm = events.find((event) => event.type === "confirm")!;
     expect((confirm.confirm as { confirmToken?: string }).confirmToken).toBe("card-token-1");
+  });
+
+  it("emits attachments for attachment-only replies (the weekly-report PDF turn empties text)", async () => {
+    apiMocks.post.mockResolvedValue({ task_id: "task-2", status: "pending" });
+    apiMocks.get.mockResolvedValueOnce({
+      status: "done",
+      // lynclaw strips the body for pdf-only turns — the PDF speaks through
+      // attachments[] alone, so the payload must pass through untouched.
+      text: "",
+      sources: [],
+      attachments: [
+        {
+          artifact_id: "c".repeat(32),
+          kind: "pdf",
+          filename: "灵光记周报-2026-09-21_2026-09-27.pdf",
+          download_url: "https://signed.example.com/weekly.pdf",
+          expires_at: "",
+        },
+      ],
+    });
+
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+
+    const done = onEvent.mock.calls
+      .map((call) => call[0] as Record<string, unknown>)
+      .find((event) => event.type === "done")!;
+    expect(done.text).toBe("");
+    expect(done.attachments).toEqual([
+      {
+        id: "c".repeat(32),
+        name: "灵光记周报-2026-09-21_2026-09-27.pdf",
+        type: "pdf",
+        url: "https://signed.example.com/weekly.pdf",
+        downloadUrl: "https://signed.example.com/weekly.pdf",
+        expiresAt: undefined,
+      },
+    ]);
+  });
+
+  it("emits image attachments for visual-summary replies", async () => {
+    apiMocks.post.mockResolvedValue({ task_id: "task-3", status: "pending" });
+    apiMocks.get.mockResolvedValueOnce({
+      status: "done",
+      text: "图文总结已生成。\n\n![灵光记图文总结](https://signed.example.com/card.png)",
+      sources: ["周会"],
+      attachments: [
+        {
+          artifact_id: "d".repeat(32),
+          kind: "image",
+          filename: "灵光记图文总结-2026-09-26-m1.png",
+          download_url: "https://signed.example.com/card.png",
+        },
+      ],
+    });
+
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+
+    const done = onEvent.mock.calls
+      .map((call) => call[0] as Record<string, unknown>)
+      .find((event) => event.type === "done")!;
+    expect(done.text).toContain("图文总结已生成");
+    expect(done.attachments).toHaveLength(1);
+    expect((done.attachments as unknown[])[0]).toMatchObject({ type: "image" });
+  });
+
+  it("emits poll progress events as status ticks and tool rows exactly once", async () => {
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    // Successive GETs return growing progress lists (the server sends the
+    // full list every time) and finally the done payload.
+    apiMocks.get
+      .mockResolvedValueOnce({
+        status: "pending",
+        progress_events: [{ type: "round_start", round: 1, content: "我去会议记录里翻一翻…" }],
+      })
+      .mockResolvedValueOnce({
+        status: "pending",
+        progress_events: [
+          { type: "round_start", round: 1, content: "我去会议记录里翻一翻…" },
+          { type: "tool_start", tool: "search_meetings", label: "搜索会议", round: 1 },
+        ],
+      })
+      .mockResolvedValueOnce({
+        status: "done",
+        text: "找到 2 场会议",
+        sources: ["会议A"],
+        progress_events: [
+          { type: "round_start", round: 1, content: "我去会议记录里翻一翻…" },
+          { type: "tool_start", tool: "search_meetings", label: "搜索会议", round: 1 },
+          { type: "tool_end", tool: "search_meetings", label: "搜索会议", duration_ms: 1200, round: 1 },
+        ],
+      });
+
+    const transport = new PollChatTransport();
+    const onEvent = vi.fn();
+    await transport.send(sendOptions({ onEvent }));
+
+    const events = onEvent.mock.calls.map((call) => call[0] as Record<string, unknown>);
+    const statuses = events.filter((event) => event.type === "status");
+    const tools = events.filter((event) => event.type === "tool");
+    // The local "thinking" placeholder fires first; the server's round_start
+    // caption then replaces it exactly once (no re-emission on later polls).
+    expect(statuses).toEqual([
+      { type: "status", text: "thinking" },
+      { type: "status", text: "我去会议记录里翻一翻…" },
+    ]);
+    // tool_start/tool_end drive the tool row lifecycle.
+    expect(tools).toEqual([
+      { type: "tool", name: "搜索会议", state: "running" },
+      { type: "tool", name: "搜索会议", state: "done" },
+    ]);
+
+    const done = events.find((event) => event.type === "done")!;
+    expect(done.text).toBe("找到 2 场会议");
+  });
+
+  it("ignores progress events without a usable type or label", async () => {
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    apiMocks.get
+      .mockResolvedValueOnce({
+        status: "pending",
+        progress_events: [
+          { type: "thinking", content: "不应透出的思维链" },
+          { type: "tool_start", round: 1 },
+          { type: "round_start", round: 1 },
+          { type: "tool_start", tool: "render_report_pdf", label: "生成报告", round: 2 },
+        ],
+      })
+      .mockResolvedValue({ status: "done", text: "ok" });
+
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+
+    const relevant = onEvent.mock.calls
+      .map((call) => call[0] as Record<string, unknown>)
+      .filter((event) => event.type === "status" || event.type === "tool");
+    // The local "thinking" placeholder aside, thinking/content poll events
+    // and label-less tool events never reach the UI.
+    expect(relevant).toEqual([
+      { type: "status", text: "thinking" },
+      { type: "tool", name: "生成报告", state: "running" },
+    ]);
   });
 
   it("sends fileIds / confirm token / token only when relevant", async () => {
@@ -478,6 +680,77 @@ describe("PollChatTransport", () => {
     expect(events[types.indexOf("done")]!.text).toBe("一二三四五六七八九十");
   });
 
+  it("streams partial pending text as content deltas and only replays the remainder at done", async () => {
+    chatPollTiming.typewriterTickMs = 1;
+    chatPollTiming.typewriterMaxMs = 1; // one-shot remainder slice
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    apiMocks.get
+      .mockResolvedValueOnce({ status: "pending", text: "你好" })
+      .mockResolvedValueOnce({ status: "pending", text: "你好，会议" })
+      // A shrunken/stale payload must not re-emit or rewind the cursor.
+      .mockResolvedValueOnce({ status: "pending", text: "你好" })
+      .mockResolvedValueOnce({
+        status: "done",
+        text: "你好，会议纪要整理好了",
+        sources: [],
+        attachments: [],
+      });
+
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+
+    const events = onEvent.mock.calls.map(
+      (call) => call[0] as { type: string; delta?: string; text?: string },
+    );
+    const deltas = events.filter((event) => event.type === "content").map((event) => event.delta!);
+    // The two pending growths stream immediately; done types only the tail.
+    expect(deltas).toEqual(["你好", "，会议", "纪要整理好了"]);
+    const done = events.find((event) => event.type === "done")!;
+    expect(done.text).toBe("你好，会议纪要整理好了");
+  });
+
+  it("stays caption-only when pending payloads carry no partial text", async () => {
+    chatPollTiming.typewriterTickMs = 1;
+    chatPollTiming.typewriterMaxMs = 1;
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    apiMocks.get
+      .mockResolvedValueOnce({ status: "pending", text: null })
+      .mockResolvedValueOnce({ status: "pending" })
+      .mockResolvedValueOnce({ status: "done", text: "完整答案", sources: [] });
+
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+
+    const events = onEvent.mock.calls.map(
+      (call) => call[0] as { type: string; delta?: string },
+    );
+    const types = events.map((event) => event.type);
+    // No content before done's single typewriter slice.
+    expect(types.filter((type) => type === "content")).toHaveLength(1);
+    expect(types.indexOf("done")).toBe(types.lastIndexOf("content") + 1);
+  });
+
+  it("re-polls immediately when the app returns to the foreground mid-wait", async () => {
+    // Interval long enough that only the foreground wake can explain a fast
+    // second GET (frozen-timer recovery after backgrounding the app).
+    chatPollTiming.intervalMs = 5_000;
+    chatPollTiming.intervalFastMs = 5_000;
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    apiMocks.get
+      .mockResolvedValueOnce({ status: "pending", text: null })
+      .mockResolvedValueOnce({ status: "done", text: "接上了", sources: [] });
+
+    const onEvent = vi.fn();
+    const sending = new PollChatTransport().send(sendOptions({ onEvent }));
+    await vi.waitFor(() => expect(apiMocks.get).toHaveBeenCalledTimes(1));
+    const returnedAt = Date.now();
+    // jsdom reports visibilityState "visible", so this fires the wake.
+    document.dispatchEvent(new Event("visibilitychange"));
+    await sending;
+    expect(apiMocks.get).toHaveBeenCalledTimes(2);
+    expect(Date.now() - returnedAt).toBeLessThan(2_000);
+  });
+
   it("advances pending stage captions while the turn stays pending", async () => {
     chatPollTiming.intervalMs = 1;
     chatPollTiming.pendingStageMs = [0, 4, 8];
@@ -592,20 +865,17 @@ describe("transport selection by server", () => {
     );
   }
 
-  it("leads with SSE on api.lynse.cn and never probes poll", async () => {
+  it("always polls — even on the managed gateway host — and never touches stream", async () => {
     apiMocks.getBaseUrl.mockReturnValue("https://api.lynse.cn");
-    apiMocks.stream = streamReplaying([
-      { type: "content", content: "你" },
-      { type: "done", text: "你好" },
-    ]);
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
 
     const { events, onEvent } = collector();
     await new PollChatTransport().send(sendOptions({ onEvent }));
 
-    expect(apiMocks.stream).toHaveBeenCalledTimes(1);
-    expect(apiMocks.stream.mock.calls[0]![0]).toBe("/api/business/ai/chat/stream");
-    expect(apiMocks.post).not.toHaveBeenCalled();
-    expect(events.map((e) => e.type)).toEqual(["content", "done"]);
+    expect(apiMocks.post.mock.calls[0]![0]).toBe("/api/business/ai/chat/poll");
+    expect(apiMocks.stream).not.toHaveBeenCalled();
+    expect(events.at(-1)).toMatchObject({ type: "done" });
   });
 
   it("uses poll on every other server and never touches stream", async () => {
@@ -630,6 +900,29 @@ describe("transport selection by server", () => {
 
     expect(apiMocks.stream).not.toHaveBeenCalled();
     expect(events.at(-1)).toMatchObject({ type: "error" });
+  });
+
+  it("targets the dedicated agent base URL with native lynclaw paths when configured (route B)", async () => {
+    const agentBase = "https://lynclaw-api-319577-10-1401959758.sh.run.tcloudbase.com";
+    apiMocks.getAgentBaseUrl.mockReturnValue(agentBase);
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
+
+    const { events, onEvent } = collector();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+
+    // Direct connections skip the gateway prefix: the service serves
+    // /api/chat/* natively (verified against the CloudRun deployment).
+    expect(apiMocks.post).toHaveBeenCalledWith(
+      "/api/chat/poll",
+      expect.objectContaining({ query: "hello", sessionId: "session-1" }),
+      { baseUrl: agentBase },
+    );
+    expect(apiMocks.get).toHaveBeenCalledWith("/api/chat/poll/task-1", {
+      baseUrl: agentBase,
+    });
+    expect(apiMocks.stream).not.toHaveBeenCalled();
+    expect(events.at(-1)).toMatchObject({ type: "done" });
   });
 
   it("StreamChatTransport forwards confirm frames after done", async () => {

@@ -149,4 +149,53 @@ test.describe("chat core", () => {
     // Composer is usable again.
     await expect(page.locator(chatSelectors.composer)).toBeEnabled();
   });
+
+  test("renders the visual-summary image and the weekly-report pdf attachments", async ({
+    page,
+    mockServer,
+  }) => {
+    const script = loadScript("attachments-report");
+    mockServer.setChatScript(script);
+    await openChat(page, mockServer.url);
+
+    // 图文总结: the intro text stays; the image renders once — as the
+    // attachment card (the body markdown copy is deduped against the same URL).
+    // Clicking the bare picture opens the fullscreen viewer with the
+    // download / forward toolbar instead of navigating away.
+    await sendChatMessage(page, script.turns[0]!.user);
+    await waitForTurnDone(page);
+    await expectAssistantSaid(page, "图文总结已生成");
+    const image = page.getByRole("img", { name: "灵光记图文总结-2026-09-26-weekly.png" });
+    await expect(image).toBeVisible();
+    await expect(image).toHaveAttribute("src", /\/mock-assets\/visual-summary\.png$/);
+    await image.click();
+    await expect(page.getByTestId("chat-image-download")).toBeVisible();
+    await expect(page.getByTestId("chat-image-forward")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("chat-image-download")).toHaveCount(0);
+
+    // 周报: the pdf-only turn has an empty body server-side; the message must
+    // survive (not be dropped as an empty placeholder). The card is a plain
+    // file chip (no inline preview) whose tap re-signs and downloads locally.
+    await sendChatMessage(page, script.turns[1]!.user);
+    await waitForTurnDone(page);
+    const pdfCard = page.getByRole("button", { name: /灵光记周报-2026-09-21_2026-09-27\.pdf/ });
+    await expect(pdfCard).toBeVisible();
+    await expect(
+      page.locator('iframe[title="灵光记周报-2026-09-21_2026-09-27.pdf"]'),
+    ).toHaveCount(0);
+    const pdfDownload = page.waitForEvent("download");
+    await pdfCard.click();
+    expect((await pdfDownload).suggestedFilename()).toContain("灵光记周报");
+
+    // 懒签名回合: the CloudBase storage backend ships `download_url: ""` —
+    // the card must mint its URL via the download-url endpoint on mount and
+    // only then render (this also restores already-saved url-less history).
+    await sendChatMessage(page, script.turns[2]!.user);
+    await waitForTurnDone(page);
+    await expectAssistantSaid(page, "图文总结已生成");
+    const lazyImage = page.getByRole("img", { name: "灵光记图文总结-2026-09-02-lazy.png" });
+    await expect(lazyImage).toBeVisible();
+    await expect(lazyImage).toHaveAttribute("src", /\/mock-assets\/visual-summary\.png$/);
+  });
 });

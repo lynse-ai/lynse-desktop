@@ -106,6 +106,9 @@ pub fn model_file_name(provider: &str, model_id: &str) -> Option<String> {
         // WhisperX (faster-whisper CTranslate2 weights + wav2vec2 aligner)
         // downloads via its Python bridge as well.
         "whisperx" => None,
+        // AntSpeaker MECT voiceprint checkpoint: one .pt artifact fetched
+        // through the generic downloader.
+        "antspeaker" => Some("mect_b2_vb2.pt".to_owned()),
         _ => None,
     }
 }
@@ -633,8 +636,7 @@ impl BatchSttAdapter for WhisperAdapter {
         let mut segments = normalize_whisper_output(&parsed);
 
         if config.campp_diarization {
-            let funasr_dir = crate::model_dir(app)?;
-            crate::assign_campp_speakers(app, &request.audio_path, &mut segments, &funasr_dir, request.expected_speakers)?;
+            crate::assign_campp_speakers(app, &request.audio_path, &mut segments, request.expected_speakers)?;
         } else {
             // Single speaker when diarization is off — never fabricate multiple.
             for segment in &mut segments {

@@ -38,6 +38,7 @@ import { useMaximized } from "@lynse/views/layout";
 import { cn } from "@lynse/ui/lib/utils";
 import { DesktopNavigationProvider } from "./platform/navigation";
 import { NativeThemeSync } from "./platform/native-theme";
+import { AppThemeSync } from "@lynse/views/settings/app-theme";
 import { clearAuthSecrets, secureStorage } from "./secure-storage";
 
 // Build channel (official | debug) + WeChat Open Platform appid, injected
@@ -245,10 +246,13 @@ export default function App() {
 
   return (
     <ThemeProvider>
-      {/* Keep the native window material (vibrancy) on the app's appearance,
-          not the system's — see NativeThemeSync. Every window kind renders
-          inside ThemeProvider, so the island and subtitle overlay sync too. */}
+      {/* Keep the native window material (vibrancy) on the appearance and
+          repaint the per-mode appearance customization on every flip — both
+          key off the resolved light/dark, not the system's. Every window kind
+          renders inside ThemeProvider, so the island and subtitle overlay
+          sync too. */}
       <NativeThemeSync />
+      <AppThemeSync />
       {recordingIslandWindow ? (
         <RecordingIslandWindow />
       ) : subtitleWindow ? (

@@ -1,6 +1,7 @@
 "use client";
 
 import { ThemeProvider as NextThemesProvider } from "next-themes";
+import { AppThemeSync } from "@lynse/views/settings/app-theme";
 
 export function ThemeProvider({
   children,
@@ -17,6 +18,9 @@ export function ThemeProvider({
       disableTransitionOnChange
       {...props}
     >
+      {/* Repaint the per-mode appearance customization whenever the resolved
+          light/dark flips (system following day/night). */}
+      <AppThemeSync />
       {children}
     </NextThemesProvider>
   );

@@ -35,6 +35,11 @@ export function MilkdownEditor({ initialContent, onChange, onEditorReady }: Milk
     const root = containerRef.current;
     if (!root || editorInstance) return;
 
+    // create() is async, so cleanup can land before the editor exists. Without
+    // this flag the resolved editor would be parked in `editorInstance` after
+    // teardown — never destroyed, and it would trip the guard above on the next
+    // mount, leaving the container empty.
+    let disposed = false;
     Editor.make()
       .config((ctx) => {
         ctx.set(rootCtx, root);
@@ -54,11 +59,16 @@ export function MilkdownEditor({ initialContent, onChange, onEditorReady }: Milk
       .use(clipboard)
       .create()
       .then((editor) => {
+        if (disposed) {
+          editor.destroy();
+          return;
+        }
         editorInstance = editor;
         onEditorReadyRef.current?.(editor);
       });
 
     return () => {
+      disposed = true;
       onEditorReadyRef.current?.(null);
       editorInstance?.destroy();
       editorInstance = null;

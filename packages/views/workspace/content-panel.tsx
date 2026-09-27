@@ -537,7 +537,12 @@ export function ContentPanel() {
   }, []);
 
   const refreshLocalQueries = useCallback((fileId?: string | null) => {
+    // The Notes page list is keyed `["notes", …]`, not `["files"]` — without
+    // it a locally deleted recording keeps its row until the next refetch,
+    // which reads as the delete button doing nothing.
     qc.invalidateQueries({ queryKey: ["files"] });
+    qc.invalidateQueries({ queryKey: ["notes"] });
+    qc.invalidateQueries({ queryKey: ["folder-counts"] });
     if (fileId) {
       qc.invalidateQueries({ queryKey: ["file-transcription", fileId] });
       qc.invalidateQueries({ queryKey: ["file-audio-url", fileId] });
@@ -596,9 +601,13 @@ export function ContentPanel() {
 
   const handleDeleteLocalTranscription = useCallback(async () => {
     if (!selectedItemId) return;
-    await getDesktopLocalTranscriptionApi()?.delete(selectedItemId);
-    refreshLocalQueries(selectedItemId);
-    selectItem(null, null);
+    try {
+      await getDesktopLocalTranscriptionApi()?.delete(selectedItemId);
+      refreshLocalQueries(selectedItemId);
+      selectItem(null, null);
+    } catch (error) {
+      setLocalRetryError(error instanceof Error ? error.message : String(error));
+    }
   }, [refreshLocalQueries, selectItem, selectedItemId]);
 
   const handleCreateVoiceprint = useCallback(async (segmentId: string, name: string) => {

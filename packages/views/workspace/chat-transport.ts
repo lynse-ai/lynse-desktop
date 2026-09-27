@@ -369,6 +369,28 @@ function submitErrorMessage(error: unknown): string {
   return detail || "发送失败，请稍后重试";
 }
 
+/** How far past a cut we look for a word end before giving up on the snap. */
+const WORD_SNAP_LOOKAHEAD = 8;
+
+/**
+ * Move a slice end onto a character-safe boundary. A cut between the halves of
+ * a surrogate pair flashes a broken glyph every tick, and a cut inside a Latin
+ * word reads as stutter; CJK has no word ends so only the surrogate rule
+ * applies there. `end` is exclusive and below `text.length`.
+ */
+export function safeSliceEnd(text: string, end: number): number {
+  if (end <= 0 || end >= text.length) return end;
+  // Trailing high surrogate: its pair belongs in this slice.
+  if (/[\uD800-\uDBFF]$/.test(text.slice(end - 1, end))) end += 1;
+  // Inside a word/number run: carry it to the next break, if nearby.
+  if (/[A-Za-z0-9_]$/.test(text.slice(end - 1, end)) && /[A-Za-z0-9_]/.test(text[end] ?? "")) {
+    const rest = text.slice(end, end + WORD_SNAP_LOOKAHEAD);
+    const breakAt = rest.search(/[^\w]/);
+    if (breakAt >= 0) end += breakAt + 1;
+  }
+  return Math.min(end, text.length);
+}
+
 /**
  * In-flight poll waits that may be cut short. When the app returns to the
  * foreground mid-turn, mobile/webview runtimes have frozen timers and may
@@ -620,8 +642,13 @@ export class PollChatTransport implements ChatTransport {
   ): number {
     const text = typeof data?.text === "string" ? data.text : "";
     if (text.length <= streamed) return streamed;
-    onEvent({ type: "content", delta: text.slice(streamed) });
-    return text.length;
+    // A payload cut between a surrogate pair would paint half an emoji; hold
+    // the lone high surrogate back so the next poll emits it with its pair.
+    let end = text.length;
+    if (/[\uD800-\uDBFF]$/.test(text)) end -= 1;
+    if (end <= streamed) return streamed;
+    onEvent({ type: "content", delta: text.slice(streamed, end) });
+    return end;
   }
 
   /**
@@ -667,10 +694,13 @@ export class PollChatTransport implements ChatTransport {
     const tickMs = Math.max(1, chatPollTiming.typewriterTickMs);
     const steps = Math.min(text.length, Math.max(1, Math.floor(maxMs / tickMs)));
     const sliceSize = Math.ceil(text.length / steps);
-    for (let at = 0; at < text.length; at += sliceSize) {
+    let at = 0;
+    while (at < text.length) {
       if (this.cancelled) return;
-      onEvent(emit(text.slice(at, at + sliceSize)));
-      if (at + sliceSize < text.length) await sleep(tickMs, () => this.cancelled);
+      const end = safeSliceEnd(text, Math.min(at + sliceSize, text.length));
+      onEvent(emit(text.slice(at, end)));
+      at = end;
+      if (at < text.length) await sleep(tickMs, () => this.cancelled);
     }
   }
 

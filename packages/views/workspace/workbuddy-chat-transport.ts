@@ -4,7 +4,7 @@ import {
   WORKBUDDY_ERROR,
 } from "@lynse/core/auth/workbuddy";
 import type { ChatTransport, SendChatOptions } from "./chat-transport";
-import { chatPollTiming } from "./chat-transport";
+import { chatPollTiming, safeSliceEnd } from "./chat-transport";
 
 /**
  * WorkBuddy local-assistant chat transport (OpenAPI v2).
@@ -169,10 +169,13 @@ async function typewriter(
     Math.max(1, Math.floor(chatPollTiming.typewriterMaxMs / tickMs)),
   );
   const sliceSize = Math.ceil((fullText.length - from) / steps);
-  for (let at = from; at < fullText.length; at += sliceSize) {
+  let at = from;
+  while (at < fullText.length) {
     if (cancelled()) return;
-    onEvent({ type: "content", delta: fullText.slice(at, at + sliceSize) });
-    if (at + sliceSize < fullText.length) await sleep(tickMs, cancelled);
+    const end = safeSliceEnd(fullText, Math.min(at + sliceSize, fullText.length));
+    onEvent({ type: "content", delta: fullText.slice(at, end) });
+    at = end;
+    if (at < fullText.length) await sleep(tickMs, cancelled);
   }
 }
 

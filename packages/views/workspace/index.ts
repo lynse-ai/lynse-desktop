@@ -5,6 +5,8 @@ export type {
   SttProviderConfig,
   TranscribeConfig,
 } from "./local-transcription";
+export { getDesktopCloudSyncApi } from "./sync-upload";
+export type { DesktopCloudSyncApi } from "./sync-upload";
 export {
   buildNoteMarkdown,
   getDesktopVaultApi,

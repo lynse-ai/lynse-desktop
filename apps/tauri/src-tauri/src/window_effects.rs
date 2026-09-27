@@ -44,10 +44,15 @@ impl WindowEffects {
 static WINDOW_EFFECTS: OnceLock<WindowEffects> = OnceLock::new();
 
 /// Horizontal gap between the traffic-light pills, in points. The system
-/// default is 8; a tighter 6 keeps the group compact enough to sit balanced
+/// default is 8; a tighter gap keeps the group compact enough to sit balanced
 /// in the narrow sidebar rail. Change together with `trafficLightPosition.x`
 /// in tauri.conf.json, which anchors the group's left edge.
-const TRAFFIC_LIGHTS_GAP: f64 = 6.0;
+///
+/// The pills have a 14pt hit frame around a 12pt visible dot, so this gap
+/// leaves a 6pt visible slit between dots and the group spans 48pt.
+/// The 60pt-wide sidebar rail anchors it at x = 6, which keeps ~5pt of
+/// frost on either side of the group.
+const TRAFFIC_LIGHTS_GAP: f64 = 4.0;
 
 /// Reports the material that was actually installed so the renderer knows
 /// whether it may leave the sidebar transparent.

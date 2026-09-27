@@ -22,14 +22,14 @@ import type { CompletedLiveSession } from "./types";
 // Uploads a finished local recording to the cloud via the direct-upload
 // sync chain (the server never relays the bytes) and turns it into a
 // regular cloud note:
-//   1. read the local WAV captured by the Rust sidecar
-//   2. uploadAudioViaSyncChain — POST sync/pre/create (placeholder) →
-//      POST sync/pre/sts (objectKey + STS credentials) → client-direct
-//      OSS PUT → GET sync/pre/notify (idempotent completion notice)
-//   3. POST /api/business/file/trans — trigger the server-side
+//   1. uploadAudioViaSyncChain — POST sync/pre/create (placeholder) →
+//      POST sync/pre/sts (objectKey + STS credentials) → the Rust shell
+//      streams the recorded WAV straight to OSS → GET sync/pre/notify
+//      (idempotent completion notice)
+//   2. POST /api/business/file/trans — trigger the server-side
 //      transcription + summarization pipeline (no waiting here; the file
 //      list polls trans/status and shows the processing state)
-//   4. finalizeLocal(sessionId, true) — mark the local record synced and
+//   3. finalizeLocal(sessionId, true) — mark the local record synced and
 //      let Rust clean up the local WAV files
 //
 // The client-generated fileId is persisted on the local record before the
@@ -40,34 +40,26 @@ import type { CompletedLiveSession } from "./types";
 
 interface SyncTarget {
   sessionId: string;
+  /** Local transcription record id — Rust streams its audio to OSS. */
+  recordId: string;
   filename: string;
-  audioUrl: string;
   durationMs: number;
   startedAt?: string;
   /** fileId from an earlier attempt — reuse it across retries. */
   existingFileId?: string;
 }
 
-async function readRecordingBlob(audioUrl: string): Promise<Blob> {
-  const response = await fetch(audioUrl);
-  if (!response.ok) {
-    throw new Error(`failed to read local recording: ${response.status}`);
-  }
-  return response.blob();
-}
-
 async function runCloudSync(target: SyncTarget): Promise<void> {
   const desktopApi = getDesktopLiveTranslationApi();
   if (!desktopApi) throw new Error("desktop live translation api unavailable");
 
-  const blob = await readRecordingBlob(target.audioUrl);
   const fileId = target.existingFileId ?? generateSyncFileId();
   // Persist before uploading: a mid-flight failure leaves the id on the
   // record so the retry upserts the same placeholder (dting_file row).
   await desktopApi.setCloudFileId(target.sessionId, fileId);
 
   await uploadAudioViaSyncChain({
-    file: blob,
+    recordId: target.recordId,
     saveFilename: target.filename,
     contentType: "audio/wav",
     fileId,
@@ -99,7 +91,10 @@ export function useRecordingCloudSync() {
       toast.info(t("live_translation.sync_uploading"));
       try {
         await runCloudSync(target);
+        // A synced recording leaves the local list and joins the cloud one, so
+        // both list keys have to be refetched.
         await qc.invalidateQueries({ queryKey: ["files"] });
+        await qc.invalidateQueries({ queryKey: ["notes"] });
         toast.success(t("live_translation.saved"));
         // Persist into the unified notification center (the toast is ephemeral).
         useNotificationStore.getState().add({
@@ -127,8 +122,8 @@ export function useRecordingCloudSync() {
     (session: CompletedLiveSession) =>
       syncTarget({
         sessionId: session.sessionId,
+        recordId: session.recordId,
         filename: deriveFilename(session),
-        audioUrl: session.playbackUrl,
         durationMs: session.durationMs,
         startedAt: session.startedAt,
       }),

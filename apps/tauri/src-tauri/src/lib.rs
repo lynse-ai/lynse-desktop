@@ -66,6 +66,8 @@ mod workbuddy;
 mod storage;
 mod content_migration;
 mod window_effects;
+// Client-direct OSS upload for the recording cloud-sync chain.
+mod sync_upload;
 
 use live_translation::LiveTranslationManager;
 
@@ -2598,7 +2600,17 @@ async fn todo_add_to_calendar(
 fn local_transcription_get(app: AppHandle, id: String) -> CommandResult<Option<Value>> { get_store_value(&app, "local-transcriptions", &id) }
 
 #[tauri::command]
-fn local_transcription_delete(app: AppHandle, id: String) -> CommandResult<()> { remove_store_value(&app, "local-transcriptions", &id) }
+fn local_transcription_delete(app: AppHandle, id: String) -> CommandResult<()> {
+    // The record row is the last reference to a live session's directory, so
+    // the captured audio goes with it — otherwise deleting a recording leaves
+    // its WAVs behind forever.
+    if let Some(record) = get_store_value(&app, "local-transcriptions", &id)? {
+        if let Some(session_id) = record.get("liveSessionId").and_then(Value::as_str) {
+            live_translation::remove_recorded_session(&app, session_id)?;
+        }
+    }
+    remove_store_value(&app, "local-transcriptions", &id)
+}
 
 #[tauri::command]
 fn local_transcription_audio_url(app: AppHandle, id: String) -> CommandResult<Option<String>> {
@@ -4171,6 +4183,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             local_transcription_list, local_transcription_get, local_transcription_delete, local_transcription_audio_url,
             local_transcription_track_audio_url,
+            sync_upload::sync_upload_audio_size, sync_upload::sync_upload_put_signed_file,
             todo_list, todo_save, todo_delete, todo_add_to_calendar,
             inspiration_list, inspiration_save, inspiration_delete, inspiration_transcribe, inspiration_audio_url,
             inspiration_image_url, inspiration_stage_image, inspiration_stage_image_from_path,

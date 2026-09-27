@@ -11,6 +11,7 @@ import {
   normalizePollConfirmation,
   parseChatStreamData,
   refreshAttachmentUrl,
+  safeSliceEnd,
   type SendChatOptions,
 } from "./chat-transport";
 import { ApiError } from "@lynse/core/api";
@@ -946,5 +947,80 @@ describe("transport selection by server", () => {
 
     expect(events.map((e) => e.type)).toEqual(["done", "confirm"]);
     expect(events[1]).toMatchObject({ type: "confirm", confirm: { confirmToken: "t1" } });
+  });
+});
+
+describe("safeSliceEnd", () => {
+  it("never cuts a surrogate pair, pulling the high half into the slice", () => {
+    const text = `前文😀后文${"占".repeat(40)}`;
+    const cut = text.indexOf("😀") + 1; // lands between the pair
+    const end = safeSliceEnd(text, cut);
+    expect(text.slice(end - 2, end)).toBe("😀");
+  });
+
+  it("snaps a cut inside a Latin word to the word end, within a bounded chase", () => {
+    expect(safeSliceEnd("see the word next", 10)).toBe(13); // "see the word "
+    // A word end further than the lookahead is not chased.
+    expect(safeSliceEnd("see the transcription now", 10)).toBe(10);
+  });
+
+  it("leaves CJK, boundaries and the string end untouched", () => {
+    const cjk = "会议纪要整理好了";
+    expect(safeSliceEnd(cjk, 3)).toBe(3);
+    expect(safeSliceEnd("a b c", 2)).toBe(2);
+    expect(safeSliceEnd(cjk, cjk.length)).toBe(cjk.length);
+  });
+});
+
+describe("typewriter slice integrity", () => {
+  const contentDeltas = (onEvent: ReturnType<typeof vi.fn>) =>
+    onEvent.mock.calls
+      .map((call) => call[0] as { type: string; delta?: string })
+      .filter((event) => event.type === "content")
+      .map((event) => event.delta ?? "");
+
+  it("replays without ever emitting half an emoji or a split word", async () => {
+    chatPollTiming.typewriterTickMs = 1;
+    chatPollTiming.typewriterMaxMs = 120; // many small slices
+    const full = `这是一段包含 emoji 😀 的回答，还有英文单词 summary 和表格。\n\n| 阶段 | 状态 |\n| --- | --- |\n| 转写 | 完成 |\n`;
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    apiMocks.get.mockResolvedValue({ status: "done", text: full, sources: [], attachments: [] });
+
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+
+    const deltas = contentDeltas(onEvent);
+    expect(deltas.length).toBeGreaterThan(4);
+    expect(deltas.join("")).toBe(full);
+    // Every cut lands on a safe boundary: never between a surrogate pair,
+    // never between two characters of the same word.
+    let at = 0;
+    for (const delta of deltas.slice(0, -1)) {
+      at += delta.length;
+      expect(/[\uD800-\uDBFF]$/.test(delta)).toBe(false);
+      expect(/\w/.test(full[at - 1]!) && /\w/.test(full[at]!)).toBe(false);
+    }
+  });
+
+  it("holds a partial pending payload's trailing surrogate until its pair arrives", async () => {
+    chatPollTiming.typewriterTickMs = 1;
+    chatPollTiming.typewriterMaxMs = 1;
+    const half = "好的 😀".slice(0, 4); // ends on the emoji's high surrogate
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    apiMocks.get
+      .mockResolvedValueOnce({ status: "pending", text: half })
+      .mockResolvedValueOnce({
+        status: "done",
+        text: "好的 😀 完成",
+        sources: [],
+        attachments: [],
+      });
+
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+
+    const deltas = contentDeltas(onEvent);
+    expect(deltas.join("")).toBe("好的 😀 完成");
+    expect(deltas.some((delta) => /[\uD800-\uDBFF]$/.test(delta))).toBe(false);
   });
 });

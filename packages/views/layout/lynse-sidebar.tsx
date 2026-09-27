@@ -116,13 +116,13 @@ export function LynseSidebar() {
           own border does the separating. */}
       <aside
         className={cn(
-          "lyse-sidebar flex h-full w-[68px] shrink-0 flex-col items-center bg-sidebar pb-2",
-          // Only macOS overlays the traffic lights on the window top (bottom
-          // edge ≈ 39px) — keep the avatar below with clear breathing room.
-          // Windows/Linux desktops have a native title bar and no lights over
-          // the rail, and the web has none either — both keep the tighter
-          // padding.
-          isMacDesktop ? "pt-[54px]" : "pt-10"
+          "lyse-sidebar flex h-full w-[60px] shrink-0 flex-col items-center bg-sidebar pb-2",
+          // Only macOS overlays the traffic lights on the window top — their
+          // visible dots end ≈26px down, so this keeps an ~18px gap above the
+          // avatar. Windows/Linux desktops have a native title bar and no
+          // lights over the rail, and the web has none either — both keep the
+          // tighter padding.
+          isMacDesktop ? "pt-[44px]" : "pt-10"
         )}
         data-tauri-drag-region
       >
@@ -182,7 +182,7 @@ export function LynseSidebar() {
                   type="button"
                   title={t("nav.notifications")}
                   data-tauri-drag-region={false}
-                  className="relative flex w-[56px] flex-col items-center justify-center rounded-lg px-1 py-2 transition-colors text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
+                  className="relative flex w-[52px] flex-col items-center justify-center rounded-lg px-1 py-2 transition-colors text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
                 >
                   <Bell className="size-5" />
                   <span className="mt-1 whitespace-nowrap text-3xs font-medium leading-none">{item.label}</span>
@@ -276,7 +276,7 @@ function NavButton({
       title={title}
       data-tauri-drag-region={false}
       className={cn(
-        "relative flex w-[56px] flex-col items-center justify-center rounded-lg px-1 py-2 transition-colors",
+        "relative flex w-[52px] flex-col items-center justify-center rounded-lg px-1 py-2 transition-colors",
         // Selected = accent-colored icon+label, no pill behind them; the solid
         // glyph alone carries the selected state.
         active

@@ -72,6 +72,12 @@ pub fn live_translation_finalize_local(session_id: String, synced: bool) -> Comm
     unsupported()
 }
 
+/// No recorded sessions exist where live translation is unsupported, so there
+/// is never a directory to clean up.
+pub(crate) fn remove_recorded_session(_app: &tauri::AppHandle, _session_id: &str) -> CommandResult<()> {
+    Ok(())
+}
+
 #[tauri::command]
 pub fn live_translation_recoveries() -> CommandResult<Vec<Value>> {
     Ok(Vec::new())

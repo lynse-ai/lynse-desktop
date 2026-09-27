@@ -3046,11 +3046,29 @@ pub fn live_translation_discard(
         return Err("cannot discard the active live translation session".to_owned());
     }
     remove_store_value(&app, "local-transcriptions", &format!("local:live:{session_id}"))?;
-    let directory = recovery_root(&app)?.join(session_id);
-    if directory.exists() {
-        fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
+    remove_recorded_session(&app, &session_id)
+}
+
+/// Delete a finished session's directory under the recordings root. Refuses
+/// anything that does not resolve to a directory inside that root, so a
+/// malformed session id can never walk out of the app's own data.
+pub(crate) fn remove_recorded_session(app: &AppHandle, session_id: &str) -> CommandResult<()> {
+    if !valid_session_id(session_id) {
+        return Err("invalid live translation session id".to_owned());
     }
-    Ok(())
+    let root = recovery_root(app)?;
+    let directory = root.join(session_id);
+    let Ok(resolved) = directory.canonicalize() else {
+        return Ok(()); // already gone — nothing to clean up
+    };
+    let contained = root
+        .canonicalize()
+        .map(|root| resolved.starts_with(&root))
+        .unwrap_or(false);
+    if !contained {
+        return Err("refusing to delete a path outside the recordings directory".to_owned());
+    }
+    fs::remove_dir_all(&resolved).map_err(|error| error.to_string())
 }
 
 /// Re-run echo cancellation over a recording's raw tracks (the detail

@@ -240,7 +240,7 @@ export function HomePage() {
   const todoPageAvailable = notesPath === "/notes";
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-4xl flex-col overflow-y-auto overscroll-contain px-6 pb-6">
+    <div className="no-scrollbar mx-auto flex h-full w-full max-w-4xl flex-col overflow-y-auto overscroll-contain px-6 pb-6">
       {/* ── Header ───────────────────────────────────────
           Doubles as the window drag region (same as the other pages' title
           bars). Tauri only starts a drag when the exact mousedown target has

@@ -24,6 +24,7 @@ import type {
   SttDownloadProgress,
   SttModelInfo,
   TranscribeConfig,
+  DesktopCloudSyncApi,
   DesktopVaultApi,
   VaultSyncProgress,
 } from "@lynse/views/workspace";
@@ -98,6 +99,7 @@ export type UpdateDownloadProgress = {
 type DesktopApi = {
   openExternal: (url: string) => Promise<void>;
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
+  cloudSync: DesktopCloudSyncApi;
   liveTranslation: DesktopLiveTranslationApi;
   meetingDetector: DesktopMeetingDetectorApi;
   recordingCard: DesktopRecordingCardApi;
@@ -338,6 +340,11 @@ export async function installTauriBridge(): Promise<void> {
       deleteVoiceprint: (id: string) => command("local_transcription_delete_voiceprint", { id }),
       getSttConfig: () => command<TranscribeConfig>("local_stt_config_get"),
       saveSttConfig: (config: TranscribeConfig) => command<TranscribeConfig>("local_stt_config_save", { config }),
+    },
+    cloudSync: {
+      audioSize: (recordId) => command<number>("sync_upload_audio_size", { recordId }),
+      putSignedFile: (put) =>
+        command<{ sizeBytes: number }>("sync_upload_put_signed_file", { put }),
     },
     audioEditor: {
       status: () => command<{ ffmpegAvailable: boolean }>("audio_editor_status"),

@@ -275,10 +275,24 @@ function handleChatPoll(
 
   const elapsed = Date.now() - task.submittedAt;
   if (elapsed < task.delayMs) {
+    // Mimic the real service's live partial text: `stream` turns reveal
+    // their chunks on the scripted cadence while pending, so the client's
+    // progressive-text path gets exercised end to end. `stream-abort` stays
+    // text-free on purpose — the Stop-button spec depends on a pending turn
+    // with nothing renderable yet.
+    let partialText: string | null = null;
+    if (task.response.type === "stream" && task.response.chunks.length) {
+      const cadence = task.response.chunkDelayMs ?? 60;
+      const revealed = Math.min(
+        task.response.chunks.length,
+        Math.floor(elapsed / cadence),
+      );
+      partialText = task.response.chunks.slice(0, revealed).join("") || null;
+    }
     respondJson(res, 200, {
       task_id: taskId,
       status: "pending",
-      text: null,
+      text: partialText,
       sources: [],
       attachments: [],
       human_support_link: null,

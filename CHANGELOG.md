@@ -8,6 +8,21 @@
 > the history (that commit documents a `vA.B.C(N)` build-counter tag
 > convention), so they are not listed either.
 
+## 1.1.3 (2026-09-27)
+
+### New Features
+
+- The appearance settings are rebuilt around three simple choices: theme preview cards (system / light / dark), a theme preset — Lynse, Linear, or Notion — that restyles surfaces in both light and dark modes at once, and a single accent color (quick swatches, a color picker, or a hex value). Picking Lynse again resets everything; an accent override recolors buttons, links, highlights and the sidebar selection while the preset's surfaces stay.
+- AI assistant replies can be inserted into a note with one click.
+- Local transcription gains a MECT-B2 voiceprint engine, with model download and switching in the STT settings.
+
+### Fixed
+
+- Dark Linear/Notion presets no longer paint an opaque sidebar over the macOS vibrancy frost — the rail dissolves into the frosted material like the default dark theme.
+
+### Changed
+
+- Build channels are restructured to official/debug, and the runtime archives and update feeds now use CloudBase static hosting as the primary source (GitHub remains a fallback for older tags). The "new version" fallback link points at www.lynse.cn.
 ## 1.1.1 (2026-09-27)
 
 ### New Features

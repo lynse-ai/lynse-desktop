@@ -333,18 +333,3 @@
         box-shadow: none;
     }
 }
-
-/* ── Translucent sidebar (settings › appearance) ───────────────────────────
-   html[data-translucent-sidebar] is set by packages/views/settings/app-theme.ts.
-   Duplicates the two authored rail literals with alpha: on macOS vibrancy the
-   frost shows through the rail; without vibrancy (web / Windows) the page
-   background bleeds in for a softer tint. In vibrancy dark the app-level
-   `--sidebar: transparent` rule (imported after tokens) still wins, which is
-   the intended no-op there. */
-html[data-translucent-sidebar="true"]:not(.dark) {
-    --sidebar: oklch(0.963 0 0 / 62%);
-}
-
-html[data-translucent-sidebar="true"].dark {
-    --sidebar: rgb(10 11 13 / 55%);
-}

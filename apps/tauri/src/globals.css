@@ -8,10 +8,9 @@
 /* One step lighter: plain text inherits the variable Light (300) cut of the
    bundled Inter + OPPO Sans pairing (see packages/ui/styles/fonts.css).
    Explicit font-medium / semibold / bold utilities are untouched, so labels
-   and headings keep their hierarchy. --app-body-weight is the appearance
-   panel's UI-font-weight override (packages/views/settings/app-theme.ts). */
+   and headings keep their hierarchy. */
 body {
-  font-weight: var(--app-body-weight, 300);
+  font-weight: 300;
 }
 
 /* ── Native window material (macOS vibrancy, Codex-style shell) ────────────
@@ -35,9 +34,12 @@ html[data-window-effects="vibrancy"] {
 /* Dark dissolves the rail into the raw frost (--sidebar: transparent). Light
    keeps --sidebar opaque so the rail paints the flat neutral grey of the
    ZCode/Codex light theme — no wallpaper bleed, and clearly darker than the
-   white content card beside it. */
+   white content card beside it.
+   !important: theme presets (packages/views/settings/app-theme.ts) write
+   --sidebar as an inline style, which would otherwise beat this rule and
+   paint an opaque rail over the frost in vibrancy dark. */
 html[data-window-effects="vibrancy"].dark {
-  --sidebar: transparent;
+  --sidebar: transparent !important;
 }
 
 /* Light theme only: raw frost picks up wallpaper hues, and a dark wallpaper
@@ -91,9 +93,10 @@ html[data-window-effects="vibrancy"] .lyse-content-card {
     background: var(--background);
   }
   /* Must match the .dark override's specificity above, or the dark rail
-     would stay transparent (raw frost) instead of going opaque. */
+     would stay transparent (raw frost) instead of going opaque. Same
+     !important rationale: beat theme presets' inline --sidebar. */
   html[data-window-effects="vibrancy"].dark {
-    --sidebar: var(--background);
+    --sidebar: var(--background) !important;
   }
 }
 

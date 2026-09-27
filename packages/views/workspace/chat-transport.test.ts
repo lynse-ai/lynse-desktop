@@ -582,6 +582,37 @@ describe("PollChatTransport", () => {
     });
   });
 
+  it("asks for re-login instead of busy when a 503 is an identity failure", async () => {
+    apiMocks.post.mockRejectedValue(
+      new ApiError(503, '{"detail":"身份校验失败，请稍后重试"}'),
+    );
+
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+
+    // An unverifiable token never succeeds on retry — surface it immediately.
+    expect(apiMocks.post).toHaveBeenCalledTimes(1);
+    expect(onEvent).toHaveBeenCalledWith({
+      type: "error",
+      message: "登录状态已失效，请重新登录后再试",
+    });
+  });
+
+  it("passes real 503 details through instead of rewriting them as busy", async () => {
+    apiMocks.post.mockRejectedValue(new ApiError(503, '{"detail":"身份校验超时，请稍后重试"}'));
+
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+
+    // Timeout stays retryable busy semantics, but the message is the
+    // backend's own copy — not the phantom "too many users".
+    expect(apiMocks.post).toHaveBeenCalledTimes(1 + chatPollTiming.maxSubmitRetries);
+    expect(onEvent).toHaveBeenCalledWith({
+      type: "error",
+      message: "身份校验超时，请稍后重试",
+    });
+  });
+
   it("recovers when the busy envelope clears after a retry", async () => {
     apiMocks.post
       .mockRejectedValueOnce(new ApiError(503, '{"code":503,"msg":"system.error.busy","data":null}'))

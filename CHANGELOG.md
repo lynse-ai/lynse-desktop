@@ -8,6 +8,12 @@
 > the history (that commit documents a `vA.B.C(N)` build-counter tag
 > convention), so they are not listed either.
 
+## 1.1.4 (2026-09-28)
+
+### Fixed
+
+- Fixed a memory leak in the Markdown note editor: an editor instance created asynchronously was left alive when the editor unmounted.
+
 ## 1.1.3 (2026-09-27)
 
 ### New Features

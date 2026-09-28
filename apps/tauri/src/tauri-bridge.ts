@@ -571,7 +571,7 @@ export async function installTauriBridge(): Promise<void> {
       save: (todo: unknown) => command("todo_save", { todo }),
       delete: (id: string) => command("todo_delete", { id }),
       addToCalendar: (id: string, title: string, sourceTitle: string | null, startAt: string, endAt: string, confirmed: boolean) =>
-        command("todo_add_to_calendar", { todo_id: id, title, source_title: sourceTitle, start_at: startAt, end_at: endAt, confirmed }),
+        command("todo_add_to_calendar", { todoId: id, title, sourceTitle, startAt, endAt, confirmed }),
     },
     inspiration: {
       list: () => command("inspiration_list"),

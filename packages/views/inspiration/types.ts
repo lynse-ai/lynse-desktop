@@ -66,6 +66,47 @@ export type InspirationRecord = {
   transcript?: string | null;
   transcriptStatus?: InspirationTranscriptStatus | null;
   transcriptError?: string | null;
+  /**
+   * Sensitivity of the note (plan T8.4). `restricted` needs an explicit
+   * per-record cloud-save consent on the Lynse Memory side before it syncs.
+   */
+  sensitivity?: "normal" | "private" | "sensitive" | "restricted";
+  /** Whether this note participates in AI context recall (default true). */
+  aiContextEnabled?: boolean;
+  /** Server sync version + state; present once the record is cloud-bound. */
+  version?: number;
+  syncState?: InspirationSyncState;
+  /** Server record kept alongside the local draft when a 409 conflict hits. */
+  serverRecord?: Partial<InspirationRecord> | null;
+};
+
+/** Per-record cloud sync state (plan T8.1: 仅本机 / 同步中 / 已同步 / 冲突). */
+export type InspirationSyncState = "local" | "syncing" | "synced" | "conflict";
+
+export type InspirationCloudStatus = {
+  bound: boolean;
+  userId?: string;
+  apiBase?: string;
+  cursor?: string;
+  pendingOps?: number;
+  conflicts?: number;
+  lastSyncAt?: string | null;
+  lastError?: string | null;
+  paused?: boolean;
+  /** id → sync state for records known to the account cache. */
+  recordStates?: Record<string, InspirationSyncState>;
+};
+
+export type InspirationCloudSyncReport = {
+  skipped?: string;
+  submitted?: number;
+  appliedChanges?: number;
+  deletedChanges?: number;
+  conflicts?: number;
+  pendingOps?: number;
+  paused?: string | null;
+  error?: string | null;
+  cursor?: string;
 };
 
 /** Payload for `inspiration_save`. The backend fills id/timestamps. */
@@ -83,6 +124,15 @@ export type InspirationSaveInput = {
   images?: Array<{ file: string }>;
   /** Staged image attachments to adopt into durable storage. */
   pendingImages?: Array<{ sourcePath: string; width?: number; height?: number }>;
+  /** Per-inspiration switches (plan T8.4); absent fields keep stored values. */
+  sensitivity?: InspirationRecord["sensitivity"];
+  aiContextEnabled?: boolean;
+  /**
+   * Explicit server version to rebase on (conflict resolution, plan T8.3):
+   * resubmitting a kept draft passes the server record's version so the
+   * retried update carries the right baseVersion.
+   */
+  version?: number;
 };
 
 export type InspirationVoiceSnapshot = {
@@ -131,4 +181,13 @@ export interface DesktopInspirationApi {
   voiceState: () => Promise<InspirationVoiceSnapshot>;
   /** Subscribe to `inspiration-voice-event`; returns an unlisten fn. */
   onVoiceEvent: (callback: (event: InspirationVoiceEvent) => void) => Promise<() => void>;
+  /**
+   * Lynse Memory cloud sync (plan T7/T8). `cloudBind` must only be called
+   * after the renderer verified the Lynse token via `GET /v1/me` and passes
+   * the server-derived user id; API-Key sessions never bind.
+   */
+  cloudBind: (userId: string, apiBase: string) => Promise<InspirationCloudStatus>;
+  cloudUnbind: () => Promise<void>;
+  cloudStatus: () => Promise<InspirationCloudStatus>;
+  cloudSync: (token: string) => Promise<InspirationCloudSyncReport>;
 }

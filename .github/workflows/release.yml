@@ -183,8 +183,8 @@ jobs:
       - name: Stamp build number (macOS)
         # Apple requires CFBundleVersion (the build number) to strictly increase
         # over the app's lifetime, independent of the marketing version. Use the
-        # workflow run number: monotonic, never resets on major/minor bumps,
-        # and needs no bookkeeping in release tags (tags are pure semver now).
+        # workflow run number: monotonic. The marketing version is frozen at
+        # 1.1.4 — releases differ only by build-counter tags `v1.1.4(N)`.
         if: runner.os == 'macOS'
         shell: bash
         run: |
@@ -220,8 +220,11 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
+          # Literal prefix match, not a regex: version headings may contain
+          # build-counter parentheses (`## 1.1.4(2) (date)`) that a regex
+          # would parse as a capture group.
           BODY=$(awk -v ver="$VERSION" '
-            $0 ~ "^## " ver "( |$)" { found = 1; next }
+            index($0, "## " ver " ") == 1 { found = 1; next }
             found && /^## / { exit }
             found { print }
           ' CHANGELOG.md | cat -s | sed -e '/./,$!d')

@@ -8,6 +8,12 @@
 > the history (that commit documents a `vA.B.C(N)` build-counter tag
 > convention), so they are not listed either.
 
+## 1.1.4(2) (2026-09-28)
+
+### Fixed
+
+- Fixed adding a to-do item to the system calendar: the desktop bridge passed snake_case argument names, which Tauri rejected as `missing required key todoId`.
+
 ## 1.1.4 (2026-09-28)
 
 ### Fixed

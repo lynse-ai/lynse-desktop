@@ -904,7 +904,7 @@ describe("transport selection by server", () => {
   });
 
   it("targets the dedicated agent base URL with native lynclaw paths when configured (route B)", async () => {
-    const agentBase = "https://lynclaw-api-319577-10-1401959758.sh.run.tcloudbase.com";
+    const agentBase = "https://lynclaw-api-321192-9-1401959758.sh.run.tcloudbase.com";
     apiMocks.getAgentBaseUrl.mockReturnValue(agentBase);
     apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
     apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });

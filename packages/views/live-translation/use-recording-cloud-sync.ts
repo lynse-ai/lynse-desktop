@@ -14,6 +14,7 @@ import {
 import { deriveFilename } from "./recording-complete-dialog";
 import { getDesktopLiveTranslationApi } from "./desktop-api";
 import { useNotificationStore } from "../notifications/use-notification-store";
+import { transcribeWithCreditsToast } from "../workspace/transcription-credits";
 import type { CompletedLiveSession } from "./types";
 
 // ───────────────────────────────────────────────────────────────
@@ -69,8 +70,11 @@ async function runCloudSync(target: SyncTarget): Promise<void> {
       : undefined,
   });
 
-  // Trigger the server-side transcription + summarization pipeline.
-  await api().post("/api/business/file/trans", { fileId });
+  // Trigger the server-side transcription + summarization pipeline. This is
+  // the charge point — toast how many credits the submission consumed.
+  await transcribeWithCreditsToast(() =>
+    api().post<{ requiredPoints?: number }>("/api/business/file/trans", { fileId }),
+  );
   await desktopApi.finalizeLocal(target.sessionId, true);
 }
 
@@ -95,6 +99,9 @@ export function useRecordingCloudSync() {
         // both list keys have to be refetched.
         await qc.invalidateQueries({ queryKey: ["files"] });
         await qc.invalidateQueries({ queryKey: ["notes"] });
+        // The transcription submission charged credits — refresh balances.
+        await qc.invalidateQueries({ queryKey: ["user", "credits"] });
+        await qc.invalidateQueries({ queryKey: ["user", "membership"] });
         toast.success(t("live_translation.saved"));
         // Persist into the unified notification center (the toast is ephemeral).
         useNotificationStore.getState().add({

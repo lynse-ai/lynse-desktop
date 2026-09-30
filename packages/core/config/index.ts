@@ -20,6 +20,9 @@ export const AGENT_API_URL_STORAGE_KEY = "lynse_agent_api_url";
  * Route B preset: the lynclaw agent service deployed on Tencent CloudRun,
  * connected to directly — no Lynse gateway in between. The service accepts
  * the Lynse session token and the poll chat contract.
+ *
+ * Deployment `lynclaw-api-321192-9` replaced the retired `319577-10` one
+ * (user-confirmed 2026-09-30); the old host must not be referenced anywhere.
  */
 export const CLOUDRUN_AGENT_URL =
-  "https://lynclaw-api-319577-10-1401959758.sh.run.tcloudbase.com";
+  "https://lynclaw-api-321192-9-1401959758.sh.run.tcloudbase.com";

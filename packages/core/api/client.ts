@@ -19,6 +19,11 @@ let apiTransportMode: "proxy" | "direct" = "proxy";
 /** Gateway envelope code for missing/expired credentials ("Please provide
  *  authentication token") — arrives as HTTP 200, not a real 401. */
 const GATEWAY_AUTH_ERROR_CODE = 2013;
+/** Same gateway family reports an existing-but-dead session as 2000 ("User
+ *  is not logged in or session has expired"). Left unhandled the UI silently
+ *  keeps showing stale authenticated data: queries retain their last
+ *  successful payload while every refetch fails. */
+const GATEWAY_SESSION_EXPIRED_CODE = 2000;
 
 /**
  * Desktop shells that provide a native fetch implementation can bypass the
@@ -148,11 +153,21 @@ export class ApiClient {
 
     if (json && typeof json === "object" && "code" in json && "data" in json) {
       if (json.code !== 200) {
-        // The gateway reports missing/expired credentials as an HTTP-200
-        // envelope (e.g. code 2013 "Please provide authentication token")
-        // instead of a real 401 — treat it as unauthorized so the session
-        // drops and the app falls back to the launch page.
-        if (json.code === GATEWAY_AUTH_ERROR_CODE) this.onUnauthorized?.();
+        // The gateway reports missing/expired credentials as HTTP-200
+        // envelopes (2013 "Please provide authentication token", 2000 "User
+        // is not logged in or session has expired") instead of a real 401 —
+        // treat both as unauthorized so the session drops and the app falls
+        // back to the launch page. The message check is a safety net for
+        // sibling gateways that phrase the same condition under other codes.
+        const envelopeMessage =
+          typeof json.msg === "string" ? json.msg : typeof json.message === "string" ? json.message : "";
+        if (
+          json.code === GATEWAY_AUTH_ERROR_CODE ||
+          json.code === GATEWAY_SESSION_EXPIRED_CODE ||
+          /not logged in|session has expired/i.test(envelopeMessage)
+        ) {
+          this.onUnauthorized?.();
+        }
         // `data` may carry useful fields even on failure (e.g. `cooldown`
         // alongside error.operation.too.frequent).
         throw new ApiError(

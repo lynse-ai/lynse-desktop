@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { openUrl, openPath } from "@tauri-apps/plugin-opener";
+import { openUrl, openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -98,6 +98,12 @@ export type UpdateDownloadProgress = {
 
 type DesktopApi = {
   openExternal: (url: string) => Promise<void>;
+  // Saves a remote attachment into the system Downloads folder (via Rust —
+  // the webview can't fetch the signed object hosts, no CORS for the app
+  // origin, and WKWebView ignores anchor downloads) and reveals the file.
+  attachment: {
+    save: (url: string, fileName: string) => Promise<{ path: string }>;
+  };
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
   cloudSync: DesktopCloudSyncApi;
   liveTranslation: DesktopLiveTranslationApi;
@@ -545,6 +551,18 @@ export async function installTauriBridge(): Promise<void> {
         });
       },
       relaunchApp: () => relaunch(),
+    },
+    attachment: {
+      // Rust fetches (no CORS applies) into Downloads with a never-overwrite
+      // name, then the file is revealed in Finder / Explorer.
+      save: async (url, fileName) => {
+        const { path } = await command<{ path: string }>("attachment_save", {
+          url,
+          fileName,
+        });
+        await revealItemInDir(path);
+        return { path };
+      },
     },
     vault: {
       getConfig: () => command("vault_config_get"),

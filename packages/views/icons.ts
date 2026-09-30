@@ -60,6 +60,9 @@ export {
   Pencil,           // Rename / Edit inline
   MoreHorizontal,   // Context menu trigger
   GripVertical,     // Drag handle
+  ZoomIn,           // Image viewer zoom in
+  ZoomOut,          // Image viewer zoom out
+  Fullscreen,       // Image viewer fit to window
 
   // ── Content / Document ────────────────────────────────
   FileText,         // Generic document / file

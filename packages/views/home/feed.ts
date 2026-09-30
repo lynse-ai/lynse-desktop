@@ -164,9 +164,6 @@ function todoEntries(todos: TodoItem[], windowStart: Date, windowEnd: Date): Fee
       // Place the todo at its due date on the timeline.
       at: due,
       title: todo.title,
-      description: todo.sourceTitle
-        ? { i18nKey: "home.desc_from_source", params: { title: todo.sourceTitle } }
-        : undefined,
       badge,
       data: todo,
     });

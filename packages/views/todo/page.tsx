@@ -206,12 +206,6 @@ function TodoItemRow({
           {todo.owner}
         </span>
       )}
-      {todo.sourceTitle && (
-        <span className="shrink-0 text-xs text-muted-foreground/70">
-          来源：{todo.sourceTitle}
-          {formatSourceTime(todo.sourceMeetingTime as any)}
-        </span>
-      )}
       {!todo.calendarEventId && (
         <Calendar className="size-4 shrink-0 text-muted-foreground/40" />
       )}
@@ -302,6 +296,14 @@ export function TodoEditSheet({
     if (todo.calendarStartAt) {
       try {
         const d = new Date(todo.calendarStartAt);
+        if (!isNaN(d.getTime())) return toLocalTimeInput(d);
+      } catch { /* fall through */ }
+    }
+    // Full-ISO dueDate (cloud todos) carries the extracted time; date-only
+    // due dates have none, so keep the 14:00 default there.
+    if (todo.dueDate && todo.dueDate.length > 10) {
+      try {
+        const d = new Date(todo.dueDate);
         if (!isNaN(d.getTime())) return toLocalTimeInput(d);
       } catch { /* fall through */ }
     }

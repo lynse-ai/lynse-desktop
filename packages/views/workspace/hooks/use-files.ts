@@ -30,6 +30,7 @@ import {
   mergeCloudAndLocalFiles,
 } from "../local-transcription";
 import { removeNotesFromVault } from "../note-vault";
+import { transcribeWithCreditsToast } from "../transcription-credits";
 
 // Lynse API returns { code, data: [...files], total, msg }
 // ApiClient unwraps to the inner data field (the file array)
@@ -605,9 +606,14 @@ export function useTransferFile() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (req: TransferFileReq) =>
-      api().post<TransferFileResult>("/api/business/file/trans", req),
+      transcribeWithCreditsToast(() =>
+        api().post<TransferFileResult>("/api/business/file/trans", req),
+      ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["files"] });
+      // The submission just charged credits — refresh balance displays.
+      qc.invalidateQueries({ queryKey: ["user", "credits"] });
+      qc.invalidateQueries({ queryKey: ["user", "membership"] });
     },
   });
 }
@@ -1001,7 +1007,11 @@ export async function rerunSummaryPipeline({
   getCurrentConclusions = (params) =>
     api().getWithParams<FileConclusion[]>("/api/business/file/conclusion/list", params),
   startProcessing = (request) =>
-    api().post<TransferFileResult>("/api/business/file/trans", request),
+    // Default (production) submission toasts the credits the server charged;
+    // test doubles injected via this parameter bypass the helper entirely.
+    transcribeWithCreditsToast(() =>
+      api().post<TransferFileResult>("/api/business/file/trans", request),
+    ),
   waitForProcessing = (args) => waitForTranscriptionCompletion(args),
   waitForConclusion = (args) => waitForConclusionCompletion(args),
 }: {
@@ -1044,6 +1054,9 @@ export function useRerunSummary() {
       qc.invalidateQueries({ queryKey: ["files"] });
       // The pipeline may also rename the file (AI title) — refresh the notes list.
       qc.invalidateQueries({ queryKey: ["notes"] });
+      // Transcription charged credits at submission — refresh balance displays.
+      qc.invalidateQueries({ queryKey: ["user", "credits"] });
+      qc.invalidateQueries({ queryKey: ["user", "membership"] });
       if (data.conclusion) {
         qc.setQueryData(["file-conclusions", req.fileId], [data.conclusion]);
       } else {

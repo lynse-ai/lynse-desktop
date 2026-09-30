@@ -4,9 +4,10 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useAuthStore } from "@lynse/core/auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@lynse/ui/components/ui/dialog";
 import { cn } from "@lynse/ui/lib/utils";
 import { UserCircle, Zap, Clock } from "../icons";
-import { useMembership, useUserCredits, type MembershipQuota } from "../layout/use-user-credits";
+import { useMembership, useUserCredits, usePointsLedger, type MembershipQuota, type PointsLogEntry } from "../layout/use-user-credits";
 import { useLocalizedPlan } from "../layout/user-profile-dropdown";
 import { memberBadgeSrc } from "./member-badges";
 
@@ -61,18 +62,25 @@ const toneFillClass = {
 } as const;
 
 /** Usage quota row: tinted icon chip, the remaining figure emphasized with
- * the quota total de-emphasized beside it, and a bar that fills on mount. */
+ * the quota total de-emphasized beside it, and a bar that fills on mount.
+ * `labelExtra` renders fine content right after the label (the points-history
+ * entry point); `extra` renders colored chips between the emphasized figure
+ * and the total (monthly gifts, booster balance) in consumption order. */
 function QuotaRow({
   icon: Icon,
   label,
+  labelExtra,
   emphasized,
+  extra,
   suffix,
   fraction,
   className,
 }: {
   icon: typeof Zap;
   label: string;
+  labelExtra?: ReactNode;
   emphasized: ReactNode;
+  extra?: ReactNode;
   suffix?: ReactNode;
   fraction: number | null;
   className?: string;
@@ -87,9 +95,11 @@ function QuotaRow({
             <Icon className="size-3" />
           </span>
           {label}
+          {labelExtra}
         </span>
-        <span className="text-13 font-semibold tabular-nums">
+        <span className="flex items-baseline gap-1.5 text-13 font-semibold tabular-nums">
           {emphasized}
+          {extra}
           {suffix && (
             <span className="font-normal text-muted-foreground">{suffix}</span>
           )}
@@ -117,6 +127,46 @@ function QuotaRow({
   );
 }
 
+/** Direction of one points-log row. The server's operationType ("+"/"-") is
+ *  authoritative; changeType is the fallback for legacy rows lacking it. */
+function pointsChangeSign(entry: PointsLogEntry): string {
+  if (entry.operationType === "+") return "+";
+  if (entry.operationType === "-") return "−";
+  if (entry.changeType === 1) return "−";
+  if (entry.changeType === 3) return "";
+  return "+";
+}
+
+/** One recent-points-transaction row: type label (+ free-text detail, e.g.
+ *  the booster-pack name on purchases), then signed amount and the date. */
+function PointsLogRow({ entry }: { entry: PointsLogEntry }) {
+  const { t } = useTranslation();
+  const changeType = typeof entry.changeType === "number" ? entry.changeType : -1;
+  const label =
+    changeType >= 0 && changeType <= 7
+      ? t(`layout.points_change_${changeType}`)
+      : t("layout.points_change_unknown");
+  const amount = typeof entry.pointsAmount === "number" ? entry.pointsAmount : Number(entry.pointsAmount) || 0;
+  const time = typeof entry.createTime === "string" ? entry.createTime.slice(5, 16) : "";
+  const detail = typeof entry.pointsDetails === "string" ? entry.pointsDetails : "";
+
+  return (
+    <div className="flex items-center justify-between gap-2 text-2xs">
+      <span className="min-w-0 truncate text-muted-foreground">
+        {label}
+        {detail && <span className="text-muted-foreground/60"> · {detail}</span>}
+      </span>
+      <span className="flex shrink-0 items-center gap-1.5 tabular-nums">
+        <span className={cn(pointsChangeSign(entry) === "−" ? "text-destructive/80" : "text-primary/80")}>
+          {pointsChangeSign(entry)}
+          {Math.abs(amount).toLocaleString()}
+        </span>
+        <span className="text-muted-foreground/60">{time}</span>
+      </span>
+    </div>
+  );
+}
+
 /**
  * Account summary for the settings "Account & Storage" page: identity
  * (nickname + masked phone, with the tier medallion beside paid nicknames),
@@ -129,6 +179,8 @@ export function AccountCard() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const { data: credits } = useUserCredits();
   const { data: membership } = useMembership();
+  const { data: ledger } = usePointsLedger();
+  const [historyOpen, setHistoryOpen] = useState(false);
   const durationText = useDurationText();
   const plan = useLocalizedPlan(membership?.memberLevel || credits?.benefitType);
 
@@ -199,7 +251,38 @@ export function AccountCard() {
         <QuotaRow
           icon={Zap}
           label={t("layout.credits_label")}
-          emphasized={pointsRemaining.toLocaleString()}
+          labelExtra={
+            ledger && ledger.recent.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => setHistoryOpen(true)}
+                className="cursor-pointer text-2xs text-muted-foreground/70 underline decoration-dotted underline-offset-2 transition-colors hover:text-foreground"
+              >
+                {t("layout.points_history")}
+              </button>
+            ) : null
+          }
+          emphasized={<span className="text-warning">{pointsRemaining.toLocaleString()}</span>}
+          extra={
+            <>
+              {ledger && ledger.monthlyGiftTotal > 0 && (
+                <span
+                  className="text-2xs font-normal text-muted-foreground"
+                  title={t("settings.account_monthly_gift_hint")}
+                >
+                  {t("settings.account_monthly_gift")} {ledger.monthlyGiftTotal.toLocaleString()}
+                </span>
+              )}
+              {ledger && ledger.boosterRemaining !== null && ledger.boosterRemaining > 0 && (
+                <span
+                  className="rounded-full bg-warning/15 px-1.5 py-0.5 text-2xs font-semibold text-warning"
+                  title={t("settings.account_booster_hint")}
+                >
+                  +{ledger.boosterRemaining.toLocaleString()} {t("settings.account_booster")}
+                </span>
+              )}
+            </>
+          }
           suffix={` / ${pointsTotal.toLocaleString()}`}
           fraction={pointsTotal > 0 ? pointsRemaining / pointsTotal : null}
         />
@@ -218,6 +301,27 @@ export function AccountCard() {
           />
         )}
       </CardContent>
+
+      {/* Secondary view: full points history, opened from the fine link on
+          the credits label. Kept out of the card so the summary stays clean. */}
+      <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("layout.points_history")}</DialogTitle>
+            <DialogDescription>{t("settings.account_points_history_hint")}</DialogDescription>
+          </DialogHeader>
+          <div className="flex max-h-[50vh] flex-col gap-1.5 overflow-y-auto pr-1">
+            {ledger?.recent.map((entry) => (
+              <PointsLogRow key={entry.id ?? `${entry.createTime}-${entry.pointsAmount}`} entry={entry} />
+            ))}
+            {ledger && ledger.recent.length === 0 && (
+              <p className="py-4 text-center text-xs text-muted-foreground">
+                {t("settings.account_points_history_empty")}
+              </p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

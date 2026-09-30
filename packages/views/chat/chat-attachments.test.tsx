@@ -141,6 +141,34 @@ describe("ChatAttachments", () => {
     vi.unstubAllGlobals();
   });
 
+  it("does not fall back to the web download when the save dialog is cancelled", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const save = vi.fn().mockResolvedValue(null);
+    (window as Window & { desktopAPI?: unknown }).desktopAPI = {
+      attachment: { save },
+    };
+    render(
+      <ChatAttachments
+        attachments={[
+          {
+            id: "a".repeat(32),
+            name: "灵光记图文总结.png",
+            type: "image",
+            url: "https://files.example.com/card.png",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("img", { name: "灵光记图文总结.png" }));
+    fireEvent.click(screen.getByTestId("chat-image-download"));
+
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it("renders pdf attachments as a plain file card without an inline preview and downloads on click", async () => {
     const open = vi.spyOn(window, "open").mockImplementation(() => null);
     const fetchMock = vi.fn().mockRejectedValue(new Error("cors"));

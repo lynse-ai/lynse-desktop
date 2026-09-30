@@ -3895,45 +3895,18 @@ fn diagnostics_prepare_report(
     Ok(json!({ "dir": dir.to_string_lossy() }))
 }
 
-/// Sanitize a client-supplied download name: keep the last path component,
-/// replace control characters and Windows-forbidden ones, then trim. Returns
-/// None when nothing usable remains (unlike `is_safe_asset_file_name` this
-/// keeps non-ASCII names such as Chinese attachment titles).
-fn safe_download_file_name(name: &str) -> Option<String> {
-    let base = Path::new(name).file_name()?.to_string_lossy();
-    let cleaned: String = base
-        .chars()
-        .map(|c| {
-            if c.is_control()
-                || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
-            {
-                '_'
-            } else {
-                c
-            }
-        })
-        .collect();
-    let trimmed = cleaned.trim().trim_matches('.').trim();
-    if trimmed.is_empty() || trimmed.len() > 200 {
-        return None;
-    }
-    Some(trimmed.to_string())
-}
-
-/// Save a chat attachment (a visual-summary image, for example) into the
-/// system Downloads folder. The webview can't fetch the signed object hosts
-/// (they send no CORS headers for the app origin) and anchor downloads are
-/// inert inside WKWebView, so the fetch runs here over reqwest — no CORS
-/// applies. Returns the written path so the UI can reveal it.
+/// Save a chat attachment (a visual-summary image, for example) to the path
+/// the user picked in the native save dialog. The webview can't fetch the
+/// signed object hosts (they send no CORS headers for the app origin), so
+/// the fetch runs here over reqwest — no CORS applies. The dialog already
+/// asks about replacing an existing file, so the chosen path is written as
+/// picked.
 #[tauri::command]
-async fn attachment_save(app: AppHandle, url: String, file_name: String) -> CommandResult<Value> {
-    let name =
-        safe_download_file_name(&file_name).ok_or_else(|| "invalid file name".to_string())?;
-    let dir = app
-        .path()
-        .download_dir()
-        .map_err(|error| format!("resolve downloads dir: {error}"))?;
-    fs::create_dir_all(&dir).map_err(|error| format!("create downloads dir: {error}"))?;
+async fn attachment_save(url: String, path: String) -> CommandResult<Value> {
+    let target = PathBuf::from(&path);
+    if target.file_name().is_none() {
+        return Err("invalid target path".to_string());
+    }
 
     let bytes = reqwest::get(&url)
         .await
@@ -3944,23 +3917,8 @@ async fn attachment_save(app: AppHandle, url: String, file_name: String) -> Comm
         .await
         .map_err(|error| format!("read attachment: {error}"))?;
 
-    // Never overwrite: pick the first free "name", "name (1)", … slot.
-    let stem = Path::new(&name)
-        .with_extension("")
-        .to_string_lossy()
-        .to_string();
-    let extension = Path::new(&name)
-        .extension()
-        .map(|ext| ext.to_string_lossy().to_string());
-    let mut target = dir.join(&name);
-    let mut index = 1;
-    while target.exists() {
-        let candidate = match &extension {
-            Some(ext) => format!("{stem} ({index}).{ext}"),
-            None => format!("{stem} ({index})"),
-        };
-        target = dir.join(candidate);
-        index += 1;
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("create target dir: {error}"))?;
     }
     fs::write(&target, &bytes).map_err(|error| format!("write attachment: {error}"))?;
 

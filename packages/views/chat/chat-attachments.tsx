@@ -24,17 +24,19 @@ function attachmentKind(attachment: ChatAttachment): "image" | "pdf" | "html" | 
 
 /** Optional desktop bridge surface used for downloads (`window.desktopAPI`). */
 type DesktopDownloadBridge = {
-  attachment?: { save?: (url: string, fileName: string) => Promise<{ path: string }> };
+  attachment?: {
+    save?: (url: string, fileName: string) => Promise<{ path: string } | null>;
+  };
   openExternal?: (url: string) => Promise<void>;
 };
 
 /**
- * Save the attachment. Desktop goes through Rust (`attachment.save`): the
- * webview can't fetch the signed object hosts (no CORS for the app origin)
- * and anchor downloads are inert in WKWebView — the file lands in the
- * system Downloads folder and is revealed in Finder / Explorer. The web
- * uses the browser's downloader, falling back to opening the URL for a
- * manual save when the signed host refuses CORS.
+ * Save the attachment. Desktop first asks where to save with a native
+ * dialog, then Rust fetches (the webview can't — no CORS for the app
+ * origin) and writes to the picked path, revealing the file afterwards.
+ * Cancelling the dialog does nothing. The web uses the browser's
+ * downloader, falling back to opening the URL for a manual save when the
+ * signed host refuses CORS.
  */
 async function downloadAttachment(
   url: string,
@@ -44,11 +46,12 @@ async function downloadAttachment(
   const desktop = (window as Window & { desktopAPI?: DesktopDownloadBridge }).desktopAPI;
   if (desktop?.attachment?.save) {
     try {
-      await desktop.attachment.save(url, filename || "attachment");
-      if (savedMessage) toast.success(savedMessage);
+      const saved = await desktop.attachment.save(url, filename || "attachment");
+      if (saved && savedMessage) toast.success(savedMessage);
+      // Cancelled or saved — either way the web path must stay silent.
       return;
     } catch {
-      // Fetch/write failed on the desktop side — try the web path below.
+      // Dialog or write failed on the desktop side — try the web path below.
     }
   }
   try {

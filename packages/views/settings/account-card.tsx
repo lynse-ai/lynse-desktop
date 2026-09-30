@@ -264,24 +264,14 @@ export function AccountCard() {
           }
           emphasized={<span className="text-warning">{pointsRemaining.toLocaleString()}</span>}
           extra={
-            <>
-              {ledger && ledger.monthlyGiftTotal > 0 && (
-                <span
-                  className="text-2xs font-normal text-muted-foreground"
-                  title={t("settings.account_monthly_gift_hint")}
-                >
-                  {t("settings.account_monthly_gift")} {ledger.monthlyGiftTotal.toLocaleString()}
-                </span>
-              )}
-              {ledger && ledger.boosterRemaining !== null && ledger.boosterRemaining > 0 && (
-                <span
-                  className="rounded-full bg-warning/15 px-1.5 py-0.5 text-2xs font-semibold text-warning"
-                  title={t("settings.account_booster_hint")}
-                >
-                  +{ledger.boosterRemaining.toLocaleString()} {t("settings.account_booster")}
-                </span>
-              )}
-            </>
+            ledger && ledger.boosterRemaining !== null && ledger.boosterRemaining > 0 && (
+              <span
+                className="rounded-full bg-warning/15 px-1.5 py-0.5 text-2xs font-semibold text-warning"
+                title={t("settings.account_booster_hint")}
+              >
+                +{ledger.boosterRemaining.toLocaleString()} {t("settings.account_booster")}
+              </span>
+            )
           }
           suffix={` / ${pointsTotal.toLocaleString()}`}
           fraction={pointsTotal > 0 ? pointsRemaining / pointsTotal : null}

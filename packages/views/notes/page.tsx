@@ -324,8 +324,13 @@ export function NotesPage() {
     // Wide range → effectively "all my meetings" (recordings + their notes).
     startTime: "2020-01-01T00:00:00",
     endTime,
+    // The global QueryClient pins staleTime at Infinity, so a remount would
+    // otherwise keep serving the cached list forever. Notes are edited across
+    // devices — revalidate against the cloud on every entry to this page
+    // (the previous list stays painted while the refetch runs).
+    refetchOnMount: "always",
   });
-  const { data: folders } = useFolders();
+  const { data: folders } = useFolders({ refetchOnMount: "always" });
 
   // Right-click actions on a note row: move to another group / soft-delete.
   // Same mutations the workspace file list uses, so both views stay in sync

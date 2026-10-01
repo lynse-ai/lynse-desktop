@@ -266,6 +266,8 @@ export function useNotes(params: {
   startTime?: string;
   endTime?: string;
   enabled?: boolean;
+  /** Pass "always" to refetch on every mount (the global client pins staleTime). */
+  refetchOnMount?: boolean | "always";
 }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
@@ -274,6 +276,7 @@ export function useNotes(params: {
     // and an unstable object/Date in the key would create a new cache entry per
     // render (data → undefined → blank list).
     queryKey: ["notes", params.startTime, params.endTime, isAuthenticated],
+    refetchOnMount: params.refetchOnMount,
     // Keep the previous list visible while a refetch is in flight.
     placeholderData: keepPreviousData,
     queryFn: async () => {

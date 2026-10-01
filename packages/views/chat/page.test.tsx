@@ -55,6 +55,28 @@ vi.mock("@lynse/ui/markdown", () => ({
   StreamingMarkdown: ({ content }: { content: string }) => <div>{content}</div>,
 }));
 
+// The page registers the history toggle into the unified app title bar;
+// render the registered middle-toggle as a real button so the history test
+// can still click it by its label.
+vi.mock("../layout/app-title-bar", () => ({
+  TitleBarSlot: (props: {
+    actions?: React.ReactNode;
+    middleToggle?: { collapsed: boolean; onToggle: () => void; label?: string };
+  }) => (
+    <div>
+      {props.actions}
+      {props.middleToggle && (
+        <button
+          type="button"
+          onClick={props.middleToggle.onToggle}
+          aria-label={props.middleToggle.label}
+          aria-pressed={!props.middleToggle.collapsed}
+        />
+      )}
+    </div>
+  ),
+}));
+
 afterEach(() => {
   cleanup();
   chat.isLoading = false;

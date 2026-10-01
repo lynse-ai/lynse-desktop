@@ -11,7 +11,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
-  Clock,
   FileText,
   Globe,
   Headphones,
@@ -59,6 +58,7 @@ import {
 } from "./chat-attachment-upload";
 import { ChatHistorySidebar } from "./chat-history-sidebar";
 import { AssistantSwitcher } from "./assistant-switcher";
+import { TitleBarSlot } from "../layout/app-title-bar";
 import { MentionChips, MentionPicker } from "./chat-mention-picker";
 import {
   activeMentions,
@@ -555,52 +555,48 @@ export function ChatPage() {
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <header
-        className="flex h-14 shrink-0 items-center border-b border-border/50 bg-background/80 px-6 backdrop-blur-xl select-none"
-        data-tauri-drag-region
-      >
-        <div className="flex min-w-0 flex-1 items-center justify-center gap-2 pl-24" data-tauri-drag-region>
-          <AssistantSwitcher
-            activeAssistant={activeAssistant}
-            onSelect={setActiveAssistant}
-            disabled={isLoading}
-          />
-          {isLoading && (
-            <span className="size-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true" />
-          )}
-        </div>
-        <div className="flex items-center gap-1" data-tauri-drag-region={false}>
-          {!isWorkBuddy && (
-            <>
-          <Button
-            variant="ghost"
-            size="icon"
-            className={`size-8 border transition-colors ${
-              historyOpen
-                ? "border-border bg-card text-foreground"
-                : "border-transparent text-muted-foreground hover:border-border hover:bg-card hover:text-foreground"
-            }`}
-            onClick={() => setHistoryOpen((open) => !open)}
-            title={t("chat.history")}
-            aria-label={t("chat.history")}
-            aria-pressed={historyOpen}
-          >
-            <Clock className="size-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 border border-transparent text-xs text-muted-foreground transition-colors hover:border-border hover:bg-card hover:text-foreground"
-            onClick={handleNewChat}
-            title={t("chat.new_chat")}
-          >
-            <Plus className="size-3.5" />
-            {t("chat.new_chat")}
-          </Button>
-            </>
-          )}
-        </div>
-      </header>
+      {/* Page chrome lives in the unified app title bar via the slot:
+          assistant switcher centered (like the original chat header), the
+          history-drawer toggle on the left of the bar, new-chat on the right. */}
+      <TitleBarSlot
+        title={
+          <>
+            <AssistantSwitcher
+              activeAssistant={activeAssistant}
+              onSelect={setActiveAssistant}
+              disabled={isLoading}
+            />
+            {isLoading && (
+              <span className="size-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true" />
+            )}
+          </>
+        }
+        titleAlign="center"
+        middleToggle={
+          !isWorkBuddy
+            ? {
+                collapsed: !historyOpen,
+                onToggle: () => setHistoryOpen((open) => !open),
+                label: t("chat.history"),
+                panelWidth: 224, // w-56 history drawer
+              }
+            : undefined
+        }
+        actions={
+          !isWorkBuddy ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8 border border-transparent text-muted-foreground transition-colors hover:border-border hover:bg-card hover:text-foreground"
+              onClick={handleNewChat}
+              title={t("chat.new_chat")}
+              aria-label={t("chat.new_chat")}
+            >
+              <Plus className="size-4" />
+            </Button>
+          ) : undefined
+        }
+      />
 
       <AnimatePresence initial={false}>
         {!isWorkBuddy && historyOpen && (
@@ -610,7 +606,7 @@ export function ChatPage() {
             animate={{ x: 0 }}
             exit={reduceMotion ? { opacity: 0 } : { x: "-100%" }}
             transition={{ duration: 0.18, ease: "easeOut" }}
-            className="absolute bottom-0 left-0 top-14 z-20 flex w-56 flex-col border-r border-border/60"
+            className="absolute bottom-0 left-0 top-0 z-20 flex w-56 flex-col border-r border-border/60"
           >
             <ChatHistorySidebar
               conversations={conversations.filter((c) => c.provider !== "workbuddy")}

@@ -4369,14 +4369,10 @@ pub fn run() {
                     return;
                 }
             }
-            // Resizes (and the fullscreen enter/exit behind them) can reset the
-            // traffic lights to the system layout; re-assert the tighter stride.
-            if !matches!(event, tauri::WindowEvent::Resized { .. }) || window.label() != "main" {
-                return;
-            }
-            if let Some(webview) = window.get_webview_window("main") {
-                window_effects::apply_traffic_light_spacing(&webview);
-            }
+            // Traffic lights keep the system-default layout (size, stride and
+            // tao-owned `trafficLightPosition` anchoring) — no re-assertion
+            // needed since the stride-tightening hack was retired with the
+            // rail-embedded lights.
         })
         .invoke_handler(tauri::generate_handler![
             local_transcription_list, local_transcription_get, local_transcription_delete, local_transcription_audio_url,

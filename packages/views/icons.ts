@@ -79,6 +79,7 @@ export {
   Bold,             // Bold mark
   Italic,           // Italic mark
   Code,             // Inline code
+  CodeXml,          // Source view toggle (</>)
   ListOrdered,      // Ordered list
   ListChecks,       // Task list
   Quote,            // Blockquote

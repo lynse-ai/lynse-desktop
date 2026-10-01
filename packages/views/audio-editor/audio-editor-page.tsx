@@ -31,6 +31,7 @@ import { cn } from "@lynse/ui/lib/utils";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@lynse/ui/components/ui/dialog";
 import { getDesktopAudioEditorApi } from "./api";
+import { TitleBarSlot } from "../layout/app-title-bar";
 import { useAudioEditorStore, type AudioEditorSaveMode } from "./store";
 import { EditorWaveform, type WaveformSelection } from "./editor-waveform";
 import { EditorOverview } from "./editor-overview";
@@ -545,12 +546,25 @@ export function AudioEditorPage() {
   return (
     <TooltipProvider delay={200}>
       <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
-        {/* ═══ Header — the recording page's header: back button, title +
-               date on the left, mode / save-target pills on the right. The
-               ✕ / ✓ pair lives between the timer and the transport below,
-               and only while an edit is pending. ═══ */}
+        {/* ═══ Header — the recording page's header: back button on the
+               left, mode / save-target pills on the right. The document
+               title + date live in the unified app title bar. The ✕ / ✓
+               pair lives between the timer and the transport below, and
+               only while an edit is pending. ═══ */}
+        <TitleBarSlot
+          title={
+            <span className="flex max-w-full flex-col items-center leading-tight" data-tauri-drag-region>
+              <span className="max-w-full truncate text-[13px] font-medium text-foreground" title={activeItem?.title}>
+                {activeItem?.title ?? ""}
+              </span>
+              {recordingDate && (
+                <span className="truncate text-2xs text-muted-foreground/60">{recordingDate}</span>
+              )}
+            </span>
+          }
+        />
         <header
-          className="flex h-14 shrink-0 select-none items-center justify-between gap-3 border-b border-border px-5"
+          className="flex h-12 shrink-0 select-none items-center justify-between gap-3 border-b border-border px-5"
           data-tauri-drag-region
         >
           <div className="flex min-w-0 items-center gap-1.5">
@@ -572,14 +586,6 @@ export function AudioEditorPage() {
               />
               <TooltipContent>{backLabel}</TooltipContent>
             </Tooltip>
-            <div className="min-w-0">
-              <h1 className="truncate text-sm font-semibold leading-tight" title={activeItem?.title}>{activeItem?.title ?? ""}</h1>
-              {recordingDate && (
-                <p className="truncate text-2xs leading-tight text-muted-foreground/60">
-                  {recordingDate}
-                </p>
-              )}
-            </div>
           </div>
 
           <div className="flex shrink-0 items-center gap-2">

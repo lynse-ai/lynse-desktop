@@ -16,10 +16,20 @@ function NavigationProviderInner({
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
+  // Next's App Router keeps a monotonically increasing `idx` in history.state;
+  // idx > 0 means there is something to go back to. Defensive: state is null
+  // on a freshly opened tab.
+  const historyIdx =
+    typeof window === "undefined" ? 0 : (window.history.state?.idx ?? 0);
+
   const adapter: NavigationAdapter = {
     push: router.push,
     replace: router.replace,
     back: router.back,
+    forward: () => window.history.forward(),
+    canGoBack: historyIdx > 0,
+    canGoForward:
+      typeof window !== "undefined" && historyIdx < window.history.length - 1,
     pathname,
     searchParams: new URLSearchParams(searchParams.toString()),
     getShareableUrl: (path: string) =>

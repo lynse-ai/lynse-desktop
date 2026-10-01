@@ -8,9 +8,11 @@ import { Button } from "@lynse/ui/components/ui/button";
 import { toast } from "sonner";
 import { featureFlags } from "../feature-flags";
 import { getDesktopInspirationApi } from "../inspiration/desktop-api";
+import { isWebPlatform } from "../platform";
 import { useInspirationCaptureStore } from "../inspiration/capture-store";
 import { type TodoItem, addTodoToSystemCalendar, isCalendarAvailable, saveTodo } from "./todo-api";
 import { useTodos } from "./use-todos";
+import { TitleBarSlot } from "../layout/app-title-bar";
 
 // ── Helpers ────────────────────────────────────────────────
 
@@ -124,7 +126,7 @@ function AddTodoInput({ onAdd }: { onAdd: (title: string) => void }) {
           onKeyDown={onKeyDown}
         />
         <kbd className="pointer-events-none inline-flex h-5 items-center gap-0.5 rounded border border-border/50 bg-muted/60 px-1.5 text-3xs font-medium text-muted-foreground">
-          ⌘↵
+          {isWebPlatform() ? "Enter" : "⌘↵"}
         </kbd>
       </div>
     </div>
@@ -565,40 +567,38 @@ export function TodoPage() {
 
   // ── Render ────────────────────────────────────────────────
   return (
-    <div className="flex h-full flex-col min-w-0">
-      {/* Header */}
-      <div
-        className="flex shrink-0 items-center justify-between border-b border-stroke-secondary px-6 select-none"
-        style={{ height: 44 }}
-        data-tauri-drag-region
-      >
-        <h1 className="text-base font-semibold text-foreground">{t("todo.page_title")}</h1>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => load()}
-            disabled={refreshing}
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 disabled:opacity-50"
-            title={t("todo.refresh")}
-          >
-            <RefreshCw className={`size-3.5 ${refreshing ? "animate-spin" : ""}`} />
-            {t("todo.refresh")}
-          </button>
-          <button
-            onClick={() => clearCompleted()}
-            disabled={clearing || completedCount === 0}
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 disabled:opacity-40"
-            title={t("todo.clear_completed")}
-          >
-            <Trash2 className="size-3.5" />
-            {clearing ? t("todo.clearing") : t("todo.clear_completed")}
-            {completedCount > 0 && !clearing && (
-              <span className="ml-0.5 rounded-full bg-muted px-1.5 text-3xs tabular-nums">
-                {completedCount}
-              </span>
-            )}
-          </button>
-        </div>
-      </div>
+    <div className={`flex h-full flex-col min-w-0${isWebPlatform() ? " mx-auto w-full max-w-3xl" : ""}`}>
+      {/* Refresh / clear actions live in the unified app title bar via the
+          slot (no center title — the bar doesn't echo the page name). */}
+      <TitleBarSlot
+        actions={
+          <>
+            <button
+              onClick={() => load()}
+              disabled={refreshing}
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 disabled:opacity-50"
+              title={t("todo.refresh")}
+            >
+              <RefreshCw className={`size-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              {t("todo.refresh")}
+            </button>
+            <button
+              onClick={() => clearCompleted()}
+              disabled={clearing || completedCount === 0}
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 disabled:opacity-40"
+              title={t("todo.clear_completed")}
+            >
+              <Trash2 className="size-3.5" />
+              {clearing ? t("todo.clearing") : t("todo.clear_completed")}
+              {completedCount > 0 && !clearing && (
+                <span className="ml-0.5 rounded-full bg-muted px-1.5 text-3xs tabular-nums">
+                  {completedCount}
+                </span>
+              )}
+            </button>
+          </>
+        }
+      />
 
       {/* Error banner */}
       {error && (

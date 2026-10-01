@@ -43,17 +43,6 @@ impl WindowEffects {
 
 static WINDOW_EFFECTS: OnceLock<WindowEffects> = OnceLock::new();
 
-/// Horizontal gap between the traffic-light pills, in points. The system
-/// default is 8; a tighter gap keeps the group compact enough to sit balanced
-/// in the narrow sidebar rail. Change together with `trafficLightPosition.x`
-/// in tauri.conf.json, which anchors the group's left edge.
-///
-/// The pills have a 14pt hit frame around a 12pt visible dot, so this gap
-/// leaves a 6pt visible slit between dots and the group spans 48pt.
-/// The 60pt-wide sidebar rail anchors it at x = 6, which keeps ~5pt of
-/// frost on either side of the group.
-const TRAFFIC_LIGHTS_GAP: f64 = 4.0;
-
 /// Reports the material that was actually installed so the renderer knows
 /// whether it may leave the sidebar transparent.
 #[tauri::command]
@@ -87,7 +76,6 @@ pub(crate) fn apply_window_effects(window: &WebviewWindow) -> tauri::Result<()> 
             };
             let _ = WINDOW_EFFECTS.set(mode);
             let _ = app.emit(WINDOW_EFFECTS_EVENT, mode.as_str());
-            unsafe { tighten_traffic_light_stride(&webview) };
         })?;
     }
 
@@ -95,59 +83,6 @@ pub(crate) fn apply_window_effects(window: &WebviewWindow) -> tauri::Result<()> 
     let _ = window;
 
     Ok(())
-}
-
-/// Re-asserts the tightened traffic-light spacing on the main window.
-///
-/// tao re-applies `trafficLightPosition` on every window relayout but reads
-/// the button stride from the live frames, so the tighter stride set at setup
-/// usually survives. Fullscreen transitions can still reset the buttons to the
-/// system layout, so the resize event handler calls this to re-assert it.
-pub(crate) fn apply_traffic_light_spacing(window: &WebviewWindow) {
-    #[cfg(target_os = "macos")]
-    {
-        let window = window.clone();
-        let _ = window.with_webview(move |webview| {
-            unsafe { tighten_traffic_light_stride(&webview) };
-        });
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    let _ = window;
-}
-
-/// Narrows the spacing between the native traffic-light buttons.
-///
-/// Only the stride is changed here; the group's x/y anchor stays owned by
-/// `trafficLightPosition` in tauri.conf.json (tao re-applies it on relayouts).
-///
-/// # Safety
-///
-/// `webview` must hand back a live AppKit window pointer, and every call
-/// happens on the main thread (guaranteed by `with_webview`).
-#[cfg(target_os = "macos")]
-unsafe fn tighten_traffic_light_stride(webview: &tauri::webview::PlatformWebview) {
-    use objc2_app_kit::{NSView, NSWindow, NSWindowButton};
-
-    let ns_window = &*(webview.ns_window() as *mut NSWindow);
-    let Some(close) = ns_window.standardWindowButton(NSWindowButton::CloseButton) else {
-        return;
-    };
-    let Some(miniaturize) = ns_window.standardWindowButton(NSWindowButton::MiniaturizeButton)
-    else {
-        return;
-    };
-    let Some(zoom) = ns_window.standardWindowButton(NSWindowButton::ZoomButton) else {
-        return;
-    };
-
-    let stride = NSView::frame(&close).size.width + TRAFFIC_LIGHTS_GAP;
-    let close_x = NSView::frame(&close).origin.x;
-    for (index, button) in [miniaturize, zoom].into_iter().enumerate() {
-        let mut rect = NSView::frame(&button);
-        rect.origin.x = close_x + (index as f64 + 1.0) * stride;
-        button.setFrameOrigin(rect.origin);
-    }
 }
 
 /// Installs the frosted material on the recording-island floating window.

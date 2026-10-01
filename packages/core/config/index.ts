@@ -2,15 +2,25 @@ export const APP_NAME = "Lynse";
 export const APP_URL =
   typeof window !== "undefined" ? window.location.origin : "";
 
+// Core has no Node types (@types/node is out of boundary); declare just the
+// shape Next.js injects. The `typeof` guard keeps non-Next shells (Tauri /
+// vite) from touching an undefined global, and the literal
+// `process.env.NEXT_PUBLIC_*` member expression must stay intact for the
+// Next.js compiler to inline it at build time.
+declare const process: { env: Record<string, string | undefined> } | undefined;
+
 /**
- * Production backend origin. The last-resort fallback when neither a saved
- * server (`lynse_api_url`) nor a build-time default exists: the packaged
- * shells fetch directly from a custom-scheme origin (tauri://localhost),
- * where a relative request URL cannot even be parsed — without a real
- * backend target, sign-in dies with WebKit's "The string did not match the
- * expected pattern."
+ * Production backend origin. Build-time `NEXT_PUBLIC_API_URL` wins when set
+ * (web deployments point it at the live gateway); the hard-coded value is the
+ * last-resort fallback when neither a saved server (`lynse_api_url`) nor a
+ * build-time default exists: the packaged shells fetch directly from a
+ * custom-scheme origin (tauri://localhost), where a relative request URL
+ * cannot even be parsed — without a real backend target, sign-in dies with
+ * WebKit's "The string did not match the expected pattern."
  */
-export const DEFAULT_API_URL = "https://api.lynse.cn";
+export const DEFAULT_API_URL =
+  (typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_URL) ||
+  "https://api.lynse.cn";
 
 /** Storage key for the optional dedicated AI-assistant (agent) backend origin.
  *  Empty/absent means the assistant rides the main backend gateway. */

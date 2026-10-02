@@ -99,7 +99,7 @@ function providerForEngine(engine: SttEngine, prev?: SttProviderConfig): SttProv
         model: prev?.provider === "moss" ? prev.model ?? DEFAULT_MOSS_MODEL : DEFAULT_MOSS_MODEL,
         hotword_package_id: prev?.provider === "moss" ? prev.hotword_package_id ?? null : null,
       };
-    case "antspeaker":
+    case "sherpa":
       // Voiceprint-model provider, not a transcription engine — absent from
       // ENGINE_OPTIONS, so this branch is unreachable in the UI.
       return defaultProviderConfig();

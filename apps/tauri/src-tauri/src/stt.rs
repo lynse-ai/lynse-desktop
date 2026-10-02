@@ -106,9 +106,9 @@ pub fn model_file_name(provider: &str, model_id: &str) -> Option<String> {
         // WhisperX (faster-whisper CTranslate2 weights + wav2vec2 aligner)
         // downloads via its Python bridge as well.
         "whisperx" => None,
-        // AntSpeaker MECT voiceprint checkpoint: one .pt artifact fetched
-        // through the generic downloader.
-        "antspeaker" => Some("mect_b2_vb2.pt".to_owned()),
+        // sherpa-onnx 3D-Speaker CAM++ voiceprint checkpoint: one .onnx
+        // artifact fetched through the generic downloader.
+        "sherpa" => Some("3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx".to_owned()),
         _ => None,
     }
 }

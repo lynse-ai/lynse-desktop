@@ -9,7 +9,7 @@ import type {
   WorkspaceItem,
 } from "./types";
 
-export type SttEngine = "qwen3" | "funasr" | "whisper" | "whisperx" | "vibeasr" | "mlx" | "moss" | "antspeaker";
+export type SttEngine = "qwen3" | "funasr" | "whisper" | "whisperx" | "vibeasr" | "mlx" | "moss" | "sherpa";
 
 export type WhisperModel = "small-q5_1" | "medium-q5_0" | "large-v3-turbo-q5_0";
 
@@ -125,11 +125,10 @@ export interface DesktopLocalTranscriptionApi {
   createVoiceprint: (input: { name: string; sampleRecordId: string; sampleSegmentIds: string[] }) => Promise<LocalVoiceprint>;
   updateVoiceprint: (voiceprint: LocalVoiceprint) => Promise<LocalVoiceprint>;
   deleteVoiceprint: (id: string) => Promise<void>;
-  /** Which embedding backend new voiceprints would use ("campplus" | "mect" | null). */
+  /** Which embedding backend new voiceprints would use ("3dspeaker" | null). */
   getVoiceprintBackendStatus: () => Promise<{
     backend: string | null;
-    mectInstalled: boolean;
-    campplusAvailable: boolean;
+    modelInstalled: boolean;
   }>;
   getSttConfig: () => Promise<TranscribeConfig>;
   saveSttConfig: (config: TranscribeConfig) => Promise<TranscribeConfig>;

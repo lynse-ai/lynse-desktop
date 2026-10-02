@@ -211,7 +211,7 @@ export interface LocalVoiceprint {
   sampleRecordId: string;
   sampleSegmentIds: string[];
   embedding: number[];
-  /** Embedding model family ("campplus" | "mect"); legacy entries are campplus. */
+  /** Embedding model family ("3dspeaker"); "campplus"/"mect" only appear on entries enrolled with previous engines, and they never match. */
   backend?: string;
   sampleText?: string;
 }

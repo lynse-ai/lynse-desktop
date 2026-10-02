@@ -29,11 +29,10 @@ export function SttSettingsSection({ onBrowseModels }: { onBrowseModels?: () => 
   const [voiceprints, setVoiceprints] = useState<LocalVoiceprint[]>([]);
   const [voiceprintBackend, setVoiceprintBackend] = useState<{
     backend: string | null;
-    mectInstalled: boolean;
-    campplusAvailable: boolean;
+    modelInstalled: boolean;
   } | null>(null);
-  /** MECT download progress: null when idle, percent=null for indeterminate. */
-  const [mectDownload, setMectDownload] = useState<{ percent: number | null; error?: string | null } | null>(null);
+  /** Voiceprint model download progress: null when idle, percent=null for indeterminate. */
+  const [voiceprintDownload, setVoiceprintDownload] = useState<{ percent: number | null; error?: string | null } | null>(null);
   const [hotwordName, setHotwordName] = useState("");
   const [hotwordText, setHotwordText] = useState("");
 
@@ -48,14 +47,14 @@ export function SttSettingsSection({ onBrowseModels }: { onBrowseModels?: () => 
     let unlisten: (() => void) | undefined;
     let active = true;
     localTranscriptionApi.onSttDownloadProgress((progress) => {
-      if (progress.provider !== "antspeaker") return;
+      if (progress.provider !== "sherpa") return;
       if (progress.phase === "done") {
-        setMectDownload(null);
+        setVoiceprintDownload(null);
         void refreshLocalAssets();
       } else if (progress.phase === "error") {
-        setMectDownload({ percent: null, error: progress.error ?? progress.phase });
+        setVoiceprintDownload({ percent: null, error: progress.error ?? progress.phase });
       } else {
-        setMectDownload({ percent: progress.percent });
+        setVoiceprintDownload({ percent: progress.percent });
       }
     }).then((fn) => {
       if (active) unlisten = fn;
@@ -85,13 +84,13 @@ export function SttSettingsSection({ onBrowseModels }: { onBrowseModels?: () => 
     setVoiceprintBackend(backendStatus);
   }
 
-  async function handleDownloadMect() {
+  async function handleDownloadVoiceprintModel() {
     if (!localTranscriptionApi) return;
-    setMectDownload({ percent: null });
+    setVoiceprintDownload({ percent: null });
     try {
-      await localTranscriptionApi.downloadSttModel("antspeaker", "mect-b2");
+      await localTranscriptionApi.downloadSttModel("sherpa", "3dspeaker-campplus");
     } catch (error) {
-      setMectDownload({ percent: null, error: error instanceof Error ? error.message : String(error) });
+      setVoiceprintDownload({ percent: null, error: error instanceof Error ? error.message : String(error) });
     }
     await refreshLocalAssets();
   }
@@ -230,22 +229,20 @@ export function SttSettingsSection({ onBrowseModels }: { onBrowseModels?: () => 
           <div className="flex items-center justify-between gap-2 text-xs">
             <Label className="text-2xs text-muted-foreground">{t("settings.voiceprint_engine")}</Label>
             <span className="truncate text-2xs">
-              {voiceprintBackend?.mectInstalled
-                ? t("settings.voiceprint_engine_mect")
-                : voiceprintBackend?.campplusAvailable
-                  ? t("settings.voiceprint_engine_campplus")
-                  : t("settings.voiceprint_engine_none")}
+              {voiceprintBackend?.modelInstalled
+                ? t("settings.voiceprint_engine_3dspeaker")
+                : t("settings.voiceprint_engine_none")}
             </span>
           </div>
 
-          {!voiceprintBackend?.mectInstalled && (
+          {!voiceprintBackend?.modelInstalled && (
             <div className="space-y-1.5">
-              {mectDownload ? (
+              {voiceprintDownload ? (
                 <div className="rounded-md border bg-muted/30 p-2 text-2xs text-muted-foreground">
-                  {mectDownload.error
-                    ? mectDownload.error
-                    : t("settings.voiceprint_mect_downloading", {
-                        percent: mectDownload.percent != null ? `${mectDownload.percent}%` : "…",
+                  {voiceprintDownload.error
+                    ? voiceprintDownload.error
+                    : t("settings.voiceprint_3dspeaker_downloading", {
+                        percent: voiceprintDownload.percent != null ? `${voiceprintDownload.percent}%` : "…",
                       })}
                 </div>
               ) : (
@@ -254,13 +251,13 @@ export function SttSettingsSection({ onBrowseModels }: { onBrowseModels?: () => 
                   size="sm"
                   variant="outline"
                   className="h-7 text-xs"
-                  onClick={handleDownloadMect}
+                  onClick={handleDownloadVoiceprintModel}
                 >
-                  {t("settings.voiceprint_mect_download")}
+                  {t("settings.voiceprint_3dspeaker_download")}
                 </Button>
               )}
               <p className="text-2xs leading-relaxed text-muted-foreground">
-                {t("settings.voiceprint_mect_license_note")}
+                {t("settings.voiceprint_3dspeaker_note")}
               </p>
             </div>
           )}
@@ -270,15 +267,17 @@ export function SttSettingsSection({ onBrowseModels }: { onBrowseModels?: () => 
               {t("settings.voiceprints_empty")}
             </p>
           ) : voiceprints.map((voiceprint) => {
-            const isMect = voiceprint.backend === "mect";
-            const inactive = voiceprintBackend?.backend === "mect" && !isMect;
+            // Only entries enrolled with the current engine (3D-Speaker) can
+            // match; legacy CAM++/MECT entries are flagged so the user knows
+            // to re-save them.
+            const active = voiceprint.backend === "3dspeaker";
             return (
               <div key={voiceprint.id} className="space-y-0.5 rounded bg-background px-2 py-1">
                 <div className="flex items-center justify-between gap-2">
                   <span className="flex min-w-0 items-center gap-1.5 text-xs">
                     <span className="truncate">{voiceprint.name}</span>
                     <span className="shrink-0 rounded border border-border px-1 text-2xs text-muted-foreground">
-                      {isMect ? "MECT" : "CAM++"}
+                      {active ? "3D-Speaker" : voiceprint.backend === "mect" ? "MECT" : "CAM++"}
                     </span>
                   </span>
                   <Button
@@ -291,7 +290,7 @@ export function SttSettingsSection({ onBrowseModels }: { onBrowseModels?: () => 
                     {t("settings.delete")}
                   </Button>
                 </div>
-                {inactive && (
+                {!active && (
                   <p className="text-2xs text-muted-foreground">{t("settings.voiceprint_legacy_inactive")}</p>
                 )}
               </div>

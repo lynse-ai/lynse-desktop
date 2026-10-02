@@ -298,7 +298,7 @@ export function LoginPage() {
           artwork card takes the mirrored half. */}
       <div className="relative z-10 flex w-1/2 min-w-0 flex-col px-7 pb-5 pt-10">
         <img src={LYNSE_LOGO_SRC} alt="Lynse" className="h-4 w-auto self-start dark:invert" />
-        <h1 className="mt-5 text-lg font-semibold tracking-tight">
+        <h1 className="mt-10 text-lg font-semibold tracking-tight">
           {t("auth.welcome_title")}
         </h1>
         <p className="mt-2.5 text-[13px] leading-relaxed text-muted-foreground">

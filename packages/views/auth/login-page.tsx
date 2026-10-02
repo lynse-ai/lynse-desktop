@@ -304,7 +304,7 @@ export function LoginPage() {
           {t("auth.login_subtitle")}
         </p>
 
-        <div className="mt-5 w-full max-w-[320px] flex-1 overflow-y-auto">
+        <div className="mt-5 w-full max-w-[260px] flex-1 overflow-y-auto">
         {view === "more" ? (
           /* ── More ways to sign in ─────────────────────── */
           <div className="space-y-4">

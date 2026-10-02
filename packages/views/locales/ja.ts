@@ -3,6 +3,7 @@ const ja = {
   auth: {
     login_title: "Lynse にログイン",
     login_subtitle: "録音・文字起こし・議事録・ナレッジ管理",
+    welcome_title: "Lynse へようこそ",
     sms_code_placeholder: "認証コードを入力",
     more_login: "その他のログイン方法",
     api_login: "API ログイン",

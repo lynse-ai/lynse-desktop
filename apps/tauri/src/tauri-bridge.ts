@@ -148,6 +148,7 @@ type DesktopApi = {
     checkForUpdate: () => Promise<AppUpdateInfo>;
     downloadAndInstallUpdate: (onProgress: (progress: UpdateDownloadProgress) => void) => Promise<void>;
     relaunchApp: () => Promise<void>;
+    setCompactWindowSize: (active: boolean) => Promise<void>;
   };
 }
 
@@ -552,6 +553,10 @@ export async function installTauriBridge(): Promise<void> {
         });
       },
       relaunchApp: () => relaunch(),
+      // Pre-auth compact welcome window (690×450) vs dashboard size — see
+      // the Rust command for the shape table.
+      setCompactWindowSize: (active: boolean) =>
+        command<void>("set_compact_window_mode", { active }),
     },
     attachment: {
       // Native "where to save" dialog first; the picked path goes to Rust

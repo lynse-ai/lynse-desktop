@@ -17,7 +17,7 @@ use tauri::http::{header, Request, Response, StatusCode};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Emitter, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -4058,6 +4058,28 @@ fn center_window_over_main(
     let _ = window.set_position(LogicalPosition::new(x, y));
 }
 
+/// Shape the main window between the two faces it hosts: the compact
+/// welcome window (690×450, the pre-auth login face) and the dashboard
+/// size (960×600) once signed in. The packaged default is already compact —
+/// this flips it back and forth around sign-in/sign-out without a cold
+/// restart. `center` keeps the small window on screen regardless of where
+/// the (top-left anchored) resize leaves it.
+#[tauri::command]
+fn set_compact_window_mode(app: AppHandle, active: bool) -> CommandResult<()> {
+    let Some(main) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    let (size, min_size) = if active {
+        ((690.0, 450.0), (560.0, 400.0))
+    } else {
+        ((960.0, 600.0), (960.0, 600.0))
+    };
+    let _ = main.set_min_size(Some(LogicalSize::new(min_size.0, min_size.1)));
+    let _ = main.set_size(LogicalSize::new(size.0, size.1));
+    let _ = main.center();
+    Ok(())
+}
+
 /// Open (or focus) the standalone About window — a small fixed-size window
 /// with the app icon, version and legal links that used to sit at the bottom
 /// of the settings dialog. `title` is the localized window title picked by
@@ -4413,6 +4435,7 @@ pub fn run() {
             secure_update_vault_entry,
             get_app_info,
             open_about_window,
+            set_compact_window_mode,
             open_feedback_window,
             open_logs_folder,
             diagnostics_read_logs, diagnostics_prepare_report, attachment_save,

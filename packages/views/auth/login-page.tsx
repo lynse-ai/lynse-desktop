@@ -31,7 +31,7 @@ import { WechatIcon } from "./wechat-icon";
 import { authErrorText } from "./auth-errors";
 import { ApiAuthPanel } from "./api-auth-panel";
 import { LYNSE_LOGO_SRC } from "./lynse-logo";
-import { LYNSE_SPLASH_SRC } from "./splash-image";
+import { LOGIN_ARTWORK_SRC } from "./login-artwork";
 
 /** Login QR panel phases. "expired"/"error" offer a manual refresh. */
 type QrPhase = "creating" | "ready" | "scanned" | "expired" | "error";
@@ -45,11 +45,11 @@ type LoginView = "phone" | "more" | "qr" | "api";
 const CODE_AUTO_SUBMIT_DELAY_MS = 600;
 
 /**
- * Startup login page, shown by the AuthGate before any session exists.
- *
- * The layout mirrors the Lynse mobile app: the wordmark on a bare background,
- * pill-shaped inputs, a full-width pill sign-in button, an agreement row, and
- * circular third-party sign-in entries at the bottom. No card, no panels.
+ * Startup login page, shown by the AuthGate before any session exists, in
+ * the compact welcome window (690×450 — the window shape is AuthGate's
+ * job). Qoder-welcome layout: a left column with the wordmark, a welcome
+ * heading and the active sign-in form, and a full-height rounded artwork
+ * card on the right (LOGIN_ARTWORK_SRC, user-provided).
  *
  * Form content differs by build channel:
  *  - "testflight": phone + SMS code form; a "more ways to sign in" screen
@@ -283,53 +283,28 @@ export function LoginPage() {
 
   return (
     /* Locked to the viewport with no page scroll: the column is sized to fit
-       the minimum window (600px), and an overflow scrollbar on the login
-       face reads as a glitch. The `dark` class is forced, not theme-driven:
-       the launch artwork is a black B&W image, so the whole face — tokens,
-       pills, inverted logo — renders in its dark palette in every theme, and
-       the hand-off from the AuthGate splash (same artwork) is seamless.
-       text-foreground is re-declared here because <Input> carries no color
-       class of its own and would otherwise inherit body's light-theme
-       charcoal (invisible on the dark pills). */
-    <main className="dark relative flex h-dvh overflow-hidden bg-[#050505] text-foreground">
-      {/* Launch artwork backdrop — the same image the AuthGate splash shows
-          (swap recipe in splash-image.ts) — behind a vertical scrim (copy
-          legibility top/bottom) plus a horizontal one rising from the right,
-          where the form column sits over the artwork's dark half. */}
-      <img
-        src={LYNSE_SPLASH_SRC}
-        alt=""
-        aria-hidden
-        className="pointer-events-none absolute inset-0 h-full w-full select-none object-cover"
-      />
-      <div
-        aria-hidden
-        className="absolute inset-0 bg-gradient-to-b from-background/70 via-background/25 to-background/90"
-      />
-      <div
-        aria-hidden
-        className="absolute inset-0 bg-gradient-to-l from-background/60 via-background/15 to-transparent"
-      />
+       the compact welcome window (690×450, see AuthGate). Theme-driven tokens
+       (no forced dark anymore) — the user-provided artwork card carries the
+       color, Qoder-welcome style: info + form on the left, the image on the
+       right. text-foreground is re-declared because <Input> carries no color
+       class of its own. */
+    <main className="relative flex h-dvh overflow-hidden bg-background text-foreground">
+      {/* The login face replaces the whole dashboard, so it carries its own
+          drag strip — the unified title bar is not mounted here. */}
+      <div aria-hidden data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-10" />
 
-      {/* Right-hand form column: the portrait owns the left half, the form
-          lives on the right. Brand block = wordmark + the brand taglines,
-          kept locale-independent like the wordmark itself. */}
-      <div className="relative z-10 ml-auto flex h-full w-full max-w-md flex-col justify-center pl-6 pr-[6vw]">
-        <div className="flex w-fit flex-col items-center self-center">
-          <img
-            src={LYNSE_LOGO_SRC}
-            alt="Lynse"
-            className="h-9 w-auto dark:invert"
-          />
-          <p className="mt-5 text-lg font-medium tracking-[0.4em] text-foreground">
-            记录 · 思考 · 进化
-          </p>
-          <p className="mt-2 text-xs tracking-[0.35em] text-muted-foreground">
-            CAPTURE. THINK. EVOLVE.
-          </p>
-        </div>
+      {/* Left column: brand block + the active sign-in form, actions hugging
+          the bottom edge like the reference window. */}
+      <div className="relative z-10 flex min-w-0 flex-1 flex-col px-7 pb-5 pt-9">
+        <img src={LYNSE_LOGO_SRC} alt="Lynse" className="h-5 w-auto self-start dark:invert" />
+        <h1 className="mt-4 text-lg font-semibold tracking-tight">
+          {t("auth.welcome_title")}
+        </h1>
+        <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
+          {t("auth.login_subtitle")}
+        </p>
 
-        <div className="mt-12 w-full">
+        <div className="mt-5 w-full max-w-[320px] flex-1 overflow-y-auto">
         {view === "more" ? (
           /* ── More ways to sign in ─────────────────────── */
           <div className="space-y-4">
@@ -432,7 +407,7 @@ export function LoginPage() {
               {/* ── Sign-in + agreement ────────────────────── */}
               <Button
                 size="sm"
-                className="relative mt-10 h-12 w-full rounded-full bg-gradient-to-r from-[color-mix(in_oklab,var(--primary)_55%,white)] to-primary text-sm font-medium text-primary-foreground hover:opacity-90"
+                className="relative mt-6 h-12 w-full rounded-full bg-gradient-to-r from-[color-mix(in_oklab,var(--primary)_55%,white)] to-primary text-sm font-medium text-primary-foreground hover:opacity-90"
                 disabled={loginDisabled}
                 onClick={() => handleSmsLogin()}
               >
@@ -557,13 +532,12 @@ export function LoginPage() {
         )}
 
         {error && <p className="mt-3 text-center text-xs text-destructive">{error}</p>}
-      </div>
+        </div>
 
         {/* ── More ways to sign in (phone view) / WeChat wait state,
-            pinned to the window's bottom edge, right-aligned like the
-            column above ── */}
+            pinned to the window's bottom edge ── */}
         {passwordless && (view === "phone" || wechatWaiting) && (
-          <div className="absolute inset-x-0 bottom-10 px-6 pr-[6vw]">
+          <div className="mt-auto pt-3">
             {wechatWaiting ? (
               <div className="space-y-1.5 text-center">
                 <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
@@ -595,6 +569,16 @@ export function LoginPage() {
           </div>
         )}
       </div>
+
+      {/* ── Right column — full-height rounded artwork card, inset on all
+          sides like the reference window. Decorative (aria-hidden). ── */}
+      <aside aria-hidden className="shrink-0 py-3 pr-3">
+        <img
+          src={LOGIN_ARTWORK_SRC}
+          alt=""
+          className="h-full w-[280px] select-none rounded-xl object-cover"
+        />
+      </aside>
 
     </main>
   );

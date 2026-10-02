@@ -81,6 +81,9 @@ type DesktopAppApi = {
   checkForUpdate: () => Promise<AppUpdateInfo>;
   downloadAndInstallUpdate: (onProgress: (progress: UpdateDownloadProgress) => void) => Promise<void>;
   relaunchApp: () => Promise<void>;
+  /** Pre-auth compact welcome window (true, 690×450) vs dashboard size
+   * (false, 960×600). No-op outside the desktop app. */
+  setCompactWindowSize: (active: boolean) => Promise<void>;
 };
 
 /** Access the desktop update API, or null when running outside the Tauri host. */

@@ -8,6 +8,22 @@
 > the history (that commit documents a `vA.B.C(N)` build-counter tag
 > convention), so they are not listed either.
 
+## 1.1.4(100) (2026-10-02)
+
+### New Features
+
+- First-launch permission onboarding: after signing in, a guided page walks through microphone and transcription permissions once, can open the macOS privacy pane directly when something is denied, and never shows again once done.
+- While a recording or live-transcription session is running, the title bar shows a floating pill with the session title, timer, and pause/stop controls; page titles pad out of its way.
+- Chat attachments: images open in a zoomable viewer, and any attachment can be saved to the Downloads folder through the native save dialog.
+- List queries (notes, files, meetings) are cached locally and restored instantly on return visits; the cache is cleared on sign-out.
+- On a note page, opening the AI chat panel now collapses the list to give it room, and closing the panel restores the list (unless it was collapsed manually).
+
+### Fixed
+
+- "Insert into note" from chat now verifies the target note exists on the signed-in server before filing, names it in the success toast, and keeps the assistant pinned to the backend its session was created on — no more silent "success" into a note that isn't there.
+- Entering the notes page always refetches notes and folders so stale lists can't linger.
+- Numbered lists in replies no longer trigger the option picker: the choice modal only opens when the text actually reads as a menu.
+
 ## 1.1.4(2) (2026-09-28)
 
 ### Fixed

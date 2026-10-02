@@ -3,7 +3,7 @@ const ko = {
   auth: {
     login_title: "Lynse 로그인",
     login_subtitle: "녹음, 문자 변환, 회의록, 지식 관리",
-    welcome_title: "Lynse 에 오신 것을 환영합니다",
+    welcome_title: "안녕, 친구! 환영해요! 👋🏻",
     sms_code_placeholder: "인증 코드를 입력하세요",
     more_login: "더 많은 로그인 방법",
     api_login: "API 로그인",

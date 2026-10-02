@@ -3,7 +3,7 @@ const en = {
   auth: {
     login_title: "Sign in to Lynse",
     login_subtitle: "Record, transcribe, and organize your meetings",
-    welcome_title: "Welcome to Lynse",
+    welcome_title: "Hi friend, welcome! 👋🏻",
     sms_code_placeholder: "Enter the code",
     more_login: "More ways to sign in",
     api_login: "API sign-in",

@@ -3,7 +3,7 @@ const zhHant = {
   auth: {
     login_title: "登入 Lynse",
     login_subtitle: "錄音轉寫、會議紀要、知識管理",
-    welcome_title: "歡迎來到 Lynse",
+    welcome_title: "Hi，朋友，歡迎你！👋🏻",
     sms_code_placeholder: "請輸入驗證碼",
     more_login: "更多登入方式",
     api_login: "API 登入",

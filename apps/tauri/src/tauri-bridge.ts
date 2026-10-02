@@ -382,6 +382,7 @@ export async function installTauriBridge(): Promise<void> {
       saveProviderConfig: async (config) => saveLiveTranslationProviderConfig(config),
       permissions: () => command<LivePermissionStatus>("live_translation_permissions"),
       requestPermission: (kind) => command<LivePermissionStatus>("live_translation_request_permission", { kind }),
+      openPrivacyPane: (kind) => command<void>("live_translation_open_privacy_pane", { kind }),
       audioDevices: () => command<AudioDevicesSnapshot>("live_translation_audio_devices"),
       start: (request: LiveStartRequest) => command<LiveTranslationSnapshot>("live_translation_start", { request }),
       pause: () => command<LiveTranslationSnapshot>("live_translation_pause"),

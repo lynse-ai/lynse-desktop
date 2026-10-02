@@ -186,8 +186,11 @@ export function LynseSidebar() {
             >
               <span
                 className={cn(
-                  "flex shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20",
-                  isWeb ? "size-8" : "size-7",
+                  "flex shrink-0 items-center justify-center rounded-full bg-primary/15 font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20",
+                  // Two CJK initials at 12px nearly touch the ring in the
+                  // 28px rail avatar; drop it one token step there. The wider
+                  // web avatar (32px) keeps text-xs.
+                  isWeb ? "size-8 text-xs" : "size-7 text-3xs",
                 )}
               >
                 {initials}

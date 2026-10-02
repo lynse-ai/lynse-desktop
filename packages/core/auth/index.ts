@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { ApiClient } from "../api/client";
 import { clearListQueryCache } from "../query-persistence";
+import { AGENT_API_URL_STORAGE_KEY, agentUrlForApiUrl } from "../config";
 import type { StorageAdapter } from "../types/storage";
 import type { AuthSession } from "./session";
 import {
@@ -51,6 +52,19 @@ let authStoreInstance: ReturnType<typeof createAuthStore> | undefined;
  *  unreachable backend hangs the AuthGate spinner forever. */
 const RESTORE_SESSION_TIMEOUT_MS = 10_000;
 
+/**
+ * Keep the AI assistant on the same environment as the business backend.
+ * File ids are minted per environment, so a hand-picked server at login must
+ * move the assistant with it — otherwise chats, citations, and conclusion
+ * inserts silently mix test and production data.
+ */
+function applyAgentUrlForApi(opts: AuthOpts, apiUrl: string) {
+  const agentUrl = agentUrlForApiUrl(apiUrl);
+  opts.api.setAgentBaseUrl(agentUrl);
+  if (agentUrl) opts.storage.setItem(AGENT_API_URL_STORAGE_KEY, agentUrl);
+  else opts.storage.removeItem(AGENT_API_URL_STORAGE_KEY);
+}
+
 export function createAuthStore(opts: AuthOpts) {
   return create<AuthState>()((set) => {
     /**
@@ -62,6 +76,7 @@ export function createAuthStore(opts: AuthOpts) {
       if (apiUrl) {
         opts.api.setBaseUrl(apiUrl);
         opts.storage.setItem("lynse_api_url", apiUrl);
+        applyAgentUrlForApi(opts, apiUrl);
       }
       if (!opts.cookieAuth) {
         if (result.apiKey) {
@@ -90,6 +105,7 @@ export function createAuthStore(opts: AuthOpts) {
       if (apiUrl) {
         opts.api.setBaseUrl(apiUrl);
         opts.storage.setItem("lynse_api_url", apiUrl);
+        applyAgentUrlForApi(opts, apiUrl);
       }
 
       // Set apiKey BEFORE the token request so X-API-Key header is sent
@@ -120,6 +136,7 @@ export function createAuthStore(opts: AuthOpts) {
       if (apiUrl) {
         opts.api.setBaseUrl(apiUrl);
         opts.storage.setItem("lynse_api_url", apiUrl);
+        applyAgentUrlForApi(opts, apiUrl);
       }
       const state = createWechatState();
       // The callback page reads this back to reject forged redirects (the

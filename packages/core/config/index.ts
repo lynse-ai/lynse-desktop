@@ -22,6 +22,10 @@ export const DEFAULT_API_URL =
   (typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_URL) ||
   "https://api.lynse.cn";
 
+/** Test backend origin (the other login-form preset). Kept beside the agent
+ *  mapping below: the assistant environment must always move with it. */
+export const TEST_API_URL = "https://gapp.lynse.cn";
+
 /** Storage key for the optional dedicated AI-assistant (agent) backend origin.
  *  Empty/absent means the assistant rides the main backend gateway. */
 export const AGENT_API_URL_STORAGE_KEY = "lynse_agent_api_url";
@@ -36,3 +40,17 @@ export const AGENT_API_URL_STORAGE_KEY = "lynse_agent_api_url";
  */
 export const CLOUDRUN_AGENT_URL =
   "https://lynclaw-api-321192-9-1401959758.sh.run.tcloudbase.com";
+
+/**
+ * Canonical assistant origin per business backend. File ids (notes, mentions,
+ * conclusion inserts) are minted per environment, so the assistant must serve
+ * the same environment the business session is on — a test-backend session
+ * chats with the test lynclaw deployment, and production rides the production
+ * gateway. Returning null means "follow the main backend" (route A).
+ */
+export function agentUrlForApiUrl(apiUrl: string | null | undefined): string | null {
+  if (!apiUrl) return null;
+  const url = apiUrl.replace(/\/+$/, "");
+  if (url === TEST_API_URL) return CLOUDRUN_AGENT_URL;
+  return null;
+}

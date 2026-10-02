@@ -13,7 +13,12 @@ import {
 } from "@lynse/ui/components/ui/select";
 import { api } from "@lynse/core/api";
 import { useAuthStore } from "@lynse/core/auth";
-import { DEFAULT_API_URL } from "@lynse/core/config";
+import {
+  AGENT_API_URL_STORAGE_KEY,
+  agentUrlForApiUrl,
+  DEFAULT_API_URL,
+  TEST_API_URL,
+} from "@lynse/core/config";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Loader2 } from "../icons";
 import { authErrorText } from "./auth-errors";
@@ -24,7 +29,7 @@ import { authErrorText } from "./auth-errors";
  * default the API client itself falls back to (core/config).
  */
 const SERVER_PRESETS = [
-  { url: "https://gapp.lynse.cn", labelKey: "auth.api_config_server_test" },
+  { url: TEST_API_URL, labelKey: "auth.api_config_server_test" },
   { url: DEFAULT_API_URL, labelKey: "auth.api_config_server_prod" },
 ] as const;
 
@@ -74,10 +79,16 @@ export function ApiAuthPanel({ onSuccess }: { onSuccess?: () => void }) {
     return preset ? t(preset.labelKey) : url;
   }
 
-  /** Apply the selected server to this session (client + persistence). */
+  /** Apply the selected server to this session (client + persistence). The
+   *  assistant moves with it: file ids are per-environment, so a server
+   *  switch must drop any agent override that points somewhere else. */
   function applyServer(url: string) {
     api().setBaseUrl(url);
     localStorage.setItem("lynse_api_url", url);
+    const agentUrl = agentUrlForApiUrl(url);
+    api().setAgentBaseUrl(agentUrl);
+    if (agentUrl) localStorage.setItem(AGENT_API_URL_STORAGE_KEY, agentUrl);
+    else localStorage.removeItem(AGENT_API_URL_STORAGE_KEY);
     setAppliedUrl(url);
   }
 

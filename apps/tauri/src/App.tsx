@@ -33,6 +33,7 @@ import {
 } from "@lynse/views/feature-flags";
 import { featureFlags } from "@lynse/views/feature-flags";
 import { AuthGate, ApiConfigPage } from "@lynse/views/auth";
+import { PermissionOnboardingGate } from "@lynse/views/onboarding";
 import { configureWechatLogin } from "@lynse/core/auth/wechat";
 import { useMaximized } from "@lynse/views/layout";
 import { cn } from "@lynse/ui/lib/utils";
@@ -188,26 +189,31 @@ function AppShell() {
 
   return (
     <AuthGate>
-      <DashboardLayout>
-        <PageRouter />
-      </DashboardLayout>
-      {/* Answers the tray menu's "start live recording" no matter which page
-          is open; the island answers tray pause/stop while a session runs. */}
-      <RecordingTrayAgent />
-      {/* Answers IM chat messages (Feishu today; DingTalk next) through the
-          Rust bot long connection — headless, works with any page open or the
-          window hidden. */}
-      <BotAgent />
-      {/* Headless plugin subscribers (event listeners) for installed + enabled
-          plugins; renders nothing until a plugin contributes one. */}
-      <PluginHost />
-      {/* Starts/stops a recording when the Rust meeting detector spots a
-          whitelisted meeting app doing audio (user opt-in from Settings). */}
-      {featureFlags.autoRecord && <MeetingAutoRecordAgent />}
-      {/* Pops the flomo-style capture panel over any page (sidebar icon,
-          home quick actions). */}
-      {featureFlags.inspiration && <InspirationCaptureSheet />}
-      <AppUpdateNotifier />
+      {/* First-launch permission onboarding (desktop only): holds the whole
+          shell — recording agents included — until mic/system-audio setup is
+          answered, so nothing starts recording behind the user's back. */}
+      <PermissionOnboardingGate>
+        <DashboardLayout>
+          <PageRouter />
+        </DashboardLayout>
+        {/* Answers the tray menu's "start live recording" no matter which page
+            is open; the island answers tray pause/stop while a session runs. */}
+        <RecordingTrayAgent />
+        {/* Answers IM chat messages (Feishu today; DingTalk next) through the
+            Rust bot long connection — headless, works with any page open or the
+            window hidden. */}
+        <BotAgent />
+        {/* Headless plugin subscribers (event listeners) for installed + enabled
+            plugins; renders nothing until a plugin contributes one. */}
+        <PluginHost />
+        {/* Starts/stops a recording when the Rust meeting detector spots a
+            whitelisted meeting app doing audio (user opt-in from Settings). */}
+        {featureFlags.autoRecord && <MeetingAutoRecordAgent />}
+        {/* Pops the flomo-style capture panel over any page (sidebar icon,
+            home quick actions). */}
+        {featureFlags.inspiration && <InspirationCaptureSheet />}
+        <AppUpdateNotifier />
+      </PermissionOnboardingGate>
     </AuthGate>
   );
 }

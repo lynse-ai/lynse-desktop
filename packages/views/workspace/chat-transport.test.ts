@@ -234,16 +234,36 @@ describe("extractConfirmFromText", () => {
     // valid "too short" case to pin here.
   });
 
-  // KNOWN MISFIRE (2026-09-19): the bare-number branch treats any 2-8 line
-  // sequentially numbered list as a choice menu, so ordinary assistant answers
-  // that use "1. … 2. …" pop a confirm card. This test pins the CURRENT
-  // behavior so the eventual heuristic fix flips it deliberately, not silently.
-  it("KNOWN ISSUE: plain numbered lists are (wrongly) read as menus", () => {
-    const numbered = extractConfirmFromText(
-      "提高会议效率的建议：\n1. 会前发议程\n2. 限制参会人数\n3. 会后跟进",
-    );
-    expect(numbered).not.toBeNull();
-    expect(numbered?.options.map((o) => o.value)).toEqual(["会前发议程", "限制参会人数", "会后跟进"]);
+  // FIXED (2026-10-02): this was pinned as KNOWN MISFIRE (2026-09-19) — bare
+  // numbers alone cannot distinguish a menu from an ordinary ordered list, so
+  // the numeric branch now additionally requires choice phrasing in the
+  // preamble (extractConfirmFromText's semantic gate).
+  it("no longer reads plain numbered lists as menus", () => {
+    // The originally pinned misfire: a suggestion list, not a menu.
+    expect(
+      extractConfirmFromText("提高会议效率的建议：\n1. 会前发议程\n2. 限制参会人数\n3. 会后跟进"),
+    ).toBeNull();
+    // The 2026-10-02 screenshot: markdown-styled difficulty list, no ask.
+    expect(
+      extractConfirmFromText(
+        "项目的困难点主要集中在以下几个方面：\n## 核心困难\n\n1. **成本压不下去，低价必亏**\n" +
+          "2. **海外市场只能走高端，低端路线难存活**\n3. **认证审核反复**\n4. **供应链议价能力弱**",
+      ),
+    ).toBeNull();
+    // Bare numbered list with no preamble at all.
+    expect(extractConfirmFromText("1. 甲方案\n2. 乙方案")).toBeNull();
+    // Numbered list buried mid-answer with prose after it.
+    expect(extractConfirmFromText("你想选哪个：\n1. 甲\n2. 乙\n\n以上仅供参考。")).toBeNull();
+  });
+
+  it("numbered menus still pop when the preamble asks for a choice", () => {
+    // Strong cue: question mark + imperative.
+    const ask = extractConfirmFromText("你想怎么处理？\n1) 重启设备\n2) 暂不处理");
+    expect(ask?.options.map((o) => o.value)).toEqual(["重启设备", "暂不处理"]);
+
+    // Soft second-person ask without an enumeration intro.
+    const soft = extractConfirmFromText("你想：\n1. 全部删除\n2. 仅删附件");
+    expect(soft?.options.map((o) => o.value)).toEqual(["全部删除", "仅删附件"]);
   });
 
   /** Deterministic PRNG so CI failures reproduce exactly. */

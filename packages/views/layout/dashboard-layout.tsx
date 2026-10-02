@@ -17,8 +17,8 @@ interface DashboardLayoutProps {
 export function DashboardLayout({ children, extra }: DashboardLayoutProps) {
   return (
     <DndProvider>
-      {/* .lyse-shell: under light-mode vibrancy the CSS washes this shell with
-          one veil of the theme background, so the title bar, the sidebar rail
+      {/* .lyse-shell: under light-mode vibrancy the CSS paints this shell with
+          the opaque theme sidebar grey, so the title bar, the sidebar rail
           and the bare strips around the inset card share the same material
           instead of letting raw wallpaper hues bleed through; dark mode keeps
           them on raw frost (no-op on the web).

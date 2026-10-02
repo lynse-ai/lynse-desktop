@@ -4418,6 +4418,7 @@ pub fn run() {
             diagnostics_read_logs, diagnostics_prepare_report, attachment_save,
             live_translation::live_translation_permissions,
             live_translation::live_translation_request_permission,
+            live_translation::live_translation_open_privacy_pane,
             live_translation::live_translation_audio_devices,
             live_translation::live_translation_state,
             live_translation::live_translation_start,

@@ -12,6 +12,7 @@
     "./navigation": "./navigation/index.ts",
     "./feature-flags": "./feature-flags.ts",
     "./auth": "./auth/index.ts",
+    "./onboarding": "./onboarding/index.ts",
     "./layout": "./layout/index.ts",
     "./recordings": "./recordings/index.ts",
     "./meetings": "./meetings/index.ts",

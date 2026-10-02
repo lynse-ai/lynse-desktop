@@ -369,6 +369,16 @@ export function useFileDetail(fileId: string | null) {
   });
 }
 
+/**
+ * One-shot file/info lookup outside React (e.g. the chat insert guard).
+ * Resolves null when the backend answers `{ code: 200, data: null }` — the
+ * signature of a file id that does not exist on the currently signed-in
+ * server (ids are minted per environment); hard errors still throw.
+ */
+export async function fetchFileDetail(fileId: string): Promise<FileDetail | null> {
+  return api().getWithParams<FileDetail | null>("/api/business/file/info", { fileId });
+}
+
 export function useFileConclusions(fileId: string | null) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 

@@ -702,6 +702,28 @@ pub(crate) fn open_macos_privacy_pane(kind: &str) {
         .spawn();
 }
 
+/// Opens the OS privacy pane for one permission kind: System Settings on
+/// macOS (microphone / screen & system-audio recording), the microphone
+/// privacy page on Windows (loopback needs no consent there). Backs the
+/// onboarding toggles — a permission request that still ends ungranted hands
+/// the user straight to the pane where the grant lives.
+#[tauri::command]
+pub fn live_translation_open_privacy_pane(kind: String) -> CommandResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        open_macos_privacy_pane(if kind == "microphone" {
+            "microphone"
+        } else {
+            "screen"
+        });
+    }
+    #[cfg(target_os = "windows")]
+    if kind == "microphone" {
+        crate::windows_capture::open_microphone_privacy_settings();
+    }
+    Ok(())
+}
+
 /// Endpoint lists for the recording settings pickers. Windows returns the
 /// real WASAPI endpoints (stable ids + friendly names + defaults); other
 /// platforms return empty lists so the UI can hide the pickers.

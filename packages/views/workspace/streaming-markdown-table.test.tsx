@@ -23,9 +23,7 @@ describe("StreamingMarkdown GFM tables", () => {
     render(<StreamingMarkdown content={content} isStreaming mode="minimal" />);
 
     const table = screen.getByRole("table");
-    expect(table.className).toContain("table-fixed");
-    expect(table.className).toContain("[&_th:first-child]:w-14");
-    expect(table.className).toContain("[&_th:nth-child(2)]:w-32");
+    expect(table.className).not.toContain("table-fixed");
     expect(within(table).getByText("版本规划会：手游版本排期与需求评审")).toBeTruthy();
     expect(within(table).queryByText(/按主题分类来看/)).toBeNull();
     expect(screen.getByText(/按主题分类来看/).closest("table")).toBeNull();

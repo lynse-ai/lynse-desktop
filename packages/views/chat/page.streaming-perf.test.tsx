@@ -88,6 +88,11 @@ vi.mock("@lynse/ui/markdown", async (importOriginal) => {
 vi.mock("@lynse/core/i18n/react", () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: "zh" } }),
 }));
+// ChatPage pulls `push` from the shared navigation context, which the
+// benchmark never provides — stub it so renders never throw.
+vi.mock("../navigation", () => ({
+  useNavigation: () => ({ push: vi.fn() }),
+}));
 vi.mock("../workspace/hooks/use-files", () => ({
   useNotes: () => ({ data: [] }),
   useInsertConclusion: () => ({ mutateAsync: vi.fn() }),

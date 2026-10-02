@@ -42,7 +42,7 @@ import {
 import { openExternalUrl, getDesktopAppApi } from "../app-update";
 import { useNavigation } from "../navigation";
 import { useChat } from "../workspace/hooks/use-chat";
-import { useInsertConclusion, useNotes } from "../workspace/hooks/use-files";
+import { useInsertConclusion, useNotes, fetchFileDetail } from "../workspace/hooks/use-files";
 import { useFolders } from "../workspace/hooks/use-folders";
 import { getWorkspaceState } from "../workspace/store";
 import {
@@ -581,18 +581,34 @@ export function ChatPage() {
     if (insertingMessageId) return;
     setInsertingMessageId(messageId);
     try {
+      // File ids are minted per environment, so a mention captured on another
+      // server can look valid here while pointing nowhere — verify the target
+      // exists on the signed-in backend before filing, or the insert would
+      // "succeed" into an invisible orphan.
+      const detail = await fetchFileDetail(target.fileId);
+      if (!detail) {
+        toast.error(t("chat.insert_target_missing"));
+        return;
+      }
       await insertConclusion.mutateAsync({
         fileId: target.fileId,
         teamId: target.teamId,
         conclusionText: content,
       });
       setInsertedMessageId(messageId);
-      toast.success(t("chat.inserted_to_note"));
+      // Naming the target in the toast makes a wrong-environment insert
+      // visible at a glance instead of a plain success.
+      const title = String(
+        detail.originalFilename ?? detail.name ?? detail.filename ?? "",
+      ).trim();
+      toast.success(
+        title ? t("chat.inserted_to_note_title", { title }) : t("chat.inserted_to_note"),
+      );
     } catch (error) {
       // Surface the backend's own message (e.g. permission/ownership errors)
       // when it has one; otherwise fall back to the generic locale string.
-      const detail = error instanceof Error && error.message ? error.message : "";
-      toast.error(detail || t("chat.insert_to_note_failed"));
+      const backendMessage = error instanceof Error && error.message ? error.message : "";
+      toast.error(backendMessage || t("chat.insert_to_note_failed"));
     } finally {
       setInsertingMessageId(null);
     }
@@ -1105,7 +1121,7 @@ function EmptyChat({
 
   return (
     <div className="relative mx-auto flex min-h-full w-full max-w-4xl flex-col items-center justify-center overflow-hidden px-6 py-8 text-center">
-      {icon ?? <AssistantAvatar size={112} className="relative mb-4" />}
+      {icon ?? <AssistantAvatar size={72} className="relative mb-4" />}
       <h1 className="relative text-xl font-semibold tracking-tight text-foreground">
         {title ?? t("chat.welcome_title")}
       </h1>

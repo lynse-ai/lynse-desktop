@@ -5,7 +5,7 @@ import { Label } from "@lynse/ui/components/ui/label";
 import { Input } from "@lynse/ui/components/ui/input";
 import { Button } from "@lynse/ui/components/ui/button";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { Loader2, Plus, Trash2 } from "../icons";
+import { Loader2 } from "../icons";
 import {
   type DesktopLocalTranscriptionApi,
   type SttEngine,
@@ -295,8 +295,6 @@ function EngineFields({
   );
 }
 
-type LangEntry = { language: string; config: SttProviderConfig };
-
 export function SttConfigSection({
   api,
   hotwordPackages,
@@ -309,7 +307,6 @@ export function SttConfigSection({
   const { t } = useTranslation();
   const [config, setConfig] = useState<TranscribeConfig | null>(null);
   const [models, setModels] = useState<SttModelInfo[]>([]);
-  const [langEntries, setLangEntries] = useState<LangEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -320,12 +317,6 @@ export function SttConfigSection({
     api.getSttConfig().then((loaded) => {
       if (!active) return;
       setConfig(loaded);
-      setLangEntries(
-        Object.entries(loaded.per_language ?? {}).map(([language, cfg]) => ({
-          language,
-          config: cfg,
-        })),
-      );
     }).catch((e: unknown) =>
       active && setError(e instanceof Error ? e.message : t("settings.stt_load_failed")),
     );
@@ -342,13 +333,12 @@ export function SttConfigSection({
     setSaving(true);
     setError(null);
     try {
+      // `per_language` has no UI anymore (task creation never passes a
+      // language, so the Rust-side routing can't fire); pass the loaded map
+      // through untouched so existing configs are not wiped by a save.
       const next: TranscribeConfig = {
         default: config.default ?? null,
-        per_language: Object.fromEntries(
-          langEntries
-            .filter((entry) => entry.language.trim())
-            .map((entry) => [entry.language.trim(), entry.config]),
-        ),
+        per_language: config.per_language ?? {},
       };
       await api.saveSttConfig(next);
       setConfig(next);
@@ -398,88 +388,6 @@ export function SttConfigSection({
           models={models}
           onBrowseModels={onBrowseModels}
         />
-      </div>
-
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <Label className="text-2xs">{t("settings.stt_per_language")}</Label>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="h-6 px-2 text-xs"
-            onClick={() =>
-              setLangEntries((list) => [...list, { language: "", config: defaultProviderConfig() }])
-            }
-          >
-            <Plus className="mr-1 size-3" />
-            {t("settings.stt_add_language")}
-          </Button>
-        </div>
-
-        {langEntries.length === 0 && (
-          <p className="text-2xs text-muted-foreground">
-            {t("settings.stt_no_language_override")}
-          </p>
-        )}
-
-        {langEntries.map((entry, index) => {
-          return (
-            <div key={index} className="space-y-2 rounded bg-background p-2">
-              <div className="flex items-center gap-2">
-                <Input
-                  value={entry.language}
-                  onChange={(event) =>
-                    setLangEntries((list) =>
-                      list.map((item, i) => (i === index ? { ...item, language: event.target.value } : item)),
-                    )
-                  }
-                  placeholder={t("settings.stt_language_placeholder")}
-                  className="h-8 text-xs"
-                />
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 px-2 text-xs"
-                  onClick={() => setLangEntries((list) => list.filter((_, i) => i !== index))}
-                >
-                  <Trash2 className="mr-1 size-3" />
-                  {t("settings.delete")}
-                </Button>
-              </div>
-              <select
-                value={entry.config.provider}
-                onChange={(event) =>
-                  setLangEntries((list) =>
-                    list.map((item, i) =>
-                      i === index ? { ...item, config: providerForEngine(event.target.value as SttEngine, item.config) } : item,
-                    ),
-                  )
-                }
-                className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
-              >
-                {VISIBLE_ENGINE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {t(option.labelKey)}
-                  </option>
-                ))}
-              </select>
-              <EngineFields
-                config={entry.config}
-                hotwordPackages={hotwordPackages}
-                onChange={(next) =>
-                  setLangEntries((list) => list.map((item, i) => (i === index ? { ...item, config: next } : item)))
-                }
-              />
-              <ModelStatusHint
-                config={entry.config}
-                models={models}
-                onBrowseModels={onBrowseModels}
-              />
-            </div>
-          );
-        })}
       </div>
 
       {error && <p className="mt-2 text-2xs text-destructive">{error}</p>}

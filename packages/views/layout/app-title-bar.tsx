@@ -8,6 +8,7 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
 import { isTauri, isMacDesktop } from "./use-maximized";
 import { ArrowLeft, ArrowRight, PanelLeft } from "../icons";
+import { RecordingTitleBarPill, useRecordingPillVisible } from "./recording-title-pill";
 
 export const TITLE_BAR_HEIGHT = 34;
 
@@ -106,6 +107,10 @@ export function AppTitleBar() {
   const titleAlign = useTitleBarSlotStore((s) => s.titleAlign);
   const slotActions = useTitleBarSlotStore((s) => s.actions);
   const middleToggle = useTitleBarSlotStore((s) => s.middleToggle);
+  // While the recording pill is on screen, start-aligned titles (breadcrumbs)
+  // pad their right edge so long text truncates instead of sliding under the
+  // pill. Center-aligned titles (the chat switcher) are compact and stay put.
+  const pillVisible = useRecordingPillVisible();
 
   // While a page's middle panel (chat history drawer, notes file list) is
   // open, the bar mirrors the content split below it: the left cluster
@@ -189,18 +194,24 @@ export function AppTitleBar() {
             assistant switcher), left-aligned after the divider (ChatGPT-
             desktop style — the title leads its zone; the chat page declares
             "center" for its switcher). No slot → empty drag strip. Shifted
-            2px down — text reads optically high in the short bar. ── */}
+            2px down — text reads optically high in the short bar. `relative`
+            hosts the floating recording pill at the zone's right end; the
+            pill is absolutely positioned so the layout below never shifts. ── */}
       <div
         className={cn(
-          "flex min-w-0 flex-1 translate-y-0.5 items-center gap-1.5 px-4",
+          "relative flex min-w-0 flex-1 translate-y-0.5 items-center gap-1.5 px-4",
           titleAlign === "center" ? "justify-center" : "justify-start",
+          pillVisible && titleAlign !== "center" && "pr-32",
         )}
         data-tauri-drag-region
       >
         {slotTitle}
+        <RecordingTitleBarPill />
       </div>
 
-      <ZoneDivider />
+      {/* Only pages with registered actions get the closing divider; with an
+          empty actions zone the line would just dangle at the window edge. */}
+      {slotActions != null && <ZoneDivider />}
 
       {/* ── Right: page actions (same 2px optical correction) ── */}
       <div

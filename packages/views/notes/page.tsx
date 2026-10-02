@@ -315,6 +315,25 @@ export function NotesPage() {
     if (!selectedItemId) setIsListCollapsed(false);
   }, [selectedItemId]);
 
+  // The AI chat panel and the notes list compete for width: opening the
+  // assistant collapses the list, closing it gives the list back. A list the
+  // user had already collapsed themselves stays collapsed on close.
+  const isListCollapsedRef = useRef(isListCollapsed);
+  isListCollapsedRef.current = isListCollapsed;
+  const chatListLinkRef = useRef({ prevChatVisible: chatPanelVisible, collapsedByChat: false });
+  useEffect(() => {
+    const link = chatListLinkRef.current;
+    if (link.prevChatVisible === chatPanelVisible) return;
+    link.prevChatVisible = chatPanelVisible;
+    if (chatPanelVisible) {
+      link.collapsedByChat = !isListCollapsedRef.current;
+      setIsListCollapsed(true);
+    } else if (link.collapsedByChat) {
+      link.collapsedByChat = false;
+      setIsListCollapsed(false);
+    }
+  }, [chatPanelVisible]);
+
   // Landing on Notes is "seeing" its module notifications (transcription
   // completions, vault sync) — clear the sidebar's notes dot.
   useEffect(() => {
@@ -728,7 +747,7 @@ export function NotesPage() {
         className={cn(
           "relative flex min-w-0 flex-col overflow-hidden",
           selectedItemId ? "shrink-0" : "flex-1",
-          selectedItemId && !isListResizing && !isListCollapsed ? "transition-[width] duration-300" : "",
+          selectedItemId && !isListResizing ? "transition-[width] duration-300" : "",
           selectedItemId && isListCollapsed && "w-0",
         )}
         style={

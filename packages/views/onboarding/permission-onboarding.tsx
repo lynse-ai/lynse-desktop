@@ -165,7 +165,7 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
         />
 
         <div className="relative flex w-full max-w-md animate-page-in flex-col items-center">
-          <img src={LYNSE_LOGO_SRC} alt="Lynse" className="h-[22px] w-auto dark:invert" />
+          <img src={LYNSE_LOGO_SRC} alt="Lynse" className="h-5 w-auto dark:invert" />
           <h1 className="mt-7 text-balance text-center text-2xl font-semibold tracking-tight">
             {t("onboarding.title")}
           </h1>

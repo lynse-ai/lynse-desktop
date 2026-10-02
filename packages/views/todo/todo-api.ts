@@ -14,6 +14,16 @@
  */
 
 import { api, ApiError } from "@lynse/core/api/client";
+import { getAuthStore } from "@lynse/core/auth";
+import { getActiveQueryClient } from "@lynse/core/query-client";
+import {
+  fetchNotesList,
+  NOTES_WIDE_WINDOW_START,
+  notesWideWindowEnd,
+  LIST_STALE_TIME_MS,
+} from "../workspace/hooks/use-files";
+import { isLocalFileId } from "../workspace/local-transcription";
+import type { WorkspaceItem } from "../workspace/types";
 
 export interface TodoItem {
   id: string;
@@ -85,17 +95,6 @@ export async function fetchCloudTodos(): Promise<TodoItem[]> {
 // The todo API only returns the source `fileId`, never the note title, so
 // "提取自哪个笔记" is resolved client-side in one notes-list request per load.
 
-/** Extract fileId → note title from a `/api/business/file/timeRange/list` payload. */
-export function noteTitleMapFromFiles(rows: Record<string, unknown>[]): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const row of rows) {
-    const id = String(row.id ?? "");
-    const title = String(row.originalFilename ?? row.name ?? row.filename ?? "").trim();
-    if (id && title) map.set(id, title);
-  }
-  return map;
-}
-
 /** Fill in `sourceTitle` for cloud todos by looking their `sourceFileId` up in
  *  `titles`. Mutates in place — the items are per-load copies. */
 export function applySourceTitles(items: TodoItem[], titles: Map<string, string>): void {
@@ -107,48 +106,57 @@ export function applySourceTitles(items: TodoItem[], titles: Map<string, string>
   }
 }
 
-/** Short-lived cache: several consumers share one todo store and each load
- *  would otherwise re-fetch the notes list. */
-let noteTitleCache: { at: number; map: Map<string, string> } | null = null;
-const NOTE_TITLE_CACHE_TTL_MS = 5 * 60 * 1000;
-
-/** The notes endpoint is windowed; a wide range covers "all my notes" (same
- *  approach as the notes page / webdav config). */
-function wideNotesWindow(): { startTime: string; endTime: string } {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const toApiDateTime = (d: Date) =>
-    `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(
-      d.getMinutes(),
-    )}:${pad(d.getSeconds())}`;
-  return {
-    startTime: "2020-01-01T00:00:00",
-    endTime: toApiDateTime(new Date(Date.now() + 366 * 24 * 60 * 60 * 1000)),
-  };
-}
-
-/** fileId → note title, via the same listing the notes page uses. Throws on
- *  network/auth errors so callers can degrade gracefully. */
+/** fileId → note title, resolved through the SHARED notes list cache — the
+ *  notes page and the heatmap already maintain a wide-window list under the
+ *  `["notes", …]` key, so most loads cost zero extra transfer. When nothing
+ *  is cached we fetch once through the same query key, so the result lands
+ *  in the shared cache (and its disk mirror) instead of a private copy.
+ *  Throws on network/auth errors so callers can degrade gracefully. */
 async function fetchNoteTitleMap(): Promise<Map<string, string>> {
-  if (noteTitleCache && Date.now() - noteTitleCache.at < NOTE_TITLE_CACHE_TTL_MS) {
-    return noteTitleCache.map;
-  }
-  const data = await api().getWithParams<Record<string, unknown>[] | Record<string, unknown>>(
-    "/api/business/file/timeRange/list",
-    wideNotesWindow(),
-  );
-  let rows: Record<string, unknown>[] = [];
-  if (Array.isArray(data)) rows = data;
-  else {
-    for (const key of ["list", "records", "data"]) {
-      const arr = (data as Record<string, unknown>)[key];
-      if (Array.isArray(arr)) {
-        rows = arr;
-        break;
-      }
+  const queryClient = getActiveQueryClient();
+  const authenticated = getAuthStore()?.getState().isAuthenticated ?? false;
+
+  if (queryClient) {
+    const cached = queryClient
+      .getQueryCache()
+      .getAll()
+      .find(
+        (query) =>
+          query.queryKey[0] === "notes" &&
+          query.queryKey[1] === NOTES_WIDE_WINDOW_START &&
+          Array.isArray(query.state.data) &&
+          query.state.data.length > 0,
+      );
+    if (cached) return noteTitleMapFromItems(cached.state.data as WorkspaceItem[]);
+
+    if (authenticated) {
+      const items = await queryClient.fetchQuery({
+        queryKey: ["notes", NOTES_WIDE_WINDOW_START, notesWideWindowEnd(), true],
+        queryFn: () =>
+          fetchNotesList({ startTime: NOTES_WIDE_WINDOW_START, endTime: notesWideWindowEnd() }),
+        staleTime: LIST_STALE_TIME_MS,
+      });
+      return noteTitleMapFromItems(items);
     }
   }
-  const map = noteTitleMapFromFiles(rows);
-  noteTitleCache = { at: Date.now(), map };
+
+  // No react-query runtime (tests, exotic embeds): one direct fetch.
+  const items = await fetchNotesList({
+    startTime: NOTES_WIDE_WINDOW_START,
+    endTime: notesWideWindowEnd(),
+  });
+  return noteTitleMapFromItems(items);
+}
+
+/** Extract fileId → note title from slim list items (local transcriptions
+ *  have no cloud note and are skipped). */
+export function noteTitleMapFromItems(items: WorkspaceItem[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const item of items) {
+    if (isLocalFileId(item.id)) continue;
+    const title = item.title.trim();
+    if (item.id && title) map.set(item.id, title);
+  }
   return map;
 }
 

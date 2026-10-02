@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { ApiClient } from "../api/client";
+import { clearListQueryCache } from "../query-persistence";
 import type { StorageAdapter } from "../types/storage";
 import type { AuthSession } from "./session";
 import {
@@ -141,6 +142,10 @@ export function createAuthStore(opts: AuthOpts) {
         opts.api.setApiKey(null);
         opts.api.setToken(null);
       }
+      // The persisted list mirror (notes/files/folders) belongs to this
+      // account — drop it so another sign-in on this machine never paints
+      // the previous user's data from disk.
+      clearListQueryCache(opts.storage);
       set({ user: null, isAuthenticated: false, isLoading: false });
       opts.onLogout?.();
     },

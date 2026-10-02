@@ -116,7 +116,7 @@ export function LynseSidebar() {
           "lyse-sidebar flex h-full shrink-0 flex-col bg-sidebar",
           isWeb
             ? "w-[208px] items-stretch px-3 pt-4 pb-2"
-            : "w-[52px] items-center pt-4 pb-4",
+            : "w-[48px] items-center pl-1 pt-4 pb-4",
         )}
         data-tauri-drag-region
       >
@@ -235,7 +235,7 @@ function NavButton({
         "relative flex rounded-lg transition-colors",
         isWeb
           ? "w-full items-center gap-2.5 px-2.5 py-2"
-          : "w-[44px] flex-col items-center justify-center px-1 py-2",
+          : "w-[40px] flex-col items-center justify-center px-1 py-2",
         // Selected = accent-colored icon+label, no pill behind them; the solid
         // glyph alone carries the selected state.
         active

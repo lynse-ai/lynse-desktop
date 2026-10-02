@@ -574,7 +574,7 @@ export function TodoPage() {
         actions={
           <>
             <button
-              onClick={() => load()}
+              onClick={() => load({ force: true })}
               disabled={refreshing}
               className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 disabled:opacity-50"
               title={t("todo.refresh")}
@@ -604,7 +604,7 @@ export function TodoPage() {
       {error && (
         <div className="flex items-center justify-between gap-2 border-b border-destructive/30 bg-destructive/10 px-6 py-2 text-xs text-destructive">
           <span>{t("todo.load_error")}</span>
-          <button onClick={() => load()} className="underline decoration-from-font underline-offset-2">
+          <button onClick={() => load({ force: true })} className="underline decoration-from-font underline-offset-2">
             {t("todo.retry")}
           </button>
         </div>
@@ -678,7 +678,7 @@ export function TodoPage() {
           onClose={() => setSelectedId(null)}
           onDelete={() => void handleDelete(selected.id)}
           onCalendarAdded={() => {
-            void load();
+            void load({ force: true });
             setSelectedId(null);
           }}
           onSaved={patchLocal}

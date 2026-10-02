@@ -33,6 +33,13 @@ function nowIso(): string {
  * One module-level store instead of per-hook state, so every consumer —
  * home summary strip, home feed, global search, activity heatmap, todo
  * page — shares one list and a toggle is reflected everywhere instantly.
+ *
+ * Startup cache: the last loaded list is mirrored to localStorage and seeds
+ * the store, so consumers paint real content immediately and the mount load
+ * refreshes in the background. Remount loads are throttled (TODO_LOAD_
+ * THROTTLE_MS) — every consumer mount used to re-fetch the whole cloud list;
+ * now only loads outside the window, auth flips, errors and explicit
+ * `force` refreshes hit the network.
  */
 interface TodoStore {
   todos: TodoItem[];
@@ -43,9 +50,14 @@ interface TodoStore {
   /** Clearing completed (button busy). */
   clearing: boolean;
   error: string | null;
-  /** Set once the first load attempt has landed. */
+  /** Set once the first load attempt has landed (or a cached list seeded). */
   loaded: boolean;
-  load: (initial?: boolean) => Promise<void>;
+  /** When the last successful load finished — drives the remount throttle. */
+  lastLoadedAt: number;
+  /** Auth state the last load ran under; an auth flip must bypass the
+   *  throttle so a new session never inherits the previous user's list. */
+  lastLoadedAuthed: boolean | null;
+  load: (opts?: { initial?: boolean; force?: boolean }) => Promise<void>;
   addLocal: (title: string) => Promise<void>;
   toggle: (todo: TodoItem) => Promise<void>;
   remove: (todo: TodoItem) => Promise<void>;
@@ -60,15 +72,73 @@ interface TodoStore {
  *  the initial load; they share one fetch instead of racing. */
 let loadInFlight: Promise<void> | null = null;
 
+/** Re-fetch window for consumer remounts. Explicit refreshes (`force`) and
+ *  auth flips always reload. */
+export const TODO_LOAD_THROTTLE_MS = 60_000;
+
+// ── Startup cache (localStorage mirror of the merged list) ──
+
+const TODO_CACHE_KEY = "lynse.todos.cache.v1";
+/** The persisted copy exists for instant paint; real stores stay the source
+ *  of truth and every load refreshes from them. */
+const TODO_CACHE_LIMIT = 2000;
+
+function readTodoCache(): TodoItem[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(TODO_CACHE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (entry): entry is TodoItem =>
+          typeof entry === "object" &&
+          entry !== null &&
+          typeof (entry as TodoItem).id === "string" &&
+          typeof (entry as TodoItem).title === "string",
+      )
+      .slice(0, TODO_CACHE_LIMIT);
+  } catch {
+    return [];
+  }
+}
+
+function writeTodoCache(items: TodoItem[]): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(TODO_CACHE_KEY, JSON.stringify(items.slice(0, TODO_CACHE_LIMIT)));
+  } catch {
+    /* quota / privacy mode — the cache is best-effort */
+  }
+}
+
+const initialTodos = readTodoCache();
+
 const useTodoStore = create<TodoStore>((set, get) => ({
-  todos: [],
+  todos: initialTodos,
   loading: false,
   refreshing: false,
   clearing: false,
   error: null,
-  loaded: false,
+  loaded: initialTodos.length > 0,
+  lastLoadedAt: 0,
+  lastLoadedAuthed: null,
 
-  load: (initial = false) => {
+  load: (opts = {}) => {
+    const { initial = false, force = false } = opts;
+    const authed = getAuthStore()?.getState().isAuthenticated ?? false;
+    // Remount throttle: inside the window the store's list is fresh enough;
+    // skip the cloud round-trip entirely. Errors and auth flips never skip.
+    if (
+      !force &&
+      get().loaded &&
+      !get().error &&
+      get().lastLoadedAuthed === authed &&
+      Date.now() - get().lastLoadedAt < TODO_LOAD_THROTTLE_MS
+    ) {
+      return Promise.resolve();
+    }
     if (loadInFlight) return loadInFlight;
     loadInFlight = (async () => {
       // Full skeleton only before the first load has landed; later loads
@@ -79,7 +149,7 @@ const useTodoStore = create<TodoStore>((set, get) => ({
       set({ error: null });
       try {
         const { items, cloudFailed } = await fetchTodos();
-        set({ todos: items, loaded: true });
+        set({ todos: items, loaded: true, lastLoadedAt: Date.now(), lastLoadedAuthed: authed });
         // Only surface the failure when the user is signed in — otherwise
         // the cloud being unreachable is expected (local-only mode).
         if (cloudFailed && getAuthStore()?.getState().isAuthenticated) {
@@ -126,7 +196,7 @@ const useTodoStore = create<TodoStore>((set, get) => ({
     } catch (e) {
       console.error("[Todo] toggle failed:", e);
       // Reconcile with the real store so the checkbox reflects the truth.
-      await get().load();
+      await get().load({ force: true });
     }
   },
 
@@ -136,7 +206,7 @@ const useTodoStore = create<TodoStore>((set, get) => ({
       await deleteTodo(todo);
     } catch (e) {
       console.error("[Todo] remove failed:", e);
-      await get().load();
+      await get().load({ force: true });
     }
   },
 
@@ -185,7 +255,7 @@ const useTodoStore = create<TodoStore>((set, get) => ({
     }
     // Reconcile with the real stores so any item whose deletion failed
     // reappears instead of silently staying gone.
-    await get().load();
+    await get().load({ force: true });
   },
 
   upsert: (todo) => {
@@ -196,6 +266,16 @@ const useTodoStore = create<TodoStore>((set, get) => ({
     );
   },
 }));
+
+// Write-through: any todos change (load, toggle, add, remove, upsert) lands
+// in the startup cache after a short debounce, so the next app launch paints
+// this list immediately.
+let cacheWriteTimer: ReturnType<typeof setTimeout> | null = null;
+useTodoStore.subscribe((state, prev) => {
+  if (state.todos === prev.todos) return;
+  if (cacheWriteTimer) clearTimeout(cacheWriteTimer);
+  cacheWriteTimer = setTimeout(() => writeTodoCache(state.todos), 800);
+});
 
 /**
  * Hook façade over the shared store. `enabled: false` skips triggering the
@@ -210,7 +290,7 @@ export function useTodos({ enabled = true }: { enabled?: boolean } = {}) {
   // Reload on auth flips (login / logout) so the list matches the session.
   useEffect(() => {
     if (!enabled) return;
-    void store.load(true);
+    void store.load({ initial: true });
   }, [enabled, isAuthenticated, store.load]);
 
   // Skeleton from the very first paint for mounts that will trigger the

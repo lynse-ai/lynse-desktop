@@ -15,6 +15,8 @@ import {
   useRerunSummary,
   useTemplateCategories,
   isTranscriptionCompleted,
+  NOTES_WIDE_WINDOW_START,
+  notesWideWindowEnd,
 } from "../workspace/hooks/use-files";
 import { useMoveFiles } from "../workspace/hooks/use-folder-mutations";
 import { useFolders } from "../workspace/hooks/use-folders";
@@ -92,14 +94,6 @@ function saveNotesCache(items: WorkspaceItem[]) {
   } catch {
     // Ignore quota / serialization errors: the cache is best-effort.
   }
-}
-
-/** Format a Date as the backend's `YYYY-MM-DDTHH:MM:SS` (no timezone suffix). */
-function toApiDateTime(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
-    d.getHours(),
-  )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 type TimeBucket = "today" | "yesterday" | "thisWeek" | "thisMonth" | "lastMonth" | "month";
@@ -348,24 +342,17 @@ export function NotesPage() {
       : notesListWidth;
 
   // Stable for the session: a bare `new Date()` here would change the query key
-  // on every render, miss the cache and blank the list.
-  const endTime = useMemo(() => {
-    const d = new Date();
-    d.setHours(23, 59, 59, 0);
-    return toApiDateTime(d);
-  }, []);
+  // on every render, miss the cache and blank the list. Shared with the
+  // heatmap and the todo source-title lookup so all wide consumers read the
+  // same cache entry.
+  const endTime = useMemo(() => notesWideWindowEnd(), []);
 
   const { data: files, isFetching: filesFetching } = useNotes({
     // Wide range → effectively "all my meetings" (recordings + their notes).
-    startTime: "2020-01-01T00:00:00",
+    startTime: NOTES_WIDE_WINDOW_START,
     endTime,
-    // The global QueryClient pins staleTime at Infinity, so a remount would
-    // otherwise keep serving the cached list forever. Notes are edited across
-    // devices — revalidate against the cloud on every entry to this page
-    // (the previous list stays painted while the refetch runs).
-    refetchOnMount: "always",
   });
-  const { data: folders } = useFolders({ refetchOnMount: "always" });
+  const { data: folders } = useFolders();
 
   // Right-click actions on a note row: move to another group / soft-delete.
   // Same mutations the workspace file list uses, so both views stay in sync

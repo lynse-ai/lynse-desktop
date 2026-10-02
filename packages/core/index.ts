@@ -1,2 +1,10 @@
 export { QueryProvider } from "./provider";
-export { createQueryClient } from "./query-client";
+export {
+  createQueryClient,
+  setActiveQueryClient,
+  getActiveQueryClient,
+} from "./query-client";
+export {
+  attachListQueryPersistence,
+  hydrateListQueryCache,
+} from "./query-persistence";

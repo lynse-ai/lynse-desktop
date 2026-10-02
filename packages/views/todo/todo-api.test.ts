@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { applySourceTitles, mapCloudTodo, noteTitleMapFromFiles } from "./todo-api";
+import { applySourceTitles, mapCloudTodo, noteTitleMapFromItems } from "./todo-api";
 import type { TodoItem } from "./todo-api";
+import type { WorkspaceItem } from "../workspace/types";
+import { isLocalFileId } from "../workspace/local-transcription";
 
 describe("mapCloudTodo", () => {
   it("keeps the source file id the todo was extracted from", () => {
@@ -22,19 +24,27 @@ describe("mapCloudTodo", () => {
   });
 });
 
-describe("noteTitleMapFromFiles", () => {
-  it("builds a fileId → title map with the same fallbacks the notes page uses", () => {
-    const map = noteTitleMapFromFiles([
-      { id: "f1", originalFilename: "产品设计评审会" },
-      { id: "f2", name: "周会" },
-      { id: "f3", filename: "复盘" },
-      { id: "", originalFilename: "no id" },
-      { id: "f4", originalFilename: "   " },
+describe("noteTitleMapFromItems", () => {
+  const item = (id: string, title: string): WorkspaceItem => ({
+    id,
+    type: "file",
+    title,
+    updatedAt: "",
+    createdAt: "",
+  });
+
+  it("builds a fileId → title map and skips empty rows and local records", () => {
+    const map = noteTitleMapFromItems([
+      item("f1", "产品设计评审会"),
+      item("f2", "周会"),
+      item("", "no id"),
+      item("f3", "   "),
+      item("local:abc", "本地转写"),
     ]);
     expect(map.get("f1")).toBe("产品设计评审会");
     expect(map.get("f2")).toBe("周会");
-    expect(map.get("f3")).toBe("复盘");
-    expect(map.size).toBe(3);
+    expect(map.size).toBe(2);
+    expect(isLocalFileId("local:abc")).toBe(true);
   });
 });
 

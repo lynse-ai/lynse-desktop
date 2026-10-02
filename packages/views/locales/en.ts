@@ -760,6 +760,7 @@ const en = {
     attachment_download_done: "Saved to your Downloads folder",
     confirm_cancel: "Cancel",
     sources: "Sources",
+    source_not_found: "Couldn't find the matching note",
     contact_support: "Contact support",
     assistant_lynse: "Xiaoling Assistant",
     assistant_workbuddy: "Work buddy",

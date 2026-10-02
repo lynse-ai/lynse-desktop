@@ -758,6 +758,7 @@ const zh = {
     attachment_download_done: "已保存到「下载」文件夹",
     confirm_cancel: "取消",
     sources: "引用来源",
+    source_not_found: "未找到对应的笔记",
     contact_support: "联系人工",
     assistant_lynse: "小灵助手",
     assistant_workbuddy: "Work buddy",

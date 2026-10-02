@@ -3,7 +3,7 @@
 import { useMemo, type ReactNode } from "react";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { useNotes } from "../workspace/hooks/use-files";
+import { useNotes, NOTES_WIDE_WINDOW_START, notesWideWindowEnd } from "../workspace/hooks/use-files";
 import { useTodos } from "../todo/use-todos";
 import { CalendarDays, Mic, ListChecks } from "../icons";
 
@@ -80,18 +80,14 @@ export function UserActivityHeatmap({ enabled = true }: { enabled?: boolean }) {
   const { t, i18n } = useTranslation();
 
   // Stable for the session — a bare `new Date()` in the query key would miss
-  // the cache and refetch on every render.
-  const endTime = useMemo(() => {
-    const d = new Date();
-    d.setHours(23, 59, 59, 0);
-    const p = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-  }, []);
+  // the cache and refetch on every render. Same shared window as the notes
+  // page, so both hit one cache entry per day.
+  const endTime = useMemo(() => notesWideWindowEnd(), []);
 
   const { data: notes, isLoading: notesLoading } = useNotes({
     // Wide range → effectively "all my meetings"; the grid window is applied
     // client-side so the totals below are true all-time numbers.
-    startTime: "2020-01-01T00:00:00",
+    startTime: NOTES_WIDE_WINDOW_START,
     endTime,
     enabled,
   });

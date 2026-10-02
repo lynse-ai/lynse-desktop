@@ -78,6 +78,9 @@ vi.mock("../workspace/hooks/use-files", () => ({
     data: [{ templates: [{ id: "tpl-1", isDefault: 1 }] }],
   }),
   isTranscriptionCompleted: () => false,
+  // Wide notes window shared with the heatmap / todo title lookup.
+  NOTES_WIDE_WINDOW_START: "2020-01-01T00:00:00",
+  notesWideWindowEnd: () => "2026-10-01T23:59:59",
 }));
 
 vi.mock("../workspace/hooks/use-folder-mutations", () => ({

@@ -59,10 +59,11 @@ export function PermissionOnboardingGate({ children }: { children: ReactNode }) 
  * two required permission rows with toggles that fire the real TCC prompts,
  * a Continue that unlocks once both are granted, and a "later" escape hatch
  * so a denied permission can never lock the user out) and a right product
- * collage showing what the permissions unlock. The collage hides below `lg`
- * — the minimum desktop window keeps the single centered column. Theme-token
- * based throughout, so it follows the user's light/dark appearance (unlike
- * the forced-dark login face).
+ * collage showing what the permissions unlock. The collage hides below the
+ * 900px split — the packaged main window is a fixed 960×600, so the split
+ * must land under it (not Tailwind's `lg`) or it would never show. Theme-
+ * token based throughout, so it follows the user's light/dark appearance
+ * (unlike the forced-dark login face).
  */
 export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
   const { t } = useTranslation();
@@ -155,7 +156,7 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
       <div aria-hidden data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-11" />
 
       {/* ── Left column — the setup face ── */}
-      <div className="relative z-10 flex w-full flex-col items-center justify-center overflow-y-auto px-6 py-10 lg:w-[46%] lg:shrink-0 lg:px-12">
+      <div className="relative z-10 flex w-full flex-col items-center justify-center overflow-y-auto px-6 py-10 min-[900px]:w-1/2 min-[900px]:shrink-0 lg:px-12">
         {/* Single soft brand glow behind the column — the only ornament,
             kept token-based so it reads correctly in both appearances. */}
         <div
@@ -164,7 +165,7 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
         />
 
         <div className="relative flex w-full max-w-md animate-page-in flex-col items-center">
-          <img src={LYNSE_LOGO_SRC} alt="Lynse" className="h-8 w-auto dark:invert" />
+          <img src={LYNSE_LOGO_SRC} alt="Lynse" className="h-[22px] w-auto dark:invert" />
           <h1 className="mt-7 text-balance text-center text-2xl font-semibold tracking-tight">
             {t("onboarding.title")}
           </h1>
@@ -224,11 +225,12 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
 
       {/* ── Right column — what the permissions unlock: a static collage of
           the recording surface with floating outcome chips, all localized.
-          Decorative only (aria-hidden); collapses below `lg` where the
-          window is too narrow for two columns. ── */}
+          Decorative only (aria-hidden); collapses below the 900px split —
+          the packaged main window is a fixed 960×600, so the split must
+          land under it or it would never show. ── */}
       <aside
         aria-hidden
-        className="relative hidden flex-1 items-center justify-center overflow-hidden border-l border-border/60 bg-gradient-to-b from-primary/10 via-transparent to-primary/5 lg:flex"
+        className="relative hidden flex-1 items-center justify-center overflow-hidden border-l border-border/60 bg-gradient-to-b from-primary/10 via-transparent to-primary/5 min-[900px]:flex"
       >
         <div className="relative w-[82%] max-w-[520px] rounded-2xl border border-border/70 bg-card shadow-xl">
           <div className="flex items-center gap-3 border-b border-border/60 px-4 py-3">

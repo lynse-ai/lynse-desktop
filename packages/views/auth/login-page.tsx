@@ -511,12 +511,7 @@ export function LoginPage() {
              sign-in form on "github" builds, a "more ways" view on
              "testflight"; the same UI the /api-config page renders. ─────── */
           <>
-            <div className="space-y-4">
-              <p className="text-center text-sm font-medium">
-                {t("auth.api_config_title")}
-              </p>
-              <ApiAuthPanel />
-            </div>
+            <ApiAuthPanel />
             {passwordless && (
               <div className="mt-2 text-center">
                 <Button

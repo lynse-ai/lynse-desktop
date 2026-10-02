@@ -8,6 +8,18 @@
 > the history (that commit documents a `vA.B.C(N)` build-counter tag
 > convention), so they are not listed either.
 
+## 1.1.6 (2026-10-02)
+
+### New Features
+
+- Voiceprint engine rebuilt on sherpa-onnx with the 3D-Speaker CAM++ model (Apache-2.0, safe for commercial use): a ~28 MB download from the STT settings replaces the old bundled engine, and matching now runs in a lightweight environment without the heavy transcription stack.
+- The sign-in window is redesigned as a compact welcome screen with a 1:1 split layout and an illustration card, returning to the dashboard size after signing in.
+
+### Changed
+
+- Voiceprints enrolled with an earlier engine no longer participate in matching; they stay listed with their engine badge and a hint to re-save them from the original transcript.
+- The onboarding page adapts to narrower windows (900 px breakpoint) with a smaller logo.
+
 ## 1.1.5 (2026-10-02)
 
 ### New Features

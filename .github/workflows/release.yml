@@ -183,8 +183,7 @@ jobs:
       - name: Stamp build number (macOS)
         # Apple requires CFBundleVersion (the build number) to strictly increase
         # over the app's lifetime, independent of the marketing version. Use the
-        # workflow run number: monotonic. The marketing version is frozen at
-        # 1.1.4 — releases differ only by build-counter tags `v1.1.4(N)`.
+        # workflow run number: monotonic.
         if: runner.os == 'macOS'
         shell: bash
         run: |

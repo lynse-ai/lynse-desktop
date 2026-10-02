@@ -8,7 +8,7 @@
 > the history (that commit documents a `vA.B.C(N)` build-counter tag
 > convention), so they are not listed either.
 
-## 1.1.4(100) (2026-10-02)
+## 1.1.5 (2026-10-02)
 
 ### New Features
 
@@ -23,6 +23,10 @@
 - "Insert into note" from chat now verifies the target note exists on the signed-in server before filing, names it in the success toast, and keeps the assistant pinned to the backend its session was created on — no more silent "success" into a note that isn't there.
 - Entering the notes page always refetches notes and folders so stale lists can't linger.
 - Numbered lists in replies no longer trigger the option picker: the choice modal only opens when the text actually reads as a menu.
+
+### Changed
+
+- The AI assistant now connects to the new backend service endpoint for improved reliability.
 
 ## 1.1.4(2) (2026-09-28)
 

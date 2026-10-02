@@ -96,6 +96,11 @@ log "Apple build number: $BUILD_NUMBER"
 # "debug" channel and the packaged app only offers the API-key form.
 export VITE_BUILD_CHANNEL=official
 
+# Official builds default the server address to the gapp gateway. Shell env
+# beats apps/tauri/.env (whose VITE_API_URL= is deliberately empty), while
+# users who picked a server on the API-config page keep their saved choice.
+export VITE_API_URL="${VITE_API_URL:-https://gapp.lynse.cn}"
+
 log "Building the Tauri app bundle (updater artifacts disabled for App Store)"
 (cd "$ROOT" && pnpm --filter @lynse/tauri exec tauri build --bundles app \
   --config '{"bundle":{"createUpdaterArtifacts":false}}')

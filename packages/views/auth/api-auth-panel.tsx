@@ -35,9 +35,10 @@ const SERVER_PRESETS = [
 
 const DEFAULT_SERVER_URL = DEFAULT_API_URL;
 
-// Shared pill-input treatment (borderless muted fill, like the login page).
+// Shared pill-input treatment (borderless muted fill, sized to match the
+// compact login form).
 const pillInputClass =
-  "h-12 rounded-full border-0 bg-muted px-5 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none";
+  "h-9 rounded-full border-0 bg-muted px-3.5 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none";
 
 /**
  * Server selection + API-key sign-in in one form — API configuration and the
@@ -129,7 +130,7 @@ export function ApiAuthPanel({ onSuccess }: { onSuccess?: () => void }) {
   );
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3.5">
       <div className="space-y-1.5">
         <Label htmlFor="api-config-url" className="text-xs text-muted-foreground">
           {t("auth.api_config_base_url")}
@@ -157,7 +158,7 @@ export function ApiAuthPanel({ onSuccess }: { onSuccess?: () => void }) {
           <Button
             size="sm"
             variant="outline"
-            className="h-12 shrink-0 rounded-full px-5 text-xs"
+            className="h-9 shrink-0 rounded-full px-4 text-xs"
             onClick={handleConfirmServer}
           >
             {t("auth.api_config_confirm")}
@@ -210,7 +211,7 @@ export function ApiAuthPanel({ onSuccess }: { onSuccess?: () => void }) {
       ) : (
         <Button
           size="sm"
-          className="h-12 w-full rounded-full text-sm font-medium"
+          className="h-9 w-full rounded-full text-sm font-medium"
           onClick={handleConnect}
           disabled={!apiKey.trim() || connecting}
         >

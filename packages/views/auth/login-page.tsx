@@ -311,22 +311,22 @@ export function LoginPage() {
             <p className="text-center text-sm font-medium">
               {t("auth.more_login")}
             </p>
-            <div className="space-y-2.5">
+            <div className="space-y-2">
               <button
                 type="button"
                 onClick={handleWechatLogin}
-                className="flex h-10 w-full items-center gap-3 rounded-full bg-muted px-4 text-left transition-colors hover:bg-muted/70"
+                className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
               >
-                <WechatIcon className="size-5" />
+                <WechatIcon className="size-4" />
                 <span className="text-sm">{t("auth.wechat_login")}</span>
                 <ChevronRight className="ml-auto size-4 text-muted-foreground" />
               </button>
               <button
                 type="button"
                 onClick={() => setView("qr")}
-                className="flex h-10 w-full items-center gap-3 rounded-full bg-muted px-4 text-left transition-colors hover:bg-muted/70"
+                className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
               >
-                <QrCode className="size-5" />
+                <QrCode className="size-4" />
                 <span className="text-sm">{t("auth.qr_login")}</span>
                 <ChevronRight className="ml-auto size-4 text-muted-foreground" />
               </button>
@@ -334,9 +334,9 @@ export function LoginPage() {
                 <button
                   type="button"
                   onClick={() => setView("api")}
-                  className="flex h-10 w-full items-center gap-3 rounded-full bg-muted px-4 text-left transition-colors hover:bg-muted/70"
+                  className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
                 >
-                  <KeyRound className="size-5" />
+                  <KeyRound className="size-4" />
                   <span className="text-sm">{t("auth.api_login")}</span>
                   <ChevronRight className="ml-auto size-4 text-muted-foreground" />
                 </button>
@@ -357,7 +357,7 @@ export function LoginPage() {
           view === "phone" ? (
             <>
               {/* ── Phone number pill ──────────────────────── */}
-              <div className="flex h-10 items-center gap-3 rounded-full bg-muted px-4">
+              <div className="flex h-9 items-center gap-3 rounded-full bg-muted px-3.5">
                 <span className="text-sm text-foreground">+86</span>
                 <span className="h-4 w-px shrink-0 bg-border" />
                 <Input
@@ -376,7 +376,7 @@ export function LoginPage() {
               </div>
 
               {/* ── SMS code pill (send button inside) ─────── */}
-              <div className="relative mt-2.5">
+              <div className="relative mt-2">
                 <Input
                   inputMode="numeric"
                   maxLength={SMS_CODE_MAX_LENGTH}
@@ -386,13 +386,13 @@ export function LoginPage() {
                   onKeyDown={(e) => {
                     if (e.key === "Enter") void handleSmsLogin();
                   }}
-                  className="h-10 rounded-full border-0 bg-muted pl-4 pr-28 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none"
+                  className="h-9 rounded-full border-0 bg-muted pl-3.5 pr-24 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none"
                 />
                 <Button
                   type="button"
                   size="sm"
                   variant="ghost"
-                  className="absolute right-3.5 top-1/2 h-7 -translate-y-1/2 px-0 text-xs font-medium hover:bg-transparent"
+                  className="absolute right-3 top-1/2 h-6 -translate-y-1/2 px-0 text-xs font-medium hover:bg-transparent"
                   disabled={sendCodeDisabled}
                   onClick={handleSendCode}
                 >
@@ -407,7 +407,7 @@ export function LoginPage() {
               {/* ── Sign-in + agreement ────────────────────── */}
               <Button
                 size="sm"
-                className="relative mt-5 h-10 w-full rounded-full bg-gradient-to-r from-[color-mix(in_oklab,var(--primary)_55%,white)] to-primary text-sm font-medium text-primary-foreground hover:opacity-90"
+                className="relative mt-4 h-9 w-full rounded-full bg-gradient-to-r from-[color-mix(in_oklab,var(--primary)_55%,white)] to-primary text-sm font-medium text-primary-foreground hover:opacity-90"
                 disabled={loginDisabled}
                 onClick={() => handleSmsLogin()}
               >

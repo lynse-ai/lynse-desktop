@@ -296,7 +296,7 @@ export function LoginPage() {
       {/* Left column: brand block + the active sign-in form, actions hugging
           the bottom edge like the reference window. Half the window — the
           artwork card takes the mirrored half. */}
-      <div className="relative z-10 flex w-1/2 min-w-0 flex-col px-7 pb-5 pt-10">
+      <div className="relative z-10 flex w-1/2 min-w-0 flex-col px-7 pb-5 pt-14">
         <img src={LYNSE_LOGO_SRC} alt="Lynse" className="h-4 w-auto self-start dark:invert" />
         <h1 className="mt-10 text-lg font-semibold tracking-tight">
           {t("auth.welcome_title")}

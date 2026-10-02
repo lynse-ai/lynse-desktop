@@ -294,17 +294,18 @@ export function LoginPage() {
       <div aria-hidden data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-10" />
 
       {/* Left column: brand block + the active sign-in form, actions hugging
-          the bottom edge like the reference window. */}
-      <div className="relative z-10 flex min-w-0 flex-1 flex-col px-7 pb-5 pt-9">
+          the bottom edge like the reference window. Half the window — the
+          artwork card takes the mirrored half. */}
+      <div className="relative z-10 flex w-1/2 min-w-0 flex-col px-7 pb-5 pt-10">
         <img src={LYNSE_LOGO_SRC} alt="Lynse" className="h-5 w-auto self-start dark:invert" />
-        <h1 className="mt-4 text-lg font-semibold tracking-tight">
+        <h1 className="mt-5 text-lg font-semibold tracking-tight">
           {t("auth.welcome_title")}
         </h1>
-        <p className="mt-1.5 text-[13px] leading-relaxed text-muted-foreground">
+        <p className="mt-2.5 text-[13px] leading-relaxed text-muted-foreground">
           {t("auth.login_subtitle")}
         </p>
 
-        <div className="mt-5 w-full max-w-[260px] flex-1 overflow-y-auto">
+        <div className="mt-7 w-full max-w-[260px] flex-1 overflow-y-auto">
         {view === "more" ? (
           /* ── More ways to sign in ─────────────────────── */
           <div className="space-y-4">
@@ -376,7 +377,7 @@ export function LoginPage() {
               </div>
 
               {/* ── SMS code pill (send button inside) ─────── */}
-              <div className="relative mt-2">
+              <div className="relative mt-3.5">
                 <Input
                   inputMode="numeric"
                   maxLength={SMS_CODE_MAX_LENGTH}
@@ -407,7 +408,7 @@ export function LoginPage() {
               {/* ── Sign-in + agreement ────────────────────── */}
               <Button
                 size="sm"
-                className="relative mt-4 h-9 w-full rounded-full bg-gradient-to-r from-[color-mix(in_oklab,var(--primary)_55%,white)] to-primary text-sm font-medium text-primary-foreground hover:opacity-90"
+                className="relative mt-6 h-9 w-full rounded-full bg-gradient-to-r from-[color-mix(in_oklab,var(--primary)_55%,white)] to-primary text-sm font-medium text-primary-foreground hover:opacity-90"
                 disabled={loginDisabled}
                 onClick={() => handleSmsLogin()}
               >
@@ -560,7 +561,7 @@ export function LoginPage() {
               <button
                 type="button"
                 onClick={() => setView("more")}
-                className="ml-auto flex items-center gap-1 text-2xs text-muted-foreground transition-colors hover:text-foreground"
+                className="flex items-center gap-1 text-2xs text-muted-foreground transition-colors hover:text-foreground"
               >
                 {t("auth.more_login")}
                 <ChevronRight className="size-3" />
@@ -571,12 +572,12 @@ export function LoginPage() {
       </div>
 
       {/* ── Right column — full-height rounded artwork card, inset on all
-          sides like the reference window. Decorative (aria-hidden). ── */}
-      <aside aria-hidden className="shrink-0 py-3 pr-3">
+          sides like the reference window; exactly half the window. ── */}
+      <aside aria-hidden className="w-1/2 shrink-0 py-3 pr-3">
         <img
           src={LOGIN_ARTWORK_SRC}
           alt=""
-          className="h-full w-[280px] select-none rounded-xl object-cover"
+          className="h-full w-full select-none rounded-xl object-cover"
         />
       </aside>
 

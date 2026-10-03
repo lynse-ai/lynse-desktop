@@ -15,7 +15,10 @@
     "build:audio-capture": "bash ./scripts/build-audio-capture.sh",
     "test:audio-capture": "bash ./audio-capture/scripts/test-audio-capture.sh",
     "tauri": "tauri",
-    "check": "cargo check --manifest-path src-tauri/Cargo.toml"
+    "check": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "test": "vitest run",
+    "publish:cloudbase": "bash ./scripts/publish-cloudbase.sh",
+    "mirror:cloudbase": "bash ./scripts/mirror-release-to-cloudbase.sh"
   },
   "dependencies": {
     "@lynse/core": "workspace:*",
@@ -40,6 +43,7 @@
     "@types/react-dom": "catalog:",
     "@tauri-apps/cli": "^2.0.0",
     "typescript": "catalog:",
-    "vite": "^8.0.0"
+    "vite": "^8.0.0",
+    "vitest": "catalog:"
   }
 }

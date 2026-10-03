@@ -3,6 +3,7 @@ import App from "./App";
 import "./globals.css";
 import { installTauriBridge } from "./tauri-bridge";
 import { installLogger } from "./logger";
+import { installEventUnlistenGuard } from "./event-guard";
 import { initAppTheme } from "@lynse/views/settings/app-theme";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -15,6 +16,10 @@ async function bootstrap() {
     const { installE2EShim } = await import("./e2e/tauri-shim");
     installE2EShim();
   }
+  // Runs after the e2e shim (which provides its own event internals) and before
+  // the first listener is registered in installTauriBridge, so every teardown
+  // path in the app goes through the guard.
+  installEventUnlistenGuard();
   const windowKind = new URLSearchParams(window.location.search).get("window");
   // Transparent floating windows must render the webview body transparent too,
   // otherwise the theme background shows through as a square frame.

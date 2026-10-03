@@ -1,0 +1,101 @@
+name: Re-mirror a release to CloudBase
+
+# Repair tool for the updater channel: republish an ALREADY-BUILT GitHub Release
+# to the CloudBase endpoint the in-app updater polls, without rebuilding
+# anything. Use it when `updates/latest.json` is behind the newest tag — which is
+# exactly how 1.1.0 stayed live for several releases after the mirror job in
+# release.yml was dropped (48602a24).
+#
+#   gh workflow run remirror-updates.yml -f tag=v1.1.6
+#
+# A dry run comes first and is not skippable: the manifest is only ever flipped
+# after both platform entries exist, every advertised asset is reachable, and the
+# per-tag copy has been uploaded.
+#
+# Required secret: CLOUDBASE_API_KEY (云开发控制台 → 环境设置 → API 密钥).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to mirror, e.g. v1.1.6"
+        required: true
+        type: string
+      dry_run:
+        description: "Check and rewrite only — upload nothing"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Same env as release.yml: the CloudBase environment and the updates base the
+# in-app updater polls.
+env:
+  CLOUDBASE_ENV_ID: lynse-d8g49o1i956741f9e
+  CLOUDBASE_UPDATES_BASE: https://lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com/updates
+
+jobs:
+  remirror:
+    name: Mirror ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    env:
+      CLOUDBASE_API_KEY: ${{ secrets.CLOUDBASE_API_KEY }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Guard on CloudBase credentials
+        shell: bash
+        run: |
+          if [[ -z "${CLOUDBASE_API_KEY:-}" ]]; then
+            echo "::error::CLOUDBASE_API_KEY secret is not set — nothing can be uploaded."
+            exit 1
+          fi
+
+      - name: Validate the tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${{ inputs.tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] \
+            || { echo "::error::tag must look like v1.1.6, got '${{ inputs.tag }}'"; exit 1; }
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install CloudBase CLI
+        run: npm i -g @cloudbase/cli@latest
+
+      - name: Dry run — verify the release is complete and mirrorable
+        shell: bash
+        run: bash apps/tauri/scripts/mirror-release-to-cloudbase.sh "${{ inputs.tag }}" --dry-run
+
+      - name: Mirror and flip the stable pointer
+        if: "!inputs.dry_run"
+        shell: bash
+        run: bash apps/tauri/scripts/mirror-release-to-cloudbase.sh "${{ inputs.tag }}"
+
+      - name: Read the live manifest back
+        if: "!inputs.dry_run"
+        shell: bash
+        run: |
+          set -euo pipefail
+          WANT="${{ inputs.tag }}"
+          WANT="${WANT#v}"
+          curl -fsSL --max-time 20 "$CLOUDBASE_UPDATES_BASE/latest.json?cb=$GITHUB_RUN_ID" \
+            | node -e '
+              let raw = "";
+              process.stdin.on("data", (d) => (raw += d));
+              process.stdin.on("end", () => {
+                const m = JSON.parse(raw);
+                if (m.version !== process.env.WANT) {
+                  console.error(`::error::live manifest serves ${m.version}, expected ${process.env.WANT}`);
+                  process.exit(1);
+                }
+                console.log(`confirmed: live updater manifest is ${m.version}`);
+              });
+            '

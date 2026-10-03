@@ -62,8 +62,13 @@ done
 [[ -n "$TAG" ]] || die "Usage: publish-cloudbase.sh <tag> [--build] [--dry-run]
   e.g. publish-cloudbase.sh v1.2.0 --build"
 
-[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Tag must look like v1.2.0, got: $TAG"
-VERSION="${TAG#v}"
+# A build-counter suffix is allowed: this repo's history carries tags like
+# v1.1.4(2), and rejecting them made the script unusable for exactly the
+# releases that need repairing. The manifest version is always the numeric
+# prefix, which is also what tauri.conf.json carries.
+[[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+) ]] \
+  || die "Tag must look like v1.2.0 (optionally with a build suffix, e.g. v1.1.4(2)), got: $TAG"
+VERSION="${BASH_REMATCH[1]}"
 
 # The updater compares the manifest version against the running app, so the
 # manifest MUST carry the version the app was built with — never the tag alone.

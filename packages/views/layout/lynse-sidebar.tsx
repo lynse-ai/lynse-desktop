@@ -15,8 +15,10 @@ import {
 import { AppUpdateDialog } from "../app-update-dialog";
 import { featureFlags } from "../feature-flags";
 import { SettingsDialog } from "../settings/settings-dialog";
+import { openAppUpdateDialog, useAppUpdate } from "../app-update";
 import { UserProfileDropdown } from "./user-profile-dropdown";
 import {
+  Download,
   House,
   Lightbulb,
   ListChecks,
@@ -58,6 +60,9 @@ export function LynseSidebar() {
   const systemUnread = useNotificationStore(selectSystemUnread);
   const notesUnread = useNotificationStore(selectNotesUnread);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Shared update store (already polled by the mounted AppUpdateDialog) — the
+  // rail badge is just another subscriber.
+  const { update } = useAppUpdate();
 
   const nickname = (data?.nickname as string) || "User";
   const initials = nickname.slice(0, 2).toUpperCase();
@@ -170,6 +175,21 @@ export function LynseSidebar() {
           isWeb ? "items-stretch" : "items-center",
         )}
       >
+        {/* Update badge — sits above the account row and opens the shared
+            update dialog. Never renders on web (no desktop bridge → no
+            update state). */}
+        {update?.hasUpdate && (
+          <button
+            type="button"
+            onClick={() => openAppUpdateDialog()}
+            title={t("notifications.update_available", { version: update.latestVersion })}
+            aria-label={t("notifications.update_available", { version: update.latestVersion })}
+            data-tauri-drag-region={false}
+            className="mb-2 flex size-7 shrink-0 items-center justify-center rounded-full bg-sidebar-primary text-sidebar-primary-foreground shadow-sm transition-transform duration-150 hover:scale-105 active:scale-95"
+          >
+            <Download className="size-3.5" strokeWidth={2.5} />
+          </button>
+        )}
         <UserProfileDropdown
           onOpenSettings={() => setSettingsOpen(true)}
           side={isWeb ? "top" : "right"}
@@ -181,18 +201,10 @@ export function LynseSidebar() {
               className={
                 isWeb
                   ? "flex h-11 w-full shrink-0 items-center gap-2.5 rounded-xl px-1.5 transition-colors hover:bg-foreground/5"
-                  : "flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20 transition-colors hover:bg-primary/20"
+                  : "flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20 transition-colors hover:bg-primary/20"
               }
             >
-              <span
-                className={cn(
-                  "flex shrink-0 items-center justify-center rounded-full bg-primary/15 font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20",
-                  // Two CJK initials at 12px nearly touch the ring in the
-                  // 28px rail avatar; drop it one token step there. The wider
-                  // web avatar (32px) keeps text-xs.
-                  isWeb ? "size-8 text-xs" : "size-7 text-3xs",
-                )}
-              >
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20">
                 {initials}
               </span>
               {isWeb && (

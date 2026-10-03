@@ -51,6 +51,12 @@ function formatPillTimer(ms: number): string {
  *
  * Hidden on the recording page itself, whose dock already owns the controls,
  * and on non-desktop shells (no bridge → `available` is false).
+ *
+ * Theme-split fill: the inverted `bg-foreground` capsule reads as a dark chip
+ * on the light-grey bar, which is right — but `--foreground` is a warm white,
+ * so the same fill is a bright slab on the near black dark bar. Dark therefore
+ * drops to a translucent tint plus a hairline ring; the pulsing dot carries
+ * the session state in both.
  */
 export function RecordingTitleBarPill() {
   const { t } = useTranslation();
@@ -81,14 +87,14 @@ export function RecordingTitleBarPill() {
   return (
     <div
       data-tauri-drag-region
-      className="absolute right-2 top-1/2 flex h-[26px] -translate-y-1/2 items-center gap-2 rounded-full bg-foreground pl-2.5 pr-1.5 text-background shadow-sm"
+      className="absolute right-2 top-1/2 flex h-[26px] -translate-y-1/2 items-center gap-2 rounded-full bg-foreground pl-2.5 pr-1.5 text-background shadow-sm dark:bg-foreground/10 dark:text-foreground dark:ring-1 dark:ring-inset dark:ring-border"
     >
       {/* Session indicator — red pulsing while recording, warning amber when
           paused or while a stream error is up (island parity); a tiny spinner
           stands in while the stop finalizes in the background. */}
       {stopping ? (
         <span
-          className="size-3 shrink-0 animate-spin rounded-full border-2 border-background/25 border-t-background"
+          className="size-3 shrink-0 animate-spin rounded-full border-2 border-background/25 border-t-background dark:border-foreground/20 dark:border-t-foreground"
           aria-hidden="true"
         />
       ) : (
@@ -116,7 +122,7 @@ export function RecordingTitleBarPill() {
         onClick={togglePause}
         aria-label={paused ? t("recording_mode.resume") : t("recording_mode.pause")}
         title={paused ? t("recording_mode.resume") : t("recording_mode.pause")}
-        className="flex size-5 items-center justify-center rounded-full text-background/70 transition-[color,background-color,transform] duration-150 hover:bg-background/15 hover:text-background active:scale-[0.96]"
+        className="flex size-5 items-center justify-center rounded-full text-background/70 transition-[color,background-color,transform] duration-150 hover:bg-background/15 hover:text-background active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-foreground/10 dark:hover:text-foreground"
       >
         <IconSwap stateKey={paused ? "play" : "pause"}>
           {paused ? <Play className="size-3" /> : <Pause className="size-3" />}
@@ -127,7 +133,7 @@ export function RecordingTitleBarPill() {
         onClick={stop}
         aria-label={t("recording_mode.stop_recording")}
         title={t("recording_mode.stop_recording")}
-        className="flex size-5 items-center justify-center rounded-full text-background/70 transition-[color,background-color,transform] duration-150 hover:bg-destructive/25 hover:text-destructive active:scale-[0.96]"
+        className="flex size-5 items-center justify-center rounded-full text-background/70 transition-[color,background-color,transform] duration-150 hover:bg-destructive/25 hover:text-destructive active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-destructive/15"
       >
         <Square className="size-3" />
       </button>

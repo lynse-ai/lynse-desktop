@@ -197,6 +197,11 @@ export function HomePage() {
     return () => clearTimeout(timer);
   }, [strip.leaving]);
   const stripCurrent = rotateCount > 0 ? strip.current % rotateCount : 0;
+  /** Manual step: clicking the label advances with the same crossfade the
+   *  5s timer uses. Deliberately not shared with the effect above — a
+   *  per-render closure in its deps would restart the interval constantly. */
+  const advanceStrip = () =>
+    setStrip((s) => ({ current: (s.current + 1) % rotateCount, leaving: s.current }));
   const upcomingDueLabel = upcomingTodo ? dueTodoLabel(upcomingTodo, t, i18n.language) : "";
 
   /** Content of one carousel slot: a summary text line or the due todo row. */
@@ -299,9 +304,20 @@ export function HomePage() {
         onMouseEnter={() => setStripPaused(true)}
         onMouseLeave={() => setStripPaused(false)}
       >
-        <span className="shrink-0 text-xs font-medium text-primary">
+        <button
+          type="button"
+          onClick={advanceStrip}
+          disabled={rotateCount <= 1}
+          title={t("home.summary_next")}
+          className={cn(
+            "shrink-0 text-xs font-medium text-primary transition-transform duration-150",
+            rotateCount > 1
+              ? "cursor-pointer hover:opacity-80 active:scale-[0.96]"
+              : "cursor-default",
+          )}
+        >
           {t("home.summary_title")}
-        </span>
+        </button>
         <span className="h-4 w-px shrink-0 bg-border/60" />
         <div className="relative min-w-0 flex-1 overflow-hidden">
           {rotateCount > 1 ? (

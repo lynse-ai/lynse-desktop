@@ -4389,26 +4389,6 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn run() {
-    // Persist panics to the log file: the default hook only writes to stderr,
-    // which is invisible for packaged (non-terminal) launches.
-    std::panic::set_hook(Box::new(|info| {
-        let location = info
-            .location()
-            .map(|location| {
-                format!("{}:{}:{}", location.file(), location.line(), location.column())
-            })
-            .unwrap_or_else(|| "unknown".to_string());
-        let payload = info.payload();
-        let message = if let Some(text) = payload.downcast_ref::<&str>() {
-            (*text).to_string()
-        } else if let Some(text) = payload.downcast_ref::<String>() {
-            text.clone()
-        } else {
-            "non-string panic payload".to_string()
-        };
-        log::error!("panic at {location}: {message}");
-    }));
-
     tauri::Builder::default()
         // Must be registered first: a second launch (the user re-clicks the
         // shortcut while the app lives closed-to-tray) focuses the existing
@@ -4455,6 +4435,9 @@ pub fn run() {
                 }
                 Err(error) => eprintln!("Failed to resolve log dir: {error}"),
             }
+            // After the logger exists, so panics reach the file instead of
+            // being dropped by a logger-less `log::error!` (see logging.rs).
+            logging::install_panic_hook();
             app.manage(recording_card::RecordingCardManager::new(app.handle().clone()));
             if let Err(error) = migrate_electron_data(&app.handle()) {
                 log::error!("Failed to migrate Electron local data: {error}");

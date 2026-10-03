@@ -34,6 +34,12 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      # Locale parity is not compiler-enforced (the locale files are plain
+      # objects with no `satisfies` contract), so a key added to one language
+      # ships as a raw dotted string on screen. The audit is the only gate.
+      - name: i18n audit
+        run: pnpm i18n:check
+
       # Repo-wide flat config (eslint.config.mjs); turbo fans out to the
       # per-package `eslint .` scripts.
       - name: Lint

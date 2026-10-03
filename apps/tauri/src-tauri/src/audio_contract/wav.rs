@@ -13,6 +13,15 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+/// How often a live track pushes appended bytes to the platter. Syncing per
+/// packet would run at the capture callback rate (50-100 times a second);
+/// this bounds power-loss damage to a short window without costing the audio
+/// thread.
+const SYNC_INTERVAL: Duration = Duration::from_secs(2);
+/// Byte budget that forces a sync ahead of the interval on a busy track.
+const SYNC_BYTES: usize = 128 * 1024;
 
 /// Physical WAV format of a track. Deliberately independent of the manifest
 /// schema: raw tracks are 16-bit PCM at the processing rate on every platform
@@ -46,6 +55,9 @@ struct Inner {
     /// Frames (per-channel sample groups) written so far.
     sample_frames: u64,
     closed: bool,
+    /// Payload bytes appended since the track was last synced.
+    bytes_since_sync: usize,
+    last_sync: Instant,
 }
 
 impl WavTrackWriter {
@@ -77,6 +89,8 @@ impl WavTrackWriter {
                 file: Some(file),
                 sample_frames: 0,
                 closed: false,
+                bytes_since_sync: 0,
+                last_sync: Instant::now(),
             }),
             path: path.to_path_buf(),
             format,
@@ -120,6 +134,19 @@ impl WavTrackWriter {
         };
         file.write_all(&payload).map_err(|error| error.to_string())?;
         inner.sample_frames += pad_frames as u64 + incoming_frames;
+        inner.bytes_since_sync += payload.len();
+        if inner.bytes_since_sync >= SYNC_BYTES || inner.last_sync.elapsed() >= SYNC_INTERVAL {
+            if let Some(handle) = inner.file.as_ref() {
+                // A failed sync only means the bytes are still in the OS cache;
+                // the recording is intact for a process crash, so report it
+                // rather than tear down a live capture over it.
+                if let Err(error) = handle.sync_all() {
+                    log::warn!("WAV track {} sync failed: {error}", self.path.display());
+                }
+            }
+            inner.bytes_since_sync = 0;
+            inner.last_sync = Instant::now();
+        }
         Ok(())
     }
 
@@ -127,16 +154,25 @@ impl WavTrackWriter {
     /// a crash before this leaves a valid placeholder header that recovery
     /// can repair with [`repair_header`].
     pub fn close(&self) -> Result<u64, String> {
+        let mut sync_error = None;
         {
             let mut inner = self.inner.lock().map_err(|_| "wav track lock poisoned")?;
             if !inner.closed {
                 inner.closed = true;
                 if let Some(mut file) = inner.file.take() {
-                    let _ = file.sync_all();
+                    if let Err(error) = file.sync_all() {
+                        log::error!("WAV track {} close sync failed: {error}", self.path.display());
+                        sync_error = Some(error.to_string());
+                    }
                 }
             }
         }
         repair_header(&self.path, &self.format)?;
+        // `repair_header` re-syncs the file, so the payload usually lands
+        // anyway; surface the original failure rather than dropping it.
+        if let Some(error) = sync_error {
+            return Err(error);
+        }
         Ok(self.sample_frames())
     }
 

@@ -17,6 +17,7 @@ import {
   ChevronRight,
 } from "../icons";
 import { useWorkspaceStore } from "./store";
+import { SummaryExportMenuItem } from "../connections/summary-export-menu-item";
 import { useAudioEditorStore } from "../audio-editor/store";
 import { useNavigation } from "../navigation";
 import { TAB_BAR_HEIGHT } from "./layout-constants";
@@ -950,6 +951,13 @@ export function ContentPanel() {
                 <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
                 <span>{t("resummarize.button")}</span>
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {/* Export the current summary to a connected document provider
+                  (PRD FR-3). Renders nothing while Connections is off. */}
+              <SummaryExportMenuItem
+                fileId={selectedItemId}
+                disabled={currentFileSummarizing || !activeSummary?.id}
+              />
             </DropdownMenuContent>
           </DropdownMenu>
         )}

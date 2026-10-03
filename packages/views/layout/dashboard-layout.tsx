@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { LynseSidebar } from "./lynse-sidebar";
 import { AppTitleBar } from "./app-title-bar";
+import { CalendarReminderBanner } from "../connections";
 import { DndProvider } from "../workspace/dnd-provider";
 import { AboutDialog } from "../about/about-dialog";
 
@@ -38,6 +39,8 @@ export function DashboardLayout({ children, extra }: DashboardLayoutProps) {
           >
             {children}
             {extra}
+            {/* Pre-meeting reminder (Connections, in-app only in P0). */}
+            <CalendarReminderBanner />
           </main>
         </div>
       </div>

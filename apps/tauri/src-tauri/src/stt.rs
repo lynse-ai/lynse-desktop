@@ -380,18 +380,14 @@ pub(crate) const RUNTIME_BINARIES: &[&str] = &["whisper", "vibeasr", "ffmpeg", "
 /// GPU acceleration without a separately installed Vulkan runtime.
 pub(crate) const RUNTIME_WINDOWS_EXTRA: &[&str] = &["vulkan-1.dll"];
 
-/// On-disk names a complete runtime must contain on `is_windows`. vibeasr is
-/// not required on Windows: its sidecar never launched there (missing MinGW
-/// runtime DLLs) and the engine is retired — requiring it would make the
-/// shipped archive permanently "incomplete". The Vulkan loader takes its
-/// place as the Windows-specific file.
+/// On-disk names a complete runtime must contain on `is_windows`. The same
+/// four binaries are required on every platform now: the Windows `vibeasr`
+/// build is statically linked against the MinGW runtime, so the sidecar no
+/// longer needs the MinGW `bin` dir on PATH (the dynamic build is why it had
+/// been dropped from Windows runtimes). The Vulkan loader joins as the
+/// Windows-specific extra so the whisper build gets GPU acceleration.
 pub(crate) fn required_runtime_names(is_windows: bool) -> Vec<String> {
-    let bases: &[&str] = if is_windows {
-        &["whisper", "ffmpeg", "ffprobe"]
-    } else {
-        RUNTIME_BINARIES
-    };
-    let mut names: Vec<String> = bases
+    let mut names: Vec<String> = RUNTIME_BINARIES
         .iter()
         .map(|base| sidecar_binary_name_for(base, is_windows))
         .collect();
@@ -591,9 +587,12 @@ impl BatchSttAdapter for WhisperAdapter {
 
         let sidecar = sidecar_path(app, "whisper")?;
         // whisper.cpp appends the format extension to the `-of` value, so pass
-        // a bare base name here and read `<base>.json` below.
+        // a bare base name here and read `<base>.json` below. Newer whisper-cli
+        // builds instead name the JSON after the input file (`input.wav.json`),
+        // so fall back to that when the `-of`-derived file is missing.
         let output_base = request.model_directory.join("whisper-output");
         let output_json = request.model_directory.join("whisper-output.json");
+        let output_json_fallback = request.model_directory.join("input.wav.json");
         let mut args = vec![
             sidecar.to_string_lossy().into_owned(),
             "-m".to_owned(),
@@ -629,8 +628,9 @@ impl BatchSttAdapter for WhisperAdapter {
         }
 
         let parsed: Value = {
-            let content = std::fs::read_to_string(&output_json)
-                .map_err(|error| format!("无法读取 Whisper 输出（{}）：{error}", output_json.display()))?;
+            let read_path = if output_json.exists() { &output_json } else { &output_json_fallback };
+            let content = std::fs::read_to_string(read_path)
+                .map_err(|error| format!("无法读取 Whisper 输出（{}）：{error}", read_path.display()))?;
             serde_json::from_str(&content).map_err(|error| error.to_string())?
         };
         let mut segments = normalize_whisper_output(&parsed);
@@ -1157,7 +1157,7 @@ mod tests {
     }
 
     #[test]
-    fn required_runtime_names_drop_vibeasr_and_add_loader_on_windows() {
+    fn required_runtime_names_share_binaries_and_add_loader_on_windows() {
         let macos = required_runtime_names(false);
         assert_eq!(
             macos,
@@ -1173,6 +1173,7 @@ mod tests {
             windows,
             vec![
                 "whisper.exe".to_owned(),
+                "vibeasr.exe".to_owned(),
                 "ffmpeg.exe".to_owned(),
                 "ffprobe.exe".to_owned(),
                 "vulkan-1.dll".to_owned()
@@ -1318,8 +1319,18 @@ mod tests {
         assert_eq!(config.resolve(Some("zh"), None).engine(), "whisper");
         // default when nothing else matches
         assert_eq!(config.resolve(Some("en"), None).engine(), "qwen3");
-        // fall back to Qwen3 when config empty
-        assert_eq!(TranscribeConfig::default().resolve(None, None).engine(), "qwen3");
+        // Empty config falls back to the platform default (Qwen3 on Apple
+        // Silicon, whisper elsewhere) — mirror
+        // `default_provider_follows_platform_engine_availability`.
+        let expected_default = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            "qwen3"
+        } else {
+            "whisper"
+        };
+        assert_eq!(
+            TranscribeConfig::default().resolve(None, None).engine(),
+            expected_default
+        );
     }
 
     #[test]

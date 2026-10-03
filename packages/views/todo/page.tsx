@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
-import { Plus, Calendar, Trash2, X, RefreshCw, Loader2 } from "../icons";
+import { Plus, Calendar, Trash2, X, RefreshCw, Loader2, Upload } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Sheet, SheetContent } from "@lynse/ui/components/ui/sheet";
 import { Button } from "@lynse/ui/components/ui/button";
@@ -12,6 +12,7 @@ import { isWebPlatform } from "../platform";
 import { useInspirationCaptureStore } from "../inspiration/capture-store";
 import { type TodoItem, addTodoToSystemCalendar, isCalendarAvailable, saveTodo } from "./todo-api";
 import { useTodos } from "./use-todos";
+import { TodoExportBar, TodoExportDialog, useTodoExportSelection } from "./export-action-items";
 import { TitleBarSlot } from "../layout/app-title-bar";
 
 // ── Helpers ────────────────────────────────────────────────
@@ -169,22 +170,39 @@ function TodoItemRow({
   active,
   onSelect,
   onToggle,
+  selectable = false,
+  isChecked = false,
+  onCheck,
 }: {
   todo: TodoItem;
   active: boolean;
   onSelect: () => void;
   onToggle: () => void;
+  /** Export mode: a second checkbox appears and the row click selects. */
+  selectable?: boolean;
+  isChecked?: boolean;
+  onCheck?: () => void;
 }) {
   const { t } = useTranslation();
   const dueText = formatDueDisplay(todo);
 
   return (
     <button
-      onClick={onSelect}
+      onClick={selectable ? (onCheck ?? onSelect) : onSelect}
       className={`flex w-full items-center gap-3 rounded-lg px-6 py-2.5 text-left transition-colors ${
         active ? "bg-accent/60" : "hover:bg-accent/30"
       }`}
     >
+      {selectable && (
+        <input
+          type="checkbox"
+          checked={isChecked}
+          onChange={() => onCheck?.()}
+          className="size-4 shrink-0 rounded border-border accent-primary"
+          onClick={(e) => e.stopPropagation()}
+          aria-label={t("todo.export_select_item")}
+        />
+      )}
       <input
         type="checkbox"
         checked={todo.completed}
@@ -535,6 +553,16 @@ export function TodoPage() {
   const sheetAvailable = featureFlags.inspiration && Boolean(getDesktopInspirationApi());
   const completedCount = todos.filter((x) => x.completed).length;
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Export selection (PRD FR-2). Only cloud todos carry an id the export
+  // contract understands, so local ones stay unselectable.
+  const exportSelection = useTodoExportSelection(todos);
+  const [exportMode, setExportMode] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const rowSelectionProps = (todo: TodoItem) => ({
+    selectable: exportMode && Boolean(todo.backend),
+    isChecked: exportSelection.selected.has(todo.id),
+    onCheck: () => exportSelection.toggle(todo.id),
+  });
   const calendarAvailable = useMemo(() => isCalendarAvailable(), []);
 
   const handleAdd = useCallback(
@@ -573,6 +601,19 @@ export function TodoPage() {
       <TitleBarSlot
         actions={
           <>
+            {featureFlags.connections && exportSelection.exportableIds.size > 0 && (
+              <button
+                onClick={() => {
+                  setExportMode((prev) => !prev);
+                  if (exportMode) exportSelection.clear();
+                }}
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50"
+                title={t("todo.export_button")}
+              >
+                {exportMode ? <X className="size-3.5" /> : <Upload className="size-3.5" />}
+                {t(exportMode ? "todo.export_exit" : "todo.export_button")}
+              </button>
+            )}
             <button
               onClick={() => load({ force: true })}
               disabled={refreshing}
@@ -598,6 +639,20 @@ export function TodoPage() {
             </button>
           </>
         }
+      />
+
+      {exportMode && (
+        <TodoExportBar
+          count={exportSelection.count}
+          onSelectAll={exportSelection.selectAll}
+          onClear={exportSelection.clear}
+          onExport={() => setExportOpen(true)}
+        />
+      )}
+      <TodoExportDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        actionItemIds={[...exportSelection.selected]}
       />
 
       {/* Error banner */}
@@ -634,6 +689,7 @@ export function TodoPage() {
                     active={selectedId === todo.id}
                     onSelect={() => setSelectedId(todo.id)}
                     onToggle={() => handleToggle(todo.id)}
+                    {...rowSelectionProps(todo)}
                   />
                 ))}
               </GroupSection>
@@ -647,6 +703,7 @@ export function TodoPage() {
                     active={selectedId === todo.id}
                     onSelect={() => setSelectedId(todo.id)}
                     onToggle={() => handleToggle(todo.id)}
+                    {...rowSelectionProps(todo)}
                   />
                 ))}
               </GroupSection>
@@ -660,6 +717,7 @@ export function TodoPage() {
                     active={selectedId === todo.id}
                     onSelect={() => setSelectedId(todo.id)}
                     onToggle={() => handleToggle(todo.id)}
+                    {...rowSelectionProps(todo)}
                   />
                 ))}
               </GroupSection>

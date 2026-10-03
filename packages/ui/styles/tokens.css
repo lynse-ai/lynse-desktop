@@ -281,7 +281,7 @@
    read as thicker). Unlayered on purpose: this must win over Tailwind
    utilities so every popup presents the same material. */
 .glass-overlay {
-    background: color-mix(in srgb, var(--popover) 70%, transparent);
+    background: color-mix(in srgb, var(--popover) var(--glass-coat, 70%), transparent);
     -webkit-backdrop-filter: blur(24px) saturate(180%);
     backdrop-filter: blur(24px) saturate(180%);
     box-shadow:
@@ -290,14 +290,14 @@
 }
 
 .dark .glass-overlay {
-    background: color-mix(in srgb, var(--popover) 62%, transparent);
+    background: color-mix(in srgb, var(--popover) var(--glass-coat-dark, 62%), transparent);
     box-shadow:
         inset 0 1px 0 rgb(255 255 255 / 12%),
         inset 0 0 0 1px rgb(255 255 255 / 5%);
 }
 
 .glass-overlay-thick {
-    background: color-mix(in srgb, var(--popover) 82%, transparent);
+    background: color-mix(in srgb, var(--popover) var(--glass-coat-thick, 82%), transparent);
     -webkit-backdrop-filter: blur(40px) saturate(200%);
     backdrop-filter: blur(40px) saturate(200%);
     box-shadow:
@@ -306,10 +306,23 @@
 }
 
 .dark .glass-overlay-thick {
-    background: color-mix(in srgb, var(--popover) 74%, transparent);
+    background: color-mix(in srgb, var(--popover) var(--glass-coat-thick-dark, 74%), transparent);
     box-shadow:
         inset 0 1px 0 rgb(255 255 255 / 14%),
         inset 0 0 0 1px rgb(255 255 255 / 6%);
+}
+
+/* No native material behind the webview — Windows/Linux desktop, web builds, or
+   macOS where vibrancy could not be installed (`data-window-effects` is only set
+   to "vibrancy" when Rust actually put an NSVisualEffectView there). The coats
+   above assume the window itself is already diffused, so over app-painted
+   content they read as see-through; a denser coat keeps the glass cue without
+   the bleed-through. Blur and inner-edge shadows are unchanged. */
+:root:not([data-window-effects="vibrancy"]) {
+    --glass-coat: 74%;
+    --glass-coat-dark: 90%;
+    --glass-coat-thick: 82%;
+    --glass-coat-thick-dark: 94%;
 }
 
 /* System accessibility settings fall back to near-solid panels: keep the

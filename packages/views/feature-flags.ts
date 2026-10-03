@@ -17,6 +17,11 @@ export const featureFlags = {
   /** Quick voice-memo capture inside the inspiration popup. Hidden for now —
    * flip to `true` to bring back the mic button and recording UI. */
   inspirationVoiceCapture: false,
+  /** Settings → Connections (third-party integrations: calendar, Notion, task
+   * tools). Off until the backend's /api/v2/integrations contract is deployed —
+   * the rows degrade to a 503 "not configured" line while dark. Flip here alone
+   * to expose the section (PRD: docs/connections-api-contract.md). */
+  connections: true,
   /** Settings → Plugins community (browse/install/enable/uninstall plugins).
    * When off, plugin-contributed settings sections render unconditionally —
    * the exact pre-plugin behavior — so this flag alone rolls back the whole

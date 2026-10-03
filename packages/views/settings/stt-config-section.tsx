@@ -40,12 +40,15 @@ const ENGINE_OPTIONS: { value: SttEngine; labelKey: string }[] = [
   { value: "mlx", labelKey: "settings.stt_engine_mlx" },
 ];
 
-/** Engines selectable on this desktop. Only the whisper.cpp sidecar runtime
- *  ships outside macOS — the MLX/venv-bound engines hard-error there on
- *  first transcription, so they are hidden rather than selectable. */
+/** Engines selectable on this desktop. Outside macOS only the sidecar engines
+ *  ship (whisper.cpp's whisper + VibeASR.cpp's vibeasr, both in the shared
+ *  runtime archive) — the MLX/venv-bound engines hard-error there on first
+ *  transcription, so they are hidden rather than selectable. */
+const SIDECAR_ENGINES: ReadonlySet<SttEngine> = new Set(["whisper", "vibeasr"]);
+
 const VISIBLE_ENGINE_OPTIONS = isMacDesktop
   ? ENGINE_OPTIONS
-  : ENGINE_OPTIONS.filter((option) => option.value === "whisper");
+  : ENGINE_OPTIONS.filter((option) => SIDECAR_ENGINES.has(option.value));
 
 /** Platform-aware stand-in for an unset `config.default` — mirrors the Rust
  *  `ProviderConfig::default()` (Qwen3 on Apple Silicon, whisper elsewhere). */

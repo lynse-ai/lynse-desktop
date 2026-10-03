@@ -6,10 +6,10 @@ use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -143,19 +143,93 @@ pub(crate) fn engine_model_dir(app: &AppHandle, engine: &str, model_id: &str) ->
     Ok(path)
 }
 
+/// Write `bytes` over `path` atomically: stage into a uniquely named sibling,
+/// fsync it, then rename. A crash mid-write can only leave the previous file or
+/// the complete new one, never a truncated mix of the two.
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> CommandResult<()> {
+    static STAGING_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+    let parent = path.parent().ok_or("Write target has no parent directory")?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let file_name = path
+        .file_name()
+        .ok_or("Write target has no file name")?
+        .to_string_lossy();
+    // The staging name has to be unique per writer: a fixed `.tmp` sibling is
+    // clobbered when two commands save to the same store concurrently.
+    let staging = parent.join(format!(
+        "{file_name}.{}-{}.tmp",
+        std::process::id(),
+        STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let outcome = (|| -> CommandResult<()> {
+        let mut file = File::create(&staging).map_err(|error| error.to_string())?;
+        file.write_all(bytes).map_err(|error| error.to_string())?;
+        file.flush().map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        drop(file);
+        fs::rename(&staging, path).map_err(|error| error.to_string())?;
+        // The rename is only durable once the directory entry itself is on
+        // disk. Unix can fsync a directory handle; Windows cannot open one for
+        // writing and journals the rename instead, so the step is unix-only.
+        #[cfg(unix)]
+        if let Ok(directory) = File::open(parent) {
+            let _ = directory.sync_all();
+        }
+        Ok(())
+    })();
+    if outcome.is_err() {
+        let _ = fs::remove_file(&staging);
+    }
+    outcome
+}
+
+/// Unreadable stores are preserved under a distinct name rather than repaired
+/// in place, so the bytes stay available for recovery.
+fn quarantine_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "store".to_owned());
+    // Filename-safe stamp: `:` is legal in a path but not in a Windows one.
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    path.with_file_name(format!("{file_name}.corrupt-{stamp}"))
+}
+
 pub(crate) fn read_array(path: &Path) -> CommandResult<Vec<Value>> {
-    match fs::read_to_string(path) {
-        Ok(content) => Ok(serde_json::from_str(&content).unwrap_or_default()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(error.to_string()),
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if content.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    match serde_json::from_str::<Vec<Value>>(&content) {
+        Ok(values) => Ok(values),
+        // An unreadable store used to decode as "zero records", and the next
+        // save wrote that emptiness back over the real data. Preserve the file
+        // and refuse instead: every writer propagates this error, so nothing
+        // can overwrite what we cannot read.
+        Err(error) => {
+            let quarantine = quarantine_path(path);
+            match fs::rename(path, &quarantine) {
+                Ok(()) => Err(format!(
+                    "Local store {} is unreadable ({error}); preserved as {}",
+                    path.display(),
+                    quarantine.display()
+                )),
+                Err(rename_error) => Err(format!(
+                    "Local store {} is unreadable ({error}); could not preserve it ({rename_error})",
+                    path.display()
+                )),
+            }
+        }
     }
 }
 
 pub(crate) fn write_array(path: &Path, values: &[Value]) -> CommandResult<()> {
-    let temporary = path.with_extension("json.tmp");
-    let content = serde_json::to_string_pretty(values).map_err(|error| error.to_string())?;
-    fs::write(&temporary, content).map_err(|error| error.to_string())?;
-    fs::rename(&temporary, path).map_err(|error| error.to_string())
+    let content = serde_json::to_vec_pretty(values).map_err(|error| error.to_string())?;
+    atomic_write(path, &content)
 }
 
 pub(crate) fn list_store(app: &AppHandle, directory: &str) -> CommandResult<Vec<Value>> {
@@ -455,13 +529,11 @@ fn ensure_sherpa_package(python: &str) -> CommandResult<()> {
     if check.status.success() {
         return Ok(());
     }
-    let pip = PathBuf::from(python)
-        .parent()
-        .map(|directory| directory.join("pip"))
-        .unwrap_or_else(|| PathBuf::from("pip"));
+    // `-m pip` rather than the venv's `pip` sibling: on Windows that file is
+    // `pip.exe` next to `Scripts/python.exe`, and the plain name does not exist.
     log::info!("[stt] 首次使用声纹引擎，安装 sherpa-onnx 依赖…");
-    let install = Command::new(&pip)
-        .args(["install", "--quiet", "--disable-pip-version-check", "sherpa-onnx", "imageio-ffmpeg"])
+    let install = Command::new(python)
+        .args(["-m", "pip", "install", "--quiet", "--disable-pip-version-check", "sherpa-onnx", "imageio-ffmpeg"])
         .status()
         .map_err(|error| format!("安装 sherpa-onnx 失败：{error}"))?;
     if !install.success() {
@@ -479,14 +551,24 @@ pub(crate) fn ensure_sherpa_venv(app: &AppHandle) -> CommandResult<String> {
     if let Ok(value) = env::var("LYNSE_SHERPA_PYTHON") {
         return Ok(value);
     }
-    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../.venv-sherpa/bin/python");
+    let python_relative = if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" };
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../../../.venv-sherpa/{python_relative}"));
     if development.exists() {
         return Ok(development.to_string_lossy().into_owned());
     }
     let venv = app_data_dir(app)?.join("sherpa-venv");
-    let python = venv.join("bin/python");
+    let python = venv.join(python_relative);
     if !python.exists() {
-        let interpreter = ["python3.12", "python3.11", "python3.13", "python3"]
+        // Windows ships no `python3.12`-style names: the installer puts `python`
+        // on PATH and the `py` launcher covers versioned selection. The
+        // WindowsApps `python3` stub prints a store hint and exits non-zero, so
+        // the `--version` probe below rejects it.
+        let candidates: &[&str] = if cfg!(windows) {
+            &["python", "py", "python3"]
+        } else {
+            &["python3.12", "python3.11", "python3.13", "python3"]
+        };
+        let interpreter = candidates
             .into_iter()
             .find(|candidate| Command::new(candidate).arg("--version").output().map(|output| output.status.success()).unwrap_or(false))
             .ok_or("未找到可用的 python3 解释器")?;
@@ -870,21 +952,22 @@ pub struct SttModelEntry {
 }
 
 /// VibeVoice-ASR-BitNet weights (Microsoft, MIT): a VAE encoder GGUF plus an
-/// LM decoder GGUF, both required by the `vibeasr` sidecar.
+/// LM decoder GGUF, both required by the `vibeasr` sidecar. Sizes and SHA-256
+/// are the HuggingFace LFS OIDs of `microsoft/VibeVoice-ASR-BitNet`.
 pub const VIBEVOICE_BITNET_FILES: &[SttModelFile] = &[
     SttModelFile {
         file_name: "vibeasr-vae-encoder-i8_s.gguf",
-        size_bytes: 0,
+        size_bytes: 703_080_064,
         download_url:
             "https://huggingface.co/microsoft/VibeVoice-ASR-BitNet/resolve/main/vibeasr-vae-encoder-i8_s.gguf",
-        sha256: "",
+        sha256: "4941c82608c253ec066b5cc74d3dd11a5c8fef96cccbc5b87359ef0fe4338df6",
     },
     SttModelFile {
         file_name: "vibeasr-lm-i2_s-embed-q6_k.gguf",
-        size_bytes: 0,
+        size_bytes: 992_877_600,
         download_url:
             "https://huggingface.co/microsoft/VibeVoice-ASR-BitNet/resolve/main/vibeasr-lm-i2_s-embed-q6_k.gguf",
-        sha256: "",
+        sha256: "fbe273d8dc2f2433bb25f849e19d77ea65aaa2188d12c20cee987ab6f321e002",
     },
 ];
 
@@ -921,34 +1004,34 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         provider: "whisper",
         id: "small-q5_1",
         label: "Whisper small (q5_1, ~190 MB)",
-        size_bytes: 199_229_824,
+        size_bytes: 190_085_487,
         download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
-        sha256: "",
+        sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
         files: &[],
     },
     SttModelEntry {
         provider: "whisper",
         id: "medium-q5_0",
         label: "Whisper medium (q5_0, ~539 MB)",
-        size_bytes: 565_165_670,
+        size_bytes: 539_212_467,
         download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin",
-        sha256: "",
+        sha256: "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f",
         files: &[],
     },
     SttModelEntry {
         provider: "whisper",
         id: "large-v3-turbo-q5_0",
         label: "Whisper large-v3-turbo (q5_0, ~574 MB)",
-        size_bytes: 601_882_112,
+        size_bytes: 574_041_195,
         download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
-        sha256: "",
+        sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
         files: &[],
     },
     SttModelEntry {
         provider: "vibeasr",
         id: "vibeasr-bitnet-1.5b",
         label: "VibeVoice-ASR-BitNet 1.5B（本地·CPU，中英法等 7 语种，~1.6 GiB）",
-        size_bytes: 0,
+        size_bytes: 1_695_957_664,
         download_url: "",
         sha256: "",
         files: VIBEVOICE_BITNET_FILES,
@@ -1170,7 +1253,15 @@ fn sha256_of_file(path: &Path) -> CommandResult<String> {
         return Err("无法计算文件哈希".to_owned());
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    Ok(text.split_whitespace().next().unwrap_or("").to_owned())
+    // certutil's output is localized ("SHA256 的 <path> 哈希:" on zh-CN
+    // Windows), so the digest cannot be picked by position — scan for the
+    // 64-hex-digit token, which is unambiguous in every locale. shasum prints
+    // "<hash>  <path>", where the same scan also matches.
+    Ok(text
+        .split_whitespace()
+        .find(|token| token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()))
+        .unwrap_or("")
+        .to_ascii_lowercase())
 }
 
 /// Produce the list of URLs to try, in order. Hugging Face (`huggingface.co`)
@@ -4543,6 +4634,55 @@ mod tests {
         let (start, end) = calendar_event_times("2026-07-13T10:00:00+08:00", "2026-07-13T11:00:00+08:00").unwrap();
         assert!(end > start);
         assert!(calendar_event_times("2026-07-13T11:00:00+08:00", "2026-07-13T10:00:00+08:00").is_err());
+    }
+
+    #[test]
+    fn atomic_write_leaves_no_staging_files() {
+        let dir = test_temp_dir("atomic-write");
+        let target = dir.join("index.json");
+        atomic_write(&target, b"[{\"id\":\"a\"}]").unwrap();
+        atomic_write(&target, b"[]").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "[]");
+        let strays: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp"))
+            .collect();
+        assert!(strays.is_empty(), "staging files left behind: {strays:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unreadable_store_is_preserved_instead_of_emptied() {
+        let dir = test_temp_dir("quarantine");
+        let target = dir.join("index.json");
+        fs::write(&target, b"[{\"id\":\"a\"},").unwrap();
+        let error = read_array(&target).unwrap_err();
+        assert!(error.contains("unreadable"), "{error}");
+        assert!(!target.exists(), "an unreadable store must not stay in place");
+        let preserved: Vec<PathBuf> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().contains(".corrupt-"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert_eq!(preserved.len(), 1, "the unreadable bytes must survive");
+        assert_eq!(fs::read_to_string(&preserved[0]).unwrap(), "[{\"id\":\"a\"},");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_store_reads_as_no_records() {
+        let dir = test_temp_dir("empty-store");
+        let target = dir.join("index.json");
+        fs::write(&target, "  \n").unwrap();
+        assert!(read_array(&target).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// Create a uniquely-named temp directory for a test and return it. The

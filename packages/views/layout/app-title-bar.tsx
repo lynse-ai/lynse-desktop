@@ -6,11 +6,16 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
-import { isTauri, isMacDesktop } from "./use-maximized";
-import { ArrowLeft, ArrowRight, PanelLeft } from "../icons";
+import { isTauri, isMacDesktop, useMaximized } from "./use-maximized";
+import { ArrowLeft, ArrowRight, PanelLeft, Minus, Square, Copy, X } from "../icons";
 import { RecordingTitleBarPill, useRecordingPillVisible } from "./recording-title-pill";
 
 export const TITLE_BAR_HEIGHT = 34;
+
+// Windows/Linux desktop windows ship without native title bar (see
+// `tauri.windows.conf.json`), so the app bar is the only caption area there and
+// has to carry the window buttons itself. macOS keeps its traffic lights.
+const showWindowControls = isTauri && !isMacDesktop;
 
 /* ── Slot store ────────────────────────────────────────────────────────────
  * The shell-level bar is one strip for the whole window, but only the mounted
@@ -139,7 +144,11 @@ export function AppTitleBar() {
 
   return (
     <div
-      className="relative flex shrink-0 select-none items-center gap-1 pr-2"
+      className={cn(
+        "relative flex shrink-0 select-none items-center gap-1",
+        // The caption buttons own the top-right corner, so no padding there.
+        !showWindowControls && "pr-2",
+      )}
       style={{ height: TITLE_BAR_HEIGHT }}
       data-tauri-drag-region
       onDoubleClick={handleDoubleClick}
@@ -220,6 +229,8 @@ export function AppTitleBar() {
       >
         {slotActions}
       </div>
+
+      {showWindowControls && <WindowControls />}
     </div>
   );
 }
@@ -260,4 +271,74 @@ function BarButton({
 
 function ZoneDivider() {
   return <div className="mx-1 h-[18px] w-px shrink-0 bg-border/60" aria-hidden="true" />;
+}
+
+/**
+ * Caption buttons for the frameless Windows/Linux window. Flush to the top-right
+ * corner and full bar height, matching where the OS put them before: the close
+ * target sits at the window edge, not inset by the app's own padding.
+ *
+ * Renders nothing on macOS (native traffic lights) and in the web build. The
+ * login page has no title bar of its own — it carries just a drag strip — so it
+ * mounts this directly, otherwise a signed-out window could not be closed.
+ */
+export function WindowControls() {
+  const { t } = useTranslation();
+  const maximized = useMaximized();
+
+  if (!showWindowControls) return null;
+
+  return (
+    <div
+      className="flex h-full shrink-0 items-stretch self-stretch"
+      data-tauri-drag-region={false}
+    >
+      <CaptionButton label={t("layout.window_minimize")} onClick={() => void getCurrentWindow().minimize()}>
+        <Minus className="size-3.5" strokeWidth={1.5} />
+      </CaptionButton>
+      <CaptionButton
+        label={t(maximized ? "layout.window_restore" : "layout.window_maximize")}
+        onClick={() => void getCurrentWindow().toggleMaximize()}
+      >
+        {maximized ? (
+          <Copy className="size-3.5" strokeWidth={1.5} />
+        ) : (
+          <Square className="size-3.5" strokeWidth={1.5} />
+        )}
+      </CaptionButton>
+      <CaptionButton label={t("layout.window_close")} danger onClick={() => void getCurrentWindow().close()}>
+        <X className="size-3.5" strokeWidth={1.5} />
+      </CaptionButton>
+    </div>
+  );
+}
+
+function CaptionButton({
+  label,
+  danger,
+  onClick,
+  children,
+}: {
+  label: string;
+  danger?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      data-tauri-drag-region={false}
+      onClick={onClick}
+      className={cn(
+        "flex w-[46px] shrink-0 items-center justify-center transition-colors",
+        danger
+          ? "text-muted-foreground hover:bg-destructive hover:text-destructive-foreground"
+          : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
+  );
 }

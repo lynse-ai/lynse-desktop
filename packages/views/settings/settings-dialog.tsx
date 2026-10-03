@@ -19,8 +19,11 @@ import {
   Info,
   Puzzle,
   Bot,
+  Plug,
 } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
+import { isWebPlatform } from "../platform";
+import { ConnectionsCard } from "../connections";
 import {
   getDesktopLocalTranscriptionApi,
 } from "../workspace/local-transcription";
@@ -65,6 +68,7 @@ type SettingsSectionId =
   | "feishu"
   | "workbuddy"
   | "stt"
+  | "connections"
   | "plugins"
   | "about"
   // Plugin contributions may register additional section ids at runtime.
@@ -201,6 +205,22 @@ export function SettingsDialog({
           }
         />
       ),
+    });
+  }
+
+  // Third-party integrations. Gated from feature-flags alone: the section
+  // disappears entirely while the /api/v2/integrations backend is not
+  // deployed, rather than showing rows that can only error.
+  //
+  // Desktop only, per PRD §2 ("P0-P2 不做 Web 端 UI"): the flag is global, so
+  // without this check flipping it on would surface the section in the web app
+  // too, where there is no deep-link or native surface for the flows.
+  if (featureFlags.connections && !isWebPlatform()) {
+    sections.push({
+      id: "connections",
+      label: t("settings.connections"),
+      icon: Plug,
+      content: <ConnectionsCard />,
     });
   }
 

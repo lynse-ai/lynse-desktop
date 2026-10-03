@@ -95,7 +95,16 @@ build_vibeasr() {
   local gen_args=()
   if [[ "$IS_WINDOWS" -eq 1 ]]; then
     # MSVC is rejected by VibeASR.cpp; the build requires MinGW (GCC/Clang).
-    gen_args=(-G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM=mingw32-make)
+    # Statically link the MinGW runtime (libgcc/libstdc++/winpthread) so the
+    # shipped vibeasr.exe launches on machines without the MinGW bin dir on
+    # PATH — the dynamically linked build was why the sidecar had to be
+    # dropped from Windows runtimes ("missing MinGW runtime DLLs").
+    gen_args=(-G "MinGW Makefiles" -DCMAKE_MAKE_PROGRAM=mingw32-make \
+      -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc -static-libstdc++")
+    # Portable CPU baseline, mirroring the whisper build: GGML_NATIVE=OFF keeps
+    # the binary off the CI runner's instruction set; AVX2 on, AVX512 off so
+    # older user CPUs never hit an illegal-instruction crash.
+    gen_args+=(-DGGML_NATIVE=OFF -DGGML_AVX2=ON -DGGML_AVX512=OFF)
   fi
   cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=OFF "${gen_args[@]+"${gen_args[@]}"}"

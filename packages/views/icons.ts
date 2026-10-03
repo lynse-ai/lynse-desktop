@@ -54,6 +54,7 @@ export {
   Filter,           // Filter controls
   Send,             // Send message (chat)
   X,                // Close / Dismiss
+  Minus,            // Window minimize (frameless desktop title bar)
   Upload,           // Upload action
   Copy,             // Copy to clipboard
   Check,            // Confirm / Copied

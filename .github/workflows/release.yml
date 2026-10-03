@@ -97,10 +97,11 @@ jobs:
         run: bash apps/tauri/scripts/fetch-sidecars.sh
 
       - name: Smoke test sidecars
-        # Offline ASR (vibeasr) is not supported on Windows yet — its binary
-        # builds but cannot launch on the runner (missing MinGW runtime DLL),
-        # so `--help` returns non-zero. Don't let that block the msi build.
-        continue-on-error: true
+        # Every sidecar must launch: the Windows vibeasr.exe is statically
+        # linked, so `--help` succeeding proves no MinGW runtime DLL is needed.
+        # A failure here blocks the msi/dmg build — shipping an archive whose
+        # binary cannot start would make the VibeVoice model card uninstalleable
+        # end-to-end (download OK, transcribe dead).
         shell: bash
         run: |
           SIDECARS=apps/tauri/src-tauri/resources/sidecars
@@ -135,10 +136,14 @@ jobs:
             SHA_VAR=LYNSE_RUNTIME_SHA_WINDOWS_X86_64
           fi
           # Hard gate: a Windows archive without the Vulkan loader would pass
-          # the client's completeness check but silently run CPU-only.
+          # the client's completeness check but silently run CPU-only; without
+          # vibeasr.exe the client's completeness check (required_runtime_names)
+          # would reject every archive as permanently "incomplete".
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             test -s "$SIDECARS/vulkan-1.dll" \
               || { echo "::error::vulkan-1.dll missing from sidecars — the whisper build went out CPU-only"; exit 1; }
+            test -s "$SIDECARS/vibeasr.exe" \
+              || { echo "::error::vibeasr.exe missing from sidecars — the client requires it in the runtime"; exit 1; }
           fi
           ARCHIVE="lynse-stt-runtime-$PLATFORM.tar.gz"
           tar -czf "$ARCHIVE" -C "$SIDECARS" .

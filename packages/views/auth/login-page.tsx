@@ -27,6 +27,7 @@ import { ArrowRight, ChevronRight, KeyRound, Loader2, QrCode } from "../icons";
 import { getDesktopAppApi, openExternalUrl } from "../app-update";
 import { hasDevApiAuth, hasPasswordlessAuth } from "../feature-flags";
 import { PRIVACY_URL, TERMS_URL } from "../about/links";
+import { WindowControls } from "../layout/app-title-bar";
 import { WechatIcon } from "./wechat-icon";
 import { authErrorText } from "./auth-errors";
 import { ApiAuthPanel } from "./api-auth-panel";
@@ -292,6 +293,12 @@ export function LoginPage() {
       {/* The login face replaces the whole dashboard, so it carries its own
           drag strip — the unified title bar is not mounted here. */}
       <div aria-hidden data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-10" />
+      {/* Frameless Windows/Linux: this strip is the only caption area while
+          signed out, so it needs the window buttons too. Renders nothing on
+          macOS/web. Kept outside the aria-hidden drag strip above. */}
+      <div className="absolute right-0 top-0 z-30 flex h-10">
+        <WindowControls />
+      </div>
 
       {/* Left column: brand block + the active sign-in form, actions hugging
           the bottom edge like the reference window. Half the window — the

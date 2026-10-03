@@ -3966,12 +3966,25 @@ fn diagnostics_prepare_report(
             .map_err(|error| format!("resolve log dir: {error}"))?;
         let logs_dir = dir.join("logs");
         fs::create_dir_all(&logs_dir).map_err(|error| format!("create logs dir: {error}"))?;
+        // A report leaves the machine, so the account name in the home path is
+        // scrubbed. Nothing else is rewritten: device names, session ids and
+        // full paths are exactly what makes a pasted log diagnosable.
+        let home = app
+            .path()
+            .home_dir()
+            .ok()
+            .and_then(|path| path.to_str().map(str::to_owned));
         for file in diagnostics_log_files(&log_dir) {
             let Some(name) = file.file_name() else {
                 continue;
             };
             if let Ok(bytes) = fs::read(&file) {
-                let _ = fs::write(logs_dir.join(name), bytes);
+                let text = String::from_utf8_lossy(&bytes);
+                let scrubbed = match &home {
+                    Some(home) => text.replace(home, "~"),
+                    None => text.into_owned(),
+                };
+                let _ = fs::write(logs_dir.join(name), scrubbed);
             }
         }
     }
@@ -4007,6 +4020,22 @@ async fn attachment_save(url: String, path: String) -> CommandResult<Value> {
     fs::write(&target, &bytes).map_err(|error| format!("write attachment: {error}"))?;
 
     Ok(json!({ "path": target.to_string_lossy() }))
+}
+
+/// Read a chat attachment's body as text so the renderer can preview it in
+/// app. Same reqwest route as `attachment_save` (the signed object hosts send
+/// no CORS headers for the app origin), but nothing is written to disk and the
+/// signed URL never reaches the address bar or a browser tab.
+#[tauri::command]
+async fn attachment_text(url: String) -> CommandResult<String> {
+    reqwest::get(&url)
+        .await
+        .map_err(|error| format!("fetch attachment: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("fetch attachment: {error}"))?
+        .text()
+        .await
+        .map_err(|error| format!("read attachment: {error}"))
 }
 
 const TRAY_ELAPSED_ID: &str = "tray_elapsed";
@@ -4135,11 +4164,41 @@ fn center_window_over_main(
         let _ = fallback;
         return;
     };
-    let Ok(scale) = main.scale_factor() else { return };
+    let Ok(scale) = main.scale_factor() else {
+        let _ = fallback;
+        return;
+    };
     // Physical pixels → logical units, then top-left for our centered window.
     let x = (main_position.x as f64 + main_size.width as f64 / 2.0) / scale - width / 2.0;
     let y = (main_position.y as f64 + main_size.height as f64 / 2.0) / scale - height / 2.0;
     let _ = window.set_position(LogicalPosition::new(x, y));
+}
+
+/// Reveal a hidden-created popup whose page-load event never arrived.
+///
+/// The About and Feedback windows are built with `visible(false)` and shown
+/// from their `on_page_load(Finished)` event so they never flash at the origin.
+/// On Windows that event can be missed entirely — the webview's first
+/// navigation completes before the hook attaches — which left the popup
+/// created but permanently invisible. The page-load hook stays as the fast
+/// path; this only acts when the window is still hidden after it.
+#[cfg(target_os = "windows")]
+fn ensure_window_revealed(app: &AppHandle, label: &'static str) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+        let Some(window) = app.get_webview_window(label) else {
+            log::warn!("[window:{label}] fallback: window is gone");
+            return;
+        };
+        let visible = window.is_visible();
+        log::info!("[window:{label}] fallback check: is_visible={visible:?}");
+        if visible.unwrap_or(false) {
+            return;
+        }
+        let revealed = window.show().and_then(|_| window.set_focus());
+        log::info!("[window:{label}] fallback reveal: ok={:?}", revealed.is_ok());
+    });
 }
 
 /// Shape the main window between the two faces it hosts: the compact
@@ -4170,10 +4229,14 @@ fn set_compact_window_mode(app: AppHandle, active: bool) -> CommandResult<()> {
 /// the frontend, which knows the active locale.
 #[tauri::command]
 fn open_about_window(app: AppHandle, title: Option<String>) -> CommandResult<()> {
+    log::info!("[window:about] open requested");
     if let Some(window) = app.get_webview_window("about") {
-        let _ = window.show();
-        let _ = window.set_focus();
-        return Ok(());
+        let revealed = window.show().and_then(|_| window.set_focus());
+        log::info!(
+            "[window:about] reusing existing window, reveal ok={:?}",
+            revealed.is_ok()
+        );
+        return revealed.map_err(|error| format!("show about window: {error}"));
     }
     // Created hidden and positioned before the reveal, so the popup never
     // flashes at the screen origin before settling over the main window.
@@ -4194,13 +4257,20 @@ fn open_about_window(app: AppHandle, title: Option<String>) -> CommandResult<()>
     .visible(false)
     .on_page_load(|window, payload| {
         if payload.event() == PageLoadEvent::Finished {
+            log::info!("[window:about] page load finished, revealing");
             let _ = window.show();
             let _ = window.set_focus();
         }
     })
     .build()
-    .map_err(|error| format!("failed to create about window: {error}"))?;
+    .map_err(|error| {
+        log::error!("[window:about] build failed: {error}");
+        format!("failed to create about window: {error}")
+    })?;
+    log::info!("[window:about] created, reveal armed on page load");
     center_window_over_main(&app, &window, ABOUT_WINDOW_WIDTH, ABOUT_WINDOW_HEIGHT);
+    #[cfg(target_os = "windows")]
+    ensure_window_revealed(&app, "about");
     #[cfg(not(target_os = "windows"))]
     {
         let _ = window.show();
@@ -4243,6 +4313,8 @@ fn open_feedback_window(app: AppHandle, title: Option<String>) -> CommandResult<
     .build()
     .map_err(|error| format!("failed to create feedback window: {error}"))?;
     center_window_over_main(&app, &window, FEEDBACK_WINDOW_WIDTH, FEEDBACK_WINDOW_HEIGHT);
+    #[cfg(target_os = "windows")]
+    ensure_window_revealed(&app, "feedback");
     #[cfg(not(target_os = "windows"))]
     {
         let _ = window.show();
@@ -4523,6 +4595,7 @@ pub fn run() {
             open_feedback_window,
             open_logs_folder,
             diagnostics_read_logs, diagnostics_prepare_report, attachment_save,
+            attachment_text,
             live_translation::live_translation_permissions,
             live_translation::live_translation_request_permission,
             live_translation::live_translation_open_privacy_pane,

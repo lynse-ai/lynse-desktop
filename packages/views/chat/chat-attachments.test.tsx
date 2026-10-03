@@ -200,8 +200,8 @@ describe("ChatAttachments", () => {
     vi.unstubAllGlobals();
   });
 
-  it("shows cached HTML reports with a sandboxed preview and attachment link", () => {
-    render(
+  it("downloads HTML reports instead of previewing the signed url inline", () => {
+    const { container } = render(
       <ChatAttachments
         attachments={[
           {
@@ -215,12 +215,40 @@ describe("ChatAttachments", () => {
       />,
     );
 
-    const preview = screen.getByTitle("meeting-report.html");
-    expect(preview.getAttribute("src")).toBe("https://files.example.com/file_html.html");
-    expect(preview.getAttribute("sandbox")).toBe("");
-    expect(
-      screen.getByRole("link", { name: /meeting-report\.html/i }).getAttribute("href"),
-    ).toBe("https://files.example.com/file_html.html");
+    // No iframe and no anchor: either would put the signed object host, key
+    // and signature in the status bar or the address bar.
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.getByRole("button", { name: /meeting-report\.html/ })).toBeTruthy();
+  });
+
+  it("previews markdown attachments in-app without exposing the signed url", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => "# 周报\n\n结论",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <ChatAttachments
+        attachments={[
+          {
+            name: "summary.md",
+            type: "file",
+            url: "https://bucket.example.com/summary.md",
+            downloadUrl: "https://bucket.example.com/summary.md",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /summary\.md/ }));
+
+    // The body is fetched and rendered by the app's own markdown renderer;
+    // nothing in the DOM points at the object host.
+    expect(await screen.findByRole("heading", { name: "周报" })).toBeTruthy();
+    expect(document.querySelector("[href*='bucket.example.com']")).toBeNull();
+    expect(document.querySelector("[src*='bucket.example.com']")).toBeNull();
+    vi.unstubAllGlobals();
   });
 
   it("re-signs and swaps the image source when the signed url fails to load", async () => {

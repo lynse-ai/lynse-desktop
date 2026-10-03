@@ -103,6 +103,9 @@ type DesktopApi = {
   // it to the picked path. Resolves null when the user cancels the dialog.
   attachment: {
     save: (url: string, fileName: string) => Promise<{ path: string } | null>;
+    // Fetch an attachment's body for the in-app preview, over the same Rust
+    // route as `save` — the renderer cannot reach the signed hosts itself.
+    text: (url: string) => Promise<string>;
   };
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
   cloudSync: DesktopCloudSyncApi;
@@ -571,6 +574,7 @@ export async function installTauriBridge(): Promise<void> {
         await revealItemInDir(path);
         return { path };
       },
+      text: (url) => command<string>("attachment_text", { url }),
     },
     vault: {
       getConfig: () => command("vault_config_get"),

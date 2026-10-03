@@ -5,20 +5,30 @@ import { AnimatePresence, motion } from "motion/react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { getAuthStore } from "@lynse/core/auth";
 import { toast } from "sonner";
-import { Check, Download, FileText, Fullscreen, Loader2, Share, X, ZoomIn, ZoomOut } from "../icons";
+import { Check, Download, Eye, FileText, Fullscreen, Loader2, Share, X, ZoomIn, ZoomOut } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@lynse/ui/components/ui/dialog";
+import { Markdown } from "@lynse/ui/markdown";
 import type { AttachmentDraft } from "./chat-attachment-upload";
 import { formatFileSize } from "./chat-attachment-upload";
 import type { ChatAttachment } from "../workspace/types";
 import { refreshAttachmentUrl } from "../workspace/chat-transport";
 
-function attachmentKind(attachment: ChatAttachment): "image" | "pdf" | "html" | "file" {
+function attachmentKind(
+  attachment: ChatAttachment,
+): "image" | "pdf" | "html" | "markdown" | "file" {
   const value = attachment.name || attachment.url || attachment.downloadUrl || "";
   if ((attachment.type || "").startsWith("image") || /\.(png|jpe?g|gif|webp)$/i.test(value)) {
     return "image";
   }
   if (attachment.type === "pdf" || /\.pdf$/i.test(value)) return "pdf";
   if (attachment.type === "html" || /\.html?$/i.test(value)) return "html";
+  if (attachment.type === "markdown" || /\.mdx?$/i.test(value)) return "markdown";
   return "file";
 }
 
@@ -26,9 +36,23 @@ function attachmentKind(attachment: ChatAttachment): "image" | "pdf" | "html" | 
 type DesktopDownloadBridge = {
   attachment?: {
     save?: (url: string, fileName: string) => Promise<{ path: string } | null>;
+    text?: (url: string) => Promise<string>;
   };
   openExternal?: (url: string) => Promise<void>;
 };
+
+/**
+ * Read a text attachment for the in-app preview. Desktop goes through Rust:
+ * the signed object hosts send no CORS headers for the app origin, so a
+ * renderer fetch dies there (see `attachment_save` in the shell).
+ */
+async function loadAttachmentText(url: string): Promise<string> {
+  const desktop = (window as Window & { desktopAPI?: DesktopDownloadBridge }).desktopAPI;
+  if (desktop?.attachment?.text) return desktop.attachment.text(url);
+  const response = await fetch(url, { mode: "cors" });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.text();
+}
 
 /**
  * Save the attachment. Desktop first asks where to save with a native
@@ -557,23 +581,39 @@ function AttachmentItem({
     );
   }
 
+  if (kind === "markdown") {
+    return (
+      <MarkdownAttachmentCard
+        attachment={attachment}
+        name={name}
+        href={href}
+        refresh={refresh}
+      />
+    );
+  }
+
+  // Nothing below navigates. A signed URL in an <a href> or an <iframe src>
+  // puts the object host, key and signature in the address bar and the status
+  // bar, so the bytes land on disk first and the user's own app opens them.
+  const filename = kind === "pdf" && !/\.pdf$/i.test(name) ? `${name}.pdf` : name;
+  const openLocally = () => {
+    if (downloading) return;
+    setDownloading(true);
+    void (async () => {
+      try {
+        const fresh = attachment.id ? await refresh() : null;
+        const url = fresh || href;
+        if (!url) return;
+        await downloadAttachment(url, filename);
+      } finally {
+        setDownloading(false);
+      }
+    })();
+  };
+
   if (kind === "pdf") {
     // WeChat-style file card: icon + filename, tap to download locally —
     // no inline preview, the PDF viewer is the user's own app.
-    const openLocally = () => {
-      if (downloading) return;
-      setDownloading(true);
-      void (async () => {
-        try {
-          const fresh = attachment.id ? await refresh() : null;
-          const url = fresh || href;
-          if (!url) return;
-          await downloadAttachment(url, name.endsWith(".pdf") ? name : `${name}.pdf`);
-        } finally {
-          setDownloading(false);
-        }
-      })();
-    };
     return (
       <button
         type="button"
@@ -601,42 +641,94 @@ function AttachmentItem({
     );
   }
 
-  if (kind === "html") {
-    return (
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
-        <a
-          href={href}
-          target="_blank"
-          rel="noreferrer"
-          className="flex min-w-0 items-center gap-2 border-b border-border px-3 py-2 text-xs text-foreground hover:bg-accent"
-        >
-          <FileText className="size-3.5 shrink-0 text-primary" />
-          <span className="min-w-0 flex-1 truncate">{name}</span>
-          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-3xs font-medium text-muted-foreground">
-            HTML
-          </span>
-        </a>
-        <iframe
-          src={href}
-          title={name}
-          sandbox=""
-          referrerPolicy="no-referrer"
-          className={compact ? "h-48 w-full bg-background" : "h-80 w-full bg-background"}
-        />
-      </section>
-    );
-  }
-
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
+    <button
+      type="button"
+      onClick={openLocally}
       className="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent"
     >
       <FileText className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="truncate">{name}</span>
-    </a>
+      {kind === "html" && (
+        <span className="ml-auto shrink-0 rounded bg-muted px-1.5 py-0.5 text-3xs font-medium text-muted-foreground">
+          HTML
+        </span>
+      )}
+      {downloading ? (
+        <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+      ) : (
+        <Download className="size-3.5 shrink-0 text-muted-foreground" />
+      )}
+    </button>
+  );
+}
+
+/**
+ * Markdown attachment: a card that opens the document inside the app instead
+ * of handing the user a bucket URL. The body is fetched lazily on first open
+ * and kept for the lifetime of the message.
+ */
+function MarkdownAttachmentCard({
+  attachment,
+  name,
+  href,
+  refresh,
+}: {
+  attachment: ChatAttachment;
+  name: string;
+  href: string;
+  refresh: () => Promise<string | null>;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  const onOpenChange = (next: boolean) => {
+    setOpen(next);
+    if (!next || text != null) return;
+    setFailed(false);
+    void (async () => {
+      // Re-sign first: the URL stored in history may already be dead.
+      const fresh = attachment.id ? await refresh() : null;
+      try {
+        setText(await loadAttachmentText(fresh || href));
+      } catch {
+        setFailed(true);
+      }
+    })();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <button
+        type="button"
+        className="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent"
+      >
+        <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="truncate">{name}</span>
+        <span className="ml-auto shrink-0 rounded bg-muted px-1.5 py-0.5 text-3xs font-medium text-muted-foreground">
+          MD
+        </span>
+        <Eye className="size-3.5 shrink-0 text-muted-foreground" />
+      </button>
+      <DialogContent className="max-w-3xl gap-0 p-0">
+        <DialogHeader className="border-b border-border/50 px-5 py-4">
+          <DialogTitle className="truncate text-sm">{name}</DialogTitle>
+        </DialogHeader>
+        <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
+          {failed ? (
+            <p className="text-sm text-muted-foreground">{t("chat.attachment_preview_failed")}</p>
+          ) : text == null ? (
+            <Loader2 className="size-4 animate-spin text-muted-foreground" />
+          ) : (
+            <Markdown mode="full" className="text-sm">
+              {text}
+            </Markdown>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

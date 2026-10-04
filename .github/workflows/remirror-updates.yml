@@ -85,7 +85,8 @@ jobs:
         run: |
           set -euo pipefail
           WANT="${{ inputs.tag }}"
-          WANT="${WANT#v}"
+          # export: the read-back runs in node, which only sees exported vars
+          export WANT="${WANT#v}"
           curl -fsSL --max-time 20 "$CLOUDBASE_UPDATES_BASE/latest.json?cb=$GITHUB_RUN_ID" \
             | node -e '
               let raw = "";

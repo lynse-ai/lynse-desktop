@@ -7,6 +7,10 @@
 > `release: v1.0.0(1)` and was never tagged; 1.0.1 and 1.0.2 appear nowhere in
 > the history (that commit documents a `vA.B.C(N)` build-counter tag
 > convention), so they are not listed either.
+>
+> Entries since 1.1.7 ship in both English and Chinese (New Features/Fixed plus
+> 新功能/修复). The release pipeline extracts the whole version section
+> verbatim, so the in-app update notes render both languages.
 
 ## 1.1.7 (2026-10-04)
 
@@ -25,6 +29,22 @@
 - On Windows the app drew its own 34px bar *under* the native title bar, leaving a dead strip across the top. Windows now runs frameless (`tauri.windows.conf.json` sets `decorations: false`) so that bar *is* the title bar — it carries minimize/maximize/close on its right edge, and the sign-in window gets the same buttons since it has no title bar of its own. macOS layout is untouched.
 - Windows offline Whisper transcription failed with "无法读取 Whisper 输出": newer whisper-cli builds write their JSON next to the input file (`input.wav.json`) instead of the `-of` base (`whisper-output.json`). The adapter now accepts both layouts. Verified end-to-end on Windows via real UI-driven transcription (model download → SHA-256 check → transcript persisted).
 - Model and runtime downloads no longer fail SHA-256 verification on Chinese-locale Windows: certutil's localized output header ("SHA256 的 … 哈希:") was being parsed as the digest. The parser now scans for the 64-hex-digit token, which is locale-independent.
+
+### 新功能
+
+- 桌面端全新「Connections（集成连接）」区块上线：一个入口浏览 Lynse 将接入的第三方服务，展示每项服务的权限范围和连接流程。本期界面先行，后端联通随后跟上。
+- Windows 也支持声纹了：sherpa-onnx venv 改为按 Windows 平台自身布局定位（`Scripts\python.exe` 取代 POSIX 的 `bin/python`），依赖通过 `python -m pip` 安装，解释器探测接受 Windows 实际提供的名称（`python`、`py`）。
+- Windows 上可用 VibeVoice-ASR-BitNet 1.5B（微软，MIT 协议）：`vibeasr` sidecar 以静态链接方式随共享运行时发布（无需 MinGW 运行时 DLL），模型卡进入插件社区（固定大小与 SHA-256），非 macOS 平台可在转写设置中选择该引擎。已在 Windows 端到端实测（语音 → 流式协议转写）。
+- 下载的模型文件现在全部校验固定 SHA-256（此前只有声纹模型校验），目录中的模型大小与真实产物逐字节一致，下载进度因此精确。
+
+### 修复
+
+- 应用内更新通道已修复：CloudBase 镜像任务此前被误删，线上更新清单一直停留在 1.1.0，1.1.5 和 1.1.6 从未推送给已安装用户。现在发版会重新镜像到 CloudBase，发版流水线在发布后校验线上清单（镜像缺失时直接失败），并有每日巡检盯住清单落后。任意近期版本的客户端下次检查更新即可收到本版本。
+- 启动期崩溃不再无声无息：panic 记录器现在等文件日志后端就绪后才安装，插件初始化、托盘创建、窗口创建阶段的崩溃都能写入每日日志文件，而不是应用直接消失（Windows 上「Lynse 自己退出」类反馈的根因）。
+- 修复 Tauri 事件 unlisten 不幂等的问题：组件卸载与监听清理竞态（listen 未返回就卸载、StrictMode 双挂载）不再抛出未处理 rejection，也不再泄漏原生事件处理器。
+- Windows 上应用自绘的 34px 条画在原生标题栏下方，顶部留下一条死区。现在 Windows 以无边框运行（`tauri.windows.conf.json` 设 `decorations: false`），该条就是标题栏——右缘带最小化/最大化/关闭按钮，登录窗同样带这三个按钮（它没有系统标题栏）。macOS 布局不受影响。
+- Windows 离线 Whisper 转写报「无法读取 Whisper 输出」：新版 whisper-cli 把 JSON 写在输入文件旁（`input.wav.json`）而不是 `-of` 指定的基名（`whisper-output.json`）。适配器现在两种布局都接受。已在 Windows 通过真实 UI 驱动转写端到端验证（模型下载 → SHA-256 校验 → 转写持久化）。
+- 中文系统的 Windows 上模型与运行时下载不再因 SHA-256 校验失败：certutil 本地化输出的表头（「SHA256 的 … 哈希：」）曾被当成摘要解析。解析器现在扫描 64 位十六进制 token，与系统语言无关。
 
 ## 1.1.6 (2026-10-02)
 

@@ -8,16 +8,20 @@
 > the history (that commit documents a `vA.B.C(N)` build-counter tag
 > convention), so they are not listed either.
 
-## Unreleased
+## 1.1.7 (2026-10-04)
 
 ### New Features
 
+- The Connections section ships on desktop: a single place to browse the third-party services Lynse will integrate with, with per-service permission scopes and a connect flow. The UI goes live first; the backend link-up rolls out next.
 - Voiceprints work on Windows too: the sherpa-onnx venv is now located through the platform's own layout (`Scripts\python.exe` instead of the POSIX `bin/python`), dependencies install through `python -m pip`, and the interpreter probe accepts the names Windows actually provides (`python`, `py`).
 - VibeVoice-ASR-BitNet 1.5B (Microsoft, MIT) is now available on Windows: the `vibeasr` sidecar ships in the shared runtime statically linked (no MinGW runtime DLLs needed), the model card joins the plugin community with pinned sizes and SHA-256, and the engine is selectable in STT settings outside macOS. Verified end-to-end on Windows (speech → transcript via the streaming protocol).
 - Downloaded model files are now verified against pinned SHA-256 digests (previously only the voiceprint model was pinned), and model sizes in the catalog match the real artifacts byte-for-byte, so download progress is exact.
 
 ### Fixed
 
+- The in-app update channel is repaired. The served update manifest had been stuck at 1.1.0 since the CloudBase mirror job was accidentally dropped, so 1.1.5 and 1.1.6 never reached installed clients. Releases mirror to CloudBase again, the release pipeline now verifies the live manifest after publishing (and fails loudly when the mirror is missing), and a daily check watches for the manifest trailing the newest tag. Clients from any recent version pick up this release on their next update check.
+- Startup crashes are no longer silent. The panic logger now installs after the file log backend exists, so panics during plugin init, tray setup or window creation land in the daily log file instead of the app just vanishing (the "Lynse quits itself" report shape on Windows).
+- Guarded Tauri's non-idempotent event unlisten, so component cleanups that race their own listener teardown (unmount before the listen resolves, StrictMode double-mount) no longer throw unhandled rejections or leak native event handlers.
 - On Windows the app drew its own 34px bar *under* the native title bar, leaving a dead strip across the top. Windows now runs frameless (`tauri.windows.conf.json` sets `decorations: false`) so that bar *is* the title bar — it carries minimize/maximize/close on its right edge, and the sign-in window gets the same buttons since it has no title bar of its own. macOS layout is untouched.
 - Windows offline Whisper transcription failed with "无法读取 Whisper 输出": newer whisper-cli builds write their JSON next to the input file (`input.wav.json`) instead of the `-of` base (`whisper-output.json`). The adapter now accepts both layouts. Verified end-to-end on Windows via real UI-driven transcription (model download → SHA-256 check → transcript persisted).
 - Model and runtime downloads no longer fail SHA-256 verification on Chinese-locale Windows: certutil's localized output header ("SHA256 的 … 哈希:") was being parsed as the digest. The parser now scans for the 64-hex-digit token, which is locale-independent.

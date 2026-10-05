@@ -38,6 +38,28 @@
 
 桌面端**没有任何本地转写模型**（无 whisper/onnx），转写、总结、Ask Pocket 全部服务端完成。这是与 Lynse（本地 MLX Qwen3-ASR）最大的差异。
 
+## 二点五、Opus 编码与上传封装（2026-10-03 补充实锤）
+
+**是标准 Ogg Opus（RFC 7845）**。磁盘文件（`local_recordings/desktop_*.ogg`）字节级验证：
+- `OggS` 容器 + `OpusHead`（单声道，pre-skip 312，输入采样率声明 16 kHz，mapping family 0）+ `OpusTags`（vendor 串 "Pocket Desktop"）；首页 serial number 是自定义标记 "KCOP"。
+- ffprobe 实测：mono、容器 48 kHz、有效码率 ~34–44 kbps（VBR）。对比 WAV s16 mono 16k（256 kbps）约省 6–8 倍。
+
+**编码栈**（符号表）：libopus C 源码直接编译进二进制（`opus_encoder.c`），经 `audiopus-0.2.0` 安全绑定；容器用 `ogg-0.9.2` 纯 Rust muxer，`ogg::writing::PacketWriter<BufWriter<File>>::write_packet` —— **边录边编码边流式落盘**，不是事后转码。模块分层：`audio::pipeline`（WriterHandle/StreamAccumulator）→ `audio::aec`（WebRTC）→ `audio::finalizer`（`finalize_recording_ogg` / `finalize_recording_wav` 双路径，WAV 路径服务硬件设备原声）。
+
+**双档编码实测**（2026-10-03 逐包 TOC 解析两段真实录音）：
+- **语音段**：SILK 宽带（WB）20ms 帧、单帧包、VBR，有效码率 **33–37 kbps**（两段 26s/44s 语音均为 ~33–37k，与 nominal 32 kbps 一致；静音段 VBR 自动降到几字节的微型包）。
+- **音乐/系统声段**：切换 **CELT fullband 5ms 帧，有效码率 ~194 kbps**（nominal 约 192k）——第二段录音里语音块和音乐块整段交替（10s 粒度观察），同一单流 serial "KCOP" 内完成切换。
+- 即内容自适应双档：说话时 32k 语音档，检测到非语音（媒体播放/系统声）时提到 192k 全频档。对 Lynse 的含义：会议语音占绝对多数，常量 64k stereo VBR 足够；content-adaptive 双档可作为后续增强。
+
+**上传封装**（前端 UploadQueueWorker）：
+1. 本地是 WAV 源（导入/旧数据）→ 上传前调 Rust `compress_audio`（`src/audio/compressor.rs`）转 OGG/Opus，产物落盘为 "sealed" `.ogg` **复用**（重试不重复转码；转码失败回退传原始 WAV）。
+2. cloudUrl 扩展名 + `uploadMimeType`（audio/ogg）先"seal"进队列 payload，重试用同一 URL —— 幂等。
+3. ≥50 MB 走 S3 multipart（start → 逐片 sign → Rust `upload_file_part_to_url` 按 offset/length 读片上传 → complete，失败 abort）；<50 MB 单 presigned PUT（也由 Rust 执行）。
+4. ≥25 MB 先查网络质量（saveData/2g/downlink<0.75 Mbps/rtt>2 s → defer + 退避重试）。
+5. 服务端 create 录音 409 视为已存在 → 断点续传语义。
+
+**佐证**：`audio_peaks::extract_audio_peaks`（tokio spawn_blocking，Rust 原生采样）产出 `AudioPeaksInfo`，随 create-recording 的 `gradientData` 一起提交服务端 —— 波形缩略图云端也有，与本地一致。
+
 ## 三、数据模型（pocket.db，13 个 sqlx migration）
 
 - `recordings` — 列表轻行：title/duration/folder/gradient_data(波形)/has_summarization；`recording_details` — 详情大 JSON（转写+总结）**按 recording_id 单独一张表**，列表查询永不拖详情。

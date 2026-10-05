@@ -49,8 +49,9 @@ function formatPillTimer(ms: number): string {
  * any existing title-bar element (absolutely positioned; breadcrumb pages
  * make room via {@link useRecordingPillVisible}).
  *
- * Hidden on the recording page itself, whose dock already owns the controls,
- * and on non-desktop shells (no bridge → `available` is false).
+ * Hidden on pages that have their own recording controls — the recording
+ * page's dock and the home page's floating recording capsule — and on
+ * non-desktop shells (no bridge → `available` is false).
  *
  * Theme-split fill: the inverted `bg-foreground` capsule reads as a dark chip
  * on the light-grey bar, which is right — but `--foreground` is a warm white,
@@ -73,9 +74,15 @@ export function RecordingTitleBarPill() {
   } = useQuickRecording();
   const setVisible = useRecordingPillStore((s) => s.setVisible);
 
-  // The recording page's dock owns the controls — no duplicate pill there.
+  // The pill only fills pages without their own recording controls: the
+  // recording page's dock owns the controls, and the home page has its own
+  // floating recording capsule.
+  const onHomePage = pathname === "/" || pathname.startsWith("/home");
   const visible =
-    available && (recording || paused || stopping) && pathname !== "/recording";
+    available &&
+    (recording || paused || stopping) &&
+    pathname !== "/recording" &&
+    !onHomePage;
 
   useEffect(() => {
     setVisible(visible);

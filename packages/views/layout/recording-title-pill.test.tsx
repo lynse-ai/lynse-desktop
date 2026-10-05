@@ -53,7 +53,9 @@ function renderPill() {
 }
 
 beforeEach(() => {
-  mocks.pathname = "/";
+  // A neutral inner page — "/" and "/home" are the home route, where the
+  // pill deliberately stays hidden.
+  mocks.pathname = "/notes";
   mocks.quick.available = true;
   mocks.quick.recording = false;
   mocks.quick.paused = false;
@@ -118,6 +120,17 @@ describe("RecordingTitleBarPill", () => {
     renderPill();
     expect(screen.queryByTitle("recording_mode.pause")).toBeNull();
     expect(screen.getByTestId("pill-visible").textContent).toBe("false");
+  });
+
+  it("hides on the home page, which has its own floating recording capsule", () => {
+    mocks.quick.recording = true;
+    for (const home of ["/", "/home"]) {
+      mocks.pathname = home;
+      const { unmount } = renderPill();
+      expect(screen.queryByTitle("recording_mode.pause")).toBeNull();
+      expect(screen.getByTestId("pill-visible").textContent).toBe("false");
+      unmount();
+    }
   });
 
   it("wires the pause and stop buttons to the quick-recording controls", () => {

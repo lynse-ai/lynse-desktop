@@ -106,6 +106,22 @@ log "Building the Tauri app bundle (updater artifacts disabled for App Store)"
   --config '{"bundle":{"createUpdaterArtifacts":false}}')
 [[ -d "$APP_PATH" ]] || die "Expected app bundle not found at $APP_PATH"
 
+# Bundle native ffmpeg/ffprobe into Resources. The App Sandbox denies exec of
+# any binary outside the app bundle (EPERM), so the on-demand runtime download
+# can never satisfy the audio editor / WAV converters in TestFlight builds.
+# The nested-codesign loop below stamps them with the sandbox-inherit
+# entitlements, same as audio-capture. Requires the arm64 source build from
+# scripts/fetch-sidecars.sh — the old ffbinaries prebuilts are x86_64 only.
+for sidecar in ffmpeg ffprobe; do
+  SIDECAR_SRC="$APP_DIR/src-tauri/resources/sidecars/$sidecar"
+  [[ -f "$SIDECAR_SRC" ]] || die "$SIDECAR_SRC missing — run apps/tauri/scripts/fetch-sidecars.sh first"
+  if [[ "$(uname -m)" == "arm64" ]] && ! lipo -archs "$SIDECAR_SRC" | grep -q arm64; then
+    die "$SIDECAR_SRC is not arm64 — re-run apps/tauri/scripts/fetch-sidecars.sh (older x86_64 builds EPERM under the sandbox)"
+  fi
+  log "Bundling $sidecar into app Resources"
+  cp "$SIDECAR_SRC" "$APP_PATH/Contents/Resources/$sidecar"
+done
+
 # Tauri copies the semver into CFBundleVersion — replace it with the decimal
 # build number before codesigning so the stamp is covered by the signature.
 PLIST="$APP_PATH/Contents/Info.plist"

@@ -434,12 +434,13 @@ pub(crate) fn runtime_dir(app: &tauri::AppHandle, version: &str) -> PathBuf {
     }
 }
 
-/// Locate a bundled sidecar (whisper, vibeasr, ffmpeg, ffprobe). Resolution order:
+/// Locate a sidecar (whisper, vibeasr, ffmpeg, ffprobe). Resolution order:
 /// 1. dev `resources/sidecars` (local development),
-/// 2. on-demand shared runtime in the app data dir (downloaded at model-install
+/// 2. the packaged resource dir — App Store / TestFlight builds bundle
+///    ffmpeg/ffprobe here, because the App Sandbox denies exec'ing any binary
+///    outside the app bundle (EPERM) and a downloaded copy can never run there,
+/// 3. on-demand shared runtime in the app data dir (downloaded at model-install
 ///    time, shared across every offline engine),
-/// 3. the packaged resource dir (backward compat with older installs that
-///    bundled the runtimes),
 /// 4. otherwise a clear error asking the user to download the offline runtime.
 pub(crate) fn sidecar_path(app: &tauri::AppHandle, base: &str) -> CommandResult<PathBuf> {
     let name = sidecar_binary_name(base);
@@ -457,19 +458,20 @@ pub(crate) fn sidecar_path(app: &tauri::AppHandle, base: &str) -> CommandResult<
             .join(&name));
     }
 
-    // 2. On-demand shared runtime in the user data dir.
-    let version = format!("v{}", app.package_info().version);
-    let runtime = runtime_dir(app, &version);
-    if runtime_is_complete(&runtime) {
-        let candidate = runtime.join(&name);
+    // 2. Packaged resources (bundled into Contents/Resources by
+    //    build-appstore.sh and stamped with the sandbox-inherit entitlements).
+    if let Ok(resources) = app.path().resource_dir() {
+        let candidate = resources.join(&name);
         if candidate.exists() {
             return Ok(candidate);
         }
     }
 
-    // 3. Old packaged resources (backward compat).
-    if let Ok(resources) = app.path().resource_dir() {
-        let candidate = resources.join(&name);
+    // 3. On-demand shared runtime in the user data dir.
+    let version = format!("v{}", app.package_info().version);
+    let runtime = runtime_dir(app, &version);
+    if runtime_is_complete(&runtime) {
+        let candidate = runtime.join(&name);
         if candidate.exists() {
             return Ok(candidate);
         }

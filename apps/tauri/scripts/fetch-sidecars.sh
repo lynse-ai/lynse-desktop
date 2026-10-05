@@ -124,6 +124,26 @@ build_vibeasr() {
   echo "    vibeasr -> $(basename "$target")"
 }
 
+build_ffmpeg_source() {
+  # Native Apple Silicon build, minimal LGPL config: no GPL extras (x264 etc.),
+  # no network, no external libs — everything the app needs (decode to WAV,
+  # trim/concat/silencedetect/afftdn filters, ffprobe) is built-in. Prebuilt
+  # arm64 LGPL binaries don't exist (ffbinaries ships x86_64 only, which
+  # EPERMs when a sandboxed App Store build spawns it), so we compile.
+  local src
+  src="$(mktemp -d)"
+  git clone --depth 1 --branch "${FFMPEG_REF:-n6.1.1}" https://github.com/FFmpeg/FFmpeg "$src"
+  (cd "$src" && ./configure \
+    --enable-static --disable-shared \
+    --disable-debug --disable-doc --disable-autodetect \
+    --disable-ffplay --disable-network --enable-protocol=file \
+    && make -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)" ffmpeg ffprobe \
+    && strip ffmpeg ffprobe)
+  cp "$src/ffmpeg" "$src/ffprobe" "$SIDECARS/"
+  rm -rf "$src"
+  echo "    ffmpeg / ffprobe built from source ($(uname -m), LGPL)"
+}
+
 fetch_ffmpeg() {
   if [[ "$IS_WINDOWS" -eq 1 ]]; then
     # BtbN LGPL static build (CPU), so the bundled executables need no DLLs.
@@ -136,11 +156,11 @@ fetch_ffmpeg() {
     cp "$tmp"/ffmpeg-master-latest-win64-lgpl/bin/ffmpeg.exe "$SIDECARS/"
     cp "$tmp"/ffmpeg-master-latest-win64-lgpl/bin/ffprobe.exe "$SIDECARS/"
     rm -rf "$tmp" "$zip"
+  elif [[ "$(uname -m)" == "arm64" ]]; then
+    build_ffmpeg_source
   else
-    # ffbinaries LGPL static build (x64 macOS; runs via Rosetta on Apple Silicon).
-    # johnvansickle's old /releases/ffmpeg-release-x64-static.tar.xz now 404s, and
-    # evermeet moved to a .7z on a different host. ffbinaries is GitHub-hosted and
-    # reliably ships both ffmpeg and ffprobe for macOS.
+    # ffbinaries LGPL static build (x64 macOS) — fine for unsandboxed Intel
+    # builds; Apple Silicon App Store builds need the arm64 source build above.
     local fz pz tmp
     fz="$(mktemp)"; pz="$(mktemp)"
     curl -fL "https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v6.1/ffmpeg-6.1-macos-64.zip" -o "$fz"

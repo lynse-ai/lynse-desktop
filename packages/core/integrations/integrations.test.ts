@@ -7,6 +7,9 @@ const apiMocks = vi.hoisted(() => ({
   post: vi.fn(),
   put: vi.fn(),
   delete: vi.fn(),
+  // The Connections BFF origin override (lynse_integrations_api_url); tests
+  // run with it unset, so every call carries a trailing `{}` options object.
+  getIntegrationsBaseUrl: vi.fn(() => null),
 }));
 
 vi.mock("../api/client", async () => {
@@ -41,6 +44,7 @@ describe("integrations api", () => {
     expect(apiMocks.getWithParams).toHaveBeenCalledWith(
       "/api/v2/integrations/google-calendar/oauth-state",
       { platform: "desktop", origin: undefined },
+      {},
     );
   });
 
@@ -49,16 +53,21 @@ describe("integrations api", () => {
     await disconnectAccount("todoist", "acct/2");
     expect(apiMocks.delete).toHaveBeenCalledWith(
       "/api/v2/integrations/todoist/disconnect?account_id=acct%2F2",
+      {},
     );
   });
 
   it("sends the destination under the provider-specific field", async () => {
     apiMocks.put.mockResolvedValue({ ok: true, destination_id: "proj-1" });
     await setDefaultDestination("todoist", { account_id: "a1", destination_id: "proj-1" });
-    expect(apiMocks.put).toHaveBeenCalledWith("/api/v2/integrations/todoist/default-destination", {
-      account_id: "a1",
-      destination_id: "proj-1",
-    });
+    expect(apiMocks.put).toHaveBeenCalledWith(
+      "/api/v2/integrations/todoist/default-destination",
+      {
+        account_id: "a1",
+        destination_id: "proj-1",
+      },
+      {},
+    );
   });
 
   it("posts the export payload through", async () => {
@@ -67,10 +76,14 @@ describe("integrations api", () => {
       action_item_ids: ["t1"],
       default_task_list_id: "list-1",
     });
-    expect(apiMocks.post).toHaveBeenCalledWith("/api/v2/integrations/google-tasks/export", {
-      action_item_ids: ["t1"],
-      default_task_list_id: "list-1",
-    });
+    expect(apiMocks.post).toHaveBeenCalledWith(
+      "/api/v2/integrations/google-tasks/export",
+      {
+        action_item_ids: ["t1"],
+        default_task_list_id: "list-1",
+      },
+      {},
+    );
   });
 });
 

@@ -40,7 +40,7 @@ import { useDestinations, useExportActionItems } from "../connections/use-connec
  * as non-selectable.
  */
 
-export const EXPORTABLE_PROVIDERS: IntegrationsProvider[] = ["todoist", "google-tasks"];
+export const EXPORTABLE_PROVIDERS: IntegrationsProvider[] = ["todoist", "google-tasks", "feishu-tasks"];
 
 export function useTodoExportSelection(todos: { id: string; backend?: boolean }[]) {
   const [selected, setSelected] = useState<Set<string>>(() => new Set());

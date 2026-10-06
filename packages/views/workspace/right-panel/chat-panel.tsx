@@ -104,7 +104,7 @@ export function ChatPanel() {
       {/* Header */}
       <div className="flex shrink-0 flex-col border-b border-border" style={{ padding: "8px 12px", gap: 6 }}>
         <div className="flex items-center gap-2">
-          <AssistantAvatar size={90} />
+          <AssistantAvatar size={28} />
           <div className="flex flex-1 flex-col overflow-hidden">
             <span className="text-xs font-semibold text-muted-foreground">{t("chat.assistant_lynse")}</span>
             <span className="truncate text-2xs text-muted-foreground/60">{t("chat.ready")}</span>
@@ -169,7 +169,7 @@ export function ChatPanel() {
       >
         {viewMessages.length === 0 && !isLoading && (
             <div className="flex flex-col items-center justify-center pt-10 text-center text-muted-foreground">
-            <AssistantAvatar size={179} className="mb-2 opacity-90" />
+            <AssistantAvatar size={72} className="mb-2 opacity-90" />
             <p className="text-xs">{t("chat.empty_prompt")}</p>
             <p className="mt-1 text-2xs opacity-60">{t("chat.empty_hint")}</p>
           </div>

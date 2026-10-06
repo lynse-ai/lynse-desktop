@@ -1,16 +1,19 @@
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
-import { Plus, Calendar, Trash2, X, RefreshCw, Loader2 } from "../icons";
+import { Plus, Calendar, Trash2, X, RefreshCw, Loader2, Upload } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Sheet, SheetContent } from "@lynse/ui/components/ui/sheet";
 import { Button } from "@lynse/ui/components/ui/button";
 import { toast } from "sonner";
 import { featureFlags } from "../feature-flags";
 import { getDesktopInspirationApi } from "../inspiration/desktop-api";
+import { isWebPlatform } from "../platform";
 import { useInspirationCaptureStore } from "../inspiration/capture-store";
 import { type TodoItem, addTodoToSystemCalendar, isCalendarAvailable, saveTodo } from "./todo-api";
 import { useTodos } from "./use-todos";
+import { TodoExportBar, TodoExportDialog, useTodoExportSelection } from "./export-action-items";
+import { TitleBarSlot } from "../layout/app-title-bar";
 
 // ── Helpers ────────────────────────────────────────────────
 
@@ -124,7 +127,7 @@ function AddTodoInput({ onAdd }: { onAdd: (title: string) => void }) {
           onKeyDown={onKeyDown}
         />
         <kbd className="pointer-events-none inline-flex h-5 items-center gap-0.5 rounded border border-border/50 bg-muted/60 px-1.5 text-3xs font-medium text-muted-foreground">
-          ⌘↵
+          {isWebPlatform() ? "Enter" : "⌘↵"}
         </kbd>
       </div>
     </div>
@@ -167,22 +170,39 @@ function TodoItemRow({
   active,
   onSelect,
   onToggle,
+  selectable = false,
+  isChecked = false,
+  onCheck,
 }: {
   todo: TodoItem;
   active: boolean;
   onSelect: () => void;
   onToggle: () => void;
+  /** Export mode: a second checkbox appears and the row click selects. */
+  selectable?: boolean;
+  isChecked?: boolean;
+  onCheck?: () => void;
 }) {
   const { t } = useTranslation();
   const dueText = formatDueDisplay(todo);
 
   return (
     <button
-      onClick={onSelect}
+      onClick={selectable ? (onCheck ?? onSelect) : onSelect}
       className={`flex w-full items-center gap-3 rounded-lg px-6 py-2.5 text-left transition-colors ${
         active ? "bg-accent/60" : "hover:bg-accent/30"
       }`}
     >
+      {selectable && (
+        <input
+          type="checkbox"
+          checked={isChecked}
+          onChange={() => onCheck?.()}
+          className="size-4 shrink-0 rounded border-border accent-primary"
+          onClick={(e) => e.stopPropagation()}
+          aria-label={t("todo.export_select_item")}
+        />
+      )}
       <input
         type="checkbox"
         checked={todo.completed}
@@ -204,12 +224,6 @@ function TodoItemRow({
       {todo.owner && (
         <span className="shrink-0 text-xs text-muted-foreground/70">
           {todo.owner}
-        </span>
-      )}
-      {todo.sourceTitle && (
-        <span className="shrink-0 text-xs text-muted-foreground/70">
-          来源：{todo.sourceTitle}
-          {formatSourceTime(todo.sourceMeetingTime as any)}
         </span>
       )}
       {!todo.calendarEventId && (
@@ -302,6 +316,14 @@ export function TodoEditSheet({
     if (todo.calendarStartAt) {
       try {
         const d = new Date(todo.calendarStartAt);
+        if (!isNaN(d.getTime())) return toLocalTimeInput(d);
+      } catch { /* fall through */ }
+    }
+    // Full-ISO dueDate (cloud todos) carries the extracted time; date-only
+    // due dates have none, so keep the 14:00 default there.
+    if (todo.dueDate && todo.dueDate.length > 10) {
+      try {
+        const d = new Date(todo.dueDate);
         if (!isNaN(d.getTime())) return toLocalTimeInput(d);
       } catch { /* fall through */ }
     }
@@ -531,6 +553,16 @@ export function TodoPage() {
   const sheetAvailable = featureFlags.inspiration && Boolean(getDesktopInspirationApi());
   const completedCount = todos.filter((x) => x.completed).length;
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Export selection (PRD FR-2). Only cloud todos carry an id the export
+  // contract understands, so local ones stay unselectable.
+  const exportSelection = useTodoExportSelection(todos);
+  const [exportMode, setExportMode] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const rowSelectionProps = (todo: TodoItem) => ({
+    selectable: exportMode && Boolean(todo.backend),
+    isChecked: exportSelection.selected.has(todo.id),
+    onCheck: () => exportSelection.toggle(todo.id),
+  });
   const calendarAvailable = useMemo(() => isCalendarAvailable(), []);
 
   const handleAdd = useCallback(
@@ -563,46 +595,71 @@ export function TodoPage() {
 
   // ── Render ────────────────────────────────────────────────
   return (
-    <div className="flex h-full flex-col min-w-0">
-      {/* Header */}
-      <div
-        className="flex shrink-0 items-center justify-between border-b border-stroke-secondary px-6 select-none"
-        style={{ height: 44 }}
-        data-tauri-drag-region
-      >
-        <h1 className="text-base font-semibold text-foreground">{t("todo.page_title")}</h1>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => load()}
-            disabled={refreshing}
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 disabled:opacity-50"
-            title={t("todo.refresh")}
-          >
-            <RefreshCw className={`size-3.5 ${refreshing ? "animate-spin" : ""}`} />
-            {t("todo.refresh")}
-          </button>
-          <button
-            onClick={() => clearCompleted()}
-            disabled={clearing || completedCount === 0}
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 disabled:opacity-40"
-            title={t("todo.clear_completed")}
-          >
-            <Trash2 className="size-3.5" />
-            {clearing ? t("todo.clearing") : t("todo.clear_completed")}
-            {completedCount > 0 && !clearing && (
-              <span className="ml-0.5 rounded-full bg-muted px-1.5 text-3xs tabular-nums">
-                {completedCount}
-              </span>
+    <div className={`flex h-full flex-col min-w-0${isWebPlatform() ? " mx-auto w-full max-w-3xl" : ""}`}>
+      {/* Refresh / clear actions live in the unified app title bar via the
+          slot (no center title — the bar doesn't echo the page name). */}
+      <TitleBarSlot
+        actions={
+          <>
+            {featureFlags.connections && exportSelection.exportableIds.size > 0 && (
+              <button
+                onClick={() => {
+                  setExportMode((prev) => !prev);
+                  if (exportMode) exportSelection.clear();
+                }}
+                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50"
+                title={t("todo.export_button")}
+              >
+                {exportMode ? <X className="size-3.5" /> : <Upload className="size-3.5" />}
+                {t(exportMode ? "todo.export_exit" : "todo.export_button")}
+              </button>
             )}
-          </button>
-        </div>
-      </div>
+            <button
+              onClick={() => load({ force: true })}
+              disabled={refreshing}
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 disabled:opacity-50"
+              title={t("todo.refresh")}
+            >
+              <RefreshCw className={`size-3.5 ${refreshing ? "animate-spin" : ""}`} />
+              {t("todo.refresh")}
+            </button>
+            <button
+              onClick={() => clearCompleted()}
+              disabled={clearing || completedCount === 0}
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50 disabled:opacity-40"
+              title={t("todo.clear_completed")}
+            >
+              <Trash2 className="size-3.5" />
+              {clearing ? t("todo.clearing") : t("todo.clear_completed")}
+              {completedCount > 0 && !clearing && (
+                <span className="ml-0.5 rounded-full bg-muted px-1.5 text-3xs tabular-nums">
+                  {completedCount}
+                </span>
+              )}
+            </button>
+          </>
+        }
+      />
+
+      {exportMode && (
+        <TodoExportBar
+          count={exportSelection.count}
+          onSelectAll={exportSelection.selectAll}
+          onClear={exportSelection.clear}
+          onExport={() => setExportOpen(true)}
+        />
+      )}
+      <TodoExportDialog
+        open={exportOpen}
+        onOpenChange={setExportOpen}
+        actionItemIds={[...exportSelection.selected]}
+      />
 
       {/* Error banner */}
       {error && (
         <div className="flex items-center justify-between gap-2 border-b border-destructive/30 bg-destructive/10 px-6 py-2 text-xs text-destructive">
           <span>{t("todo.load_error")}</span>
-          <button onClick={() => load()} className="underline decoration-from-font underline-offset-2">
+          <button onClick={() => load({ force: true })} className="underline decoration-from-font underline-offset-2">
             {t("todo.retry")}
           </button>
         </div>
@@ -632,6 +689,7 @@ export function TodoPage() {
                     active={selectedId === todo.id}
                     onSelect={() => setSelectedId(todo.id)}
                     onToggle={() => handleToggle(todo.id)}
+                    {...rowSelectionProps(todo)}
                   />
                 ))}
               </GroupSection>
@@ -645,6 +703,7 @@ export function TodoPage() {
                     active={selectedId === todo.id}
                     onSelect={() => setSelectedId(todo.id)}
                     onToggle={() => handleToggle(todo.id)}
+                    {...rowSelectionProps(todo)}
                   />
                 ))}
               </GroupSection>
@@ -658,6 +717,7 @@ export function TodoPage() {
                     active={selectedId === todo.id}
                     onSelect={() => setSelectedId(todo.id)}
                     onToggle={() => handleToggle(todo.id)}
+                    {...rowSelectionProps(todo)}
                   />
                 ))}
               </GroupSection>
@@ -676,7 +736,7 @@ export function TodoPage() {
           onClose={() => setSelectedId(null)}
           onDelete={() => void handleDelete(selected.id)}
           onCalendarAdded={() => {
-            void load();
+            void load({ force: true });
             setSelectedId(null);
           }}
           onSaved={patchLocal}

@@ -30,6 +30,7 @@ import { SmoothTimer } from "./smooth-timer";
 import { RecordingDock } from "./recording-dock";
 import { RecordingCompleteDialog } from "./recording-complete-dialog";
 import { getDesktopLiveTranslationApi } from "./desktop-api";
+import { TitleBarSlot } from "../layout/app-title-bar";
 import {
   ArrowRight,
   Bookmark,
@@ -191,19 +192,26 @@ export function TranscriptDetailPage() {
   return (
     <TooltipProvider delay={200}>
       <div className="flex h-full min-h-0 flex-col bg-background text-foreground">
-        {/* ═══ Header ═══ */}
+        {/* Title + date live in the unified app title bar; the in-page header
+            keeps only the functional controls. */}
+        <TitleBarSlot
+          title={
+            <span className="flex max-w-full flex-col items-center leading-tight" data-tauri-drag-region>
+              <span className="max-w-full truncate text-[13px] font-medium text-foreground">
+                {t("transcript_detail.title")}
+              </span>
+              {recordingDate && (
+                <span className="truncate text-2xs text-muted-foreground/60">{recordingDate}</span>
+              )}
+            </span>
+          }
+        />
+        {/* ═══ Header (functional controls) ═══ */}
         <header
-          className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-border px-5 select-none"
+          className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border px-5 select-none"
           data-tauri-drag-region
         >
-          <div className="min-w-0">
-            <h1 className="truncate text-sm font-semibold leading-tight">
-              {t("transcript_detail.title")}
-            </h1>
-            <p className="truncate text-2xs leading-tight text-muted-foreground/60">
-              {recordingDate}
-            </p>
-          </div>
+          <div className="min-w-0" />
 
           <div className="flex shrink-0 items-center gap-2">
             {/* live mode controls — captions-exit toggle + translation switch

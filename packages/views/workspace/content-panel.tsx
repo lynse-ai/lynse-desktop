@@ -13,11 +13,11 @@ import {
   RefreshCw,
   Loader2,
   Trash2,
-  Upload,
   ChevronLeft,
   ChevronRight,
 } from "../icons";
 import { useWorkspaceStore } from "./store";
+import { SummaryExportMenuItem } from "../connections/summary-export-menu-item";
 import { useAudioEditorStore } from "../audio-editor/store";
 import { useNavigation } from "../navigation";
 import { TAB_BAR_HEIGHT } from "./layout-constants";
@@ -29,7 +29,6 @@ import { DeleteConfirmDialog } from "./delete-confirm-dialog";
 import { AudioPlayer } from "./audio-player";
 import type { AudioPlayerHandle } from "./audio-player";
 import { getDesktopLiveTranslationApi } from "../live-translation/desktop-api";
-import { useRecordingCloudSync } from "../live-translation/use-recording-cloud-sync";
 import type { RecordingTrackManifest } from "./types";
 import { getSpeakerColor } from "@lynse/ui/lib/speaker";
 import { getDisplayTitle, type EditedTitleState } from "./title-edit-state";
@@ -341,7 +340,6 @@ export function ContentPanel() {
   const [pendingSummaryTabsByFile, setPendingSummaryTabsByFile] = useState<Record<string, SummaryTabModel[]>>({});
   const [retryingLocalFileIds, setRetryingLocalFileIds] = useState<Set<string>>(() => new Set());
   const [localRetryError, setLocalRetryError] = useState<string | null>(null);
-  const [cloudSyncing, setCloudSyncing] = useState(false);
   const [voiceprintDraft, setVoiceprintDraft] = useState<{ segmentId: string; name: string } | null>(null);
   // Summary tab staged for deletion behind the themed confirm dialog.
   const [pendingDeleteSummary, setPendingDeleteSummary] = useState<{ conclusionId: string; idx: number } | null>(null);
@@ -359,7 +357,6 @@ export function ContentPanel() {
   const pendingRecording = usePendingRecordingStore((s) =>
     s.pending.find((p) => pendingRecordingRecordId(p.sessionId) === selectedItemId),
   );
-  const { syncLocalRecord } = useRecordingCloudSync();
   const selectedFile = useMemo(() => {
     if (!selectedItemId) return null;
     const listed = files?.find((f) => f.id === selectedItemId) ?? null;
@@ -541,7 +538,12 @@ export function ContentPanel() {
   }, []);
 
   const refreshLocalQueries = useCallback((fileId?: string | null) => {
+    // The Notes page list is keyed `["notes", …]`, not `["files"]` — without
+    // it a locally deleted recording keeps its row until the next refetch,
+    // which reads as the delete button doing nothing.
     qc.invalidateQueries({ queryKey: ["files"] });
+    qc.invalidateQueries({ queryKey: ["notes"] });
+    qc.invalidateQueries({ queryKey: ["folder-counts"] });
     if (fileId) {
       qc.invalidateQueries({ queryKey: ["file-transcription", fileId] });
       qc.invalidateQueries({ queryKey: ["file-audio-url", fileId] });
@@ -600,33 +602,14 @@ export function ContentPanel() {
 
   const handleDeleteLocalTranscription = useCallback(async () => {
     if (!selectedItemId) return;
-    await getDesktopLocalTranscriptionApi()?.delete(selectedItemId);
-    refreshLocalQueries(selectedItemId);
-    selectItem(null, null);
-  }, [refreshLocalQueries, selectItem, selectedItemId]);
-
-  // Push a locally-kept recording (a failed save-time cloud sync) through
-  // the sync chain again — the persisted cloud fileId keeps the retry on
-  // the same server-side placeholder instead of duplicating the record.
-  const handleUploadLocalRecording = useCallback(async () => {
-    const localApi = getDesktopLocalTranscriptionApi();
-    if (!localApi || !selectedItemId) return;
-    setCloudSyncing(true);
-    setLocalRetryError(null);
     try {
-      const record = await localApi.get(selectedItemId);
-      if (!record) {
-        setLocalRetryError("本地记录不存在");
-        return;
-      }
-      await syncLocalRecord(record);
+      await getDesktopLocalTranscriptionApi()?.delete(selectedItemId);
       refreshLocalQueries(selectedItemId);
+      selectItem(null, null);
     } catch (error) {
       setLocalRetryError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setCloudSyncing(false);
     }
-  }, [refreshLocalQueries, selectedItemId, syncLocalRecord]);
+  }, [refreshLocalQueries, selectItem, selectedItemId]);
 
   const handleCreateVoiceprint = useCallback(async (segmentId: string, name: string) => {
     if (!selectedItemId || !segmentId) return;
@@ -968,6 +951,13 @@ export function ContentPanel() {
                 <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
                 <span>{t("resummarize.button")}</span>
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              {/* Export the current summary to a connected document provider
+                  (PRD FR-3). Renders nothing while Connections is off. */}
+              <SummaryExportMenuItem
+                fileId={selectedItemId}
+                disabled={currentFileSummarizing || !activeSummary?.id}
+              />
             </DropdownMenuContent>
           </DropdownMenu>
         )}
@@ -1011,23 +1001,6 @@ export function ContentPanel() {
                     >
                       <RefreshCw className="size-3" />
                       重试
-                    </button>
-                  )}
-                  {/* Real records only (not the optimistic placeholder):
-                      push a locally-kept recording to the cloud again. */}
-                  {!pendingRecording && (
-                    <button
-                      type="button"
-                      onClick={handleUploadLocalRecording}
-                      disabled={cloudSyncing}
-                      className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-60"
-                    >
-                      {cloudSyncing ? (
-                        <Loader2 className="size-3 animate-spin" />
-                      ) : (
-                        <Upload className="size-3" />
-                      )}
-                      上传到云
                     </button>
                   )}
                   <button

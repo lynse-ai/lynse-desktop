@@ -18,6 +18,8 @@
 
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
+import { featureFlags } from "../feature-flags";
+import { findCalendarEventForDetection } from "../connections";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useLiveTranslation } from "./use-live-translation";
 import {
@@ -104,6 +106,18 @@ export function MeetingAutoRecordAgent() {
       console.warn(
         `[meeting-auto-record] recording started: session=${sessionId} sources=[${sources.join(",")}]`,
       );
+
+      // Calendar attribution (PRD FR-1). Log-only until the backend gains
+      // `file.calendar_event_id` — the association has nowhere to be stored
+      // yet, and inventing a local one would be a second source of truth.
+      if (featureFlags.connections) {
+        void findCalendarEventForDetection(Date.parse(event.detectedAt)).then((matched) => {
+          if (!matched) return;
+          console.warn(
+            `[meeting-auto-record] calendar match: event=${matched.id} "${matched.title}" start=${matched.start_time} session=${sessionId}`,
+          );
+        });
+      }
       if (droppedSystemAudio) {
         toast.warning(t("auto_record.permission_missing_system"));
       }

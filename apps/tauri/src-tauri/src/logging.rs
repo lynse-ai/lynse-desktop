@@ -112,6 +112,33 @@ pub fn build_plugin(log_dir: &Path) -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
+/// Route panics into the log file: the default hook only writes to stderr, which
+/// is invisible for packaged (non-terminal) launches.
+///
+/// Must be called *after* [`build_plugin`] is registered. Until a logger exists
+/// `log::error!` has no backend and silently drops the record, so installing
+/// earlier replaced the default hook with one that printed nothing — a startup
+/// panic looked like the app simply exiting.
+pub fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let location = info
+            .location()
+            .map(|location| {
+                format!("{}:{}:{}", location.file(), location.line(), location.column())
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        let payload = info.payload();
+        let message = if let Some(text) = payload.downcast_ref::<&str>() {
+            (*text).to_string()
+        } else if let Some(text) = payload.downcast_ref::<String>() {
+            text.clone()
+        } else {
+            "non-string panic payload".to_string()
+        };
+        log::error!("panic at {location}: {message}");
+    }));
+}
+
 /// Delete `lynse*.log` files (current daily files plus archives left by the
 /// old size-based rotation) whose last write predates the retention window.
 /// Runs once at startup, before the plugin opens the live file, so a crash

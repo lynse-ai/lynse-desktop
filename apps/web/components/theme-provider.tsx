@@ -1,6 +1,7 @@
 "use client";
 
 import { ThemeProvider as NextThemesProvider } from "next-themes";
+import { AppThemeSync } from "@lynse/views/settings/app-theme";
 
 export function ThemeProvider({
   children,
@@ -9,7 +10,9 @@ export function ThemeProvider({
   return (
     <NextThemesProvider
       attribute="class"
-      defaultTheme="system"
+      // Web defaults to light (website-style first impression); an explicit
+      // user choice in Settings still wins because next-themes persists it.
+      defaultTheme="light"
       enableSystem
       // Snap the theme flip instead of smearing: without this, every
       // color/box-shadow transition on the page fires at once on switch
@@ -17,6 +20,9 @@ export function ThemeProvider({
       disableTransitionOnChange
       {...props}
     >
+      {/* Repaint the per-mode appearance customization whenever the resolved
+          light/dark flips (system following day/night). */}
+      <AppThemeSync />
       {children}
     </NextThemesProvider>
   );

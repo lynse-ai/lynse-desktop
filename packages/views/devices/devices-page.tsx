@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { PageHeader } from "../layout/page-header";
+import { TitleBarSlot } from "../layout/app-title-bar";
 import {
   Bluetooth,
   RefreshCw,
@@ -95,11 +95,6 @@ export function DevicesPage() {
   if (!api) {
     return (
       <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-        <PageHeader className="h-auto min-h-14 py-3">
-          <h1 className="text-sm font-semibold tracking-tight text-foreground">
-            {t("devices.title")}
-          </h1>
-        </PageHeader>
         <main className="flex min-h-0 flex-1 items-center justify-center">
           <div className="flex max-w-sm flex-col items-center gap-3 text-center">
             <Bluetooth className="size-10 text-muted-foreground/40" />
@@ -164,45 +159,39 @@ export function DevicesPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <PageHeader className="h-auto min-h-14 py-3">
-        <div className="flex flex-1 items-center gap-4">
-          <div className="min-w-0">
-            <h1 className="text-sm font-semibold tracking-tight text-foreground">
-              {t("devices.title")}
-            </h1>
-            <p className="mt-0.5 text-2xs text-muted-foreground">
-              {t("devices.subtitle")}
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {connected && (
+      {/* Disconnect / add-device actions live in the unified app title bar
+          via the slot (no center title — the bar doesn't echo the page name). */}
+      <TitleBarSlot
+        actions={
+          <>
+            {connected && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5 border-border bg-card text-xs text-muted-foreground shadow-sm hover:border-destructive/40 hover:text-destructive"
+                onClick={async () => {
+                  try {
+                    await api.disconnect();
+                    await refresh();
+                  } catch (error) {
+                    toast.error(String(error));
+                  }
+                }}
+              >
+                {t("devices.disconnect")}
+              </Button>
+            )}
             <Button
-              variant="outline"
               size="sm"
-              className="h-8 gap-1.5 border-border bg-card text-xs text-muted-foreground shadow-sm hover:border-destructive/40 hover:text-destructive"
-              onClick={async () => {
-                try {
-                  await api.disconnect();
-                  await refresh();
-                } catch (error) {
-                  toast.error(String(error));
-                }
-              }}
+              className="h-8 gap-1.5 bg-primary text-xs text-primary-foreground shadow-sm hover:bg-primary/90"
+              onClick={() => setAddOpen(true)}
             >
-              {t("devices.disconnect")}
+              <Plus className="size-3.5" />
+              {t("devices.add_device")}
             </Button>
-          )}
-          <Button
-            size="sm"
-            className="h-8 gap-1.5 bg-primary text-xs text-primary-foreground shadow-sm hover:bg-primary/90"
-            onClick={() => setAddOpen(true)}
-          >
-            <Plus className="size-3.5" />
-            {t("devices.add_device")}
-          </Button>
-        </div>
-      </PageHeader>
+          </>
+        }
+      />
 
       <main className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         {snapshot?.bluetoothError && (

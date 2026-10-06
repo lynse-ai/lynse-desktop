@@ -6,10 +6,10 @@ use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -17,7 +17,7 @@ use tauri::http::{header, Request, Response, StatusCode};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::webview::PageLoadEvent;
-use tauri::{AppHandle, Emitter, LogicalPosition, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -67,10 +67,27 @@ mod workbuddy;
 mod storage;
 mod content_migration;
 mod window_effects;
+// Client-direct OSS upload for the recording cloud-sync chain.
+mod sync_upload;
 
 use live_translation::LiveTranslationManager;
 
-const VOICEPRINT_MATCH_THRESHOLD: f64 = 0.31;
+/// Speaker-verification threshold calibrated on the 3D-Speaker CAM++ model
+/// via sherpa-onnx (smoke-tested on the official sample clips): full-length
+/// same-speaker pairs score ≈0.60–0.70 and drop to ≈0.51 on 2s segments,
+/// while impostor pairs land near −0.1…0.1. 0.45 keeps headroom on both
+/// sides (mirrors the old MECT calibration approach).
+const VOICEPRINT_MATCH_THRESHOLD: f64 = 0.45;
+/// Backend key stored on each local-voiceprints entry: embeddings from
+/// different models live in different spaces and are only compared within
+/// their own backend. Entries stamped anything else (legacy FunASR
+/// "campplus", the removed non-commercial "mect") never take part in matching.
+const VOICEPRINT_BACKEND_3DSPEAKER: &str = "3dspeaker";
+/// sherpa-onnx voiceprint runtime and its 3D-Speaker CAM++ ONNX checkpoint
+/// (Apache-2.0), fetched as a single file through the generic model downloader.
+pub const SHERPA_PROVIDER: &str = "sherpa";
+pub const SHERPA_MODEL_ID: &str = "3dspeaker-campplus";
+pub const SHERPA_MODEL_FILE: &str = "3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx";
 
 struct AppState {
     model_download_in_progress: Mutex<bool>,
@@ -127,19 +144,93 @@ pub(crate) fn engine_model_dir(app: &AppHandle, engine: &str, model_id: &str) ->
     Ok(path)
 }
 
+/// Write `bytes` over `path` atomically: stage into a uniquely named sibling,
+/// fsync it, then rename. A crash mid-write can only leave the previous file or
+/// the complete new one, never a truncated mix of the two.
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> CommandResult<()> {
+    static STAGING_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
+    let parent = path.parent().ok_or("Write target has no parent directory")?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let file_name = path
+        .file_name()
+        .ok_or("Write target has no file name")?
+        .to_string_lossy();
+    // The staging name has to be unique per writer: a fixed `.tmp` sibling is
+    // clobbered when two commands save to the same store concurrently.
+    let staging = parent.join(format!(
+        "{file_name}.{}-{}.tmp",
+        std::process::id(),
+        STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    let outcome = (|| -> CommandResult<()> {
+        let mut file = File::create(&staging).map_err(|error| error.to_string())?;
+        file.write_all(bytes).map_err(|error| error.to_string())?;
+        file.flush().map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        drop(file);
+        fs::rename(&staging, path).map_err(|error| error.to_string())?;
+        // The rename is only durable once the directory entry itself is on
+        // disk. Unix can fsync a directory handle; Windows cannot open one for
+        // writing and journals the rename instead, so the step is unix-only.
+        #[cfg(unix)]
+        if let Ok(directory) = File::open(parent) {
+            let _ = directory.sync_all();
+        }
+        Ok(())
+    })();
+    if outcome.is_err() {
+        let _ = fs::remove_file(&staging);
+    }
+    outcome
+}
+
+/// Unreadable stores are preserved under a distinct name rather than repaired
+/// in place, so the bytes stay available for recovery.
+fn quarantine_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "store".to_owned());
+    // Filename-safe stamp: `:` is legal in a path but not in a Windows one.
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    path.with_file_name(format!("{file_name}.corrupt-{stamp}"))
+}
+
 pub(crate) fn read_array(path: &Path) -> CommandResult<Vec<Value>> {
-    match fs::read_to_string(path) {
-        Ok(content) => Ok(serde_json::from_str(&content).unwrap_or_default()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(error.to_string()),
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if content.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    match serde_json::from_str::<Vec<Value>>(&content) {
+        Ok(values) => Ok(values),
+        // An unreadable store used to decode as "zero records", and the next
+        // save wrote that emptiness back over the real data. Preserve the file
+        // and refuse instead: every writer propagates this error, so nothing
+        // can overwrite what we cannot read.
+        Err(error) => {
+            let quarantine = quarantine_path(path);
+            match fs::rename(path, &quarantine) {
+                Ok(()) => Err(format!(
+                    "Local store {} is unreadable ({error}); preserved as {}",
+                    path.display(),
+                    quarantine.display()
+                )),
+                Err(rename_error) => Err(format!(
+                    "Local store {} is unreadable ({error}); could not preserve it ({rename_error})",
+                    path.display()
+                )),
+            }
+        }
     }
 }
 
 pub(crate) fn write_array(path: &Path, values: &[Value]) -> CommandResult<()> {
-    let temporary = path.with_extension("json.tmp");
-    let content = serde_json::to_string_pretty(values).map_err(|error| error.to_string())?;
-    fs::write(&temporary, content).map_err(|error| error.to_string())?;
-    fs::rename(&temporary, path).map_err(|error| error.to_string())
+    let content = serde_json::to_vec_pretty(values).map_err(|error| error.to_string())?;
+    atomic_write(path, &content)
 }
 
 pub(crate) fn list_store(app: &AppHandle, directory: &str) -> CommandResult<Vec<Value>> {
@@ -402,6 +493,106 @@ pub(crate) fn whisperx_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
     }
     let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
     Ok(resources.join("whisperx_transcribe.py"))
+}
+
+/// Resource path to the sherpa-onnx voiceprint bridge, mirroring
+/// [`whisperx_script_path`].
+pub(crate) fn sherpa_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/sherpa_voiceprint.py");
+    if development.exists() {
+        return Ok(development);
+    }
+    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
+    Ok(resources.join("sherpa_voiceprint.py"))
+}
+
+/// Path of the downloaded 3D-Speaker CAM++ ONNX checkpoint.
+fn sherpa_model_path(app: &AppHandle) -> CommandResult<PathBuf> {
+    Ok(engine_model_dir(app, SHERPA_PROVIDER, SHERPA_MODEL_ID)?.join(SHERPA_MODEL_FILE))
+}
+
+/// The embedding backend voiceprints are enrolled with: 3D-Speaker CAM++
+/// through sherpa-onnx (Apache-2.0). The previous FunASR-bundled CAM++ and
+/// MECT backends live in incompatible embedding spaces and never match.
+fn voiceprint_backend_available(app: &AppHandle) -> CommandResult<bool> {
+    Ok(sherpa_model_path(app)?.exists())
+}
+
+/// Ensure `sherpa_onnx` is importable in the given venv, pip-installing on
+/// first use (the wheel bundles onnxruntime; `imageio-ffmpeg` provides the
+/// audio decoder). Self-heals a venv left half-installed by an interrupted
+/// pip run, mirroring [`ensure_qwen3_asr_package`].
+fn ensure_sherpa_package(python: &str) -> CommandResult<()> {
+    let check = Command::new(python)
+        .args(["-c", "import sherpa_onnx, imageio_ffmpeg"])
+        .output()
+        .map_err(|error| format!("无法运行声纹 Python：{error}"))?;
+    if check.status.success() {
+        return Ok(());
+    }
+    // `-m pip` rather than the venv's `pip` sibling: on Windows that file is
+    // `pip.exe` next to `Scripts/python.exe`, and the plain name does not exist.
+    log::info!("[stt] 首次使用声纹引擎，安装 sherpa-onnx 依赖…");
+    let install = Command::new(python)
+        .args(["-m", "pip", "install", "--quiet", "--disable-pip-version-check", "sherpa-onnx", "imageio-ffmpeg"])
+        .status()
+        .map_err(|error| format!("安装 sherpa-onnx 失败：{error}"))?;
+    if !install.success() {
+        return Err("安装 sherpa-onnx 失败（请检查网络，或手动安装到声纹虚拟环境）".to_owned());
+    }
+    Ok(())
+}
+
+/// Ensure a usable sherpa-onnx venv exists, creating one on first use.
+/// Returns the python path. Kept separate from the other venvs so voiceprints
+/// work without any transcription stack installed. Interpreter selection
+/// mirrors [`ensure_whisperx_venv`]: prefer a known-compatible CPython
+/// before the system `python3`.
+pub(crate) fn ensure_sherpa_venv(app: &AppHandle) -> CommandResult<String> {
+    if let Ok(value) = env::var("LYNSE_SHERPA_PYTHON") {
+        return Ok(value);
+    }
+    let python_relative = if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" };
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../../../.venv-sherpa/{python_relative}"));
+    if development.exists() {
+        return Ok(development.to_string_lossy().into_owned());
+    }
+    let venv = app_data_dir(app)?.join("sherpa-venv");
+    let python = venv.join(python_relative);
+    if !python.exists() {
+        // Windows ships no `python3.12`-style names: the installer puts `python`
+        // on PATH and the `py` launcher covers versioned selection. The
+        // WindowsApps `python3` stub prints a store hint and exits non-zero, so
+        // the `--version` probe below rejects it.
+        let candidates: &[&str] = if cfg!(windows) {
+            &["python", "py", "python3"]
+        } else {
+            &["python3.12", "python3.11", "python3.13", "python3"]
+        };
+        let interpreter = candidates
+            .into_iter()
+            .find(|candidate| Command::new(candidate).arg("--version").output().map(|output| output.status.success()).unwrap_or(false))
+            .ok_or("未找到可用的 python3 解释器")?;
+        log::info!("[stt] 创建声纹虚拟环境（{interpreter}）：{}", venv.display());
+        fs::create_dir_all(&venv).map_err(|error| error.to_string())?;
+        let status = Command::new(interpreter)
+            .args(["-m", "venv", venv.to_string_lossy().as_ref()])
+            .status()
+            .map_err(|error| format!("无法创建声纹虚拟环境：{error}"))?;
+        if !status.success() {
+            return Err("创建声纹虚拟环境失败".to_owned());
+        }
+    }
+    ensure_sherpa_package(&python.to_string_lossy())?;
+    Ok(python.to_string_lossy().into_owned())
+}
+
+/// Run the sherpa-onnx voiceprint bridge on its dedicated venv; returns
+/// captured stdout (a single JSON line, parsed by [`parse_funasr_json`]).
+fn run_sherpa(app: &AppHandle, arguments: &[String]) -> CommandResult<String> {
+    let python = ensure_sherpa_venv(app)?;
+    let model_directory = engine_model_dir(app, SHERPA_PROVIDER, SHERPA_MODEL_ID)?;
+    run_python_with_model_cache(&python, arguments, &model_directory)
 }
 
 /// Ensure `mlx-qwen3-asr` (+ its vendored ffmpeg helper) is importable in the
@@ -762,21 +953,22 @@ pub struct SttModelEntry {
 }
 
 /// VibeVoice-ASR-BitNet weights (Microsoft, MIT): a VAE encoder GGUF plus an
-/// LM decoder GGUF, both required by the `vibeasr` sidecar.
+/// LM decoder GGUF, both required by the `vibeasr` sidecar. Sizes and SHA-256
+/// are the HuggingFace LFS OIDs of `microsoft/VibeVoice-ASR-BitNet`.
 pub const VIBEVOICE_BITNET_FILES: &[SttModelFile] = &[
     SttModelFile {
         file_name: "vibeasr-vae-encoder-i8_s.gguf",
-        size_bytes: 0,
+        size_bytes: 703_080_064,
         download_url:
             "https://huggingface.co/microsoft/VibeVoice-ASR-BitNet/resolve/main/vibeasr-vae-encoder-i8_s.gguf",
-        sha256: "",
+        sha256: "4941c82608c253ec066b5cc74d3dd11a5c8fef96cccbc5b87359ef0fe4338df6",
     },
     SttModelFile {
         file_name: "vibeasr-lm-i2_s-embed-q6_k.gguf",
-        size_bytes: 0,
+        size_bytes: 992_877_600,
         download_url:
             "https://huggingface.co/microsoft/VibeVoice-ASR-BitNet/resolve/main/vibeasr-lm-i2_s-embed-q6_k.gguf",
-        sha256: "",
+        sha256: "fbe273d8dc2f2433bb25f849e19d77ea65aaa2188d12c20cee987ab6f321e002",
     },
 ];
 
@@ -813,34 +1005,34 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         provider: "whisper",
         id: "small-q5_1",
         label: "Whisper small (q5_1, ~190 MB)",
-        size_bytes: 199_229_824,
+        size_bytes: 190_085_487,
         download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
-        sha256: "",
+        sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
         files: &[],
     },
     SttModelEntry {
         provider: "whisper",
         id: "medium-q5_0",
         label: "Whisper medium (q5_0, ~539 MB)",
-        size_bytes: 565_165_670,
+        size_bytes: 539_212_467,
         download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin",
-        sha256: "",
+        sha256: "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f",
         files: &[],
     },
     SttModelEntry {
         provider: "whisper",
         id: "large-v3-turbo-q5_0",
         label: "Whisper large-v3-turbo (q5_0, ~574 MB)",
-        size_bytes: 601_882_112,
+        size_bytes: 574_041_195,
         download_url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
-        sha256: "",
+        sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
         files: &[],
     },
     SttModelEntry {
         provider: "vibeasr",
         id: "vibeasr-bitnet-1.5b",
         label: "VibeVoice-ASR-BitNet 1.5B（本地·CPU，中英法等 7 语种，~1.6 GiB）",
-        size_bytes: 0,
+        size_bytes: 1_695_957_664,
         download_url: "",
         sha256: "",
         files: VIBEVOICE_BITNET_FILES,
@@ -861,6 +1053,15 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         size_bytes: 3_221_225_472,
         download_url: "",
         sha256: "",
+        files: &[],
+    },
+    SttModelEntry {
+        provider: "sherpa",
+        id: "3dspeaker-campplus",
+        label: "3D-Speaker CAM++ 声纹模型（sherpa-onnx·本地说话人识别，~28 MB）",
+        size_bytes: 28_281_138,
+        download_url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx",
+        sha256: "f682b514c05d947ee3fa91cd6ec6c5c7543479a128373fa29b1faedccd21fd11",
         files: &[],
     },
 ];
@@ -927,10 +1128,11 @@ fn model_is_installed(app: &AppHandle, provider: &str, model_id: &str) -> bool {
         }
     }
     // Whisper/VibeVoice also require the shared on-demand runtime
-    // (whisper, vibeasr, ffmpeg, ffprobe). FunASR, MLX and Qwen3 do not:
-    // FunASR ships its own bundle and the MLX engines run through a
-    // self-contained Python venv with a vendored ffmpeg (imageio-ffmpeg).
-    if provider != "funasr" && provider != "mlx" && provider != "qwen3" && provider != "moss" {
+    // (whisper, vibeasr, ffmpeg, ffprobe). FunASR and MLX do not: FunASR
+    // ships its own bundle, the MLX-family engines run through a
+    // self-contained Python venv with a vendored ffmpeg (imageio-ffmpeg),
+    // and sherpa-onnx is a single ONNX file on its own lightweight venv.
+    if provider != "funasr" && provider != "mlx" && provider != "qwen3" && provider != "moss" && provider != SHERPA_PROVIDER {
         let version = format!("v{}", app.package_info().version);
         let runtime = stt::runtime_dir(app, &version);
         if !stt::runtime_is_complete(&runtime) {
@@ -963,18 +1165,22 @@ fn model_status_list(app: &AppHandle) -> CommandResult<Value> {
     Ok(json!({ "models": models }))
 }
 
-/// Assign speaker labels to segments using CAM++ embeddings + greedy
-/// clustering. Used by Whisper's optional speaker separation.
+/// Assign speaker labels to segments by clustering embeddings greedily.
+/// Used by Whisper's optional speaker separation, via the 3D-Speaker CAM++
+/// embeddings from sherpa-onnx.
 pub(crate) fn assign_campp_speakers(
     app: &AppHandle,
     audio_path: &str,
     segments: &mut [Value],
-    funasr_dir: &Path,
     expected_speakers: Option<u64>,
 ) -> CommandResult<()> {
     if segments.is_empty() {
         return Ok(());
     }
+    if !voiceprint_backend_available(app)? {
+        return Err("声纹模型未安装，请在设置中下载 3D-Speaker 声纹模型".to_owned());
+    }
+    let threshold = VOICEPRINT_MATCH_THRESHOLD;
     let candidates: Vec<Value> = segments
         .iter()
         .filter_map(|segment| {
@@ -988,8 +1194,7 @@ pub(crate) fn assign_campp_speakers(
             }
         })
         .collect();
-    let embeddings = run_voiceprint_extraction(app, audio_path, &candidates, funasr_dir)?;
-    let threshold = VOICEPRINT_MATCH_THRESHOLD;
+    let embeddings = run_voiceprint_extraction(app, audio_path, &candidates)?;
     let mut clusters: Vec<Vec<f64>> = Vec::new();
     let mut assignment: HashMap<String, usize> = HashMap::new();
     for candidate in &candidates {
@@ -1049,7 +1254,15 @@ fn sha256_of_file(path: &Path) -> CommandResult<String> {
         return Err("无法计算文件哈希".to_owned());
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    Ok(text.split_whitespace().next().unwrap_or("").to_owned())
+    // certutil's output is localized ("SHA256 的 <path> 哈希:" on zh-CN
+    // Windows), so the digest cannot be picked by position — scan for the
+    // 64-hex-digit token, which is unambiguous in every locale. shasum prints
+    // "<hash>  <path>", where the same scan also matches.
+    Ok(text
+        .split_whitespace()
+        .find(|token| token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()))
+        .unwrap_or("")
+        .to_ascii_lowercase())
 }
 
 /// Produce the list of URLs to try, in order. Hugging Face (`huggingface.co`)
@@ -1271,15 +1484,17 @@ fn verify_and_install(part: &Path, target: &Path, expected_sha256: &str) -> Comm
 // archive URL and its embedded SHA-256 are version-specific; the SHA is
 // compiled into the client so a tampered/replaced archive fails verification.
 
-/// GitHub repo that hosts the per-platform runtime archives. Keep in sync with
-/// the release workflow that uploads them.
+/// GitHub repo that hosted the per-tag runtime archives before the
+/// CloudBase-only release flow; kept for the fallback candidate list.
 const RUNTIME_REPO: &str = "lynse-ai/lynse-desktop";
 
-/// Tencent CloudBase static hosting mirror serving the same per-tag layout as
-/// the GitHub release (`updates/<tag>/<archive>`). Compiled in from the
-/// release workflow's env; absent in local dev builds, whose candidate list
-/// then starts at GitHub direct.
-const RUNTIME_MIRROR_BASE: Option<&'static str> = option_env!("LYNSE_UPDATES_MIRROR_BASE");
+/// Tencent CloudBase static hosting serving the update artifacts
+/// (`updates/<tag>/<archive>`) — the same source the in-app updater polls.
+/// Releases are published locally (publish-cloudbase.sh), so the mirror is
+/// always present; the GitHub URL and ghproxy-style mirrors below stay in the
+/// candidate list as fallbacks for tags published before that flow.
+const RUNTIME_MIRROR_BASE: &str =
+    "https://lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com/updates";
 
 /// Per-platform runtime archive base name, e.g.
 /// `lynse-stt-runtime-macos-aarch64.tar.gz`.
@@ -1287,9 +1502,8 @@ fn runtime_archive_name() -> String {
     format!("lynse-stt-runtime-{}.tar.gz", stt::runtime_platform_dir())
 }
 
-/// GitHub download URL for this app version's runtime archive — also the
-/// source the CloudBase mirror copies from. Mirrors the git tag exactly (e.g.
-/// `v0.1.15`).
+/// Legacy GitHub download URL for this app version's runtime archive. Mirrors
+/// the git tag exactly (e.g. `v0.1.15`).
 fn runtime_github_url(version: &str) -> String {
     format!(
         "https://github.com/{RUNTIME_REPO}/releases/download/{version}/{}",
@@ -1297,22 +1511,18 @@ fn runtime_github_url(version: &str) -> String {
     )
 }
 
-/// Mirror URL for this version's runtime archive; `None` when the build has
-/// no mirror compiled in.
-fn runtime_mirror_url(version: &str) -> Option<String> {
-    match RUNTIME_MIRROR_BASE {
-        Some(base) if !base.is_empty() => Some(format!("{base}/{version}/{}", runtime_archive_name())),
-        _ => None,
-    }
+/// CloudBase URL for this version's runtime archive.
+fn runtime_mirror_url(version: &str) -> String {
+    format!("{RUNTIME_MIRROR_BASE}/{version}/{}", runtime_archive_name())
 }
 
-/// Same domestic-mirror strategy as model downloads: GitHub Releases is blocked
-/// or throttled from mainland China, so try the CloudBase mirror first, then
-/// the direct GitHub URL, then `ghproxy`-style mirrors. GitHub direct stays in
-/// the list so non-China users and unmirrored old tags are unaffected.
+/// Domestic-friendly download chain: CloudBase first (fast, no quota issues
+/// from mainland China), then the legacy GitHub URL, then `ghproxy`-style
+/// mirrors — the latter two only ever serve tags published before the
+/// CloudBase-only flow.
 fn runtime_download_candidates(version: &str) -> Vec<String> {
     let github = runtime_github_url(version);
-    let mut list: Vec<String> = runtime_mirror_url(version).into_iter().collect();
+    let mut list: Vec<String> = vec![runtime_mirror_url(version)];
     list.push(github.clone());
     for mirror in [
         github.replace("https://github.com/", "https://ghproxy.net/https://github.com/"),
@@ -1611,6 +1821,14 @@ fn record_speaker_key(segment: &Value) -> Option<String> {
         .find_map(|key| segment.get(*key).and_then(Value::as_str).map(ToOwned::to_owned))
 }
 
+/// Whether a stored voiceprint can take part in matching. Only entries
+/// enrolled with the current backend (3D-Speaker via sherpa-onnx) qualify;
+/// legacy FunASR "campplus" and removed "mect" entries live in incompatible
+/// embedding spaces and never match.
+fn voiceprint_is_active(voiceprint: &Value) -> bool {
+    voiceprint.get("backend").and_then(Value::as_str) == Some(VOICEPRINT_BACKEND_3DSPEAKER)
+}
+
 fn voiceprint_candidates(segments: &[Value]) -> Vec<Value> {
     let mut candidates: HashMap<String, (i64, Value)> = HashMap::new();
     for segment in segments {
@@ -1666,38 +1884,48 @@ fn average_embeddings(embeddings: &[Vec<f64>]) -> Vec<f64> {
     averaged
 }
 
-pub(crate) fn run_voiceprint_extraction(app: &AppHandle, audio_path: &str, candidates: &[Value], directory: &Path) -> CommandResult<HashMap<String, Vec<f64>>> {
+pub(crate) fn run_voiceprint_extraction(app: &AppHandle, audio_path: &str, candidates: &[Value]) -> CommandResult<HashMap<String, Vec<f64>>> {
     if candidates.is_empty() { return Ok(HashMap::new()) }
     let segments: Vec<Value> = candidates.iter().map(|candidate| json!({
         "id": candidate.get("id").cloned().unwrap_or(Value::Null),
         "startMs": candidate.get("startMs").cloned().unwrap_or(Value::Null),
         "endMs": candidate.get("endMs").cloned().unwrap_or(Value::Null)
     })).collect();
-    let args = vec![
-        script_path(app)?.to_string_lossy().into_owned(), audio_path.to_owned(),
-        "--model-dir".to_owned(), directory.to_string_lossy().into_owned(),
-        "--extract-voiceprint".to_owned(), "--segments-json".to_owned(),
+    // The sherpa-onnx bridge decodes audio with its own vendored ffmpeg and
+    // prints a single JSON line, parsed by the shared parser below.
+    let arguments = vec![
+        sherpa_script_path(app)?.to_string_lossy().into_owned(), audio_path.to_owned(),
+        "--model".to_owned(), sherpa_model_path(app)?.to_string_lossy().into_owned(),
+        "--segments-json".to_owned(),
         serde_json::to_string(&segments).map_err(|error| error.to_string())?
     ];
-    embeddings_from_stdout(&run_funasr(app, &args, directory)?)
+    embeddings_from_stdout(&run_sherpa(app, &arguments)?)
 }
 
-fn apply_voiceprints(app: &AppHandle, audio_path: &str, segments: &mut [Value], directory: &Path) -> CommandResult<()> {
-    // Voiceprint matching relies on the FunASR/CAM++ model. If it isn't
-    // installed, skip silently rather than failing a Whisper/VibeVoice job.
-    if !directory.join(".ready").exists() {
-        return Ok(());
-    }
+fn apply_voiceprints(app: &AppHandle, audio_path: &str, segments: &mut [Value]) -> CommandResult<()> {
     let voiceprints = list_store(app, "local-voiceprints")?;
     if voiceprints.is_empty() || segments.is_empty() { return Ok(()) }
     let candidates = voiceprint_candidates(segments);
-    let embeddings = run_voiceprint_extraction(app, audio_path, &candidates, directory)?;
+    if candidates.is_empty() { return Ok(()) }
+
+    // A voiceprint only matches embeddings extracted with the same model, so
+    // only entries enrolled with the current backend take part (see
+    // voiceprint_is_active). A missing model skips matching silently rather
+    // than failing a Whisper/VibeVoice job.
+    if !voiceprint_backend_available(app)? { return Ok(()) }
+    let references: Vec<Value> = voiceprints.iter()
+        .filter(|voiceprint| voiceprint_is_active(voiceprint))
+        .cloned().collect();
+    if references.is_empty() { return Ok(()) }
+
+    let embeddings = run_voiceprint_extraction(app, audio_path, &candidates)?;
     let mut matches = HashMap::new();
-    for candidate in candidates {
+    for candidate in candidates.iter() {
         let Some(id) = candidate.get("id").and_then(Value::as_str) else { continue };
         let Some(key) = candidate.get("speakerKey").and_then(Value::as_str) else { continue };
+        if matches.contains_key(key) { continue }
         let Some(embedding) = embeddings.get(id) else { continue };
-        let best = voiceprints.iter().filter_map(|voiceprint| {
+        let best = references.iter().filter_map(|voiceprint| {
             let reference = voiceprint.get("embedding").and_then(Value::as_array)?
                 .iter().filter_map(Value::as_f64).collect::<Vec<_>>();
             let score = cosine_similarity(embedding, &reference);
@@ -1958,7 +2186,6 @@ fn transcribe_single_track(
     });
     ensure_model_installed(app, provider.engine(), model_id)?;
     let directory = engine_model_dir(app, provider.engine(), model_id)?;
-    let funasr_dir = model_dir(app)?;
     let expected_speakers = provider.expected_speakers();
     let hotword_package_id = provider.hotword_package_id().map(str::to_owned);
     let terms = active_hotword_terms(app, hotword_package_id.as_deref())?;
@@ -1983,7 +2210,7 @@ fn transcribe_single_track(
             object.insert("text".to_owned(), json!(apply_hotwords(text, &terms)));
         }
     }
-    apply_voiceprints(app, audio_path, &mut segments, &funasr_dir)?;
+    apply_voiceprints(app, audio_path, &mut segments)?;
     Ok((transcript, segments, probe_audio_duration_ms(app, audio_path)))
 }
 
@@ -2685,7 +2912,17 @@ async fn todo_add_to_calendar(
 fn local_transcription_get(app: AppHandle, id: String) -> CommandResult<Option<Value>> { get_store_value(&app, "local-transcriptions", &id) }
 
 #[tauri::command]
-fn local_transcription_delete(app: AppHandle, id: String) -> CommandResult<()> { remove_store_value(&app, "local-transcriptions", &id) }
+fn local_transcription_delete(app: AppHandle, id: String) -> CommandResult<()> {
+    // The record row is the last reference to a live session's directory, so
+    // the captured audio goes with it — otherwise deleting a recording leaves
+    // its WAVs behind forever.
+    if let Some(record) = get_store_value(&app, "local-transcriptions", &id)? {
+        if let Some(session_id) = record.get("liveSessionId").and_then(Value::as_str) {
+            live_translation::remove_recorded_session(&app, session_id)?;
+        }
+    }
+    remove_store_value(&app, "local-transcriptions", &id)
+}
 
 #[tauri::command]
 fn local_transcription_audio_url(app: AppHandle, id: String) -> CommandResult<Option<String>> {
@@ -2884,8 +3121,15 @@ fn local_stt_download_model(
             // Whisper/VibeVoice require the shared on-demand runtime
             // (whisper, vibeasr, ffmpeg, ffprobe). Download it first if
             // missing; a previously-downloaded model skips the model download
-            // but still ensures the runtime is present.
-            if let Err(error) = ensure_runtime_available(&app, &provider, &model_id) {
+            // but still ensures the runtime is present. sherpa-onnx instead
+            // needs its own lightweight venv, prepared here so the first
+            // voiceprint operation doesn't pay the pip install.
+            if provider == SHERPA_PROVIDER {
+                if let Err(error) = ensure_sherpa_venv(&app) {
+                    emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
+                    return Err(error);
+                }
+            } else if let Err(error) = ensure_runtime_available(&app, &provider, &model_id) {
                 emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
                 return Err(error);
             }
@@ -3093,8 +3337,25 @@ fn local_transcription_update_voiceprint(app: AppHandle, mut voiceprint: Value) 
 #[tauri::command]
 fn local_transcription_delete_voiceprint(app: AppHandle, id: String) -> CommandResult<()> { remove_store_value(&app, "local-voiceprints", &id) }
 
+/// Which embedding backend voiceprint matching would use right now — surfaced
+/// in settings so the engine choice behind enroll/match is explicit rather
+/// than implicit (the PRD's "no dark behaviours" rule).
+#[tauri::command]
+fn local_voiceprint_backend_status(app: AppHandle) -> CommandResult<Value> {
+    let model_installed = sherpa_model_path(&app)?.exists();
+    let backend = if model_installed {
+        json!(VOICEPRINT_BACKEND_3DSPEAKER)
+    } else {
+        Value::Null
+    };
+    Ok(json!({
+        "backend": backend,
+        "modelInstalled": model_installed,
+    }))
+}
+
 /// `command(async)`: voiceprint extraction spawns a Python process and loads
-/// the CAM++ model, blocking for seconds to minutes.
+/// the embedding model (CAM++), blocking for seconds to minutes.
 #[tauri::command(async)]
 fn local_transcription_create_voiceprint(app: AppHandle, input: Value) -> CommandResult<Value> {
     let record_id = input.get("sampleRecordId").and_then(Value::as_str).ok_or("Sample record id is required")?;
@@ -3112,11 +3373,10 @@ fn local_transcription_create_voiceprint(app: AppHandle, input: Value) -> Comman
         if start.as_i64()? >= end.as_i64()? { None } else { Some(json!({ "id": id, "startMs": start, "endMs": end })) }
     }).collect();
     if candidates.is_empty() { return Err("Selected segment does not have usable audio timestamps".to_owned()) }
-    let directory = model_dir(&app)?;
-    if !directory.join(".ready").exists() {
-        return Err("Local ASR model is not installed".to_owned());
+    if !voiceprint_backend_available(&app)? {
+        return Err("本地声纹模型未安装，请先在设置中下载声纹模型".to_owned());
     }
-    let embeddings = run_voiceprint_extraction(&app, audio_path, &candidates, &directory)?;
+    let embeddings = run_voiceprint_extraction(&app, audio_path, &candidates)?;
     let values = candidates.iter().filter_map(|candidate| candidate.get("id").and_then(Value::as_str)).filter_map(|id| embeddings.get(id).cloned()).collect::<Vec<_>>();
     let embedding = average_embeddings(&values);
     if embedding.is_empty() { return Err("Voiceprint embedding extraction failed".to_owned()) }
@@ -3124,6 +3384,7 @@ fn local_transcription_create_voiceprint(app: AppHandle, input: Value) -> Comman
     let voiceprint = json!({
         "id": format!("voiceprint:{}", Uuid::new_v4()), "name": name, "createdAt": timestamp, "updatedAt": timestamp,
         "sampleRecordId": record_id, "sampleSegmentIds": selected_ids, "embedding": embedding,
+        "backend": VOICEPRINT_BACKEND_3DSPEAKER,
         "sampleText": segments.iter().filter_map(|segment| segment.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join("\n")
     });
     save_store_value(&app, "local-voiceprints", voiceprint.clone())?;
@@ -3619,6 +3880,22 @@ fn bundle_build_number() -> Option<String> {
     None
 }
 
+/// Whether this process runs under the macOS App Sandbox. TestFlight / App
+/// Store signing injects the sandbox entitlement (plus this env marker set by
+/// sandbox initialization) even when the source entitlements never declared
+/// it. A sandboxed app cannot rewrite its own bundle in /Applications, so the
+/// in-app updater's download+install would always fail with EPERM — those
+/// builds must update through the store channel (TestFlight) instead.
+#[cfg(target_os = "macos")]
+fn is_app_sandboxed() -> bool {
+    std::env::var_os("APP_SANDBOX_CONTAINER_ID").is_some()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_app_sandboxed() -> bool {
+    false
+}
+
 #[tauri::command]
 fn get_app_info(app: AppHandle) -> Value {
     let version = app.package_info().version.to_string();
@@ -3628,7 +3905,7 @@ fn get_app_info(app: AppHandle) -> Value {
         "linux" => "linux",
         other => other,
     };
-    json!({ "version": version, "build": bundle_build_number(), "platform": platform })
+    json!({ "version": version, "build": bundle_build_number(), "platform": platform, "sandboxed": is_app_sandboxed() })
 }
 
 /// Reveal the app log folder in the system file manager so users can attach
@@ -3773,17 +4050,76 @@ fn diagnostics_prepare_report(
             .map_err(|error| format!("resolve log dir: {error}"))?;
         let logs_dir = dir.join("logs");
         fs::create_dir_all(&logs_dir).map_err(|error| format!("create logs dir: {error}"))?;
+        // A report leaves the machine, so the account name in the home path is
+        // scrubbed. Nothing else is rewritten: device names, session ids and
+        // full paths are exactly what makes a pasted log diagnosable.
+        let home = app
+            .path()
+            .home_dir()
+            .ok()
+            .and_then(|path| path.to_str().map(str::to_owned));
         for file in diagnostics_log_files(&log_dir) {
             let Some(name) = file.file_name() else {
                 continue;
             };
             if let Ok(bytes) = fs::read(&file) {
-                let _ = fs::write(logs_dir.join(name), bytes);
+                let text = String::from_utf8_lossy(&bytes);
+                let scrubbed = match &home {
+                    Some(home) => text.replace(home, "~"),
+                    None => text.into_owned(),
+                };
+                let _ = fs::write(logs_dir.join(name), scrubbed);
             }
         }
     }
 
     Ok(json!({ "dir": dir.to_string_lossy() }))
+}
+
+/// Save a chat attachment (a visual-summary image, for example) to the path
+/// the user picked in the native save dialog. The webview can't fetch the
+/// signed object hosts (they send no CORS headers for the app origin), so
+/// the fetch runs here over reqwest — no CORS applies. The dialog already
+/// asks about replacing an existing file, so the chosen path is written as
+/// picked.
+#[tauri::command]
+async fn attachment_save(url: String, path: String) -> CommandResult<Value> {
+    let target = PathBuf::from(&path);
+    if target.file_name().is_none() {
+        return Err("invalid target path".to_string());
+    }
+
+    let bytes = reqwest::get(&url)
+        .await
+        .map_err(|error| format!("fetch attachment: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("fetch attachment: {error}"))?
+        .bytes()
+        .await
+        .map_err(|error| format!("read attachment: {error}"))?;
+
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("create target dir: {error}"))?;
+    }
+    fs::write(&target, &bytes).map_err(|error| format!("write attachment: {error}"))?;
+
+    Ok(json!({ "path": target.to_string_lossy() }))
+}
+
+/// Read a chat attachment's body as text so the renderer can preview it in
+/// app. Same reqwest route as `attachment_save` (the signed object hosts send
+/// no CORS headers for the app origin), but nothing is written to disk and the
+/// signed URL never reaches the address bar or a browser tab.
+#[tauri::command]
+async fn attachment_text(url: String) -> CommandResult<String> {
+    reqwest::get(&url)
+        .await
+        .map_err(|error| format!("fetch attachment: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("fetch attachment: {error}"))?
+        .text()
+        .await
+        .map_err(|error| format!("read attachment: {error}"))
 }
 
 const TRAY_ELAPSED_ID: &str = "tray_elapsed";
@@ -3912,11 +4248,63 @@ fn center_window_over_main(
         let _ = fallback;
         return;
     };
-    let Ok(scale) = main.scale_factor() else { return };
+    let Ok(scale) = main.scale_factor() else {
+        let _ = fallback;
+        return;
+    };
     // Physical pixels → logical units, then top-left for our centered window.
     let x = (main_position.x as f64 + main_size.width as f64 / 2.0) / scale - width / 2.0;
     let y = (main_position.y as f64 + main_size.height as f64 / 2.0) / scale - height / 2.0;
     let _ = window.set_position(LogicalPosition::new(x, y));
+}
+
+/// Reveal a hidden-created popup whose page-load event never arrived.
+///
+/// The About and Feedback windows are built with `visible(false)` and shown
+/// from their `on_page_load(Finished)` event so they never flash at the origin.
+/// On Windows that event can be missed entirely — the webview's first
+/// navigation completes before the hook attaches — which left the popup
+/// created but permanently invisible. The page-load hook stays as the fast
+/// path; this only acts when the window is still hidden after it.
+#[cfg(target_os = "windows")]
+fn ensure_window_revealed(app: &AppHandle, label: &'static str) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+        let Some(window) = app.get_webview_window(label) else {
+            log::warn!("[window:{label}] fallback: window is gone");
+            return;
+        };
+        let visible = window.is_visible();
+        log::info!("[window:{label}] fallback check: is_visible={visible:?}");
+        if visible.unwrap_or(false) {
+            return;
+        }
+        let revealed = window.show().and_then(|_| window.set_focus());
+        log::info!("[window:{label}] fallback reveal: ok={:?}", revealed.is_ok());
+    });
+}
+
+/// Shape the main window between the two faces it hosts: the compact
+/// welcome window (690×450, the pre-auth login face) and the dashboard
+/// size (960×600) once signed in. The packaged default is already compact —
+/// this flips it back and forth around sign-in/sign-out without a cold
+/// restart. `center` keeps the small window on screen regardless of where
+/// the (top-left anchored) resize leaves it.
+#[tauri::command]
+fn set_compact_window_mode(app: AppHandle, active: bool) -> CommandResult<()> {
+    let Some(main) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    let (size, min_size) = if active {
+        ((690.0, 450.0), (560.0, 400.0))
+    } else {
+        ((960.0, 600.0), (960.0, 600.0))
+    };
+    let _ = main.set_min_size(Some(LogicalSize::new(min_size.0, min_size.1)));
+    let _ = main.set_size(LogicalSize::new(size.0, size.1));
+    let _ = main.center();
+    Ok(())
 }
 
 /// Open (or focus) the standalone About window — a small fixed-size window
@@ -3925,10 +4313,14 @@ fn center_window_over_main(
 /// the frontend, which knows the active locale.
 #[tauri::command]
 fn open_about_window(app: AppHandle, title: Option<String>) -> CommandResult<()> {
+    log::info!("[window:about] open requested");
     if let Some(window) = app.get_webview_window("about") {
-        let _ = window.show();
-        let _ = window.set_focus();
-        return Ok(());
+        let revealed = window.show().and_then(|_| window.set_focus());
+        log::info!(
+            "[window:about] reusing existing window, reveal ok={:?}",
+            revealed.is_ok()
+        );
+        return revealed.map_err(|error| format!("show about window: {error}"));
     }
     // Created hidden and positioned before the reveal, so the popup never
     // flashes at the screen origin before settling over the main window.
@@ -3949,13 +4341,20 @@ fn open_about_window(app: AppHandle, title: Option<String>) -> CommandResult<()>
     .visible(false)
     .on_page_load(|window, payload| {
         if payload.event() == PageLoadEvent::Finished {
+            log::info!("[window:about] page load finished, revealing");
             let _ = window.show();
             let _ = window.set_focus();
         }
     })
     .build()
-    .map_err(|error| format!("failed to create about window: {error}"))?;
+    .map_err(|error| {
+        log::error!("[window:about] build failed: {error}");
+        format!("failed to create about window: {error}")
+    })?;
+    log::info!("[window:about] created, reveal armed on page load");
     center_window_over_main(&app, &window, ABOUT_WINDOW_WIDTH, ABOUT_WINDOW_HEIGHT);
+    #[cfg(target_os = "windows")]
+    ensure_window_revealed(&app, "about");
     #[cfg(not(target_os = "windows"))]
     {
         let _ = window.show();
@@ -3998,6 +4397,8 @@ fn open_feedback_window(app: AppHandle, title: Option<String>) -> CommandResult<
     .build()
     .map_err(|error| format!("failed to create feedback window: {error}"))?;
     center_window_over_main(&app, &window, FEEDBACK_WINDOW_WIDTH, FEEDBACK_WINDOW_HEIGHT);
+    #[cfg(target_os = "windows")]
+    ensure_window_revealed(&app, "feedback");
     #[cfg(not(target_os = "windows"))]
     {
         let _ = window.show();
@@ -4072,26 +4473,6 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn run() {
-    // Persist panics to the log file: the default hook only writes to stderr,
-    // which is invisible for packaged (non-terminal) launches.
-    std::panic::set_hook(Box::new(|info| {
-        let location = info
-            .location()
-            .map(|location| {
-                format!("{}:{}:{}", location.file(), location.line(), location.column())
-            })
-            .unwrap_or_else(|| "unknown".to_string());
-        let payload = info.payload();
-        let message = if let Some(text) = payload.downcast_ref::<&str>() {
-            (*text).to_string()
-        } else if let Some(text) = payload.downcast_ref::<String>() {
-            text.clone()
-        } else {
-            "non-string panic payload".to_string()
-        };
-        log::error!("panic at {location}: {message}");
-    }));
-
     tauri::Builder::default()
         // Must be registered first: a second launch (the user re-clicks the
         // shortcut while the app lives closed-to-tray) focuses the existing
@@ -4138,6 +4519,9 @@ pub fn run() {
                 }
                 Err(error) => eprintln!("Failed to resolve log dir: {error}"),
             }
+            // After the logger exists, so panics reach the file instead of
+            // being dropped by a logger-less `log::error!` (see logging.rs).
+            logging::install_panic_hook();
             app.manage(recording_card::RecordingCardManager::new(app.handle().clone()));
             if let Err(error) = migrate_electron_data(&app.handle()) {
                 log::error!("Failed to migrate Electron local data: {error}");
@@ -4230,18 +4614,15 @@ pub fn run() {
                     return;
                 }
             }
-            // Resizes (and the fullscreen enter/exit behind them) can reset the
-            // traffic lights to the system layout; re-assert the tighter stride.
-            if !matches!(event, tauri::WindowEvent::Resized { .. }) || window.label() != "main" {
-                return;
-            }
-            if let Some(webview) = window.get_webview_window("main") {
-                window_effects::apply_traffic_light_spacing(&webview);
-            }
+            // Traffic lights keep the system-default layout (size, stride and
+            // tao-owned `trafficLightPosition` anchoring) — no re-assertion
+            // needed since the stride-tightening hack was retired with the
+            // rail-embedded lights.
         })
         .invoke_handler(tauri::generate_handler![
             local_transcription_list, local_transcription_get, local_transcription_delete, local_transcription_audio_url,
             local_transcription_track_audio_url,
+            sync_upload::sync_upload_audio_size, sync_upload::sync_upload_put_signed_file,
             todo_list, todo_save, todo_delete, todo_add_to_calendar,
             inspiration_list, inspiration_save, inspiration_delete, inspiration_transcribe, inspiration_audio_url,
             inspiration_image_url, inspiration_stage_image, inspiration_stage_image_from_path,
@@ -4255,6 +4636,7 @@ pub fn run() {
             local_transcription_save_hotword_package, local_transcription_delete_hotword_package,
             local_transcription_list_voiceprints, local_transcription_create_voiceprint,
             local_transcription_update_voiceprint, local_transcription_delete_voiceprint,
+            local_voiceprint_backend_status,
             local_stt_config_get, local_stt_config_save,
             vault::vault_config_get, vault::vault_config_save, vault::vault_default_path,
             vault::vault_write_note, vault::vault_write_notes, vault::vault_read_note,
@@ -4278,11 +4660,14 @@ pub fn run() {
             secure_update_vault_entry,
             get_app_info,
             open_about_window,
+            set_compact_window_mode,
             open_feedback_window,
             open_logs_folder,
-            diagnostics_read_logs, diagnostics_prepare_report,
+            diagnostics_read_logs, diagnostics_prepare_report, attachment_save,
+            attachment_text,
             live_translation::live_translation_permissions,
             live_translation::live_translation_request_permission,
+            live_translation::live_translation_open_privacy_pane,
             live_translation::live_translation_audio_devices,
             live_translation::live_translation_state,
             live_translation::live_translation_start,
@@ -4393,6 +4778,55 @@ mod tests {
         assert!(calendar_event_times("2026-07-13T11:00:00+08:00", "2026-07-13T10:00:00+08:00").is_err());
     }
 
+    #[test]
+    fn atomic_write_leaves_no_staging_files() {
+        let dir = test_temp_dir("atomic-write");
+        let target = dir.join("index.json");
+        atomic_write(&target, b"[{\"id\":\"a\"}]").unwrap();
+        atomic_write(&target, b"[]").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "[]");
+        let strays: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp"))
+            .collect();
+        assert!(strays.is_empty(), "staging files left behind: {strays:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unreadable_store_is_preserved_instead_of_emptied() {
+        let dir = test_temp_dir("quarantine");
+        let target = dir.join("index.json");
+        fs::write(&target, b"[{\"id\":\"a\"},").unwrap();
+        let error = read_array(&target).unwrap_err();
+        assert!(error.contains("unreadable"), "{error}");
+        assert!(!target.exists(), "an unreadable store must not stay in place");
+        let preserved: Vec<PathBuf> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().contains(".corrupt-"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert_eq!(preserved.len(), 1, "the unreadable bytes must survive");
+        assert_eq!(fs::read_to_string(&preserved[0]).unwrap(), "[{\"id\":\"a\"},");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_store_reads_as_no_records() {
+        let dir = test_temp_dir("empty-store");
+        let target = dir.join("index.json");
+        fs::write(&target, "  \n").unwrap();
+        assert!(read_array(&target).unwrap().is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     /// Create a uniquely-named temp directory for a test and return it. The
     /// caller is responsible for cleanup.
     fn test_temp_dir(name: &str) -> std::path::PathBuf {
@@ -4475,13 +4909,12 @@ mod tests {
     fn runtime_download_candidates_order_mirror_then_github_then_proxies() {
         let candidates = runtime_download_candidates("v0.1.15");
         let archive = runtime_archive_name();
-        let mut expected: Vec<String> = Vec::new();
-        if let Some(base) = RUNTIME_MIRROR_BASE.filter(|base| !base.is_empty()) {
-            expected.push(format!("{base}/v0.1.15/{archive}"));
-        }
-        expected.push(format!("https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"));
-        expected.push(format!("https://ghproxy.net/https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"));
-        expected.push(format!("https://mirror.ghproxy.com/https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"));
+        let expected: Vec<String> = vec![
+            format!("{RUNTIME_MIRROR_BASE}/v0.1.15/{archive}"),
+            format!("https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"),
+            format!("https://ghproxy.net/https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"),
+            format!("https://mirror.ghproxy.com/https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"),
+        ];
         assert_eq!(candidates, expected);
     }
 }

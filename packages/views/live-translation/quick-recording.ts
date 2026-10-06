@@ -214,5 +214,10 @@ export function useQuickRecording() {
     /** True while a stop has been registered but the background finalization
      *  (sidecar drain + persistence) has not landed yet. */
     stopping: view.state === "stopping",
+    /** Authoritative elapsed time from the capture sidecar, in ms, for
+     *  compact readouts (the title-bar pill). */
+    elapsedMs: view.elapsedMs,
+    /** Last engine/stream error, if any — surfaces as a warning tint. */
+    lastError: view.lastError,
   };
 }

@@ -14,6 +14,7 @@ vi.mock("../workspace/chat-transport", async (importOriginal) => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  delete (window as Window & { desktopAPI?: unknown }).desktopAPI;
 });
 
 describe("ChatAttachments", () => {
@@ -63,6 +64,111 @@ describe("ChatAttachments", () => {
     expect(screen.queryByTestId("chat-image-download")).toBeNull();
   });
 
+  it("zooms the opened image with the magnifier buttons, wheel, and keyboard, and resets to fit", () => {
+    render(
+      <ChatAttachments
+        attachments={[
+          {
+            id: "a".repeat(32),
+            name: "灵光记图文总结.png",
+            type: "image",
+            url: "https://files.example.com/card.png",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("img", { name: "灵光记图文总结.png" }));
+
+    const level = screen.getByTestId("chat-image-zoom-level");
+    expect(level.textContent).toBe("100%");
+
+    // Windows-Photos style magnifier buttons step in and out.
+    fireEvent.click(screen.getByTestId("chat-image-zoom-in"));
+    expect(level.textContent).toBe("125%");
+
+    // Wheel zooms too (mouse wheel on Windows, two-finger scroll on Mac).
+    fireEvent.wheel(screen.getByTestId("chat-image-stage"), { deltaY: -120 });
+    expect(level.textContent).toBe("163%");
+
+    // Keyboard +/- zooms and the fit button restores the default size.
+    fireEvent.keyDown(window, { key: "-" });
+    expect(level.textContent).toBe("130%");
+    fireEvent.click(screen.getByTestId("chat-image-zoom-reset"));
+    expect(level.textContent).toBe("100%");
+
+    // Zooming out floors at 25% and disables the zoom-out button.
+    for (let i = 0; i < 10; i += 1) {
+      fireEvent.click(screen.getByTestId("chat-image-zoom-out"));
+    }
+    expect(level.textContent).toBe("25%");
+    expect(screen.getByTestId("chat-image-zoom-out").hasAttribute("disabled")).toBe(true);
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("chat-image-zoom-level")).toBeNull();
+  });
+
+  it("saves downloads through the desktop bridge without the browser fetch fallback", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const save = vi.fn().mockResolvedValue({ path: "/Users/me/Downloads/card.png" });
+    (window as Window & { desktopAPI?: unknown }).desktopAPI = {
+      attachment: { save },
+    };
+    render(
+      <ChatAttachments
+        attachments={[
+          {
+            id: "a".repeat(32),
+            name: "灵光记图文总结.png",
+            type: "image",
+            url: "https://files.example.com/card.png",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("img", { name: "灵光记图文总结.png" }));
+    fireEvent.click(screen.getByTestId("chat-image-download"));
+
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith(
+        "https://files.example.com/card.png",
+        "灵光记图文总结.png",
+      ),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("does not fall back to the web download when the save dialog is cancelled", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const save = vi.fn().mockResolvedValue(null);
+    (window as Window & { desktopAPI?: unknown }).desktopAPI = {
+      attachment: { save },
+    };
+    render(
+      <ChatAttachments
+        attachments={[
+          {
+            id: "a".repeat(32),
+            name: "灵光记图文总结.png",
+            type: "image",
+            url: "https://files.example.com/card.png",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("img", { name: "灵光记图文总结.png" }));
+    fireEvent.click(screen.getByTestId("chat-image-download"));
+
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
   it("renders pdf attachments as a plain file card without an inline preview and downloads on click", async () => {
     const open = vi.spyOn(window, "open").mockImplementation(() => null);
     const fetchMock = vi.fn().mockRejectedValue(new Error("cors"));
@@ -94,8 +200,8 @@ describe("ChatAttachments", () => {
     vi.unstubAllGlobals();
   });
 
-  it("shows cached HTML reports with a sandboxed preview and attachment link", () => {
-    render(
+  it("downloads HTML reports instead of previewing the signed url inline", () => {
+    const { container } = render(
       <ChatAttachments
         attachments={[
           {
@@ -109,12 +215,40 @@ describe("ChatAttachments", () => {
       />,
     );
 
-    const preview = screen.getByTitle("meeting-report.html");
-    expect(preview.getAttribute("src")).toBe("https://files.example.com/file_html.html");
-    expect(preview.getAttribute("sandbox")).toBe("");
-    expect(
-      screen.getByRole("link", { name: /meeting-report\.html/i }).getAttribute("href"),
-    ).toBe("https://files.example.com/file_html.html");
+    // No iframe and no anchor: either would put the signed object host, key
+    // and signature in the status bar or the address bar.
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.getByRole("button", { name: /meeting-report\.html/ })).toBeTruthy();
+  });
+
+  it("previews markdown attachments in-app without exposing the signed url", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => "# 周报\n\n结论",
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <ChatAttachments
+        attachments={[
+          {
+            name: "summary.md",
+            type: "file",
+            url: "https://bucket.example.com/summary.md",
+            downloadUrl: "https://bucket.example.com/summary.md",
+          },
+        ]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /summary\.md/ }));
+
+    // The body is fetched and rendered by the app's own markdown renderer;
+    // nothing in the DOM points at the object host.
+    expect(await screen.findByRole("heading", { name: "周报" })).toBeTruthy();
+    expect(document.querySelector("[href*='bucket.example.com']")).toBeNull();
+    expect(document.querySelector("[src*='bucket.example.com']")).toBeNull();
+    vi.unstubAllGlobals();
   });
 
   it("re-signs and swaps the image source when the signed url fails to load", async () => {

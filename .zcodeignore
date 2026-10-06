@@ -1,0 +1,115 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+.next/
+dist/
+out/
+build/
+.turbo/
+*.tsbuildinfo
+
+# Local env files
+*.local
+.env
+.env.worktree
+
+# OS / Editor
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.code-workspace
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Misc
+.cache/
+coverage/
+.playwright-mcp/
+.playwright-cli/
+.token_cache
+
+# AI tooling local state (session skills / editor specs / lock files)
+.agents/
+.qoder/
+skills-lock.json
+
+# Local Python virtualenvs for STT bridges (FunASR / MLX)
+.venv-*/
+
+# Project operational data (WorkBuddy memory / notes) — not source
+.workbuddy/
+
+# Local STT sidecar binaries (whisper/moss-transcribe/ffmpeg/ffprobe)
+# Fetched by CI via scripts/fetch-sidecars.sh; never committed.
+apps/tauri/src-tauri/resources/sidecars/
+apps/tauri/audio-capture/.build/
+
+# Python bytecode (MLX / FunASR bridge scripts)
+__pycache__/
+*.pyc
+
+# Signing / distribution keys — never commit these (TestFlight, App Store Connect, updater)
+*.p12
+*.p8
+*.pem
+*.cer
+*.mobileprovision
+*.keystore
+private_keys/
+
+# Local agent workspace state
+.zcode/
+
+# Local TestFlight build-number counter (see apps/tauri/scripts/build-appstore.sh)
+apps/tauri/.build-number
+
+# Local-only working directories
+GIF/
+research/
+*.vetd
+*.vetd.d/
+
+# Vendored AEC3 build workspace (extracted sources + merged static lib; tarballs are committed)
+apps/tauri/audio-capture/vendor/src/
+apps/tauri/audio-capture/vendor/build/
+
+# Vendored WebRTC AEC3 static library (scripts/build-lynse-aec3.ps1) — the
+# real artifact is built per machine / CI, never committed.
+apps/tauri/src-tauri/aec3/lib/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

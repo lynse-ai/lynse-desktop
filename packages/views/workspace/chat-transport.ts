@@ -258,17 +258,37 @@ const CIRCLED: Record<string, string> = {
   "⑥": "6", "⑦": "7", "⑧": "8", "⑨": "9",
 };
 
+/** Explicit "pick one" phrasing — an unambiguous ask for a choice. */
+const CHOICE_CUE_RE =
+  /请选择|请挑选|请选出|请确认|请回复|请选一|选择|选定|选一个|任选|choose|select|pick|which/i;
+
+/** Softer second-person ask ("你想怎么处理"). */
+const CHOICE_WEAK_RE =
+  /你想|您想|你希望|您希望|你倾向|您倾向|要不要|是否需要|需要我|哪种|哪个|怎么处理|如何处理|怎么办/;
+
+/** Enumeration intros — the preamble presents information, not a menu. */
+const LIST_INTRO_RE =
+  /以下几个方面|如下|以下内容|包括|总结|要点|结论|步骤|原因|因素|优缺点|区别|对比|注意事项/;
+
+/** Markdown styling inside an item means formatted content, not a choice. */
+const MARKDOWNISH_RE = /\*\*|__|`|\[[^\]]*\]\(/;
+
 /**
  * Heuristic detector: when the assistant replies with a choice menu like
  *
+ *   请选择操作:
  *   A) 重启设备
  *   B) 暂不处理
- *   C) 咨询人工
  *
  * synthesize a ChatConfirm so the UI can pop a clickable dialog instead of
  * forcing the user to type "A/B/C". Works on the finished assistant text.
  *
- * Returns null when no clean, sequential option list (A,B,C… or 1,2,3…) is found.
+ * Structure alone (2-8 sequential keys) cannot tell a bare-number menu from
+ * an ordinary markdown ordered list — the model writes most enumerations as
+ * "1. … 2. …" — so beyond the structural checks the preamble must also read
+ * as an ask (see CHOICE_CUE_RE / CHOICE_WEAK_RE vs LIST_INTRO_RE). Returns
+ * null when any gate fails; a missed menu just stays as plain text, which is
+ * strictly better than a spurious modal.
  */
 export function extractConfirmFromText(text: string): ChatConfirm | null {
   if (!text || text.length < 6) return null;
@@ -278,8 +298,10 @@ export function extractConfirmFromText(text: string): ChatConfirm | null {
   const options: { key: string; text: string }[] = [];
   const questionLines: string[] = [];
   let seenOptions = false;
+  let tailIsOption = false;
 
   for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
     const m = OPTION_RE.exec(line);
     if (m) {
       const circled = m[3];
@@ -290,22 +312,48 @@ export function extractConfirmFromText(text: string): ChatConfirm | null {
       if (content) {
         options.push({ key: key.toUpperCase(), text: content });
         seenOptions = true;
+        tailIsOption = true;
       }
-    } else if (!seenOptions) {
-      questionLines.push(line);
+    } else {
+      tailIsOption = false;
+      if (!seenOptions) questionLines.push(line);
     }
   }
 
   if (options.length < 2 || options.length > 8) return null;
 
+  // A menu ends with its options; a numbered list followed by more prose is
+  // an enumerated answer with the list buried mid-text.
+  if (!tailIsOption) return null;
+
+  // Menu items are short and plain. Markdown styling or very long lines mean
+  // formatted content, not choices (the 2026-10-02 misfire: a six-item
+  // "**困难点**" list popped the dialog).
+  if (options.some((o) => o.text.length > 50 || MARKDOWNISH_RE.test(o.text))) return null;
+
   const first = options[0]!;
   const isLetter = /^[A-Z]$/.test(first.key);
   const expectedKey = (i: number) =>
     isLetter ? String.fromCharCode(65 + i) : String(i + 1);
-  // Require the detected keys to be sequential (A,B,C… or 1,2,3…) so that
-  // ordinary bullet lists don't get mistaken for a confirmation menu.
+  // Require the detected keys to be sequential (A,B,C… or 1,2,3…).
   const sequential = options.every((o, i) => o.key === expectedKey(i));
   if (!sequential) return null;
+
+  // Semantic gate: letter-keyed menus (A/B/C, （A）, [A]) never occur in
+  // ordinary prose, but digits and circled numbers do — so those need the
+  // preamble to actually ask for a choice. An explicit ask overrides an
+  // enumeration intro; a soft ask does not survive one.
+  if (!isLetter) {
+    let strong = false;
+    let weak = false;
+    let intro = false;
+    for (const line of questionLines) {
+      if (/[?？]\s*$/.test(line.trim()) || CHOICE_CUE_RE.test(line)) strong = true;
+      if (CHOICE_WEAK_RE.test(line)) weak = true;
+      if (LIST_INTRO_RE.test(line)) intro = true;
+    }
+    if (!(strong || (weak && !intro))) return null;
+  }
 
   const question = questionLines.join(" ").replace(/\s+/g, " ").trim();
   return {
@@ -393,6 +441,28 @@ function submitErrorMessage(error: unknown): string {
     return "当前使用人数较多，请稍后再试";
   }
   return detail || "发送失败，请稍后重试";
+}
+
+/** How far past a cut we look for a word end before giving up on the snap. */
+const WORD_SNAP_LOOKAHEAD = 8;
+
+/**
+ * Move a slice end onto a character-safe boundary. A cut between the halves of
+ * a surrogate pair flashes a broken glyph every tick, and a cut inside a Latin
+ * word reads as stutter; CJK has no word ends so only the surrogate rule
+ * applies there. `end` is exclusive and below `text.length`.
+ */
+export function safeSliceEnd(text: string, end: number): number {
+  if (end <= 0 || end >= text.length) return end;
+  // Trailing high surrogate: its pair belongs in this slice.
+  if (/[\uD800-\uDBFF]$/.test(text.slice(end - 1, end))) end += 1;
+  // Inside a word/number run: carry it to the next break, if nearby.
+  if (/[A-Za-z0-9_]$/.test(text.slice(end - 1, end)) && /[A-Za-z0-9_]/.test(text[end] ?? "")) {
+    const rest = text.slice(end, end + WORD_SNAP_LOOKAHEAD);
+    const breakAt = rest.search(/[^\w]/);
+    if (breakAt >= 0) end += breakAt + 1;
+  }
+  return Math.min(end, text.length);
 }
 
 /**
@@ -646,8 +716,13 @@ export class PollChatTransport implements ChatTransport {
   ): number {
     const text = typeof data?.text === "string" ? data.text : "";
     if (text.length <= streamed) return streamed;
-    onEvent({ type: "content", delta: text.slice(streamed) });
-    return text.length;
+    // A payload cut between a surrogate pair would paint half an emoji; hold
+    // the lone high surrogate back so the next poll emits it with its pair.
+    let end = text.length;
+    if (/[\uD800-\uDBFF]$/.test(text)) end -= 1;
+    if (end <= streamed) return streamed;
+    onEvent({ type: "content", delta: text.slice(streamed, end) });
+    return end;
   }
 
   /**
@@ -693,10 +768,13 @@ export class PollChatTransport implements ChatTransport {
     const tickMs = Math.max(1, chatPollTiming.typewriterTickMs);
     const steps = Math.min(text.length, Math.max(1, Math.floor(maxMs / tickMs)));
     const sliceSize = Math.ceil(text.length / steps);
-    for (let at = 0; at < text.length; at += sliceSize) {
+    let at = 0;
+    while (at < text.length) {
       if (this.cancelled) return;
-      onEvent(emit(text.slice(at, at + sliceSize)));
-      if (at + sliceSize < text.length) await sleep(tickMs, () => this.cancelled);
+      const end = safeSliceEnd(text, Math.min(at + sliceSize, text.length));
+      onEvent(emit(text.slice(at, end)));
+      at = end;
+      if (at < text.length) await sleep(tickMs, () => this.cancelled);
     }
   }
 

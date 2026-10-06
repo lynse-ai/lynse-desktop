@@ -88,8 +88,14 @@ vi.mock("@lynse/ui/markdown", async (importOriginal) => {
 vi.mock("@lynse/core/i18n/react", () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: "zh" } }),
 }));
+// ChatPage pulls `push` from the shared navigation context, which the
+// benchmark never provides — stub it so renders never throw.
+vi.mock("../navigation", () => ({
+  useNavigation: () => ({ push: vi.fn() }),
+}));
 vi.mock("../workspace/hooks/use-files", () => ({
   useNotes: () => ({ data: [] }),
+  useInsertConclusion: () => ({ mutateAsync: vi.fn() }),
 }));
 vi.mock("../workspace/hooks/use-folders", () => ({
   useFolders: () => ({ data: [] }),
@@ -251,21 +257,18 @@ describe("chat streaming performance", () => {
     // completed must stay at zero during the whole stream.
     expect(completedRenders).toBeLessThanOrEqual(1);
     // Budget 2 — store notifications coalesced: at least 20% fewer writes than
-    // the one-messages-update + one-conversations-update per delta baseline.
-    // KNOWN REGRESSION (failing since ≤2026-09-13, before the current tree):
-    // writes now land at ~2.2/delta, above even the unbatched baseline, so
-    // batching was lost somewhere in the store. Warn by default; set
-    // ENFORCE_STREAM_WRITE_BUDGET=1 to make this a hard gate again once the
-    // coalescing is fixed.
+    // the one-messages-update + one-conversations-update per delta baseline
+    // (streaming writes mirror the messages buffer into the conversation in a
+    // single set). Set ENFORCE_STREAM_WRITE_BUDGET=0 only to diagnose.
     // (Read via a structural cast — this jsdom package has no @types/node.)
     const enforceWriteBudget = (
       globalThis as { process?: { env?: Record<string, string | undefined> } }
-    ).process?.env?.ENFORCE_STREAM_WRITE_BUDGET;
+    ).process?.env?.ENFORCE_STREAM_WRITE_BUDGET !== "0";
     if (enforceWriteBudget) {
       expect(writes).toBeLessThanOrEqual(Math.floor(baselineWrites * 0.8));
     } else {
       console.warn(
-        `[streaming-perf] budget 2 (write coalescing) regressed: ` +
+        `[streaming-perf] budget 2 (write coalescing) skipped: ` +
           `${writes} writes vs budget ${Math.floor(baselineWrites * 0.8)}`,
       );
     }

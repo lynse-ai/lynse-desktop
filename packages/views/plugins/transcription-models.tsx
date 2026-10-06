@@ -15,10 +15,12 @@ import {
   type TranscribeConfig,
   FUNASR_MODEL_ID,
   WHISPERX_MODEL_ID,
+  VIBEVOICE_MODEL_ID,
   getDesktopLocalTranscriptionApi,
   providerEngine,
   providerModelId,
 } from "../workspace/local-transcription";
+import { isMacDesktop } from "../layout/use-maximized";
 import { definePlugin, registerPlugin } from "./registry";
 import type { PluginManifest } from "./types";
 
@@ -29,11 +31,17 @@ import type { PluginManifest } from "./types";
  * existing download pipeline on first use and is not user-visible.
  *
  * Community lineup (PRD v0.5): FunASR latest + WhisperX latest first, Qwen3
- * both tiers retained, plus the whisper.cpp tiers — whisper is the only local
- * engine shipped on Windows (Vulkan-enabled sidecar) so its models must be
- * installable there; on macOS the sidecar runs on Metal. MOSS waits until
- * quantization/adaptation lands; the vibeasr/mlx tiers stay functional for
- * existing installs but are not listed.
+ * both tiers retained, plus the whisper.cpp tiers and VibeVoice-ASR-BitNet.
+ * The sidecar engines (whisper on Metal/Vulkan, vibeasr on CPU) ship on both
+ * desktop platforms; MOSS waits until quantization/adaptation lands; the
+ * vibeasr/mlx tiers stay functional for existing installs but are not listed.
+ *
+ * Off macOS the catalog is filtered down to the sidecar engines (whisper +
+ * vibeasr, see visibleModelCatalog): the MLX/venv-bound engines (Qwen3, MOSS,
+ * FunASR, WhisperX) hard-error there on first use, so their cards are hidden
+ * rather than listed as permanently failing downloads. VibeVoice runs on
+ * Windows too — its statically-linked `vibeasr.exe` sidecar ships in the same
+ * shared runtime.
  */
 
 export interface TranscriptionModelEntry {
@@ -79,6 +87,14 @@ export const TRANSCRIPTION_MODEL_CATALOG: TranscriptionModelEntry[] = [
     badges: [],
   },
   {
+    pluginId: "lynse.model.vibevoice-bitnet-1.5b",
+    engine: "vibeasr",
+    modelId: VIBEVOICE_MODEL_ID,
+    nameKey: "plugins.models.vibevoice.name",
+    descriptionKey: "plugins.models.vibevoice.description",
+    badges: ["recommended"],
+  },
+  {
     pluginId: "lynse.model.whisper-large-v3-turbo-q5_0",
     engine: "whisper",
     modelId: "large-v3-turbo-q5_0",
@@ -103,6 +119,20 @@ export const TRANSCRIPTION_MODEL_CATALOG: TranscriptionModelEntry[] = [
     badges: [],
   },
 ];
+
+/** Model cards listed on this desktop, mirroring VISIBLE_ENGINE_OPTIONS in
+ *  settings/stt-config-section: only the sidecar engines (whisper.cpp's
+ *  whisper + VibeASR.cpp's vibeasr, both shipped in the shared runtime
+ *  archive) work outside macOS, so every MLX/venv-bound engine's cards are
+ *  hidden there. Resolved at render time (not module scope) so tests can flip
+ *  the platform. */
+const SIDECAR_ENGINES: ReadonlySet<SttEngine> = new Set(["whisper", "vibeasr"]);
+
+function visibleModelCatalog(): TranscriptionModelEntry[] {
+  return isMacDesktop
+    ? TRANSCRIPTION_MODEL_CATALOG
+    : TRANSCRIPTION_MODEL_CATALOG.filter((entry) => SIDECAR_ENGINES.has(entry.engine));
+}
 
 function modelManifest(entry: TranscriptionModelEntry): PluginManifest {
   return definePlugin({
@@ -283,7 +313,7 @@ export function TranscriptionModelsSection({
         <p className="text-2xs leading-relaxed text-muted-foreground">
           {t("plugins.models.hint")}
         </p>
-        {TRANSCRIPTION_MODEL_CATALOG.map((entry) => {
+        {visibleModelCatalog().map((entry) => {
           const model = models.find(
             (candidate) => candidate.provider === entry.engine && candidate.id === entry.modelId,
           );

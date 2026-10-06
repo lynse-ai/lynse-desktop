@@ -13,7 +13,9 @@ import { Button } from "@lynse/ui/components/ui/button";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { ArrowUp, Download, Loader2, RefreshCw } from "./icons";
 import {
+  TESTFLIGHT_URL,
   getAppInfoSync,
+  isSandboxedMacApp,
   openExternalUrl,
   useAppUpdate,
   useAppUpdateDialog,
@@ -57,6 +59,10 @@ export function AppUpdateDialog() {
   const currentVersion = getAppInfoSync()?.version ?? update?.currentVersion ?? "—";
   const hasUpdate = Boolean(update?.hasUpdate);
   const failed = installState.phase === "failed";
+  // TestFlight/App Store builds run sandboxed and can never install an
+  // update in place (EPERM replacing /Applications/<app>) — offer the
+  // channel instead and hide the download flow entirely.
+  const sandboxed = isSandboxedMacApp();
 
   const progressLabel = busy
     ? installState.phase === "downloading"
@@ -119,6 +125,12 @@ export function AppUpdateDialog() {
           </p>
         ) : null}
 
+        {hasUpdate && sandboxed && (
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            {t("settings.update_in_testflight_desc")}
+          </p>
+        )}
+
         {checking && (
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Loader2 className="size-3.5 shrink-0 animate-spin" />
@@ -157,14 +169,21 @@ export function AppUpdateDialog() {
             {hasUpdate ? t("settings.update_later") : t("settings.update_close")}
           </Button>
           {hasUpdate ? (
-            <Button size="sm" onClick={install} disabled={busy || checking}>
-              {failed ? (
-                <RefreshCw className="size-3.5" />
-              ) : (
-                <Download className="size-3.5" />
-              )}
-              {failed ? t("settings.update_retry") : t("settings.install_update")}
-            </Button>
+            sandboxed ? (
+              <Button size="sm" onClick={() => openExternalUrl(TESTFLIGHT_URL)}>
+                <ArrowUp className="size-3.5" />
+                {t("settings.update_in_testflight")}
+              </Button>
+            ) : (
+              <Button size="sm" onClick={install} disabled={busy || checking}>
+                {failed ? (
+                  <RefreshCw className="size-3.5" />
+                ) : (
+                  <Download className="size-3.5" />
+                )}
+                {failed ? t("settings.update_retry") : t("settings.install_update")}
+              </Button>
+            )
           ) : (
             <Button
               size="sm"

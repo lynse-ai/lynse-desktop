@@ -12,7 +12,7 @@ export interface ContextInboxItem {
   displayed_at: string;
   snoozed_until: string;
   goal_id: string;
-  source_refs: { source_id: string; source_revision: string; excerpt: string }[];
+  source_refs: { source_id: string; source_revision: number; excerpt?: string; fragment_ref?: string }[];
 }
 
 export interface ContextInboxResponse {

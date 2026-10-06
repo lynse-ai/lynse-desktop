@@ -378,12 +378,24 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
   const handleEvent = (evt: ChatStreamEvent, conversationId: string, assistantId: string) => {
     const isActive = () => get().activeConversationId === conversationId;
 
-    // The active conversation renders through the `messages` buffer (the
-    // persist subscription merges it back into `conversations`); background
-    // conversations write straight into their stored copy.
+    // The active conversation renders through the `messages` buffer; background
+    // conversations write straight into their stored copy. The active write
+    // mirrors into the conversation in the SAME set: two notifications per
+    // typewriter delta double the render work, and splitting them lets a
+    // conversation switch land between the writes and lose the buffered turn.
     const writeMessage = (updater: (message: ChatMessage) => ChatMessage) => {
       if (isActive()) {
-        setMessages((prev) => prev.map((m) => (m.id === assistantId ? updater(m) : m)));
+        set((s) => {
+          const messages = s.messages.map((m) => (m.id === assistantId ? updater(m) : m));
+          return {
+            messages,
+            conversations: s.conversations.map((c) =>
+              c.id === s.activeConversationId
+                ? { ...c, messages, updatedAt: messages.at(-1)?.timestamp ?? c.updatedAt }
+                : c,
+            ),
+          };
+        });
         return;
       }
       setConversations((prev) =>
@@ -626,6 +638,9 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       role: "user",
       content,
       timestamp: Date.now(),
+      // Remember the turn's context files so reply actions (e.g. filing the
+      // assistant reply as a note summary) can resolve the target note.
+      fileIds: fileIds.length > 0 ? fileIds : undefined,
       // Composer attachments (name/kind only — no hosted URL yet) so the sent
       // bubble shows what was attached.
       attachments: attachments?.length ? attachments : undefined,
@@ -1027,6 +1042,11 @@ function syncActiveConversation(): void {
   try {
     const { activeConversationId, conversations, messages } = useChatStore.getState();
     if (!activeConversationId) return;
+    // Streaming writes already mirror the buffer into the conversation in
+    // their single set — re-mapping here would add a second notification per
+    // typewriter delta.
+    const active = conversations.find((c) => c.id === activeConversationId);
+    if (active && active.messages === messages) return;
     const updatedAt = messages.at(-1)?.timestamp ?? Date.now();
     useChatStore.setState({
       conversations: conversations.map((c) =>

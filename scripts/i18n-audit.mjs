@@ -9,15 +9,17 @@
  * Usage: node scripts/i18n-audit.mjs   (or: pnpm i18n:check from the repo root)
  * Exits non-zero when class A or C has findings.
  */
-import { readFileSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "packages", "views");
 const LOCALE_DIR = join(ROOT, "locales");
-const LOCALES = ["en", "zh", "ja"];
+// Every locale registered in packages/views/locales/index.ts. `zh-Hant` and
+// `ko` were missing from this list, so translations added to the other three
+// silently shipped without them.
+const LOCALES = ["en", "zh", "zh-Hant", "ja", "ko"];
 
 /**
  * Locale files are plain nested objects with `const x = {...}; export default x;`.
@@ -46,18 +48,25 @@ const flat = Object.fromEntries(
 );
 
 // ---- Collect call sites -----------------------------------------------------
-const files = execSync(
-  `find ${ROOT} -type f \\( -name '*.ts' -o -name '*.tsx' \\) -not -path '*/node_modules/*' -not -path '*/locales/*'`,
-  { encoding: "utf8" }
-)
-  .trim()
-  .split("\n");
+// Walked in-process rather than shelling out to `find`: the POSIX binary is
+// absent on a plain Windows checkout, which made the audit unusable there.
+function collectSourceFiles(dir, out = []) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "node_modules" || entry.name === "locales") continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) collectSourceFiles(full, out);
+    else if (/\.tsx?$/.test(entry.name)) out.push(full);
+  }
+  return out;
+}
+
+const files = collectSourceFiles(ROOT);
 
 const used = new Map(); // key -> Set("file:line")
 const dynamic = [];
 
 for (const file of files) {
-  const rel = file.replace(ROOT + "/", "");
+  const rel = relative(ROOT, file).split(sep).join("/");
   readFileSync(file, "utf8")
     .split("\n")
     .forEach((line, i) => {
@@ -79,11 +88,9 @@ for (const key of [...used.keys()].sort()) {
 }
 
 // ---- C. cross-locale completeness -------------------------------------------
-const baseline = new Set([
-  ...flat.en.keys(),
-  ...flat.zh.keys(),
-  ...flat.ja.keys(),
-]);
+// Union over every locale, so a key that exists in only one file still counts
+// as missing from the rest.
+const baseline = new Set(LOCALES.flatMap((l) => [...flat[l].keys()]));
 const incomplete = {};
 for (const l of LOCALES) {
   const lack = [...baseline].filter((k) => !flat[l].has(k)).sort();

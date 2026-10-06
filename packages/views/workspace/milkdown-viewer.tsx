@@ -26,6 +26,10 @@ export function MilkdownViewer({ content }: MilkdownViewerProps) {
     const root = containerRef.current;
     if (!root) return;
 
+    // create() is async: without `disposed` a content change tears down the
+    // previous effect while its editor is still in flight, so the resolved
+    // instance is never destroyed and keeps its DOM alive.
+    let disposed = false;
     Editor.make()
       .config((ctx) => {
         ctx.set(rootCtx, root);
@@ -40,10 +44,15 @@ export function MilkdownViewer({ content }: MilkdownViewerProps) {
       .use(gfm)
       .create()
       .then((editor) => {
+        if (disposed) {
+          editor.destroy();
+          return;
+        }
         editorRef.current = editor;
       });
 
     return () => {
+      disposed = true;
       editorRef.current?.destroy();
       editorRef.current = null;
     };

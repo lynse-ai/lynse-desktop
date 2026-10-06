@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { ApiClient, setApiInstance } from "../api/client";
 import { createAuthStore, getAuthStore, registerAuthStore } from "../auth";
-import { DEFAULT_API_URL, AGENT_API_URL_STORAGE_KEY } from "../config";
+import { DEFAULT_API_URL, AGENT_API_URL_STORAGE_KEY, CLOUDRUN_AGENT_URL, agentUrlForApiUrl } from "../config";
 import { defaultStorage } from "./storage";
 import { QueryProvider } from "../provider";
 import { initI18n } from "../i18n";
@@ -42,9 +42,18 @@ export function initCore(
     },
     identity,
   });
-  // The AI assistant can target a dedicated backend (route B direct
-  // CloudRun); absent/empty means it follows the main URL above.
-  apiClient.setAgentBaseUrl(storage.getItem(AGENT_API_URL_STORAGE_KEY));
+  // The AI assistant targets a dedicated backend (route B direct CloudRun);
+  // absent/empty means it follows the main URL above. Server switches keep
+  // the persisted agent in sync (auth login / api-config panel), but installs
+  // saved before that rule may still carry an agent pinned to the *other*
+  // environment — heal those at boot so a session can never chat across
+  // environments. Hand-typed custom URLs are left untouched.
+  const savedAgentUrl = storage.getItem(AGENT_API_URL_STORAGE_KEY);
+  const agentUrl =
+    !savedAgentUrl || savedAgentUrl === CLOUDRUN_AGENT_URL
+      ? agentUrlForApiUrl(effectiveUrl)
+      : savedAgentUrl;
+  apiClient.setAgentBaseUrl(agentUrl);
   setApiInstance(apiClient);
 
   if (!cookieAuth) {

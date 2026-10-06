@@ -72,6 +72,13 @@ const REFERENCE_STALL_LIMIT_FRAMES: usize = 30;
 const MAX_QUEUED_FRAMES: usize = 500;
 /// How often a stream with a dead device retries opening it.
 const REOPEN_RETRY: Duration = Duration::from_secs(1);
+/// Upper bound for one WASAPI device probe during `start`. On a cold audio
+/// stack (first capture after boot/install) `Activate`/`Initialize`/`Start` can
+/// wedge inside a COM call indefinitely; running the probe on a worker with a
+/// deadline turns that hang into a normal start failure the UI can recover
+/// from. A wedged worker is intentionally leaked — a thread stuck mid-COM-call
+/// cannot be cancelled — which is far cheaper than freezing the whole app.
+const DEVICE_PROBE_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Clone, Debug, Default)]
 pub struct CaptureConfig {
@@ -409,12 +416,20 @@ impl CaptureEngine {
         // Up-front availability check per source, with device facts for the
         // Ready event.
         let mic_probe = if sources.mic {
-            Some(probe_device(&config.mic_endpoint, SourceKind::Mic, config.raw_mic)?)
+            Some(probe_device_with_timeout(
+                &config.mic_endpoint,
+                SourceKind::Mic,
+                config.raw_mic,
+            )?)
         } else {
             None
         };
         let system_probe = if sources.system {
-            Some(probe_device(&config.system_endpoint, SourceKind::System, false)?)
+            Some(probe_device_with_timeout(
+                &config.system_endpoint,
+                SourceKind::System,
+                false,
+            )?)
         } else {
             None
         };
@@ -695,6 +710,43 @@ fn device_enumerator() -> Result<IMMDeviceEnumerator, String> {
 
 /// Bring up one WASAPI client purely to verify the endpoint works; torn down
 /// immediately. Returns precise error text per source on failure.
+/// `probe_device` on a worker thread bounded by [`DEVICE_PROBE_TIMEOUT`]. The
+/// probe only validates a device and reads its format, returning plain data,
+/// so the COM objects it opens never escape the worker. On timeout the worker
+/// is leaked (it cannot be interrupted mid-COM-call) and the start fails with a
+/// user-facing reason instead of hanging forever.
+fn probe_device_with_timeout(
+    endpoint: &Option<String>,
+    kind: SourceKind,
+    raw: bool,
+) -> Result<(DeviceInfo, StreamFormat), String> {
+    let label = match kind {
+        SourceKind::Mic => "麦克风",
+        SourceKind::System => "系统声音",
+    };
+    let endpoint = endpoint.clone();
+    let (tx, rx) = channel();
+    std::thread::Builder::new()
+        .name("lynse-audio-probe".to_owned())
+        .spawn(move || {
+            let _ = tx.send(probe_device(&endpoint, kind, raw));
+        })
+        .map_err(|error| format!("启动 {label} 探测线程失败：{error}"))?;
+    match rx.recv_timeout(DEVICE_PROBE_TIMEOUT) {
+        Ok(result) => result,
+        Err(_) => {
+            log::error!(
+                "{label} device probe timed out after {:?} — WASAPI call wedged",
+                DEVICE_PROBE_TIMEOUT
+            );
+            Err(format!(
+                "{label}设备探测超时（{}秒）：Windows 音频服务没有响应。请检查系统声音设置或插拔音频设备后重试。",
+                DEVICE_PROBE_TIMEOUT.as_secs()
+            ))
+        }
+    }
+}
+
 fn probe_device(
     endpoint: &Option<String>,
     kind: SourceKind,

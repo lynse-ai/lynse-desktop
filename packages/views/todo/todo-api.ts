@@ -14,6 +14,16 @@
  */
 
 import { api, ApiError } from "@lynse/core/api/client";
+import { getAuthStore } from "@lynse/core/auth";
+import { getActiveQueryClient } from "@lynse/core/query-client";
+import {
+  fetchNotesList,
+  NOTES_WIDE_WINDOW_START,
+  notesWideWindowEnd,
+  LIST_STALE_TIME_MS,
+} from "../workspace/hooks/use-files";
+import { isLocalFileId } from "../workspace/local-transcription";
+import type { WorkspaceItem } from "../workspace/types";
 
 export interface TodoItem {
   id: string;
@@ -22,6 +32,7 @@ export interface TodoItem {
   notes?: string;
   dueDate?: string; // ISO-8601 date used for grouping
   sourceTitle?: string; // e.g. "产品设计评审会"
+  sourceFileId?: string; // cloud-only: id of the note the todo was extracted from
   sourceMeetingTime?: string;
   createdAt: string; // ISO-8601
   updatedAt: string;
@@ -66,6 +77,7 @@ export function mapCloudTodo(raw: CloudTodo): TodoItem {
     completed: raw.isCompleted === 1 || raw.isCompleted === true,
     dueDate: normalizeCloudDate(raw.expectedCompleteTime),
     owner: raw.owner ? String(raw.owner) : undefined,
+    sourceFileId: raw.fileId ? String(raw.fileId) : undefined,
     sourceTitle: undefined,
     createdAt: normalizeCloudDate(raw.createTime) ?? new Date().toISOString(),
     updatedAt: normalizeCloudDate(raw.updateTime) ?? new Date().toISOString(),
@@ -77,6 +89,75 @@ export function mapCloudTodo(raw: CloudTodo): TodoItem {
 export async function fetchCloudTodos(): Promise<TodoItem[]> {
   const data = await api().post<CloudTodo[] | null>("/api/business/file/todo/listall", {});
   return (Array.isArray(data) ? data : []).map(mapCloudTodo);
+}
+
+// ── Source-note title resolution ──────────────────────────
+// The todo API only returns the source `fileId`, never the note title, so
+// "提取自哪个笔记" is resolved client-side in one notes-list request per load.
+
+/** Fill in `sourceTitle` for cloud todos by looking their `sourceFileId` up in
+ *  `titles`. Mutates in place — the items are per-load copies. */
+export function applySourceTitles(items: TodoItem[], titles: Map<string, string>): void {
+  for (const item of items) {
+    if (item.backend && item.sourceFileId && !item.sourceTitle) {
+      const title = titles.get(item.sourceFileId);
+      if (title) item.sourceTitle = title;
+    }
+  }
+}
+
+/** fileId → note title, resolved through the SHARED notes list cache — the
+ *  notes page and the heatmap already maintain a wide-window list under the
+ *  `["notes", …]` key, so most loads cost zero extra transfer. When nothing
+ *  is cached we fetch once through the same query key, so the result lands
+ *  in the shared cache (and its disk mirror) instead of a private copy.
+ *  Throws on network/auth errors so callers can degrade gracefully. */
+async function fetchNoteTitleMap(): Promise<Map<string, string>> {
+  const queryClient = getActiveQueryClient();
+  const authenticated = getAuthStore()?.getState().isAuthenticated ?? false;
+
+  if (queryClient) {
+    const cached = queryClient
+      .getQueryCache()
+      .getAll()
+      .find(
+        (query) =>
+          query.queryKey[0] === "notes" &&
+          query.queryKey[1] === NOTES_WIDE_WINDOW_START &&
+          Array.isArray(query.state.data) &&
+          query.state.data.length > 0,
+      );
+    if (cached) return noteTitleMapFromItems(cached.state.data as WorkspaceItem[]);
+
+    if (authenticated) {
+      const items = await queryClient.fetchQuery({
+        queryKey: ["notes", NOTES_WIDE_WINDOW_START, notesWideWindowEnd(), true],
+        queryFn: () =>
+          fetchNotesList({ startTime: NOTES_WIDE_WINDOW_START, endTime: notesWideWindowEnd() }),
+        staleTime: LIST_STALE_TIME_MS,
+      });
+      return noteTitleMapFromItems(items);
+    }
+  }
+
+  // No react-query runtime (tests, exotic embeds): one direct fetch.
+  const items = await fetchNotesList({
+    startTime: NOTES_WIDE_WINDOW_START,
+    endTime: notesWideWindowEnd(),
+  });
+  return noteTitleMapFromItems(items);
+}
+
+/** Extract fileId → note title from slim list items (local transcriptions
+ *  have no cloud note and are skipped). */
+export function noteTitleMapFromItems(items: WorkspaceItem[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const item of items) {
+    if (isLocalFileId(item.id)) continue;
+    const title = item.title.trim();
+    if (item.id && title) map.set(item.id, title);
+  }
+  return map;
 }
 
 /** Toggle a cloud todo's completed state (server-side update). */
@@ -135,6 +216,7 @@ export function normalizeStored(raw: unknown): TodoItem {
     notes: t.notes ? String(t.notes) : undefined,
     dueDate: t.dueDate ? String(t.dueDate) : undefined,
     sourceTitle: t.sourceTitle ? String(t.sourceTitle) : undefined,
+    sourceFileId: t.sourceFileId ? String(t.sourceFileId) : undefined,
     sourceMeetingTime: t.sourceMeetingTime ? String(t.sourceMeetingTime) : undefined,
     createdAt: t.createdAt ? String(t.createdAt) : new Date().toISOString(),
     updatedAt: t.updatedAt ? String(t.updatedAt) : new Date().toISOString(),
@@ -182,6 +264,18 @@ export async function fetchTodos(): Promise<{ items: TodoItem[]; cloudFailed: bo
     const override = overrides[item.id];
     return override ? { ...item, ...override } : item;
   });
+  // Resolve "which note was this todo extracted from" — only cloud items
+  // carry a sourceFileId, and only they need the extra notes request. Fired
+  // only when the cloud gave us todos; signed-out / offline loads skip it.
+  const needsTitles = items.some((item) => item.backend && item.sourceFileId && !item.sourceTitle);
+  if (needsTitles) {
+    try {
+      applySourceTitles(items, await fetchNoteTitleMap());
+    } catch (e) {
+      // Best-effort: todos still load, they just show no source note.
+      console.warn("[Todo] source note titles unavailable:", e);
+    }
+  }
   return { items, cloudFailed };
 }
 

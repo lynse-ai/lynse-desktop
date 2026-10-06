@@ -1,37 +1,38 @@
 "use client";
 
 import { useState } from "react";
-import { toast } from "sonner";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
 import { getDesktopInspirationApi } from "../inspiration";
+import { isWebPlatform } from "../platform";
 import { useUserCredits } from "./use-user-credits";
-import { useNotificationStore, selectUnreadCount } from "../notifications/use-notification-store";
 import { useChatStore, selectChatUnreadCount } from "../workspace/hooks/use-chat-store";
-import { openExternalUrl, openAppUpdateDialog } from "../app-update";
+import {
+  useNotificationStore,
+  selectUnreadByTypes,
+} from "../notifications/use-notification-store";
 import { AppUpdateDialog } from "../app-update-dialog";
 import { featureFlags } from "../feature-flags";
-import { NotificationList } from "../notifications/notification-list";
-import { openContextNotification } from "../notifications/context-inbox";
 import { SettingsDialog } from "../settings/settings-dialog";
+import { openAppUpdateDialog, useAppUpdate } from "../app-update";
 import { UserProfileDropdown } from "./user-profile-dropdown";
-import { isMacDesktop } from "./use-maximized";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuTrigger,
-} from "@lynse/ui/components/ui/dropdown-menu";
-import {
+  Bell,
+  Download,
   House,
   Lightbulb,
   ListChecks,
   FolderOpen,
   Bot,
-  Bell,
-  Settings,
   Bluetooth,
 } from "../icons";
+
+// Module-level constants keep the notification selector identities stable across renders.
+const selectSystemUnread = selectUnreadByTypes(["system"]);
+const selectNotesUnread = selectUnreadByTypes(["transcription", "sync"]);
+const selectContextCount = (state: ReturnType<typeof useNotificationStore.getState>) =>
+  state.items.filter((item) => item.type === "context").length;
 
 interface NavItem {
   key: string;
@@ -56,14 +57,19 @@ export function LynseSidebar() {
   const { pathname, push } = useNavigation();
   const { t } = useTranslation();
   const { data } = useUserCredits();
-  const unreadCount = useNotificationStore(selectUnreadCount);
   const chatUnreadCount = useChatStore(selectChatUnreadCount);
-  const markAllRead = useNotificationStore((s) => s.markAllRead);
+  const systemUnread = useNotificationStore(selectSystemUnread);
+  const notesUnread = useNotificationStore(selectNotesUnread);
+  const contextCount = useNotificationStore(selectContextCount);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [notifOpen, setNotifOpen] = useState(false);
+  // Shared update store (already polled by the mounted AppUpdateDialog) — the
+  // rail badge is just another subscriber.
+  const { update } = useAppUpdate();
 
   const nickname = (data?.nickname as string) || "User";
   const initials = nickname.slice(0, 2).toUpperCase();
+  // Web shell renders a wider, label-first sidebar; the desktop rail is untouched.
+  const isWeb = isWebPlatform();
 
   const topItems: NavItem[] = [
     { key: "home", label: t("nav.home"), icon: House, path: "/home" },
@@ -106,153 +112,122 @@ export function LynseSidebar() {
     : true,
   );
 
-  const bottomItems: NavItem[] = [
-    { key: "notifications", label: t("nav.notifications"), icon: Bell, path: "/notifications" },
-    { key: "settings", label: t("nav.settings"), icon: Settings, action: () => setSettingsOpen(true) },
-  ];
-
   return (
     <>
       {/* .lyse-sidebar: no divider of its own — the rail and the strips around
           the inset content card share one flat frame material, and the card's
-          own border does the separating. */}
+          own border does the separating. The traffic lights live in the app
+          title bar above, so the rail keeps only a tight top padding. */}
       <aside
         className={cn(
-          "lyse-sidebar flex h-full w-[68px] shrink-0 flex-col items-center bg-sidebar pb-2",
-          // Only macOS overlays the traffic lights on the window top (bottom
-          // edge ≈ 39px) — keep the avatar below with clear breathing room.
-          // Windows/Linux desktops have a native title bar and no lights over
-          // the rail, and the web has none either — both keep the tighter
-          // padding.
-          isMacDesktop ? "pt-[54px]" : "pt-10"
+          "lyse-sidebar flex h-full shrink-0 flex-col bg-sidebar",
+          isWeb
+            ? "w-[208px] items-stretch px-3 pt-4 pb-2"
+            : "w-[48px] items-center pl-1 pt-4 pb-4",
         )}
         data-tauri-drag-region
       >
-      {/* User avatar at the top — opens the profile menu. It opens to the
-          right of the rail (not on top of it) and its top edge aligns with the
-          avatar's, so the tall menu starts as high as possible and the log-out
-          row at the bottom stays inside the window. */}
-      <UserProfileDropdown
-        onOpenSettings={() => setSettingsOpen(true)}
-        side="right"
-        trigger={
-          <button
-            type="button"
-            title={nickname}
-            data-tauri-drag-region={false}
-            className="mb-2 flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20 transition-colors hover:bg-primary/20"
-          >
-            {initials}
-          </button>
-        }
-      />
+      {isWeb && (
+        <div className="px-1.5 pb-3 text-[15px] font-semibold tracking-tight text-foreground">
+          Lynse
+        </div>
+      )}
 
-      <div className="flex w-full flex-1 flex-col items-center gap-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className={cn("flex w-full flex-1 flex-col overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", isWeb ? "items-stretch gap-0.5" : "items-center gap-1")}>
         {topItems.map((item) => {
           const Icon = item.icon;
-          const active = item.key === "settings" ? settingsOpen : isNavActive(pathname, item.path ?? "");
+          const active = isNavActive(pathname, item.path ?? "");
           // The AI-assistant (chat) icon carries its own unread badge so a new
-          // assistant reply is visible at a glance — the Bell stays the unified
-          // center, this is a direct shortcut back to the chat.
+          // assistant reply is visible at a glance; home/notes carry the
+          // notification types that belong to their module as plain dots.
           const badgeCount = item.key === "chat" ? chatUnreadCount : 0;
+          const dot =
+            item.key === "home" ? systemUnread > 0
+            : item.key === "notes" ? notesUnread > 0
+            : false;
           return (
             <NavButton
               key={item.key}
               active={active}
               badgeCount={badgeCount}
+              dot={dot}
               onClick={() => (item.action ? item.action() : push(item.path ?? ""))}
               title={item.label}
             >
               <Icon className={cn("size-5", active && item.solid !== false && "fill-current")} />
-              <span className="mt-1 whitespace-nowrap text-3xs font-medium leading-none">{item.label}</span>
+              {isWeb ? (
+                <span className="whitespace-nowrap text-[13px] font-medium leading-none">{item.label}</span>
+              ) : (
+                <span className="mt-1 whitespace-nowrap text-3xs font-medium leading-none">{item.label}</span>
+              )}
             </NavButton>
           );
         })}
       </div>
 
-      <div className="flex w-full flex-col items-center gap-1 border-t border-sidebar-border/60 pt-2">
-        {bottomItems.map((item) => {
-          const Icon = item.icon;
-          const active = item.key === "settings" ? settingsOpen : isNavActive(pathname, item.path ?? "");
-
-          // Notifications open a slide-in drawer (the unified notification center),
-          // instead of navigating to the bare /notifications route.
-          if (item.key === "notifications") {
-            return (
-              <DropdownMenu key={item.key} open={notifOpen} onOpenChange={setNotifOpen}>
-                <DropdownMenuTrigger
-                  type="button"
-                  title={t("nav.notifications")}
-                  data-tauri-drag-region={false}
-                  className="relative flex w-[56px] flex-col items-center justify-center rounded-lg px-1 py-2 transition-colors text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
-                >
-                  <Bell className="size-5" />
-                  <span className="mt-1 whitespace-nowrap text-3xs font-medium leading-none">{item.label}</span>
-                  {!!unreadCount && (
-                    <span
-                      aria-label={t("layout.unread_replies", { count: unreadCount })}
-                      className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-3xs font-semibold leading-none text-destructive-foreground ring-2 ring-card"
-                    >
-                      {unreadCount > 99 ? "99+" : unreadCount}
-                    </span>
-                  )}
-                </DropdownMenuTrigger>
-                <DropdownMenuContent side="right" align="start" sideOffset={10} className="w-80 p-0">
-                  <div className="flex items-center justify-between border-b border-border/50 px-3 py-2">
-                    <span className="text-sm font-medium text-foreground">{t("notifications.title")}</span>
-                    <button
-                      type="button"
-                      onClick={() => markAllRead()}
-                      className="text-xs text-muted-foreground transition-colors hover:text-foreground"
-                    >
-                      {t("notifications.mark_all_read")}
-                    </button>
-                  </div>
-                  <div className="max-h-[60vh] overflow-y-auto">
-                    <NotificationList
-                      onItemClick={(n) => {
-                        if (n.type === "context") {
-                          setNotifOpen(false);
-                          void openContextNotification(n, push).catch(() => toast.error(t("notifications.context_unavailable")));
-                          return;
-                        }
-                        // The app-update row opens the in-app update dialog
-                        // instead of bouncing the user to the release page.
-                        if (n.id === "system:app-update") {
-                          setNotifOpen(false);
-                          openAppUpdateDialog();
-                          return;
-                        }
-                        // Chat notifications carry their conversation id —
-                        // select it so the user lands in that conversation.
-                        if (n.id.startsWith("chat:")) {
-                          useChatStore.getState().openLatestUnread(n.id.slice("chat:".length));
-                        }
-                        if (n.href) {
-                          if (n.external) openExternalUrl(n.href);
-                          else push(n.href);
-                        }
-                        setNotifOpen(false);
-                      }}
-                    />
-                  </div>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            );
-          }
-
-          return (
-            <NavButton
-              key={item.key}
-              active={active}
-              onClick={() => (item.action ? item.action() : push(item.path ?? ""))}
-              title={item.label}
+      {/* ── Bottom: avatar — profile menu (usage, appearance, settings,
+          logout). Settings intentionally has no dedicated rail entry; it
+          lives in this menu. ── */}
+      <div
+        className={cn(
+          "flex w-full shrink-0 flex-col pt-2",
+          // The desktop rail is too narrow for a divider to read well; only the
+          // wide web sidebar keeps one above the account row.
+          isWeb && "border-t border-sidebar-border/60",
+          isWeb ? "items-stretch" : "items-center",
+        )}
+      >
+        {/* Update badge — sits above the account row and opens the shared
+            update dialog. Never renders on web (no desktop bridge → no
+            update state). */}
+        {update?.hasUpdate && (
+          <button
+            type="button"
+            onClick={() => openAppUpdateDialog()}
+            title={t("notifications.update_available", { version: update.latestVersion })}
+            aria-label={t("notifications.update_available", { version: update.latestVersion })}
+            data-tauri-drag-region={false}
+            className="mb-2 flex size-7 shrink-0 items-center justify-center rounded-full bg-sidebar-primary text-sidebar-primary-foreground shadow-sm transition-transform duration-150 hover:scale-105 active:scale-95"
+          >
+            <Download className="size-3.5" strokeWidth={2.5} />
+          </button>
+        )}
+        {contextCount > 0 && (
+          <NavButton
+            active={isNavActive(pathname, "/notifications")}
+            badgeCount={contextCount}
+            onClick={() => push("/notifications")}
+            title={t("nav.notifications")}
+          >
+            <Bell className="size-5" />
+            <span className={isWeb ? "text-[13px] font-medium" : "mt-1 text-3xs font-medium"}>
+              {t("nav.notifications")}
+            </span>
+          </NavButton>
+        )}
+        <UserProfileDropdown
+          onOpenSettings={() => setSettingsOpen(true)}
+          side={isWeb ? "top" : "right"}
+          trigger={
+            <button
+              type="button"
+              title={nickname}
+              data-tauri-drag-region={false}
+              className={
+                isWeb
+                  ? "flex h-11 w-full shrink-0 items-center gap-2.5 rounded-xl px-1.5 transition-colors hover:bg-foreground/5"
+                  : "flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20 transition-colors hover:bg-primary/20"
+              }
             >
-              <Icon className={cn("size-5", active && item.solid !== false && "fill-current")} />
-              <span className="mt-1 whitespace-nowrap text-3xs font-medium leading-none">{item.label}</span>
-            </NavButton>
-          );
-        })}
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20">
+                {initials}
+              </span>
+              {isWeb && (
+                <span className="truncate text-[13px] font-medium text-foreground">{nickname}</span>
+              )}
+            </button>
+          }
+        />
       </div>
     </aside>
     <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
@@ -264,6 +239,7 @@ export function LynseSidebar() {
 function NavButton({
   active,
   badgeCount,
+  dot,
   onClick,
   title,
   children,
@@ -271,11 +247,14 @@ function NavButton({
   active: boolean;
   /** Unread count shown as a numeric badge (IM-style). 0/undefined hides it. */
   badgeCount?: number;
+  /** Unread marker shown as a small dot (module notifications). */
+  dot?: boolean;
   onClick: () => void;
   title: string;
   children: React.ReactNode;
 }) {
   const { t } = useTranslation();
+  const isWeb = isWebPlatform();
   return (
     <button
       type="button"
@@ -283,7 +262,10 @@ function NavButton({
       title={title}
       data-tauri-drag-region={false}
       className={cn(
-        "relative flex w-[56px] flex-col items-center justify-center rounded-lg px-1 py-2 transition-colors",
+        "relative flex rounded-lg transition-colors",
+        isWeb
+          ? "w-full items-center gap-2.5 px-2.5 py-2"
+          : "w-[40px] flex-col items-center justify-center px-1 py-2",
         // Selected = accent-colored icon+label, no pill behind them; the solid
         // glyph alone carries the selected state.
         active
@@ -298,6 +280,12 @@ function NavButton({
         >
           {badgeCount > 99 ? "99+" : badgeCount}
         </span>
+      )}
+      {!badgeCount && dot && (
+        <span
+          aria-hidden="true"
+          className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-sidebar"
+        />
       )}
       {children}
     </button>

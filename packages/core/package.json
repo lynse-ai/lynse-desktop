@@ -28,6 +28,10 @@
     "./platform": "./platform/index.ts",
     "./i18n": "./i18n/index.ts",
     "./i18n/react": "./i18n/react.ts",
+    "./integrations": "./integrations/index.ts",
+    "./integrations/api": "./integrations/api.ts",
+    "./integrations/errors": "./integrations/errors.ts",
+    "./integrations/types": "./integrations/types.ts",
     "./types": "./types/index.ts",
     "./types/storage": "./types/storage.ts"
   },

@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
-import { openUrl, openPath } from "@tauri-apps/plugin-opener";
+import { open, save } from "@tauri-apps/plugin-dialog";
+import { openUrl, openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -24,6 +24,7 @@ import type {
   SttDownloadProgress,
   SttModelInfo,
   TranscribeConfig,
+  DesktopCloudSyncApi,
   DesktopVaultApi,
   VaultSyncProgress,
 } from "@lynse/views/workspace";
@@ -96,7 +97,17 @@ export type UpdateDownloadProgress = {
 
 type DesktopApi = {
   openExternal: (url: string) => Promise<void>;
+  // Asks where to save with a native dialog, then Rust fetches the remote
+  // attachment (the webview can't — no CORS for the app origin) and writes
+  // it to the picked path. Resolves null when the user cancels the dialog.
+  attachment: {
+    save: (url: string, fileName: string) => Promise<{ path: string } | null>;
+    // Fetch an attachment's body for the in-app preview, over the same Rust
+    // route as `save` — the renderer cannot reach the signed hosts itself.
+    text: (url: string) => Promise<string>;
+  };
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
+  cloudSync: DesktopCloudSyncApi;
   liveTranslation: DesktopLiveTranslationApi;
   meetingDetector: DesktopMeetingDetectorApi;
   recordingCard: DesktopRecordingCardApi;
@@ -108,9 +119,19 @@ type DesktopApi = {
   audioEditor: DesktopAudioEditorApi;
   feishu: DesktopFeishuApi;
   bots: DesktopBotsApi;
-  appInfo: { version: string; build?: string | null; platform: string };
+  appInfo: {
+    version: string;
+    build?: string | null;
+    platform: string;
+    /** macOS App Sandbox (TestFlight/App Store) build — updater must not install in place. */
+    sandboxed: boolean;
+  };
   app: {
-    getInfo: () => Promise<{ version: string; platform: string }>;
+    getInfo: () => Promise<{
+      version: string;
+      platform: string;
+      sandboxed: boolean;
+    }>;
     openAboutWindow: (title?: string) => Promise<void>;
     openFeedbackWindow: (title?: string) => Promise<void>;
     openLogsFolder: () => Promise<void>;
@@ -129,11 +150,12 @@ type DesktopApi = {
     checkForUpdate: () => Promise<AppUpdateInfo>;
     downloadAndInstallUpdate: (onProgress: (progress: UpdateDownloadProgress) => void) => Promise<void>;
     relaunchApp: () => Promise<void>;
+    setCompactWindowSize: (active: boolean) => Promise<void>;
   };
 }
 
-/** Human-facing fallback link (release page) for "view release" affordances. */
-const RELEASES_PAGE_URL = "https://github.com/lynse-ai/lynse-desktop/releases/latest";
+/** Human-facing fallback link (official site) for "view release" affordances. */
+const RELEASES_PAGE_URL = "https://www.lynse.cn";
 
 // The Update object carries the download/install methods, so it can't cross
 // into the UI as a plain value. Keep it here; the UI only ever sees the
@@ -325,8 +347,17 @@ export async function installTauriBridge(): Promise<void> {
       createVoiceprint: (input: unknown) => command("local_transcription_create_voiceprint", { input }),
       updateVoiceprint: (voiceprint: unknown) => command("local_transcription_update_voiceprint", { voiceprint }),
       deleteVoiceprint: (id: string) => command("local_transcription_delete_voiceprint", { id }),
+      getVoiceprintBackendStatus: () =>
+        command<{ backend: string | null; modelInstalled: boolean }>(
+          "local_voiceprint_backend_status",
+        ),
       getSttConfig: () => command<TranscribeConfig>("local_stt_config_get"),
       saveSttConfig: (config: TranscribeConfig) => command<TranscribeConfig>("local_stt_config_save", { config }),
+    },
+    cloudSync: {
+      audioSize: (recordId) => command<number>("sync_upload_audio_size", { recordId }),
+      putSignedFile: (put) =>
+        command<{ sizeBytes: number }>("sync_upload_put_signed_file", { put }),
     },
     audioEditor: {
       status: () => command<{ ffmpegAvailable: boolean }>("audio_editor_status"),
@@ -354,6 +385,7 @@ export async function installTauriBridge(): Promise<void> {
       saveProviderConfig: async (config) => saveLiveTranslationProviderConfig(config),
       permissions: () => command<LivePermissionStatus>("live_translation_permissions"),
       requestPermission: (kind) => command<LivePermissionStatus>("live_translation_request_permission", { kind }),
+      openPrivacyPane: (kind) => command<void>("live_translation_open_privacy_pane", { kind }),
       audioDevices: () => command<AudioDevicesSnapshot>("live_translation_audio_devices"),
       start: (request: LiveStartRequest) => command<LiveTranslationSnapshot>("live_translation_start", { request }),
       pause: () => command<LiveTranslationSnapshot>("live_translation_pause"),
@@ -440,9 +472,15 @@ export async function installTauriBridge(): Promise<void> {
         return unlisten;
       },
     },
-    appInfo: { version: "0.1.0", build: null, platform: "darwin" },
+    appInfo: { version: "0.1.0", build: null, platform: "darwin", sandboxed: false },
     app: {
-      getInfo: () => command<{ version: string; build: string | null; platform: string }>("get_app_info"),
+      getInfo: () =>
+        command<{
+          version: string;
+          build: string | null;
+          platform: string;
+          sandboxed: boolean;
+        }>("get_app_info"),
       // Opens (or focuses) the standalone About window. The localized title
       // is passed in because only the frontend knows the active locale.
       openAboutWindow: (title?: string) =>
@@ -471,7 +509,8 @@ export async function installTauriBridge(): Promise<void> {
         }),
       revealReportFolder: (path: string) => openPath(path),
       // Talks to the tauri-plugin-updater, whose endpoints/pubkey live in
-      // tauri.conf.json; releases are published by release.yml. `check()`
+      // tauri.conf.json; releases are published to CloudBase by
+      // scripts/publish-cloudbase.sh. `check()`
       // returns null when the running version is the latest.
       checkForUpdate: async () => {
         const update = await check();
@@ -516,6 +555,25 @@ export async function installTauriBridge(): Promise<void> {
         });
       },
       relaunchApp: () => relaunch(),
+      // Pre-auth compact welcome window (690×450) vs dashboard size — see
+      // the Rust command for the shape table.
+      setCompactWindowSize: (active: boolean) =>
+        command<void>("set_compact_window_mode", { active }),
+    },
+    attachment: {
+      // Native "where to save" dialog first; the picked path goes to Rust
+      // for the fetch + write, then the file is revealed in the manager.
+      save: async (url, fileName) => {
+        const target = await save({ defaultPath: fileName });
+        if (!target) return null;
+        const { path } = await command<{ path: string }>("attachment_save", {
+          url,
+          path: target,
+        });
+        await revealItemInDir(path);
+        return { path };
+      },
+      text: (url) => command<string>("attachment_text", { url }),
     },
     vault: {
       getConfig: () => command("vault_config_get"),
@@ -542,7 +600,7 @@ export async function installTauriBridge(): Promise<void> {
       save: (todo: unknown) => command("todo_save", { todo }),
       delete: (id: string) => command("todo_delete", { id }),
       addToCalendar: (id: string, title: string, sourceTitle: string | null, startAt: string, endAt: string, confirmed: boolean) =>
-        command("todo_add_to_calendar", { todo_id: id, title, source_title: sourceTitle, start_at: startAt, end_at: endAt, confirmed }),
+        command("todo_add_to_calendar", { todoId: id, title, sourceTitle, startAt, endAt, confirmed }),
     },
     inspiration: {
       list: () => command("inspiration_list"),

@@ -3,7 +3,7 @@
 import i18next from "i18next";
 import { toast } from "sonner";
 import { getDesktopAppApi } from "../app-update";
-import { isTauri } from "../layout/use-maximized";
+import { isMacDesktop } from "../layout/use-maximized";
 
 /** The Lynse workspace on the hosted FeedLog service. */
 export const FEEDBACK_BOARD_URL = "https://lynse.feedlog.ai";
@@ -16,7 +16,9 @@ export const FEEDBACK_BOARD_URL = "https://lynse.feedlog.ai";
  * so it is resolved here and passed to the host command.
  */
 export function openFeedbackWindow(): void {
-  const api = isTauri ? getDesktopAppApi() : null;
+  // macOS-only OS window, same split as `openAboutWindow`: the Windows popup
+  // never appears, so Windows/Linux open the public board in the browser.
+  const api = isMacDesktop ? getDesktopAppApi() : null;
   if (api?.openFeedbackWindow) {
     const title = i18next.isInitialized ? i18next.t("feedback.title") : "Lynse";
     // Never swallow a failed host command (the OS window failing to appear

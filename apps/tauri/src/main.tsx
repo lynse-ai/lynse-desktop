@@ -3,6 +3,8 @@ import App from "./App";
 import "./globals.css";
 import { installTauriBridge } from "./tauri-bridge";
 import { installLogger } from "./logger";
+import { installEventUnlistenGuard } from "./event-guard";
+import { initAppTheme } from "@lynse/views/settings/app-theme";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -14,6 +16,10 @@ async function bootstrap() {
     const { installE2EShim } = await import("./e2e/tauri-shim");
     installE2EShim();
   }
+  // Runs after the e2e shim (which provides its own event internals) and before
+  // the first listener is registered in installTauriBridge, so every teardown
+  // path in the app goes through the guard.
+  installEventUnlistenGuard();
   const windowKind = new URLSearchParams(window.location.search).get("window");
   // Transparent floating windows must render the webview body transparent too,
   // otherwise the theme background shows through as a square frame.
@@ -33,6 +39,10 @@ async function bootstrap() {
   // into the same log file the Rust side writes, so a bug report only ever
   // needs one folder. Install before the bridge so bridge failures log too.
   installLogger(windowKind ?? "main");
+
+  // Full-fidelity appearance pass (colors, fonts, contrast) before React
+  // mounts; index.html already painted the bare color trio pre-bundle.
+  initAppTheme();
 
   await installTauriBridge();
   syncWindowEffects();

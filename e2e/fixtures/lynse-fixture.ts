@@ -24,6 +24,14 @@ export async function bootstrapApp(page: import("@playwright/test").Page, server
     localStorage.setItem("lynse_api_url", url);
     localStorage.setItem("lynse_token", "e2e-access-token");
     localStorage.setItem("lynse_locale", "en");
+    // Past first-run: since v1.1.6 the desktop shell renders the permission
+    // onboarding instead of the dashboard until this is answered, which made
+    // every desktop spec stall on the onboarding page (no Home button). The
+    // fixture means "logged-in app at its landing route", so skip it the same
+    // way a user who already answered would see it skipped.
+    // Key mirrors PERMISSION_ONBOARDING_DONE_KEY in
+    // packages/views/onboarding/permission-onboarding.tsx.
+    localStorage.setItem("lynse_permission_onboarding_done", "1");
   }, serverUrl);
 }
 

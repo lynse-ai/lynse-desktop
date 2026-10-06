@@ -300,7 +300,7 @@ impl TrackManifest {
 
 pub fn write_manifest(path: &Path, manifest: &TrackManifest) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(manifest).map_err(|error| error.to_string())?;
-    fs::write(path, bytes).map_err(|error| error.to_string())
+    crate::atomic_write(path, &bytes)
 }
 
 pub fn read_manifest(path: &Path) -> Result<TrackManifest, String> {

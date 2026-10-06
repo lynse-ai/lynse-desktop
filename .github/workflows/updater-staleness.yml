@@ -1,0 +1,95 @@
+name: Updater staleness check
+
+# Tripwire for the failure mode that stranded the live updater manifest: a new
+# tag ships on GitHub, but the CloudBase `latest.json` that every installed
+# client polls keeps advertising an older version. Nothing else in CI notices —
+# the release workflow goes green because its own build steps succeeded.
+#
+# This compares the newest released tag against what the public endpoint actually
+# serves, and fails loudly on drift. It needs no secrets beyond the automatic
+# GITHUB_TOKEN, so it costs nothing to keep running.
+#
+# On failure: run `gh workflow run remirror-updates.yml -f tag=<newest tag>`.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CLOUDBASE_UPDATES_BASE: https://lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com/updates
+
+jobs:
+  staleness:
+    name: Compare newest release with served manifest
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Resolve the newest release tag
+        id: newest
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="$(gh api "repos/${GITHUB_REPOSITORY}/tags" --paginate -q '.[].name' \
+                  | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)"
+          [[ -n "$TAG" ]] || { echo "::error::no vN.N.N tag found in this repository"; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # Age of that release: a tag published minutes ago may still be
+          # building or mirroring, which is not staleness.
+          PUBLISHED="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$TAG" -q '.published_at')"
+          AGE_H="$(node -e 'console.log((Date.now()-Date.parse(process.env.P))/3.6e6)' P="$PUBLISHED")"
+          echo "published=$PUBLISHED" >> "$GITHUB_OUTPUT"
+          echo "age_hours=$AGE_H" >> "$GITHUB_OUTPUT"
+          echo "newest tag=$TAG published=$PUBLISHED age=${AGE_H}h"
+
+      - name: Read what the updater endpoint actually serves
+        id: served
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --max-time 20 "$CLOUDBASE_UPDATES_BASE/latest.json?cb=$(date +%s)" -o live.json \
+            || { echo "::error::could not read $CLOUDBASE_UPDATES_BASE/latest.json"; exit 1; }
+          node -e '
+            const m = JSON.parse(require("fs").readFileSync("live.json", "utf8"));
+            if (!m.version) { console.error("::error::live manifest has no .version"); process.exit(1); }
+            const missing = ["darwin-aarch64", "windows-x86_64"].filter((p) => !m.platforms?.[p]?.url);
+            console.log(`version=${m.version}`);
+            console.log(`platforms=${Object.keys(m.platforms ?? {}).join(",")}`);
+            console.log(`served_version=${m.version}`);
+            if (missing.length) console.log(`missing=${missing.join(",")}`);
+            require("fs").writeFileSync("served.txt", m.version);
+            require("fs").writeFileSync("missing.txt", missing.join(","));
+          '
+          echo "served_version=$(cat served.txt)" >> "$GITHUB_OUTPUT"
+          echo "missing=$(cat missing.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Fail on drift
+        shell: bash
+        env:
+          NEWEST: ${{ steps.newest.outputs.tag }}
+          NEWEST_AGE_H: ${{ steps.newest.outputs.age_hours }}
+          SERVED: ${{ steps.served.outputs.served_version }}
+          MISSING: ${{ steps.served.outputs.missing }}
+        run: |
+          set -euo pipefail
+          WANT="${NEWEST#v}"
+          fail() { echo "::error::$1"; exit 1; }
+
+          if [[ -n "${MISSING}" ]]; then
+            fail "updater manifest is missing platform entries: ${MISSING}. Clients on those platforms get no update. Fix: gh workflow run remirror-updates.yml -f tag=${NEWEST}"
+          fi
+
+          if [[ "${SERVED}" != "${WANT}" ]]; then
+            # Grace window: the mirror may still be running for a just-cut tag.
+            if (( $(node -e 'console.log(Number(process.env.A) < 6)' A="$NEWEST_AGE_H") )); then
+              echo "::warning::served ${SERVED} != newest ${WANT}, but ${NEWEST} was published <6h ago — assuming the release pipeline is still running."
+              exit 0
+            fi
+            fail "STALE UPDATER MANIFEST: endpoint serves ${SERVED} while newest release is ${WANT} (${NEWEST_AGE_H}h old). Every installed client is being told they are up to date. Fix: gh workflow run remirror-updates.yml -f tag=${NEWEST}"
+          fi
+
+          echo "updater manifest is current: ${SERVED} with both platform entries"

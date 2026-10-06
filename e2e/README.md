@@ -106,3 +106,19 @@ tests/
 - 附件上传不测（功能未实现，聊天页入口已在 UI 上屏蔽，
   见 `packages/views/chat/page.tsx`）。
 - `/todo`、`/notes`、`/notifications` 在 web 端无路由（侧栏链接 404），冒烟未含。
+
+## Connections（`/api/v2/integrations`）的 mock
+
+`fixtures/integrations-mock.ts` 是有状态的契约实现，`fixtures/mock-server.ts` 会把
+`/api/v2/integrations*` 与 `/api/v2/calendar*` 全部转给它，因此这些路由**不走**
+`api-mocks.ts` 的扁平表（那张表忽略 HTTP 方法、且只能返回 200）。
+
+- 驱动连接流程：`GET …/oauth-state` → `completeOAuth(mockServer.integrations, state)`
+  代替"用户在系统浏览器里点了同意" → `GET …/oauth-result` 变 `done`。
+- 注入错误态（AC-4 文案）：`failNextRequest(state, { method, pathPrefix, status, body })`，一次性。
+- 断言客户端发了什么：`mockServer.requests({ method, path })` / `lastRequest()`。
+- 总结导出的 upsert 幂等（FR-3 AC）：同一 `file_id` 二次导出返回同一 `page_id` 且 `updated: true`。
+
+契约正文见仓库内 `docs/connections-api-contract.md`。UI 侧目前受
+`featureFlags.connections` 门控（默认关），所以 `tests-desktop/30-connections.spec.ts`
+里的 UI 用例断言的是"分区不出现"；翻开开关后那里才是行级流程用例的落点。

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import i18next from "i18next";
 import { toast } from "sonner";
 import { getDesktopAppApi } from "../app-update";
-import { isTauri } from "../layout/use-maximized";
+import { isMacDesktop } from "../layout/use-maximized";
 
 // ── In-app fallback dialog store ──────────────────────────────────────────
 // Outside the desktop host (the web app) there is no OS window to pop, so
@@ -50,7 +50,11 @@ export function useAboutDialog(): {
  * so it is resolved here and passed to the host command.
  */
 export function openAboutWindow(): void {
-  const api = isTauri ? getDesktopAppApi() : null;
+  // Only macOS pops the standalone OS window. On Windows the host command
+  // stalls inside `WebviewWindowBuilder::build()` — no window, no error, and
+  // the rest of the UI stays responsive — so About uses the in-app dialog
+  // there instead of a window that never arrives.
+  const api = isMacDesktop ? getDesktopAppApi() : null;
   if (api?.openAboutWindow) {
     const title = i18next.isInitialized ? i18next.t("about.title") : "Lynse";
     // Never swallow a failed host command: the OS window failing to appear

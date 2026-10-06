@@ -1,192 +1,119 @@
 # Lynse
 
-**本地优先的会议纪要工具** —— 导入音视频 / 文档，自动转写并生成结构化纪要。
+**本地优先的会议知识管理工具** —— 录音与音视频导入、本地语音转写、结构化会议纪要、AI 助手。
 
-Lynse 是一个跨平台桌面应用（同时提供 Web 端）。核心思路是 **“文件导入式”**：把已有的会议录音、视频或文档丢进来，由本地引擎做语音转写、可选说话人分离，再交给云端大模型生成纪要，全程可审计、可离线。
-
-> 当前稳定版：**v0.1.23**（Windows `.msi` + macOS `.dmg` 双平台发布）。
+**Local-first meeting knowledge platform** — recording & audio/video import, on-device speech transcription, structured meeting minutes, and an AI assistant.
 
 ---
 
-## 功能特性
+## 中文
 
-- **本地语音转写（STT）**：基于 FunASR（Paraformer 大模型 + FSMN VAD + CAM++ 声纹）在本地运行，音频不出机器。
-- **Provider 抽象与按语言路由**：`BatchSttAdapter` 把转写引擎抽象成统一 trait，配置 `{ default, per_language }` 即可为不同语言（如 `zh` / `en`）指定不同引擎与参数。
-- **可选说话人分离**：本地声纹（voiceprint）管理，把转写结果按说话人分段。
-- **本地热词包（hotword）**：针对专有名词、人名、产品名提升识别准确率。
-- **云端大模型摘要**：转写文本交给可配置的云端 LLM 生成结构化纪要（标题、要点、行动项）。
-- **密钥安全存储**：API Key / Token 不再写进 `localStorage` 明文，而是存入 **操作系统 Keychain**（macOS 钥匙串 / Windows 凭据管理器）。
-- **STT 路由配置 UI**：设置页内可视化编辑默认引擎与逐语言覆盖，实时保存生效。
-- **Markdown 编辑器**：基于 Milkdown 的纪要编辑与渲染。
+Lynse 是一个跨平台桌面应用（同时提供 Web 版）：把会议录音、音视频或文档导入进来，由**本地引擎**完成语音转写与说话人识别，再结合云端大模型生成结构化纪要。本地优先意味着音频可以不出设备——转写、声纹、热词全部在本机运行。
 
----
+### 核心特性
 
-## 技术栈
+- **本地语音转写**：多引擎可插拔，按语言路由——
+  - Qwen3-ASR（Apple Silicon · MLX，默认引擎，0.6B / 1.7B 两档）
+  - whisper.cpp sidecar（Windows · Vulkan 加速）
+  - FunASR（Paraformer + FSMN VAD）、MLX-Whisper、WhisperX（词级对齐）、MOSS-Transcribe（说话人分离）、VibeVoice-ASR-BitNet（CPU）
+- **本地声纹识别**：sherpa-onnx + 3D-Speaker CAM++（Apache-2.0，约 28 MB 模型），按声纹自动标注/匹配说话人，全程本机运行
+- **实时翻译**：录音/会议进行中的多语种实时转写与翻译
+- **热词包**：针对专有名词、人名、产品名提升识别准确率
+- **会议纪要与 AI 助手**：结构化纪要（标题、要点、行动项）、Markdown 编辑、可追问整场会议的 AI 对话
+- **云同步与备份**：录音云端同步（断点续传）、WebDAV 备份
+- **安全的密钥存储**：API Key / Token 存入操作系统钥匙串（macOS Keychain / Windows 凭据管理器），不落明文
+- **自动更新**：Tauri updater + minisign 签名清单，GitHub Releases 为主源，中国大陆走 CloudBase 镜像
 
-| 层 | 技术 |
+### 仓库结构
+
+pnpm workspaces + Turborepo 单仓，内部包以源码形式直接发布给各端 bundler 编译。
+
+| 目录 | 说明 |
 | --- | --- |
-| 桌面外壳 | **Tauri 2**（Rust 1.97 + WebView） |
-| 前端框架 | **React 19** + **Vite** |
-| Web 端 | **Next.js 16** |
-| 样式 | **Tailwind CSS 4** + shadcn/ui |
-| 状态 / 数据 | **zustand** + TanStack Query + **zod** |
-| 编辑器 | **Milkdown** |
-| 本地转写 | **FunASR**（Python 子进程：Paraformer + FSMN VAD + CAM++） |
-| 密钥存储 | **keyring** crate → OS Keychain |
-| 工程化 | pnpm workspaces + **Turborepo** |
+| `apps/web` | Next.js Web 版（App Router） |
+| `apps/tauri` | Tauri 2 桌面端（Vite 渲染层 + Rust 外壳，本地引擎桥接在 `src-tauri`） |
+| `packages/core` | 无头业务逻辑：API 客户端、认证、导航、平台层 |
+| `packages/views` | 共享业务页面与组件（不依赖任何路由框架） |
+| `packages/ui` | 基础 UI 组件（shadcn / Base UI） |
+| `packages/tsconfig` | 共享 TypeScript 配置 |
 
----
+### 本地开发
 
-## 仓库结构
-
-```
-lynse-desktop/
-├── apps/
-│   ├── tauri/        # 桌面应用（Tauri 2 + React 19 + Vite）
-│   │   └── src-tauri/ # Rust 后端：命令、STT 适配器、Keychain
-│   └── web/          # Web 端（Next.js 16）
-├── packages/
-│   ├── core/         # 共享逻辑：store、StorageAdapter、i18n、api client
-│   ├── ui/           # shadcn/ui 组件库（Tailwind 4）
-│   ├── views/        # 跨端视图：设置对话框、Markdown、本地转写 API
-│   └── tsconfig/     # 共享 TS 配置
-└── docs/             # 调研与对比文档
-```
-
----
-
-## 安装（从 Release 下载）
-
-适用于不想自己编译、直接从 GitHub Release 取安装包的用户。
-
-### macOS（未签名 dmg）
-
-> 当前仅提供 **Apple Silicon（aarch64）** 版本（`Lynse_x.x.x_aarch64.dmg`），M 系列芯片适用；Intel Mac 暂未发布。安装包**未经过 Apple 公证（Notarization）**，首次打开会被 Gatekeeper 拦截，属于正常现象。
-
-1. 在 [Releases](https://github.com/lynse-ai/lynse-desktop/releases) 下载 `Lynse_x.x.x_aarch64.dmg`。
-2. 双击挂载，把 **`Lynse.app`** 拖到「应用程序」文件夹。
-3. 首次打开会被拦截，任选一种方式放行：
-   - **方式 A（推荐）**：在「应用程序」里**右键点击 Lynse → 打开**，弹窗中点「打开」。
-   - **方式 B**：系统设置 → **隐私与安全性**，滚动到底部，点 **「仍要打开」**。
-4. 若提示 App **「已损坏，无法打开」**（下载后 Gatekeeper 给文件打了隔离属性）：
-   ```bash
-   sudo xattr -cr /Applications/Lynse.app
-   ```
-   执行后重新打开即可。
-
-### Windows（msi）
-
-1. 下载 `Lynse_x.x.x_x64_en-US.msi`。
-2. 双击运行，按向导安装。
-3. 若 SmartScreen 拦截，点「更多信息 → 仍要运行」。
-4. 安装后从开始菜单启动 **Lynse**。
-
----
-
-## 快速开始
-
-### 前置要求
-
-- Node.js ≥ 18（推荐 22）+ pnpm ≥ 9
-- Rust 工具链（仅桌面端开发需要）：`rustup`
-- macOS：Xcode Command Line Tools
-- Windows：Visual Studio Build Tools（C++ 桌面开发）
-- 本地转写可选：Python 3.10+，并准备好 FunASR 模型目录
-
-### 安装与运行
+要求：Node 22+、pnpm 10、Rust stable（桌面端）。本地转写引擎在应用内首次使用时自动下载并自建 Python 环境，无需预装。
 
 ```bash
-# 安装依赖
 pnpm install
 
-# 启动桌面应用（默认 http://127.0.0.1:5174/，原生窗口同步弹出）
-pnpm dev:desktop
+pnpm dev:desktop        # Tauri 桌面端开发
+pnpm dev:web            # Next.js Web 版开发（端口 3000）
 
-# 启动 Web 端
-pnpm dev:web
+pnpm typecheck          # TypeScript 全仓检查
+pnpm lint               # ESLint
+pnpm test               # Vitest 单测
+pnpm build              # 构建全部应用
+
+pnpm --filter @lynse/tauri build   # 打包桌面端（.app/.dmg/msi）
 ```
 
-其他常用脚本：
+### 发布
+
+推送 `v*` 格式的 tag（如 `v1.1.6`）即触发 GitHub Actions：构建 macOS（dmg + app）与 Windows（msi）安装包、生成签名的更新清单（latest.json）、发布 GitHub Release 并镜像到 CloudBase 更新源。**不要**在本地用 `gh release create` 手工建 Release。
+
+## English
+
+Lynse is a cross-platform desktop app (with a Web edition): import meeting recordings, audio/video, or documents — **on-device engines** handle speech transcription and speaker identification, then a cloud LLM turns the transcript into structured minutes. Local-first means your audio can stay on your machine: transcription, voiceprints, and hotwords all run locally.
+
+### Highlights
+
+- **On-device transcription** with pluggable, per-language routed engines:
+  - Qwen3-ASR (Apple Silicon · MLX, the default engine, 0.6B / 1.7B variants)
+  - whisper.cpp sidecar (Windows · Vulkan accelerated)
+  - FunASR (Paraformer + FSMN VAD), MLX-Whisper, WhisperX (word-level alignment), MOSS-Transcribe (diarization), VibeVoice-ASR-BitNet (CPU)
+- **Local voiceprint recognition**: sherpa-onnx + 3D-Speaker CAM++ (Apache-2.0, ~28 MB model) labels and matches speakers automatically — fully on-device
+- **Live translation**: real-time transcription and translation while a meeting is in progress
+- **Hotword packages**: boost accuracy for proper nouns, names, and product terms
+- **Minutes & AI assistant**: structured minutes (title, takeaways, action items), Markdown editing, and a chat that can answer questions about the whole meeting
+- **Cloud sync & backup**: recording cloud sync with resumable uploads, plus WebDAV backup
+- **Secure secrets**: API keys / tokens live in the OS keychain (macOS Keychain / Windows Credential Manager), never in plaintext
+- **Auto-update**: Tauri updater with minisign-signed manifests — GitHub Releases as the primary source, a CloudBase mirror for mainland China
+
+### Repository layout
+
+A pnpm-workspaces + Turborepo monorepo; internal packages ship raw source that each app's bundler compiles.
+
+| Directory | Purpose |
+| --- | --- |
+| `apps/web` | Next.js web edition (App Router) |
+| `apps/tauri` | Tauri 2 desktop app (Vite renderer + Rust shell; native engine bridges in `src-tauri`) |
+| `packages/core` | Headless business logic: API client, auth, navigation, platform layer |
+| `packages/views` | Shared business pages/components (framework-agnostic routing) |
+| `packages/ui` | Base UI components (shadcn / Base UI) |
+| `packages/tsconfig` | Shared TypeScript configurations |
+
+### Development
+
+Requirements: Node 22+, pnpm 10, Rust stable (desktop). Local transcription engines download on first use inside the app and set up their own Python environments — nothing to preinstall.
 
 ```bash
-pnpm build        # 全量构建（turbo build）
-pnpm typecheck    # 类型检查
-pnpm lint         # 代码检查
-pnpm test         # 运行测试
-pnpm ui:add       # 通过 shadcn 添加组件
+pnpm install
+
+pnpm dev:desktop        # Tauri desktop development
+pnpm dev:web            # Next.js web development (port 3000)
+
+pnpm typecheck          # Repo-wide TypeScript check
+pnpm lint               # ESLint
+pnpm test               # Vitest unit tests
+pnpm build              # Build all apps
+
+pnpm --filter @lynse/tauri build   # Bundle the desktop app (.app/.dmg/msi)
 ```
 
-## 本地转写（FunASR）配置
+### Releasing
 
-本地转写在桌面端的 **设置 → Offline Transcription** 中开启：
-
-1. **启用离线转写** 开关。
-2. **下载本地模型**（Paraformer / VAD / CAM++）——首次使用需联网拉取。
-3. 可选：**本地热词包**（提升专有名词识别）、**本地声纹**（说话人分离）。
-4. 在 **STT 路由配置** 区块设置：
-   - **默认引擎**（当前为 FunASR）及其参数：`expected_speakers`（预期说话人数）、`hotword_package_id`（热词包）。
-   - **按语言覆盖**：为 `zh` / `en` 等语言单独指定引擎与参数，未命中的语言回退到 default。
-
-配置通过 `local_stt_config_get` / `local_stt_config_save` 命令持久化到用户目录，转写时按 `per_note → per_language → default → Funasr` 的优先级解析。
-
----
-
-## 密钥安全
-
-桌面端通过 `secure-storage` 模块把 `lynse_api_key` / `lynse_token` 等敏感字段存入 **操作系统 Keychain**：
-
-- 应用启动时从 Keychain 拉入内存缓存，并自动迁移 / 清除历史 `localStorage` 明文。
-- 非敏感配置仍走本地存储，保持 `StorageAdapter` 同步契约，Web 端零改动。
-
----
-
-## 数据流向（隐私）
-
-Lynse 是录音类应用，请务必了解数据去了哪里：
-
-| 功能 | 数据 | 去向 |
-| --- | --- | --- |
-| 本地转写（FunASR / whisper，默认关闭，需手动开启并下载模型） | 音频 | **全程留在本机**，不上传 |
-| 云端转写（默认路径） | 录音文件 | 上传至 Lynse 服务端（`api.lynse.cn`）处理 |
-| AI 纪要 / 摘要 | 转写文本 | 发送至云端大模型生成 |
-| 实时字幕 / 翻译 | 实时音频流 | 发送至**你自行配置**的第三方服务（火山引擎 / 通义 / iLiveData），凭证仅保存在本机 Keychain/本地配置 |
-| API Key / 登录令牌 | 凭证 | 仅存于操作系统 Keychain，不写明文文件 |
-
----
-
-## 构建与发布（双平台）
-
-发版采用 **“打 tag 触发 CI 双平台构建”** 的约定：推送 `v*` 形式的 tag 后，GitHub Actions 在 matrix 中分别构建：
-
-- `windows-latest` → `Lynse_x.x.x_x64_en-US.msi`
-- `macos-latest` → `Lynse_x.x.x_aarch64.dmg`
-
-两个产物上传到**同一个 GitHub Release**。
-
-```bash
-# 1. 提交改动
-git add -A && git commit -m "release: v0.1.x — ..."
-
-# 2. 升级版本号（tauri.conf.json / package.json / apps/tauri/package.json 保持一致）
-
-# 3. 打 tag 并推送，触发双平台构建
-git tag v0.1.x
-git push origin main
-git push origin v0.1.x
-```
-
-> 本机无法直接编译 Windows，因此“双平台编译”实际由这次 push 触发的 CI 完成，产物可在 Release 页面下载。
-
----
-
-## 说明
-
-- 当前本地 STT 仅内置 **FunASR** 一种引擎，`BatchSttAdapter` 已预留多引擎扩展位（OpenAI / Deepgram / Groq 等可按同样 trait 接入）。
-- 转写块的 `prior_context` 防幻觉、本地 Ollama 原生摘要、本地存储 SQLite 化等为后续规划项。
-- macOS / Windows 安装包目前均**未签名 / 未公证**，放行步骤见上方「安装」章节。
+Pushing a `v*` tag (e.g. `v1.1.6`) triggers GitHub Actions: it builds the macOS (dmg + app) and Windows (msi) bundles, generates the signed update manifest (latest.json), publishes the GitHub Release, and mirrors it to the CloudBase update source. Do **not** create releases manually with `gh release create`.
 
 ---
 
 ## License
 
-MIT
+[MIT](LICENSE) © 2026 Lynse. Bundled third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -222,6 +222,10 @@ export interface DesktopLiveTranslationApi {
   saveProviderConfig: (config: LiveTranslationProviderConfig) => Promise<LiveTranslationProviderConfig>;
   permissions: () => Promise<LivePermissionStatus>;
   requestPermission: (kind: "microphone" | "systemAudio") => Promise<LivePermissionStatus>;
+  /** Open the OS privacy pane for one permission kind (System Settings on
+   * macOS). Backs the onboarding toggles: a request that still ends
+   * ungranted lands the user where the grant actually lives. */
+  openPrivacyPane: (kind: "microphone" | "systemAudio") => Promise<void>;
   /** List selectable capture/playback endpoints (Windows). Empty lists on
    * platforms without device pickers — the UI hides the selectors then. */
   audioDevices: () => Promise<AudioDevicesSnapshot>;

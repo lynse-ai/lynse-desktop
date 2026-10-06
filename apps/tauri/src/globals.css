@@ -34,21 +34,27 @@ html[data-window-effects="vibrancy"] {
 /* Dark dissolves the rail into the raw frost (--sidebar: transparent). Light
    keeps --sidebar opaque so the rail paints the flat neutral grey of the
    ZCode/Codex light theme — no wallpaper bleed, and clearly darker than the
-   white content card beside it. */
+   white content card beside it.
+   !important: theme presets (packages/views/settings/app-theme.ts) write
+   --sidebar as an inline style, which would otherwise beat this rule and
+   paint an opaque rail over the frost in vibrancy dark. */
 html[data-window-effects="vibrancy"].dark {
-  --sidebar: transparent;
+  --sidebar: transparent !important;
 }
 
 /* Light theme only: raw frost picks up wallpaper hues, and a dark wallpaper
    reads as a dirty halo in the strips around the inset content card. The
-   shell therefore carries a 90% veil of the sidebar grey — the same tone the
-   rail paints — so the whole outer frame (rail + strips) reads as one flat
-   material and the white content card sits inset in it.
+   shell therefore paints the sidebar grey itself — the exact opaque color the
+   rail paints — so the whole outer frame (title bar + rail + strips around
+   the inset card) is literally one flat material and the white content card
+   sits inset in it. A translucent wash can never match the opaque rail: the
+   residual wallpaper tint turned the 5px strips into a visible third color
+   between rail and card.
 
    Dark keeps the shell on raw frost: the frosted rail riding the wallpaper is
    the look, and the content card carries the theme canvas on its own. */
 html[data-window-effects="vibrancy"]:not(.dark) .lyse-shell {
-  background: color-mix(in srgb, var(--sidebar) 80%, transparent);
+  background: var(--sidebar);
 }
 
 html[data-window-effects="vibrancy"].dark .lyse-shell {
@@ -90,9 +96,10 @@ html[data-window-effects="vibrancy"] .lyse-content-card {
     background: var(--background);
   }
   /* Must match the .dark override's specificity above, or the dark rail
-     would stay transparent (raw frost) instead of going opaque. */
+     would stay transparent (raw frost) instead of going opaque. Same
+     !important rationale: beat theme presets' inline --sidebar. */
   html[data-window-effects="vibrancy"].dark {
-    --sidebar: var(--background);
+    --sidebar: var(--background) !important;
   }
 }
 

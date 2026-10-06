@@ -7,7 +7,7 @@ import { FileList } from "./middle-panel/file-list";
 import { ContentPanel } from "./content-panel";
 import { ChatPanel } from "./right-panel/chat-panel";
 import { ResizableHandle } from "./resizable-handle";
-import { TitleBar } from "../layout/title-bar";
+import { WorkspaceTitleBarSlot } from "../layout/title-bar";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useDndBridge } from "./dnd-provider";
 import { useMoveFiles } from "./hooks/use-folder-mutations";
@@ -65,9 +65,10 @@ export function WorkspaceLayout() {
         side="right"
       />
 
-      {/* Right column: title bar + content panel + chat panel */}
+      {/* Right column: content panel + chat panel (breadcrumb + actions live
+          in the unified app title bar via the headless slot) */}
       <div className="flex min-w-0 flex-1 flex-col bg-background">
-        <TitleBar />
+        <WorkspaceTitleBarSlot />
         <div className="flex min-h-0 flex-1">
           {/* Primary content panel */}
           <div className="min-w-0 flex-1 bg-background">

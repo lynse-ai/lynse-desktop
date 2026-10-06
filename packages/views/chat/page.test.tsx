@@ -1,11 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatPage } from "./page";
 
 const chat = vi.hoisted(() => ({
-  messages: [],
+  messages: [] as Array<Record<string, unknown>>,
   isLoading: false,
   conversations: [] as Array<Record<string, unknown>>,
   activeConversationId: null as string | null,
@@ -29,6 +29,19 @@ const uploadMock = vi.hoisted(() => ({
   uploadFileToOSS: vi.fn(),
 }));
 
+const insertConclusionMock = vi.hoisted(() => ({
+  mutateAsync: vi.fn(),
+}));
+
+const fileApiMock = vi.hoisted(() => ({
+  fetchFileDetail: vi.fn(),
+}));
+
+const toastMock = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+}));
+
 vi.mock("../workspace/hooks/use-chat", () => ({
   useChat: () => chat,
 }));
@@ -36,6 +49,15 @@ vi.mock("../workspace/hooks/use-chat", () => ({
 vi.mock("../workspace/hooks/use-files", () => ({
   useNotes: () => ({ data: mentionData.notes }),
   uploadFileToOSS: uploadMock.uploadFileToOSS,
+  useInsertConclusion: () => insertConclusionMock,
+  fetchFileDetail: fileApiMock.fetchFileDetail,
+}));
+
+// Keep every other sonner export (Toaster etc.) intact — only the imperative
+// toast calls are asserted.
+vi.mock("sonner", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  toast: toastMock,
 }));
 
 vi.mock("../workspace/hooks/use-folders", () => ({
@@ -43,16 +65,50 @@ vi.mock("../workspace/hooks/use-folders", () => ({
 }));
 
 vi.mock("@lynse/core/i18n/react", () => ({
-  useTranslation: () => ({ t: (key: string) => key }),
+  // Echo interpolated params so tests can assert what values a string was
+  // rendered with, not just which key fired.
+  useTranslation: () => ({
+    t: (key: string, params?: Record<string, unknown>) =>
+      params && Object.keys(params).length > 0 ? `${key} ${JSON.stringify(params)}` : key,
+  }),
+}));
+
+// The page pulls `push` from the shared navigation context, which no test
+// provides — hand it a recorder so renders never throw.
+vi.mock("../navigation", () => ({
+  useNavigation: () => ({ push: vi.fn() }),
 }));
 
 vi.mock("@lynse/ui/markdown", () => ({
   StreamingMarkdown: ({ content }: { content: string }) => <div>{content}</div>,
 }));
 
+// The page registers the history toggle into the unified app title bar;
+// render the registered middle-toggle as a real button so the history test
+// can still click it by its label.
+vi.mock("../layout/app-title-bar", () => ({
+  TitleBarSlot: (props: {
+    actions?: React.ReactNode;
+    middleToggle?: { collapsed: boolean; onToggle: () => void; label?: string };
+  }) => (
+    <div>
+      {props.actions}
+      {props.middleToggle && (
+        <button
+          type="button"
+          onClick={props.middleToggle.onToggle}
+          aria-label={props.middleToggle.label}
+          aria-pressed={!props.middleToggle.collapsed}
+        />
+      )}
+    </div>
+  ),
+}));
+
 afterEach(() => {
   cleanup();
   chat.isLoading = false;
+  chat.messages = [];
   chat.conversations = [];
   chat.activeConversationId = null;
   chat.sendMessage.mockClear();
@@ -62,6 +118,17 @@ afterEach(() => {
   mentionData.notes = [];
   mentionData.folders = [];
   uploadMock.uploadFileToOSS.mockReset();
+  insertConclusionMock.mutateAsync.mockReset();
+  insertConclusionMock.mutateAsync.mockResolvedValue("conclusion-1");
+  fileApiMock.fetchFileDetail.mockReset();
+  fileApiMock.fetchFileDetail.mockResolvedValue({
+    id: "note-1",
+    originalFilename: "产品评审",
+    createdAt: "",
+    updatedAt: "",
+  });
+  toastMock.success.mockClear();
+  toastMock.error.mockClear();
 });
 
 describe("ChatPage", () => {
@@ -193,5 +260,74 @@ describe("ChatPage", () => {
     // composer shows only the mic placeholder next to it.
     expect(screen.queryByRole("button", { name: "chat.attach_files" })).toBeNull();
     expect(screen.getByRole("button", { name: "chat.microphone" })).toBeTruthy();
+  });
+
+  it("offers insert-into-notes for single-file turns and files the reply via the conclusion API", async () => {
+    mentionData.notes = [
+      { id: "note-1", type: "file", title: "产品评审", createdAt: "", updatedAt: "", teamId: "team-9" },
+    ];
+    chat.messages = [
+      { id: "u1", role: "user", content: "总结 @产品评审", timestamp: 1, fileIds: ["note-1"] },
+      { id: "a1", role: "assistant", content: "# 会议纪要\n\n一、明确排期", timestamp: 2 },
+    ];
+    render(<ChatPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "chat.insert_to_note" }));
+
+    await waitFor(() =>
+      expect(insertConclusionMock.mutateAsync).toHaveBeenCalledWith({
+        fileId: "note-1",
+        teamId: "team-9",
+        conclusionText: "# 会议纪要\n\n一、明确排期",
+      }),
+    );
+    expect(toastMock.success).toHaveBeenCalledWith(
+      'chat.inserted_to_note_title {"title":"产品评审"}',
+    );
+  });
+
+  it("names the note generically when the target file has no title", async () => {
+    mentionData.notes = [
+      { id: "note-1", type: "file", title: "产品评审", createdAt: "", updatedAt: "" },
+    ];
+    chat.messages = [
+      { id: "u1", role: "user", content: "总结 @产品评审", timestamp: 1, fileIds: ["note-1"] },
+      { id: "a1", role: "assistant", content: "纪要", timestamp: 2 },
+    ];
+    fileApiMock.fetchFileDetail.mockResolvedValue({ id: "note-1", createdAt: "", updatedAt: "" });
+    render(<ChatPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "chat.insert_to_note" }));
+
+    await waitFor(() => expect(toastMock.success).toHaveBeenCalledWith("chat.inserted_to_note"));
+  });
+
+  it("refuses to insert when the target note does not exist on the signed-in server", async () => {
+    mentionData.notes = [
+      { id: "note-1", type: "file", title: "产品评审", createdAt: "", updatedAt: "" },
+    ];
+    chat.messages = [
+      { id: "u1", role: "user", content: "总结 @产品评审", timestamp: 1, fileIds: ["note-1"] },
+      { id: "a1", role: "assistant", content: "纪要", timestamp: 2 },
+    ];
+    // File ids are per-environment: a mention from another server resolves to
+    // `{ code: 200, data: null }` here.
+    fileApiMock.fetchFileDetail.mockResolvedValue(null);
+    render(<ChatPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "chat.insert_to_note" }));
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledWith("chat.insert_target_missing"));
+    expect(insertConclusionMock.mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("hides insert-into-notes when the turn referenced several files", () => {
+    chat.messages = [
+      { id: "u2", role: "user", content: "对比", timestamp: 1, fileIds: ["n1", "n2"] },
+      { id: "a2", role: "assistant", content: "对比结果…", timestamp: 2 },
+    ];
+    render(<ChatPage />);
+
+    expect(screen.queryByRole("button", { name: "chat.insert_to_note" })).toBeNull();
   });
 });

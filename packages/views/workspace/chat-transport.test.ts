@@ -11,6 +11,7 @@ import {
   normalizePollConfirmation,
   parseChatStreamData,
   refreshAttachmentUrl,
+  safeSliceEnd,
   type SendChatOptions,
 } from "./chat-transport";
 import { ApiError } from "@lynse/core/api";
@@ -233,16 +234,36 @@ describe("extractConfirmFromText", () => {
     // valid "too short" case to pin here.
   });
 
-  // KNOWN MISFIRE (2026-09-19): the bare-number branch treats any 2-8 line
-  // sequentially numbered list as a choice menu, so ordinary assistant answers
-  // that use "1. … 2. …" pop a confirm card. This test pins the CURRENT
-  // behavior so the eventual heuristic fix flips it deliberately, not silently.
-  it("KNOWN ISSUE: plain numbered lists are (wrongly) read as menus", () => {
-    const numbered = extractConfirmFromText(
-      "提高会议效率的建议：\n1. 会前发议程\n2. 限制参会人数\n3. 会后跟进",
-    );
-    expect(numbered).not.toBeNull();
-    expect(numbered?.options.map((o) => o.value)).toEqual(["会前发议程", "限制参会人数", "会后跟进"]);
+  // FIXED (2026-10-02): this was pinned as KNOWN MISFIRE (2026-09-19) — bare
+  // numbers alone cannot distinguish a menu from an ordinary ordered list, so
+  // the numeric branch now additionally requires choice phrasing in the
+  // preamble (extractConfirmFromText's semantic gate).
+  it("no longer reads plain numbered lists as menus", () => {
+    // The originally pinned misfire: a suggestion list, not a menu.
+    expect(
+      extractConfirmFromText("提高会议效率的建议：\n1. 会前发议程\n2. 限制参会人数\n3. 会后跟进"),
+    ).toBeNull();
+    // The 2026-10-02 screenshot: markdown-styled difficulty list, no ask.
+    expect(
+      extractConfirmFromText(
+        "项目的困难点主要集中在以下几个方面：\n## 核心困难\n\n1. **成本压不下去，低价必亏**\n" +
+          "2. **海外市场只能走高端，低端路线难存活**\n3. **认证审核反复**\n4. **供应链议价能力弱**",
+      ),
+    ).toBeNull();
+    // Bare numbered list with no preamble at all.
+    expect(extractConfirmFromText("1. 甲方案\n2. 乙方案")).toBeNull();
+    // Numbered list buried mid-answer with prose after it.
+    expect(extractConfirmFromText("你想选哪个：\n1. 甲\n2. 乙\n\n以上仅供参考。")).toBeNull();
+  });
+
+  it("numbered menus still pop when the preamble asks for a choice", () => {
+    // Strong cue: question mark + imperative.
+    const ask = extractConfirmFromText("你想怎么处理？\n1) 重启设备\n2) 暂不处理");
+    expect(ask?.options.map((o) => o.value)).toEqual(["重启设备", "暂不处理"]);
+
+    // Soft second-person ask without an enumeration intro.
+    const soft = extractConfirmFromText("你想：\n1. 全部删除\n2. 仅删附件");
+    expect(soft?.options.map((o) => o.value)).toEqual(["全部删除", "仅删附件"]);
   });
 
   /** Deterministic PRNG so CI failures reproduce exactly. */
@@ -934,7 +955,7 @@ describe("transport selection by server", () => {
   });
 
   it("targets the dedicated agent base URL with native lynclaw paths when configured (route B)", async () => {
-    const agentBase = "https://lynclaw-api-319577-10-1401959758.sh.run.tcloudbase.com";
+    const agentBase = "https://lynclaw-api-321192-9-1401959758.sh.run.tcloudbase.com";
     apiMocks.getAgentBaseUrl.mockReturnValue(agentBase);
     apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
     apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
@@ -977,5 +998,80 @@ describe("transport selection by server", () => {
 
     expect(events.map((e) => e.type)).toEqual(["done", "confirm"]);
     expect(events[1]).toMatchObject({ type: "confirm", confirm: { confirmToken: "t1" } });
+  });
+});
+
+describe("safeSliceEnd", () => {
+  it("never cuts a surrogate pair, pulling the high half into the slice", () => {
+    const text = `前文😀后文${"占".repeat(40)}`;
+    const cut = text.indexOf("😀") + 1; // lands between the pair
+    const end = safeSliceEnd(text, cut);
+    expect(text.slice(end - 2, end)).toBe("😀");
+  });
+
+  it("snaps a cut inside a Latin word to the word end, within a bounded chase", () => {
+    expect(safeSliceEnd("see the word next", 10)).toBe(13); // "see the word "
+    // A word end further than the lookahead is not chased.
+    expect(safeSliceEnd("see the transcription now", 10)).toBe(10);
+  });
+
+  it("leaves CJK, boundaries and the string end untouched", () => {
+    const cjk = "会议纪要整理好了";
+    expect(safeSliceEnd(cjk, 3)).toBe(3);
+    expect(safeSliceEnd("a b c", 2)).toBe(2);
+    expect(safeSliceEnd(cjk, cjk.length)).toBe(cjk.length);
+  });
+});
+
+describe("typewriter slice integrity", () => {
+  const contentDeltas = (onEvent: ReturnType<typeof vi.fn>) =>
+    onEvent.mock.calls
+      .map((call) => call[0] as { type: string; delta?: string })
+      .filter((event) => event.type === "content")
+      .map((event) => event.delta ?? "");
+
+  it("replays without ever emitting half an emoji or a split word", async () => {
+    chatPollTiming.typewriterTickMs = 1;
+    chatPollTiming.typewriterMaxMs = 120; // many small slices
+    const full = `这是一段包含 emoji 😀 的回答，还有英文单词 summary 和表格。\n\n| 阶段 | 状态 |\n| --- | --- |\n| 转写 | 完成 |\n`;
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    apiMocks.get.mockResolvedValue({ status: "done", text: full, sources: [], attachments: [] });
+
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+
+    const deltas = contentDeltas(onEvent);
+    expect(deltas.length).toBeGreaterThan(4);
+    expect(deltas.join("")).toBe(full);
+    // Every cut lands on a safe boundary: never between a surrogate pair,
+    // never between two characters of the same word.
+    let at = 0;
+    for (const delta of deltas.slice(0, -1)) {
+      at += delta.length;
+      expect(/[\uD800-\uDBFF]$/.test(delta)).toBe(false);
+      expect(/\w/.test(full[at - 1]!) && /\w/.test(full[at]!)).toBe(false);
+    }
+  });
+
+  it("holds a partial pending payload's trailing surrogate until its pair arrives", async () => {
+    chatPollTiming.typewriterTickMs = 1;
+    chatPollTiming.typewriterMaxMs = 1;
+    const half = "好的 😀".slice(0, 4); // ends on the emoji's high surrogate
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    apiMocks.get
+      .mockResolvedValueOnce({ status: "pending", text: half })
+      .mockResolvedValueOnce({
+        status: "done",
+        text: "好的 😀 完成",
+        sources: [],
+        attachments: [],
+      });
+
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+
+    const deltas = contentDeltas(onEvent);
+    expect(deltas.join("")).toBe("好的 😀 完成");
+    expect(deltas.some((delta) => /[\uD800-\uDBFF]$/.test(delta))).toBe(false);
   });
 });

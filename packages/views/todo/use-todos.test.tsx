@@ -46,6 +46,7 @@ function Probe({ label }: { label: string }) {
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
   vi.mocked(fetchTodos).mockClear();
   vi.mocked(saveTodo).mockClear();
   useTodoStore.setState({
@@ -55,6 +56,8 @@ afterEach(() => {
     clearing: false,
     error: null,
     loaded: false,
+    lastLoadedAt: 0,
+    lastLoadedAuthed: null,
   });
 });
 
@@ -104,5 +107,37 @@ describe("useTodos shared store", () => {
     );
     await act(async () => {});
     expect(vi.mocked(fetchTodos)).toHaveBeenCalledTimes(1);
+  });
+
+  it("throttles remount loads inside the window; force bypasses it", async () => {
+    const first = render(<Probe label="a" />);
+    await act(async () => {});
+    expect(vi.mocked(fetchTodos)).toHaveBeenCalledTimes(1);
+    first.unmount();
+
+    // Remount inside the throttle window → the shared store already holds a
+    // fresh list; no cloud round-trip.
+    const second = render(<Probe label="b" />);
+    await act(async () => {});
+    expect(vi.mocked(fetchTodos)).toHaveBeenCalledTimes(1);
+    second.unmount();
+
+    // An explicit refresh (button / reconcile) must always reload.
+    await act(async () => {
+      await useTodoStore.getState().load({ force: true });
+    });
+    expect(vi.mocked(fetchTodos)).toHaveBeenCalledTimes(2);
+  });
+
+  it("reloads after an error even inside the throttle window", async () => {
+    render(<Probe label="a" />);
+    await act(async () => {});
+    expect(vi.mocked(fetchTodos)).toHaveBeenCalledTimes(1);
+
+    useTodoStore.setState({ error: "待办加载失败" });
+    const second = render(<Probe label="b" />);
+    await act(async () => {});
+    expect(vi.mocked(fetchTodos)).toHaveBeenCalledTimes(2);
+    second.unmount();
   });
 });

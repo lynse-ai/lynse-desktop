@@ -11,7 +11,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
-  Clock,
   FileText,
   Globe,
   Headphones,
@@ -20,6 +19,7 @@ import {
   ListOrdered,
   Loader2,
   Mic,
+  NotePlus,
   Pencil,
   Plus,
   RefreshCw,
@@ -30,6 +30,7 @@ import {
 import { Button } from "@lynse/ui/components/ui/button";
 import { Textarea } from "@lynse/ui/components/ui/textarea";
 import { StreamingMarkdown } from "@lynse/ui/markdown";
+import { toast } from "sonner";
 import { AssistantAvatar } from "../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
@@ -39,10 +40,21 @@ import {
   startWorkBuddyAuthorization,
 } from "@lynse/core/auth/workbuddy";
 import { openExternalUrl, getDesktopAppApi } from "../app-update";
+import { useNavigation } from "../navigation";
 import { useChat } from "../workspace/hooks/use-chat";
-import { useNotes } from "../workspace/hooks/use-files";
+import { useInsertConclusion, useNotes, fetchFileDetail } from "../workspace/hooks/use-files";
 import { useFolders } from "../workspace/hooks/use-folders";
-import { LOCAL_TRANSCRIPTION_FOLDER_ID } from "../workspace/local-transcription";
+import { getWorkspaceState } from "../workspace/store";
+import {
+  getDesktopLocalTranscriptionApi,
+  isLocalFileId,
+  LOCAL_TRANSCRIPTION_FOLDER_ID,
+} from "../workspace/local-transcription";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@lynse/ui/components/ui/popover";
 import { WaitingText } from "../workspace/hooks/waiting-text";
 import { ConfirmDialog } from "../workspace/ConfirmDialog";
 import { isFreshlyRevealed } from "../workspace/chat-reveal";
@@ -54,6 +66,7 @@ import {
 } from "./chat-attachment-upload";
 import { ChatHistorySidebar } from "./chat-history-sidebar";
 import { AssistantSwitcher } from "./assistant-switcher";
+import { TitleBarSlot } from "../layout/app-title-bar";
 import { MentionChips, MentionPicker } from "./chat-mention-picker";
 import {
   activeMentions,
@@ -134,11 +147,14 @@ function ThinkingIndicator() {
 export function ChatPage() {
   const [input, setInput] = useState("");
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [insertingMessageId, setInsertingMessageId] = useState<string | null>(null);
+  const [insertedMessageId, setInsertedMessageId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const reduceMotion = useReducedMotion();
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { t } = useTranslation();
+  const { push } = useNavigation();
   const {
     messages,
     isLoading,
@@ -262,6 +278,68 @@ export function ChatPage() {
   const { data: notes } = useNotes({ startTime: "2020-01-01T00:00:00", endTime: mentionRangeEnd });
   const { data: folders } = useFolders();
   const noteList: WorkspaceItem[] = useMemo(() => (Array.isArray(notes) ? notes : []), [notes]);
+
+  // Citation sources from the poll payload are meeting IDs/titles (or, from
+  // older builds, empty placeholders rescued via the reply's meeting table).
+  // Resolve each against the note list and open it preselected in the notes
+  // module — same flow as global search.
+  const notesPath = getDesktopLocalTranscriptionApi() ? "/notes" : "/recordings";
+  const findSourceNote = useCallback(
+    (source: string): WorkspaceItem | undefined => {
+      const key = source.trim();
+      if (!key) return undefined;
+      return (
+        noteList.find((note) => note.id === key) ??
+        noteList.find((note) => note.title === key) ??
+        noteList.find((note) => note.title.includes(key) || key.includes(note.title))
+      );
+    },
+    [noteList],
+  );
+  // Display label: prefer the matched note's own title — it carries the date
+  // prefix titles show everywhere else in the app (e.g. "09-28 需求评审会…").
+  const resolveSourceLabel = useCallback(
+    (source: string) => findSourceNote(source)?.title ?? source,
+    [findSourceNote],
+  );
+  const handleOpenSource = useCallback(
+    (source: string) => {
+      const target = findSourceNote(source);
+      if (!target) {
+        toast(t("chat.source_not_found"));
+        return;
+      }
+      getWorkspaceState().selectItem(target.id, "file", target.title);
+      push(notesPath);
+    },
+    [findSourceNote, notesPath, push, t],
+  );
+
+  // ── "Insert reply into notes" targets ───────────────────
+  // Each assistant reply can be filed as the summary of the note its turn was
+  // about: the target is the single cloud file the user's turn referenced
+  // (mentions / attachments, recorded on the user message at send time). No
+  // context, several files at once, or a local transcription — none of those
+  // resolve to exactly one insertable note, so no button is shown.
+  const insertConclusion = useInsertConclusion();
+  const insertTargets = useMemo(() => {
+    const targets = new Map<string, { fileId: string; teamId?: string }>();
+    let contextFileIds: string[] = [];
+    for (const message of messages) {
+      if (message.role === "user") {
+        contextFileIds = message.fileIds ?? [];
+        continue;
+      }
+      if (contextFileIds.length !== 1) continue;
+      const fileId = contextFileIds[0]!;
+      if (isLocalFileId(fileId)) continue;
+      targets.set(message.id, {
+        fileId,
+        teamId: noteList.find((note) => note.id === fileId)?.teamId,
+      });
+    }
+    return targets;
+  }, [messages, noteList]);
 
   const [mentions, setMentions] = useState<ChatMention[]>([]);
   const [mentionState, setMentionState] = useState<{
@@ -479,6 +557,8 @@ export function ChatPage() {
     resetMentionState();
     clearAttachmentDrafts();
     setCopiedMessageId(null);
+    setInsertedMessageId(null);
+    setInsertingMessageId(null);
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
@@ -492,54 +572,92 @@ export function ChatPage() {
     }
   };
 
+  /** File an assistant reply into the referenced note as a new conclusion. */
+  const handleInsertToNote = async (
+    messageId: string,
+    content: string,
+    target: { fileId: string; teamId?: string },
+  ) => {
+    if (insertingMessageId) return;
+    setInsertingMessageId(messageId);
+    try {
+      // File ids are minted per environment, so a mention captured on another
+      // server can look valid here while pointing nowhere — verify the target
+      // exists on the signed-in backend before filing, or the insert would
+      // "succeed" into an invisible orphan.
+      const detail = await fetchFileDetail(target.fileId);
+      if (!detail) {
+        toast.error(t("chat.insert_target_missing"));
+        return;
+      }
+      await insertConclusion.mutateAsync({
+        fileId: target.fileId,
+        teamId: target.teamId,
+        conclusionText: content,
+      });
+      setInsertedMessageId(messageId);
+      // Naming the target in the toast makes a wrong-environment insert
+      // visible at a glance instead of a plain success.
+      const title = String(
+        detail.originalFilename ?? detail.name ?? detail.filename ?? "",
+      ).trim();
+      toast.success(
+        title ? t("chat.inserted_to_note_title", { title }) : t("chat.inserted_to_note"),
+      );
+    } catch (error) {
+      // Surface the backend's own message (e.g. permission/ownership errors)
+      // when it has one; otherwise fall back to the generic locale string.
+      const backendMessage = error instanceof Error && error.message ? error.message : "";
+      toast.error(backendMessage || t("chat.insert_to_note_failed"));
+    } finally {
+      setInsertingMessageId(null);
+    }
+  };
+
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
-      <header
-        className="flex h-14 shrink-0 items-center border-b border-border/50 bg-background/80 px-6 backdrop-blur-xl select-none"
-        data-tauri-drag-region
-      >
-        <div className="flex min-w-0 flex-1 items-center justify-center gap-2 pl-24" data-tauri-drag-region>
-          <AssistantSwitcher
-            activeAssistant={activeAssistant}
-            onSelect={setActiveAssistant}
-            disabled={isLoading}
-          />
-          {isLoading && (
-            <span className="size-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true" />
-          )}
-        </div>
-        <div className="flex items-center gap-1" data-tauri-drag-region={false}>
-          {!isWorkBuddy && (
-            <>
-          <Button
-            variant="ghost"
-            size="icon"
-            className={`size-8 border transition-colors ${
-              historyOpen
-                ? "border-border bg-card text-foreground"
-                : "border-transparent text-muted-foreground hover:border-border hover:bg-card hover:text-foreground"
-            }`}
-            onClick={() => setHistoryOpen((open) => !open)}
-            title={t("chat.history")}
-            aria-label={t("chat.history")}
-            aria-pressed={historyOpen}
-          >
-            <Clock className="size-3.5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-8 border border-transparent text-xs text-muted-foreground transition-colors hover:border-border hover:bg-card hover:text-foreground"
-            onClick={handleNewChat}
-            title={t("chat.new_chat")}
-          >
-            <Plus className="size-3.5" />
-            {t("chat.new_chat")}
-          </Button>
-            </>
-          )}
-        </div>
-      </header>
+      {/* Page chrome lives in the unified app title bar via the slot:
+          assistant switcher centered (like the original chat header), the
+          history-drawer toggle on the left of the bar, new-chat on the right. */}
+      <TitleBarSlot
+        title={
+          <>
+            <AssistantSwitcher
+              activeAssistant={activeAssistant}
+              onSelect={setActiveAssistant}
+              disabled={isLoading}
+            />
+            {isLoading && (
+              <span className="size-1.5 animate-pulse rounded-full bg-primary" aria-hidden="true" />
+            )}
+          </>
+        }
+        titleAlign="center"
+        middleToggle={
+          !isWorkBuddy
+            ? {
+                collapsed: !historyOpen,
+                onToggle: () => setHistoryOpen((open) => !open),
+                label: t("chat.history"),
+                panelWidth: 224, // w-56 history drawer
+              }
+            : undefined
+        }
+        actions={
+          !isWorkBuddy ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8 border border-transparent text-muted-foreground transition-colors hover:border-border hover:bg-card hover:text-foreground"
+              onClick={handleNewChat}
+              title={t("chat.new_chat")}
+              aria-label={t("chat.new_chat")}
+            >
+              <Plus className="size-4" />
+            </Button>
+          ) : undefined
+        }
+      />
 
       <AnimatePresence initial={false}>
         {!isWorkBuddy && historyOpen && (
@@ -549,7 +667,7 @@ export function ChatPage() {
             animate={{ x: 0 }}
             exit={reduceMotion ? { opacity: 0 } : { x: "-100%" }}
             transition={{ duration: 0.18, ease: "easeOut" }}
-            className="absolute bottom-0 left-0 top-14 z-20 flex w-56 flex-col border-r border-border/60"
+            className="absolute bottom-0 left-0 top-0 z-20 flex w-56 flex-col border-r border-border/60"
           >
             <ChatHistorySidebar
               conversations={conversations.filter((c) => c.provider !== "workbuddy")}
@@ -677,7 +795,27 @@ export function ChatPage() {
                       isStreaming={message.id === streamingMessageId}
                       copied={copiedMessageId === message.id}
                       onCopy={() => handleCopy(message.id, message.content)}
+                      insertTarget={insertTargets.get(message.id)}
+                      insertState={
+                        insertingMessageId === message.id
+                          ? "inserting"
+                          : insertedMessageId === message.id
+                            ? "inserted"
+                            : "idle"
+                      }
+                      onInsertToNote={
+                        insertTargets.has(message.id)
+                          ? () =>
+                              void handleInsertToNote(
+                                message.id,
+                                message.content,
+                                insertTargets.get(message.id)!,
+                              )
+                          : undefined
+                      }
                       onAuthorizeWorkBuddy={() => void startWorkBuddyAuthorize()}
+                      resolveSourceLabel={resolveSourceLabel}
+                      onOpenSource={handleOpenSource}
                     />
                   </div>
                 </article>
@@ -983,7 +1121,7 @@ function EmptyChat({
 
   return (
     <div className="relative mx-auto flex min-h-full w-full max-w-4xl flex-col items-center justify-center overflow-hidden px-6 py-8 text-center">
-      {icon ?? <AssistantAvatar size={112} className="relative mb-4" />}
+      {icon ?? <AssistantAvatar size={72} className="relative mb-4" />}
       <h1 className="relative text-xl font-semibold tracking-tight text-foreground">
         {title ?? t("chat.welcome_title")}
       </h1>
@@ -994,13 +1132,124 @@ function EmptyChat({
   );
 }
 
+/**
+ * Meeting titles from the reply's own markdown table (`| # | 日期 | 时长 |
+ * 分类 | 主题 |`). Older lynclaw builds emit one empty string per meeting in
+ * `sources`, so on those turns the table's topic column is the only
+ * client-side source for row labels.
+ */
+function meetingTitlesFromReply(content: string): string[] {
+  const titles: string[] = [];
+  for (const line of content.split("\n")) {
+    const cells = line.split("|").map((cell) => cell.trim());
+    if (cells.length < 7) continue;
+    // Only rows whose second cell is a MM-DD date count as meeting rows;
+    // header and separator rows fail this check.
+    if (!/^\d{1,2}-\d{1,2}$/.test(cells[2] ?? "")) continue;
+    const title = cells[cells.length - 2] ?? "";
+    if (title) titles.push(title);
+  }
+  return titles;
+}
+
+/**
+ * Collapsed citation strip: one icon chip carrying the source count, which
+ * opens a popover listing the cited meetings. The poll payload may carry
+ * meeting IDs/titles (resolved via `resolveLabel`) or, from older backends,
+ * empty placeholders — those fall back to titles parsed from the reply's
+ * meeting table. `onOpen` receives the best key available for the jump.
+ */
+function ChatSources({
+  sources,
+  resolveLabel,
+  content,
+  onOpen,
+}: {
+  sources: string[];
+  resolveLabel: (source: string) => string;
+  content?: string;
+  onOpen?: (source: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const rescuedTitles = useMemo(
+    () => (content ? meetingTitlesFromReply(content) : []),
+    [content],
+  );
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-2xs uppercase tracking-[0.08em] text-muted-foreground/70">
+        {t("chat.sources")}
+      </span>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger
+          className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/60 px-2 py-0.5 text-3xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent data-popup-open:border-primary/30 data-popup-open:bg-accent"
+          aria-label={t("chat.sources")}
+        >
+          <FileText className="size-3 shrink-0 text-primary/70" />
+          <span>{sources.length}</span>
+        </PopoverTrigger>
+        <PopoverContent
+          side="bottom"
+          align="start"
+          sideOffset={6}
+          className="w-[360px] gap-0 p-1"
+        >
+          <div className="max-h-64 overflow-y-auto">
+            {sources.map((source, index) => {
+              // Empty placeholders fall back to the reply-table topic, then
+              // resolveLabel upgrades it to the full note title (with its
+              // date prefix) when the matching note exists.
+              const label = source.trim()
+                ? resolveLabel(source)
+                : rescuedTitles[index]
+                  ? resolveLabel(rescuedTitles[index])
+                  : source;
+              return (
+                <button
+                  key={`${source}-${index}`}
+                  type="button"
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent"
+                  title={label}
+                  onClick={() => {
+                    setOpen(false);
+                    onOpen?.(source.trim() || label);
+                  }}
+                >
+                  <FileText className="size-3.5 shrink-0 text-primary/70" />
+                  <span className="min-w-0 flex-1 truncate">{label}</span>
+                  <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                </button>
+              );
+            })}
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
 interface AssistantMessageProps {
   message: ReturnType<typeof useChat>["messages"][number];
   isStreaming: boolean;
   copied: boolean;
   onCopy: () => void;
+  /**
+   * The note this reply can be filed under (single cloud file the turn
+   * referenced). When absent the insert button is not rendered — a summary
+   * must belong to exactly one note, so multi-file or context-less turns
+   * offer nothing to insert into.
+   */
+  insertTarget?: { fileId: string; teamId?: string };
+  insertState?: "idle" | "inserting" | "inserted";
+  onInsertToNote?: () => void;
   /** Shown on a WorkBuddy auth-failure bubble instead of the error text. */
   onAuthorizeWorkBuddy?: () => void;
+  /** Resolves a raw citation source (meeting ID or title) to a display label. */
+  resolveSourceLabel: (source: string) => string;
+  /** Opens a cited source's note. */
+  onOpenSource?: (source: string) => void;
 }
 
 function AssistantMessage({
@@ -1008,12 +1257,57 @@ function AssistantMessage({
   isStreaming,
   copied,
   onCopy,
+  insertTarget,
+  insertState = "idle",
+  onInsertToNote,
   onAuthorizeWorkBuddy,
+  resolveSourceLabel,
+  onOpenSource,
 }: AssistantMessageProps) {
   const { t } = useTranslation();
   // The poll transport types the answer out itself; `revealedAt` only drives
   // the staggered entrance of attachments / support link after the text lands.
   const revealed = isFreshlyRevealed(message);
+
+  // Per-message actions (insert into note, copy). They render inline ahead of
+  // the citation strip when one exists, else on their own row below.
+  const messageActions = (
+    <>
+      {insertTarget && onInsertToNote && (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="text-muted-foreground"
+          disabled={insertState === "inserting"}
+          onClick={onInsertToNote}
+          title={
+            insertState === "inserted" ? t("chat.inserted_to_note") : t("chat.insert_to_note")
+          }
+          aria-label={
+            insertState === "inserted" ? t("chat.inserted_to_note") : t("chat.insert_to_note")
+          }
+        >
+          {insertState === "inserting" ? (
+            <Loader2 className="size-3 animate-spin" />
+          ) : insertState === "inserted" ? (
+            <Check className="size-3" />
+          ) : (
+            <NotePlus className="size-3" />
+          )}
+        </Button>
+      )}
+      <Button
+        variant="ghost"
+        size="icon-xs"
+        className="text-muted-foreground"
+        onClick={onCopy}
+        title={copied ? t("chat.copied") : t("chat.copy")}
+        aria-label={copied ? t("chat.copied") : t("chat.copy")}
+      >
+        {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+      </Button>
+    </>
+  );
 
   return (
     <>
@@ -1082,20 +1376,14 @@ function AssistantMessage({
         className={revealed ? "animate-in fade-in duration-300 delay-[350ms] fill-mode-backwards" : undefined}
       >
         {!!message.sources?.length && (
-          <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            <span className="text-2xs uppercase tracking-[0.08em] text-muted-foreground/70">
-              {t("chat.sources")}
-            </span>
-            {message.sources.map((source) => (
-              <span
-                key={source}
-                className="inline-flex max-w-52 items-center gap-1 rounded-full border border-border bg-muted/60 px-2 py-0.5 text-3xs text-foreground"
-                title={source}
-              >
-                <FileText className="size-3 shrink-0 text-primary/70" />
-                <span className="min-w-0 truncate">{source}</span>
-              </span>
-            ))}
+          <div className="mt-2 flex items-center gap-1.5">
+            {message.content && !message.error && <>{messageActions}</>}
+            <ChatSources
+              sources={message.sources}
+              resolveLabel={resolveSourceLabel}
+              content={message.content}
+              onOpen={onOpenSource}
+            />
           </div>
         )}
         <ChatAttachments attachments={message.attachments} />
@@ -1115,19 +1403,8 @@ function AssistantMessage({
         </a>
       )}
 
-      {message.content && !message.error && (
-        <div className="mt-2 flex items-center opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            className="text-muted-foreground"
-            onClick={onCopy}
-            title={copied ? t("chat.copied") : t("chat.copy")}
-            aria-label={copied ? t("chat.copied") : t("chat.copy")}
-          >
-            {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-          </Button>
-        </div>
+      {message.content && !message.error && !message.sources?.length && (
+        <div className="mt-2 flex items-center">{messageActions}</div>
       )}
     </>
   );

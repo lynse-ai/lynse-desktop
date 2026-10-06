@@ -12,13 +12,61 @@
 //      (bucket/endpoint/objectKey with a server-generated UUID name) plus
 //      Aliyun STS temporary credentials.
 //   3. PUT the bytes to OSS signed with the STS pair (OSS V1 header
-//      signature). No presigned URL, no backend relay.
+//      signature). No presigned URL, no backend relay. The PUT runs in the
+//      Rust shell (`sync_upload.rs`): a signed header set is not something a
+//      webview can send cross-origin, and the renderer never needs the bytes.
 //   4. GET /api/business/file/sync/pre/notify — moves the OSS address from
 //      the placeholder onto the real file record. Idempotent.
 // ───────────────────────────────────────────────────────────────
 
-import { api } from "@lynse/core/api/client";
+import { ApiError, api } from "@lynse/core/api/client";
 import type { StsTokenVO, SyncPreUploadReq } from "./types";
+
+/** The gateway answers every failure in this chain with the same opaque
+ *  `system.error.busy`, and `String(error)` drops the code that would tell the
+ *  steps apart — so name the step and keep the code. */
+async function chainStep<T>(label: string, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    throw new Error(`${label}失败：${describeError(error)}`);
+  }
+}
+
+function describeError(error: unknown): string {
+  if (error instanceof ApiError) {
+    const data = error.data === undefined ? "" : ` ${truncate(JSON.stringify(error.data))}`;
+    return `code ${error.status} ${error.message}${data}`;
+  }
+  return truncate(error instanceof Error ? error.message : String(error));
+}
+
+function truncate(value: string, maxChars = 400): string {
+  return value.length <= maxChars ? value : `${value.slice(0, maxChars)}…`;
+}
+
+/** Rust-side transport for step 3. The audio is addressed by its local
+ *  record id so the renderer cannot name an arbitrary path on disk. */
+export interface DesktopCloudSyncApi {
+  /** Byte size of the record's audio — `fileSize` on the placeholder. */
+  audioSize: (recordId: string) => Promise<number>;
+  putSignedFile: (put: {
+    recordId: string;
+    bucket: string;
+    endpoint: string;
+    objectKey: string;
+    accessKeyId: string;
+    accessKeySecret: string;
+    securityToken: string;
+    contentType: string;
+  }) => Promise<{ sizeBytes: number }>;
+}
+
+export function getDesktopCloudSyncApi(): DesktopCloudSyncApi | null {
+  if (typeof window === "undefined") return null;
+  const desktopWindow = window as Window & { desktopAPI?: { cloudSync?: DesktopCloudSyncApi } };
+  return desktopWindow.desktopAPI?.cloudSync ?? null;
+}
 
 /** Re-request credentials that expire within a minute — a large upload
  *  would otherwise outlive them mid-flight. */
@@ -37,91 +85,9 @@ export function generateSyncFileId(): string {
   return hex;
 }
 
-/** OSS V1 signature: base64(HMAC-SHA1(accessKeySecret, stringToSign)). */
-async function signOssRequest(
-  accessKeySecret: string,
-  stringToSign: string,
-): Promise<string> {
-  const subtle = globalThis.crypto?.subtle;
-  if (!subtle) {
-    throw new Error("WebCrypto unavailable — cannot sign the OSS upload");
-  }
-  const encoder = new TextEncoder();
-  const key = await subtle.importKey(
-    "raw",
-    encoder.encode(accessKeySecret),
-    { name: "HMAC", hash: "SHA-1" },
-    false,
-    ["sign"],
-  );
-  const mac = await subtle.sign("HMAC", key, encoder.encode(stringToSign));
-  let binary = "";
-  for (const byte of new Uint8Array(mac)) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
-/** PUT the blob to `https://{bucket}.{endpoint}/{objectKey}`. With STS the
- *  Authorization header is signed by the client; the security token rides
- *  along as `x-oss-security-token` and joins the canonical headers. */
-async function putToOss(
-  sts: StsTokenVO,
-  body: Blob,
-  contentType: string,
-  onProgress?: (pct: number) => void,
-): Promise<void> {
-  const endpoint = sts.endpoint.replace(/^https?:\/\//, "");
-  const url = `https://${sts.bucket}.${endpoint}/${sts.objectKey}`;
-  const date = new Date().toUTCString();
-  // V1 string-to-sign: VERB \n Content-MD5 \n Content-Type \n Date \n
-  // canonicalized x-oss-* headers \n canonicalized resource (bucket-prefixed
-  // even in virtual-hosted style).
-  const stringToSign = [
-    "PUT",
-    "",
-    contentType,
-    date,
-    `x-oss-security-token:${sts.securityToken}`,
-    `/${sts.bucket}/${sts.objectKey}`,
-  ].join("\n");
-  const signature = await signOssRequest(sts.accessKeySecret, stringToSign);
-
-  await new Promise<void>((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", url, true);
-    xhr.setRequestHeader("Authorization", `OSS ${sts.accessKeyId}:${signature}`);
-    xhr.setRequestHeader("x-oss-security-token", sts.securityToken);
-    xhr.setRequestHeader("Date", date);
-    xhr.setRequestHeader("Content-Type", contentType);
-    if (onProgress) {
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable) {
-          onProgress(Math.round((event.loaded / event.total) * 100));
-        }
-      };
-    }
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-      } else {
-        const detail =
-          typeof xhr.responseText === "string" ? xhr.responseText.slice(0, 800) : "";
-        reject(new Error(`OSS 上传失败 (HTTP ${xhr.status}): ${detail}`));
-      }
-    };
-    xhr.ontimeout = () => reject(new Error("OSS 上传超时"));
-    xhr.onerror = () =>
-      reject(
-        new Error(
-          "OSS 上传网络错误（可能是 OSS 跨域 CORS 未放行该来源，或网络不可达）",
-        ),
-      );
-    xhr.send(body);
-  });
-}
-
 export interface SyncChainUploadInput {
-  /** Audio content to upload. */
-  file: Blob;
+  /** Local transcription record id — Rust reads the audio from disk. */
+  recordId: string;
   /** Saved filename including extension. */
   saveFilename: string;
   /** MIME type; becomes both the OSS Content-Type and the recorded one. */
@@ -135,7 +101,6 @@ export interface SyncChainUploadInput {
   recordStartTime?: string;
   folderId?: string;
   mode?: string;
-  onProgress?: (pct: number) => void;
 }
 
 /** Run the whole chain — create → sts → direct OSS PUT → notify — and
@@ -143,12 +108,15 @@ export interface SyncChainUploadInput {
 export async function uploadAudioViaSyncChain(
   input: SyncChainUploadInput,
 ): Promise<string> {
+  const transport = getDesktopCloudSyncApi();
+  if (!transport) throw new Error("云端上传仅在桌面端可用");
   const contentType = input.contentType ?? "application/octet-stream";
   const fileId = input.fileId ?? generateSyncFileId();
+  const fileSize = await transport.audioSize(input.recordId);
   const req: SyncPreUploadReq = {
     fileId,
     saveFilename: input.saveFilename,
-    fileSize: input.file.size,
+    fileSize,
     bizDuration: input.bizDuration,
     contentType,
     ...(input.folderId ? { folderId: input.folderId } : {}),
@@ -157,23 +125,40 @@ export async function uploadAudioViaSyncChain(
   };
 
   // 1. Placeholder upsert (safe to re-run on retry).
-  await api().post("/api/business/file/sync/pre/create", req);
+  await chainStep("创建云端占位 /sync/pre/create", () =>
+    api().post("/api/business/file/sync/pre/create", req),
+  );
 
   // 2. STS credentials + the server-generated upload target. objectKey is
   //    authoritative — never assembled on the client.
-  let sts = await api().post<StsTokenVO>("/api/business/file/sync/pre/sts", req);
+  const requestSts = () =>
+    chainStep("获取上传凭证 /sync/pre/sts", () =>
+      api().post<StsTokenVO>("/api/business/file/sync/pre/sts", req),
+    );
+  let sts = await requestSts();
   if (new Date(sts.expiration).getTime() - Date.now() < STS_EXPIRY_MARGIN_MS) {
-    sts = await api().post<StsTokenVO>("/api/business/file/sync/pre/sts", req);
+    sts = await requestSts();
   }
   if (!sts.bucket || !sts.endpoint || !sts.objectKey) {
     throw new Error("sync/pre/sts 未返回有效的上传目标");
   }
 
   // 3. Direct PUT to OSS — the server never relays the bytes.
-  await putToOss(sts, input.file, contentType, input.onProgress);
+  await transport.putSignedFile({
+    recordId: input.recordId,
+    bucket: sts.bucket,
+    endpoint: sts.endpoint,
+    objectKey: sts.objectKey,
+    accessKeyId: sts.accessKeyId,
+    accessKeySecret: sts.accessKeySecret,
+    securityToken: sts.securityToken,
+    contentType,
+  });
 
   // 4. Completion notice (idempotent — silently succeeds on re-sync).
-  await api().getWithParams("/api/business/file/sync/pre/notify", { fileId });
+  await chainStep("通知上传完成 /sync/pre/notify", () =>
+    api().getWithParams("/api/business/file/sync/pre/notify", { fileId }),
+  );
 
   return fileId;
 }

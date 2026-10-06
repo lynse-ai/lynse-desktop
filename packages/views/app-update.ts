@@ -81,6 +81,9 @@ type DesktopAppApi = {
   checkForUpdate: () => Promise<AppUpdateInfo>;
   downloadAndInstallUpdate: (onProgress: (progress: UpdateDownloadProgress) => void) => Promise<void>;
   relaunchApp: () => Promise<void>;
+  /** Pre-auth compact welcome window (true, 690×450) vs dashboard size
+   * (false, 960×600). No-op outside the desktop app. */
+  setCompactWindowSize: (active: boolean) => Promise<void>;
 };
 
 /** Access the desktop update API, or null when running outside the Tauri host. */
@@ -95,13 +98,42 @@ export function getAppInfoSync(): {
   version: string;
   build?: string | null;
   platform: string;
+  sandboxed?: boolean;
 } | null {
   if (typeof window === "undefined") return null;
   const desktopWindow = window as Window & {
-    desktopAPI?: { appInfo?: { version: string; build?: string | null; platform: string } };
+    desktopAPI?: {
+      appInfo?: {
+        version: string;
+        build?: string | null;
+        platform: string;
+        sandboxed?: boolean;
+      };
+    };
   };
   return desktopWindow.desktopAPI?.appInfo ?? null;
 }
+
+/**
+ * True when this desktop build runs under the macOS App Sandbox — TestFlight
+ * (and App Store) signing injects the entitlement regardless of what the
+ * source entitlements declare. A sandboxed app cannot replace its own bundle
+ * in /Applications, so the in-app download+install flow always fails with
+ * EPERM; those builds update through the channel (TestFlight) instead.
+ * Windows installers and Developer-ID direct installs are never sandboxed,
+ * and outside the desktop host there is no appInfo at all — both false.
+ */
+export function isSandboxedMacApp(): boolean {
+  return getAppInfoSync()?.sandboxed === true;
+}
+
+/**
+ * TestFlight's URL scheme: opening it brings the TestFlight app forward,
+ * where TestFlight-installed builds pick up new versions. Deep-linking
+ * straight to the app's own page needs an Apple-internal app id, so the
+ * user taps Lynse in TestFlight — still one tap from there.
+ */
+export const TESTFLIGHT_URL = "itms-beta://";
 
 /** Open a URL in the system browser via the Tauri opener plugin. */
 export function openExternalUrl(url: string): void {

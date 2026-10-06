@@ -5,7 +5,7 @@ import {
   keepPreviousData,
 } from "@tanstack/react-query";
 import { api, ApiError } from "@lynse/core/api/client";
-import { useAuthStore } from "@lynse/core/auth";
+import { getAuthStore, useAuthStore } from "@lynse/core/auth";
 import type {
   FileDetail,
   FileConclusion,
@@ -20,7 +20,6 @@ import type {
   TransFileStatus,
   AiTaskAddReq,
   AiTaskResultVO,
-  LocalTranscriptionRecord,
   RecordingMode,
 } from "../types";
 import {
@@ -30,19 +29,94 @@ import {
   mergeCloudAndLocalFiles,
 } from "../local-transcription";
 import { removeNotesFromVault } from "../note-vault";
+import { transcribeWithCreditsToast } from "../transcription-credits";
 
 // Lynse API returns { code, data: [...files], total, msg }
 // ApiClient unwraps to the inner data field (the file array)
-type FileListResponse = Record<string, unknown>[];
-type FilesQueryResult = {
-  cloudItems: FileListResponse;
-  localRecords: LocalTranscriptionRecord[];
-};
+
+/** How long a fetched list is served from cache before a mount revalidates
+ *  it. The global client pins staleTime at Infinity (cross-device edits
+ *  would then never show up on their own), so the list queries opt into a
+ *  bounded window instead: remounts inside the window are instant, older
+ *  caches revalidate in the background while the old list stays painted
+ *  (placeholderData). */
+export const LIST_STALE_TIME_MS = 60_000;
+
+/** Left edge of the "all my notes" window — every wide consumer (notes page,
+ *  heatmap, todo source titles) shares it so they land on one query key. */
+export const NOTES_WIDE_WINDOW_START = "2020-01-01T00:00:00";
+
+/** The API wants local "YYYY-MM-DDTHH:mm:ss". */
+function toApiDateTime(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(
+    d.getMinutes(),
+  )}:${pad(d.getSeconds())}`;
+}
+
+/** Today 23:59:59 — the shared upper bound of the wide notes window. Pure
+ *  function of the calendar date, so the query key is stable within a day. */
+export function notesWideWindowEnd(): string {
+  const d = new Date();
+  d.setHours(23, 59, 59, 0);
+  return toApiDateTime(d);
+}
+
 type FilesRequest = {
   path: string;
   params: Record<string, string | number | boolean | undefined>;
   includeLocalRecords: boolean;
 };
+
+/** Unwrap the API's flexible list envelope (raw array or {list|records|data}). */
+function extractRowArray(data: unknown): Record<string, unknown>[] {
+  if (Array.isArray(data)) return data as Record<string, unknown>[];
+  if (typeof data === "object" && data !== null) {
+    for (const key of ["list", "records", "data"]) {
+      const arr = (data as Record<string, unknown>)[key];
+      if (Array.isArray(arr)) return arr as Record<string, unknown>[];
+    }
+  }
+  return [];
+}
+
+/** Cloud file row → the slim list model. Cache stores THIS shape, not the
+ *  fat FileInfoVO (50+ fields incl. OSS URLs) — at ten thousand records the
+ *  raw payload is tens of MB and the slim one is a fraction of that. */
+function fileRowToItem(raw: Record<string, unknown>): WorkspaceItem {
+  return {
+    id: String(raw.id ?? ""),
+    type: "file" as const,
+    title: String(raw.originalFilename ?? raw.name ?? raw.filename ?? ""),
+    updatedAt: String(raw.updateTime ?? ""),
+    createdAt: String(raw.createTime ?? raw.recordStartTime ?? ""),
+    folderId: raw.folderId as string | undefined,
+    tags: parseFileTags(raw),
+    recordingMode: parseFileRecordingMode(raw),
+    durationSeconds: parseFileDurationSeconds(raw),
+    contentType: typeof raw.contentType === "string" ? raw.contentType : undefined,
+    teamId: typeof raw.teamId === "string" ? raw.teamId : undefined,
+  };
+}
+
+/** Shared notes fetcher — the queryFn behind `useNotes` and the direct data
+ *  source for consumers outside React (todo source-title resolution). */
+export async function fetchNotesList(params: {
+  startTime?: string;
+  endTime?: string;
+}): Promise<WorkspaceItem[]> {
+  const localApi = getDesktopLocalTranscriptionApi();
+  const localRecords = localApi ? await localApi.list() : [];
+  if (!(getAuthStore()?.getState().isAuthenticated ?? false)) {
+    return mergeCloudAndLocalFiles([], localRecords);
+  }
+  const data = await api().getWithParams<unknown>("/api/business/file/timeRange/list", {
+    startTime: params.startTime,
+    endTime: params.endTime,
+  });
+  const cloudItems = extractRowArray(data).map(fileRowToItem);
+  return mergeCloudAndLocalFiles(cloudItems, localRecords);
+}
 
 export interface SummaryTabModel {
   key: string;
@@ -170,6 +244,33 @@ export function buildFilesRequest(params: {
   };
 }
 
+/** Shared workspace page fetcher — queryFn behind `useFiles`. */
+export async function fetchFilesList(params: {
+  pageNum?: number;
+  pageSize?: number;
+  originalFilename?: string;
+  folderId?: string;
+}): Promise<WorkspaceItem[]> {
+  const request = buildFilesRequest(params);
+  const localApi = getDesktopLocalTranscriptionApi();
+  const localRecords = localApi && request.includeLocalRecords ? await localApi.list() : [];
+  if (!(getAuthStore()?.getState().isAuthenticated ?? false)) {
+    return mergeCloudAndLocalFiles([], localRecords);
+  }
+  const data = await api().getWithParams<unknown>(request.path, request.params);
+  const cloudItems = extractRowArray(data).map((raw) => ({
+    id: String(raw.id ?? ""),
+    type: "file" as const,
+    title: String(raw.originalFilename ?? ""),
+    updatedAt: String(raw.updateTime ?? ""),
+    createdAt: String(raw.createTime ?? ""),
+    folderId: raw.folderId as string | undefined,
+    tags: parseFileTags(raw),
+    teamId: typeof raw.teamId === "string" ? raw.teamId : undefined,
+  }));
+  return mergeCloudAndLocalFiles(cloudItems, localRecords);
+}
+
 export function mergePendingSummaryTab({
   tabs,
   pendingId,
@@ -208,37 +309,8 @@ export function useFiles(params: {
     // Keep the previous folder's list visible while the next folder loads,
     // instead of flashing an empty grid mid-switch.
     placeholderData: keepPreviousData,
-    queryFn: async () => {
-      const request = buildFilesRequest(params);
-      const localApi = getDesktopLocalTranscriptionApi();
-      const localRecords = localApi && request.includeLocalRecords ? await localApi.list() : [];
-      if (!isAuthenticated) return { cloudItems: [], localRecords };
-
-      const data = await api().getWithParams<FileListResponse | Record<string, unknown>>(
-        request.path,
-        request.params,
-      );
-      // After unwrapping, data might be the file array directly
-      // or an object with list/records/data key
-      if (Array.isArray(data)) return { cloudItems: data, localRecords };
-      for (const key of ["list", "records", "data"]) {
-        const arr = (data as Record<string, unknown>)[key];
-        if (Array.isArray(arr)) return { cloudItems: arr, localRecords };
-      }
-      return { cloudItems: [], localRecords };
-    },
-    select: (result: FilesQueryResult): WorkspaceItem[] => {
-      const cloudItems = result.cloudItems.map((f) => ({
-        id: String((f as Record<string, unknown>).id ?? ""),
-        type: "file" as const,
-        title: String((f as Record<string, unknown>).originalFilename ?? ""),
-        updatedAt: String((f as Record<string, unknown>).updateTime ?? ""),
-        createdAt: String((f as Record<string, unknown>).createTime ?? ""),
-        folderId: (f as Record<string, unknown>).folderId as string | undefined,
-        tags: parseFileTags(f as Record<string, unknown>),
-      }));
-      return mergeCloudAndLocalFiles(cloudItems, result.localRecords);
-    },
+    queryFn: () => fetchFilesList(params),
+    staleTime: LIST_STALE_TIME_MS,
     enabled: (isAuthenticated || !!getDesktopLocalTranscriptionApi()) && (params.enabled ?? true),
   });
 }
@@ -256,6 +328,13 @@ export function useFiles(params: {
  * A wide time range effectively returns "all my meetings". Folder and tab
  * filtering is applied client-side (see the Notes page) because this endpoint
  * does not accept a folderId and does not tag items with an explicit type.
+ *
+ * Caching: the cache stores the slim `WorkspaceItem[]` (see fetchNotesList)
+ * and is persisted to disk by the core query-persistence layer, so app
+ * restarts paint the last list immediately. `LIST_STALE_TIME_MS` bounds how
+ * long a mount serves it before revalidating against the cloud — cross-device
+ * edits show up within a minute without re-downloading the whole list on
+ * every page entry.
  */
 export function useNotes(params: {
   startTime?: string;
@@ -271,44 +350,8 @@ export function useNotes(params: {
     queryKey: ["notes", params.startTime, params.endTime, isAuthenticated],
     // Keep the previous list visible while a refetch is in flight.
     placeholderData: keepPreviousData,
-    queryFn: async () => {
-      const localApi = getDesktopLocalTranscriptionApi();
-      const localRecords = localApi ? await localApi.list() : [];
-
-      if (!isAuthenticated) return { cloudItems: [], localRecords };
-
-      const data = await api().getWithParams<FileListResponse | Record<string, unknown>>(
-        "/api/business/file/timeRange/list",
-        {
-          startTime: params.startTime,
-          endTime: params.endTime,
-        },
-      );
-      if (Array.isArray(data)) return { cloudItems: data, localRecords };
-      for (const key of ["list", "records", "data"]) {
-        const arr = (data as Record<string, unknown>)[key];
-        if (Array.isArray(arr)) return { cloudItems: arr, localRecords };
-      }
-      return { cloudItems: [], localRecords };
-    },
-    select: (result: FilesQueryResult): WorkspaceItem[] => {
-      const cloudItems = result.cloudItems.map((f) => {
-        const raw = f as Record<string, unknown>;
-        return {
-          id: String(raw.id ?? ""),
-          type: "file" as const,
-          title: String(raw.originalFilename ?? raw.name ?? raw.filename ?? ""),
-          updatedAt: String(raw.updateTime ?? ""),
-          createdAt: String(raw.createTime ?? raw.recordStartTime ?? ""),
-          folderId: raw.folderId as string | undefined,
-          tags: parseFileTags(raw),
-          recordingMode: parseFileRecordingMode(raw),
-          durationSeconds: parseFileDurationSeconds(raw),
-          contentType: typeof raw.contentType === "string" ? raw.contentType : undefined,
-        };
-      });
-      return mergeCloudAndLocalFiles(cloudItems, result.localRecords);
-    },
+    queryFn: () => fetchNotesList({ startTime: params.startTime, endTime: params.endTime }),
+    staleTime: LIST_STALE_TIME_MS,
     enabled: (isAuthenticated || !!getDesktopLocalTranscriptionApi()) && (params.enabled ?? true),
   });
 }
@@ -324,6 +367,16 @@ export function useFileDetail(fileId: string | null) {
       }),
     enabled: !!fileId && !isLocalFileId(fileId) && isAuthenticated,
   });
+}
+
+/**
+ * One-shot file/info lookup outside React (e.g. the chat insert guard).
+ * Resolves null when the backend answers `{ code: 200, data: null }` — the
+ * signature of a file id that does not exist on the currently signed-in
+ * server (ids are minted per environment); hard errors still throw.
+ */
+export async function fetchFileDetail(fileId: string): Promise<FileDetail | null> {
+  return api().getWithParams<FileDetail | null>("/api/business/file/info", { fileId });
 }
 
 export function useFileConclusions(fileId: string | null) {
@@ -439,6 +492,26 @@ export function useDeleteConclusion() {
       api().delete<unknown>(`/api/business/file/conclusion/${encodeURIComponent(conclusionId)}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["file-conclusions"] });
+    },
+  });
+}
+
+/**
+ * Insert a locally produced summary (e.g. an assistant chat reply filed by
+ * the user) as a conclusion of an existing file — no AI task is created and
+ * nothing is pushed. POST /api/business/file/conclusion/insert resolves to
+ * the new conclusionId. Omitting teamId targets a personal file; each call
+ * appends a new conclusion and never overwrites previous ones.
+ */
+export function useInsertConclusion() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: { fileId: string; conclusionText: string; teamId?: string }) =>
+      api().post<string>("/api/business/file/conclusion/insert", req),
+    onSuccess: (_conclusionId, req) => {
+      qc.invalidateQueries({ queryKey: ["file-conclusions", req.fileId] });
+      qc.invalidateQueries({ queryKey: ["files"] });
+      qc.invalidateQueries({ queryKey: ["notes"] });
     },
   });
 }
@@ -580,9 +653,14 @@ export function useTransferFile() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (req: TransferFileReq) =>
-      api().post<TransferFileResult>("/api/business/file/trans", req),
+      transcribeWithCreditsToast(() =>
+        api().post<TransferFileResult>("/api/business/file/trans", req),
+      ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["files"] });
+      // The submission just charged credits — refresh balance displays.
+      qc.invalidateQueries({ queryKey: ["user", "credits"] });
+      qc.invalidateQueries({ queryKey: ["user", "membership"] });
     },
   });
 }
@@ -976,7 +1054,11 @@ export async function rerunSummaryPipeline({
   getCurrentConclusions = (params) =>
     api().getWithParams<FileConclusion[]>("/api/business/file/conclusion/list", params),
   startProcessing = (request) =>
-    api().post<TransferFileResult>("/api/business/file/trans", request),
+    // Default (production) submission toasts the credits the server charged;
+    // test doubles injected via this parameter bypass the helper entirely.
+    transcribeWithCreditsToast(() =>
+      api().post<TransferFileResult>("/api/business/file/trans", request),
+    ),
   waitForProcessing = (args) => waitForTranscriptionCompletion(args),
   waitForConclusion = (args) => waitForConclusionCompletion(args),
 }: {
@@ -1019,6 +1101,9 @@ export function useRerunSummary() {
       qc.invalidateQueries({ queryKey: ["files"] });
       // The pipeline may also rename the file (AI title) — refresh the notes list.
       qc.invalidateQueries({ queryKey: ["notes"] });
+      // Transcription charged credits at submission — refresh balance displays.
+      qc.invalidateQueries({ queryKey: ["user", "credits"] });
+      qc.invalidateQueries({ queryKey: ["user", "membership"] });
       if (data.conclusion) {
         qc.setQueryData(["file-conclusions", req.fileId], [data.conclusion]);
       } else {

@@ -54,12 +54,16 @@ export {
   Filter,           // Filter controls
   Send,             // Send message (chat)
   X,                // Close / Dismiss
+  Minus,            // Window minimize (frameless desktop title bar)
   Upload,           // Upload action
   Copy,             // Copy to clipboard
   Check,            // Confirm / Copied
   Pencil,           // Rename / Edit inline
   MoreHorizontal,   // Context menu trigger
   GripVertical,     // Drag handle
+  ZoomIn,           // Image viewer zoom in
+  ZoomOut,          // Image viewer zoom out
+  Fullscreen,       // Image viewer fit to window
 
   // ── Content / Document ────────────────────────────────
   FileText,         // Generic document / file
@@ -76,6 +80,7 @@ export {
   Bold,             // Bold mark
   Italic,           // Italic mark
   Code,             // Inline code
+  CodeXml,          // Source view toggle (</>)
   ListOrdered,      // Ordered list
   ListChecks,       // Task list
   Quote,            // Blockquote
@@ -182,6 +187,21 @@ export const SpeechOff: LucideIcon = createLucideIcon("speech-off", [
   ["path", { d: "M19.8 17.8a7.5 7.5 0 0 0 .003-10.603" }],
   ["path", { d: "M17 15a3.5 3.5 0 0 0-.025-4.975" }],
   ["path", { d: "m2 2 20 20" }],
+]);
+
+// lucide 1.41 has no "note with a plus" glyph (NotebookPlus landed in later
+// releases), so compose one: the StickyNote outline with a plus set into the
+// body below the folded corner. Used for "file this reply into my notes".
+export const NotePlus: LucideIcon = createLucideIcon("note-plus", [
+  [
+    "path",
+    {
+      d: "M21 9a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 15 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2z",
+    },
+  ],
+  ["path", { d: "M15 3v5a1 1 0 0 0 1 1h5" }],
+  ["path", { d: "M12 11.5v6" }],
+  ["path", { d: "M9 14.5h6" }],
 ]);
 
 // Official WorkBuddy brand mark (workbuddy.cn), kept in full color. The

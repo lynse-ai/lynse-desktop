@@ -702,6 +702,28 @@ pub(crate) fn open_macos_privacy_pane(kind: &str) {
         .spawn();
 }
 
+/// Opens the OS privacy pane for one permission kind: System Settings on
+/// macOS (microphone / screen & system-audio recording), the microphone
+/// privacy page on Windows (loopback needs no consent there). Backs the
+/// onboarding toggles — a permission request that still ends ungranted hands
+/// the user straight to the pane where the grant lives.
+#[tauri::command]
+pub fn live_translation_open_privacy_pane(kind: String) -> CommandResult<()> {
+    #[cfg(target_os = "macos")]
+    {
+        open_macos_privacy_pane(if kind == "microphone" {
+            "microphone"
+        } else {
+            "screen"
+        });
+    }
+    #[cfg(target_os = "windows")]
+    if kind == "microphone" {
+        crate::windows_capture::open_microphone_privacy_settings();
+    }
+    Ok(())
+}
+
 /// Endpoint lists for the recording settings pickers. Windows returns the
 /// real WASAPI endpoints (stable ids + friendly names + defaults); other
 /// platforms return empty lists so the UI can hide the pickers.
@@ -891,11 +913,10 @@ pub async fn live_translation_start(
         started_at: session.started_at.clone(),
         provider: connections_provider(&request.connections),
     };
-    fs::write(
-        session.directory.join("session.json"),
-        serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
+    crate::atomic_write(
+        &session.directory.join("session.json"),
+        &serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
+    )?;
 
     // Computed before `request.connections` is moved into spawn_connections.
     let sources_argument = request.sources_argument();
@@ -984,8 +1005,10 @@ pub async fn live_translation_start(
                 // refused — without this line a failed start is invisible
                 // in the logs (the UI event alone proved easy to miss).
                 log::error!("Windows capture failed to start: {error}");
-                voice_end(&win_session);
-                emit_error(&win_app, None, error);
+                // Reset the session + UI immediately rather than leaving it in
+                // "connecting" until the start watchdog fires (or never, if the
+                // probe wedged): a bounded probe failure now lands here.
+                fail_capture_start(&win_app, &win_session, error);
             }
         });
     }
@@ -1727,8 +1750,14 @@ enum ProviderEmission {
 }
 
 fn save_recovery_segments(session: &LiveSession, segments: &[LiveSegment]) {
-    if let Ok(data) = serde_json::to_vec_pretty(segments) {
-        let _ = fs::write(session.directory.join("segments.json"), data);
+    let Ok(data) = serde_json::to_vec_pretty(segments) else {
+        return;
+    };
+    // Staged through a rename so a crash leaves the previous complete snapshot
+    // rather than a half-written file that recovery would read back as an empty
+    // transcript.
+    if let Err(error) = crate::atomic_write(&session.directory.join("segments.json"), &data) {
+        log::warn!("Failed to persist recovery segments: {error}");
     }
 }
 
@@ -2302,6 +2331,35 @@ fn spawn_silence_watchdog(app: AppHandle, session: Arc<LiveSession>) {
     });
 }
 
+/// Terminal recovery for a capture start that never reached `Ready`. Marks the
+/// session failed, surfaces the reason and tears down the recording-island UI.
+/// Shared by the Windows capture-thread error path and [`spawn_capture_start_watchdog`]
+/// so a slow or wedged audio stack always resets the UI instead of leaving the
+/// session stuck in "connecting". The `capture_stop` flag only winds down a
+/// still-alive capture thread; one wedged inside a COM call cannot observe it
+/// and leaks, but the session slot frees so the user can retry.
+fn fail_capture_start(app: &AppHandle, session: &Arc<LiveSession>, message: impl Into<String>) {
+    let manager = app.state::<LiveTranslationManager>();
+    let taken = manager
+        .session
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.take());
+    match taken {
+        Some(current) if Arc::ptr_eq(&current, session) => {}
+        // A newer session already replaced this one (or it was already reaped)
+        // — don't stomp on it.
+        _ => return,
+    }
+    session.capture_stop.store(false, Ordering::Relaxed);
+    voice_end(session);
+    clear_card_feed_target();
+    session.set_state("failed");
+    emit_snapshot(app, session);
+    set_recording_island_visible(app, false);
+    emit_error(app, None, message);
+}
+
 /// Start watchdog: a session that never leaves "connecting" — the capture
 /// engine wedged inside a WASAPI call, or failed before the event pump ever
 /// ran — would otherwise spin in the UI forever with no explanation. After
@@ -2325,26 +2383,9 @@ fn spawn_capture_start_watchdog(app: AppHandle, session: Arc<LiveSession>) {
             CAPTURE_START_TIMEOUT,
             session.session_id
         );
-        let manager = app.state::<LiveTranslationManager>();
-        let taken = manager
-            .session
-            .lock()
-            .ok()
-            .and_then(|mut guard| guard.take());
-        match taken {
-            Some(current) if Arc::ptr_eq(&current, &session) => {}
-            _ => return,
-        }
-        // Signals a still-alive capture thread to wind down; one wedged
-        // inside a COM call cannot observe this (see the function comment).
-        session.capture_stop.store(false, Ordering::Relaxed);
-        clear_card_feed_target();
-        session.set_state("failed");
-        emit_snapshot(&app, &session);
-        set_recording_island_visible(&app, false);
-        emit_error(
+        fail_capture_start(
             &app,
-            None,
+            &session,
             "启动录音超时：音频设备没有响应。请检查系统声音设置或插拔音频设备后重试。",
         );
     });
@@ -2386,6 +2427,7 @@ async fn finalize_session(app: AppHandle, session: Arc<LiveSession>) {
     // second, so a short grace keeps the transcript tail without making the
     // completion dialog wait.
     tokio::time::sleep(Duration::from_millis(1_500)).await;
+    log::info!("Persisting recording: session={}", session.session_id);
     let persist_result = tauri::async_runtime::spawn_blocking({
         let app = app.clone();
         let session = session.clone();
@@ -2399,15 +2441,26 @@ async fn finalize_session(app: AppHandle, session: Arc<LiveSession>) {
     );
     match persist_result {
         Ok(Ok(completed)) => {
+            // A saved recording leaves no other trace in the log; without
+            // this line "did the save land?" is unanswerable from a log
+            // alone (the UI events are transient).
+            log::info!(
+                "Recording persisted: session={} playback={} durationMs={}",
+                completed.session_id,
+                completed.playback_path,
+                completed.duration_ms
+            );
             let _ = app.emit(
                 LIVE_EVENT,
                 json!({ "type": "completed", "session": completed }),
             );
         }
         Ok(Err(error)) => {
+            log::error!("Persisting recording failed: {error}");
             emit_error(&app, None, format!("保存录音失败：{error}"));
         }
         Err(error) => {
+            log::error!("Persisting recording panicked: {error}");
             emit_error(&app, None, format!("保存录音失败：{error}"));
         }
     }
@@ -2575,9 +2628,9 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
     });
     let duration_ms = session.last_elapsed_ms.load(Ordering::Relaxed);
     let transcript_path = session.directory.join("transcript.json");
-    fs::write(
+    crate::atomic_write(
         &transcript_path,
-        serde_json::to_vec_pretty(&json!({
+        &serde_json::to_vec_pretty(&json!({
             "sessionId": session.session_id,
             "sourceLanguage": session.source_language.read().expect("live source language").clone(),
             "targetLanguage": session.target_language.read().expect("live target language").clone(),
@@ -2585,16 +2638,17 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
             "segments": segments,
         }))
         .map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
+    )?;
 
     let mut timeline = String::new();
     for segment in &segments {
         timeline.push_str(&serde_json::to_string(segment).map_err(|error| error.to_string())?);
         timeline.push('\n');
     }
-    fs::write(session.directory.join("timeline.jsonl"), timeline)
-        .map_err(|error| error.to_string())?;
+    crate::atomic_write(
+        &session.directory.join("timeline.jsonl"),
+        timeline.as_bytes(),
+    )?;
 
     let transcript_text = segments
         .iter()
@@ -3034,11 +3088,29 @@ pub fn live_translation_discard(
         return Err("cannot discard the active live translation session".to_owned());
     }
     remove_store_value(&app, "local-transcriptions", &format!("local:live:{session_id}"))?;
-    let directory = recovery_root(&app)?.join(session_id);
-    if directory.exists() {
-        fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
+    remove_recorded_session(&app, &session_id)
+}
+
+/// Delete a finished session's directory under the recordings root. Refuses
+/// anything that does not resolve to a directory inside that root, so a
+/// malformed session id can never walk out of the app's own data.
+pub(crate) fn remove_recorded_session(app: &AppHandle, session_id: &str) -> CommandResult<()> {
+    if !valid_session_id(session_id) {
+        return Err("invalid live translation session id".to_owned());
     }
-    Ok(())
+    let root = recovery_root(app)?;
+    let directory = root.join(session_id);
+    let Ok(resolved) = directory.canonicalize() else {
+        return Ok(()); // already gone — nothing to clean up
+    };
+    let contained = root
+        .canonicalize()
+        .map(|root| resolved.starts_with(&root))
+        .unwrap_or(false);
+    if !contained {
+        return Err("refusing to delete a path outside the recordings directory".to_owned());
+    }
+    fs::remove_dir_all(&resolved).map_err(|error| error.to_string())
 }
 
 /// Re-run echo cancellation over a recording's raw tracks (the detail
@@ -3257,10 +3329,18 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
     // zeroed placeholders would fail `inspect_wav` below and blank the
     // duration even though the audio is all there.
     repair_capture_headers(&directory);
-    let mut segments: Vec<LiveSegment> = fs::read(directory.join("segments.json"))
-        .ok()
-        .and_then(|data| serde_json::from_slice(&data).ok())
-        .unwrap_or_default();
+    let mut segments: Vec<LiveSegment> = match fs::read(directory.join("segments.json"))
+        .map_err(|error| error.to_string())
+        .and_then(|data| serde_json::from_slice(&data).map_err(|error| error.to_string()))
+    {
+        Ok(segments) => segments,
+        Err(error) => {
+            // Recovery still returns the audio; say so instead of quietly
+            // handing back a transcript-less recording.
+            log::warn!("Recovery transcript unreadable for {session_id}: {error}");
+            Vec::new()
+        }
+    };
     for segment in &mut segments {
         if segment.is_final {
             segment.recognized_final = true;
@@ -3955,6 +4035,20 @@ fn handle_engine_event(
             if mic > MIC_SILENCE_LEVEL || (session.wants_system && system > MIC_SILENCE_LEVEL) {
                 session.mark_voice_activity();
             }
+            // Forward at the engine's 200 ms cadence: the macOS sidecar's
+            // `levels` lines are what move the page timer/meters while
+            // recording, and this is their Windows equivalent — without it
+            // the page never updates between the Ready and stopping
+            // snapshots.
+            let _ = app.emit(
+                LIVE_EVENT,
+                json!({
+                    "type": "levels",
+                    "mic": mic,
+                    "system": system,
+                    "elapsedMs": session.last_elapsed_ms.load(Ordering::Relaxed),
+                }),
+            );
         }
         EngineEvent::AudioFrame {
             source,

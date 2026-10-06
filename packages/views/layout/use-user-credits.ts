@@ -28,6 +28,102 @@ export interface MembershipQuota {
   [key: string]: unknown;
 }
 
+/** One row of GET /api/business/pointsLog/queryPointsLog (PointsLog VO). */
+export interface PointsLogEntry {
+  id?: string;
+  createTime?: string;
+  /** 0 purchase (充电包/加油包) · 1 consume · 2 moved-in · 3 transferred ·
+   *  4 transcription-failure refund · 5 team-dissolution refund · 6 initial
+   *  gift · 7 monthly login reward (observed server-side 2026-09-30). */
+  changeType?: number;
+  /** Entry amount in points (positive; direction comes from operationType). */
+  pointsAmount?: number;
+  /** "+" adds points, "−" consumes them; absent on some legacy rows. */
+  operationType?: string;
+  /** Free-text detail — booster purchases read 充电包充值（PAID），分钟数：N. */
+  pointsDetails?: string | null;
+  [key: string]: unknown;
+}
+
+function unpackLogRows(data: unknown): PointsLogEntry[] {
+  if (Array.isArray(data)) return data;
+  const o = (data ?? {}) as Record<string, PointsLogEntry[]>;
+  return o.data ?? o.rows ?? o.list ?? [];
+}
+
+/** The 加油包 (booster) is a separate bucket the server only spends once the
+ *  regular points are exhausted, yet customer/current exposes no balance for
+ *  it — the only machine-readable trace is the points log itself:
+ *  purchases are changeType 0 rows ("充电包充值…"), booster consumption rows
+ *  mention 加油包/充电包/新积分 in pointsDetails. Balance = purchased − used. */
+function isBoosterPurchase(row: PointsLogEntry): boolean {
+  return row.changeType === 0 && row.operationType !== "-";
+}
+function isBoosterConsumption(row: PointsLogEntry): boolean {
+  if (row.operationType !== "-") return false;
+  const detail = typeof row.pointsDetails === "string" ? row.pointsDetails : "";
+  return /加油包|充电包|新积分/.test(detail);
+}
+
+export interface PointsLedger {
+  /** Newest-first rows from page 1 (for the recent-activity list). */
+  recent: PointsLogEntry[];
+  /** 加油包 remaining, computed from the full log; null while loading. */
+  boosterRemaining: number | null;
+  /** Total 加油包 points ever purchased. */
+  boosterPurchased: number;
+  /** Cumulative monthly-login-reward points ever granted (changeType 7). */
+  monthlyGiftTotal: number;
+}
+
+/**
+ * Personal points ledger: the recent rows for the activity list plus the
+ * booster-pack balance derived by walking the whole log (bounded — see
+ * maxPages; accounts older/larger than the cap get a slightly understated
+ * booster balance rather than an error).
+ */
+export function usePointsLedger(recentCount = 50, pageSize = 100, maxPages = 10) {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+
+  return useQuery<PointsLedger>({
+    queryKey: ["user", "pointsLedger", pageSize, maxPages],
+    queryFn: async () => {
+      const all: PointsLogEntry[] = [];
+      for (let page = 1; page <= maxPages; page++) {
+        const data = await api().getWithParams<unknown>(
+          "/api/business/pointsLog/queryPointsLog",
+          { pointsLogType: "personal", pageNum: page, pageSize },
+        );
+        const batch = unpackLogRows(data);
+        all.push(...batch);
+        if (batch.length < pageSize) break;
+      }
+      let boosterRemaining = 0;
+      let boosterPurchased = 0;
+      let monthlyGiftTotal = 0;
+      for (const row of all) {
+        if (isBoosterPurchase(row)) {
+          boosterPurchased += Number(row.pointsAmount) || 0;
+          boosterRemaining += Number(row.pointsAmount) || 0;
+        } else if (isBoosterConsumption(row)) {
+          boosterRemaining -= Number(row.pointsAmount) || 0;
+        }
+        if (row.changeType === 7 && row.operationType !== "-") {
+          monthlyGiftTotal += Number(row.pointsAmount) || 0;
+        }
+      }
+      return {
+        recent: all.slice(0, recentCount),
+        boosterRemaining: Math.max(0, boosterRemaining),
+        boosterPurchased,
+        monthlyGiftTotal,
+      };
+    },
+    enabled: isAuthenticated,
+    staleTime: 60_000,
+  });
+}
+
 export function useUserCredits() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 

@@ -7,6 +7,126 @@
 > `release: v1.0.0(1)` and was never tagged; 1.0.1 and 1.0.2 appear nowhere in
 > the history (that commit documents a `vA.B.C(N)` build-counter tag
 > convention), so they are not listed either.
+>
+> Entries since 1.1.7 ship in both English and Chinese (New Features/Fixed plus
+> 新功能/修复). The release pipeline extracts the whole version section
+> verbatim, so the in-app update notes render both languages.
+
+## 1.1.7 (2026-10-04)
+
+### New Features
+
+- The Connections section ships on desktop: a single place to browse the third-party services Lynse will integrate with, with per-service permission scopes and a connect flow. The UI goes live first; the backend link-up rolls out next.
+- Voiceprints work on Windows too: the sherpa-onnx venv is now located through the platform's own layout (`Scripts\python.exe` instead of the POSIX `bin/python`), dependencies install through `python -m pip`, and the interpreter probe accepts the names Windows actually provides (`python`, `py`).
+- VibeVoice-ASR-BitNet 1.5B (Microsoft, MIT) is now available on Windows: the `vibeasr` sidecar ships in the shared runtime statically linked (no MinGW runtime DLLs needed), the model card joins the plugin community with pinned sizes and SHA-256, and the engine is selectable in STT settings outside macOS. Verified end-to-end on Windows (speech → transcript via the streaming protocol).
+- Downloaded model files are now verified against pinned SHA-256 digests (previously only the voiceprint model was pinned), and model sizes in the catalog match the real artifacts byte-for-byte, so download progress is exact.
+
+### Fixed
+
+- The in-app update channel is repaired. The served update manifest had been stuck at 1.1.0 since the CloudBase mirror job was accidentally dropped, so 1.1.5 and 1.1.6 never reached installed clients. Releases mirror to CloudBase again, the release pipeline now verifies the live manifest after publishing (and fails loudly when the mirror is missing), and a daily check watches for the manifest trailing the newest tag. Clients from any recent version pick up this release on their next update check.
+- Startup crashes are no longer silent. The panic logger now installs after the file log backend exists, so panics during plugin init, tray setup or window creation land in the daily log file instead of the app just vanishing (the "Lynse quits itself" report shape on Windows).
+- Guarded Tauri's non-idempotent event unlisten, so component cleanups that race their own listener teardown (unmount before the listen resolves, StrictMode double-mount) no longer throw unhandled rejections or leak native event handlers.
+- On Windows the app drew its own 34px bar *under* the native title bar, leaving a dead strip across the top. Windows now runs frameless (`tauri.windows.conf.json` sets `decorations: false`) so that bar *is* the title bar — it carries minimize/maximize/close on its right edge, and the sign-in window gets the same buttons since it has no title bar of its own. macOS layout is untouched.
+- Windows offline Whisper transcription failed with "无法读取 Whisper 输出": newer whisper-cli builds write their JSON next to the input file (`input.wav.json`) instead of the `-of` base (`whisper-output.json`). The adapter now accepts both layouts. Verified end-to-end on Windows via real UI-driven transcription (model download → SHA-256 check → transcript persisted).
+- Model and runtime downloads no longer fail SHA-256 verification on Chinese-locale Windows: certutil's localized output header ("SHA256 的 … 哈希:") was being parsed as the digest. The parser now scans for the 64-hex-digit token, which is locale-independent.
+
+### 新功能
+
+- 桌面端全新「Connections（集成连接）」区块上线：一个入口浏览 Lynse 将接入的第三方服务，展示每项服务的权限范围和连接流程。本期界面先行，后端联通随后跟上。
+- Windows 也支持声纹了：sherpa-onnx venv 改为按 Windows 平台自身布局定位（`Scripts\python.exe` 取代 POSIX 的 `bin/python`），依赖通过 `python -m pip` 安装，解释器探测接受 Windows 实际提供的名称（`python`、`py`）。
+- Windows 上可用 VibeVoice-ASR-BitNet 1.5B（微软，MIT 协议）：`vibeasr` sidecar 以静态链接方式随共享运行时发布（无需 MinGW 运行时 DLL），模型卡进入插件社区（固定大小与 SHA-256），非 macOS 平台可在转写设置中选择该引擎。已在 Windows 端到端实测（语音 → 流式协议转写）。
+- 下载的模型文件现在全部校验固定 SHA-256（此前只有声纹模型校验），目录中的模型大小与真实产物逐字节一致，下载进度因此精确。
+
+### 修复
+
+- 应用内更新通道已修复：CloudBase 镜像任务此前被误删，线上更新清单一直停留在 1.1.0，1.1.5 和 1.1.6 从未推送给已安装用户。现在发版会重新镜像到 CloudBase，发版流水线在发布后校验线上清单（镜像缺失时直接失败），并有每日巡检盯住清单落后。任意近期版本的客户端下次检查更新即可收到本版本。
+- 启动期崩溃不再无声无息：panic 记录器现在等文件日志后端就绪后才安装，插件初始化、托盘创建、窗口创建阶段的崩溃都能写入每日日志文件，而不是应用直接消失（Windows 上「Lynse 自己退出」类反馈的根因）。
+- 修复 Tauri 事件 unlisten 不幂等的问题：组件卸载与监听清理竞态（listen 未返回就卸载、StrictMode 双挂载）不再抛出未处理 rejection，也不再泄漏原生事件处理器。
+- Windows 上应用自绘的 34px 条画在原生标题栏下方，顶部留下一条死区。现在 Windows 以无边框运行（`tauri.windows.conf.json` 设 `decorations: false`），该条就是标题栏——右缘带最小化/最大化/关闭按钮，登录窗同样带这三个按钮（它没有系统标题栏）。macOS 布局不受影响。
+- Windows 离线 Whisper 转写报「无法读取 Whisper 输出」：新版 whisper-cli 把 JSON 写在输入文件旁（`input.wav.json`）而不是 `-of` 指定的基名（`whisper-output.json`）。适配器现在两种布局都接受。已在 Windows 通过真实 UI 驱动转写端到端验证（模型下载 → SHA-256 校验 → 转写持久化）。
+- 中文系统的 Windows 上模型与运行时下载不再因 SHA-256 校验失败：certutil 本地化输出的表头（「SHA256 的 … 哈希：」）曾被当成摘要解析。解析器现在扫描 64 位十六进制 token，与系统语言无关。
+
+## 1.1.6 (2026-10-02)
+
+### New Features
+
+- Voiceprint engine rebuilt on sherpa-onnx with the 3D-Speaker CAM++ model (Apache-2.0, safe for commercial use): a ~28 MB download from the STT settings replaces the old bundled engine, and matching now runs in a lightweight environment without the heavy transcription stack.
+- The sign-in window is redesigned as a compact welcome screen with a 1:1 split layout and an illustration card, returning to the dashboard size after signing in.
+
+### Changed
+
+- Voiceprints enrolled with an earlier engine no longer participate in matching; they stay listed with their engine badge and a hint to re-save them from the original transcript.
+- The onboarding page adapts to narrower windows (900 px breakpoint) with a smaller logo.
+
+## 1.1.5 (2026-10-02)
+
+### New Features
+
+- First-launch permission onboarding: after signing in, a guided page walks through microphone and transcription permissions once, can open the macOS privacy pane directly when something is denied, and never shows again once done.
+- While a recording or live-transcription session is running, the title bar shows a floating pill with the session title, timer, and pause/stop controls; page titles pad out of its way.
+- Chat attachments: images open in a zoomable viewer, and any attachment can be saved to the Downloads folder through the native save dialog.
+- List queries (notes, files, meetings) are cached locally and restored instantly on return visits; the cache is cleared on sign-out.
+- On a note page, opening the AI chat panel now collapses the list to give it room, and closing the panel restores the list (unless it was collapsed manually).
+
+### Fixed
+
+- "Insert into note" from chat now verifies the target note exists on the signed-in server before filing, names it in the success toast, and keeps the assistant pinned to the backend its session was created on — no more silent "success" into a note that isn't there.
+- Entering the notes page always refetches notes and folders so stale lists can't linger.
+- Numbered lists in replies no longer trigger the option picker: the choice modal only opens when the text actually reads as a menu.
+
+### Changed
+
+- The AI assistant now connects to the new backend service endpoint for improved reliability.
+
+## 1.1.4(2) (2026-09-28)
+
+### Fixed
+
+- Fixed adding a to-do item to the system calendar: the desktop bridge passed snake_case argument names, which Tauri rejected as `missing required key todoId`.
+
+## 1.1.4 (2026-09-28)
+
+### Fixed
+
+- Fixed a memory leak in the Markdown note editor: an editor instance created asynchronously was left alive when the editor unmounted.
+
+## 1.1.3 (2026-09-27)
+
+### New Features
+
+- The appearance settings are rebuilt around three simple choices: theme preview cards (system / light / dark), a theme preset — Lynse, Linear, or Notion — that restyles surfaces in both light and dark modes at once, and a single accent color (quick swatches, a color picker, or a hex value). Picking Lynse again resets everything; an accent override recolors buttons, links, highlights and the sidebar selection while the preset's surfaces stay.
+- AI assistant replies can be inserted into a note with one click.
+- Local transcription gains a MECT-B2 voiceprint engine, with model download and switching in the STT settings.
+
+### Fixed
+
+- Dark Linear/Notion presets no longer paint an opaque sidebar over the macOS vibrancy frost — the rail dissolves into the frosted material like the default dark theme.
+
+### Changed
+
+- Build channels are restructured to official/debug, and the runtime archives and update feeds now use CloudBase static hosting as the primary source (GitHub remains a fallback for older tags). The "new version" fallback link points at www.lynse.cn.
+## 1.1.1 (2026-09-27)
+
+### New Features
+
+- 聊天回复支持附件：图片卡片（全屏查看、下载、转发）与 PDF 文件卡片。过期的下载链接会在打开前重新签名，不再出现点开后链接已失效的情况。
+- AI 助手可以配置独立的后端地址，常规业务请求不受影响。
+
+### Performance
+
+- 流式回答不会再闪出半个 emoji 或把英文单词截断——打字机切片现在对齐到字符与单词边界。
+- 流式输出时活跃会话的状态写入合并为一次更新，每帧的渲染开销明显下降。
+
+### Fixed
+
+- 录音保存到云不再依赖云存储桶对桌面端跨域（CORS）的放行配置：音频由应用原生层签名后直传，失败时日志会记录上传地址与云端返回的具体内容。
+- 上传失败现在会指明是三步中的哪一步（创建占位 / 获取上传凭证 / 通知上传完成）以及服务端返回码，不再只显示一句「系统繁忙」。
+- 在笔记列表里删除本地录音后，该行不再残留在列表中；删除失败也会显示原因，而不是看起来毫无反应。
+- 删除本地录音会一并清理它在磁盘上的音频目录，不再留下孤立的 WAV 文件。
+
+### Changed
+
+- 侧边栏收窄，macOS 红绿灯间距与位置随之调整；首页隐藏滚动条。
 
 ## 1.1.0 (2026-09-23)
 

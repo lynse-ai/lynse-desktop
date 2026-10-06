@@ -36,6 +36,18 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
+// The model catalog renders the full lineup only on macOS; off macOS just the
+// whisper tiers survive (visibleModelCatalog). The existing card tests run as
+// mac, the Windows-hide test flips the flag — hence a getter, not a constant.
+const sttPlatform = vi.hoisted(() => ({ mac: true }));
+vi.mock("../layout/use-maximized", () => ({
+  isTauri: true,
+  useMaximized: () => false,
+  get isMacDesktop() {
+    return sttPlatform.mac;
+  },
+}));
+
 import { toast } from "sonner";
 import { feishuBotPlugin } from "./builtin/feishu-bot";
 import { PluginHost } from "./plugin-host";
@@ -67,6 +79,7 @@ function firstMatch(elements: HTMLElement[]): HTMLElement {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  sttPlatform.mac = true;
   usePluginStore.setState({ entries: {} });
   vi.stubGlobal(
     "fetch",
@@ -249,5 +262,26 @@ describe("community model card uninstall guard (P4)", () => {
     await waitFor(() =>
       expect(localApi.downloadSttModel).toHaveBeenCalledWith("funasr", "funasr-paraformer"),
     );
+  });
+
+  it("hides the MLX/venv-bound engine cards off macOS (Windows build)", async () => {
+    sttPlatform.mac = false;
+    mockLocalApi(
+      { default: { provider: "whisper", model: "large-v3-turbo-q5_0" }, per_language: {} },
+      "not_installed",
+    );
+    seedEntry("lynse.model.funasr-latest", true);
+    render(<PluginCommunitySection />);
+
+    // Only the sidecar engines (whisper tiers + VibeVoice) are listed;
+    // funasr/qwen3/whisperx cannot even create their venvs on Windows, so
+    // their cards must not offer downloads.
+    expect(screen.queryByText("plugins.models.funasr.name")).toBeNull();
+    expect(screen.queryByText("plugins.models.qwen3Large.name")).toBeNull();
+    expect(screen.queryByText("plugins.models.whisperx.name")).toBeNull();
+    expect(await screen.findByText("plugins.models.whisperTurbo.name")).toBeTruthy();
+    expect(screen.getByText("plugins.models.whisperMedium.name")).toBeTruthy();
+    expect(screen.getByText("plugins.models.whisperSmall.name")).toBeTruthy();
+    expect(screen.getByText("plugins.models.vibevoice.name")).toBeTruthy();
   });
 });

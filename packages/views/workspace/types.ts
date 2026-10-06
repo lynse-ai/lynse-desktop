@@ -23,6 +23,8 @@ export interface WorkspaceItem {
    *  progress pill and retry affordance — list cards show a local-recording
    *  badge instead of encoding this in `tags`. */
   localStatus?: LocalTranscriptionStatus;
+  /** Cloud files only: owning team (needed by team-scoped write endpoints). */
+  teamId?: string;
 }
 
 export interface FileItem {
@@ -209,6 +211,8 @@ export interface LocalVoiceprint {
   sampleRecordId: string;
   sampleSegmentIds: string[];
   embedding: number[];
+  /** Embedding model family ("3dspeaker"); "campplus"/"mect" only appear on entries enrolled with previous engines, and they never match. */
+  backend?: string;
   sampleText?: string;
 }
 
@@ -281,6 +285,13 @@ export interface ChatMessage {
   attachments?: ChatAttachment[];
   /** Marks an errored assistant message so the UI can style it. */
   error?: boolean;
+  /**
+   * Cloud file ids this turn referenced (@ mentions / the selected meeting).
+   * Kept on the user message so reply actions — e.g. filing an assistant
+   * reply as that note's summary — can still resolve the target file after
+   * a history reload.
+   */
+  fileIds?: string[];
   /** Structured confirmation prompt emitted by the assistant (a2UI-style). */
   confirm?: ChatConfirm;
   /** Human-handoff link; shown as a "contact support" button under the reply. */

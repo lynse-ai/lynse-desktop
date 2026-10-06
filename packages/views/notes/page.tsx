@@ -7,7 +7,7 @@ import { useWorkspaceStore } from "../workspace/store";
 import { ContentPanel } from "../workspace/content-panel";
 import { ChatPanel } from "../workspace/right-panel/chat-panel";
 import { ResizableHandle } from "../workspace/resizable-handle";
-import { TitleBar } from "../layout/title-bar";
+import { WorkspaceTitleBarSlot } from "../layout/title-bar";
 import {
   useNotes,
   useDeleteWorkspaceFiles,
@@ -15,6 +15,8 @@ import {
   useRerunSummary,
   useTemplateCategories,
   isTranscriptionCompleted,
+  NOTES_WIDE_WINDOW_START,
+  notesWideWindowEnd,
 } from "../workspace/hooks/use-files";
 import { useMoveFiles } from "../workspace/hooks/use-folder-mutations";
 import { useFolders } from "../workspace/hooks/use-folders";
@@ -39,7 +41,7 @@ import { useNavigation } from "../navigation";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
 import { useAuthStore } from "@lynse/core/auth";
-import { useNotificationStore } from "../notifications/use-notification-store";
+import { markTypesRead, useNotificationStore } from "../notifications/use-notification-store";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -92,14 +94,6 @@ function saveNotesCache(items: WorkspaceItem[]) {
   } catch {
     // Ignore quota / serialization errors: the cache is best-effort.
   }
-}
-
-/** Format a Date as the backend's `YYYY-MM-DDTHH:MM:SS` (no timezone suffix). */
-function toApiDateTime(d: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
-    d.getHours(),
-  )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 type TimeBucket = "today" | "yesterday" | "thisWeek" | "thisMonth" | "lastMonth" | "month";
@@ -308,21 +302,73 @@ export function NotesPage() {
   const layoutRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [isListResizing, setIsListResizing] = useState(false);
+  // The app title bar's middle-panel toggle hides the list column while a
+  // note is open, giving the document the full width.
+  const [isListCollapsed, setIsListCollapsed] = useState(false);
   // While the chat panel handle is dragged, its width animation is disabled so
   // the panel tracks the pointer 1:1 (same gate as workspace-layout.tsx).
   const [isChatPanelResizing, setIsChatPanelResizing] = useState(false);
 
-  // Stable for the session: a bare `new Date()` here would change the query key
-  // on every render, miss the cache and blank the list.
-  const endTime = useMemo(() => {
-    const d = new Date();
-    d.setHours(23, 59, 59, 0);
-    return toApiDateTime(d);
+  // A closed detail view has no list to collapse next to; reset so the next
+  // note opens with the list visible.
+  useEffect(() => {
+    if (!selectedItemId) setIsListCollapsed(false);
+  }, [selectedItemId]);
+
+  // The AI chat panel and the notes list compete for width: opening the
+  // assistant collapses the list, closing it gives the list back. A list the
+  // user had already collapsed themselves stays collapsed on close.
+  const isListCollapsedRef = useRef(isListCollapsed);
+  isListCollapsedRef.current = isListCollapsed;
+  const chatListLinkRef = useRef({ prevChatVisible: chatPanelVisible, collapsedByChat: false });
+  useEffect(() => {
+    const link = chatListLinkRef.current;
+    if (link.prevChatVisible === chatPanelVisible) return;
+    link.prevChatVisible = chatPanelVisible;
+    if (chatPanelVisible) {
+      link.collapsedByChat = !isListCollapsedRef.current;
+      setIsListCollapsed(true);
+    } else if (link.collapsedByChat) {
+      link.collapsedByChat = false;
+      setIsListCollapsed(false);
+    }
+  }, [chatPanelVisible]);
+
+  // Landing on Notes is "seeing" its module notifications (transcription
+  // completions, vault sync) — clear the sidebar's notes dot.
+  useEffect(() => {
+    markTypesRead(["transcription", "sync"]);
   }, []);
+
+  // Actual rendered list width (CSS clamp of the persisted width against the
+  // container) — reported to the app title bar so its middle-panel divider
+  // tracks the list's right edge, including during drag-resize.
+  const [listContainerWidth, setListContainerWidth] = useState(0);
+  useEffect(() => {
+    const el = layoutRef.current;
+    if (!el) return;
+    const update = () => setListContainerWidth(el.clientWidth);
+    update();
+    // jsdom (tests) has no ResizeObserver; the initial measure above still ran.
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const listWidth =
+    listContainerWidth > 0
+      ? Math.max(300, Math.min(notesListWidth, listContainerWidth - 520))
+      : notesListWidth;
+
+  // Stable for the session: a bare `new Date()` here would change the query key
+  // on every render, miss the cache and blank the list. Shared with the
+  // heatmap and the todo source-title lookup so all wide consumers read the
+  // same cache entry.
+  const endTime = useMemo(() => notesWideWindowEnd(), []);
 
   const { data: files, isFetching: filesFetching } = useNotes({
     // Wide range → effectively "all my meetings" (recordings + their notes).
-    startTime: "2020-01-01T00:00:00",
+    startTime: NOTES_WIDE_WINDOW_START,
     endTime,
   });
   const { data: folders } = useFolders();
@@ -702,9 +748,10 @@ export function NotesPage() {
           "relative flex min-w-0 flex-col overflow-hidden",
           selectedItemId ? "shrink-0" : "flex-1",
           selectedItemId && !isListResizing ? "transition-[width] duration-300" : "",
+          selectedItemId && isListCollapsed && "w-0",
         )}
         style={
-          selectedItemId
+          selectedItemId && !isListCollapsed
             ? { width: `clamp(300px, ${notesListWidth}px, calc(100% - 520px))` }
             : undefined
         }
@@ -958,15 +1005,28 @@ export function NotesPage() {
             transition={reduceMotion ? { duration: 0 } : { duration: 0.26, ease: [0.23, 1, 0.32, 1] }}
             className="flex min-w-0 flex-1 bg-background"
           >
-            <ResizableHandle
-              label={t("notes.resize_list")}
-              onResize={handleNotesListResize}
-              onResizeStart={() => setIsListResizing(true)}
-              onResizeEnd={() => setIsListResizing(false)}
-              side="right"
-            />
+            {!isListCollapsed && (
+              <ResizableHandle
+                label={t("notes.resize_list")}
+                onResize={handleNotesListResize}
+                onResizeStart={() => setIsListResizing(true)}
+                onResizeEnd={() => setIsListResizing(false)}
+                side="right"
+              />
+            )}
             <div className="flex min-w-0 flex-1 flex-col">
-              <TitleBar />
+              <WorkspaceTitleBarSlot
+                middleToggle={
+                  selectedItemId
+                    ? {
+                        collapsed: isListCollapsed,
+                        onToggle: () => setIsListCollapsed((c) => !c),
+                        label: t("notes.toggle_list"),
+                        panelWidth: listWidth,
+                      }
+                    : undefined
+                }
+              />
               <div className="flex min-h-0 flex-1">
                 <ContentPanel />
                 <AnimatePresence initial={false}>

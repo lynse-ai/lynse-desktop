@@ -32,7 +32,10 @@ export function sendButton(page: Page): Locator {
 }
 
 export function stopButton(page: Page): Locator {
-  return page.getByRole("button", chatSelectors.stop);
+  // CSS attribute locator on purpose: the confirm dialog (Base UI) marks the
+  // page background aria-hidden while open, which hides it from role queries
+  // and would let `waitForTurnDone` pass while a turn is still running.
+  return page.locator('button[title="Stop"], button[aria-label="Stop"]');
 }
 
 /** Quick-prompt chips by i18n key → English label (chat/page.tsx QUICK_PROMPTS). */

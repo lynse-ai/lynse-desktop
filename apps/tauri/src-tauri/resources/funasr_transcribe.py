@@ -18,8 +18,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-speakers", type=int, default=0)
     parser.add_argument("--hotword", default="")
     parser.add_argument("--prompt", default="", help="Trailing prior context fed to the model as an initial prompt to reduce hallucination and keep专有名词 consistent.")
-    parser.add_argument("--extract-voiceprint", action="store_true")
-    parser.add_argument("--segments-json", default="[]")
     parser.add_argument("--device", default=os.environ.get("LYNSE_FUNASR_DEVICE", "auto"))
     return parser.parse_args()
 
@@ -77,82 +75,9 @@ def mark_ready(model_dir: str) -> None:
         ready.write_text("ok\n", encoding="utf-8")
 
 
-def build_voiceprint_model(model_dir: str, device: str):
-    try:
-        import torch
-        from funasr.models.campplus.model import CAMPPlus
-    except Exception as exc:
-        print(f"FunASR CAMPPlus is not available: {exc}", file=sys.stderr)
-        raise SystemExit(3) from exc
-
-    model_path = Path(model_dir) / "iic" / "speech_campplus_sv_zh-cn_16k-common" / "campplus_cn_common.bin"
-    if not model_path.exists():
-        print(f"CAMPPlus model is not installed: {model_path}", file=sys.stderr)
-        raise SystemExit(4)
-
-    model = CAMPPlus(feat_dim=80, embedding_size=192)
-    model.load_state_dict(torch.load(str(model_path), map_location=device or "cpu"), strict=True)
-    model.eval()
-    model.to(device or "cpu")
-    return model
-
-
-def extract_voiceprint_embeddings(audio_path: str, segments_json: str, model_dir: str, device: str):
-    try:
-        import librosa
-        import numpy as np
-        import torch
-        from funasr.models.campplus.utils import extract_feature
-    except Exception as exc:
-        print(f"Voiceprint dependencies are not available: {exc}", file=sys.stderr)
-        raise SystemExit(3) from exc
-
-    segments = json.loads(segments_json)
-    if not isinstance(segments, list) or not segments:
-        print("segments-json must be a non-empty JSON array", file=sys.stderr)
-        raise SystemExit(2)
-
-    model = build_voiceprint_model(model_dir, device)
-    waveform, _sr = librosa.load(audio_path, sr=16000, mono=True)
-    embeddings = []
-
-    for segment in segments:
-        segment_id = str(segment.get("id") or "")
-        start_ms = max(0, int(segment.get("startMs") or segment.get("start_ms") or 0))
-        end_ms = int(segment.get("endMs") or segment.get("end_ms") or 0)
-        if not segment_id or end_ms <= start_ms:
-            continue
-
-        start_sample = int(start_ms * 16)
-        end_sample = min(len(waveform), int(end_ms * 16))
-        samples = waveform[start_sample:end_sample].astype("float32")
-        min_samples = int(float(os.environ.get("LYNSE_VOICEPRINT_MIN_SECONDS", "1.5")) * 16000)
-        if samples.shape[0] < min_samples:
-            samples = np.pad(samples, (0, min_samples - samples.shape[0]), "constant")
-
-        features, _lengths, _times = extract_feature([torch.from_numpy(samples)])
-        with torch.no_grad():
-            embedding = model(features.to(device or "cpu").float()).squeeze(0).cpu().numpy()
-        norm = float(np.linalg.norm(embedding))
-        if norm > 0:
-            embedding = embedding / norm
-        embeddings.append({
-            "id": segment_id,
-            "embedding": embedding.astype("float32").tolist(),
-        })
-
-    print(json.dumps({"embeddings": embeddings}, ensure_ascii=False))
-    return 0
-
-
 def main() -> int:
     args = parse_args()
     device = resolve_device(args.device)
-    if args.extract_voiceprint:
-        if not args.audio_path:
-            print("usage: funasr_transcribe.py <audio_path> --extract-voiceprint --segments-json <json>", file=sys.stderr)
-            return 2
-        return extract_voiceprint_embeddings(args.audio_path, args.segments_json, args.model_dir, device)
 
     model = build_model(args.model_dir, device)
 

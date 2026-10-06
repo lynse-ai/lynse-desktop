@@ -2,6 +2,11 @@ import http from "node:http";
 import { randomUUID } from "node:crypto";
 import { AddressInfo } from "node:net";
 import { defaultJsonRoutes } from "./api-mocks";
+import {
+  createIntegrationsState,
+  handleIntegrationsRequest,
+  type IntegrationsMockState,
+} from "./integrations-mock";
 import type { ChatScript, HttpErrorResponse, ScriptResponse } from "./chat-script";
 
 /**
@@ -55,13 +60,64 @@ const TASK_TTL_MS = 15 * 60_000;
  */
 const MIN_TURN_DELAY_MS = 600;
 
+/**
+ * A route value is either a bare body (answered 200 as-is, the legacy shape)
+ * or a descriptor that can also control the status code, the `{code,data}`
+ * gateway envelope, and a delay. The envelope matters because the real gateway
+ * wraps payloads (`client.ts` unwraps them), and a mock that always returns a
+ * bare body hides that difference until the switch to the real backend.
+ */
+export interface MockRouteDescriptor {
+  status?: number;
+  body?: unknown;
+  /** Wrap the body as `{ code, data, msg }` like the production gateway. */
+  envelope?: boolean;
+  /** Business code inside the envelope; non-200 here is a thrown ApiError. */
+  code?: number;
+  msg?: string;
+  delayMs?: number;
+}
+
+export type MockRoute = unknown | MockRouteDescriptor;
+
+/** One recorded request, for assertions the response alone cannot make. */
+export interface RecordedRequest {
+  method: string;
+  path: string;
+  query: Record<string, string>;
+  body: Record<string, unknown>;
+  headers: http.IncomingHttpHeaders;
+}
+
+function isRouteDescriptor(value: unknown): value is MockRouteDescriptor {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    ("status" in value || "envelope" in value || "body" in value || "delayMs" in value || "code" in value)
+  );
+}
+
 export interface MockServer {
   url: string;
   port: number;
+  /** Mutable state behind the `/api/v2/integrations` + `/api/v2/calendar` routes. */
+  integrations: IntegrationsMockState;
   /** Replace the active chat script (turn counter resets per sessionId). */
   setChatScript(script: ChatScript): void;
-  /** Override/add a JSON route at runtime. */
+  /** Override/add a JSON route at runtime (path only; any method). */
   setJsonRoute(path: string, body: unknown): void;
+  /**
+   * Add/override a route with method awareness. Key is `"/path"` (any method)
+   * or `"POST /path"`; a `"*"` method wildcard is accepted too. Prefix routes
+   * end with `/`.
+   */
+  setRoute(key: string, route: MockRoute): void;
+  /** Every request the server has answered, in arrival order. */
+  requests(filter?: Partial<Pick<RecordedRequest, "method" | "path">>): RecordedRequest[];
+  /** The newest matching request, or undefined. */
+  lastRequest(filter?: Partial<Pick<RecordedRequest, "method" | "path">>): RecordedRequest | undefined;
+  clearRequests(): void;
   close(): Promise<void>;
 }
 
@@ -85,7 +141,12 @@ interface ChatTask {
 
 export async function startMockServer(script?: ChatScript): Promise<MockServer> {
   let chatScript = script;
-  const jsonRoutes = new Map<string, unknown>(Object.entries(defaultJsonRoutes()));
+  /** Keys are `"METHOD /path"`, or `"* /path"` for the legacy path-only form. */
+  const jsonRoutes = new Map<string, MockRoute>(
+    Object.entries(defaultJsonRoutes()).map(([path, body]) => [`* ${path}`, body as MockRoute]),
+  );
+  const integrations = createIntegrationsState();
+  const recorded: RecordedRequest[] = [];
   // sessionId → next turn index; each conversation replays turns in order.
   const turnCounters = new Map<string, number>();
   // task_id → submitted turn; the GET serves the result once it is due.
@@ -110,6 +171,27 @@ export async function startMockServer(script?: ChatScript): Promise<MockServer> 
       if (ctx.method === "OPTIONS") {
         res.writeHead(204);
         res.end();
+        return;
+      }
+
+      recorded.push({
+        method: ctx.method,
+        path,
+        query: Object.fromEntries(url.searchParams.entries()),
+        body: ctx.body,
+        headers: req.headers,
+      });
+
+      // The Connections contract is stateful (accounts, toggles, exports,
+      // injected failures), so it is served by its own handler instead of the
+      // flat route table below.
+      if (
+        handleIntegrationsRequest(
+          { method: ctx.method, path, query: url.searchParams, body: ctx.body },
+          res,
+          integrations,
+        )
+      ) {
         return;
       }
 
@@ -148,16 +230,29 @@ export async function startMockServer(script?: ChatScript): Promise<MockServer> 
         return;
       }
 
-      // JSON routes: exact match first, then prefix match (longest wins).
-      let body = jsonRoutes.get(path);
-      if (body === undefined) {
-        const prefixes = [...jsonRoutes.keys()]
-          .filter((k) => path.startsWith(k))
-          .sort((a, b) => b.length - a.length);
-        body = prefixes.length ? jsonRoutes.get(prefixes[0]!) : {};
+      // JSON routes: method-qualified keys win over path-only keys, exact
+      // beats prefix, longest prefix wins.
+      const route = matchRoute(jsonRoutes, ctx.method, path);
+      if (route === undefined) {
+        respondJson(res, 200, {});
+        return;
       }
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify(body ?? {}));
+      const descriptor: MockRouteDescriptor = isRouteDescriptor(route) ? route : { body: route };
+      if (descriptor.delayMs) await sleep(descriptor.delayMs);
+      if (descriptor.status && descriptor.status !== 200) {
+        respondJson(res, descriptor.status, descriptor.body ?? { message: `mock ${descriptor.status}` });
+        return;
+      }
+      if (descriptor.envelope) {
+        // Production gateway shape: HTTP 200 with a business code inside.
+        respondJson(res, 200, {
+          code: descriptor.code ?? 200,
+          data: descriptor.body ?? {},
+          msg: descriptor.msg ?? "ok",
+        });
+        return;
+      }
+      respondJson(res, 200, descriptor.body ?? {});
     } catch (err) {
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ message: String(err) }));
@@ -173,6 +268,7 @@ export async function startMockServer(script?: ChatScript): Promise<MockServer> 
   return {
     url: origin,
     port,
+    integrations,
     setChatScript(next) {
       chatScript = next;
       turnCounters.clear();
@@ -180,7 +276,29 @@ export async function startMockServer(script?: ChatScript): Promise<MockServer> 
       mintUrls.clear();
     },
     setJsonRoute(path, body) {
-      jsonRoutes.set(path, body);
+      jsonRoutes.set(normalizeRouteKey(path), body as MockRoute);
+    },
+    setRoute(key, route) {
+      jsonRoutes.set(normalizeRouteKey(key), route);
+    },
+    requests(filter) {
+      if (!filter) return [...recorded];
+      return recorded.filter(
+        (r) =>
+          (!filter.method || r.method === filter.method.toUpperCase()) &&
+          (!filter.path || r.path === filter.path),
+      );
+    },
+    lastRequest(filter) {
+      const matches = recorded.filter(
+        (r) =>
+          (!filter?.method || r.method === filter.method.toUpperCase()) &&
+          (!filter?.path || r.path === filter.path),
+      );
+      return matches[matches.length - 1];
+    },
+    clearRequests() {
+      recorded.length = 0;
     },
     close() {
       return new Promise((resolve, reject) =>
@@ -275,10 +393,24 @@ function handleChatPoll(
 
   const elapsed = Date.now() - task.submittedAt;
   if (elapsed < task.delayMs) {
+    // Mimic the real service's live partial text: `stream` turns reveal
+    // their chunks on the scripted cadence while pending, so the client's
+    // progressive-text path gets exercised end to end. `stream-abort` stays
+    // text-free on purpose — the Stop-button spec depends on a pending turn
+    // with nothing renderable yet.
+    let partialText: string | null = null;
+    if (task.response.type === "stream" && task.response.chunks.length) {
+      const cadence = task.response.chunkDelayMs ?? 60;
+      const revealed = Math.min(
+        task.response.chunks.length,
+        Math.floor(elapsed / cadence),
+      );
+      partialText = task.response.chunks.slice(0, revealed).join("") || null;
+    }
     respondJson(res, 200, {
       task_id: taskId,
       status: "pending",
-      text: null,
+      text: partialText,
       sources: [],
       attachments: [],
       human_support_link: null,
@@ -369,6 +501,41 @@ function handleChatPoll(
 }
 
 const newTaskId = () => randomUUID().replace(/-/g, "");
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * `"POST /api/x"` → `"POST /api/x"`; `"/api/x"` → `"* /api/x"` so the legacy
+ * path-only fixtures keep answering every verb, exactly as before.
+ */
+function normalizeRouteKey(key: string): string {
+  const trimmed = key.trim();
+  const match = trimmed.match(/^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\/.*)$/i);
+  return match ? `${match[1]!.toUpperCase()} ${match[2]}` : `* ${trimmed}`;
+}
+
+/** Method-qualified exact match beats wildcard; exact beats prefix; longest prefix wins. */
+function matchRoute(routes: Map<string, MockRoute>, method: string, path: string): MockRoute | undefined {
+  for (const key of [`${method} ${path}`, `* ${path}`]) {
+    const value = routes.get(key);
+    if (value !== undefined) return value;
+  }
+  const split = (key: string): { verb: string; prefix: string } => {
+    const space = key.indexOf(" ");
+    return { verb: key.slice(0, space), prefix: key.slice(space + 1) };
+  };
+  const candidates = [...routes.keys()]
+    .map(split)
+    .filter(({ verb }) => verb === method || verb === "*")
+    .filter(({ prefix }) => path.startsWith(prefix))
+    .sort((a, b) => {
+      if (b.prefix.length !== a.prefix.length) return b.prefix.length - a.prefix.length;
+      const rank = (verb: string) => (verb === method ? 0 : 1);
+      return rank(a.verb) - rank(b.verb);
+    });
+  const first = candidates[0];
+  return first ? routes.get(`${first.verb} ${first.prefix}`) : undefined;
+}
 
 function respondJson(res: http.ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json" });

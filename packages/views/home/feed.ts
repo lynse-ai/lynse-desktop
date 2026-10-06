@@ -164,9 +164,6 @@ function todoEntries(todos: TodoItem[], windowStart: Date, windowEnd: Date): Fee
       // Place the todo at its due date on the timeline.
       at: due,
       title: todo.title,
-      description: todo.sourceTitle
-        ? { i18nKey: "home.desc_from_source", params: { title: todo.sourceTitle } }
-        : undefined,
       badge,
       data: todo,
     });
@@ -266,13 +263,15 @@ export function useHomeFeed(): HomeFeed {
   });
 
   const entries = useMemo(() => {
+    // Array-guard: a list cached under an older data shape must degrade to
+    // an empty feed, never take the whole HomePage down.
+    const noteItems = Array.isArray(notesQuery.data) ? notesQuery.data : [];
     const merged = [
-      ...noteEntries(notesQuery.data ?? [], windowStart, now, t),
+      ...noteEntries(noteItems, windowStart, now, t),
       ...todoEntries(todos.todos, windowStart, windowEnd),
       ...flashEntries(inspirationsQuery.data ?? [], windowStart, now),
     ];
     return merged.sort((a, b) => b.at.getTime() - a.at.getTime());
-    // `now` is intentionally captured once per render pass.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notesQuery.data, todos.todos, inspirationsQuery.data, t]);
 

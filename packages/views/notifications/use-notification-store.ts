@@ -116,3 +116,29 @@ if (typeof window !== "undefined") {
 /** Selector: total unread count (drives the Bell badge). */
 export const selectUnreadCount = (s: NotificationState): number =>
   s.items.reduce((acc, i) => acc + (i.read ? 0 : 1), 0);
+
+/**
+ * Selector factory: unread count for the given notification types. Drives the
+ * per-module dot badges in the sidebar (the Bell entry was retired; each
+ * module's icon now carries its own unread marker).
+ */
+export const selectUnreadByTypes =
+  (types: NotificationType[]) =>
+  (s: NotificationState): number =>
+    s.items.reduce(
+      (acc, i) => (i.read || !types.includes(i.type) ? acc : acc + 1),
+      0,
+    );
+
+/**
+ * Marks every unread notification of the given types as read. Called when a
+ * module is visited so its sidebar dot clears after the user has seen the
+ * module (e.g. landing on Notes clears transcription/sync dots).
+ */
+export const markTypesRead = (types: NotificationType[]) => {
+  useNotificationStore.setState((s) => ({
+    items: s.items.map((i) =>
+      i.read || !types.includes(i.type) ? i : { ...i, read: true },
+    ),
+  }));
+};

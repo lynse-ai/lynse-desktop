@@ -16,7 +16,7 @@ use crate::CommandResult;
 use crate::live_translation::decode_audio_header;
 use crate::live_translation::LiveTranslationManager;
 #[cfg(target_os = "windows")]
-use crate::live_translation::write_pcm16_wav;
+use crate::audio_contract::wav::WavTrackWriter;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Read;
@@ -400,7 +400,9 @@ fn platform_start(app: &AppHandle) -> CommandResult<Value> {
     let directory = inspirations_root(app)?.join(&capture_id);
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
 
-    let samples = Arc::new(Mutex::new(Vec::<i16>::new()));
+    // Append straight to the WAV instead of holding the memo in RAM: a capture
+    // that outlives the process now keeps everything but the last sync window.
+    let track = Arc::new(WavTrackWriter::recognition(&directory.join("audio.wav"))?);
     let live_level = Arc::new(AtomicU32::new(0.0f32.to_bits()));
     let sample_count = Arc::new(AtomicU64::new(0));
     let (done_tx, done_rx) = std::sync::mpsc::channel();
@@ -429,13 +431,13 @@ fn platform_start(app: &AppHandle) -> CommandResult<Value> {
     thread::spawn(move || {
         macro_rules! build_input_stream {
             ($sample_type:ty) => {{
-                let samples = samples.clone();
+                let track = track.clone();
                 let live_level = live_level.clone();
                 let sample_count = sample_count.clone();
                 device.build_input_stream(
                     &stream_config,
                     move |data: &[$sample_type], _| {
-                        memo_feed_samples(data, channels, in_rate, &samples, &live_level, &sample_count);
+                        memo_feed_samples(data, channels, in_rate, &track, &live_level, &sample_count);
                     },
                     move |error| log::error!("inspiration voice stream error: {error}"),
                     None,
@@ -455,6 +457,9 @@ fn platform_start(app: &AppHandle) -> CommandResult<Value> {
             _ => {
                 set_state(&capture_mirror, "idle");
                 emit_error(&capture_app, "不支持的麦克风采样格式");
+                // Close so the abandoned stub is a valid empty WAV, not a
+                // placeholder header whose length nothing will ever fix.
+                let _ = track.close();
                 let _ = done_tx.send(Err("不支持的麦克风采样格式".to_owned()));
                 return;
             }
@@ -473,6 +478,7 @@ fn platform_start(app: &AppHandle) -> CommandResult<Value> {
                 log::error!("inspiration voice capture failed: {error}");
                 set_state(&capture_mirror, "idle");
                 emit_error(&capture_app, error.clone());
+                let _ = track.close();
                 let _ = done_tx.send(Err(error));
                 return;
             }
@@ -492,13 +498,9 @@ fn platform_start(app: &AppHandle) -> CommandResult<Value> {
             }
         }
         drop(stream);
-        let pcm: Vec<i16> = samples
-            .lock()
-            .expect("inspiration voice pcm lock")
-            .drain(..)
-            .collect();
-        let duration_ms = pcm.len() as u64 * 1000 / 16_000;
-        let result = write_pcm16_wav(&directory.join("audio.wav"), &pcm).map(|_| duration_ms);
+        // `close` patches the RIFF header and reports the frames that reached
+        // the file, so the duration describes the audio rather than a counter.
+        let result = track.close().map(|frames| frames * 1000 / 16_000);
         let _ = done_tx.send(result);
     });
 
@@ -506,14 +508,14 @@ fn platform_start(app: &AppHandle) -> CommandResult<Value> {
 }
 
 /// Mix down to mono, resample to 16 kHz, and append PCM16 samples to the memo
-/// buffer. Same pipeline as the live-translation Windows microphone path, but
-/// the samples land in a local buffer instead of a translation websocket.
+/// track. Same pipeline as the live-translation Windows microphone path, but
+/// the samples land on disk instead of a translation websocket.
 #[cfg(target_os = "windows")]
 fn memo_feed_samples<T>(
     data: &[T],
     channels: usize,
     in_rate: u32,
-    samples: &Arc<Mutex<Vec<i16>>>,
+    track: &WavTrackWriter,
     level: &AtomicU32,
     sample_count: &AtomicU64,
 ) where
@@ -545,11 +547,14 @@ fn memo_feed_samples<T>(
         .iter()
         .map(|sample| (sample.clamp(-1.0, 1.0) * 32_767.0) as i16)
         .collect();
-    sample_count.fetch_add(converted.len() as u64, Ordering::Relaxed);
-    samples
-        .lock()
-        .expect("inspiration voice pcm lock")
-        .extend_from_slice(&converted);
+    let start_ms = sample_count.load(Ordering::Relaxed) * 1000 / 16_000;
+    // Count only what reached the file, so a failed append cannot shift the
+    // timeline the next one targets.
+    if track.write_i16_at(start_ms, &converted).is_ok() {
+        sample_count.fetch_add(converted.len() as u64, Ordering::Relaxed);
+    } else {
+        log::warn!("Inspiration memo append failed at {start_ms}ms, samples dropped");
+    }
 }
 
 #[cfg(target_os = "windows")]

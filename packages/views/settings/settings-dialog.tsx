@@ -8,13 +8,9 @@ import {
   DialogTitle,
 } from "@lynse/ui/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/ui/card";
-import { Label } from "@lynse/ui/components/ui/label";
-import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
   Sun,
-  Moon,
-  Monitor,
   UserCircle,
   Languages,
   CalendarDays,
@@ -23,8 +19,11 @@ import {
   Info,
   Puzzle,
   Bot,
+  Plug,
 } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
+import { isWebPlatform } from "../platform";
+import { ConnectionsCard } from "../connections";
 import {
   getDesktopLocalTranscriptionApi,
 } from "../workspace/local-transcription";
@@ -44,6 +43,7 @@ import { VaultConfigCard } from "./vault-config-card";
 import { WebdavSyncConfigCard } from "./webdav-sync-config-card";
 import { AgentServerCard } from "./agent-server-card";
 import { WorkBuddyConfigCard } from "./workbuddy-config-card";
+import { AppearanceSection } from "./appearance-settings";
 import {
   getSettingsSections,
   PluginCommunitySection,
@@ -59,8 +59,6 @@ export const SETTINGS_NAV_CLASS =
   "w-40 shrink-0 space-y-0.5 overflow-y-auto border-e bg-muted/30 p-2 sm:w-48";
 export const SETTINGS_BODY_CLASS = "min-h-0 min-w-0 flex-1 overflow-y-auto";
 
-type ThemeOption = "light" | "dark" | "system";
-
 type SettingsSectionId =
   | "account"
   | "ai_assistant"
@@ -70,6 +68,7 @@ type SettingsSectionId =
   | "feishu"
   | "workbuddy"
   | "stt"
+  | "connections"
   | "plugins"
   | "about"
   // Plugin contributions may register additional section ids at runtime.
@@ -89,14 +88,7 @@ export function SettingsDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const { theme, setTheme } = useTheme();
   const { t } = useTranslation();
-
-  const themeOptions: { value: ThemeOption; label: string; icon: typeof Sun }[] = [
-    { value: "light", label: t("layout.theme_light"), icon: Sun },
-    { value: "dark", label: t("layout.theme_dark"), icon: Moon },
-    { value: "system", label: t("layout.theme_system"), icon: Monitor },
-  ];
 
   const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>("account");
   const pluginEntries = usePluginStore((s) => s.entries);
@@ -121,28 +113,7 @@ export function SettingsDialog({
             <CardTitle className="text-xs">{t("settings.appearance")}</CardTitle>
           </CardHeader>
           <CardContent>
-            <Label className="text-xs mb-2 block">{t("layout.theme")}</Label>
-            <div className="grid grid-cols-3 gap-2">
-              {themeOptions.map((option) => {
-                const isActive = theme === option.value;
-                const Icon = option.icon;
-                return (
-                  <button
-                    key={option.value}
-                    onClick={() => setTheme(option.value)}
-                    className={cn(
-                      "flex flex-col items-center gap-1.5 rounded-lg border-2 px-2 py-2 text-xs font-medium transition-[border-color,background-color,color]",
-                      isActive
-                        ? "border-primary bg-primary/5 text-foreground"
-                        : "border-transparent bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
-                    )}
-                  >
-                    <Icon className="size-4" />
-                    <span>{option.label}</span>
-                  </button>
-                );
-              })}
-            </div>
+            <AppearanceSection />
           </CardContent>
         </Card>
 
@@ -234,6 +205,22 @@ export function SettingsDialog({
           }
         />
       ),
+    });
+  }
+
+  // Third-party integrations. Gated from feature-flags alone: the section
+  // disappears entirely while the /api/v2/integrations backend is not
+  // deployed, rather than showing rows that can only error.
+  //
+  // Desktop only, per PRD §2 ("P0-P2 不做 Web 端 UI"): the flag is global, so
+  // without this check flipping it on would surface the section in the web app
+  // too, where there is no deep-link or native surface for the flows.
+  if (featureFlags.connections && !isWebPlatform()) {
+    sections.push({
+      id: "connections",
+      label: t("settings.connections"),
+      icon: Plug,
+      content: <ConnectionsCard />,
     });
   }
 

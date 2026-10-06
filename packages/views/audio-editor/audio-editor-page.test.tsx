@@ -18,6 +18,12 @@ vi.mock("../navigation", () => ({
   useNavigation: () => ({ push: vi.fn(), pathname: "/audio-editor" }),
 }));
 
+// The page registers its title/date into the unified app title bar; render
+// the registered title inline so assertions can still find it.
+vi.mock("../layout/app-title-bar", () => ({
+  TitleBarSlot: (props: { title?: React.ReactNode }) => <div>{props.title}</div>,
+}));
+
 // Desktop bridge: runtime present, no audio URL resolvable (waveform falls
 // back to its unavailable state — fine for a smoke test).
 beforeEach(() => {

@@ -50,7 +50,9 @@ CloudBase 地址后发布。客户端更新流量走 CloudBase，GitHub 仅在�
 | --- | --- |
 | `CLOUDBASE_API_KEY` | 环境级 API 密钥，在 云开发控制台 → 环境设置 → API 密钥 创建（仅授予该环境，风险小于腾讯云主账号密钥） |
 
-未配置该 secret 时，CI 自动跳过镜像，行为与迁移前完全一致（仅 GitHub）。
+未配置该 secret 时，`mirror-cloudbase` 跳过，随后的 `verify-updates` 会因为线上清单仍是旧版本
+而**让发版流水线失败**。这是有意的：镜像没做成就必须响亮地失败，而不是构建全绿、客户端却
+永远收不到更新。下面「更新链的自检与修复工具」给出补救方式。
 
 CloudBase 静态托管上的目录结构（由 CI 维护，无需手工操作）：
 
@@ -64,6 +66,29 @@ updates/v1.0.4/lynse-stt-runtime-*.tar.gz   ← 离线转写运行时包（lib.r
 
 `mirror-cloudbase` 会先上传每个 tag 的产物目录，最后才发布 `updates/latest.json`，
 并校验两个平台的条目齐全，避免发布半成品。
+
+## 更新链的自检与修复工具
+
+镜像这一步一旦缺失，症状是**静默的**：GitHub Release 照常发出，构建全绿，但所有已安装
+客户端读到的仍是旧版本，永远收不到更新提示。`48602a24`（2026-09-26）误删 `mirror-cloudbase`
+任务后，线上 `updates/latest.json` 就停在 1.1.0，连续几个版本都没被发现。为此加了三道机制：
+
+| 机制 | 位置 | 作用 |
+| --- | --- | --- |
+| 镜像脚本（CI 与人工共用同一实现） | `apps/tauri/scripts/mirror-release-to-cloudbase.sh` | 取已发布且已签名的 GitHub Release，改写 URL → 先传 `updates/<tag>/` → 断言每个产物可下载 → 最后翻 `updates/latest.json` → **回读线上清单确认自己成功** |
+| 发版后断言 | `release.yml` 的 `verify-updates` 任务 | 读**线上**清单（不是构建产物），断言 `version` 等于本次 tag、两个平台条目齐全、清单里每个 url 返回 200 |
+| 陈旧巡检 | `.github/workflows/updater-staleness.yml`（每日 03:00） | 比较「最新 release tag」与「线上清单实际服务的版本」，漂移即失败；新 tag 发布 6 小时内视为流水线在跑，只告警不失败 |
+
+手工修复某个已发布版本（不重新构建）：
+
+```bash
+gh workflow run remirror-updates.yml -f tag=v1.1.6              # 推荐：CI 上跑，先 dry-run
+# 或本地（需 gh 已登录 + CLOUDBASE_API_KEY）：
+pnpm --filter @lynse/tauri mirror:cloudbase -- v1.1.6 --dry-run # 只校验与改写，不上传
+pnpm --filter @lynse/tauri mirror:cloudbase -- v1.1.6           # 校验通过后上传并翻牌
+```
+
+脚本会拒绝三种半成品状态：清单缺任一平台条目、缺 minisign 签名、清单引用的产物没下载下来。
 
 **流量配额提醒**：当前环境为「体验版」套餐，静态托管 CDN 流量配额很小；安装包
 100–300MB，少量用户更新即可耗尽配额。发布正式版前请升级套餐（或改用独立
@@ -113,8 +138,11 @@ pnpm --filter @lynse/tauri build
 
 - **旧版本兼容**：`v0.1.29` 及更早的客户端仍通过 `https://api.lynse.cn/v1/client/latest-version`
   代理接口做版本检查（旧 check_app_update 命令）。该后端接口需保留至旧版本基本淘汰。
-- **迁移过渡**：endpoint 列表编译进客户端，因此 `1.0.3` 及更早的版本仍只轮询 GitHub；
-  本改动发布后，该版更新必须能从 GitHub 下载（兜底保证），之后的更新流量才切到 CloudBase。
+- **迁移过渡**：endpoint 列表编译进客户端，因此 `1.0.3` 及更早的版本仍只轮询 GitHub。
+  注意 **GitHub 这条对客户端并不是可用兜底**：`lynse-ai/lynse-desktop` 是私有仓库，匿名访问
+  release 资产返回 404（见 `scripts/update-version-proxy/worker.js:3-5`）。这些旧版本真正能
+  拿到的检查渠道是 `api.lynse.cn/v1/client/latest-version` 代理接口，因此该接口必须保留；
+  而一旦 CloudBase 镜像断更，`1.0.3` 及更早版本**没有任何兜底**，只能靠用户从官网重装。
 - **缓存**：GitHub 的 `releases/latest/download/latest.json` 有约 5 分钟 CDN 缓存；
   CloudBase 静态托管网关返回 `no-store, no-cache`（直读 COS，强一致），发版即时生效。
   代价是没有边缘缓存，大文件下载每次回源 COS；若日后接入自定义 CDN 域名，

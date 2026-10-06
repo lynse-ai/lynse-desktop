@@ -4,6 +4,7 @@ import {
   fetchIntegrationStatus,
   pollOAuthResult,
   requestOAuthState,
+  requestOAuthStateWithCredentials,
   type IntegrationStatus,
   type IntegrationsProvider,
 } from "@lynse/core/integrations";
@@ -119,6 +120,74 @@ async function beginConnect(
       startedAt: null,
     });
   }
+}
+
+/**
+ * Self-serve variant (Feishu Model B): same session lifecycle, but the
+ * authorize URL is minted from the user's own org-app credentials captured by
+ * the setup dialog. The credentials live only in this call chain.
+ */
+export async function beginConnectWithCredentials(
+  provider: IntegrationsProvider,
+  params: { platform: "desktop" | "web"; origin?: string; clientId: string; clientSecret: string },
+): Promise<void> {
+  const store = useConnectStore.getState();
+  const existing = store.sessions[provider];
+  if (existing?.phase === "awaiting_browser" && existing.state) {
+    if (existing.authorizationUrl) openExternalUrl(existing.authorizationUrl);
+    return;
+  }
+
+  try {
+    const oauth = await requestOAuthStateWithCredentials(provider, {
+      platform: params.platform,
+      origin: params.origin,
+      client_id: params.clientId,
+      client_secret: params.clientSecret,
+    });
+    store.set(provider, {
+      provider,
+      phase: "awaiting_browser",
+      state: oauth.state,
+      authorizationUrl: oauth.authorization_url,
+      error: null,
+      startedAt: Date.now(),
+    });
+    openExternalUrl(oauth.authorization_url);
+    pollLoop(provider, oauth.state, 0);
+  } catch (error) {
+    store.set(provider, {
+      provider,
+      phase: "error",
+      state: null,
+      authorizationUrl: null,
+      error: error instanceof Error ? error.message : String(error),
+      startedAt: null,
+    });
+  }
+}
+
+/**
+ * Handoff from the Feishu setup dialog: the backend has already minted the
+ * authorize URL (after the user confirmed the one-click app creation), so the
+ * session starts straight at the awaiting-browser stage.
+ */
+export function beginConnectFromUrl(
+  provider: IntegrationsProvider,
+  state: string,
+  authorizationUrl: string,
+): void {
+  const store = useConnectStore.getState();
+  store.set(provider, {
+    provider,
+    phase: "awaiting_browser",
+    state,
+    authorizationUrl,
+    error: null,
+    startedAt: Date.now(),
+  });
+  openExternalUrl(authorizationUrl);
+  pollLoop(provider, state, 0);
 }
 
 async function pollLoop(provider: IntegrationsProvider, state: string, attempt: number): Promise<void> {

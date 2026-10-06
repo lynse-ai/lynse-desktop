@@ -277,6 +277,9 @@ pub struct SetModeRequest {
 pub struct PermissionStatus {
     pub(crate) microphone: String,
     pub(crate) system_audio: String,
+    /// EventKit calendar grant (macOS) or "unsupported" elsewhere; optional
+    /// permission owned by the onboarding page, not the recording flow.
+    pub(crate) calendar: String,
     system_audio_required: bool,
     restart_required: bool,
 }
@@ -587,6 +590,9 @@ pub(crate) fn run_permission_command(app: &AppHandle, argument: &str) -> Command
             .and_then(Value::as_str)
             .unwrap_or("denied")
             .to_owned(),
+        // The sidecar knows nothing about EventKit; calendar state always
+        // comes from the main process, which owns the EventKit connection.
+        calendar: crate::calendar_permission_state().to_owned(),
         system_audio_required: true,
         restart_required: value
             .get("restartRequired")
@@ -636,6 +642,10 @@ fn read_windows_permission_status() -> PermissionStatus {
     PermissionStatus {
         microphone: microphone.to_owned(),
         system_audio: "granted".to_owned(),
+        // Windows has no readable local calendar API for unpackaged apps
+        // (WinRT Appointments needs package identity); cloud calendars come
+        // via Connections instead, so the onboarding row stays hidden.
+        calendar: "unsupported".to_owned(),
         system_audio_required: true,
         restart_required: false,
     }
@@ -664,7 +674,15 @@ pub fn live_translation_request_permission(
             }
             return Ok(status);
         }
-        _ => return Err("permission kind must be microphone or systemAudio".to_owned()),
+        // Denials surface through the re-read status (denied + UI hint), not
+        // as an error — same contract as the microphone arm above.
+        "calendar" => {
+            crate::request_calendar_permission();
+            return read_permission_status(&app);
+        }
+        _ => {
+            return Err("permission kind must be microphone, systemAudio or calendar".to_owned())
+        }
     }
     #[cfg(target_os = "windows")]
     {
@@ -681,6 +699,9 @@ pub fn live_translation_request_permission(
                 }
                 return Ok(read_windows_permission_status());
             }
+            // The calendar row is hidden on Windows ("unsupported"); answer
+            // defensively in case a stale frontend ever fires the request.
+            "calendar" => return Ok(read_windows_permission_status()),
             _ => return Err("permission kind must be microphone or systemAudio".to_owned()),
         }
     }
@@ -688,11 +709,12 @@ pub fn live_translation_request_permission(
 
 /// On macOS, jump straight to the relevant Privacy & Security pane so the user
 /// only has to flip the switch. Used when a recording attempt lacks the
-/// required TCC grant (microphone or screen & system-audio recording).
+/// required TCC grant (microphone, screen & system-audio recording, calendar).
 #[cfg(target_os = "macos")]
 pub(crate) fn open_macos_privacy_pane(kind: &str) {
     let anchor = match kind {
         "microphone" => "Privacy_Microphone",
+        "calendar" => "Privacy_Calendars",
         _ => "Privacy_ScreenCapture",
     };
     let _ = Command::new("open")
@@ -703,18 +725,18 @@ pub(crate) fn open_macos_privacy_pane(kind: &str) {
 }
 
 /// Opens the OS privacy pane for one permission kind: System Settings on
-/// macOS (microphone / screen & system-audio recording), the microphone
-/// privacy page on Windows (loopback needs no consent there). Backs the
-/// onboarding toggles — a permission request that still ends ungranted hands
-/// the user straight to the pane where the grant lives.
+/// macOS (microphone / screen & system-audio recording / calendar), the
+/// microphone privacy page on Windows (loopback needs no consent there).
+/// Backs the onboarding toggles — a permission request that still ends
+/// ungranted hands the user straight to the pane where the grant lives.
 #[tauri::command]
 pub fn live_translation_open_privacy_pane(kind: String) -> CommandResult<()> {
     #[cfg(target_os = "macos")]
     {
-        open_macos_privacy_pane(if kind == "microphone" {
-            "microphone"
-        } else {
-            "screen"
+        open_macos_privacy_pane(match kind.as_str() {
+            "microphone" => "microphone",
+            "calendar" => "calendar",
+            _ => "screen",
         });
     }
     #[cfg(target_os = "windows")]

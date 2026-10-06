@@ -1400,6 +1400,7 @@ const ko = {
     "group_calendar": "캘린더",
     "group_sync": "동기화",
     "group_task": "할 일",
+    "group_cn": "중국 플랫폼",
     "connected": "연결됨",
     "reminder_title": "{{title}}까지 {{minutes}}분 남았습니다",
     "reminder_settings": "회의 전 알림",
@@ -1419,6 +1420,7 @@ const ko = {
     "disconnect": "연결 해제",
     "disconnect_confirm": "{{email}} 연결을 해제할까요? 언제든지 다시 연결할 수 있습니다.",
     "retry": "다시 시도",
+    "close": "닫기",
     "sync": "동기화",
     "notify": "시작 전 알림",
     "auto_export": "회의 후 할 일 자동 내보내기",
@@ -1433,14 +1435,24 @@ const ko = {
       "outlook-calendar": "Outlook 캘린더",
       "notion": "Notion",
       "todoist": "Todoist",
-      "google-tasks": "Google 할 일"
+      "google-tasks": "Google 할 일",
+      "feishu-calendar": "Feishu 캘린더",
+      "feishu-docs": "Feishu 문서",
+      "feishu-tasks": "Feishu 작업",
+      "feishu-mail": "Feishu 메일",
+      "feishu": "Feishu"
     },
     "hint": {
       "google-calendar": "일정을 가져오고 시작 전에 알림을 받습니다",
       "outlook-calendar": "Google 캘린더와 동일, Microsoft 계정용",
       "notion": "회의 요약을 데이터베이스에 기록합니다",
-      "todoist": "할 일을 프로젝트로 보내합니다",
-      "google-tasks": "할 일을 목록으로 보내합니다"
+      "todoist": "할 일을 프로젝트로 보냅니다",
+      "google-tasks": "할 일을 목록으로 보냅니다",
+      "feishu-calendar": "Feishu 일정을 가져오고 시작 전에 알림을 받습니다",
+      "feishu-docs": "회의 요약을 Feishu 문서로 기록합니다",
+      "feishu-tasks": "실행 항목을 Feishu 작업으로 보냅니다",
+      "feishu-mail": "Feishu 메일함을 연결합니다",
+      "feishu": "한 번 인증으로 캘린더, 작업, 문서, 메일을 포괄합니다"
     },
     "error": {
       "generic": "문제가 발생했습니다: {{error}}",
@@ -1454,6 +1466,21 @@ const ko = {
       "export_item_failed": "일부 항목을 내보내지 못했습니다",
       "timed_out": "브라우저 인증 시간이 초과되었습니다. 다시 시도해 주세요.",
       "auth_failed": "제공자가 인증을 거부했습니다."
+    },
+    "feishu_setup": {
+      "title": "Feishu 연결",
+      "body": "연결을 클릭하면 Feishu 확인 페이지가 열립니다: 확정하면 이후는 모두 자동입니다 — 앱 생성·설정·인증까지 입력은 전혀 필요 없습니다.",
+      "waiting": "Feishu에서 확인을 기다리는 중 (확정 후 자동으로 인증으로 진행)…",
+      "reopen": "확인 페이지 다시 열기",
+      "redirect_body": "마지막 단계만 수동입니다: 아래 콜백 URL을 앱의 보안 설정에 추가하세요(콘솔을 열고 '리디렉션 URL'에 붙여넣어 저장). 그런 다음 인증으로 진행합니다.",
+      "grant_body": "앱 관리자의 클릭 한 번이 필요합니다: 아래 권한 페이지에서 '앱 관리' 권한을 활성화하세요 — 이후 콜백 URL이 자동 설정되며 붙여넣기는 필요 없습니다.",
+      "grant_open": "권한 페이지 열기",
+      "grant_done": "활성화했습니다 — 자동으로 계속",
+      "copy": "복사",
+      "copied": "복사됨",
+      "copy_failed": "복사에 실패했습니다. 직접 선택하여 복사해 주세요",
+      "open_console": "앱 콘솔 열기",
+      "continue_authorize": "추가했습니다 — 인증으로 진행"
     }
   },
 
@@ -1478,6 +1505,9 @@ const ko = {
     system_audio_title: "시스템 오디오 캡처 허용",
     system_audio_desc: "통화 상대방의 목소리를 녹음하려면 시스템 오디오가 필요합니다.",
     system_audio_denied_hint: "스위치를 누르면 시스템 설정이 열립니다. 개인정보 보호 및 보안 → 화면 기록에서 Lynse 를 허용하면 이 화면이 자동으로 감지합니다.",
+    calendar_title: "캘린더 접근 허용",
+    calendar_desc: "(선택) 할 일을 한 번에 시스템 캘린더에 추가하고 향후 일정 기능을 준비합니다. 거부해도 다른 기능은 그대로 사용할 수 있어요.",
+    calendar_denied_hint: "캘린더 접근이 거부되었습니다. 시스템 설정 → 개인정보 보호 및 보안 → 캘린더에서 Lynse 를 허용하면 이 화면이 자동으로 감지합니다.",
     continue: "계속",
     skip: "나중에",
     restart_now: "Lynse 다시 시작",

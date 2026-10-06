@@ -1401,6 +1401,7 @@ const ja = {
     "group_calendar": "カレンダー",
     "group_sync": "同期",
     "group_task": "タスク",
+    "group_cn": "中国向けプラットフォーム",
     "connected": "接続済み",
     "reminder_title": "{{title}} が {{minutes}} 分後に始まります",
     "reminder_settings": "会議開始前のリマインダー",
@@ -1420,6 +1421,7 @@ const ja = {
     "disconnect": "接続を解除",
     "disconnect_confirm": "{{email}} の接続を解除しますか？いつでも再接続できます。",
     "retry": "再試行",
+    "close": "閉じる",
     "sync": "同期",
     "notify": "開始前に通知",
     "auto_export": "会議後にアクション項目を自動エクスポート",
@@ -1434,14 +1436,24 @@ const ja = {
       "outlook-calendar": "Outlook カレンダー",
       "notion": "Notion",
       "todoist": "Todoist",
-      "google-tasks": "Google タスク"
+      "google-tasks": "Google タスク",
+      "feishu-calendar": "Feishu カレンダー",
+      "feishu-docs": "Feishu ドキュメント",
+      "feishu-tasks": "Feishu タスク",
+      "feishu-mail": "Feishu メール",
+      "feishu": "Feishu"
     },
     "hint": {
       "google-calendar": "会議を取り込み、開始前に通知します",
       "outlook-calendar": "Google カレンダーと同じく Microsoft アカウント用",
       "notion": "会議の要約をデータベースに書き込みます",
       "todoist": "アクション項目をプロジェクトへ送信します",
-      "google-tasks": "アクション項目をタスクリストへ送信します"
+      "google-tasks": "アクション項目をタスクリストへ送信します",
+      "feishu-calendar": "Feishu の会議を取り込み、開始前に通知します",
+      "feishu-docs": "会議の要約を Feishu ドキュメントに書き込みます",
+      "feishu-tasks": "アクション項目を Feishu タスクへ送信します",
+      "feishu-mail": "Feishu メールボックスを接続します",
+      "feishu": "1回の認証でカレンダー・タスク・ドキュメント・メールをカバーします"
     },
     "error": {
       "generic": "問題が発生しました: {{error}}",
@@ -1455,6 +1467,21 @@ const ja = {
       "export_item_failed": "一部の項目をエクスポートできませんでした",
       "timed_out": "ブラウザでの認証が時間切れになりました。もう一度お試しください。",
       "auth_failed": "プロバイダーが認証を拒否しました。"
+    },
+    "feishu_setup": {
+      "title": "Feishu を接続",
+      "body": "接続をクリックすると Feishu の確認ページが開きます：確定すれば以降はすべて自動 — アプリの作成・設定・認証まで、入力は一切不要です。",
+      "waiting": "Feishu での確認を待っています（確定後、自動的に認証へ進みます）…",
+      "reopen": "確認ページを再度開く",
+      "redirect_body": "最後のステップのみ手動です：下のコールバック URL をアプリのセキュリティ設定に追加してください（コンソールを開き、「リダイレクト URL」に貼り付けて保存）。その後認証に進みます。",
+      "grant_body": "アプリ管理者によるワンクリックが必要です：下の権限ページで「アプリ管理」権限を有効にしてください — 以降はコールバック URL が自動設定され、貼り付けは不要になります。",
+      "grant_open": "権限ページを開く",
+      "grant_done": "有効にしました — 自動で続行",
+      "copy": "コピー",
+      "copied": "コピーしました",
+      "copy_failed": "コピーに失敗しました。手動で選択してコピーしてください",
+      "open_console": "アプリコンソールを開く",
+      "continue_authorize": "追加しました — 認証へ進む"
     }
   },
 
@@ -1479,6 +1506,9 @@ const ja = {
     system_audio_title: "システム音声のキャプチャを許可",
     system_audio_desc: "通話中の相手の声を録音するには、システム音声が必要です。",
     system_audio_denied_hint: "スイッチをクリックするとシステム設定が開きます。「プライバシーとセキュリティ → 画面収録」で Lynse を許可すると、この画面は自動的に検出します。",
+    calendar_title: "カレンダーへのアクセスを許可",
+    calendar_desc: "（任意）タスクをワンタップでシステムのカレンダーに書き込めます。今後のスケジュール機能への準備にもなります。拒否しても他の機能はそのまま使えます。",
+    calendar_denied_hint: "カレンダーへのアクセスが拒否されています。「システム設定 → プライバシーとセキュリティ → カレンダー」で Lynse を許可すると、この画面は自動的に検出します。",
     continue: "続行",
     skip: "後で",
     restart_now: "Lynse を再起動",

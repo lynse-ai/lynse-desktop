@@ -1397,6 +1397,7 @@ const zh = {
     "group_calendar": "日历",
     "group_sync": "同步",
     "group_task": "任务",
+    "group_cn": "国内平台",
     "connected": "已连接",
     "reminder_title": "{{title}} 还有 {{minutes}} 分钟开始",
     "reminder_settings": "会前提醒",
@@ -1416,6 +1417,7 @@ const zh = {
     "disconnect": "断开连接",
     "disconnect_confirm": "断开 {{email}}？你可以随时重新连接。",
     "retry": "重试",
+    "close": "关闭",
     "sync": "同步",
     "notify": "会前提醒",
     "auto_export": "会后自动导出行动项",
@@ -1430,14 +1432,24 @@ const zh = {
       "outlook-calendar": "Outlook 日历",
       "notion": "Notion",
       "todoist": "Todoist",
-      "google-tasks": "Google 任务"
+      "google-tasks": "Google 任务",
+      "feishu-calendar": "飞书日历",
+      "feishu-docs": "飞书文档",
+      "feishu-tasks": "飞书任务",
+      "feishu-mail": "飞书邮箱",
+      "feishu": "飞书"
     },
     "hint": {
       "google-calendar": "导入会议日程，并在会前提醒",
       "outlook-calendar": "与 Google 日历相同，用于 Microsoft 账号",
       "notion": "把会议总结写入数据库",
       "todoist": "把行动项发送到项目",
-      "google-tasks": "把行动项发送到任务清单"
+      "google-tasks": "把行动项发送到任务清单",
+      "feishu-calendar": "导入飞书日程，并在会前提醒",
+      "feishu-docs": "把会议总结写入飞书文档",
+      "feishu-tasks": "把行动项发送到飞书任务",
+      "feishu-mail": "连接飞书邮箱",
+      "feishu": "一次授权，覆盖日历、任务、文档与邮箱"
     },
     "error": {
       "generic": "出错了：{{error}}",
@@ -1451,6 +1463,21 @@ const zh = {
       "export_item_failed": "部分条目未能导出",
       "timed_out": "浏览器授权超时，请重试。",
       "auth_failed": "提供方拒绝了本次授权。"
+    },
+    "feishu_setup": {
+      "title": "连接飞书",
+      "body": "点击连接后，浏览器会打开飞书确认页：确认创建后自动完成配置并进入授权，全程无需填写任何内容。",
+      "waiting": "等待你在飞书中确认创建（确认后将自动进入授权）…",
+      "reopen": "重新打开飞书确认页",
+      "redirect_body": "最后一步需要手动完成：把下面的回调地址添加到应用的安全设置中（打开控制台，在“重定向 URL”里粘贴并保存），然后继续授权。",
+      "grant_body": "需要应用管理员点一次：打开下面的权限页开通“应用管理”权限——之后回调地址会自动配置，无需任何粘贴。",
+      "grant_open": "打开权限页",
+      "grant_done": "已开通，自动继续",
+      "copy": "复制",
+      "copied": "已复制",
+      "copy_failed": "复制失败，请手动选择文本复制",
+      "open_console": "打开应用控制台",
+      "continue_authorize": "已添加，继续授权"
     }
   },
 
@@ -1475,6 +1502,9 @@ const zh = {
     system_audio_title: "允许 Lynse 采集系统音频",
     system_audio_desc: "Lynse 需要系统音频来录制会议中远端参会者的声音。",
     system_audio_denied_hint: "点击右侧开关可直接打开系统设置，在「隐私与安全性 → 屏幕录制」中允许 Lynse 后，本页会自动检测。",
+    calendar_title: "允许 Lynse 访问日历",
+    calendar_desc: "（可选）把待办一键写入系统日历，并为后续的日程功能做准备；拒绝不影响使用 Lynse。",
+    calendar_denied_hint: "日历权限已被拒绝。请在「系统设置 → 隐私与安全性 → 日历」中允许 Lynse 后，本页会自动检测。",
     continue: "继续",
     skip: "稍后再说",
     restart_now: "重启 Lynse",

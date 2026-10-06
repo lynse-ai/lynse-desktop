@@ -30,6 +30,36 @@ export const TEST_API_URL = "https://gapp.lynse.cn";
  *  Empty/absent means the assistant rides the main backend gateway. */
 export const AGENT_API_URL_STORAGE_KEY = "lynse_agent_api_url";
 
+/** Storage key for the optional Connections (integrations) BFF origin — the
+ *  self-hosted OpenConnector adapter (services/integrations-bff/, deployed at
+ *  https://www.lynse.ai). Empty/absent means integrations ride the main
+ *  backend, which is the intended production shape once that backend ships. */
+export const INTEGRATIONS_API_URL_STORAGE_KEY = "lynse_integrations_api_url";
+
+/**
+ * Build-time edition split: one codebase, two packaged products.
+ *   - `cn`   ships China-first connectors (Feishu today; WeCom/DingTalk later)
+ *   - `intl` ships the overseas set (Google/Outlook/Notion/Todoist; Slack later)
+ * Each bundler injects the value as a global define — apps/tauri's
+ * vite.config already does (`LYNSE_EDITION=cn|intl pnpm dev:tauri|build`);
+ * apps/web should add the same define in next.config. Unconfigured builds
+ * fall back to `cn`. Language packs always ship in full; the edition decides
+ * the connector list and, later, the default locale.
+ */
+export type LynseEdition = "cn" | "intl";
+declare const __LYNSE_EDITION__: string | undefined;
+declare const __LYNSE_DEV__: boolean | undefined;
+
+export const LYNSE_EDITION: LynseEdition =
+  typeof __LYNSE_EDITION__ !== "undefined" &&
+  (__LYNSE_EDITION__ === "cn" || __LYNSE_EDITION__ === "intl")
+    ? __LYNSE_EDITION__
+    : "cn";
+
+/** True for dev servers; packaged builds are always false. Used only to gate
+ *  debug affordances (e.g. the dev `lynse_edition` view override). */
+export const DEV_BUILD: boolean = typeof __LYNSE_DEV__ === "boolean" ? __LYNSE_DEV__ : false;
+
 /**
  * Route B preset: the lynclaw agent service deployed on Tencent CloudRun,
  * connected to directly — no Lynse gateway in between. The service accepts

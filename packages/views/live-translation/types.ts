@@ -112,6 +112,10 @@ export interface LiveTranslationSnapshot {
 export interface LivePermissionStatus {
   microphone: "granted" | "denied" | "notDetermined";
   systemAudio: "granted" | "denied" | "notDetermined";
+  /** EventKit calendar grant (macOS only). "unsupported" (Windows) or absent
+   * (older desktop builds) hides the onboarding row — it is an optional
+   * permission owned by the onboarding page, never the recording flow. */
+  calendar?: "granted" | "denied" | "notDetermined" | "unsupported";
   systemAudioRequired: boolean;
   restartRequired: boolean;
 }
@@ -221,11 +225,11 @@ export interface DesktopLiveTranslationApi {
   getProviderConfig: () => Promise<LiveTranslationProviderConfig>;
   saveProviderConfig: (config: LiveTranslationProviderConfig) => Promise<LiveTranslationProviderConfig>;
   permissions: () => Promise<LivePermissionStatus>;
-  requestPermission: (kind: "microphone" | "systemAudio") => Promise<LivePermissionStatus>;
+  requestPermission: (kind: "microphone" | "systemAudio" | "calendar") => Promise<LivePermissionStatus>;
   /** Open the OS privacy pane for one permission kind (System Settings on
    * macOS). Backs the onboarding toggles: a request that still ends
    * ungranted lands the user where the grant actually lives. */
-  openPrivacyPane: (kind: "microphone" | "systemAudio") => Promise<void>;
+  openPrivacyPane: (kind: "microphone" | "systemAudio" | "calendar") => Promise<void>;
   /** List selectable capture/playback endpoints (Windows). Empty lists on
    * platforms without device pickers — the UI hides the selectors then. */
   audioDevices: () => Promise<AudioDevicesSnapshot>;

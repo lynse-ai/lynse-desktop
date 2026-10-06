@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { getAuthStore } from "@lynse/core/auth";
+import { api } from "@lynse/core/api/client";
+import { downloadContextReview, isContextExportPath } from "@lynse/core/api";
 import { toast } from "sonner";
 import { Check, Download, FileText, Loader2, Share, X } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
@@ -253,11 +255,40 @@ function AttachmentItem({
   compact: boolean;
   onOpenImage: (viewer: { src: string; alt: string } | null) => void;
 }) {
+  const { t } = useTranslation();
   const [downloading, setDownloading] = useState(false);
   const { href, imgSrc, refresh } = useAttachmentUrls(attachment);
   if (!href) return null;
   const kind = attachmentKind(attachment);
   const name = attachment.name || "附件";
+
+  if (isContextExportPath(href)) {
+    const downloadReview = () => {
+      if (downloading) return;
+      const token = api().getToken();
+      if (!token) { toast.error(t("notifications.context_unavailable")); return; }
+      setDownloading(true);
+      void downloadContextReview(href, token).then((blob) => {
+        const objectUrl = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = objectUrl;
+        anchor.download = name;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        window.setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000);
+      }).catch(() => toast.error(t("notifications.context_unavailable")))
+        .finally(() => setDownloading(false));
+    };
+    return (
+      <button type="button" disabled={downloading} onClick={downloadReview}
+        className="flex max-w-sm min-w-56 items-center gap-3 rounded-xl border border-border bg-card px-3.5 py-3 text-left transition-colors hover:border-primary/30 hover:bg-accent disabled:opacity-50">
+        <FileText className="size-5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-sm">{name}</span>
+        {downloading ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : <Download className="size-4 text-muted-foreground" />}
+      </button>
+    );
+  }
 
   if (kind === "image") {
     // Bare picture — no card chrome, the message bubble is the container.

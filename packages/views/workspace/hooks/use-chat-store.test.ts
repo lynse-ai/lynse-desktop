@@ -70,6 +70,40 @@ function conversationByUserText(text: string) {
 }
 
 describe("concurrent chat conversations", () => {
+  it("switches accounts without copying old history or accepting old stream events", async () => {
+    store.getState().setUserId("u1");
+    store.getState().sendMessage("Private u1 context");
+    const oldRun = fake.runs[0]!;
+    const cancel = vi.spyOn(oldRun, "cancel").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    emit(oldRun, { type: "content", delta: "Private u1 answer" });
+    window.localStorage.setItem("lynse_ai_chat_history_v1:u2", JSON.stringify({ activeConversationId: "u2-history", conversations: [{
+      id: "u2-history", title: "Own u2 history", provider: "cloud", createdAt: 1, updatedAt: 1,
+      messages: [{ id: "u2-message", role: "user", content: "Own u2 history", timestamp: 1 }],
+    }] }));
+    store.getState().switchUser("u2");
+    expect(cancel).toHaveBeenCalled();
+    expect(store.getState().conversations.map((conversation) => conversation.id)).toEqual(["u2-history"]);
+    expect(store.getState().workingConversationIds).toEqual([]);
+    emit(oldRun, { type: "done", text: "Late private u1 answer" });
+    await Promise.resolve();
+    store.getState().clearMessages();
+    store.getState().sendMessage("Open u2 context suggestion");
+    expect(window.localStorage.getItem("lynse_ai_chat_history_v1:u1")).toContain("Private u1 answer");
+    expect(window.localStorage.getItem("lynse_ai_chat_history_v1:u2")).not.toContain("Private u1");
+    expect(JSON.stringify(store.getState().conversations)).not.toContain("Private u1");
+    store.getState().switchUser(null);
+    expect(store.getState().messages).toEqual([]);
+    expect(store.getState().conversations).toEqual([]);
+    store.getState().switchUser("u1");
+    expect(JSON.stringify(store.getState().conversations)).toContain("Private u1 answer");
+    expect(JSON.stringify(store.getState().conversations)).not.toContain("Open u2 context suggestion");
+    cancel.mockRestore();
+    oldRun.cancel();
+    await Promise.resolve();
+    expect(info).not.toHaveBeenCalled();
+    info.mockRestore();
+  });
   it("runs up to three conversations at once and blocks the fourth", () => {
     const { sendMessage, clearMessages } = store.getState();
     sendMessage("one");

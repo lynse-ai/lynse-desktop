@@ -9,6 +9,11 @@ type RequestOptions = RequestInit & {
    *  transport uses it to target the dedicated agent server (route B direct
    *  CloudRun connection) while session credentials stay unchanged. */
   baseUrl?: string;
+  /** Context APIs require a current login token and never send deployment/API keys. */
+  tokenOnly?: boolean;
+  /** Bind a request to the session which started it; reject account changes. */
+  sessionToken?: string;
+  responseType?: "json" | "blob";
 };
 
 // All requests go through /api/proxy to avoid CORS issues.
@@ -88,7 +93,11 @@ export class ApiClient {
     path: string,
     options: RequestOptions = {},
   ): Promise<T> {
-    const { baseUrl: overrideBase, ...init } = options;
+    const { baseUrl: overrideBase, tokenOnly, sessionToken, responseType, ...init } = options;
+    const requestToken = this.token;
+    if (tokenOnly && (!requestToken || (sessionToken !== undefined && sessionToken !== requestToken))) {
+      throw new ApiError(401, "Session changed or unavailable");
+    }
     const baseUrl = overrideBase ?? this.backendUrl;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -96,10 +105,10 @@ export class ApiClient {
       "X-Lynse-Api-Url": baseUrl,
       ...(init.headers as Record<string, string>),
     };
-    if (this.token) {
-      headers["Authorization"] = this.token;
+    if (requestToken) {
+      headers["Authorization"] = requestToken;
     }
-    if (this.apiKey) {
+    if (this.apiKey && !tokenOnly) {
       headers["X-API-Key"] = this.apiKey;
     }
     if (this.identity?.platform) {
@@ -113,6 +122,9 @@ export class ApiClient {
       ...init,
       headers,
     });
+    if (tokenOnly && this.token !== requestToken) {
+      throw new ApiError(401, "Session changed or unavailable");
+    }
 
     if (res.status === 401) {
       this.onUnauthorized?.();
@@ -143,8 +155,12 @@ export class ApiClient {
       throw new ApiError(res.status, message, data);
     }
     if (res.status === 204) return undefined as T;
+    if (responseType === "blob") return await res.blob() as T;
 
     const json = await res.json();
+    if (tokenOnly && this.token !== requestToken) {
+      throw new ApiError(401, "Session changed or unavailable");
+    }
 
     if (json && typeof json === "object" && "code" in json && "data" in json) {
       if (json.code !== 200) {
@@ -169,6 +185,10 @@ export class ApiClient {
 
   get<T>(path: string, options?: RequestOptions) {
     return this.request<T>(path, { method: "GET", ...options });
+  }
+
+  getBlob(path: string, options?: RequestOptions) {
+    return this.request<Blob>(path, { method: "GET", ...options, responseType: "blob" });
   }
 
   getWithParams<T>(path: string, params: Record<string, string | number | boolean | undefined>) {

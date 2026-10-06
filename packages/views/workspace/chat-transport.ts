@@ -239,12 +239,17 @@ export function normalizePollConfirmation(raw: unknown): ChatConfirm | null {
     options.push({ label: label || value, value: value || label });
   }
   if (!question && options.length === 0) return null;
+  const kind = firstString(r.kind) ?? undefined;
+  const params = r.params && typeof r.params === "object" ? r.params as Record<string, unknown> : {};
+  const preview = params.preview ?? r.preview;
   return {
     question,
     options,
-    kind: firstString(r.kind) ?? undefined,
+    kind,
     confirmToken: firstString(r.confirmToken, r.confirm_token) ?? undefined,
     riskLevel: firstString(r.riskLevel, r.risk_level) ?? undefined,
+    ...(kind?.startsWith("context_") && preview && typeof preview === "object" && !Array.isArray(preview)
+      ? { preview: JSON.parse(JSON.stringify(preview)) as NonNullable<ChatConfirm["preview"]> } : {}),
   };
 }
 

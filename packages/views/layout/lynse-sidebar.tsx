@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
@@ -12,6 +13,7 @@ import { openExternalUrl, openAppUpdateDialog } from "../app-update";
 import { AppUpdateDialog } from "../app-update-dialog";
 import { featureFlags } from "../feature-flags";
 import { NotificationList } from "../notifications/notification-list";
+import { openContextNotification } from "../notifications/context-inbox";
 import { SettingsDialog } from "../settings/settings-dialog";
 import { UserProfileDropdown } from "./user-profile-dropdown";
 import { isMacDesktop } from "./use-maximized";
@@ -209,6 +211,11 @@ export function LynseSidebar() {
                   <div className="max-h-[60vh] overflow-y-auto">
                     <NotificationList
                       onItemClick={(n) => {
+                        if (n.type === "context") {
+                          setNotifOpen(false);
+                          void openContextNotification(n, push).catch(() => toast.error(t("notifications.context_unavailable")));
+                          return;
+                        }
                         // The app-update row opens the in-app update dialog
                         // instead of bouncing the user to the release page.
                         if (n.id === "system:app-update") {

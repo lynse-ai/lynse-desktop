@@ -269,6 +269,8 @@ interface ChatStoreState {
   /** Current user id, pushed in from React so non-React callbacks can persist. */
   userId: string;
   setUserId: (userId: string) => void;
+  /** Flush the old account, cancel its runs, and load only the new account's history. */
+  switchUser: (userId: string | null) => void;
   hydrate: () => void;
   setChatVisible: (visible: boolean) => void;
   setActiveAssistant: (assistant: ChatAssistant) => void;
@@ -301,6 +303,7 @@ interface ChatRun {
 // Engine state that doesn't need to trigger re-renders — kept at module scope.
 const runs = new Map<string, ChatRun>();
 let hydrated = false;
+let switchingAccount = false;
 
 /**
  * Per-turn latency samples (in-memory only, reset on reload). Each turn logs
@@ -684,6 +687,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         confirmToken,
         signal: controller.signal,
         onEvent: (evt) => {
+          if (controller.signal.aborted || get().userId !== userId) return;
           if (timing.firstEventAt == null) timing.firstEventAt = performance.now();
           if (evt.type === "content" && timing.firstContentAt == null) {
             timing.firstContentAt = performance.now();
@@ -696,6 +700,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         },
       })
       .then(() => {
+        if (get().userId !== userId || runs.get(conversationId)?.controller !== controller) return;
         // A turn that resolves without `done` was aborted or cut short.
         recordPerf(timing.completed);
         // Poll has no partial content: a stopped turn leaves an empty
@@ -719,6 +724,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         }
       })
       .catch((error: unknown) => {
+        if (get().userId !== userId || runs.get(conversationId)?.controller !== controller) return;
         recordPerf(false);
         handleEvent({ type: "error", message: errorMessage(error) }, conversationId, assistantId);
         if (runs.get(conversationId)?.controller === controller) {
@@ -741,7 +747,33 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     chatVisible: 0,
     userId: "user",
 
-    setUserId: (userId) => set({ userId }),
+    setUserId: (userId) => get().switchUser(userId),
+
+    switchUser: (userId) => {
+      const nextUserId = userId ?? "";
+      if (get().userId === nextUserId) return;
+      switchingAccount = true;
+      try {
+        if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+        syncActiveConversation();
+        if (get().userId) saveChatHistoryNow();
+        for (const run of runs.values()) {
+          run.controller.abort();
+          run.transport.cancel();
+        }
+        runs.clear();
+        hydrated = false;
+        set({ userId: nextUserId, messages: [], conversations: [], activeConversationId: null,
+          activeAssistant: "lynse", lastCloudConversationId: null, pendingConfirm: null,
+          workingConversationIds: [], unreadCounts: {}, isLoading: false });
+        for (const notification of useNotificationStore.getState().items) {
+          if (notification.type === "chat") useNotificationStore.getState().remove(notification.id);
+        }
+      } finally {
+        switchingAccount = false;
+      }
+      if (nextUserId) get().hydrate();
+    },
 
     hydrate: () => {
       if (hydrated) return;
@@ -807,6 +839,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       // A live turn owns the thread view; its own polling covers new messages.
       const inFlight = latestWorkBuddyConversation(get().conversations);
       if (inFlight && runs.has(inFlight.id)) return;
+      const userId = get().userId;
       let entries;
       try {
         entries = await fetchWorkBuddyThreadSlice();
@@ -816,7 +849,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         }
         return;
       }
-      if (entries.length === 0) return;
+      if (get().userId !== userId || entries.length === 0) return;
       const current = get();
       if (current.activeAssistant !== "workbuddy") return;
       let conv = latestWorkBuddyConversation(current.conversations);
@@ -1016,6 +1049,7 @@ export const selectChatUnreadCount = (s: ChatStoreState): number =>
   Object.values(s.unreadCounts).reduce((acc, n) => acc + (n || 0), 0);
 
 useChatStore.subscribe((state, prev) => {
+  if (switchingAccount || !state.userId) return;
   const messagesChanged = state.messages !== prev.messages;
   const activeChanged = state.activeConversationId !== prev.activeConversationId;
   const conversationsChanged = state.conversations !== prev.conversations;

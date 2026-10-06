@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 #[cfg(target_os = "macos")]
-use highlandcows_eventkit::{CalendarEvent, CalendarStore, EventKitError};
+use highlandcows_eventkit::{CalendarEvent, CalendarStore, EkAuthStatus, EventKitError};
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -412,6 +412,34 @@ fn add_todo_to_system_calendar(
             record.extend(patch);
             Ok(Value::Object(record))
         }
+    }
+}
+
+/// Map the EventKit calendar authorization to the permission-page state
+/// vocabulary. Write-only cannot arise (we only ever request full access) but
+/// is treated as undetermined so a re-request would upgrade it.
+#[cfg(target_os = "macos")]
+pub(crate) fn calendar_permission_state() -> &'static str {
+    match CalendarStore::authorization_status() {
+        EkAuthStatus::FullAccess => "granted",
+        EkAuthStatus::Denied | EkAuthStatus::Restricted => "denied",
+        EkAuthStatus::NotDetermined | EkAuthStatus::WriteOnly => "notDetermined",
+    }
+}
+
+/// Fire the EventKit full-access prompt for the onboarding toggle. Blocks
+/// until the user answers (like the in-process mic prompt); a denial is not
+/// an error here — callers re-read `calendar_permission_state` afterwards so
+/// the UI can show its denied hint instead.
+#[cfg(target_os = "macos")]
+pub(crate) fn request_calendar_permission() {
+    match CalendarStore::builder().connect() {
+        Ok(store) => {
+            if let Err(error) = store.authorize() {
+                log::error!("[calendar] onboarding authorization failed: {error}");
+            }
+        }
+        Err(error) => log::error!("[calendar] failed to connect EventKit store: {error}"),
     }
 }
 

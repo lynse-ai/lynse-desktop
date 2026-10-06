@@ -23,6 +23,7 @@ import {
 } from "@lynse/core/integrations";
 import { Loader2, Plus, RefreshCw } from "../icons";
 import { DeleteConfirmDialog } from "../workspace/delete-confirm-dialog";
+import { FeishuSetupDialog } from "./feishu-setup-dialog";
 import {
   useAccountToggles,
   useAutoExport,
@@ -55,7 +56,7 @@ export interface ProviderRowProps {
 }
 
 /** Map the server's dotted keys to copy; unknown errors interpolate raw. */
-function errorCopy(error: unknown, t: (key: string, options?: Record<string, unknown>) => string): string {
+export function errorCopy(error: unknown, t: (key: string, options?: Record<string, unknown>) => string): string {
   if (isRequiresProError(error)) return t("connections.requires_pro");
   if (isNotConfiguredError(error)) return t("connections.not_configured");
   if (isNoDestinationError(error)) return t("connections.pick_a_destination_first");
@@ -74,6 +75,7 @@ export function ProviderRow({
 }: ProviderRowProps) {
   const { t } = useTranslation();
   const [disconnectTarget, setDisconnectTarget] = useState<IntegrationAccount | null>(null);
+  const [setupOpen, setSetupOpen] = useState(false);
   const flow = useConnectFlow(provider, { isAuthenticated });
   const status = flow.query.data;
   const destinations = useDestinations(provider, kind === "destination" && Boolean(status?.connected));
@@ -82,6 +84,13 @@ export function ProviderRow({
   const autoExport = useAutoExport(provider);
 
   const accounts = status?.accounts ?? [];
+  // Feishu (Model B): until the user's own org app exists there is no
+  // authorize URL to open — route Connect into the guided setup dialog. While
+  // the status query is still loading we also treat setup as required: the
+  // alternative (straight authorize) can only fail with not_configured, which
+  // is what the "点击后连接失效" report traced back to.
+  const needsSetup =
+    provider.startsWith("feishu-") && (status === undefined || status.setup_required === true);
 
   const onDisconnected = () => {
     setDisconnectTarget(null);
@@ -123,7 +132,7 @@ export function ProviderRow({
             size="sm"
             className="h-7 shrink-0 text-2xs"
             disabled={flow.connecting}
-            onClick={flow.start}
+            onClick={() => (needsSetup ? setSetupOpen(true) : flow.start())}
           >
             {t("connections.connect")}
           </Button>
@@ -211,6 +220,10 @@ export function ProviderRow({
             </li>
           ))}
         </ul>
+      )}
+
+      {needsSetup && (
+        <FeishuSetupDialog provider={provider} open={setupOpen} onOpenChange={setSetupOpen} />
       )}
 
       <DeleteConfirmDialog

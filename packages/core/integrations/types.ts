@@ -15,7 +15,14 @@ export type IntegrationsProvider =
   | "outlook-calendar"
   | "notion"
   | "todoist"
-  | "google-tasks";
+  | "google-tasks"
+  // Feishu (P1 pulled forward for the debug deployment): one Feishu account
+  // backs all four rows, the same way one Google account backs calendar and
+  // tasks. The BFF maps them onto the single `feishu` gateway service.
+  | "feishu-calendar"
+  | "feishu-docs"
+  | "feishu-tasks"
+  | "feishu-mail";
 
 /** Where a provider's exports land. Field name differs per provider. */
 export type DestinationField =
@@ -48,6 +55,12 @@ export interface IntegrationStatus {
    * local matrix would drift from whatever the backend actually gates.
    */
   requires_pro: boolean;
+  /**
+   * Feishu (Model B): the user's org app must exist before a connection can.
+   * When true the row routes Connect into the guided setup dialog (launcher
+   * link + credentials) instead of straight to the authorize URL.
+   */
+  setup_required?: boolean;
 }
 
 /** Step 1 of the OAuth three-step flow: what to open in the system browser. */
@@ -138,6 +151,7 @@ export function destinationFieldFor(provider: IntegrationsProvider): Destination
     case "todoist":
       return "default_project_id";
     case "google-tasks":
+    case "feishu-tasks":
       return "default_task_list_id";
     default:
       return "default_database_id";
@@ -146,5 +160,9 @@ export function destinationFieldFor(provider: IntegrationsProvider): Destination
 
 /** Providers whose accounts carry Sync/Notify rather than a destination. */
 export function isCalendarProvider(provider: IntegrationsProvider): boolean {
-  return provider === "google-calendar" || provider === "outlook-calendar";
+  return (
+    provider === "google-calendar" ||
+    provider === "outlook-calendar" ||
+    provider === "feishu-calendar"
+  );
 }

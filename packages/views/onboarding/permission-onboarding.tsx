@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ListTodo, Mic, RotateCcw, Sparkles, Volume2 } from "lucide-react";
+import { CalendarDays, ListTodo, Mic, RotateCcw, Sparkles, Volume2 } from "lucide-react";
 
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Alert, AlertDescription, AlertTitle } from "@lynse/ui/components/ui/alert";
@@ -18,7 +18,7 @@ import type { LivePermissionStatus } from "../live-translation/types";
  */
 export const PERMISSION_ONBOARDING_DONE_KEY = "lynse_permission_onboarding_done";
 
-type PermissionKind = "microphone" | "systemAudio";
+type PermissionKind = "microphone" | "systemAudio" | "calendar";
 
 /**
  * First-launch gate: until the user has answered the permission page (or
@@ -56,14 +56,16 @@ export function PermissionOnboardingGate({ children }: { children: ReactNode }) 
 
 /**
  * The Pocket-style permission page: a left setup column (logo, title, the
- * two required permission rows with toggles that fire the real TCC prompts,
- * a Continue that unlocks once both are granted, and a "later" escape hatch
- * so a denied permission can never lock the user out) and a right product
- * collage showing what the permissions unlock. The collage hides below the
- * 900px split — the packaged main window is a fixed 960×600, so the split
- * must land under it (not Tailwind's `lg`) or it would never show. Theme-
- * token based throughout, so it follows the user's light/dark appearance
- * (unlike the forced-dark login face).
+ * required permission rows (microphone, system audio) plus the optional
+ * macOS-only calendar row — toggles fire the real TCC prompts — a Continue
+ * that unlocks once the required rows are granted (the optional row never
+ * gates it), and a "later" escape hatch so a denied permission can never
+ * lock the user out) and a right product collage showing what the
+ * permissions unlock. The collage hides below the 900px split — the
+ * packaged main window is a fixed 960×600, so the split must land under it
+ * (not Tailwind's `lg`) or it would never show. Theme-token based
+ * throughout, so it follows the user's light/dark appearance (unlike the
+ * forced-dark login face).
  */
 export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
   const { t } = useTranslation();
@@ -77,6 +79,13 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
     ? perms.systemAudio === "granted" || !perms.systemAudioRequired
     : false;
   const allGranted = micGranted && audioGranted;
+  // Optional calendar row: macOS EventKit only. Windows reports
+  // "unsupported" (no readable local calendar API for unpackaged apps —
+  // cloud calendars come via Connections) and older binaries omit the field;
+  // either way the row stays hidden and never gates Continue.
+  const calendarVisible = !!perms?.calendar && perms.calendar !== "unsupported";
+  const calendarGranted = perms?.calendar === "granted";
+  const calendarPending = calendarVisible && !calendarGranted;
   // macOS quirk: a fresh Screen & System Audio Recording grant only takes
   // effect after a full app restart (the sidecar owns the ScreenCaptureKit
   // session), so completion means relaunching until then.
@@ -96,12 +105,14 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
     };
   }, []);
 
-  // Poll while incomplete so a grant flipped inside System Settings (macOS
-  // opens the privacy pane for system audio) lights the toggle up without
-  // any user action back in the app. The status command is cheap and the
-  // loop stops the moment everything is granted.
+  // Poll while any visible row is incomplete so a grant flipped inside
+  // System Settings (macOS opens the privacy pane for system audio) lights
+  // the toggle up without any user action back in the app. The optional
+  // calendar row is included — a denial flipped in the pane should still
+  // light up even once the required rows are green. The status command is
+  // cheap and the loop stops the moment everything visible is granted.
   useEffect(() => {
-    if (allGranted) return;
+    if (allGranted && !calendarPending) return;
     const api = getDesktopLiveTranslationApi();
     if (!api) return;
     const timer = window.setInterval(() => {
@@ -110,7 +121,7 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
         .catch(() => undefined);
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [allGranted]);
+  }, [allGranted, calendarPending]);
 
   const request = useCallback(async (kind: PermissionKind) => {
     const api = getDesktopLiveTranslationApi();
@@ -124,13 +135,16 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
       // and the poll loop lights the toggle up once they flip it there — but
       // each jump lives in exactly one place: the Rust request itself opens
       // the screen-recording pane (macOS systemAudio) and the Windows mic
-      // privacy page, so from here only the macOS microphone needs the nudge.
-      if (
-        kind === "microphone" &&
-        next.microphone !== "granted" &&
-        getAppInfoSync()?.platform === "darwin"
-      ) {
-        await api.openPrivacyPane("microphone");
+      // privacy page, so from here only the macOS microphone and calendar
+      // rows need the nudge.
+      const ungranted =
+        kind === "microphone"
+          ? next.microphone !== "granted"
+          : kind === "calendar"
+            ? next.calendar !== "granted"
+            : false;
+      if (ungranted && getAppInfoSync()?.platform === "darwin") {
+        await api.openPrivacyPane(kind);
       }
     } catch {
       // Keep the last snapshot; the poll loop re-reads the status anyway.
@@ -193,6 +207,25 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
               busy={perms === null || requesting === "systemAudio"}
               onRequest={() => void request("systemAudio")}
             />
+            {/* Optional macOS-only row — never counted into `allGranted`, so
+                the app stays fully usable without it. */}
+            {calendarVisible && (
+              <>
+                <div className="mx-5 border-t border-dashed border-border" />
+                <PermissionRow
+                  icon={<CalendarDays className="size-4" />}
+                  title={t("onboarding.calendar_title")}
+                  description={t("onboarding.calendar_desc")}
+                  hint={
+                    perms?.calendar === "denied" ? t("onboarding.calendar_denied_hint") : null
+                  }
+                  granted={calendarGranted}
+                  busy={perms === null || requesting === "calendar"}
+                  required={false}
+                  onRequest={() => void request("calendar")}
+                />
+              </>
+            )}
           </div>
 
           {needsRestart && (
@@ -287,6 +320,7 @@ function PermissionRow({
   hint,
   granted,
   busy,
+  required = true,
   onRequest,
 }: {
   icon: ReactNode;
@@ -295,6 +329,9 @@ function PermissionRow({
   hint: string | null;
   granted: boolean;
   busy: boolean;
+  /** Marks the row as mandatory (red asterisk). Optional rows — calendar —
+   * render without it and never gate the Continue button. */
+  required?: boolean;
   onRequest: () => void;
 }) {
   return (
@@ -304,7 +341,7 @@ function PermissionRow({
       </span>
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium">
-          {title} <span className="text-destructive">*</span>
+          {title} {required && <span className="text-destructive">*</span>}
         </p>
         <p className="mt-1 text-[13px] leading-relaxed text-muted-foreground">{description}</p>
         {hint && <p className="mt-1.5 text-xs leading-relaxed text-destructive">{hint}</p>}

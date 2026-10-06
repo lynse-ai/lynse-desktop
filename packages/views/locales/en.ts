@@ -1418,6 +1418,7 @@ const en = {
     "group_calendar": "Calendar",
     "group_sync": "Sync",
     "group_task": "Tasks",
+    "group_cn": "China platforms",
     "connected": "Connected",
     "reminder_title": "{{title}} starts in {{minutes}} min",
     "reminder_settings": "Pre-meeting reminder",
@@ -1437,6 +1438,7 @@ const en = {
     "disconnect": "Disconnect",
     "disconnect_confirm": "Disconnect {{email}}? You can reconnect at any time.",
     "retry": "Retry",
+    "close": "Close",
     "sync": "Sync",
     "notify": "Remind me",
     "auto_export": "Auto-export action items after meetings",
@@ -1451,14 +1453,24 @@ const en = {
       "outlook-calendar": "Outlook Calendar",
       "notion": "Notion",
       "todoist": "Todoist",
-      "google-tasks": "Google Tasks"
+      "google-tasks": "Google Tasks",
+      "feishu-calendar": "Feishu Calendar",
+      "feishu-docs": "Feishu Docs",
+      "feishu-tasks": "Feishu Tasks",
+      "feishu-mail": "Feishu Mail",
+      "feishu": "Feishu"
     },
     "hint": {
       "google-calendar": "Pull meetings in and get a reminder before they start",
       "outlook-calendar": "Same as Google Calendar, for Microsoft accounts",
       "notion": "Write meeting summaries into a database",
       "todoist": "Send action items to a project",
-      "google-tasks": "Send action items to a task list"
+      "google-tasks": "Send action items to a task list",
+      "feishu-calendar": "Pull Feishu meetings in and get a reminder before they start",
+      "feishu-docs": "Write meeting summaries into Feishu Docs",
+      "feishu-tasks": "Send action items to Feishu Tasks",
+      "feishu-mail": "Connect your Feishu mailbox",
+      "feishu": "One authorization covers calendar, tasks, docs and mail"
     },
     "error": {
       "generic": "Something went wrong: {{error}}",
@@ -1472,6 +1484,21 @@ const en = {
       "export_item_failed": "Some items could not be exported",
       "timed_out": "The browser sign-in took too long. Please try again.",
       "auth_failed": "The provider rejected the sign-in."
+    },
+    "feishu_setup": {
+      "title": "Connect Feishu",
+      "body": "Clicking connect opens the Feishu confirmation page: once you confirm there, everything else is automatic — the app is created, configured and authorized with nothing to fill in.",
+      "waiting": "Waiting for you to confirm in Feishu (authorization follows automatically)…",
+      "reopen": "Reopen the Feishu confirmation page",
+      "redirect_body": "One last step Feishu requires by hand: add this callback URL to the app's security settings (open the console below, paste the URL under 重定向 URL, save), then continue.",
+      "grant_body": "One click Feishu requires from the app admin: open the permission page below and enable 应用管理 — after that the callback is configured automatically and no pasting is ever needed.",
+      "grant_open": "Open the permission page",
+      "grant_done": "Enabled — continue automatically",
+      "copy": "Copy",
+      "copied": "Copied",
+      "copy_failed": "Copy failed — select the text manually",
+      "open_console": "Open the app console",
+      "continue_authorize": "Done — continue to authorization"
     }
   },
 
@@ -1496,6 +1523,9 @@ const en = {
     system_audio_title: "Allow Lynse to capture system audio",
     system_audio_desc: "Lynse needs system audio to record the people on your calls.",
     system_audio_denied_hint: "Click the toggle to open System Settings — allow Lynse under Privacy & Security → Screen Recording and this page updates automatically.",
+    calendar_title: "Allow Lynse to access your calendar",
+    calendar_desc: "(Optional) Lets to-dos land in your system calendar with one tap and paves the way for upcoming schedule features. Declining keeps everything else working.",
+    calendar_denied_hint: "Calendar access was denied. Allow Lynse under System Settings → Privacy & Security → Calendars and this page updates automatically.",
     continue: "Continue",
     skip: "Maybe later",
     restart_now: "Restart Lynse",

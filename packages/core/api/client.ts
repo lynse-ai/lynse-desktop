@@ -50,6 +50,9 @@ export class ApiClient {
   // Stored here only as the value the chat transport reads; it never changes
   // where regular business requests go.
   private agentBaseUrl: string | null = null;
+  // Optional dedicated origin for the Connections BFF (lynse_integrations_api_url).
+  // Same story: integrations calls override per-request; business calls don't move.
+  private integrationsBaseUrl: string | null = null;
   private token: string | null = null;
   private apiKey: string | null = null;
   private onUnauthorized?: () => void;
@@ -92,6 +95,21 @@ export class ApiClient {
   /** The dedicated AI-assistant origin, or null when unset. */
   getAgentBaseUrl(): string | null {
     return this.agentBaseUrl;
+  }
+
+  /** Point the Connections BFF at a dedicated origin (null = follow the main
+   *  backend). Persisted separately (lynse_integrations_api_url); see core/config. */
+  setIntegrationsBaseUrl(url: string | null) {
+    // Trim before stripping trailing slashes: a pasted value with stray
+    // whitespace/newlines would otherwise produce an unparseable fetch URL
+    // (WKWebView: "The string did not match the expected pattern.").
+    const trimmed = url?.trim() || null;
+    this.integrationsBaseUrl = trimmed ? trimmed.replace(/\/+$/, "") : null;
+  }
+
+  /** The dedicated Connections-BFF origin, or null when unset. */
+  getIntegrationsBaseUrl(): string | null {
+    return this.integrationsBaseUrl;
   }
 
   private async request<T>(
@@ -206,7 +224,11 @@ export class ApiClient {
     return this.request<Blob>(path, { method: "GET", ...options, responseType: "blob" });
   }
 
-  getWithParams<T>(path: string, params: Record<string, string | number | boolean | undefined>) {
+  getWithParams<T>(
+    path: string,
+    params: Record<string, string | number | boolean | undefined>,
+    options?: RequestOptions,
+  ) {
     const searchParams = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined && value !== "") {
@@ -214,7 +236,7 @@ export class ApiClient {
       }
     }
     const query = searchParams.toString();
-    return this.request<T>(query ? `${path}?${query}` : path, { method: "GET" });
+    return this.request<T>(query ? `${path}?${query}` : path, { method: "GET", ...options });
   }
 
   post<T>(path: string, body?: unknown, options?: RequestOptions) {
@@ -225,10 +247,11 @@ export class ApiClient {
     });
   }
 
-  put<T>(path: string, body?: unknown) {
+  put<T>(path: string, body?: unknown, options?: RequestOptions) {
     return this.request<T>(path, {
       method: "PUT",
       body: body ? JSON.stringify(body) : undefined,
+      ...options,
     });
   }
 
@@ -239,8 +262,8 @@ export class ApiClient {
     });
   }
 
-  delete<T>(path: string) {
-    return this.request<T>(path, { method: "DELETE" });
+  delete<T>(path: string, options?: RequestOptions) {
+    return this.request<T>(path, { method: "DELETE", ...options });
   }
 
   /**

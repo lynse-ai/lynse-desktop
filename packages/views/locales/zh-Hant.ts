@@ -1416,6 +1416,7 @@ const zhHant = {
     "group_calendar": "日曆",
     "group_sync": "同步",
     "group_task": "任務",
+    "group_cn": "國內平台",
     "connected": "已連接",
     "reminder_title": "{{title}} 還有 {{minutes}} 分鐘開始",
     "reminder_settings": "會前提醒",
@@ -1435,6 +1436,7 @@ const zhHant = {
     "disconnect": "中斷連接",
     "disconnect_confirm": "中斷 {{email}}？你可以隨時重新連接。",
     "retry": "重試",
+    "close": "關閉",
     "sync": "同步",
     "notify": "會前提醒",
     "auto_export": "會後自動匯出行動項",
@@ -1449,14 +1451,24 @@ const zhHant = {
       "outlook-calendar": "Outlook 日曆",
       "notion": "Notion",
       "todoist": "Todoist",
-      "google-tasks": "Google 任務"
+      "google-tasks": "Google 任務",
+      "feishu-calendar": "飛書日曆",
+      "feishu-docs": "飛書文檔",
+      "feishu-tasks": "飛書任務",
+      "feishu-mail": "飛書郵箱",
+      "feishu": "飛書"
     },
     "hint": {
       "google-calendar": "匯入會議日程，並在會前提醒",
       "outlook-calendar": "與 Google 日曆相同，用於 Microsoft 帳號",
       "notion": "把會議總結寫入資料庫",
       "todoist": "把行動項傳送到專案",
-      "google-tasks": "把行動項傳送到任務清單"
+      "google-tasks": "把行動項傳送到任務清單",
+      "feishu-calendar": "匯入飛書日程，並在會前提醒",
+      "feishu-docs": "把會議總結寫入飛書文檔",
+      "feishu-tasks": "把行動項傳送到飛書任務",
+      "feishu-mail": "連接飛書郵箱",
+      "feishu": "一次授權，覆蓋日曆、任務、文檔與郵箱"
     },
     "error": {
       "generic": "發生錯誤：{{error}}",
@@ -1470,6 +1482,21 @@ const zhHant = {
       "export_item_failed": "部分項目未能匯出",
       "timed_out": "瀏覽器授權逾時，請重試。",
       "auth_failed": "服務方拒絕了本次授權。"
+    },
+    "feishu_setup": {
+      "title": "連接飛書",
+      "body": "點擊連接後，瀏覽器會打開飛書確認頁：確認建立後自動完成設定並進入授權，全程無需填寫任何內容。",
+      "waiting": "等待你在飛書中確認建立（確認後將自動進入授權）…",
+      "reopen": "重新打開飛書確認頁",
+      "redirect_body": "最後一步需要手動完成：把下面的回調地址添加到應用的安全設定中（打開控制台，在「重定向 URL」裡貼上並儲存），然後繼續授權。",
+      "grant_body": "需要應用管理員點一次：打開下面的權限頁開通「應用管理」權限——之後回調地址會自動配置，無需任何貼上。",
+      "grant_open": "打開權限頁",
+      "grant_done": "已開通，自動繼續",
+      "copy": "複製",
+      "copied": "已複製",
+      "copy_failed": "複製失敗，請手動選取文字複製",
+      "open_console": "打開應用控制台",
+      "continue_authorize": "已添加，繼續授權"
     }
   },
 
@@ -1494,6 +1521,9 @@ const zhHant = {
     system_audio_title: "允許 Lynse 擷取系統音訊",
     system_audio_desc: "Lynse 需要系統音訊來錄製會議中遠端與會者的聲音。",
     system_audio_denied_hint: "點按右側開關可直接開啟系統設定，在「隱私與安全性 → 螢幕錄製」中允許 Lynse 後，本頁會自動偵測。",
+    calendar_title: "允許 Lynse 存取行事曆",
+    calendar_desc: "（可選）把待辦一鍵寫入系統行事曆，並為後續的日程功能做準備；拒絕不影響使用 Lynse。",
+    calendar_denied_hint: "行事曆權限已被拒絕。請在「系統設定 → 隱私與安全性 → 行事曆」中允許 Lynse 後，本頁會自動偵測。",
     continue: "繼續",
     skip: "稍後再說",
     restart_now: "重新啟動 Lynse",

@@ -34,7 +34,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
 CLOUDBASE_ENV_ID="${CLOUDBASE_ENV_ID:-lynse-d8g49o1i956741f9e}"
-UPDATES_BASE="${UPDATES_BASE:-https://lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com/updates}"
+UPDATES_BASE="${UPDATES_BASE:-https://dl.lynse.cn/updates}"
 GH_REPO="${GH_REPO:-${GITHUB_REPOSITORY:-lynse-ai/lynse-desktop}}"
 
 # Both platform keys the updater can ask for. A manifest missing either one

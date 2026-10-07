@@ -154,8 +154,9 @@ type DesktopApi = {
   };
 }
 
-/** Human-facing fallback link (official site) for "view release" affordances. */
-const RELEASES_PAGE_URL = "https://www.lynse.cn";
+/** Human-facing link for "view release" affordances — the website download
+ * page (keep in sync with packages/views/about/links.ts DOWNLOAD_URL). */
+const RELEASES_PAGE_URL = "https://www.lynse.cn/download";
 
 // The Update object carries the download/install methods, so it can't cross
 // into the UI as a plain value. Keep it here; the UI only ever sees the

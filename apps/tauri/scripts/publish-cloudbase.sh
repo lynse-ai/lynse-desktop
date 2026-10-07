@@ -39,7 +39,7 @@ CHANGELOG="$ROOT/CHANGELOG.md"
 BUNDLE_DIR="$APP_DIR/src-tauri/target/release/bundle"
 
 CLOUDBASE_ENV_ID="${CLOUDBASE_ENV_ID:-lynse-d8g49o1i956741f9e}"
-UPDATES_BASE="${UPDATES_BASE:-https://lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com/updates}"
+UPDATES_BASE="${UPDATES_BASE:-https://dl.lynse.cn/updates}"
 
 DRY_RUN=false
 DO_BUILD=false

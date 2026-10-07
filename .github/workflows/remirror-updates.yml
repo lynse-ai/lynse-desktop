@@ -34,7 +34,7 @@ permissions:
 # in-app updater polls.
 env:
   CLOUDBASE_ENV_ID: lynse-d8g49o1i956741f9e
-  CLOUDBASE_UPDATES_BASE: https://lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com/updates
+  CLOUDBASE_UPDATES_BASE: https://dl.lynse.cn/updates
 
 jobs:
   remirror:

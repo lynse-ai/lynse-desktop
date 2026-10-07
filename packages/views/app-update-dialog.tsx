@@ -12,8 +12,8 @@ import {
 import { Button } from "@lynse/ui/components/ui/button";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { ArrowUp, Download, Loader2, RefreshCw } from "./icons";
+import { DOWNLOAD_URL } from "./about/links";
 import {
-  TESTFLIGHT_URL,
   getAppInfoSync,
   isSandboxedMacApp,
   openExternalUrl,
@@ -60,8 +60,9 @@ export function AppUpdateDialog() {
   const hasUpdate = Boolean(update?.hasUpdate);
   const failed = installState.phase === "failed";
   // TestFlight/App Store builds run sandboxed and can never install an
-  // update in place (EPERM replacing /Applications/<app>) — offer the
-  // channel instead and hide the download flow entirely.
+  // update in place (EPERM replacing /Applications/<app>) — send the user to
+  // the website download page instead; installing the direct build once
+  // migrates them off TestFlight and in-app updates take over from there.
   const sandboxed = isSandboxedMacApp();
 
   const progressLabel = busy
@@ -127,7 +128,7 @@ export function AppUpdateDialog() {
 
         {hasUpdate && sandboxed && (
           <p className="text-xs leading-relaxed text-muted-foreground">
-            {t("settings.update_in_testflight_desc")}
+            {t("settings.update_website_migration_desc")}
           </p>
         )}
 
@@ -170,9 +171,9 @@ export function AppUpdateDialog() {
           </Button>
           {hasUpdate ? (
             sandboxed ? (
-              <Button size="sm" onClick={() => openExternalUrl(TESTFLIGHT_URL)}>
-                <ArrowUp className="size-3.5" />
-                {t("settings.update_in_testflight")}
+              <Button size="sm" onClick={() => openExternalUrl(DOWNLOAD_URL)}>
+                <Download className="size-3.5" />
+                {t("settings.update_download_website")}
               </Button>
             ) : (
               <Button size="sm" onClick={install} disabled={busy || checking}>

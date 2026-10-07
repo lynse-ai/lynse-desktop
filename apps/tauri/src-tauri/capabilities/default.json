@@ -26,7 +26,7 @@
     {
       "identifier": "opener:allow-open-url",
       "allow": [
-        { "url": "itms-beta://*" }
+        { "url": "https://www.lynse.cn/*" }
       ]
     },
     "process:allow-restart",

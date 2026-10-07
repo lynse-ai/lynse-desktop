@@ -7,10 +7,9 @@
 
 ```
 客户端 (tauri-plugin-updater)
-   │  轮询 endpoints（每 30 分钟 + 手动"检查更新"，按顺序尝试）
+   │  轮询 endpoint（每 30 分钟 + 手动"检查更新"）
    ▼
-① https://lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com/updates/latest.json   ← 腾讯云 CloudBase 静态托管（主）
-② https://github.com/lynse-ai/lynse-desktop/releases/latest/download/latest.json   ← 兜底
+https://dl.lynse.cn/updates/latest.json   ← 腾讯云 CloudBase 静态托管（唯一更新源，自定义域名）
    │  返回 { version, platforms: { "<target>": { url, signature } } }
    ▼
 客户端比较版本 → 有新版本 → UI 提示（通知中心 / 侧边栏卡片 / 设置页）
@@ -20,10 +19,14 @@
    → 安装 → relaunch()
 ```
 
-发布链路：GitHub Actions 仍然负责构建、minisign 签名并把产物发布到 GitHub Release（源头 +
-回滚依据）；随后 `mirror-cloudbase` 任务把 Release 资产镜像到腾讯云 CloudBase 静态托管
-（环境 `lynse-d8g49o1i956741f9e`，上海），并将 `latest.json` 内的下载地址改写为
-CloudBase 地址后发布。客户端更新流量走 CloudBase，GitHub 仅在不可用时兜底。
+发布链路：GitHub Actions 负责构建、Developer ID 签名 + 公证、minisign 签名，并把产物发布到
+GitHub Release（构建源头 + 回滚依据）；随后 `mirror-cloudbase` 任务把 Release 资产镜像到
+腾讯云 CloudBase 静态托管（环境 `lynse-d8g49o1i956741f9e`，上海，自定义域名
+`dl.lynse.cn`），并将 `latest.json` 内的
+下载地址改写为 `https://dl.lynse.cn/updates/...` 后发布。客户端只轮询
+`https://dl.lynse.cn/updates/latest.json` 这一个 endpoint（早先配置的
+GitHub 兜底 endpoint 因仓库私有匿名 404、从未可用，已从 `tauri.conf.json` 移除；仅历史
+编译包内仍残留）。
 
 关键文件：
 
@@ -38,11 +41,76 @@ CloudBase 地址后发布。客户端更新流量走 CloudBase，GitHub 仅在�
 | `.github/workflows/release.yml` | 打 tag 自动构建、签名、生成并上传 `latest.json` 到 Release；`mirror-cloudbase` 任务改写 URL 后镜像到 CloudBase 静态托管 |
 | `apps/tauri/src-tauri/src/lib.rs` | 离线转写运行时包下载：CloudBase 镜像优先（`LYNSE_UPDATES_MIRROR_BASE` 编译期注入）→ GitHub → ghproxy 镜像 |
 
+## 分发渠道：官网直发（TestFlight 已退役）
+
+自 v1.1.8 起采用与常见桌面应用一致的直发模式：**官网下载页负责首次安装，应用内自动更新
+负责后续升级**，不再向 TestFlight 上传新版本。
+
+- `scripts/build-appstore.sh`（App Store/TestFlight 通道）保留但停用；`Entitlements-appstore.plist`
+  等沙盒产物链路仅作存档参考。
+- **存量 TestFlight 用户迁移**：TestFlight 装的包运行在 macOS App Sandbox 下，永远无法
+  应用内自更新（`APP_SANDBOX_CONTAINER_ID` → `get_app_info` 返回 `sandboxed: true`）。
+  更新弹窗与通知中心对这类构建不再引导 TestFlight，而是引导到官网下载页
+  （`packages/views/about/links.ts` 的 `DOWNLOAD_URL`，即 `https://www.lynse.cn/download`），
+  手动安装一次直发版后即永久脱离 TestFlight，之后全部走应用内自动更新。
+
+### Developer ID 签名 + 公证（一次性配置）
+
+官网分发必须 Developer ID 签名并公证，否则 Gatekeeper 拦截（用户需右键打开）且每次更新后
+麦克风/录屏等 TCC 授权丢失。`release.yml` 已内置检测：配置下列 Secrets 即自动签名 + 公证，
+缺省则退回 ad-hoc 签名（仅限测试）。
+
+| Secret | 说明 |
+| --- | --- |
+| `APPLE_CERTIFICATE` | Developer ID Application 证书 .p12 的 base64（`base64 -i cert.p12`） |
+| `APPLE_CERTIFICATE_PASSWORD` | 导出 .p12 时设置的密码 |
+| `APPLE_SIGNING_IDENTITY` | 证书全名，如 `Developer ID Application: Lynse (76HBB34PNK)` |
+| `APPLE_ID` | 公证用 Apple ID |
+| `APPLE_PASSWORD` | 该 Apple ID 的 app-specific password（appleid.apple.com 生成） |
+| `APPLE_TEAM_ID` | `76HBB34PNK` |
+
+证书在 developer.apple.com → Certificates → 创建 **Developer ID Application**（非 Apple
+Distribution）。公证由 tauri 打包器自动完成（notarytool 提交 + 订书 DMG），updater 产物
+`.app.tar.gz` 由签名后的 .app 打包而来，无需单独公证。
+
+⚠️ 直发版一经 Developer ID 签名，后续版本必须持续使用同一证书签名（换证书 = 用户的 TCC
+授权重置）；minisign 更新私钥 `~/.tauri/lynse-desktop.key` 同理不可更换（见下文密钥管理）。
+
+### 官网下载页接入（lynse.cn/download）
+
+官网页面无需托管安装包，读更新清单动态给出链接即可（清单与安装包同在 CloudBase，URL 200 可直下）：
+
+```
+GET https://dl.lynse.cn/updates/latest.json
+{
+  "version": "1.1.8",
+  "notes": "…",                       // 取自 CHANGELOG
+  "pub_date": "2026-10-07T…Z",
+  "platforms": {
+    "darwin-aarch64": {               // macOS（Apple Silicon，macOS 15+）
+      "signature": "…minisign…",
+      "url": "https://dl.lynse.cn/updates/v1.1.8/Lynse_1.1.8_aarch64.dmg"
+    },
+    "windows-x86_64": {               // Windows x64
+      "signature": "…",
+      "url": "https://dl.lynse.cn/updates/v1.1.8/Lynse_1.1.8_x64_en-US.msi"
+    }
+  }
+}
+```
+
+- 页面按 UA / 手动切换展示对应平台的 `platforms.<key>.url`；同目录下还有
+  `Lynse_<版本>_aarch64.app.tar.gz(.sig)`（updater 专用，无需在下载页露出）。
+- 该清单同时是应用内「新内容」说明的来源（`packages/views/app-update.ts` 的
+  `fetchLatestReleaseNotes`），官网展示的版本号/更新说明与应用内保持一致。
+- `CORS` 已放通（网关反射 Origin），浏览器 fetch 可直接读。
+
 ## 腾讯云 CloudBase 配置（一次性）
 
-更新分发使用 CloudBase 静态托管（环境 `lynse-d8g49o1i956741f9e`，地域上海，
-域名 `lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com`，已实测匿名公网可读、
-单文件 100MB+ 可上传、网关直读 COS 强一致无缓存延迟）。
+更新分发使用 CloudBase 静态托管（环境 `lynse-d8g49o1i956741f9e`，地域上海），
+对外统一走绑定的自定义域名 `dl.lynse.cn`（原生域名
+`lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com` 继续可用、指向同一 bucket，
+仅作备用入口）。已实测匿名公网可读、单文件 100MB+ 可上传、CORS 反射 Origin。
 
 只需在仓库 Secrets 配置一个变量：
 
@@ -92,7 +160,8 @@ pnpm --filter @lynse/tauri mirror:cloudbase -- v1.1.6           # 校验通过�
 
 **流量配额提醒**：当前环境为「体验版」套餐，静态托管 CDN 流量配额很小；安装包
 100–300MB，少量用户更新即可耗尽配额。发布正式版前请升级套餐（或改用独立
-COS 桶直读），配额耗尽时 updater 会自动回退到 GitHub endpoint，更新不会中断。
+COS 桶直读）。endpoint 已是单源（GitHub 兜底已移除），配额耗尽期间客户端检查更新会
+失败并在 UI 显示检查失败，配额恢复后自动继续——不影响已安装应用的使用。
 
 ## 密钥管理（重要！）
 
@@ -107,19 +176,23 @@ COS 桶直读），配额耗尽时 updater 会自动回退到 GitHub endpoint，
 ## 发布流程（全自动）
 
 ```bash
-# 1. 更新版本号（两处需一致）
+# 1. 更新版本号（三处需一致）
 #    apps/tauri/src-tauri/tauri.conf.json → "version"
 #    apps/tauri/src-tauri/Cargo.toml      → [package] version
-# 2. 提交 + 打 tag 推送
-git commit -am "release: v0.1.30"
-git tag v0.1.30
-git push origin main v0.1.30
-# 3. GitHub Actions「Release」工作流自动：
-#    - 构建 Windows (msi) + macOS (dmg)
-#    - 用私钥签名，生成 .sig 文件
+#    apps/tauri/package.json              → "version"
+# 2. CHANGELOG.md 顶部加条目（latest.json 的 notes 由 mirror 脚本取自这里）
+# 3. 提交 + 打 tag 推送
+git commit -am "release: v1.1.8"
+git tag v1.1.8
+git push origin main v1.1.8
+# 4. GitHub Actions「Release」工作流自动：
+#    - 构建 Windows (msi) + macOS (dmg)，Developer ID 签名 + 公证（已配 APPLE_* Secrets 时）
+#    - 用 minisign 私钥签名，生成 .sig 文件
 #    - 生成 latest.json 并连同安装包上传到该 tag 的 Release
 #    - mirror-cloudbase 任务把资产镜像到 CloudBase 静态托管，改写 URL 后发布 updates/latest.json
-# 4. 已发布的客户端在下次轮询时自动收到更新（CloudBase 主、GitHub 兜底）
+#    - verify-updates 断言线上清单版本/平台/可下载性，不过则发版失败
+# 5. 已发布的客户端在下次轮询时自动收到更新并一键升级；
+#    官网下载页读 latest.json 自动展示新版本，无需改官网代码
 ```
 
 ## 本地构建签名包（可选）
@@ -138,17 +211,17 @@ pnpm --filter @lynse/tauri build
 
 - **旧版本兼容**：`v0.1.29` 及更早的客户端仍通过 `https://api.lynse.cn/v1/client/latest-version`
   代理接口做版本检查（旧 check_app_update 命令）。该后端接口需保留至旧版本基本淘汰。
-- **迁移过渡**：endpoint 列表编译进客户端，因此 `1.0.3` 及更早的版本仍只轮询 GitHub。
-  注意 **GitHub 这条对客户端并不是可用兜底**：`lynse-ai/lynse-desktop` 是私有仓库，匿名访问
-  release 资产返回 404（见 `scripts/update-version-proxy/worker.js:3-5`）。这些旧版本真正能
-  拿到的检查渠道是 `api.lynse.cn/v1/client/latest-version` 代理接口，因此该接口必须保留；
-  而一旦 CloudBase 镜像断更，`1.0.3` 及更早版本**没有任何兜底**，只能靠用户从官网重装。
-- **缓存**：GitHub 的 `releases/latest/download/latest.json` 有约 5 分钟 CDN 缓存；
-  CloudBase 静态托管网关返回 `no-store, no-cache`（直读 COS，强一致），发版即时生效。
-  代价是没有边缘缓存，大文件下载每次回源 COS；若日后接入自定义 CDN 域名，
-  需为 `updates/latest.json` 配置短 TTL（如 60–300 秒）。
-- **发布页链接**：更新弹窗里的"查看发布"仍指向 GitHub Releases 页面
-  （`tauri-bridge.ts` 的 `RELEASES_PAGE_URL`），仅为浏览用途，不影响更新流程。
-- **macOS 签名**：当前为 ad-hoc 签名。如需 Developer ID 公证分发，在 release.yml 中补充
-  `APPLE_CERTIFICATE` 等环境变量即可，updater 流程不受影响。
-- **版本比较**：由 updater 插件按 semver 判断，`version` 字段必须是合法 semver（如 `0.1.30`）。
+- **历史编译包内的 GitHub endpoint**：`1.0.x` 等旧包编译时带有 GitHub 兜底 endpoint，但该
+  仓库私有、匿名 404，从来不是可用兜底；新包已移除（`tauri.conf.json` 只保留 CloudBase）。
+  一旦 CloudBase 镜像断更，旧版本没有任何兜底，只能靠用户从官网重装——`verify-updates` /
+  `updater-staleness.yml` 就是为拦截这种静默断更而设。
+- **缓存**：原生域名走网关直读 COS，`no-store, no-cache` 强一致。自定义域名
+  `dl.lynse.cn` 带 CDN 缓存（实测响应头 `max-age=300, s-maxage=600`），清单与安装包
+  最多延迟 5–10 分钟生效——在可接受范围内，换版本后立刻自检若未提示更新可稍等重试。
+- **发布页链接**：更新弹窗里的"查看发布"与沙盒（TestFlight）构建的引导按钮都指向官网
+  下载页 `https://www.lynse.cn/download`（`tauri-bridge.ts` 的 `RELEASES_PAGE_URL` 与
+  `packages/views/about/links.ts` 的 `DOWNLOAD_URL`）。
+- **macOS 签名**：配置 APPLE_* Secrets 后为 Developer ID 签名 + 公证（官网直发的正式形态）；
+  Secrets 缺省时退回 ad-hoc 签名，仅限内部测试（Gatekeeper 需右键打开、更新后 TCC 授权
+  丢失）。`capabilities/default.json` 的 opener 白名单只放行 `https://www.lynse.cn/*`。
+- **版本比较**：由 updater 插件按 semver 判断，`version` 字段必须是合法 semver（如 `1.1.8`）。

@@ -28,7 +28,7 @@ export const LYNSE_MEMORY_API_URL_KEY = "lynse_memory_api_url";
  * empty override) via localStorage[LYNSE_MEMORY_API_URL_KEY].
  */
 export const DEFAULT_MEMORY_API_URL =
-  "https://lynse-memory-319577-10-1401959758.sh.run.tcloudbase.com";
+  "https://lynse-memory-321192-9-1401959758.sh.run.tcloudbase.com";
 
 export function memoryApiBase(): string {
   if (typeof window === "undefined") return "";

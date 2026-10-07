@@ -18,8 +18,7 @@ export type AppUpdateInfo = {
  * The hosting gateway reflects the request origin in CORS and serves
  * no-store, so the read is always fresh.
  */
-const UPDATES_MANIFEST_URL =
-  "https://lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com/updates/latest.json";
+const UPDATES_MANIFEST_URL = "https://dl.lynse.cn/updates/latest.json";
 
 export interface LatestReleaseNotes {
   version: string;
@@ -119,21 +118,15 @@ export function getAppInfoSync(): {
  * (and App Store) signing injects the entitlement regardless of what the
  * source entitlements declare. A sandboxed app cannot replace its own bundle
  * in /Applications, so the in-app download+install flow always fails with
- * EPERM; those builds update through the channel (TestFlight) instead.
- * Windows installers and Developer-ID direct installs are never sandboxed,
- * and outside the desktop host there is no appInfo at all — both false.
+ * EPERM; those builds are pointed at the website download page instead, and
+ * installing the direct-distribution build once migrates them off TestFlight
+ * for good. Windows installers and Developer-ID direct installs are never
+ * sandboxed, and outside the desktop host there is no appInfo at all —
+ * both false.
  */
 export function isSandboxedMacApp(): boolean {
   return getAppInfoSync()?.sandboxed === true;
 }
-
-/**
- * TestFlight's URL scheme: opening it brings the TestFlight app forward,
- * where TestFlight-installed builds pick up new versions. Deep-linking
- * straight to the app's own page needs an Apple-internal app id, so the
- * user taps Lynse in TestFlight — still one tap from there.
- */
-export const TESTFLIGHT_URL = "itms-beta://";
 
 /** Open a URL in the system browser via the Tauri opener plugin. */
 export function openExternalUrl(url: string): void {

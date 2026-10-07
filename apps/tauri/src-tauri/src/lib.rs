@@ -1521,8 +1521,7 @@ const RUNTIME_REPO: &str = "lynse-ai/lynse-desktop";
 /// Releases are published locally (publish-cloudbase.sh), so the mirror is
 /// always present; the GitHub URL and ghproxy-style mirrors below stay in the
 /// candidate list as fallbacks for tags published before that flow.
-const RUNTIME_MIRROR_BASE: &str =
-    "https://lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com/updates";
+const RUNTIME_MIRROR_BASE: &str = "https://dl.lynse.cn/updates";
 
 /// Per-platform runtime archive base name, e.g.
 /// `lynse-stt-runtime-macos-aarch64.tar.gz`.

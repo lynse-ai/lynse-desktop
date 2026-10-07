@@ -12,6 +12,38 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.1.8 (2026-10-07)
+
+### New Features
+
+- Feishu joins the Connections section as a self-serve row: one authorization binds the account and covers calendar sync/notify, task export and docs exports inline, with a guided setup dialog on first connect. Connections is now split by edition — domestic platforms render as one row per platform, international services keep their per-service groups (dev builds can flip either view).
+- Inspirations sync to the cloud for the first time: notes and images written on desktop now back up to the user's Lynse Memory account space, with per-note AI-context consent on by default and an editable opt-out, so the assistant can recall them without ever publishing them anywhere else. The sync engine is account-partitioned, journals pending operations offline and re-uploads media through signed links.
+- The assistant's personal-context inbox ships on desktop: a notification-center feed of account-isolated, evidence-cited goal previews and follow-ups pulled from the user's own meetings and (now) inspirations, with snooze/dismiss and a display quota so it stays quiet by design.
+- Chat supports attachment cards with lazy signed download links, and the assistant backend address is configurable in settings (follow the main server, pin the dedicated CloudRun service, or enter a custom origin).
+- Distribution moves from TestFlight to the website: new installs come from the download page and updates arrive in-app. Sandbox (TestFlight) builds are now steered to the website for a one-time manual reinstall instead of an update that could never apply.
+
+### Fixed
+
+- The update channel now serves from dl.lynse.cn, the custom domain bound to the same CloudBase hosting (the long tcloudbaseapp.com address stays as a fallback); release mirroring, repair jobs and the daily staleness check all publish to it.
+- The inspiration cloud endpoint now points at the current lynse-memory service instead of the pending-retirement one.
+- Chat errors are surfaced honestly: a backend 503 no longer masquerades as "server busy", backend detail text passes through, and a failed identity check asks for re-login instead of retrying forever.
+- Native ffmpeg is bundled with the audio editor so export does not depend on a system copy.
+
+### 新功能
+
+- 飞书接入「连接」设置：一次授权完成绑定，日历同步/提醒、任务导出、文档导出在同一行内管理，首次连接有引导设置。连接页按版本拆分——国内平台一行一平台，国际服务保持分组展示。
+- 灵感首次支持云同步：桌面记录的图文备份到用户的 Lynse Memory 账号空间，每条灵感默认参与 AI 上下文召回且可单独关闭；同步引擎按账号隔离、离线操作有日志续传、媒体走签名链路上传。
+- 助手的个人上下文收件箱上线桌面端：通知中心里展示按账号隔离、带证据引用的目标预览与跟进建议（来源含会议与灵感），支持稍后/忽略，并带展示配额保持克制。
+- 聊天支持附件卡片与懒签名下载链接；助手后端地址可在设置中配置（跟随主服务 / 指定云托管服务 / 自定义地址）。
+- 分发渠道从 TestFlight 切换为官网直发：新用户从下载页安装，老用户应用内升级；沙盒（TestFlight）构建改为引导到官网手动重装一次。
+
+### 修复
+
+- 更新通道切换到自定义域名 dl.lynse.cn（同一 CloudBase 托管，原长域名保留兜底）；发版镜像、修复任务与每日巡检同步发布到新地址。
+- 灵感云同步端点从待退役的旧服务切换到现役 lynse-memory 服务。
+- 聊天报错如实透出：后端 503 不再统一显示「人太多」，后端 detail 文案直达用户，身份校验失败提示重新登录而不是无限重试。
+- 音频编辑器内置原生 ffmpeg，导出不再依赖系统安装。
+
 ## 1.1.7 (2026-10-04)
 
 ### New Features

@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 env:
-  CLOUDBASE_UPDATES_BASE: https://lynse-d8g49o1i956741f9e-1401959758.tcloudbaseapp.com/updates
+  CLOUDBASE_UPDATES_BASE: https://dl.lynse.cn/updates
 
 jobs:
   staleness:

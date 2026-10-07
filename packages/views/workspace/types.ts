@@ -383,7 +383,11 @@ export interface ChatConfirm {
   confirmToken?: string;
   /** Backend risk hint for the card ("low" | "medium" | "high"). */
   riskLevel?: string;
+  /** Frozen context action fields shown to the user before authorization. */
+  preview?: Record<string, ChatConfirmPreviewValue>;
 }
+
+export type ChatConfirmPreviewValue = string | number | boolean | null | ChatConfirmPreviewValue[] | { [key: string]: ChatConfirmPreviewValue };
 
 /** Human-handoff entry the backend attaches to a finished reply. */
 export interface ChatHumanSupportLink {

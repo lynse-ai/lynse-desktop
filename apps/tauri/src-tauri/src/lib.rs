@@ -26,6 +26,7 @@ mod live_translation;
 #[path = "live_translation_stub.rs"]
 mod live_translation;
 mod logging;
+mod inspiration_cloud;
 mod inspiration_voice;
 mod meeting_detector;
 mod feishu;
@@ -2336,7 +2337,7 @@ fn todo_delete(app: AppHandle, id: String) -> CommandResult<()> {
 /// vault folder's `Inspirations/` subfolder once the vault is enabled, else
 /// the legacy `<app_data>/inspirations/<uuid>/`. Records store relative file
 /// names only, so relocating the root needs no index rewrite.
-fn inspiration_dir(app: &AppHandle, uuid: &str) -> CommandResult<PathBuf> {
+pub(crate) fn inspiration_dir(app: &AppHandle, uuid: &str) -> CommandResult<PathBuf> {
     Ok(vault::content_dir(app, vault::ContentKind::Inspirations)?.join(uuid))
 }
 
@@ -2392,6 +2393,20 @@ fn save_inspiration(app: &AppHandle, inspiration: Value) -> CommandResult<Value>
             merged.insert("updatedAt".to_owned(), json!(timestamp));
             if let Some(tags) = object.get("tags") {
                 merged.insert("tags".to_owned(), tags.clone());
+            }
+            // T8.4 per-inspiration switches: sensitivity + "用于 AI 上下文".
+            // Absent fields keep the stored value (same merge rule as tags).
+            if let Some(sensitivity) = object.get("sensitivity").and_then(Value::as_str).filter(|value| !value.is_empty()) {
+                merged.insert("sensitivity".to_owned(), json!(sensitivity));
+            }
+            if let Some(ai_context) = object.get("aiContextEnabled").and_then(Value::as_bool) {
+                merged.insert("aiContextEnabled".to_owned(), json!(ai_context));
+            }
+            // Conflict resolution (plan T8.3): re-submitting a draft against
+            // the server's current version carries an explicit `version`
+            // (the server record's version becomes the new baseVersion).
+            if let Some(version) = object.get("version").and_then(Value::as_i64) {
+                merged.insert("version".to_owned(), json!(version));
             }
             existing
         }
@@ -2503,6 +2518,10 @@ fn save_inspiration(app: &AppHandle, inspiration: Value) -> CommandResult<Value>
     // Mirror the memo into the Obsidian-style Journal folder (markdown file
     // + copied attachments).
     vault::sync_journal(app, &saved);
+    // Write-through into the account-scoped cloud cache: no-op until a Lynse
+    // account is bound (API-Key mode never binds), otherwise the change is
+    // queued for the Lynse Memory sync. Local-first — never blocks the save.
+    inspiration_cloud::record_local_change(app, &saved)?;
     Ok(saved)
 }
 
@@ -2511,20 +2530,44 @@ fn save_inspiration(app: &AppHandle, inspiration: Value) -> CommandResult<Value>
 /// patched straight into the inspiration record. A missing model keeps the
 /// audio and marks the record `unavailable` so the UI can offer a retry after
 /// the model is installed.
-fn transcribe_inspiration(app: &AppHandle, mut record: Value, audio_path: PathBuf) -> CommandResult<Value> {
+fn transcribe_inspiration(app: &AppHandle, record: Value, audio_path: PathBuf) -> CommandResult<Value> {
     let id = record.get("id").and_then(Value::as_str).ok_or("Record id is required")?.to_owned();
-    let patch_status = |status: &str, error: Option<&str>| -> CommandResult<Value> {
+    let audio_file = record.get("audio")
+        .and_then(|audio| audio.get("file"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    // Write the transcript text, its status and updatedAt in ONE atomic store
+    // update. Before writing, re-read the record and drop the result when the
+    // inspiration was deleted, its audio was re-recorded, or a newer
+    // transcript state already landed — a slow transcription must never
+    // overwrite newer state (plan T7.2).
+    let write_back = |app: &AppHandle, transcript: Option<&str>, status: &str, error: Option<&str>| -> CommandResult<Option<Value>> {
+        let current = match get_store_value(app, "local-inspirations", &id)? {
+            Some(current) => current,
+            None => return Ok(None),
+        };
+        let current_audio = current.get("audio")
+            .and_then(|audio| audio.get("file"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if current_audio != audio_file
+            || current.get("transcriptStatus").and_then(Value::as_str) != Some("pending")
+        {
+            return Ok(None);
+        }
         let mut patch = Map::new();
         patch.insert("transcriptStatus".to_owned(), json!(status));
         patch.insert("transcriptError".to_owned(), json!(error));
+        if let Some(text) = transcript {
+            patch.insert("transcript".to_owned(), json!(text));
+        }
         patch.insert("updatedAt".to_owned(), json!(now()));
         let updated = update_store_value(app, "local-inspirations", &id, patch)?
-            .ok_or_else(|| "Inspiration disappeared while transcribing".to_owned());
-        if let Ok(record) = updated.as_ref() {
-            // The transcript (or its failure state) lands in the journal mirror.
-            vault::sync_journal(app, record);
-        }
-        updated
+            .ok_or_else(|| "Inspiration disappeared while transcribing".to_owned())?;
+        // The transcript (or its failure state) lands in the journal mirror.
+        vault::sync_journal(app, &updated);
+        Ok(Some(updated))
     };
     let provider = resolve_provider(app, None, None);
     let model_id = match &provider {
@@ -2537,7 +2580,8 @@ fn transcribe_inspiration(app: &AppHandle, mut record: Value, audio_path: PathBu
         stt::ProviderConfig::WhisperX(_) => stt::WHISPERX_DEFAULT_MODEL_ID,
     };
     if !model_is_installed(app, provider.engine(), model_id) {
-        return patch_status("unavailable", Some("本地 ASR 模型未安装，请先在设置中下载语音识别模型"));
+        return write_back(app, None, "unavailable", Some("本地 ASR 模型未安装，请先在设置中下载语音识别模型"))?
+            .ok_or_else(|| "灵感已删除或音频已更换，转写结果已丢弃".to_owned());
     }
     let result = (|| -> CommandResult<String> {
         let directory = engine_model_dir(app, provider.engine(), model_id)?;
@@ -2557,14 +2601,10 @@ fn transcribe_inspiration(app: &AppHandle, mut record: Value, audio_path: PathBu
         Ok(apply_hotwords(output.text, &terms))
     })();
     match result {
-        Ok(transcript) => {
-            if let Some(object) = record.as_object_mut() {
-                object.insert("transcript".to_owned(), json!(transcript));
-            }
-            patch_status("completed", None)
-        }
+        Ok(transcript) => write_back(app, Some(&transcript), "completed", None)?
+            .ok_or_else(|| "灵感已删除或音频已更换，转写结果已丢弃".to_owned()),
         Err(error) => {
-            let _ = patch_status("failed", Some(&error));
+            let _ = write_back(app, None, "failed", Some(&error));
             Err(error)
         }
     }
@@ -2588,7 +2628,51 @@ fn inspiration_delete(app: AppHandle, id: String) -> CommandResult<()> {
     if directory.exists() {
         fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
     }
+    inspiration_cloud::record_local_delete(&app, &id)?;
     Ok(())
+}
+
+// ── Lynse Memory cloud sync (plan T7/T8) ────────────────────────────────────
+
+/// Open the account-scoped inspiration cache. The renderer calls this ONLY
+/// after it verified the Lynse access token against `GET /v1/me` and passes
+/// the server-derived user id — the shell never trusts a self-reported id
+/// without that verification, and API-Key-only sessions never call it.
+#[tauri::command]
+fn inspiration_cloud_bind(app: AppHandle, userId: String, apiBase: String) -> CommandResult<Value> {
+    if userId.trim().is_empty() || apiBase.trim().is_empty() {
+        return Err("userId and apiBase are required".to_owned());
+    }
+    let binding = inspiration_cloud::AccountBinding {
+        user_id: userId.trim().to_owned(),
+        api_base: apiBase.trim().trim_end_matches('/').to_owned(),
+        verified_at: now(),
+    };
+    inspiration_cloud::write_binding(&app, &binding)?;
+    inspiration_cloud::account_dir(&app, &binding.user_id)?;
+    inspiration_cloud::status_view(&app)
+}
+
+/// Logout / account switch: drop the active binding; the per-account queue
+/// pauses on disk and resumes when the same account binds again. The legacy
+/// global JSON is left untouched and is never auto-adopted by another
+/// account (plan T7.4).
+#[tauri::command]
+fn inspiration_cloud_unbind(app: AppHandle) -> CommandResult<()> {
+    inspiration_cloud::clear_binding(&app)
+}
+
+#[tauri::command]
+fn inspiration_cloud_status(app: AppHandle) -> CommandResult<Value> {
+    inspiration_cloud::status_view(&app)
+}
+
+/// Run one sync pass: media → pending operations → pull cursor changes.
+/// Requires the Lynse access token of the bound account (kept in the
+/// renderer's keychain, never persisted by this module).
+#[tauri::command(async)]
+async fn inspiration_cloud_sync(app: AppHandle, token: String) -> CommandResult<Value> {
+    inspiration_cloud::sync_once(&app, &token).await
 }
 
 #[tauri::command]
@@ -4571,6 +4655,8 @@ pub fn run() {
             inspiration_list, inspiration_save, inspiration_delete, inspiration_transcribe, inspiration_audio_url,
             inspiration_image_url, inspiration_stage_image, inspiration_stage_image_from_path,
             inspiration_stage_image_from_clipboard, inspiration_capture_from_iphone,
+            inspiration_cloud_bind, inspiration_cloud_unbind, inspiration_cloud_status,
+            inspiration_cloud_sync,
             inspiration_voice::inspiration_voice_start, inspiration_voice::inspiration_voice_stop,
             inspiration_voice::inspiration_voice_cancel, inspiration_voice::inspiration_voice_state,
             local_stt_model_status, local_stt_download_model, local_stt_delete_model,

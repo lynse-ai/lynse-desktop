@@ -1,8 +1,9 @@
 "use client";
 
 import { create } from "zustand";
+import type { ContextInboxItem } from "@lynse/core/api";
 
-export type NotificationType = "chat" | "transcription" | "sync" | "system";
+export type NotificationType = "chat" | "transcription" | "sync" | "system" | "context";
 
 export interface NotificationItem {
   /** Unique id. Chat notifications use `chat:<conversationId>` so they upsert. */
@@ -18,6 +19,8 @@ export interface NotificationItem {
   external?: boolean;
   createdAt: number;
   read: boolean;
+  /** Volatile mirror only; the authenticated cloud inbox remains authoritative. */
+  context?: { userId: string; item: ContextInboxItem; canDisplay: boolean };
 }
 
 interface NotificationState {
@@ -30,6 +33,9 @@ interface NotificationState {
   markAllRead: () => void;
   remove: (id: string) => void;
   clear: () => void;
+  contextUserId: string | null;
+  setContextUser: (userId: string | null) => void;
+  mirrorContext: (userId: string, items: ContextInboxItem[], canDisplay: boolean) => void;
 }
 
 const STORAGE_KEY = "lynse_notifications_v1";
@@ -41,7 +47,7 @@ function loadItems(): NotificationItem[] {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as NotificationItem[]) : [];
+    return Array.isArray(parsed) ? (parsed as NotificationItem[]).filter((item) => item.type !== "context") : [];
   } catch {
     return [];
   }
@@ -50,7 +56,7 @@ function loadItems(): NotificationItem[] {
 function saveItems(items: NotificationItem[]) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(items.slice(0, MAX_ITEMS)));
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(items.filter((item) => item.type !== "context").slice(0, MAX_ITEMS)));
   } catch {
     // ignore quota / private-mode errors
   }
@@ -58,6 +64,7 @@ function saveItems(items: NotificationItem[]) {
 
 export const useNotificationStore = create<NotificationState>((set) => ({
   items: loadItems(),
+  contextUserId: null,
   add: (item) =>
     set((s) => {
       const next: NotificationItem = { read: false, createdAt: Date.now(), ...item };
@@ -76,6 +83,29 @@ export const useNotificationStore = create<NotificationState>((set) => ({
   markAllRead: () => set((s) => ({ items: s.items.map((i) => ({ ...i, read: true })) })),
   remove: (id) => set((s) => ({ items: s.items.filter((i) => i.id !== id) })),
   clear: () => set({ items: [] }),
+  setContextUser: (userId) => set((s) => ({
+    contextUserId: userId,
+    items: s.contextUserId === userId ? s.items : s.items.filter((item) => item.type !== "context"),
+  })),
+  mirrorContext: (userId, records, canDisplay) => set((s) => {
+    if (s.contextUserId !== userId) return s;
+    const eligible = records.filter((item) => item.status === "pending"
+      && (!item.snoozed_until || Date.parse(item.snoozed_until) <= Date.now()));
+    const previousSelection = s.items.find((item) => item.context?.userId === userId && !item.context.item.displayed_at)?.context?.item.item_id;
+    const selected = canDisplay ? eligible.find((item) => item.item_id === previousSelection && !item.displayed_at)
+      ?? eligible.find((item) => !item.displayed_at) : undefined;
+    const mirrors: NotificationItem[] = eligible
+      .filter((item) => !!item.displayed_at || item === selected)
+      .map((item) => ({
+        id: `context:${item.item_id}`,
+        type: "context",
+        title: item.title,
+        createdAt: Date.parse(item.created_at) || Date.now(),
+        read: !!item.displayed_at || !!s.items.find((existing) => existing.id === `context:${item.item_id}`)?.read,
+        context: { userId, item, canDisplay },
+      }));
+    return { items: [...mirrors, ...s.items.filter((item) => item.type !== "context")].slice(0, MAX_ITEMS) };
+  }),
 }));
 
 // Persist to localStorage whenever the list changes (client only).

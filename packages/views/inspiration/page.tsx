@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "motion/react";
 import { cn } from "@lynse/ui/lib/utils";
@@ -25,6 +25,7 @@ import { dayGroupLabel, formatCardDateTime } from "./format";
 import { InspirationAudioPlayer } from "./audio-player";
 import { InspirationLightbox, type LightboxSlide } from "./lightbox";
 import { InspirationDetailDialog } from "./detail-dialog";
+import { useInspirationCloud } from "./use-inspiration-cloud";
 import type { InspirationImage, InspirationRecord } from "./types";
 
 const VIEW_STORAGE_KEY = "lynse_inspiration_view_v1";
@@ -442,6 +443,9 @@ export function InspirationPage() {
   const reduceMotion = useReducedMotion();
   const desktopApi = getDesktopInspirationApi();
   const columns = useColumnCount();
+  // Lynse Memory cloud sync (plan T7/T8): binding, trigger points and the
+  // 仅本机/同步中/已同步/冲突 status for the header pill.
+  const { status: cloudStatus, scheduleSync } = useInspirationCloud();
 
   const { data: inspirations = [], isLoading } = useQuery({
     queryKey: ["inspirations"],
@@ -479,6 +483,7 @@ export function InspirationPage() {
     onSuccess: () => {
       toast.success(t("inspiration.toast_deleted"));
       void invalidate();
+      scheduleSync();
     },
     onSettled: () => setDeletingId(null),
   });
@@ -494,6 +499,20 @@ export function InspirationPage() {
     () => (activeTag ? inspirations.filter((record) => record.tags.includes(activeTag)) : inspirations),
     [activeTag, inspirations],
   );
+
+  // Any local change (capture sheet saves, edits, retries) lands in this
+  // list — debounce a sync pass whenever the newest updatedAt moves.
+  const lastActivity = useMemo(
+    () => inspirations.map((record) => record.updatedAt).sort().at(-1) ?? "",
+    [inspirations],
+  );
+  const lastActivityRef = useRef(lastActivity);
+  useEffect(() => {
+    if (lastActivity && lastActivity !== lastActivityRef.current) {
+      lastActivityRef.current = lastActivity;
+      scheduleSync();
+    }
+  }, [lastActivity, scheduleSync]);
 
   const setViewAndPersist = (next: FeedView) => {
     setView(next);
@@ -588,6 +607,31 @@ export function InspirationPage() {
         <h2 className="text-sm font-medium text-foreground">{t("inspiration.title")}</h2>
         {desktopApi && (
           <div className="flex items-center gap-2">
+            {cloudStatus?.bound && (
+              <button
+                type="button"
+                title={cloudStatus.lastError ?? cloudStatus.apiBase ?? ""}
+                onClick={() => void navigator.clipboard?.writeText(JSON.stringify(cloudStatus))}
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-3xs transition-colors",
+                  cloudStatus.paused
+                    ? "bg-amber-500/15 text-amber-600"
+                    : (cloudStatus.conflicts ?? 0) > 0
+                      ? "bg-destructive/10 text-destructive"
+                      : (cloudStatus.pendingOps ?? 0) > 0
+                        ? "bg-muted text-muted-foreground"
+                        : "bg-emerald-500/10 text-emerald-600",
+                )}
+              >
+                {cloudStatus.paused
+                  ? t("inspiration.cloud_paused")
+                  : (cloudStatus.conflicts ?? 0) > 0
+                    ? t("inspiration.cloud_conflicts", { count: cloudStatus.conflicts ?? 0 })
+                    : (cloudStatus.pendingOps ?? 0) > 0
+                      ? t("inspiration.cloud_syncing", { count: cloudStatus.pendingOps ?? 0 })
+                      : t("inspiration.cloud_synced")}
+              </button>
+            )}
             <div className="flex items-center rounded-lg border border-border/50 p-0.5">
               <button
                 type="button"

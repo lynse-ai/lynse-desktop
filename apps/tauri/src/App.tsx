@@ -10,7 +10,7 @@ import { ChatPage } from "@lynse/views/chat";
 import { TodoPage } from "@lynse/views/todo";
 import { NotesPage } from "@lynse/views/notes";
 import { InspirationCaptureSheet, InspirationPage } from "@lynse/views/inspiration";
-import { NotificationsPage, AppUpdateNotifier } from "@lynse/views/notifications";
+import { NotificationsPage, AppUpdateNotifier, ContextInboxNotifier } from "@lynse/views/notifications";
 import { DevicesPage } from "@lynse/views/devices";
 import { SettingsDialog, useWebdavAutoSync } from "@lynse/views/settings";
 import { AboutWindow } from "@lynse/views/about";
@@ -229,6 +229,7 @@ function AppContent() {
           and this supervisor is what stops the bots and aborts in-flight
           answers. */}
       <BotAuthSupervisor />
+      <ContextInboxNotifier />
       <AppShell />
     </DesktopNavigationProvider>
   );

@@ -18,6 +18,7 @@ import { SettingsDialog } from "../settings/settings-dialog";
 import { openAppUpdateDialog, useAppUpdate } from "../app-update";
 import { UserProfileDropdown } from "./user-profile-dropdown";
 import {
+  Bell,
   Download,
   House,
   Lightbulb,
@@ -27,11 +28,11 @@ import {
   Bluetooth,
 } from "../icons";
 
-// Module-scoped unread dots (the sidebar Bell was retired; each module's icon
-// carries its own notification marker). Module-level constants keep the
-// zustand selector identities stable across renders.
+// Module-level constants keep the notification selector identities stable across renders.
 const selectSystemUnread = selectUnreadByTypes(["system"]);
 const selectNotesUnread = selectUnreadByTypes(["transcription", "sync"]);
+const selectContextCount = (state: ReturnType<typeof useNotificationStore.getState>) =>
+  state.items.filter((item) => item.type === "context").length;
 
 interface NavItem {
   key: string;
@@ -59,6 +60,7 @@ export function LynseSidebar() {
   const chatUnreadCount = useChatStore(selectChatUnreadCount);
   const systemUnread = useNotificationStore(selectSystemUnread);
   const notesUnread = useNotificationStore(selectNotesUnread);
+  const contextCount = useNotificationStore(selectContextCount);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Shared update store (already polled by the mounted AppUpdateDialog) — the
   // rail badge is just another subscriber.
@@ -189,6 +191,19 @@ export function LynseSidebar() {
           >
             <Download className="size-3.5" strokeWidth={2.5} />
           </button>
+        )}
+        {contextCount > 0 && (
+          <NavButton
+            active={isNavActive(pathname, "/notifications")}
+            badgeCount={contextCount}
+            onClick={() => push("/notifications")}
+            title={t("nav.notifications")}
+          >
+            <Bell className="size-5" />
+            <span className={isWeb ? "text-[13px] font-medium" : "mt-1 text-3xs font-medium"}>
+              {t("nav.notifications")}
+            </span>
+          </NavButton>
         )}
         <UserProfileDropdown
           onOpenSettings={() => setSettingsOpen(true)}

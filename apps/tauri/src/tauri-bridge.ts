@@ -51,8 +51,7 @@ import type {
 import type {
   DesktopInspirationApi,
   InspirationVoiceEvent,
-} from "@lynse/views/inspiration";
-import type {
+} from "@lynse/views/inspiration";import type {
   DesktopWebdavSyncApi,
   DesktopStorageApi,
   WebdavSyncProgress,
@@ -629,6 +628,11 @@ export async function installTauriBridge(): Promise<void> {
       voiceStop: () => command("inspiration_voice_stop"),
       voiceCancel: () => command("inspiration_voice_cancel"),
       voiceState: () => command("inspiration_voice_state"),
+      cloudBind: (userId: string, apiBase: string) =>
+        command("inspiration_cloud_bind", { userId, apiBase }),
+      cloudUnbind: () => command<void>("inspiration_cloud_unbind"),
+      cloudStatus: () => command("inspiration_cloud_status"),
+      cloudSync: (token: string) => command("inspiration_cloud_sync", { token }),
       onVoiceEvent: (callback: (event: InspirationVoiceEvent) => void) =>
         getCurrentWebview().listen<InspirationVoiceEvent>("inspiration-voice-event", (event) =>
           callback(event.payload),

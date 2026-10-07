@@ -239,12 +239,17 @@ export function normalizePollConfirmation(raw: unknown): ChatConfirm | null {
     options.push({ label: label || value, value: value || label });
   }
   if (!question && options.length === 0) return null;
+  const kind = firstString(r.kind) ?? undefined;
+  const params = r.params && typeof r.params === "object" ? r.params as Record<string, unknown> : {};
+  const preview = params.preview ?? r.preview;
   return {
     question,
     options,
-    kind: firstString(r.kind) ?? undefined,
+    kind,
     confirmToken: firstString(r.confirmToken, r.confirm_token) ?? undefined,
     riskLevel: firstString(r.riskLevel, r.risk_level) ?? undefined,
+    ...(kind?.startsWith("context_") && preview && typeof preview === "object" && !Array.isArray(preview)
+      ? { preview: JSON.parse(JSON.stringify(preview)) as NonNullable<ChatConfirm["preview"]> } : {}),
   };
 }
 
@@ -400,9 +405,24 @@ function humanizeBackendError(message: string | null | undefined): string | null
 
 const BUSY_ERROR_KEY = "system.error.busy";
 
+/**
+ * A 503 from the agent backend is also how token/identity verification
+ * failure surfaces ("身份校验失败" — expired Lynse token, or a token the
+ * deployment's identity host cannot verify). Retrying it or rewriting it as
+ * "busy" hides a dead login behind a phantom load problem.
+ */
+const IDENTITY_FAILURE_PATTERN = /身份校验失败|身份验证未通过|登录状态已失效|not logged in/i;
+
+function isIdentityFailureError(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return false;
+  const detail = detailText(error);
+  return !!detail && IDENTITY_FAILURE_PATTERN.test(detail);
+}
+
 /** True when a submit failure means "server busy" and is worth retrying. */
 function isBusySubmitError(error: unknown): boolean {
   if (!(error instanceof ApiError)) return false;
+  if (isIdentityFailureError(error)) return false;
   if (error.status === 503 || error.status === 429) return true;
   const detail = detailText(error);
   return !!detail && detail.trim().toLowerCase() === BUSY_ERROR_KEY;
@@ -413,7 +433,13 @@ function submitErrorMessage(error: unknown): string {
   const status = error instanceof ApiError ? error.status : undefined;
   if (status === 400) return detail || "登录状态已失效，请重新登录后再试";
   if (status === 401 || status === 403) return detail || "身份验证未通过，请重新登录";
-  if (status === 503 || status === 429) return "当前使用人数较多，请稍后再试";
+  if (status === 503 || status === 429) {
+    if (isIdentityFailureError(error)) return "登录状态已失效，请重新登录后再试";
+    // Pass the backend's own copy through (saturation, identity timeout, …);
+    // only a bare 503 with no detail falls back to generic busy.
+    if (detail) return detail;
+    return "当前使用人数较多，请稍后再试";
+  }
   return detail || "发送失败，请稍后重试";
 }
 

@@ -1,6 +1,12 @@
-//! WebDAV sync: two-way merge of the local record stores (todos,
-//! inspirations) plus the renderer's settings bundle, and a one-way mirror of
-//! meeting-note markdown files.
+//! WebDAV sync: two-way merge of the local record stores (todos) plus the
+//! renderer's settings bundle, and a one-way mirror of meeting-note markdown
+//! files.
+//!
+//! Inspirations are NOT synced here anymore (plan T7.3): their cloud authority
+//! is the account-scoped Lynse Memory sync (`inspiration_cloud.rs`). An
+//! existing remote `inspirations.json` is left untouched as a read-only
+//! archive — the old "edit beats delete" WebDAV merge must never feed the
+//! cloud cache.
 //!
 //! The renderer owns the settings bundle content (it lives in localStorage
 //! stores); it passes a fresh bundle into `webdav_sync_now` and applies the
@@ -15,7 +21,7 @@
 //!   manifest.json        ancestor snapshot: per-store {id -> hash}, settings fingerprint
 //!   settings.json        opaque renderer settings bundle with an `exportedAt` stamp
 //!   todos.json           record array
-//!   inspirations.json    record array (`audio` stripped — audio never leaves the device)
+//!   inspirations.json    LEGACY read-only archive (no longer synced; T7.3)
 //!   notes/index.json     { fileId -> { fileName, title, hash, pushedAt } }
 //!   notes/<title>.md     note markdown assembled by the renderer
 //! ```
@@ -445,20 +451,15 @@ struct StoreSyncSpec {
     strip_fields: &'static [&'static str],
 }
 
-const SYNC_STORES: [StoreSyncSpec; 2] = [
-    StoreSyncSpec {
-        name: "todos",
-        local_dir: "local-todos",
-        remote_file: "todos.json",
-        strip_fields: &[],
-    },
-    StoreSyncSpec {
-        name: "inspirations",
-        local_dir: "local-inspirations",
-        remote_file: "inspirations.json",
-        strip_fields: &["audio"],
-    },
-];
+// Inspirations deliberately removed from the two-way sync set (plan T7.3):
+// their cloud authority is the Lynse Memory service; a stale WebDAV copy is a
+// read-only archive and must never resurrect cloud-deleted records.
+const SYNC_STORES: [StoreSyncSpec; 1] = [StoreSyncSpec {
+    name: "todos",
+    local_dir: "local-todos",
+    remote_file: "todos.json",
+    strip_fields: &[],
+}];
 
 /// `manifest.json` — the common ancestor of the last successful sync.
 #[derive(Debug, Default, Serialize, Deserialize)]

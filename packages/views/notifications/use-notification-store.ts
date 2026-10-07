@@ -36,6 +36,9 @@ interface NotificationState {
   contextUserId: string | null;
   setContextUser: (userId: string | null) => void;
   mirrorContext: (userId: string, items: ContextInboxItem[], canDisplay: boolean) => void;
+  /** True while the authenticated inbox sync keeps failing; drives the page hint. */
+  contextUnavailable: boolean;
+  setContextUnavailable: (unavailable: boolean) => void;
 }
 
 const STORAGE_KEY = "lynse_notifications_v1";
@@ -62,9 +65,16 @@ function saveItems(items: NotificationItem[]) {
   }
 }
 
+/** An item is eligible while its snooze deadline is missing, stale, or unparseable. */
+function isNotSnoozed(deadline: string | null): boolean {
+  const timestamp = deadline ? Date.parse(deadline) : NaN;
+  return !(Number.isFinite(timestamp) && timestamp > Date.now());
+}
+
 export const useNotificationStore = create<NotificationState>((set) => ({
   items: loadItems(),
   contextUserId: null,
+  contextUnavailable: false,
   add: (item) =>
     set((s) => {
       const next: NotificationItem = { read: false, createdAt: Date.now(), ...item };
@@ -89,8 +99,7 @@ export const useNotificationStore = create<NotificationState>((set) => ({
   })),
   mirrorContext: (userId, records, canDisplay) => set((s) => {
     if (s.contextUserId !== userId) return s;
-    const eligible = records.filter((item) => item.status === "pending"
-      && (!item.snoozed_until || Date.parse(item.snoozed_until) <= Date.now()));
+    const eligible = records.filter((item) => item.status === "pending" && isNotSnoozed(item.snoozed_until));
     const previousSelection = s.items.find((item) => item.context?.userId === userId && !item.context.item.displayed_at)?.context?.item.item_id;
     const selected = canDisplay ? eligible.find((item) => item.item_id === previousSelection && !item.displayed_at)
       ?? eligible.find((item) => !item.displayed_at) : undefined;
@@ -106,6 +115,7 @@ export const useNotificationStore = create<NotificationState>((set) => ({
       }));
     return { items: [...mirrors, ...s.items.filter((item) => item.type !== "context")].slice(0, MAX_ITEMS) };
   }),
+  setContextUnavailable: (unavailable) => set({ contextUnavailable: unavailable }),
 }));
 
 // Persist to localStorage whenever the list changes (client only).

@@ -1085,6 +1085,8 @@ const en = {
     context_dismiss: "Dismiss",
     context_snooze: "Remind me tomorrow",
     context_unavailable: "This suggestion changed or is unavailable. Try again later.",
+    context_open_prompt: "Review context suggestion {{itemId}}",
+    context_sync_unavailable: "Context suggestions can't be synced right now. Retrying automatically.",
     title: "Notifications",
     empty_hint: "No new notifications",
     mark_all_read: "Mark all as read",

@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getAuthStore, useAuthStore } from "@lynse/core/auth";
 import { api } from "@lynse/core/api/client";
+import { ApiError } from "@lynse/core/api";
 import { actOnContextInbox, getContextInboxItem, listContextInbox, syncContextMeetings } from "@lynse/core/api";
 import type { ContextInboxAction, ContextInboxItem, ContextInboxResponse } from "@lynse/core/api";
+import { useTranslation } from "@lynse/core/i18n/react";
 import { useChatStore } from "../workspace/hooks/use-chat-store";
 import { useNotificationStore, type NotificationItem } from "./use-notification-store";
 
@@ -17,6 +19,15 @@ interface InboxController {
 }
 
 let activeInbox: InboxController | null = null;
+
+/**
+ * Account switches and unmounts abort an in-flight open on purpose; recovery
+ * is the refreshed inbox list, not an error toast.
+ */
+export function isBenignContextOpenError(error: unknown): boolean {
+  return (error as { name?: string } | null)?.name === "AbortError"
+    || (error instanceof ApiError && error.status === 401);
+}
 
 export async function actOnContextNotification(notification: NotificationItem, action: ContextInboxAction) {
   const context = notification.context;
@@ -37,19 +48,44 @@ export async function openContextNotification(notification: NotificationItem, pu
 export function ContextInboxNotifier() {
   const authenticated = useAuthStore((s) => s.isAuthenticated);
   const knownUserId = useAuthStore((s) => s.user?.id ?? null);
+  const { t } = useTranslation();
   const sessionToken = authenticated ? api().getToken() : null;
   const queryClient = useQueryClient();
+  // `open` runs from effects after mount, so it reads the live translation
+  // through a ref instead of capturing the first render's `t`.
+  const tRef = useRef(t);
+  useLayoutEffect(() => {
+    tRef.current = t;
+  }, [t]);
+  // Tracks the last identity the chat store was cleared for (see the session
+  // effect below).
+  const identityRef = useRef<string | null>(null);
+  // Consecutive inbox failures drive the poll backoff; counted here because
+  // TanStack's fetchFailureCount stays flat when retry is disabled.
+  const consecutiveFailures = useRef(0);
   // Query keys contain a disposable session ID, never the login credential.
   const sessionId = useMemo(() => authenticated && sessionToken
     ? `${knownUserId ?? "verified-by-server"}:${crypto.randomUUID()}` : "signed-out", [authenticated, knownUserId, sessionToken]);
   const queryKey = useMemo(() => ["context-inbox", sessionId], [sessionId]);
   const inbox = useQuery({
     queryKey,
-    queryFn: ({ signal }) => listContextInbox(sessionToken!, signal),
+    queryFn: async ({ signal }) => {
+      try {
+        const data = await listContextInbox(sessionToken!, signal);
+        consecutiveFailures.current = 0;
+        return data;
+      } catch (error) {
+        // Cancellation is not an endpoint failure; never let it back off the poll.
+        if ((error as { name?: string })?.name !== "AbortError") consecutiveFailures.current += 1;
+        throw error;
+      }
+    },
     enabled: !!sessionToken,
     staleTime: 0,
     retry: false,
-    refetchInterval: 60_000,
+    // Back off when the inbox keeps failing (server off) so the poll stops
+    // hammering a closed endpoint every minute.
+    refetchInterval: () => (consecutiveFailures.current >= 3 ? 300_000 : 60_000),
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
   });
@@ -58,17 +94,27 @@ export function ContextInboxNotifier() {
     const store = useNotificationStore.getState();
     store.setContextUser(null);
     activeInbox = null;
-    useChatStore.getState().switchUser(null);
+    consecutiveFailures.current = 0;
+    // Clear chat state only when the logged-in identity changes; a token
+    // refresh for the same account must never wipe an in-progress chat.
+    const identity = `${authenticated ? "signed-in" : "signed-out"}:${knownUserId ?? "pending"}`;
+    if (identityRef.current !== identity) {
+      identityRef.current = identity;
+      useChatStore.getState().switchUser(null);
+    }
     return () => {
       activeInbox = null;
       useNotificationStore.getState().setContextUser(null);
       void queryClient.cancelQueries({ queryKey });
       queryClient.removeQueries({ queryKey });
     };
-  }, [queryClient, queryKey]);
+  }, [queryClient, queryKey, authenticated, knownUserId]);
 
   const userId = sessionToken && inbox.data && !inbox.isError
     && (!knownUserId || knownUserId === inbox.data.user_id) ? inbox.data.user_id : null;
+  useEffect(() => {
+    useNotificationStore.getState().setContextUnavailable(!!sessionToken && inbox.isError);
+  }, [inbox.isError, sessionToken]);
   useEffect(() => {
     if (!sessionToken || !userId) {
       activeInbox = null;
@@ -133,7 +179,7 @@ export function ContextInboxNotifier() {
         chat.clearMessages();
         push("/chat");
         // A user request follows the usual transport and confirmation protocol.
-        chat.sendMessage(`查看上下文建议 ${item.item_id}`, undefined, false, undefined, { assistant: "lynse" });
+        chat.sendMessage(tRef.current("notifications.context_open_prompt", { itemId: item.item_id }), undefined, false, undefined, { assistant: "lynse" });
       },
     };
     const synchronize = () => {

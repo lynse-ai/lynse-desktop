@@ -9,8 +9,8 @@ export interface ContextInboxItem {
   version: number;
   created_at: string;
   updated_at: string;
-  displayed_at: string;
-  snoozed_until: string;
+  displayed_at: string | null;
+  snoozed_until: string | null;
   goal_id: string;
   source_refs: { source_id: string; source_revision: number; excerpt?: string; fragment_ref?: string }[];
 }
@@ -94,6 +94,29 @@ export async function downloadContextReview(path: string, sessionToken: string, 
   if (!isContextExportPath(path)) throw new Error("Invalid context export path");
   const blob = await api().getBlob(path, requestOptions(sessionToken, signal));
   if (api().getToken() !== sessionToken) throw new Error("Session changed");
-  if (!blob.type.startsWith("text/markdown")) throw new Error("Context export unavailable");
+  // Gateways may serve the export as text/plain or octet-stream and may omit
+  // the header entirely; only reject shapes that indicate an HTML error page
+  // or a JSON API envelope rather than the markdown document itself.
+  const contentType = blob.type.toLowerCase();
+  if (contentType.includes("text/html") || contentType.startsWith("application/json")) {
+    throw new Error("Context export unavailable");
+  }
+  const body = (await blob.text()).trimStart();
+  if (api().getToken() !== sessionToken) throw new Error("Session changed");
+  let isApiEnvelope = false;
+  if (body.startsWith("{")) {
+    try {
+      const json: unknown = JSON.parse(body);
+      isApiEnvelope = json !== null && typeof json === "object" && (
+        "status" in json || "error" in json || "detail" in json ||
+        ("code" in json && ("msg" in json || "message" in json || "data" in json))
+      );
+    } catch {
+      // Markdown can start with a brace without being a JSON API envelope.
+    }
+  }
+  if (/^(?:<!doctype\s+html\b|<(?:html|head|body)\b)/i.test(body) || isApiEnvelope) {
+    throw new Error("Context export unavailable");
+  }
   return blob;
 }

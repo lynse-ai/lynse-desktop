@@ -71,7 +71,7 @@ describe("context API session boundary", () => {
     await expect(listContextInbox("test-session")).rejects.toMatchObject({ status: 503 });
   });
 
-  it("downloads Markdown through the authenticated endpoint and rejects external paths and JSON errors", async () => {
+  it("downloads Markdown through the authenticated endpoint and rejects external paths and error payloads", async () => {
     fetchMock.mockResolvedValueOnce(new Response("# Goal review", { headers: { "Content-Type": "text/markdown; charset=utf-8" } }));
     const result = await downloadContextReview("/api/context/goals/goal-1/export", "test-session");
     expect(await result.text()).toBe("# Goal review");
@@ -79,7 +79,12 @@ describe("context API session boundary", () => {
     await expect(downloadContextReview("https://other.invalid/api/context/goals/goal-1/export", "test-session")).rejects.toThrow("Invalid");
     fetchMock.mockResolvedValueOnce(Response.json({ status: "error" }));
     await expect(downloadContextReview("/api/context/goals/goal-1/export", "test-session")).rejects.toThrow("unavailable");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // Gateways may relabel the document or drop the header entirely.
+    fetchMock.mockResolvedValueOnce(new Response("# Goal review", { headers: { "Content-Type": "text/plain" } }));
+    await expect(downloadContextReview("/api/context/goals/goal-1/export", "test-session")).resolves.toBeInstanceOf(Blob);
+    fetchMock.mockResolvedValueOnce(new Response("<html>proxy login</html>", { headers: { "Content-Type": "text/html" } }));
+    await expect(downloadContextReview("/api/context/goals/goal-1/export", "test-session")).rejects.toThrow("unavailable");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("rejects a downloaded result when the account changes during its request", async () => {

@@ -3,10 +3,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ApiClient, setApiInstance, setApiTransportMode } from "@lynse/core/api/client";
+import { ApiClient, ApiError, setApiInstance, setApiTransportMode } from "@lynse/core/api/client";
 import { createAuthStore, registerAuthStore } from "@lynse/core/auth";
 import type { ContextInboxItem } from "@lynse/core/api";
-import { ContextInboxNotifier, actOnContextNotification, openContextNotification } from "./context-inbox";
+import { ContextInboxNotifier, actOnContextNotification, isBenignContextOpenError, openContextNotification } from "./context-inbox";
 import { NotificationList } from "./notification-list";
 import { useNotificationStore } from "./use-notification-store";
 import { useChat } from "../workspace/hooks/use-chat";
@@ -15,7 +15,9 @@ const fakeChat = vi.hoisted(() => ({ setUserId: vi.fn(), switchUser: vi.fn(), hy
 vi.mock("../workspace/hooks/use-chat-store", () => ({
   useChatStore: Object.assign((selector: (state: typeof fakeChat) => unknown) => selector(fakeChat), { getState: () => fakeChat }),
 }));
-vi.mock("@lynse/core/i18n/react", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock("@lynse/core/i18n/react", () => ({
+  useTranslation: () => ({ t: (key: string, opts?: Record<string, unknown>) => (opts && "itemId" in opts ? `${key}:${opts.itemId}` : key) }),
+}));
 
 const initialItem: ContextInboxItem = {
   item_id: "proposal-1", kind: "goal_suggestion", title: "Follow up project A", body: "Three meetings have follow-up actions", status: "pending", version: 1,
@@ -181,7 +183,7 @@ describe("persistent context inbox bridge", () => {
     const push = vi.fn();
     await openContextNotification(useNotificationStore.getState().items[0]!, push);
     expect(push).toHaveBeenCalledWith("/chat");
-    expect(fakeChat.sendMessage).toHaveBeenCalledWith("查看上下文建议 proposal-1", undefined, false, undefined, { assistant: "lynse" });
+    expect(fakeChat.sendMessage).toHaveBeenCalledWith("notifications.context_open_prompt:proposal-1", undefined, false, undefined, { assistant: "lynse" });
     expect(fakeChat.hydrate).toHaveBeenCalled();
     expect(fakeChat.setUserId.mock.invocationCallOrder[0]).toBeLessThan(fakeChat.hydrate.mock.invocationCallOrder[0]!);
     expect(fakeChat.hydrate.mock.invocationCallOrder[0]).toBeLessThan(fakeChat.sendMessage.mock.invocationCallOrder[0]!);
@@ -289,5 +291,53 @@ describe("persistent context inbox bridge", () => {
     await waitFor(() => expect(queryClient.getQueryCache().getAll()[0]?.state.status).toBe("error"));
     expect(useNotificationStore.getState().items).toHaveLength(0);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats aborts and session changes as benign open failures but surfaces the rest", () => {
+    expect(isBenignContextOpenError(new DOMException("aborted", "AbortError"))).toBe(true);
+    expect(isBenignContextOpenError(new ApiError(401, "Session changed or unavailable"))).toBe(true);
+    expect(isBenignContextOpenError(new Error("Context suggestion changed"))).toBe(false);
+  });
+
+  it("shows items whose snooze deadline the server corrupted instead of hiding them forever", async () => {
+    item = { ...initialItem, snoozed_until: "not-a-timestamp" };
+    start(true);
+    await screen.findByText("Follow up project A");
+  });
+
+  it("still hides an item snoozed into the future", async () => {
+    item = { ...initialItem, snoozed_until: new Date(Date.now() + 60_000).toISOString() };
+    start(true);
+    await waitFor(() => expect(useNotificationStore.getState().contextUserId).toBe("u1"));
+    expect(screen.queryByText("Follow up project A")).toBeNull();
+  });
+
+  it("flags the page while the inbox keeps failing and backs the poll off", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(async (url: string) => String(url).includes("/inbox?")
+      ? Promise.reject(new Error("agent down"))
+      : Response.json({ status: "accepted", queued: true }));
+    start();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(useNotificationStore.getState().contextUnavailable).toBe(true);
+    const lists = () => fetchMock.mock.calls.filter(([url]) => String(url).includes("/inbox?"));
+    expect(lists()).toHaveLength(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(lists()).toHaveLength(3);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(lists()).toHaveLength(3);
+    await act(async () => { await vi.advanceTimersByTimeAsync(240_000); });
+    expect(lists()).toHaveLength(4);
+    fetchMock.mockImplementation(async (url: string) => String(url).includes("/inbox?")
+      ? Response.json({ status: "ok", available: true, user_id: userId, items: [item], can_display: canDisplay })
+      : Response.json({ status: "accepted", queued: true }));
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey: ["context-inbox"] });
+      // TanStack batches observer notifications behind a timer; flush it.
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(useNotificationStore.getState().contextUnavailable).toBe(false);
+    expect(useNotificationStore.getState().items).toHaveLength(1);
   });
 });

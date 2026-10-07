@@ -1087,6 +1087,8 @@ const ja = {
     context_dismiss: "閉じる",
     context_snooze: "明日もう一度通知",
     context_unavailable: "提案が更新されたか、現在読み込めません。後でもう一度お試しください。",
+    context_open_prompt: "コンテキスト提案を確認 {{itemId}}",
+    context_sync_unavailable: "コンテキスト提案を現在同期できません。自動的に再試行します。",
     title: "通知",
     empty_hint: "新しい通知はありません",
     mark_all_read: "すべて既読にする",

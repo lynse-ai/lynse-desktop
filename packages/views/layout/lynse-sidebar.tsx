@@ -192,6 +192,9 @@ export function LynseSidebar() {
             <Download className="size-3.5" strokeWidth={2.5} />
           </button>
         )}
+        {/* Context suggestions surface as a badge on the notifications entry
+            only; the open / dismiss / snooze actions live in the notifications
+            page, which is the single handler for the context inbox. */}
         {contextCount > 0 && (
           <NavButton
             active={isNavActive(pathname, "/notifications")}

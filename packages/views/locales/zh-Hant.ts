@@ -1083,6 +1083,8 @@ const zhHant = {
     context_dismiss: "忽略",
     context_snooze: "明天再提醒",
     context_unavailable: "建議已更新或暫時無法讀取，請稍後重試",
+    context_open_prompt: "查看上下文建議 {{itemId}}",
+    context_sync_unavailable: "暫時無法同步上下文建議，正在自動重試",
     title: "通知",
     empty_hint: "暫無新通知",
     mark_all_read: "標記全部已讀",

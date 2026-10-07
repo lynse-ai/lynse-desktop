@@ -1086,6 +1086,8 @@ const ko = {
     context_dismiss: "무시",
     context_snooze: "내일 다시 알림",
     context_unavailable: "제안이 변경되었거나 현재 읽을 수 없습니다. 나중에 다시 시도하세요.",
+    context_open_prompt: "컨텍스트 제안 검토 {{itemId}}",
+    context_sync_unavailable: "컨텍스트 제안을 지금 동기화할 수 없습니다. 자동으로 재시도합니다.",
     title: "알림",
     empty_hint: "새 알림이 없습니다",
     mark_all_read: "모두 읽음으로 표시",

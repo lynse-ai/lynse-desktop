@@ -101,5 +101,22 @@ export async function downloadContextReview(path: string, sessionToken: string, 
   if (contentType.includes("text/html") || contentType.startsWith("application/json")) {
     throw new Error("Context export unavailable");
   }
+  const body = (await blob.text()).trimStart();
+  if (api().getToken() !== sessionToken) throw new Error("Session changed");
+  let isApiEnvelope = false;
+  if (body.startsWith("{")) {
+    try {
+      const json: unknown = JSON.parse(body);
+      isApiEnvelope = json !== null && typeof json === "object" && (
+        "status" in json || "error" in json || "detail" in json ||
+        ("code" in json && ("msg" in json || "message" in json || "data" in json))
+      );
+    } catch {
+      // Markdown can start with a brace without being a JSON API envelope.
+    }
+  }
+  if (/^(?:<!doctype\s+html\b|<(?:html|head|body)\b)/i.test(body) || isApiEnvelope) {
+    throw new Error("Context export unavailable");
+  }
   return blob;
 }

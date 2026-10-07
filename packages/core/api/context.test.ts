@@ -87,6 +87,43 @@ describe("context API session boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  it.each(["", "text/plain", "application/octet-stream"])("rejects HTML and API error bodies served as '%s'", async (contentType) => {
+    for (const body of [
+      "<html>proxy login</html>",
+      " \n<!DOCTYPE HTML><html><body>Bad gateway</body></html>",
+      JSON.stringify({ status: "error", message: "Context unavailable" }),
+      JSON.stringify({ error: "context_unavailable" }),
+      JSON.stringify({ detail: "Not authenticated" }),
+      JSON.stringify({ code: 2013, msg: "Please provide authentication token", data: null }),
+    ]) {
+      // A Blob body keeps the missing-header case truly untyped.
+      const response = new Response(new Blob([body], { type: contentType }));
+      expect(response.headers.get("Content-Type")).toBe(contentType || null);
+      fetchMock.mockResolvedValueOnce(response);
+      await expect(downloadContextReview("/api/context/goals/goal-1/export", "test-session")).rejects.toThrow("Context export unavailable");
+    }
+  });
+
+  it.each(["", "text/plain", "application/octet-stream"])("preserves Markdown served as '%s'", async (contentType) => {
+    const body = '# Goal review\n\n<div>Meeting notes</div>\n\n```json\n{"error":"example"}\n```';
+    fetchMock.mockResolvedValueOnce(new Response(new Blob([body], { type: contentType })));
+    const result = await downloadContextReview("/api/context/goals/goal-1/export", "test-session");
+    expect(result.type).toBe(contentType);
+    expect(await result.text()).toBe(body);
+  });
+
+  it("rejects a downloaded result when the account changes during body validation", async () => {
+    const blob = new Blob(["# Old review"]);
+    let finish!: (body: string) => void;
+    const readBody = vi.spyOn(blob, "text").mockImplementation(() => new Promise<string>((resolve) => { finish = resolve; }));
+    vi.spyOn(client, "getBlob").mockResolvedValueOnce(blob);
+    const result = downloadContextReview("/api/context/goals/goal-1/export", "test-session");
+    await vi.waitFor(() => expect(readBody).toHaveBeenCalledOnce());
+    client.setToken("other-session");
+    finish("# Old review");
+    await expect(result).rejects.toThrow("Session changed");
+  });
+
   it("rejects a downloaded result when the account changes during its request", async () => {
     let finish!: (response: Response) => void;
     fetchMock.mockImplementation(() => new Promise<Response>((resolve) => { finish = resolve; }));

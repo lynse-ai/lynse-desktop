@@ -12,6 +12,16 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.1.9 (2026-10-08)
+
+### Fixed
+
+- Internal maintenance release: refinements around the sign-in page and day-to-day housekeeping, with no changes to normal sign-in or update behavior.
+
+### 修复
+
+- 内部维护版本：登录页相关细节优化与日常维护，正常登录与更新行为均无变化。
+
 ## 1.1.8 (2026-10-07)
 
 ### New Features

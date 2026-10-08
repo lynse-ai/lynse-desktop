@@ -47,7 +47,7 @@ function isConversation(value: unknown): value is ChatConversation {
 
 function messagesForStorage(messages: ChatMessage[]): ChatMessage[] {
   return messages
-    .filter((message) => message.role !== "assistant" || !!message.content || !!message.error)
+    .filter((message) => message.role !== "assistant" || !!message.content || !!message.error || !!message.connectionRequests?.length)
     // `status` is transient progress; `revealedAt` is the one-shot reveal
     // marker — neither belongs in persisted history.
     .map(({ status: _status, revealedAt: _revealedAt, ...message }) => message);

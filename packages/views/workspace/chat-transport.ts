@@ -6,7 +6,7 @@ import type {
   ChatAttachment,
   ChatHumanSupportLink,
 } from "./types";
-import { api, ApiError } from "@lynse/core/api";
+import { api, ApiError, normalizeConnectionRequest, type ConnectorConnectionRequest } from "@lynse/core/api";
 
 export interface SendChatOptions {
   query: string;
@@ -138,6 +138,7 @@ interface ChatPollTaskResponse {
   human_support_link?: unknown;
   humanSupportLink?: unknown;
   confirmation?: unknown;
+  connection_requests?: unknown;
   error?: string | null;
 }
 
@@ -147,6 +148,11 @@ const firstString = (...values: unknown[]): string | null => {
   }
   return null;
 };
+
+function connectionRequests(raw: unknown): ConnectorConnectionRequest[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.map(normalizeConnectionRequest).filter((card): card is ConnectorConnectionRequest => card !== null);
+}
 
 /** Normalize a `done.attachments[]` entry into the UI's ChatAttachment. */
 export function normalizePollAttachment(raw: unknown): ChatAttachment | null {
@@ -807,6 +813,7 @@ export class PollChatTransport implements ChatTransport {
       humanSupportLink: normalizeHumanSupportLink(
         data.human_support_link ?? data.humanSupportLink,
       ),
+      connectionRequests: connectionRequests(data.connection_requests),
     });
     const confirm = normalizePollConfirmation(data.confirmation);
     if (confirm) onEvent({ type: "confirm", confirm });
@@ -865,6 +872,7 @@ export function parseChatStreamData(payload: string): ChatStreamEvent[] {
                 (a): a is ChatAttachment => a != null,
               )
             : [],
+          connectionRequests: connectionRequests(p.connection_requests),
         },
       ];
     case "tool":
@@ -901,6 +909,10 @@ export function parseChatStreamData(payload: string): ChatStreamEvent[] {
             humanizeBackendError(str(p.message, p.error, p.detail)) ?? "生成失败，请稍后重试",
         },
       ];
+    case "connection_request": {
+      const request = normalizeConnectionRequest(p.connection_request ?? p);
+      return request ? [{ type: "connection_request", request }] : [];
+    }
     case "confirmation": {
       const confirm = normalizePollConfirmation(p.confirmation ?? p);
       return confirm ? [{ type: "confirm", confirm }] : [];
@@ -923,6 +935,7 @@ export function parseChatStreamData(payload: string): ChatStreamEvent[] {
             : [],
           attachments,
           humanSupportLink: normalizeHumanSupportLink(p.human_support_link ?? p.humanSupportLink),
+          connectionRequests: connectionRequests(p.connection_requests),
         },
       ];
       const confirm = normalizePollConfirmation(p.confirmation);

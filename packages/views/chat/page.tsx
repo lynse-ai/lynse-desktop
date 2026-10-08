@@ -59,6 +59,7 @@ import { WaitingText } from "../workspace/hooks/waiting-text";
 import { ConfirmDialog } from "../workspace/ConfirmDialog";
 import { isFreshlyRevealed } from "../workspace/chat-reveal";
 import { ChatAttachments } from "./chat-attachments";
+import { ChatConnectionCards } from "./chat-connection-cards";
 import { ThinkingBlock, ToolActivity } from "./chat-reasoning";
 import {
   mergeContextFileIds,
@@ -1349,7 +1350,7 @@ function AssistantMessage({
             <div className="rounded-2xl rounded-tl-md border border-border bg-card px-4 py-3.5 text-sm leading-6 text-foreground shadow-sm">
               <StreamingMarkdown content={message.content} isStreaming={isStreaming} mode="minimal" />
             </div>
-          ) : message.attachments?.length || message.sources?.length || message.humanSupportLink?.url ? (
+          ) : message.attachments?.length || message.sources?.length || message.humanSupportLink?.url || message.connectionRequests?.length ? (
             // Attachment-only reply: the report-PDF turn empties the body
             // server-side and speaks through attachment cards, which render
             // below — keep the bubble body empty instead of spinning forever.
@@ -1387,6 +1388,7 @@ function AssistantMessage({
           </div>
         )}
         <ChatAttachments attachments={message.attachments} />
+        {!!message.connectionRequests?.length && <ChatConnectionCards requests={message.connectionRequests} messageId={message.id} />}
       </div>
 
       {message.humanSupportLink?.url && (

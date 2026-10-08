@@ -70,6 +70,21 @@ function conversationByUserText(text: string) {
 }
 
 describe("concurrent chat conversations", () => {
+  it("keeps and persists connector-only replies without duplicated streaming cards", async () => {
+    store.getState().setUserId("connector-user");
+    store.getState().sendMessage("Read Notion");
+    const run = fake.runs[0]!;
+    const request = { request_id: "req-1", provider: "notion", provider_display_name: "Notion", status: "waiting_auth" as const, action_url: "https://auth.invalid/start" };
+    emit(run, { type: "connection_request", request });
+    emit(run, { type: "connection_request", request });
+    emit(run, { type: "done", text: "" });
+    run.cancel();
+    await Promise.resolve();
+    const assistant = store.getState().messages.find((message) => message.role === "assistant");
+    expect(assistant?.connectionRequests).toEqual([request]);
+    await vi.waitFor(() => expect(window.localStorage.getItem("lynse_ai_chat_history_v1:connector-user")).toContain("req-1"));
+  });
+
   it("switches accounts without copying old history or accepting old stream events", async () => {
     store.getState().setUserId("u1");
     store.getState().sendMessage("Private u1 context");

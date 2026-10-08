@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { ApiClient, setApiInstance } from "../api/client";
 import { createAuthStore, getAuthStore, registerAuthStore } from "../auth";
-import { DEFAULT_API_URL, AGENT_API_URL_STORAGE_KEY, CLOUDRUN_AGENT_URL, agentUrlForApiUrl, INTEGRATIONS_API_URL_STORAGE_KEY } from "../config";
+import { DEFAULT_API_URL, AGENT_API_URL_STORAGE_KEY, CLOUDRUN_AGENT_URL, agentUrlForApiUrl, DEFAULT_INTEGRATIONS_API_URL, INTEGRATIONS_API_URL_STORAGE_KEY } from "../config";
 import { defaultStorage } from "./storage";
 import { QueryProvider } from "../provider";
 import { initI18n } from "../i18n";
@@ -54,12 +54,10 @@ export function initCore(
       ? agentUrlForApiUrl(effectiveUrl)
       : savedAgentUrl;
   apiClient.setAgentBaseUrl(agentUrl);
-  // Connections BFF override: absent/empty keeps integrations on the main
-  // backend (the production shape once that backend exists). Set via
-  // `lynse_integrations_api_url` in localStorage for the self-hosted
-  // OpenConnector adapter debug deployment.
-  const savedIntegrationsUrl = storage.getItem(INTEGRATIONS_API_URL_STORAGE_KEY);
-  if (savedIntegrationsUrl) apiClient.setIntegrationsBaseUrl(savedIntegrationsUrl);
+  // Connections always target the BFF, including packaged builds with no
+  // saved override. Preserve explicitly configured self-hosted origins.
+  const savedIntegrationsUrl = storage.getItem(INTEGRATIONS_API_URL_STORAGE_KEY)?.trim();
+  apiClient.setIntegrationsBaseUrl(savedIntegrationsUrl || DEFAULT_INTEGRATIONS_API_URL);
   setApiInstance(apiClient);
 
   if (!cookieAuth) {

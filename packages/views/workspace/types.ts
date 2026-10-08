@@ -2,6 +2,7 @@ export type ItemType = "recording" | "meeting" | "note" | "file";
 export type RecordingMode = "meeting" | "call" | "import";
 
 import type { SttProviderConfig } from "./local-transcription";
+import type { ConnectorConnectionRequest } from "@lynse/core/api";
 
 export interface WorkspaceItem {
   id: string;
@@ -296,6 +297,7 @@ export interface ChatMessage {
   confirm?: ChatConfirm;
   /** Human-handoff link; shown as a "contact support" button under the reply. */
   humanSupportLink?: ChatHumanSupportLink;
+  connectionRequests?: ConnectorConnectionRequest[];
   /**
    * When the finished answer landed (poll delivers the whole turn at once).
    * The UI plays its two-phase reveal (text first, attachments follow)
@@ -408,13 +410,14 @@ export type ChatStreamEvent =
   | { type: "thinking"; delta: string }
   /** Tool activity; `id` optional, `state` defaults to "running". */
   | { type: "tool"; name: string; id?: string; state?: "running" | "done" }
-  | { type: "meta"; sources: string[]; attachments: ChatAttachment[] }
+  | { type: "meta"; sources: string[]; attachments: ChatAttachment[]; connectionRequests?: ConnectorConnectionRequest[] }
   | {
       type: "done";
       text?: string;
       sources?: string[];
       attachments?: ChatAttachment[];
       humanSupportLink?: ChatHumanSupportLink;
+      connectionRequests?: ConnectorConnectionRequest[];
     }
   | { type: "error"; message: string; /** True when the fix is re-authorizing WorkBuddy. */ workbuddyAuthRequired?: boolean }
   /**
@@ -423,7 +426,8 @@ export type ChatStreamEvent =
    * message for "user"). The server id lets thread catch-ups dedupe.
    */
   | { type: "workbuddy_seen"; serverId: string; role: "user" | "assistant" }
-  | { type: "confirm"; confirm: ChatConfirm };
+  | { type: "confirm"; confirm: ChatConfirm }
+  | { type: "connection_request"; request: ConnectorConnectionRequest };
 
 /** Stable identity for one conversation turn series. */
 export interface ChatSessionMeta {

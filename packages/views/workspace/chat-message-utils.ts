@@ -15,6 +15,7 @@ export function isEmptyAssistantPlaceholder(message: ChatMessage): boolean {
     !message.content &&
     !message.workbuddyAuthRequired &&
     !message.attachments?.length &&
+    !message.connectionRequests?.length &&
     !message.sources?.length &&
     !message.humanSupportLink?.url &&
     !message.confirm

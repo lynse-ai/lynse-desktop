@@ -305,6 +305,19 @@ describe("extractConfirmFromText", () => {
 });
 
 describe("PollChatTransport", () => {
+  it("delivers structured connector cards from poll without deriving URLs from reply text", async () => {
+    apiMocks.post.mockResolvedValue({ task_id: "connector-task", status: "pending" });
+    apiMocks.get.mockResolvedValueOnce({ status: "done", text: "Connect Notion", connection_requests: [
+      { request_id: "req-1", provider: "notion", provider_display_name: "Notion", status: "waiting_auth", action_url: "https://auth.invalid/start" },
+      { request_id: "../invalid", provider: "notion", status: "waiting_auth" },
+    ] });
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+    expect(onEvent.mock.calls.find(([event]) => event.type === "done")?.[0].connectionRequests).toEqual([
+      expect.objectContaining({ request_id: "req-1", action_url: "https://auth.invalid/start" }),
+    ]);
+  });
+
   it("submits, polls pending, then emits done plus the confirmation card", async () => {
     apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
     apiMocks.get
@@ -845,6 +858,15 @@ describe("PollChatTransport", () => {
 });
 
 describe("parseChatStreamData", () => {
+  it("handles standalone, meta and done connection cards consistently", () => {
+    const card = { request_id: "req-1", provider: "google_calendar", provider_display_name: "Google Calendar", status: "waiting_auth", action_url: "https://auth.invalid/start" };
+    const standalone = parseChatStreamData(JSON.stringify({ type: "connection_request", connection_request: card }));
+    expect(standalone).toEqual([{ type: "connection_request", request: expect.objectContaining(card) }]);
+    for (const type of ["meta", "done"]) {
+      expect(parseChatStreamData(JSON.stringify({ type, connection_requests: [card] }))[0]).toMatchObject({ connectionRequests: [expect.objectContaining(card)] });
+    }
+  });
+
   it("maps the lynclaw stream frames onto UI events", () => {
     expect(parseChatStreamData('{"round":1,"content":"听明白…","type":"round_start"}')).toEqual([
       { type: "status", text: "听明白…" },

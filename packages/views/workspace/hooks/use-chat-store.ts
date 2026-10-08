@@ -458,6 +458,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           ...m,
           sources: evt.sources ? evt.sources.map(redactMeetingIds) : m.sources,
           attachments: evt.attachments,
+          connectionRequests: evt.connectionRequests ?? m.connectionRequests,
         }));
         break;
       case "done": {
@@ -477,6 +478,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           sources: evt.sources ? evt.sources.map(redactMeetingIds) : m.sources,
           attachments: evt.attachments ?? m.attachments,
           humanSupportLink: evt.humanSupportLink,
+          connectionRequests: evt.connectionRequests ?? m.connectionRequests,
           confirm: detected && !m.confirm ? detected : m.confirm,
           // Poll delivers the whole answer at once — let the UI play its
           // two-phase reveal (text first, attachments/cards after).
@@ -517,6 +519,17 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         }
         break;
       }
+      case "connection_request":
+        writeMessage((m) => ({
+          ...m,
+          connectionRequests: [
+            ...(m.connectionRequests ?? []).filter((card) => card.request_id
+              ? card.request_id !== evt.request.request_id
+              : card.provider !== evt.request.provider),
+            evt.request,
+          ],
+        }));
+        break;
       case "confirm":
         writeMessage((m) => ({ ...m, confirm: evt.confirm }));
         if (isActive()) set({ pendingConfirm: { messageId: assistantId, confirm: evt.confirm } });

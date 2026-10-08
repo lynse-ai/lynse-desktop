@@ -40,14 +40,6 @@ async function bootstrap() {
   // needs one folder. Install before the bridge so bridge failures log too.
   installLogger(windowKind ?? "main");
 
-  // Dev-only debug seam: pin the Connections BFF origin (services/
-  // integrations-bff on www.lynse.ai) on every boot. The dev WebView's
-  // localStorage is ephemeral, so seeding at boot beats hand-typing it into
-  // the console; the packaged build keeps the user-controlled storage path.
-  if (import.meta.env.DEV) {
-    localStorage.setItem("lynse_integrations_api_url", "https://www.lynse.ai");
-  }
-
   // Full-fidelity appearance pass (colors, fonts, contrast) before React
   // mounts; index.html already painted the bare color trio pre-bundle.
   initAppTheme();

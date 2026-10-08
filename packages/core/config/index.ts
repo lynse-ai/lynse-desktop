@@ -30,10 +30,10 @@ export const TEST_API_URL = "https://gapp.lynse.cn";
  *  Empty/absent means the assistant rides the main backend gateway. */
 export const AGENT_API_URL_STORAGE_KEY = "lynse_agent_api_url";
 
-/** Storage key for the optional Connections (integrations) BFF origin — the
- *  self-hosted OpenConnector adapter (services/integrations-bff/, deployed at
- *  https://www.lynse.ai). Empty/absent means integrations ride the main
- *  backend, which is the intended production shape once that backend ships. */
+/** Connections use the deployed BFF in both development and packaged apps. */
+export const DEFAULT_INTEGRATIONS_API_URL = "https://www.lynse.ai";
+
+/** Storage key for an explicitly configured Connections BFF origin. */
 export const INTEGRATIONS_API_URL_STORAGE_KEY = "lynse_integrations_api_url";
 
 /**

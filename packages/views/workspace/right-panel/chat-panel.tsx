@@ -16,6 +16,7 @@ import { useFiles } from "../hooks/use-files";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { isFreshlyRevealed } from "../chat-reveal";
 import { ChatAttachments } from "../../chat/chat-attachments";
+import { ChatConnectionCards } from "../../chat/chat-connection-cards";
 import { ChatHistorySidebar } from "../../chat/chat-history-sidebar";
 import { ThinkingBlock } from "../../chat/chat-reasoning";
 
@@ -227,7 +228,7 @@ export function ChatPanel() {
                   <div className="whitespace-pre-wrap break-words text-destructive">{msg.content}</div>
                 ) : msg.content ? (
                   <StreamingMarkdown content={msg.content} isStreaming={isLoading} mode="minimal" />
-                ) : msg.attachments?.length || msg.sources?.length || msg.humanSupportLink?.url ? (
+                ) : msg.attachments?.length || msg.sources?.length || msg.humanSupportLink?.url || msg.connectionRequests?.length ? (
                   // Attachment-only reply (empty body server-side): the cards
                   // render below — don't keep "typing" forever.
                   null
@@ -268,6 +269,7 @@ export function ChatPanel() {
                     }
                   >
                     <ChatAttachments attachments={msg.attachments} compact />
+                    {!!msg.connectionRequests?.length && <ChatConnectionCards requests={msg.connectionRequests} messageId={msg.id} />}
                   </div>
                 ) : (
                   <ChatAttachments attachments={msg.attachments} compact />

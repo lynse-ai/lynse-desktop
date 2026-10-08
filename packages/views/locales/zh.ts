@@ -9,6 +9,7 @@ const zh = {
     api_login: "API 登录",
     wechat: "微信",
     back_to_phone: "使用手机号登录",
+    test_mode_exit: "退出测试模式",
     agree_prefix: "我已阅读并同意",
     agree_terms: "《用户协议》",
     agree_join: "",

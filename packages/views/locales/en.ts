@@ -9,6 +9,7 @@ const en = {
     api_login: "API sign-in",
     wechat: "WeChat",
     back_to_phone: "Sign in with phone",
+    test_mode_exit: "Exit test mode",
     agree_prefix: "I have read and agree to the ",
     agree_terms: "Terms of Service",
     agree_join: " and ",

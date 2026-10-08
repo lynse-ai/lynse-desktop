@@ -9,6 +9,7 @@ const ja = {
     api_login: "API ログイン",
     wechat: "WeChat",
     back_to_phone: "電話番号でログイン",
+    test_mode_exit: "テストモードを終了",
     agree_prefix: "次の内容に同意します：",
     agree_terms: "利用規約",
     agree_join: "・",

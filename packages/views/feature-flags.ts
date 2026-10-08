@@ -66,10 +66,11 @@ export function hasPasswordlessAuth(): boolean {
 }
 
 /**
- * Dev-only API-key sign-in on the login page. Production builds never ship
- * it; dev shells expose it as an extra entry under "more ways to sign in".
- * Like the build channel, each app shell injects this from its own env
- * (`import.meta.env.DEV` in Tauri, `process.env.NODE_ENV` on web).
+ * Dev-only API-key sign-in on the login page. Injected per app shell from
+ * its own env (`import.meta.env.DEV` in Tauri, `process.env.NODE_ENV` on
+ * web); packaged official builds start without it but can unlock the same
+ * surface at runtime via the test mode below. Like the build channel, the
+ * gate lives in feature-flags so every entry point reads one source.
  */
 let devApiAuth = false;
 
@@ -77,6 +78,53 @@ export function configureDevApiAuth(enabled: boolean): void {
   devApiAuth = enabled;
 }
 
-export function hasDevApiAuth(): boolean {
+/**
+ * Runtime "test mode" — a hidden maintenance entry for the team inside a
+ * single official build. Tapping the login-page logo five times in a row
+ * enables it: the API sign-in surface (server selection + API key, the
+ * debug-build panel) appears under "more ways to sign in" and persists in
+ * localStorage until explicitly exited. Deliberately narrow on purpose —
+ * phone/WeChat login and the official update source stay untouched, and
+ * the panel is a pure UI unlock (connecting still needs a valid key), so
+ * the flag is no auth bypass.
+ */
+const TEST_MODE_STORAGE_KEY = "lynse_test_mode";
+
+let testMode: boolean | undefined;
+
+function loadTestMode(): boolean {
+  if (testMode === undefined) {
+    try {
+      testMode =
+        typeof localStorage !== "undefined" &&
+        localStorage.getItem(TEST_MODE_STORAGE_KEY) === "1";
+    } catch {
+      testMode = false;
+    }
+  }
+  return testMode;
+}
+
+export function isTestMode(): boolean {
+  return loadTestMode();
+}
+
+export function setTestMode(enabled: boolean): void {
+  testMode = enabled;
+  try {
+    if (enabled) localStorage.setItem(TEST_MODE_STORAGE_KEY, "1");
+    else localStorage.removeItem(TEST_MODE_STORAGE_KEY);
+  } catch {
+    // Storage unavailable (SSR / private mode) — keep it session-only.
+  }
+}
+
+/** The environment-injected dev flag alone (dev shells), without the
+ *  runtime test mode — used to tell the two unlock paths apart. */
+export function isDevShell(): boolean {
   return devApiAuth;
+}
+
+export function hasDevApiAuth(): boolean {
+  return devApiAuth || loadTestMode();
 }

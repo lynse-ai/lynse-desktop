@@ -25,7 +25,13 @@ import {
 import { useTranslation } from "@lynse/core/i18n/react";
 import { ArrowRight, ChevronRight, KeyRound, Loader2, QrCode } from "../icons";
 import { getDesktopAppApi, openExternalUrl } from "../app-update";
-import { hasDevApiAuth, hasPasswordlessAuth } from "../feature-flags";
+import {
+  hasDevApiAuth,
+  hasPasswordlessAuth,
+  isDevShell,
+  isTestMode,
+  setTestMode,
+} from "../feature-flags";
 import { PRIVACY_URL, TERMS_URL } from "../about/links";
 import { WindowControls } from "../layout/app-title-bar";
 import { WechatIcon } from "./wechat-icon";
@@ -230,6 +236,23 @@ export function LoginPage() {
     if (url) openExternalUrl(url);
   }
 
+  // Hidden maintenance entry: five taps on the logo (each within two
+  // seconds of the previous) unlock the test mode — the API sign-in panel
+  // of the debug builds — in packaged official builds. Dev shells already
+  // ship the API entry, so there the tap only navigates to it.
+  const logoTapsRef = useRef({ count: 0, at: 0 });
+
+  function handleLogoTap() {
+    const now = Date.now();
+    const streak =
+      now - logoTapsRef.current.at < 2000 ? logoTapsRef.current.count + 1 : 1;
+    logoTapsRef.current = { count: streak, at: now };
+    if (streak < 5) return;
+    logoTapsRef.current = { count: 0, at: 0 };
+    if (!isDevShell()) setTestMode(true);
+    setView("api");
+  }
+
   async function handleWechatLogin() {
     setError(null);
     const { authorizeUrl, state } = startWechatLogin();
@@ -304,7 +327,14 @@ export function LoginPage() {
           the bottom edge like the reference window. Half the window — the
           artwork card takes the mirrored half. */}
       <div className="relative z-10 flex w-1/2 min-w-0 flex-col px-7 pb-5 pt-14">
-        <img src={LYNSE_LOGO_SRC} alt="Lynse" className="h-4 w-auto self-start dark:invert" />
+        <button
+          type="button"
+          aria-label="Lynse"
+          onClick={handleLogoTap}
+          className="cursor-default self-start"
+        >
+          <img src={LYNSE_LOGO_SRC} alt="" className="h-4 w-auto dark:invert" />
+        </button>
         <h1 className="mt-5 text-lg font-semibold tracking-tight">
           {t("auth.welcome_title")}
         </h1>
@@ -359,6 +389,19 @@ export function LoginPage() {
               >
                 {t("auth.back_to_phone")}
               </Button>
+              {!isDevShell() && isTestMode() && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 text-xs text-muted-foreground"
+                  onClick={() => {
+                    setTestMode(false);
+                    setView("phone");
+                  }}
+                >
+                  {t("auth.test_mode_exit")}
+                </Button>
+              )}
             </div>
           </div>
         ) : passwordless && view !== "api" ? (

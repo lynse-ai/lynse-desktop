@@ -9,6 +9,7 @@ const ko = {
     api_login: "API 로그인",
     wechat: "WeChat",
     back_to_phone: "전화번호로 로그인",
+    test_mode_exit: "테스트 모드 종료",
     agree_prefix: "다음에 동의합니다:",
     agree_terms: "서비스 이용약관",
     agree_join: " 및 ",

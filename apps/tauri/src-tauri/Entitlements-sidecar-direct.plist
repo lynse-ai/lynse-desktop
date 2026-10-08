@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- Website-direct (Developer ID, non-sandboxed) flow: the capture helper
+         opens the microphone itself, so under Hardened Runtime it needs the
+         audio-input entitlement — without it capture fails silently even after
+         the user allows Lynse in System Settings. The app-sandbox+inherit
+         variant for the App Store/TestFlight channel lives in
+         Entitlements-audio-capture.plist; do not mix the two. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+  </dict>
+</plist>

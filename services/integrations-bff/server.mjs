@@ -29,7 +29,34 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { gzipSync } from "node:zlib";
 
-const PORT = Number(process.env.PORT ?? 3101);
+import { config } from "./src/env.mjs";
+import { Store } from "./src/store.mjs";
+import { createStoreBoundHandler } from "./src/routes.mjs";
+
+const PORT = config.port;
+
+/**
+ * CONNECTORS_MULTIUSER=1 routes every request through the per-principal
+ * registry (verified identity, SQLite state, alias-matched OAuth, explicit
+ * connection selection). The default keeps the legacy single-tenant debug
+ * behaviour below untouched — the flag flip happens after the state
+ * migration (`tools/migrate-state.mjs`), per the rollout plan (step 12.3).
+ */
+let multiuserHandler = null;
+if (config.multiuser) {
+  try {
+    const store = new Store(config.dbFile);
+    multiuserHandler = createStoreBoundHandler(store);
+    console.log(`[bff] multiuser registry at ${config.dbFile}, identity ${config.identityUrl || "UNCONFIGURED"}`);
+    if (!config.identityUrl) {
+      console.error("[bff] refusing multiuser mode without IDENTITY_URL — every request would 401");
+      process.exit(1);
+    }
+  } catch (error) {
+    console.error("[bff] multiuser registry unavailable (node >= 22.5 with node:sqlite required):", error?.message ?? error);
+    process.exit(1);
+  }
+}
 const GW = (process.env.GW ?? "http://127.0.0.1:3100/oc").replace(/\/+$/, "");
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 const RUNTIME_TOKEN = process.env.RUNTIME_TOKEN ?? ADMIN_TOKEN;
@@ -1039,6 +1066,13 @@ function feishuMeetingUrl(event) {
 }
 
 const server = createServer((req, res) => {
+  if (multiuserHandler) {
+    multiuserHandler(req, res).catch((error) => {
+      console.error("[bff] unhandled:", error);
+      respond(res, 500, { message: "internal error" });
+    });
+    return;
+  }
   handle(req, res).catch((error) => {
     console.error("[bff] unhandled:", error);
     respond(res, 500, { message: "internal error" });

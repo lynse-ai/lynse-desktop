@@ -46,17 +46,15 @@ cp "$SOURCE_DIR/.build/release/lynse-audio-capture" "$DEST"
 chmod +x "$DEST"
 xattr -cr "$DEST" || true
 
-SIGNING_IDENTITY="${CODESIGN_IDENTITY:-${APPLE_SIGNING_IDENTITY:--}}"
-if [ "$SIGNING_IDENTITY" != "-" ]; then
-  # Website-direct (Developer ID) flow: notarization rejects nested binaries
-  # that are ad-hoc signed or lack a secure timestamp, and Hardened Runtime
-  # blocks the helper's microphone without the audio-input entitlement.
-  codesign --force --options runtime --timestamp \
-    --entitlements "$TAURI_DIR/src-tauri/Entitlements-sidecar-direct.plist" \
-    --sign "$SIGNING_IDENTITY" "$DEST"
-else
-  codesign --force --options runtime --sign "$SIGNING_IDENTITY" "$DEST"
-fi
+# Ad-hoc signature only. The release pipeline Developer ID-signs this binary
+# in a dedicated workflow step (release.yml): codesign cannot see the
+# certificate here — tauri imports it into a temporary keychain only during
+# bundling, after beforeBuildCommand has already run. The build script's stamp
+# check then skips the rebuild in the tauri build step, preserving that
+# signature (Developer ID + timestamp + audio-input entitlement, see
+# Entitlements-sidecar-direct.plist).
+SIGNING_IDENTITY="${CODESIGN_IDENTITY:--}"
+codesign --force --options runtime --sign "$SIGNING_IDENTITY" "$DEST"
 
 printf '%s\n' "$SOURCE_HASH" > "$STAMP"
 echo "built $DEST"

@@ -185,6 +185,38 @@ jobs:
           fi
           echo "Apple signing/notarization env forwarded:$forwarded"
 
+      - name: Developer ID sign the audio-capture sidecar (macOS)
+        # Notarization rejects nested resource binaries that are ad-hoc signed
+        # or lack a secure timestamp, and Hardened Runtime blocks the helper's
+        # microphone without the audio-input entitlement. tauri imports the
+        # certificate into its own temporary keychain only during bundling —
+        # AFTER beforeBuildCommand has already built this helper — so sign it
+        # here, in a throwaway keychain that is deleted afterwards (leaving
+        # tauri's own import unambiguous). The build script's stamp check then
+        # skips the rebuild inside the tauri build step, preserving the
+        # signature.
+        if: runner.os == 'macOS' && env.APPLE_SIGNING_IDENTITY != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/lynse-sidecar.keychain-db"
+          KC_PASS="$(openssl rand -hex 24)"
+          security create-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
+          CERT="$RUNNER_TEMP/developer-id.p12"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT"
+          security import "$CERT" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PASS" "$KEYCHAIN" > /dev/null
+          rm -f "$CERT"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          pnpm --filter @lynse/tauri build:audio-capture
+          codesign --force --options runtime --timestamp \
+            --entitlements apps/tauri/src-tauri/Entitlements-sidecar-direct.plist \
+            --sign "$APPLE_SIGNING_IDENTITY" apps/tauri/src-tauri/resources/sidecars/audio-capture
+          codesign --verify --strict --verbose=1 apps/tauri/src-tauri/resources/sidecars/audio-capture
+          security delete-keychain "$KEYCHAIN"
+
       - name: Stamp build number (macOS)
         # Apple requires CFBundleVersion (the build number) to strictly increase
         # over the app's lifetime, independent of the marketing version. Use the

@@ -12,6 +12,32 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.1.11 (2026-10-09)
+
+### New Features
+
+- Add WorkBuddy Cloud to the desktop AI assistant, with independent conversations, streaming replies, follow-up questions, conversation history and cloud artifact previews.
+- Run local audio imports in the background, show transcription progress in notes, and notify completion or failure across pages. Offer cloud upload when the account has the required membership entitlement.
+
+### Fixed
+
+- Fix WorkBuddy cloud connection setup, authorization scopes, reply completion and stopping; allow resetting the displayed authorization state before reconnecting.
+- Prevent duplicate local transcription jobs while checking configuration and installed models.
+- Keep Windows audio device callbacks alive across device changes and select the VibeVoice executable that supports the streaming protocol.
+- Show useful FFmpeg diagnostics when audio export fails, bound diagnostic memory use, and clean up failed or cancelled output files.
+
+### 新功能
+
+- 桌面 AI 助手接入 WorkBuddy 云端，支持独立会话、流式回复、连续追问、会话历史和云端产物预览。
+- 本地音频导入改为后台转写，笔记中显示转写进度，切换页面后仍可收到完成或失败通知；拥有对应会员权益的账号可选择云端上传。
+
+### 修复
+
+- 修复 WorkBuddy 云端连接、授权权限、回复结束和停止操作；支持重置显示的授权状态后重新连接。
+- 防止检查转写配置和已安装模型时重复创建本地转写任务。
+- 修复 Windows 切换音频设备时的回调对象生命周期，并选用支持流式协议的 VibeVoice 可执行文件。
+- 音频导出失败时显示有效的 FFmpeg 错误详情，限制诊断日志占用，并清理失败或取消的输出文件。
+
 ## 1.1.10 (2026-10-09)
 
 ### Fixed

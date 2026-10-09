@@ -48,8 +48,10 @@ test.describe("chat core", () => {
     await expect(page.getByText(turn.user).last()).toBeVisible();
     await expectAssistantSaid(page, fullText(turn));
 
-    // Source chip from the meta event.
+    // Sources are listed inside the count popover.
+    await page.getByRole("button", { name: "Sources", exact: true }).click();
     await expect(page.getByText("Q3 review.m4a").first()).toBeVisible();
+    await page.keyboard.press("Escape");
 
     // Copy toggles to Copied (the button only appears on hover over the message).
     const lastArticle = page.locator("article").last();

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -112,6 +113,16 @@ jobs:
   windows-audio:
     name: Windows capture engine check
     runs-on: windows-latest
+    # Windows minutes bill at 2x and a cold cargo link is the most expensive
+    # step in this file, so this job alone can consume a large share of the Free
+    # plan's included minutes every few PRs. It still gates every push to main
+    # (so a Windows-only compile break is caught immediately after merge), and a
+    # PR can demand it with the `windows-ci` label or a manual run — narrowed,
+    # not removed.
+    if: >-
+      github.event_name == 'push'
+      || github.event_name == 'workflow_dispatch'
+      || contains(github.event.pull_request.labels.*.name, 'windows-ci')
     steps:
       - name: Checkout
         uses: actions/checkout@v4

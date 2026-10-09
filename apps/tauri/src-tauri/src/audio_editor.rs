@@ -8,6 +8,7 @@
 // via `local-media://`, and available for offline transcription.
 
 use serde_json::{json, Value};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -40,9 +41,9 @@ fn emit_progress(app: &AppHandle, job_id: u32, phase: &str, detail: Option<&str>
     );
 }
 
-/// Run ffmpeg, polling so a cancel request can kill the child promptly.
-/// Returns Err("cancelled") when the user aborted.
-fn run_ffmpeg(app: &AppHandle, job_id: u32, args: &[String]) -> CommandResult<()> {
+/// Run ffmpeg to `output`, polling so a cancel request can kill the child
+/// promptly. Returns Err("cancelled") when the user aborted.
+fn run_ffmpeg(app: &AppHandle, job_id: u32, args: &[String], output: &Path) -> CommandResult<()> {
     let ffmpeg = ffmpeg_path(app)?;
     let mut child = Command::new(&ffmpeg)
         .args(args)
@@ -52,14 +53,23 @@ fn run_ffmpeg(app: &AppHandle, job_id: u32, args: &[String]) -> CommandResult<()
     if let Ok(mut slot) = CHILD_PID.lock() {
         *slot = Some(child.id());
     }
+    // Hand the pipe to a reader thread before polling: an exited child closes
+    // it, so `join()` after `try_wait()`/`wait()` always returns at EOF.
+    let pipe = child.stderr.take();
+    let stderr = std::thread::spawn(move || read_stderr_tail(pipe));
     let result = loop {
-        // Drain stderr so a chatty filter graph never fills the pipe buffer.
         if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            break if status.success() { Ok(()) } else { Err("FFmpeg 处理音频失败".to_owned()) };
+            let lines = stderr.join().unwrap_or_default();
+            break if status.success() {
+                Ok(())
+            } else {
+                Err(ffmpeg_failure(&lines))
+            };
         }
         if CANCELLED.load(Ordering::SeqCst) {
             let _ = child.kill();
             let _ = child.wait();
+            let _ = stderr.join();
             break Err("cancelled".to_owned());
         }
         emit_progress(app, job_id, "processing", None);
@@ -68,7 +78,51 @@ fn run_ffmpeg(app: &AppHandle, job_id: u32, args: &[String]) -> CommandResult<()
     if let Ok(mut slot) = CHILD_PID.lock() {
         *slot = None;
     }
+    // ffmpeg opens its destination immediately, so a dead job leaves a
+    // half-written file that no record points at — and the exports folder is
+    // the user's content folder, not a scratch dir.
+    if result.is_err() {
+        let _ = std::fs::remove_file(output);
+    }
     result
+}
+
+/// How many trailing lines of ffmpeg output a failure keeps. ffmpeg emits one
+/// progress line every ~0.5 s, so a cap is what bounds memory on a long job.
+const STDERR_TAIL_LINES: usize = 12;
+
+/// Read stderr to EOF, keeping its last few lines. Nothing may leave the pipe
+/// unread: ffmpeg keeps writing progress, and once the child-stdio pipe fills
+/// it blocks on its next write and never exits — the job would sit at
+/// "processing" until the user cancels.
+fn read_stderr_tail(pipe: Option<std::process::ChildStderr>) -> Vec<String> {
+    let Some(pipe) = pipe else { return Vec::new() };
+    let mut lines: Vec<String> = Vec::new();
+    for line in BufReader::new(pipe).lines() {
+        let Ok(line) = line else { break };
+        // ffmpeg rewrites its progress line with `\r`, so only the text after
+        // the last one is the current status.
+        let current = line.rsplit('\r').next().unwrap_or_default().trim_end();
+        if current.is_empty() {
+            continue;
+        }
+        if lines.len() == STDERR_TAIL_LINES {
+            lines.remove(0);
+        }
+        lines.push(current.chars().take(200).collect());
+    }
+    lines
+}
+
+/// Turn ffmpeg's tail into the user-facing failure. Without it every ffmpeg
+/// error — missing filter, undecodable source, disk full — looked identical.
+fn ffmpeg_failure(lines: &[String]) -> String {
+    let detail = lines.join(" | ");
+    if detail.is_empty() {
+        return "FFmpeg 处理音频失败".to_owned();
+    }
+    let bounded: String = detail.chars().take(400).collect();
+    format!("FFmpeg 处理音频失败：{bounded}")
 }
 
 /// Begin a job; errors when another one is still running.
@@ -241,7 +295,7 @@ pub(crate) async fn audio_editor_trim(
             "-b:a".to_owned(), "192k".to_owned(),
             output.to_string_lossy().into_owned(),
         ];
-        run_ffmpeg(app, job_id, &args)?;
+        run_ffmpeg(app, job_id, &args, &output)?;
         let duration_ms = probe_duration_ms(app, &output.to_string_lossy());
         Ok((output, duration_ms))
     })
@@ -279,7 +333,7 @@ pub(crate) async fn audio_editor_merge(
                 "-b:a".to_owned(), "192k".to_owned(),
                 output.to_string_lossy().into_owned(),
             ];
-            run_ffmpeg(app, job_id, &args)?;
+            run_ffmpeg(app, job_id, &args, &output)?;
             Ok(())
         })();
         let _ = std::fs::remove_file(&list);
@@ -323,7 +377,7 @@ pub(crate) async fn audio_editor_remove_silence(
             "-b:a".to_owned(), "192k".to_owned(),
             output.to_string_lossy().into_owned(),
         ];
-        run_ffmpeg(app, job_id, &args)?;
+        run_ffmpeg(app, job_id, &args, &output)?;
         let duration_ms = probe_duration_ms(app, &output.to_string_lossy());
         Ok((output, duration_ms))
     })
@@ -353,7 +407,7 @@ pub(crate) async fn audio_editor_enhance_voice(
             "-b:a".to_owned(), "192k".to_owned(),
             output.to_string_lossy().into_owned(),
         ];
-        run_ffmpeg(app, job_id, &args)?;
+        run_ffmpeg(app, job_id, &args, &output)?;
         let duration_ms = probe_duration_ms(app, &output.to_string_lossy());
         Ok((output, duration_ms))
     })
@@ -413,5 +467,41 @@ where
         Err(e) => Err(e),
         Ok(Err(e)) if e == "cancelled" => Err("已取消".to_owned()),
         Ok(other) => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ffmpeg_failure_keeps_the_diagnostic_tail() {
+        let lines = vec![
+            "size= 1024KiB time=00:00:12.34 bitrate= 680.2kbits/s".to_owned(),
+            "[aac @ 0x1] Too many bitstreams.".to_owned(),
+            "Error while opening encoder for output file.".to_owned(),
+        ];
+        assert_eq!(
+            ffmpeg_failure(&lines),
+            "FFmpeg 处理音频失败：size= 1024KiB time=00:00:12.34 bitrate= 680.2kbits/s | [aac @ 0x1] Too many bitstreams. | Error while opening encoder for output file."
+        );
+    }
+
+    #[test]
+    fn ffmpeg_failure_falls_back_when_ffmpeg_said_nothing() {
+        assert_eq!(ffmpeg_failure(&[]), "FFmpeg 处理音频失败");
+    }
+
+    #[test]
+    fn ffmpeg_failure_bounds_a_chatty_graph() {
+        let lines = vec!["x".repeat(5000)];
+        let message = ffmpeg_failure(&lines);
+        let detail = message.split_once('：').unwrap().1;
+        assert_eq!(detail.chars().count(), 400);
+    }
+
+    #[test]
+    fn read_stderr_tail_without_a_pipe_yields_nothing() {
+        assert!(read_stderr_tail(None).is_empty());
     }
 }

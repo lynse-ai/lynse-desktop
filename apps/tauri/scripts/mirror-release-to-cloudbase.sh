@@ -188,5 +188,25 @@ for platform in "${REQUIRED_PLATFORMS[@]}"; do
 done
 
 log "Live manifest confirmed: $SERVED ($(manifest_query "$LIVE_FILE" 'Object.keys(m.platforms ?? {}).join(", ")'))"
+
+# ── 6. refresh the version-less stable download aliases ─────────────────────
+# dl.lynse.cn/updates/latest/ holds copies of the two installers under
+# version-less filenames — the fixed URLs the website download page (and any
+# manually shared link) points at. Refreshing them here keeps every published
+# link forever current; the next cleanup can then delete old updates/<tag>/
+# dirs without breaking anything.
+log "Refreshing stable aliases under updates/latest/"
+STABLE_DMG="$(printf '%s\n' "$DIST"/Lynse_*_aarch64.dmg | head -1)"
+STABLE_MSI="$(printf '%s\n' "$DIST"/Lynse_*_x64_en-US.msi | head -1)"
+[[ -s "$STABLE_DMG" ]] || die "No aarch64 dmg in the release assets — cannot refresh updates/latest/."
+[[ -s "$STABLE_MSI" ]] || die "No x64 msi in the release assets — cannot refresh updates/latest/."
+tcb hosting deploy "$STABLE_DMG" "updates/latest/Lynse_aarch64.dmg" -e "$CLOUDBASE_ENV_ID" --yes
+tcb hosting deploy "$STABLE_MSI" "updates/latest/Lynse_x64_en-US.msi" -e "$CLOUDBASE_ENV_ID" --yes
+for url in "$UPDATES_BASE/latest/Lynse_aarch64.dmg" "$UPDATES_BASE/latest/Lynse_x64_en-US.msi"; do
+  code="$(curl -sIL -o /dev/null -w '%{http_code}' --max-time 20 "$url?cb=$(date +%s)")"
+  [[ "$code" == 200 ]] || die "Stable alias not reachable after refresh (HTTP $code): $url"
+  echo "  ok $url"
+done
+
 echo "In-app updates for $TAG are now served. Existing clients learn about it on"
 echo "their next launch, or within 30 minutes via the updater poll."

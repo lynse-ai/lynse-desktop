@@ -214,22 +214,17 @@ mv "$FINAL" "$MANIFEST"
 log "Final manifest to publish:"
 cat "$MANIFEST"
 
-# ── verify every referenced file is live before flipping ────────────────────
+# ── upload, then verify, then flip ───────────────────────────────────────────
+# Order is load-bearing (same as mirror-release-to-cloudbase.sh): the per-tag
+# copy lands FIRST, the reachability check proves every manifest URL serves,
+# and only then is the stable pointer flipped — a client can never be pointed
+# at a file that is not there yet. (Verifying before uploading can never pass:
+# this machine's artifacts are by definition not on the CDN yet.)
 if [[ "$DRY_RUN" == true ]]; then
-  log "Dry run — skipping the URL reachability check (artifacts are not uploaded yet).
-  Manifest kept at $MANIFEST for inspection."
+  log "Dry run — nothing uploaded. Manifest kept at $MANIFEST for inspection."
   exit 0
 fi
 
-log "Verifying manifest URLs exist under $UPDATES_BASE/$TAG"
-for url in $(MANIFEST_JSON="$(cat "$MANIFEST")" node -e 'console.log(Object.values(JSON.parse(process.env.MANIFEST_JSON).platforms).map(p=>p.url).join("\n"))'); do
-  code="$(curl -sIL -o /dev/null -w '%{http_code}' --max-time 20 "$url")"
-  [[ "$code" == 200 ]] || die "Manifest URL not reachable (HTTP $code): $url
-  Upload that platform's artifacts first (run publish from its build machine)."
-done
-log "All manifest URLs reachable"
-
-# ── upload ───────────────────────────────────────────────────────────────────
 [[ -n "${CLOUDBASE_API_KEY:-}" ]] || die "CLOUDBASE_API_KEY is not set (云开发控制台 → 环境设置 → API 密钥)."
 if ! command -v tcb >/dev/null; then
   tcb() { npx -y @cloudbase/cli "$@"; }
@@ -238,6 +233,13 @@ fi
 log "Uploading artifacts to updates/$TAG (per-tag copy first…)"
 tcb login --cloudbase-api-key "$CLOUDBASE_API_KEY" -e "$CLOUDBASE_ENV_ID"
 tcb hosting deploy "$DIST" "updates/$TAG" -e "$CLOUDBASE_ENV_ID" --yes
+
+log "Verifying manifest URLs exist under $UPDATES_BASE/$TAG"
+for url in $(MANIFEST_JSON="$(cat "$MANIFEST")" node -e 'console.log(Object.values(JSON.parse(process.env.MANIFEST_JSON).platforms).map(p=>p.url).join("\n"))'); do
+  code="$(curl -sIL -o /dev/null -w '%{http_code}' --max-time 20 "$url")"
+  [[ "$code" == 200 ]] || die "Manifest URL not reachable (HTTP $code): $url — pointer NOT flipped."
+done
+log "All manifest URLs reachable"
 
 # Stable endpoint polled by every client — flip last, atomically. The hosting
 # gateway serves no-store, so clients read it fresh.

@@ -22,16 +22,17 @@ import {
   MOSS_MODELS,
   MOSS_MODEL_LABELS,
   DEFAULT_MOSS_MODEL,
+  NON_MAC_ENGINES,
   findModelStatus,
 } from "../workspace/local-transcription";
 import type { LocalHotwordPackage } from "../workspace/types";
 import { isMacDesktop } from "../layout/use-maximized";
 
 /** Engine id -> translation key, resolved at render time so the labels follow the UI locale.
- *  FunASR is retired from the list (Qwen3-ASR replaces it); stored funasr configs still
- *  deserialize but the engine must be re-selected. Model download lives in the
- *  plugin community (Settings → Plugins) — this section only configures. */
+ *  Model download lives in the plugin community (Settings → Plugins) — this
+ *  section only configures which engine runs and with what options. */
 const ENGINE_OPTIONS: { value: SttEngine; labelKey: string }[] = [
+  { value: "funasr", labelKey: "settings.stt_engine_funasr" },
   { value: "qwen3", labelKey: "settings.stt_engine_qwen3" },
   { value: "moss", labelKey: "settings.stt_engine_moss" },
   { value: "whisperx", labelKey: "settings.stt_engine_whisperx" },
@@ -40,15 +41,9 @@ const ENGINE_OPTIONS: { value: SttEngine; labelKey: string }[] = [
   { value: "mlx", labelKey: "settings.stt_engine_mlx" },
 ];
 
-/** Engines selectable on this desktop. Outside macOS only the sidecar engines
- *  ship (whisper.cpp's whisper + VibeASR.cpp's vibeasr, both in the shared
- *  runtime archive) — the MLX/venv-bound engines hard-error there on first
- *  transcription, so they are hidden rather than selectable. */
-const SIDECAR_ENGINES: ReadonlySet<SttEngine> = new Set(["whisper", "vibeasr"]);
-
 const VISIBLE_ENGINE_OPTIONS = isMacDesktop
   ? ENGINE_OPTIONS
-  : ENGINE_OPTIONS.filter((option) => SIDECAR_ENGINES.has(option.value));
+  : ENGINE_OPTIONS.filter((option) => NON_MAC_ENGINES.has(option.value));
 
 /** Platform-aware stand-in for an unset `config.default` — mirrors the Rust
  *  `ProviderConfig::default()` (Qwen3 on Apple Silicon, whisper elsewhere). */

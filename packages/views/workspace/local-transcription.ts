@@ -11,6 +11,21 @@ import type {
 
 export type SttEngine = "qwen3" | "funasr" | "whisper" | "whisperx" | "vibeasr" | "mlx" | "moss" | "sherpa";
 
+/** Engines selectable outside macOS. Defined once because the engine list and
+ *  the model cards must agree — they used to each keep a private copy of this
+ *  set, which is how an engine that works came to stay hidden.
+ *
+ *  `whisper` + `vibeasr` are sidecar binaries shipped in the shared runtime.
+ *  `funasr` runs in its own pip venv, bootstrapped on first use with a
+ *  Windows-aware interpreter layout and CPU torch wheels, so it is no longer
+ *  the hard-erroring engine it used to be off macOS. MLX-family engines stay
+ *  Apple-only by definition (their backend is MLX). */
+export const NON_MAC_ENGINES: ReadonlySet<SttEngine> = new Set([
+  "whisper",
+  "vibeasr",
+  "funasr",
+]);
+
 export type WhisperModel = "small-q5_1" | "medium-q5_0" | "large-v3-turbo-q5_0";
 
 export const WHISPER_MODELS: WhisperModel[] = ["small-q5_1", "medium-q5_0", "large-v3-turbo-q5_0"];
@@ -103,9 +118,24 @@ export interface SttDownloadProgress {
   error?: string | null;
 }
 
+/** A local transcription lifecycle transition, streamed from Rust on
+ *  `local-transcription-updated`. A backgrounded job has no promise to await, so
+ *  this is what tells the notes list to refetch. */
+export interface LocalTranscriptionUpdate {
+  id: string;
+  /** Recording title, so a job that finishes after the dialog closed still
+   *  names itself in the completion / failure notification. */
+  title: string;
+  status: "transcribing" | "completed" | "failed";
+  error?: string | null;
+}
+
 export interface DesktopLocalTranscriptionApi {
   pickAudioFile: () => Promise<string | null>;
   transcribe: (audioPath: string, options?: LocalTranscriptionOptions) => Promise<LocalTranscriptionRecord>;
+  /** Queue + start a transcription and return the queued record at once; the
+   *  engine runs in the background and reports through `onTranscriptionUpdate`. */
+  start: (audioPath: string, options?: LocalTranscriptionOptions) => Promise<LocalTranscriptionRecord>;
   list: () => Promise<LocalTranscriptionRecord[]>;
   get: (id: string) => Promise<LocalTranscriptionRecord | null>;
   retry: (id: string, options?: { track?: "mic" | "system" }) => Promise<unknown>;
@@ -118,6 +148,8 @@ export interface DesktopLocalTranscriptionApi {
   deleteSttModel: (provider: SttEngine, modelId: string) => Promise<{ models: SttModelInfo[] }>;
   /** Subscribe to `stt-download-progress` events; returns an unlisten fn. */
   onSttDownloadProgress: (callback: (progress: SttDownloadProgress) => void) => Promise<() => void>;
+  /** Subscribe to `local-transcription-updated` events; returns an unlisten fn. */
+  onTranscriptionUpdate: (callback: (update: LocalTranscriptionUpdate) => void) => Promise<() => void>;
   listHotwordPackages: () => Promise<LocalHotwordPackage[]>;
   saveHotwordPackage: (pkg: LocalHotwordPackage) => Promise<LocalHotwordPackage>;
   deleteHotwordPackage: (id: string) => Promise<void>;

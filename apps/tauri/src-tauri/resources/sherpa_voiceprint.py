@@ -18,7 +18,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("audio_path")
     parser.add_argument("--model", required=True, help="Path to the CAM++ .onnx checkpoint")
-    parser.add_argument("--segments-json", default="[]")
+    parser.add_argument("--segments-json-file", required=True,
+                        help="Path to a JSON array of {id,startMs,endMs}. It is a file, "
+                             "not an inline argument: a long recording's segment list "
+                             "exceeds the 32K CreateProcess command-line limit.")
     return parser.parse_args()
 
 
@@ -44,9 +47,9 @@ def main() -> int:
         print(f"Voiceprint model is not installed: {model_path}", file=sys.stderr)
         raise SystemExit(4)
 
-    segments = json.loads(args.segments_json)
+    segments = json.loads(Path(args.segments_json_file).read_text(encoding="utf-8"))
     if not isinstance(segments, list) or not segments:
-        print("segments-json must be a non-empty JSON array", file=sys.stderr)
+        print("segments-json-file must contain a non-empty JSON array", file=sys.stderr)
         raise SystemExit(2)
 
     try:

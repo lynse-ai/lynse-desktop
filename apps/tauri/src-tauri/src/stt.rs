@@ -31,6 +31,10 @@ pub struct SttRequest {
     /// Trailing prior context (previous transcript text) used as an
     /// `initial_prompt` to reduce hallucination and专有名词 drift.
     pub prior_context: Option<String>,
+    /// Language the audio is spoken in (BCP-47 as the UI locale uses it, or
+    /// `"auto"`). `None` means nobody declared it, which engines must treat as
+    /// "detect", never as English.
+    pub language: Option<String>,
 }
 
 /// Normalized transcription result shared by every engine.
@@ -507,7 +511,10 @@ pub(crate) fn convert_to_wav_sr(
     sample_rate: u32,
 ) -> CommandResult<()> {
     let ffmpeg = sidecar_path(app, "ffmpeg")?;
-    let status = Command::new(&ffmpeg)
+    // `.output()` rather than `.status()`: the pipes are drained so a chatty
+    // ffmpeg cannot block, and its stderr is the only record of WHY a conversion
+    // died — an exit code alone reached the user as a bare "FFmpeg 转换音频失败".
+    let run = Command::new(&ffmpeg)
         .args([
             "-y",
             "-i",
@@ -520,12 +527,197 @@ pub(crate) fn convert_to_wav_sr(
             "pcm_s16le",
             output.to_string_lossy().as_ref(),
         ])
-        .status()
+        .output()
         .map_err(|error| format!("无法启动 FFmpeg：{error}"))?;
-    if !status.success() {
-        return Err("FFmpeg 转换音频失败".to_owned());
+    if !run.status.success() {
+        return Err(format!("FFmpeg 转换音频失败：{}", stderr_reason(&run.stderr)));
     }
     Ok(())
+}
+
+/// The last few ffmpeg stderr lines, newest last — where ffmpeg puts its actual
+/// complaint. Its progress rewrites with `\r`, so each line is reduced to the
+/// text after the final one, and pure progress lines are skipped.
+fn stderr_reason(stderr: &[u8]) -> String {
+    let mut kept: Vec<String> = Vec::new();
+    for line in String::from_utf8_lossy(stderr).lines().rev() {
+        let current = line.rsplit('\r').next().unwrap_or_default().trim();
+        if current.is_empty() || current.starts_with("size=") || current.starts_with("frame=") {
+            continue;
+        }
+        kept.push(current.chars().take(120).collect());
+        if kept.len() == 3 {
+            break;
+        }
+    }
+    kept.reverse();
+    if kept.is_empty() {
+        return "ffmpeg 未输出原因".to_owned();
+    }
+    kept.join(" | ")
+}
+
+/// Languages whisper.cpp can be told to transcribe in. A request naming
+/// anything else is routed to detection instead of being passed through — an
+/// unknown code makes the sidecar exit before it transcribes a single second.
+const WHISPER_LANGUAGES: &[&str] = &[
+    "zh", "en", "ja", "de", "ko", "ru", "es", "fr", "pt", "it", "pl", "tr", "nl", "fa",
+];
+
+/// The `-l` value for a request language.
+///
+/// An absent language must NOT fall through to whisper.cpp's own default,
+/// which is `en`: a Chinese meeting then transcribes as fluent-looking English
+/// hallucination ("I spent a few hours on it." x40), the run reports success,
+/// and nothing downstream can tell. Nobody declared a language, so ask the
+/// model to detect it.
+pub(crate) fn whisper_language_arg(language: Option<&str>) -> &'static str {
+    let Some(requested) = language.map(str::trim).filter(|value| !value.is_empty()) else {
+        return "auto";
+    };
+    if requested.eq_ignore_ascii_case("auto") {
+        return "auto";
+    }
+    // BCP-47 → whisper: the primary subtag carries the language, so `zh-CN`,
+    // `zh-Hant`, `en-US` and `pt_BR` all resolve.
+    let primary = requested.split(['-', '_']).next().unwrap_or_default();
+    WHISPER_LANGUAGES
+        .iter()
+        .find(|candidate| candidate.eq_ignore_ascii_case(primary))
+        .copied()
+        .unwrap_or("auto")
+}
+
+/// Worker threads for a CPU-bound sidecar.
+///
+/// whisper.cpp defaults to 4, which roughly doubles the wall-clock time of a
+/// long meeting on a modern desktop; past 8 the llama/ggml builds gain nothing
+/// on a consumer CPU, and leaving cores free keeps the app's own audio
+/// pipeline responsive while a transcription runs.
+pub(crate) fn sidecar_threads() -> String {
+    std::thread::available_parallelism()
+        .map(|count| count.get().clamp(1, 8))
+        .unwrap_or(4)
+        .to_string()
+}
+
+/// The whisper.cpp argument vector for one transcription. The executable is
+/// deliberately NOT among them — `Command::new` already supplies argv[0].
+///
+/// This is a separate, pure function because a leading copy of the sidecar path
+/// here was a silent, total failure for every local transcription: whisper.cpp
+/// reads bare arguments as *input files*, so it transcribed its own executable
+/// as the first recording, wrote that result to the `-of` name the caller reads
+/// first, and pushed the actual meeting to `<input>.wav.json`. Users got a
+/// couple of seconds of binary noise (`*Burps*`) labelled as a completed
+/// transcript of a 44-minute meeting.
+pub(crate) fn whisper_command_args(
+    model_path: &Path,
+    wav: &Path,
+    output_base: &Path,
+    language: Option<&str>,
+    threads: &str,
+    prompt: Option<&str>,
+) -> Vec<String> {
+    let mut args = vec![
+        "-m".to_owned(),
+        model_path.to_string_lossy().into_owned(),
+        "-f".to_owned(),
+        wav.to_string_lossy().into_owned(),
+        "-oj".to_owned(),
+        "-of".to_owned(),
+        output_base.to_string_lossy().into_owned(),
+        "-l".to_owned(),
+        whisper_language_arg(language).to_owned(),
+        "-t".to_owned(),
+        threads.to_owned(),
+    ];
+    if let Some(prompt) = prompt.filter(|value| !value.trim().is_empty()) {
+        args.extend(["--prompt".to_owned(), prompt.trim().to_owned()]);
+    }
+    args
+}
+
+/// Per-job scratch space for the intermediate WAV and the engine's output.
+///
+/// These artifacts deliberately do NOT live in the model directory:
+/// - two tasks using the same engine both wrote `input.wav` there and
+///   overwrote each other mid-run;
+/// - the transcript is read back by a fixed filename, so a file left by a
+///   crashed run could be read as the *current* run's result;
+/// - a 44-minute meeting drops ~85 MB (16 kHz) to ~126 MB (24 kHz) of PCM next
+///   to the weights, and nothing ever removed it.
+///
+/// Removal happens on drop, so every `?` exit path cleans up too.
+pub(crate) struct ScratchDir(PathBuf);
+
+impl ScratchDir {
+    pub(crate) fn new() -> CommandResult<Self> {
+        let directory = std::env::temp_dir().join(format!("lynse-stt-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&directory)
+            .map_err(|error| format!("无法创建转写临时目录（{directory:?}）：{error}"))?;
+        Ok(Self(directory))
+    }
+
+    pub(crate) fn join(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for ScratchDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Pick the lines that explain a sidecar failure.
+///
+/// Unlike ffmpeg, whisper prints the transcript itself as it goes, so the tail
+/// of stderr on a failure is usually *speech*, not the problem. Complaint lines
+/// are preferred; when none exist the last few lines that are not transcript or
+/// timing output are used, so the message stays honest about what the process
+/// actually said.
+fn sidecar_failure_reason(stderr: &[u8]) -> String {
+    let lines: Vec<String> = String::from_utf8_lossy(stderr)
+        .lines()
+        .map(|line| line.rsplit('\r').next().unwrap_or_default().trim())
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect();
+
+    let is_complaint = |line: &str| {
+        let lowered = line.to_ascii_lowercase();
+        ["error", "failed", "cannot", "can't", "invalid", "exception", "abort", "memory", "no space"]
+            .iter()
+            .any(|needle| lowered.contains(needle))
+    };
+    let is_noise = |line: &str| {
+        let lowered = line.to_ascii_lowercase();
+        lowered.starts_with("whisper_print_timings")
+            || lowered.starts_with("system_info")
+            || lowered.starts_with("load time")
+            || lowered.starts_with("ggml")
+            || line.starts_with('[') && line.contains("-->")
+    };
+
+    let mut kept: Vec<String> =
+        lines.iter().filter(|line| is_complaint(line.as_str())).cloned().collect();
+    if kept.is_empty() {
+        kept = lines
+            .iter()
+            .rev()
+            .filter(|line| !is_noise(line.as_str()))
+            .take(3)
+            .cloned()
+            .collect();
+        kept.reverse();
+    } else if kept.len() > 3 {
+        kept = kept.split_off(kept.len() - 3);
+    }
+    if kept.is_empty() {
+        return "转写组件未输出原因".to_owned();
+    }
+    kept.join(" | ")
 }
 
 pub struct FunasrAdapter;
@@ -584,27 +776,30 @@ impl BatchSttAdapter for WhisperAdapter {
             return Err(format!("Whisper 模型缺失：{}", model_path.display()));
         }
 
-        let wav = request.model_directory.join("input.wav");
+        // Pre-flight the speaker-separation dependency. It is only needed AFTER
+        // the transcript exists, so without this check a missing 3D-Speaker model
+        // surfaced as a failure fifteen minutes into a long meeting — the whole
+        // run wasted. The check itself is a path existence test.
+        if config.campp_diarization && !crate::voiceprint_backend_available(app)? {
+            return Err("声纹模型未安装，请在设置中下载 3D-Speaker 声纹模型".to_owned());
+        }
+
+        // Resolve the sidecar before converting: producing an 84 MB WAV and
+        // spending minutes on ffmpeg is worthless when the runtime is not
+        // installed at all.
+        let sidecar = sidecar_path(app, "whisper")?;
+
+        let scratch = ScratchDir::new()?;
+        let wav = scratch.join("input.wav");
         convert_to_wav(app, &request.audio_path, &wav)?;
 
-        let sidecar = sidecar_path(app, "whisper")?;
         // whisper.cpp appends the format extension to the `-of` value, so pass
         // a bare base name here and read `<base>.json` below. Newer whisper-cli
         // builds instead name the JSON after the input file (`input.wav.json`),
         // so fall back to that when the `-of`-derived file is missing.
-        let output_base = request.model_directory.join("whisper-output");
-        let output_json = request.model_directory.join("whisper-output.json");
-        let output_json_fallback = request.model_directory.join("input.wav.json");
-        let mut args = vec![
-            sidecar.to_string_lossy().into_owned(),
-            "-m".to_owned(),
-            model_path.to_string_lossy().into_owned(),
-            "-f".to_owned(),
-            wav.to_string_lossy().into_owned(),
-            "-oj".to_owned(),
-            "-of".to_owned(),
-            output_base.to_string_lossy().into_owned(),
-        ];
+        let output_base = scratch.join("whisper-output");
+        let output_json = scratch.join("whisper-output.json");
+        let output_json_fallback = scratch.join("input.wav.json");
         // whisper.cpp accepts a single `--prompt` (the short `-p` selects the
         // processor count on current builds), so fold the trailing context and
         // the hotword terms into one prompt.
@@ -618,36 +813,69 @@ impl BatchSttAdapter for WhisperAdapter {
             }
             prompt.push_str(&request.hotword);
         }
-        if !prompt.is_empty() {
-            args.extend(["--prompt".to_owned(), prompt]);
-        }
-        let status = Command::new(&sidecar)
+        let language = whisper_language_arg(request.language.as_deref());
+        let threads = sidecar_threads();
+        let args = whisper_command_args(
+            &model_path,
+            &wav,
+            &output_base,
+            request.language.as_deref(),
+            &threads,
+            (!prompt.is_empty()).then_some(prompt.as_str()),
+        );
+        // `.output()` captures the sidecar's stderr to build a failure message,
+        // which also removes it from the dev console — so the parameters that
+        // decide whether this run can possibly be right go to the log instead.
+        // A transcript in the wrong language has no other symptom: the sidecar
+        // exits 0 and the record reads as completed.
+        log::info!(
+            "[stt] whisper 启动：lang={language} threads={threads} model={} wav={} bytes",
+            model_path.file_name().and_then(|name| name.to_str()).unwrap_or("?"),
+            std::fs::metadata(&wav).map(|meta| meta.len()).unwrap_or_default()
+        );
+        let run = Command::new(&sidecar)
             .args(&args)
-            .status()
+            .output()
             .map_err(|error| format!("无法启动 Whisper：{error}"))?;
-        if !status.success() {
-            return Err("Whisper 转写失败".to_owned());
+        if !run.status.success() {
+            return Err(format!("Whisper 转写失败：{}", sidecar_failure_reason(&run.stderr)));
         }
 
         let parsed: Value = {
             let read_path = if output_json.exists() { &output_json } else { &output_json_fallback };
+            if !read_path.exists() {
+                // Exit code 0 with no transcript file: the run produced nothing
+                // to read. Say which of the two names was expected so a sidecar
+                // upgrade that renames its output is diagnosable from the log.
+                return Err(format!(
+                    "Whisper 未生成转写结果（期望 {}），音频可能没有可识别的语音",
+                    read_path.file_name().and_then(|name| name.to_str()).unwrap_or("whisper-output.json")
+                ));
+            }
             let content = std::fs::read_to_string(read_path)
                 .map_err(|error| format!("无法读取 Whisper 输出（{}）：{error}", read_path.display()))?;
             serde_json::from_str(&content).map_err(|error| error.to_string())?
         };
         let mut segments = normalize_whisper_output(&parsed);
+        if segments.is_empty() {
+            return Err("Whisper 未识别到语音，请确认音频不是静音".to_owned());
+        }
+        // What the sidecar actually decided, not what we asked it to do: the
+        // detected language is the one number that distinguishes a good
+        // transcript from a fluent, successful, wrong-language one.
+        log::info!(
+            "[stt] whisper 输出：{} 段，检测语言 {}",
+            segments.len(),
+            parsed.pointer("/result/language").and_then(Value::as_str).unwrap_or("?")
+        );
 
-        if config.campp_diarization {
+        if config.campp_diarization && crate::voiceprint_backend_available(app)? {
             crate::assign_campp_speakers(app, &request.audio_path, &mut segments, request.expected_speakers)?;
         } else {
             // Single speaker when diarization is off — never fabricate multiple.
-            for segment in &mut segments {
-                if let Some(object) = segment.as_object_mut() {
-                    object.insert("speakerId".to_owned(), json!("spk-1"));
-                    object.insert("speakerName".to_owned(), json!("发言人1"));
-                    object.insert("rawSpeaker".to_owned(), json!("0"));
-                }
-            }
+            // Also the fallback when the model went missing mid-run: the
+            // transcript survives, unassigned rather than lost.
+            crate::label_single_speaker(&mut segments);
         }
 
         let text = segments
@@ -656,6 +884,41 @@ impl BatchSttAdapter for WhisperAdapter {
             .collect::<String>();
         Ok(SttOutput { text, segments })
     }
+}
+
+/// Pure so the two artifact generations' help text can be told apart in a unit
+/// test without a sidecar on disk.
+pub(crate) fn help_advertises_one_shot(help: &str) -> bool {
+    help.contains("--audio") && !(help.contains("token-stream") || help.contains("---READY---"))
+}
+
+/// Detect a `vibeasr` sidecar that cannot be driven the way this adapter drives
+/// it, before a long transcription burns minutes of model load on it.
+///
+/// Upstream builds two different programs from one tree (`asr_stream_server`,
+/// which this adapter talks to, and the one-shot `asr_infer` demo CLI, which
+/// takes `--audio` and has no streaming flags at all). Published runtime
+/// archives have shipped the wrong one, and the client only learned that ~2 s
+/// in, from a raw `Unknown argument: --no-token-stream`. The build now picks
+/// deterministically and asserts the fingerprint, but installs that already
+/// fetched a bad archive keep it — so check the advertised interface and name
+/// the fix instead of relaying a CLI parse error.
+fn vibeasr_protocol_problem(sidecar: &Path) -> Option<String> {
+    let run = Command::new(sidecar).arg("--help").output().ok()?;
+    let help = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    // An empty help means the binary could not even start (a missing DLL on
+    // Windows presents as a spawn failure, not a message); nothing to conclude.
+    if help.trim().is_empty() || !help_advertises_one_shot(&help) {
+        return None;
+    }
+    Some(
+        "离线转写组件与当前引擎不匹配（VibeVoice 组件为单文件模式）。请在设置中删除并重新下载该模型以更新组件，或改用 Whisper 引擎。"
+            .to_owned(),
+    )
 }
 
 /// VibeVoice-ASR-BitNet (Microsoft, MIT) runs entirely on CPU through the
@@ -681,16 +944,20 @@ impl BatchSttAdapter for VibeVoiceAdapter {
             return Err(format!("VibeVoice 模型缺失：{}", lm.display()));
         }
 
+        // Resolve and vet the sidecar before converting: the conversion writes
+        // ~126 MB of 24 kHz PCM and takes real time, so it must not run at all
+        // when the engine could not have accepted the result.
+        let sidecar = sidecar_path(app, "vibeasr")?;
+        if let Some(problem) = vibeasr_protocol_problem(&sidecar) {
+            return Err(problem);
+        }
+
         // VibeASR.cpp consumes 24 kHz mono PCM audio.
-        let wav = request.model_directory.join("input.wav");
+        let scratch = ScratchDir::new()?;
+        let wav = scratch.join("input.wav");
         convert_to_wav_sr(app, &request.audio_path, &wav, 24_000)?;
 
-        let sidecar = sidecar_path(app, "vibeasr")?;
-
-        let threads = std::thread::available_parallelism()
-            .map(|count| count.get().min(8).max(1))
-            .unwrap_or(4)
-            .to_string();
+        let threads = sidecar_threads();
 
         let mut command = Command::new(&sidecar);
         command
@@ -732,8 +999,7 @@ impl BatchSttAdapter for VibeVoiceAdapter {
             .wait_with_output()
             .map_err(|error| format!("VibeVoice 运行失败：{error}"))?;
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("VibeVoice 转写失败：{}", stderr.trim()));
+            return Err(format!("VibeVoice 转写失败：{}", sidecar_failure_reason(&output.stderr)));
         }
 
         let raw = String::from_utf8_lossy(&output.stdout);
@@ -752,6 +1018,10 @@ impl BatchSttAdapter for VibeVoiceAdapter {
                 text.push(' ');
             }
             text.push_str(trimmed);
+        }
+
+        if text.trim().is_empty() {
+            return Err("VibeVoice 未识别到语音，请确认音频不是静音".to_owned());
         }
 
         let segment = json!({
@@ -1151,6 +1421,211 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stderr_reason_surfaces_the_complaint_not_the_progress() {
+        let raw = b"Input #0, mp3, from 'a.mp3':\r\nsize=  1024KiB time=00:00:12 \rsize=  2048KiB time=00:00:24 \n[mp3 @ 0x1] Invalid data found when processing input\nConversion failed!\n";
+        // Three trailing lines, newest last: the rewritten progress line is
+        // dropped, and the surrounding context stays because ffmpeg often puts
+        // the reason one line above "Conversion failed!".
+        assert_eq!(
+            stderr_reason(raw),
+            "Input #0, mp3, from 'a.mp3': | [mp3 @ 0x1] Invalid data found when processing input | Conversion failed!"
+        );
+    }
+
+    #[test]
+    fn stderr_reason_bounds_a_long_traceback() {
+        let raw = "x".repeat(500).into_bytes();
+        assert_eq!(stderr_reason(&raw).chars().count(), 120);
+    }
+
+    #[test]
+    fn stderr_reason_says_so_when_ffmpeg_said_nothing() {
+        assert_eq!(stderr_reason(b""), "ffmpeg 未输出原因");
+        // Progress output only: nothing actionable to report.
+        assert_eq!(stderr_reason(b"size= 1KiB time=00:00:01 \n"), "ffmpeg 未输出原因");
+    }
+
+    /// The whole point of `whisper_language_arg`: nothing in the pipeline may
+    /// hand whisper.cpp its own default, because `en` on Chinese audio produces
+    /// a fluent, successful, completely wrong transcript.
+    #[test]
+    fn whisper_language_never_defaults_to_english() {
+        assert_eq!(whisper_language_arg(None), "auto");
+        assert_eq!(whisper_language_arg(Some("")), "auto");
+        assert_eq!(whisper_language_arg(Some("   ")), "auto");
+        assert_eq!(whisper_language_arg(Some("auto")), "auto");
+        // An unrecognized code would make the sidecar exit before transcribing.
+        assert_eq!(whisper_language_arg(Some("klingon")), "auto");
+        assert_eq!(whisper_language_arg(Some("zz")), "auto");
+    }
+
+    #[test]
+    fn whisper_language_maps_ui_locales_to_whisper_codes() {
+        for (requested, expected) in [
+            ("zh", "zh"),
+            ("zh-CN", "zh"),
+            ("zh-Hant", "zh"),
+            ("en", "en"),
+            ("en-US", "en"),
+            ("JA", "ja"),
+            ("ko-KR", "ko"),
+            ("pt_BR", "pt"),
+        ] {
+            assert_eq!(whisper_language_arg(Some(requested)), expected, "{requested}");
+        }
+    }
+
+    #[test]
+    fn sidecar_failure_reason_prefers_the_complaint() {
+        let stderr = b"[00:00:01.000 --> 00:00:02.000]  \xE4\xBD\xA0\xE5\xA5\xBD\n\
+                       whisper_init_from_file_with_params_no_state: failed to load model\n";
+        let reason = sidecar_failure_reason(stderr);
+        assert!(reason.contains("failed to load model"), "{reason}");
+        assert!(!reason.contains("你好"), "transcript lines are not a failure reason: {reason}");
+    }
+
+    #[test]
+    fn sidecar_failure_reason_bounds_a_transcript_only_stderr() {
+        // A crash with nothing but transcript output must not quote the speech
+        // back at the user as the explanation.
+        let stderr = b"[00:00:01.000 --> 00:00:02.000]  a\n[00:00:02.000 --> 00:00:03.000]  b\n";
+        assert_eq!(sidecar_failure_reason(stderr), "转写组件未输出原因");
+    }
+
+    #[test]
+    fn help_advertises_one_shot_distinguishes_the_generations() {
+        let one_shot = "  --audio <path>       Path to input WAV file (required)\n  --greedy\n";
+        let streaming = "  --no-token-stream\n  reads paths from stdin, prints ---READY---\n";
+        assert!(help_advertises_one_shot(one_shot));
+        assert!(!help_advertises_one_shot(streaming));
+        assert!(!help_advertises_one_shot(""));
+    }
+
+    #[test]
+    fn scratch_dir_cleans_up_after_itself() {
+        let path = {
+            let scratch = ScratchDir::new().expect("scratch dir");
+            let file = scratch.join("input.wav");
+            std::fs::write(&file, b"pcm").expect("write scratch file");
+            assert!(file.exists());
+            scratch.0.clone()
+        };
+        assert!(!path.exists(), "scratch artifacts outlive the run: {path:?}");
+    }
+
+    #[test]
+    fn sidecar_threads_stays_in_the_useful_band() {
+        let threads: usize = sidecar_threads().parse().expect("numeric thread count");
+        assert!((1..=8).contains(&threads), "{threads}");
+    }
+
+    /// The argv must carry no copy of the executable. whisper.cpp reads a bare
+    /// argument as an input FILE, so passing the sidecar path made it transcribe
+    /// its own binary first — writing that garbage to the `-of` name the caller
+    /// reads, and the real recording to `<input>.wav.json`.
+    #[test]
+    fn whisper_args_never_contain_the_executable() {
+        let args = whisper_command_args(
+            Path::new("/models/ggml-small.bin"),
+            Path::new("/tmp/lynse-stt-x/input.wav"),
+            Path::new("/tmp/lynse-stt-x/whisper-output"),
+            None,
+            "8",
+            None,
+        );
+        assert_eq!(
+            args,
+            vec![
+                "-m", "/models/ggml-small.bin",
+                "-f", "/tmp/lynse-stt-x/input.wav",
+                "-oj", "-of", "/tmp/lynse-stt-x/whisper-output",
+                "-l", "auto",
+                "-t", "8",
+            ]
+        );
+        assert!(!args.iter().any(|arg| arg.contains("whisper.exe") || arg.ends_with("/whisper")));
+    }
+
+    #[test]
+    fn whisper_prompt_folds_context_and_hotwords_into_one_flag() {
+        let with_both = whisper_command_args(
+            Path::new("m.bin"), Path::new("in.wav"), Path::new("out"),
+            Some("zh"), "4", Some("前文 热词一"),
+        );
+        let prompt_index = with_both.iter().position(|arg| arg == "--prompt").expect("prompt flag");
+        assert_eq!(with_both[prompt_index + 1], "前文 热词一");
+        assert_eq!(with_both.iter().filter(|arg| *arg == "--prompt").count(), 1);
+        let without = whisper_command_args(
+            Path::new("m.bin"), Path::new("in.wav"), Path::new("out"), None, "4", Some("   "),
+        );
+        assert!(!without.iter().any(|arg| arg == "--prompt"));
+        assert_eq!(without[without.iter().position(|arg| arg == "-l").unwrap() + 1], "auto");
+    }
+
+    /// Runs the real whisper sidecar against the real model and a real recording
+    /// through the same argument construction and output parsing the app uses.
+    /// Skips silently unless `LYNSE_WHISPER_TEST_SIDECAR`,
+    /// `LYNSE_WHISPER_TEST_MODEL` and `LYNSE_WHISPER_TEST_AUDIO` are all set, so
+    /// CI stays fast while a set-up machine proves the offline path end to end.
+    #[test]
+    fn whisper_sidecar_transcribes_real_audio_with_declared_language() {
+        let (Some(sidecar), Some(model), Some(audio)) = (
+            std::env::var_os("LYNSE_WHISPER_TEST_SIDECAR").map(PathBuf::from),
+            std::env::var_os("LYNSE_WHISPER_TEST_MODEL").map(PathBuf::from),
+            std::env::var_os("LYNSE_WHISPER_TEST_AUDIO").map(PathBuf::from),
+        ) else {
+            eprintln!("skipping: set LYNSE_WHISPER_TEST_SIDECAR/_MODEL/_AUDIO");
+            return;
+        };
+        if !sidecar.exists() || !model.exists() || !audio.exists() {
+            eprintln!("skipping: missing artifacts");
+            return;
+        }
+
+        let scratch = ScratchDir::new().expect("scratch dir");
+        let output_base = scratch.join("whisper-output");
+        // Built by the same function the adapter uses, so an argument bug in
+        // production is a test failure first.
+        let args = whisper_command_args(
+            &model,
+            &audio,
+            &output_base,
+            Some("zh"),
+            &sidecar_threads(),
+            None,
+        );
+        let run = Command::new(&sidecar)
+            .args(&args)
+            .output()
+            .expect("spawn whisper sidecar");
+        assert!(run.status.success(), "{}", sidecar_failure_reason(&run.stderr));
+
+        let content = std::fs::read_to_string(scratch.join("whisper-output.json"))
+            .expect("whisper wrote its json next to the -of base name");
+        let parsed: Value = serde_json::from_str(&content).expect("json");
+        let segments = normalize_whisper_output(&parsed);
+        assert!(!segments.is_empty(), "no segments parsed");
+        // A single segment is the signature of the sidecar transcribing something
+        // other than the recording it was pointed at.
+        assert!(segments.len() > 1, "expected multiple segments, got {segments:?}");
+        let text: String = segments
+            .iter()
+            .filter_map(|segment| segment.get("text").and_then(Value::as_str))
+            .collect();
+        assert!(
+            text.chars().any(|ch| ('\u{4E00}'..='\u{9FFF}').contains(&ch)),
+            "expected Chinese speech, got: {}",
+            &text.chars().take(200).collect::<String>()
+        );
+        // The signature of the `lang = en` failure mode this guards against.
+        assert!(!text.contains("I spent a few hours on it"), "{text}");
+        for segment in &segments {
+            assert!(segment.get("startMs").and_then(Value::as_i64).is_some());
+            assert!(segment.get("endMs").and_then(Value::as_i64).is_some());
+        }
+    }
+
+    #[test]
     fn sidecar_binary_name_rules() {
         assert_eq!(sidecar_binary_name_for("whisper", false), "whisper");
         assert_eq!(sidecar_binary_name_for("ffmpeg", false), "ffmpeg");
@@ -1391,6 +1866,7 @@ mod tests {
             expected_speakers: None,
             hotword: "Lynse 产品周会".to_owned(),
             prior_context: None,
+            language: None,
         };
         let output = Qwen3Adapter::transcribe_via_bridge(
             venv_python.to_string_lossy().as_ref(),
@@ -1453,6 +1929,7 @@ mod tests {
             expected_speakers: None,
             hotword: String::new(),
             prior_context: None,
+            language: None,
         };
         let output = MossAdapter::transcribe_via_bridge(
             venv_python.to_string_lossy().as_ref(),

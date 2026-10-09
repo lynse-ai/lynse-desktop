@@ -77,6 +77,22 @@ use live_translation::LiveTranslationManager;
 /// while impostor pairs land near −0.1…0.1. 0.45 keeps headroom on both
 /// sides (mirrors the old MECT calibration approach).
 const VOICEPRINT_MATCH_THRESHOLD: f64 = 0.45;
+
+/// Diarization threshold, deliberately separate from the verification one above.
+///
+/// Verification compares a probe against an *enrolled* sample and can afford to
+/// be strict. Diarization clusters Whisper's own segments, and those are short:
+/// median 1.0 s on a real 44-minute meeting, 166 under 1 s, some 0 s. CAM++
+/// scores fall with slice length — same-speaker pairs sit at ≈0.65 over a
+/// sentence but ≈0.51 at 2 s, and below the verification threshold at 1 s — so
+/// reusing 0.45 made nearly every segment open a new cluster: 64 "speakers" for
+/// a 4-person meeting.
+const DIARIZATION_MATCH_THRESHOLD: f64 = 0.35;
+
+/// A slice shorter than this carries too little voice to attribute at all. It
+/// inherits whoever was last speaking instead of inventing a new person, which
+/// is also the treatment for a segment the embedding bridge never returned.
+const DIARIZATION_MIN_ATTRIBUTE_SECONDS: f64 = 1.5;
 /// Backend key stored on each local-voiceprints entry: embeddings from
 /// different models live in different spaces and are only compared within
 /// their own backend. Entries stamped anything else (legacy FunASR
@@ -452,20 +468,102 @@ pub(crate) fn script_path(app: &AppHandle) -> CommandResult<PathBuf> {
     Ok(resources.join("funasr_transcribe.py"))
 }
 
-fn python_command() -> String {
-    if let Ok(value) = env::var("LYNSE_FUNASR_PYTHON") {
-        return value;
+/// Locate or create a per-engine Python venv and return its interpreter.
+///
+/// The layout differs per platform and this is the trap that has bitten twice:
+/// POSIX venvs put the interpreter at `bin/python`, Windows at
+/// `Scripts\python.exe`, and the WindowsApps `python3` stub prints a store hint
+/// and exits 49 — which reads exactly like a script that failed validation. An
+/// engine that hard-codes `bin/python` therefore cannot run on Windows at all.
+///
+/// `env_var` lets a development machine point at an existing venv;
+/// `development_relative` is the repo-side venv `tauri dev` may already have.
+fn ensure_python_venv(app: &AppHandle, env_var: &str, development_relative: &str, directory_name: &str) -> CommandResult<String> {
+    if let Ok(value) = env::var(env_var) {
+        return Ok(value);
     }
-    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../.venv-funasr/bin/python");
+    let interpreter_relative = if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" };
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(development_relative).join(interpreter_relative);
     if development.exists() {
-        return development.to_string_lossy().into_owned();
+        return Ok(development.to_string_lossy().into_owned());
     }
-    "python3".to_owned()
+    let venv = app_data_dir(app)?.join(directory_name);
+    let python = venv.join(interpreter_relative);
+    if python.exists() {
+        return Ok(python.to_string_lossy().into_owned());
+    }
+    // Windows ships no `python3.12`-style names: the installer puts `python` on
+    // PATH and the `py` launcher covers versioned selection.
+    let candidates: &[&str] = if cfg!(windows) {
+        &["python", "py", "python3"]
+    } else {
+        &["python3.12", "python3.11", "python3.13", "python3"]
+    };
+    let interpreter = candidates
+        .into_iter()
+        .find(|candidate| Command::new(candidate).arg("--version").output().map(|output| output.status.success()).unwrap_or(false))
+        .ok_or("未找到可用的 python3 解释器")?;
+    log::info!("[stt] 创建 {directory_name} 虚拟环境（{interpreter}）：{}", venv.display());
+    fs::create_dir_all(&venv).map_err(|error| error.to_string())?;
+    let status = Command::new(interpreter)
+        .args(["-m", "venv", venv.to_string_lossy().as_ref()])
+        .status()
+        .map_err(|error| format!("无法创建 {directory_name} 虚拟环境：{error}"))?;
+    if !status.success() {
+        return Err(format!("创建 {directory_name} 虚拟环境失败"));
+    }
+    Ok(python.to_string_lossy().into_owned())
 }
 
-pub(crate) fn run_funasr(_app: &AppHandle, arguments: &[String], model_directory: &Path) -> CommandResult<String> {
-    let output = Command::new(python_command())
+/// Interpreter for the FunASR bridge, pip-installing its dependencies the first
+/// time the engine is used.
+pub(crate) fn ensure_funasr_venv(app: &AppHandle) -> CommandResult<String> {
+    let python = ensure_python_venv(app, "LYNSE_FUNASR_PYTHON", "../../../.venv-funasr", "funasr-venv")?;
+    ensure_funasr_packages(&python)?;
+    Ok(python)
+}
+
+/// Ensure `funasr` and its ModelScope downloader import in the FunASR venv.
+///
+/// torch is the trap on Windows: the default PyPI wheel is the CUDA build, which
+/// drags several GB of nvidia packages onto a machine that may have no GPU. This
+/// engine runs on CPU off Apple Silicon — the bridge resolves `auto` to `cpu` —
+/// so Windows pins the CPU index deliberately instead of hoping for the best.
+fn ensure_funasr_packages(python: &str) -> CommandResult<()> {
+    let check = Command::new(python)
+        .args(["-c", "import funasr, torch, modelscope"])
+        .output()
+        .map_err(|error| format!("无法运行 FunASR Python：{error}"))?;
+    if check.status.success() {
+        return Ok(());
+    }
+    if cfg!(windows) {
+        log::info!("[stt] 首次使用 FunASR 引擎，安装 CPU 版 torch…");
+        let torch = Command::new(python)
+            .args([
+                "-m", "pip", "install", "--quiet", "--disable-pip-version-check",
+                "torch", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cpu",
+            ])
+            .status()
+            .map_err(|error| format!("安装 torch 失败：{error}"))?;
+        if !torch.success() {
+            return Err("安装 CPU 版 torch 失败，请检查网络后重试".to_owned());
+        }
+    }
+    log::info!("[stt] 安装 FunASR 依赖…");
+    let install = Command::new(python)
+        .args(["-m", "pip", "install", "--quiet", "--disable-pip-version-check", "funasr", "modelscope", "librosa", "soundfile"])
+        .status()
+        .map_err(|error| format!("安装 FunASR 依赖失败：{error}"))?;
+    if !install.success() {
+        return Err("安装 FunASR 依赖失败，请检查网络后重试".to_owned());
+    }
+    Ok(())
+}
+
+pub(crate) fn run_funasr(app: &AppHandle, arguments: &[String], model_directory: &Path) -> CommandResult<String> {
+    let python = ensure_funasr_venv(app)?;
+    let output = Command::new(python)
         .args(arguments)
         .env("MODELSCOPE_CACHE", model_directory)
         .output()
@@ -541,7 +639,7 @@ fn sherpa_model_path(app: &AppHandle) -> CommandResult<PathBuf> {
 /// The embedding backend voiceprints are enrolled with: 3D-Speaker CAM++
 /// through sherpa-onnx (Apache-2.0). The previous FunASR-bundled CAM++ and
 /// MECT backends live in incompatible embedding spaces and never match.
-fn voiceprint_backend_available(app: &AppHandle) -> CommandResult<bool> {
+pub(crate) fn voiceprint_backend_available(app: &AppHandle) -> CommandResult<bool> {
     Ok(sherpa_model_path(app)?.exists())
 }
 
@@ -576,42 +674,9 @@ fn ensure_sherpa_package(python: &str) -> CommandResult<()> {
 /// mirrors [`ensure_whisperx_venv`]: prefer a known-compatible CPython
 /// before the system `python3`.
 pub(crate) fn ensure_sherpa_venv(app: &AppHandle) -> CommandResult<String> {
-    if let Ok(value) = env::var("LYNSE_SHERPA_PYTHON") {
-        return Ok(value);
-    }
-    let python_relative = if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" };
-    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("../../../.venv-sherpa/{python_relative}"));
-    if development.exists() {
-        return Ok(development.to_string_lossy().into_owned());
-    }
-    let venv = app_data_dir(app)?.join("sherpa-venv");
-    let python = venv.join(python_relative);
-    if !python.exists() {
-        // Windows ships no `python3.12`-style names: the installer puts `python`
-        // on PATH and the `py` launcher covers versioned selection. The
-        // WindowsApps `python3` stub prints a store hint and exits non-zero, so
-        // the `--version` probe below rejects it.
-        let candidates: &[&str] = if cfg!(windows) {
-            &["python", "py", "python3"]
-        } else {
-            &["python3.12", "python3.11", "python3.13", "python3"]
-        };
-        let interpreter = candidates
-            .into_iter()
-            .find(|candidate| Command::new(candidate).arg("--version").output().map(|output| output.status.success()).unwrap_or(false))
-            .ok_or("未找到可用的 python3 解释器")?;
-        log::info!("[stt] 创建声纹虚拟环境（{interpreter}）：{}", venv.display());
-        fs::create_dir_all(&venv).map_err(|error| error.to_string())?;
-        let status = Command::new(interpreter)
-            .args(["-m", "venv", venv.to_string_lossy().as_ref()])
-            .status()
-            .map_err(|error| format!("无法创建声纹虚拟环境：{error}"))?;
-        if !status.success() {
-            return Err("创建声纹虚拟环境失败".to_owned());
-        }
-    }
-    ensure_sherpa_package(&python.to_string_lossy())?;
-    Ok(python.to_string_lossy().into_owned())
+    let python = ensure_python_venv(app, "LYNSE_SHERPA_PYTHON", "../../../.venv-sherpa", "sherpa-venv")?;
+    ensure_sherpa_package(&python)?;
+    Ok(python)
 }
 
 /// Run the sherpa-onnx voiceprint bridge on its dedicated venv; returns
@@ -1001,6 +1066,18 @@ pub const VIBEVOICE_BITNET_FILES: &[SttModelFile] = &[
 
 pub const STT_MODELS: &[SttModelEntry] = &[
     SttModelEntry {
+        provider: "funasr",
+        id: "funasr-paraformer",
+        label: "FunASR SeACo-Paraformer（本地·中文·带标点与说话人分离，~2.1 GiB）",
+        // Measured on disk after a real download: paraformer-large + FSMN-VAD +
+        // CT-Transformer punctuation + CAM++ speaker model, fetched from
+        // ModelScope by the bridge.
+        size_bytes: 2_218_608_047,
+        download_url: "",
+        sha256: "",
+        files: &[],
+    },
+    SttModelEntry {
         provider: "qwen3",
         id: "qwen3-asr-1.7b-8bit",
         label: "Qwen3-ASR 1.7B（本地·Apple Silicon MLX 8-bit，推荐，~2 GiB）",
@@ -1192,6 +1269,71 @@ fn model_status_list(app: &AppHandle) -> CommandResult<Value> {
     Ok(json!({ "models": models }))
 }
 
+/// Label every segment as one speaker. Used when diarization is switched off,
+/// and when it fails after the transcript already exists: the recording is
+/// reported unattributed rather than thrown away.
+pub(crate) fn label_single_speaker(segments: &mut [Value]) {
+    for segment in segments {
+        if let Some(object) = segment.as_object_mut() {
+            object.insert("speakerId".to_owned(), json!("spk-1"));
+            object.insert("speakerName".to_owned(), json!("发言人1"));
+            object.insert("rawSpeaker".to_owned(), json!("0"));
+        }
+    }
+}
+
+/// Greedy speaker clustering over `(id, seconds, embedding)` entries in segment
+/// order, returning `(segment id -> cluster index, cluster count)`.
+///
+/// A cluster's centroid is the running mean of its members, NOT its first
+/// member. With a single-sample centroid, one hoarse or noisy segment both opens
+/// a new cluster and becomes the reference that the next ordinary segment fails
+/// to match, so every split seeds another one down the recording — that plus the
+/// verification threshold is what turned 4 speakers into 64.
+///
+/// Pure (no `AppHandle`, no I/O) so the real embeddings from a recording can be
+/// replayed against it directly.
+fn cluster_by_speaker(entries: &[(String, f64, Option<Vec<f64>>)]) -> (HashMap<String, usize>, usize) {
+    let mut clusters: Vec<Vec<f64>> = Vec::new();
+    let mut sizes: Vec<usize> = Vec::new();
+    let mut assignment: HashMap<String, usize> = HashMap::new();
+    let mut previous = 0usize;
+
+    for (id, seconds, embedding) in entries {
+        let Some(embedding) = embedding.as_ref().filter(|_| *seconds >= DIARIZATION_MIN_ATTRIBUTE_SECONDS) else {
+            assignment.insert(id.clone(), previous);
+            continue;
+        };
+        let mut best: Option<(f64, usize)> = None;
+        for (index, centroid) in clusters.iter().enumerate() {
+            let score = cosine_similarity(embedding, centroid);
+            if score > best.map(|found| found.0).unwrap_or(f64::MIN) {
+                best = Some((score, index));
+            }
+        }
+        let cluster_index = match best {
+            Some((score, index)) if score >= DIARIZATION_MATCH_THRESHOLD => {
+                let size = sizes[index];
+                let next = size + 1;
+                for (slot, value) in clusters[index].iter_mut().zip(embedding.iter()) {
+                    *slot = (*slot * size as f64 + *value) / next as f64;
+                }
+                sizes[index] = next;
+                index
+            }
+            _ => {
+                clusters.push(embedding.clone());
+                sizes.push(1);
+                clusters.len() - 1
+            }
+        };
+        previous = cluster_index;
+        assignment.insert(id.clone(), cluster_index);
+    }
+
+    (assignment, clusters.len())
+}
+
 /// Assign speaker labels to segments by clustering embeddings greedily.
 /// Used by Whisper's optional speaker separation, via the 3D-Speaker CAM++
 /// embeddings from sherpa-onnx.
@@ -1204,10 +1346,14 @@ pub(crate) fn assign_campp_speakers(
     if segments.is_empty() {
         return Ok(());
     }
+    // Degrade rather than fail: the caller only gets here after the transcript
+    // is already produced, and discarding minutes of Whisper work over a missing
+    // extra is worse than leaving one speaker. (Same policy as
+    // `apply_voiceprints`.) The adapter pre-screens this before the run starts.
     if !voiceprint_backend_available(app)? {
-        return Err("声纹模型未安装，请在设置中下载 3D-Speaker 声纹模型".to_owned());
+        log::warn!("[stt] 缺少 3D-Speaker 声纹模型，跳过说话人分离");
+        return Ok(());
     }
-    let threshold = VOICEPRINT_MATCH_THRESHOLD;
     let candidates: Vec<Value> = segments
         .iter()
         .filter_map(|segment| {
@@ -1221,30 +1367,40 @@ pub(crate) fn assign_campp_speakers(
             }
         })
         .collect();
-    let embeddings = run_voiceprint_extraction(app, audio_path, &candidates)?;
-    let mut clusters: Vec<Vec<f64>> = Vec::new();
-    let mut assignment: HashMap<String, usize> = HashMap::new();
-    for candidate in &candidates {
-        let id = candidate.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
-        let Some(embedding) = embeddings.get(&id) else { continue };
-        let mut best: Option<(f64, usize)> = None;
-        for (index, centroid) in clusters.iter().enumerate() {
-            let score = cosine_similarity(embedding, centroid);
-            if score > best.as_ref().map(|found| found.0).unwrap_or(0.0) {
-                best = Some((score, index));
-            }
+    // A diarization failure must not cost the transcript. Reaching here means
+    // Whisper already spent the whole recording's runtime; the policy for this
+    // stage (see the pre-screen in `WhisperAdapter`) is to degrade to one
+    // speaker, and that has to hold for a bridge error too, not just a missing
+    // model.
+    let embeddings = match run_voiceprint_extraction(app, audio_path, &candidates) {
+        Ok(embeddings) => embeddings,
+        Err(error) => {
+            log::warn!("[stt] 说话人分离失败，保留转写结果并按单人输出：{error}");
+            label_single_speaker(segments);
+            return Ok(());
         }
-        let cluster_index = match best {
-            Some((score, index)) if score >= threshold => index,
-            _ => {
-                clusters.push(embedding.clone());
-                clusters.len() - 1
-            }
-        };
-        assignment.insert(id, cluster_index);
-    }
+    };
+    // Every segment takes part in the clustering sequence, including the ones too
+    // short to be judged: they still need a speaker, and inheriting the previous
+    // one is the only defensible answer. Only segments with real duration are
+    // asked of the embedding bridge (`candidates` above).
+    let entries: Vec<(String, f64, Option<Vec<f64>>)> = segments
+        .iter()
+        .filter_map(|segment| {
+            let id = segment.get("id").and_then(Value::as_str)?.to_owned();
+            let start = segment.get("startMs").and_then(Value::as_i64).unwrap_or_default();
+            let end = segment.get("endMs").and_then(Value::as_i64).unwrap_or_default();
+            Some((id.clone(), (end - start) as f64 / 1000.0, embeddings.get(&id).cloned()))
+        })
+        .collect();
+    let attributed = entries
+        .iter()
+        .filter(|(id, seconds, _)| embeddings.contains_key(id) && *seconds >= DIARIZATION_MIN_ATTRIBUTE_SECONDS)
+        .count();
+    let (mut assignment, cluster_count) = cluster_by_speaker(&entries);
+    log::info!("[stt] 说话人分离：{cluster_count} 位，{attributed} 段参与归属");
     if let Some(expected) = expected_speakers.filter(|value| *value > 0) {
-        if clusters.len() as u64 > expected {
+        if cluster_count as u64 > expected {
             for index in assignment.values_mut() {
                 if *index >= expected as usize {
                     *index = 0;
@@ -1292,19 +1448,45 @@ fn sha256_of_file(path: &Path) -> CommandResult<String> {
         .to_ascii_lowercase())
 }
 
+/// ModelScope (魔搭) mirrors HuggingFace repositories under the same
+/// `{org}/{repo}` path and answers `resolve/main/{file}`, so a host swap reaches
+/// the domestic CDN for the repos it carries — and 404s cheaply for those it
+/// does not. Verified against `microsoft/VibeVoice-ASR-BitNet`, whose two GGUFs
+/// match the pinned byte lengths exactly; a wrong or truncated artifact is still
+/// caught by `verify_and_install` before the file is promoted.
+fn modelscope_url(primary: &str) -> Option<String> {
+    Some(format!(
+        "https://modelscope.cn/models/{}",
+        primary.strip_prefix("https://huggingface.co/")?
+    ))
+}
+
 /// Produce the list of URLs to try, in order. Hugging Face (`huggingface.co`)
 /// is blocked or extremely slow from mainland China, so when the primary URL
 /// points there we also try the `hf-mirror.com` mirror which proxies the same
-/// repositories and is reachable domestically. Direct access is always
-/// attempted first so users outside China are unaffected.
-fn model_download_candidates(primary: &str) -> Vec<String> {
+/// repositories and is reachable domestically.
+///
+/// Domestic users START at the mirrors, ModelScope first: with the direct URL
+/// first, curl burned ~90 s (`--connect-timeout 20 --retry 3` against a
+/// blackholed host) before the mirror that actually answers ever ran. Everyone
+/// else keeps direct-first, so nothing changes outside China.
+fn model_download_candidates(primary: &str, region: &str) -> Vec<String> {
     let mirror = primary
         .replacen("https://huggingface.co/", "https://hf-mirror.com/", 1)
         .replacen("http://huggingface.co/", "https://hf-mirror.com/", 1);
-    if mirror != primary {
-        vec![primary.to_owned(), mirror]
+    if mirror == primary {
+        return vec![primary.to_owned()];
+    }
+    let modelscope = modelscope_url(primary);
+    if region == "cn" {
+        let mut list: Vec<String> = modelscope.into_iter().collect();
+        list.push(mirror);
+        list.push(primary.to_owned());
+        list
     } else {
-        vec![primary.to_owned()]
+        let mut list = vec![primary.to_owned(), mirror];
+        list.extend(modelscope);
+        list
     }
 }
 
@@ -1343,6 +1525,50 @@ fn resolve_content_length(candidates: &[String]) -> u64 {
     0
 }
 
+/// Bytes to keep free on top of a model download: the shared STT runtime
+/// (~135 MB archive, ~350 MB extracted on Windows) plus the intermediate
+/// 16/24 kHz WAV a long recording expands to during transcription (~126 MB for
+/// 44 minutes), plus room for the transcript store to grow.
+const DOWNLOAD_ALLOWANCE_BYTES: u64 = 640 * 1024 * 1024;
+
+/// Refuse a download the volume cannot hold, before curl fills the disk and
+/// takes the user's other apps with it. `Ok` when space is unknown: a platform
+/// without a free-space query must not be blocked by the check.
+fn ensure_disk_room(app: &AppHandle, entry: &SttModelEntry) -> CommandResult<()> {
+    let directory = engine_model_dir(app, entry.provider, entry.id)?;
+    // Files already on disk are skipped by the downloader, so only the missing
+    // ones count. Engines that download through their Python helper have no
+    // named artifacts, so their catalog size is the estimate.
+    let targets = model_download_targets(entry);
+    let pending: u64 = if targets.is_empty() {
+        entry.size_bytes
+    } else {
+        targets
+            .into_iter()
+            .filter(|(file_name, _, _, _)| !directory.join(file_name).exists())
+            .map(|(_, _, _, size)| size)
+            .sum()
+    };
+    if pending == 0 {
+        return Ok(());
+    }
+    let probe = if directory.exists() { directory } else {
+        app.path().app_data_dir().map_err(|error| error.to_string())?
+    };
+    let Some(free) = storage::free_bytes(&probe) else {
+        return Ok(());
+    };
+    let needed = pending + DOWNLOAD_ALLOWANCE_BYTES;
+    if free < needed {
+        return Err(format!(
+            "磁盘空间不足：需要约 {} MB（含离线转写组件），剩余 {} MB。请清理后重试，或改用更小的模型。",
+            needed / 1024 / 1024,
+            free / 1024 / 1024
+        ));
+    }
+    Ok(())
+}
+
 fn download_stt_model_file(app: &AppHandle, entry: &SttModelEntry) -> CommandResult<()> {
     let directory = engine_model_dir(app, entry.provider, entry.id)?;
     let targets = model_download_targets(entry);
@@ -1359,6 +1585,10 @@ fn download_stt_model_file(app: &AppHandle, entry: &SttModelEntry) -> CommandRes
         return Ok(());
     }
 
+    // Resolved once (cached in the process): it decides the candidate order, and
+    // a download must not pay the geo probe per file.
+    let region = detect_net_region();
+
     // Emit an immediate indeterminate signal so the UI reacts to the click
     // instead of sitting still while we probe each file's real size below.
     emit_download_progress(app, entry.provider, entry.id, 0, 0, None, "preparing", None);
@@ -1373,7 +1603,7 @@ fn download_stt_model_file(app: &AppHandle, entry: &SttModelEntry) -> CommandRes
             if *size > 0 {
                 *size
             } else {
-                resolve_content_length(&model_download_candidates(url))
+                resolve_content_length(&model_download_candidates(url, region))
             }
         })
         .collect();
@@ -1397,7 +1627,7 @@ fn download_stt_model_file(app: &AppHandle, entry: &SttModelEntry) -> CommandRes
     for ((file_name, url, sha256, _), &size) in pending.iter().zip(sizes.iter()) {
         let target = directory.join(file_name);
         let part = directory.join(format!("{file_name}.part"));
-        let candidates = model_download_candidates(url);
+        let candidates = model_download_candidates(url, region);
         let mut last_error = "模型下载失败".to_owned();
         let mut downloaded = false;
         for candidate in &candidates {
@@ -1832,9 +2062,6 @@ fn resolve_provider(app: &AppHandle, language: Option<&str>, per_note: Option<&s
 fn ensure_model_installed(app: &AppHandle, provider: &str, model_id: &str) -> CommandResult<()> {
     if !model_is_installed(app, provider, model_id) {
         return Err(match provider {
-            // FunASR is retired from the catalog; a stored funasr config can no
-            // longer run, so point the user at its replacement.
-            "funasr" => "FunASR 引擎已由 Qwen3-ASR 接替，请在设置中选择并下载新引擎".to_owned(),
             "qwen3" => "Qwen3-ASR 模型未安装，请先在设置中下载".to_owned(),
             _ => format!("STT 模型未安装：{provider}/{model_id}"),
         });
@@ -1918,13 +2145,21 @@ pub(crate) fn run_voiceprint_extraction(app: &AppHandle, audio_path: &str, candi
         "startMs": candidate.get("startMs").cloned().unwrap_or(Value::Null),
         "endMs": candidate.get("endMs").cloned().unwrap_or(Value::Null)
     })).collect();
+    // The segment list travels as a FILE. On a long recording it is tens of
+    // kilobytes of JSON, and Windows caps a child's command line at 32 K
+    // characters — passed inline, `CreateProcess` refused the spawn with
+    // `os error 206` right after a 20-minute transcription had finished.
+    let scratch = stt::ScratchDir::new()?;
+    let segments_file = scratch.join("segments.json");
+    let payload = serde_json::to_string(&segments).map_err(|error| error.to_string())?;
+    std::fs::write(&segments_file, payload)
+        .map_err(|error| format!("无法写入声纹分段文件：{error}"))?;
     // The sherpa-onnx bridge decodes audio with its own vendored ffmpeg and
     // prints a single JSON line, parsed by the shared parser below.
     let arguments = vec![
         sherpa_script_path(app)?.to_string_lossy().into_owned(), audio_path.to_owned(),
         "--model".to_owned(), sherpa_model_path(app)?.to_string_lossy().into_owned(),
-        "--segments-json".to_owned(),
-        serde_json::to_string(&segments).map_err(|error| error.to_string())?
+        "--segments-json-file".to_owned(), segments_file.to_string_lossy().into_owned(),
     ];
     embeddings_from_stdout(&run_sherpa(app, &arguments)?)
 }
@@ -1945,7 +2180,16 @@ fn apply_voiceprints(app: &AppHandle, audio_path: &str, segments: &mut [Value]) 
         .cloned().collect();
     if references.is_empty() { return Ok(()) }
 
-    let embeddings = run_voiceprint_extraction(app, audio_path, &candidates)?;
+    // Voiceprint matching is an enrichment over a transcript that already
+    // exists, so a bridge failure degrades to "no names" instead of failing the
+    // user's recording.
+    let embeddings = match run_voiceprint_extraction(app, audio_path, &candidates) {
+        Ok(embeddings) => embeddings,
+        Err(error) => {
+            log::warn!("[stt] 声纹匹配失败，保留转写结果：{error}");
+            return Ok(());
+        }
+    };
     let mut matches = HashMap::new();
     for candidate in candidates.iter() {
         let Some(id) = candidate.get("id").and_then(Value::as_str) else { continue };
@@ -2188,6 +2432,18 @@ fn transcribe_dual_tracks(
     Ok((transcript, merged, duration_ms, Value::Object(statuses)))
 }
 
+/// The audio language a record declares, if any. Absent is passed to the
+/// adapters as "detect": a record that never declared a language must not
+/// silently become an English transcription.
+fn record_language(record: &Value) -> Option<String> {
+    record
+        .get("language")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
 /// Transcribes one audio file with the record's frozen engine config.
 /// Returns (transcript text, segments, duration probe).
 fn transcribe_single_track(
@@ -2226,6 +2482,7 @@ fn transcribe_single_track(
         expected_speakers,
         hotword,
         prior_context,
+        language: record_language(record),
     };
     let output = provider.adapter().transcribe(app, &request)?;
     let normalized = json!({ "text": output.text, "segments": output.segments });
@@ -2241,8 +2498,23 @@ fn transcribe_single_track(
     Ok((transcript, segments, probe_audio_duration_ms(app, audio_path)))
 }
 
+/// Tell the UI that a local transcription record changed lifecycle status. A
+/// detached submit has no promise left to await (the upload dialog closes as
+/// soon as the job is queued), so the notes list refreshes — and the user learns
+/// the outcome — from this event. The title rides along so the notification
+/// names the recording even when the job finished long after the dialog closed.
+fn emit_transcription_update(app: &AppHandle, id: &str, title: &str, status: &str, error: Option<&str>) {
+    let _ = app.emit(
+        "local-transcription-updated",
+        json!({ "id": id, "title": title, "status": status, "error": error }),
+    );
+}
+
 fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
     let id = record.get("id").and_then(Value::as_str).ok_or("Record id is required")?.to_owned();
+    let engine = record.get("engine").and_then(Value::as_str).unwrap_or("unknown");
+    let model_id = record.get("modelId").and_then(Value::as_str).unwrap_or("unknown");
+    let title = record.get("title").and_then(Value::as_str).unwrap_or("unknown");
     let started_at = now();
     let mut started = Map::new();
     started.insert("status".to_owned(), json!("transcribing"));
@@ -2251,9 +2523,7 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
     started.insert("updatedAt".to_owned(), json!(started_at));
     started.insert("error".to_owned(), Value::Null);
     update_store_value(app, "local-transcriptions", &id, started)?;
-    let engine = record.get("engine").and_then(Value::as_str).unwrap_or("unknown");
-    let model_id = record.get("modelId").and_then(Value::as_str).unwrap_or("unknown");
-    let title = record.get("title").and_then(Value::as_str).unwrap_or("unknown");
+    emit_transcription_update(app, &id, title, "transcribing", None);
     log::info!("[stt] 转写开始：{title}（engine={engine} model={model_id} id={id}）");
 
     let result: CommandResult<(String, Vec<Value>, Option<i64>, Option<Value>)> =
@@ -2297,7 +2567,10 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
             }
             patch.insert("elapsedMs".to_owned(), json!(duration));
             patch.insert("error".to_owned(), Value::Null);
-            update_store_value(app, "local-transcriptions", &id, patch)?.ok_or("Local transcription record disappeared".to_owned())
+            let saved = update_store_value(app, "local-transcriptions", &id, patch)?
+                .ok_or("Local transcription record disappeared".to_owned())?;
+            emit_transcription_update(app, &id, title, "completed", None);
+            Ok(saved)
         }
         Err(error) => {
             log::error!("[stt] 转写失败：{title}（engine={engine}，{error}）");
@@ -2309,6 +2582,7 @@ fn transcribe_record(app: &AppHandle, record: Value) -> CommandResult<Value> {
             patch.insert("updatedAt".to_owned(), json!(failed_at));
             patch.insert("completedAt".to_owned(), json!(failed_at));
             let _ = update_store_value(app, "local-transcriptions", &id, patch);
+            emit_transcription_update(app, &id, title, "failed", Some(&error));
             Err(error)
         }
     }
@@ -2552,6 +2826,7 @@ fn transcribe_inspiration(app: &AppHandle, mut record: Value, audio_path: PathBu
             expected_speakers: provider.expected_speakers(),
             hotword,
             prior_context: None,
+            language: record_language(&record),
         };
         let output = provider.adapter().transcribe(app, &request)?;
         Ok(apply_hotwords(output.text, &terms))
@@ -2930,12 +3205,21 @@ fn local_stt_download_model(
 ) -> CommandResult<Value> {
     {
         let mut downloading = state.model_download_in_progress.lock().map_err(|_| "Model download lock is poisoned")?;
-        if *downloading { return model_status_list(&app); }
+        // One download at a time. Saying so beats returning the model list
+        // silently: the user's click otherwise looked accepted while doing
+        // nothing at all.
+        if *downloading {
+            return Err("已有一个模型正在下载，请等待它完成".to_owned());
+        }
         *downloading = true;
     }
     let result = (|| {
         let entry = stt_model_entry(&provider, &model_id)?;
         let total_bytes = entry.size_bytes;
+        if let Err(error) = ensure_disk_room(&app, entry) {
+            emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
+            return Err(error);
+        }
         if provider == "funasr" || provider == "mlx" || provider == "qwen3" || provider == "moss" || provider == "whisperx" {
             // FunASR, MLX and Qwen3 download through their Python helpers rather
             // than a fixed URL. The indeterminate event makes the UI react at
@@ -3127,6 +3411,26 @@ async fn local_transcription_transcribe(app: AppHandle, audio_path: String, opti
     tauri::async_runtime::spawn_blocking(move || transcribe_record(&handle, record))
         .await
         .map_err(|error| error.to_string())?
+}
+
+/// Queue a local transcription and start it WITHOUT waiting for the engine:
+/// returns the queued record at once, while progress and the terminal status
+/// arrive on `local-transcription-updated`. `local_transcription_transcribe`
+/// awaits the whole run, which pinned the upload modal to the engine's
+/// wall-clock time — ~19 minutes of CPU for a 43-minute recording.
+#[tauri::command]
+async fn local_transcription_start(app: AppHandle, audio_path: String, options: Option<Value>) -> CommandResult<Value> {
+    let record = create_queued_record(&app, &audio_path, options.as_ref())?;
+    save_store_value(&app, "local-transcriptions", record.clone())?;
+    let handle = app.clone();
+    let pending = record.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // The record holds the outcome (status + error) and `transcribe_record`
+        // announced both transitions on the event channel, so the returned
+        // Result has no second consumer here.
+        let _ = transcribe_record(&handle, pending);
+    });
+    Ok(record)
 }
 
 #[tauri::command]
@@ -4574,7 +4878,7 @@ pub fn run() {
             inspiration_voice::inspiration_voice_start, inspiration_voice::inspiration_voice_stop,
             inspiration_voice::inspiration_voice_cancel, inspiration_voice::inspiration_voice_state,
             local_stt_model_status, local_stt_download_model, local_stt_delete_model,
-            local_transcription_transcribe, local_transcription_retry, local_transcription_list_hotword_packages,
+            local_transcription_transcribe, local_transcription_start, local_transcription_retry, local_transcription_list_hotword_packages,
             local_transcription_save_hotword_package, local_transcription_delete_hotword_package,
             local_transcription_list_voiceprints, local_transcription_create_voiceprint,
             local_transcription_update_voiceprint, local_transcription_delete_voiceprint,
@@ -4698,6 +5002,92 @@ mod tests {
         assert_eq!(parse_range(Some("bytes=10-19"), 100), (10, 19, true));
         assert_eq!(parse_range(Some("bytes=10-"), 100), (10, 99, true));
         assert_eq!(parse_range(None, 100), (0, 99, false));
+    }
+
+    /// FunASR's retirement was enforced by three gates (no catalog entry, an
+    /// install refusal, a POSIX-only interpreter). This pins the catalog side so
+    /// the engine cannot silently vanish from the model list again.
+    #[test]
+    fn funasr_is_a_selectable_catalog_engine_downloadable_through_its_bridge() {
+        let entry = stt_model_entry("funasr", "funasr-paraformer").expect("funasr catalog entry");
+        assert_eq!(entry.provider, "funasr");
+        // Measured on disk after a real ModelScope download of the four models.
+        assert_eq!(entry.size_bytes, 2_218_608_047);
+        // The bridge downloads the bundle and marks it `.ready`, so there is no
+        // single named artifact — and no shared-runtime dependency.
+        assert!(model_download_targets(entry).is_empty());
+        assert!(stt::model_file_name("funasr", "funasr-paraformer").is_none());
+    }
+
+    /// The bridge labels speakers 0-based in `sentence_info[].spk`; the app must
+    /// carry every distinct one through, or FunASR's main advantage over the
+    /// whisper.cpp path (native diarization) is silently thrown away.
+    #[test]
+    fn normalize_funasr_preserves_the_bridge_speaker_labels() {
+        let raw = json!([{
+            "text": "甲。乙。",
+            "sentence_info": [
+                { "text": "甲。", "start": 0, "end": 1000, "spk": 0 },
+                { "text": "乙。", "start": 1000, "end": 2000, "spk": 2 },
+                { "text": "甲。", "start": 2000, "end": 3000, "spk": 0 },
+            ]
+        }]);
+        let normalized = normalize_funasr_output(raw);
+        let segments = normalized["segments"].as_array().cloned().unwrap_or_default();
+        assert_eq!(segments.len(), 3);
+        assert_eq!(segments[0]["speakerId"], "spk-1");
+        assert_eq!(segments[1]["speakerId"], "spk-3");
+        assert_eq!(segments[1]["speakerName"], "发言人3");
+        assert_eq!(segments[2]["speakerId"], "spk-1");
+    }
+
+    /// Replays the app's FunASR parsing over a real bridge transcript captured
+    /// on this machine, so a change to the bridge's output shape fails a test
+    /// instead of quietly producing an empty note. Skips unless
+    /// `LYNSE_FUNASR_TEST_OUTPUT` points at a captured stdout file.
+    #[test]
+    fn funasr_output_from_a_real_recording_parses_into_a_transcript() {
+        let Some(path) = std::env::var_os("LYNSE_FUNASR_TEST_OUTPUT").map(PathBuf::from) else {
+            eprintln!("skipping: set LYNSE_FUNASR_TEST_OUTPUT");
+            return;
+        };
+        let stdout = fs::read_to_string(&path).expect("read captured output");
+        let raw = parse_funasr_json(&stdout).expect("parse bridge json");
+        let root = raw.as_array().and_then(|items| items.first()).cloned().unwrap_or_else(|| raw.clone());
+        let normalized = normalize_funasr_output(raw);
+        let text = normalized.get("text").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let segments = normalized.get("segments").and_then(Value::as_array).cloned().unwrap_or_default();
+        eprintln!("funasr: {} chars, {} segments", text.chars().count(), segments.len());
+        assert!(text.chars().count() > 1000, "transcript unexpectedly short: {}", text.chars().count());
+        assert!(
+            text.chars().any(|ch| ('\u{4E00}'..='\u{9FFF}').contains(&ch)),
+            "expected Chinese speech: {}",
+            &text.chars().take(120).collect::<String>()
+        );
+        assert!(!segments.is_empty(), "the bridge produced no segments");
+        // Invariant against the real payload: whatever speaker count the bridge
+        // reported must survive normalization. Captured runs of this meeting have
+        // differed between one and ten speakers, so the count itself is not the
+        // assertion — losing the distinction is.
+        let bridge_speakers: Vec<&Value> = root
+            .get("sentence_info")
+            .and_then(Value::as_array)
+            .map(|sentences| sentences.iter().filter_map(|sentence| sentence.get("spk")).collect())
+            .unwrap_or_default();
+        let app_speakers: Vec<String> = segments
+            .iter()
+            .filter_map(|segment| segment.get("rawSpeaker").and_then(Value::as_str).map(str::to_owned))
+            .collect();
+        assert_eq!(
+            bridge_speakers.len(),
+            app_speakers.len(),
+            "sentences carrying a speaker label must all keep one"
+        );
+        assert_eq!(
+            bridge_speakers.iter().map(|value| value.to_string()).collect::<std::collections::HashSet<_>>().len(),
+            app_speakers.iter().cloned().collect::<std::collections::HashSet<_>>().len(),
+            "the bridge's speaker count must not collapse"
+        );
     }
 
     #[test]
@@ -4839,6 +5229,76 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    fn voice(id: &str, seconds: f64, vector: Vec<f64>) -> (String, f64, Option<Vec<f64>>) {
+        (id.to_owned(), seconds, Some(vector))
+    }
+
+    #[test]
+    fn cluster_gives_a_slice_too_short_to_attribute_the_previous_speaker() {
+        let entries = vec![
+            voice("a", 2.0, vec![1.0, 0.0]),
+            // A different voice, but 0.4 s carries too little to judge: it must
+            // not become a new person.
+            ("b".to_owned(), 0.4, Some(vec![0.0, 1.0])),
+            voice("c", 2.0, vec![1.0, 0.0]),
+            // The bridge returned nothing for this one — same treatment.
+            ("d".to_owned(), 3.0, None),
+        ];
+        let (assignment, clusters) = cluster_by_speaker(&entries);
+        assert_eq!(clusters, 1, "short and unanswered slices must not open clusters");
+        assert_eq!(assignment["b"], 0);
+        assert_eq!(assignment["d"], 0);
+    }
+
+    #[test]
+    fn cluster_separates_genuinely_different_voices() {
+        let entries = vec![
+            voice("a", 2.0, vec![1.0, 0.0]),
+            voice("b", 2.0, vec![0.98, 0.2]),
+            voice("c", 2.0, vec![0.0, 1.0]),
+            voice("d", 2.0, vec![0.2, 0.98]),
+        ];
+        let (assignment, clusters) = cluster_by_speaker(&entries);
+        assert_eq!(clusters, 2);
+        assert_eq!(assignment["a"], assignment["b"]);
+        assert_eq!(assignment["c"], assignment["d"]);
+        assert_ne!(assignment["a"], assignment["c"]);
+    }
+
+    /// Replays the clustering over the CAM++ embeddings of a real 44-minute
+    /// meeting and asserts it lands on a usable speaker count. The regression it
+    /// guards is the one that shipped: single-sample centroids plus the
+    /// verification threshold attributed that recording to 64 speakers.
+    ///
+    /// Skips unless `LYNSE_DIARIZATION_VECTORS` points at a JSON array of
+    /// `{id,seconds,embedding}` captured from a transcription run.
+    #[test]
+    fn cluster_on_real_meeting_embeddings_stays_in_a_usable_range() {
+        let Some(path) = std::env::var_os("LYNSE_DIARIZATION_VECTORS").map(PathBuf::from) else {
+            eprintln!("skipping: set LYNSE_DIARIZATION_VECTORS");
+            return;
+        };
+        let raw = fs::read_to_string(&path).expect("read vectors");
+        let parsed: Vec<Value> = serde_json::from_str(&raw).expect("json array");
+        let entries: Vec<(String, f64, Option<Vec<f64>>)> = parsed
+            .iter()
+            .map(|entry| {
+                (
+                    entry.get("id").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                    entry.get("seconds").and_then(Value::as_f64).unwrap_or_default(),
+                    entry.get("embedding").and_then(Value::as_array).map(|values| {
+                        values.iter().filter_map(Value::as_f64).collect::<Vec<_>>()
+                    }),
+                )
+            })
+            .collect();
+        let (_, clusters) = cluster_by_speaker(&entries);
+        eprintln!("replayed {} segments -> {clusters} speakers", entries.len());
+        assert!(!entries.is_empty(), "fixture had no segments");
+        assert!(clusters > 1, "a multi-speaker meeting must not collapse to one: {clusters}");
+        assert!(clusters <= 10, "over-split again (64 was the shipped failure): {clusters}");
+    }
+
     #[test]
     fn runtime_archive_name_matches_platform() {
         let name = runtime_archive_name();
@@ -4858,5 +5318,122 @@ mod tests {
             format!("https://mirror.ghproxy.com/https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"),
         ];
         assert_eq!(candidates, expected);
+    }
+
+    /// First-run simulation: fetch the runtime archive a brand-new install would
+    /// fetch for this app version, put it through the real
+    /// verify → extract → completeness-check → promote path, then execute the
+    /// binaries that land on disk.
+    ///
+    /// This is the part of the first-use flow that cannot be proven by unit
+    /// tests of its individual steps: a reachable mirror is not the same claim
+    /// as `tar` extracting a usable `whisper.exe` on this machine. `#[ignore]`d
+    /// because it pulls ~135 MB — run it after any change to the download,
+    /// extraction or packaging path:
+    ///   cargo test --lib -- --ignored --nocapture first_run
+    #[test]
+    #[ignore = "downloads the shared STT runtime (~135 MB)"]
+    fn first_run_downloads_installs_and_runs_the_runtime() {
+        let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+        let base = std::env::temp_dir().join(format!("lynse-first-run-{}", Uuid::new_v4().simple()));
+        let part = base.join("runtime.tar.gz.part");
+        let final_dir = base.join("runtime");
+        fs::create_dir_all(&base).expect("temp base");
+
+        let mut downloaded_from: Option<String> = None;
+        let mut attempted: Vec<String> = Vec::new();
+        for url in runtime_download_candidates(&version) {
+            attempted.push(url.clone());
+            let run = Command::new("curl")
+                .args([
+                    "-fL",
+                    "--retry",
+                    "3",
+                    "--connect-timeout",
+                    "20",
+                    "-o",
+                    part.to_string_lossy().as_ref(),
+                    &url,
+                ])
+                .status();
+            if matches!(run, Ok(status) if status.success()) && fs::metadata(&part).map(|m| m.len()).unwrap_or(0) > 0 {
+                downloaded_from = Some(url);
+                break;
+            }
+        }
+        let downloaded_from = downloaded_from.expect("every runtime candidate failed");
+        let archive_bytes = fs::metadata(&part).expect("archive").len();
+        // Local dev builds have no compiled-in SHA, so print the digest: a change
+        // here means the published archive was republished (for better or worse).
+        let digest = sha256_of_file(&part).unwrap_or_default();
+
+        // The production install path, including its completeness gate. A `None`
+        // SHA matches what a dev build does.
+        let install = install_runtime_archive(&part, &final_dir, None);
+
+        let mut whisper_ran = false;
+        let mut vibeasr_advertises_one_shot = false;
+        if install.is_ok() {
+            whisper_ran = Command::new(final_dir.join(stt::sidecar_binary_name_for("whisper", cfg!(windows))))
+                .arg("--help")
+                .output()
+                .map(|run| run.status.success())
+                .unwrap_or(false);
+            if let Ok(run) = Command::new(final_dir.join(stt::sidecar_binary_name_for("vibeasr", cfg!(windows))))
+                .arg("--help")
+                .output()
+            {
+                let help = format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&run.stdout),
+                    String::from_utf8_lossy(&run.stderr)
+                );
+                vibeasr_advertises_one_shot = stt::help_advertises_one_shot(&help);
+            }
+        }
+
+        fs::remove_dir_all(&base).ok();
+
+        if let Err(error) = install {
+            panic!("runtime install failed from {downloaded_from}: {error}");
+        }
+        assert!(archive_bytes > 1_000_000, "archive too small to be real: {archive_bytes}");
+        println!("runtime {version}: {archive_bytes} bytes from {downloaded_from}\n  sha256 {digest}");
+        assert!(whisper_ran, "the extracted whisper sidecar did not run");
+        // Not a test failure: the published archive is still shipping the one-shot
+        // CLI, which the client cannot drive. Printed so a republish is visible.
+        println!("  vibeasr is the one-shot (incompatible) build: {vibeasr_advertises_one_shot}");
+    }
+
+    #[test]
+    fn domestic_model_downloads_start_at_modelscope_not_huggingface() {
+        let primary = "https://huggingface.co/microsoft/VibeVoice-ASR-BitNet/resolve/main/vibeasr-vae-encoder-i8_s.gguf";
+        assert_eq!(
+            model_download_candidates(primary, "cn"),
+            vec![
+                "https://modelscope.cn/models/microsoft/VibeVoice-ASR-BitNet/resolve/main/vibeasr-vae-encoder-i8_s.gguf".to_owned(),
+                "https://hf-mirror.com/microsoft/VibeVoice-ASR-BitNet/resolve/main/vibeasr-vae-encoder-i8_s.gguf".to_owned(),
+                primary.to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn overseas_model_downloads_still_go_direct_first() {
+        let primary = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin";
+        assert_eq!(
+            model_download_candidates(primary, "global"),
+            vec![
+                primary.to_owned(),
+                "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin".to_owned(),
+                "https://modelscope.cn/models/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn non_huggingface_urls_are_not_rewritten() {
+        let primary = "https://example.com/updates/archive.tar.gz";
+        assert_eq!(model_download_candidates(primary, "cn"), vec![primary.to_owned()]);
     }
 }

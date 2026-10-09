@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_TIMEOUT};
 use windows::Win32::Media::Audio::{
-    IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator,
+    IAudioCaptureClient, IAudioClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator,
     AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR, AUDCLNT_SHAREMODE_SHARED,
     AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMOPTIONS_RAW,
 };
@@ -790,6 +790,11 @@ struct OpenedClient {
     raw_mode: bool,
     device_id: String,
     device_name: String,
+    /// WASAPI keeps the activated client alive through the endpoint object it
+    /// came from: releasing `IMMDevice` first leaves the client pointing at
+    /// freed memory, which faults inside MMDevApi.dll on the next call. Kept
+    /// as the last field so it is dropped after `client` and `capture`.
+    _device: IMMDevice,
 }
 
 impl Drop for OpenedClient {
@@ -882,6 +887,7 @@ fn open_client(
         raw_mode,
         device_id,
         device_name,
+        _device: device,
     })
 }
 

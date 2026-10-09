@@ -23,6 +23,7 @@ import type { PersistedLiveTranslationSettings } from "@lynse/views/live-transla
 import type {
   SttDownloadProgress,
   SttModelInfo,
+  LocalTranscriptionUpdate,
   TranscribeConfig,
   DesktopCloudSyncApi,
   DesktopVaultApi,
@@ -324,6 +325,7 @@ export async function installTauriBridge(): Promise<void> {
         return typeof selected === "string" ? selected : null;
       },
       transcribe: (audioPath: string, options?: unknown) => command("local_transcription_transcribe", { audioPath, options }),
+      start: (audioPath: string, options?: unknown) => command("local_transcription_start", { audioPath, options }),
       list: () => command("local_transcription_list"),
       get: (id: string) => command("local_transcription_get", { id }),
       retry: (id: string, options?: { track?: "mic" | "system" }) =>
@@ -339,6 +341,10 @@ export async function installTauriBridge(): Promise<void> {
         command<{ models: SttModelInfo[] }>("local_stt_delete_model", { provider, modelId }),
       onSttDownloadProgress: (callback: (progress: SttDownloadProgress) => void) =>
         getCurrentWebview().listen<SttDownloadProgress>("stt-download-progress", (event) =>
+          callback(event.payload),
+        ),
+      onTranscriptionUpdate: (callback: (update: LocalTranscriptionUpdate) => void) =>
+        getCurrentWebview().listen<LocalTranscriptionUpdate>("local-transcription-updated", (event) =>
           callback(event.payload),
         ),
       listHotwordPackages: () => command("local_transcription_list_hotword_packages"),

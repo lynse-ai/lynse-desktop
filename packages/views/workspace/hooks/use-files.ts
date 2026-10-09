@@ -1,9 +1,12 @@
+import { useEffect } from "react";
 import {
   useQuery,
   useMutation,
   useQueryClient,
   keepPreviousData,
 } from "@tanstack/react-query";
+import { useTranslation } from "@lynse/core/i18n/react";
+import { toast } from "sonner";
 import { api, ApiError } from "@lynse/core/api/client";
 import { getAuthStore, useAuthStore } from "@lynse/core/auth";
 import type {
@@ -1111,4 +1114,55 @@ export function useRerunSummary() {
       }
     },
   });
+}
+
+/**
+ * Keep the notes list in step with local transcription that runs in the
+ * background.
+ *
+ * `local_transcription_start` answers as soon as the job is queued so the upload
+ * dialog can close, while the engine keeps working for minutes (a 43-minute
+ * recording is ~19 minutes of CPU). Rust announces every lifecycle transition on
+ * `local-transcription-updated`; this is what refetches the list and tells the
+ * user the outcome once they have long since left the dialog.
+ *
+ * Mount it once, on the screen the user waits on — several copies would each
+ * refetch the list on the same event.
+ */
+export function useLocalTranscriptionUpdates() {
+  const qc = useQueryClient();
+  const { t } = useTranslation();
+
+  useEffect(() => {
+    const localApi = getDesktopLocalTranscriptionApi();
+    if (!localApi) return;
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    void localApi
+      .onTranscriptionUpdate((update) => {
+        qc.invalidateQueries({ queryKey: ["files"] });
+        qc.invalidateQueries({ queryKey: ["notes"] });
+        qc.invalidateQueries({ queryKey: ["file-transcription", update.id] });
+        // `transcribing` only moves the list; announcing a job the user just
+        // submitted would be noise.
+        if (update.status === "completed") {
+          toast.success(t("workspace.local_transcribe_done", { title: update.title }));
+        } else if (update.status === "failed") {
+          toast.error(t("workspace.local_transcribe_failed", { title: update.title }), {
+            description: update.error ?? undefined,
+          });
+        }
+      })
+      .then((fn) => {
+        // Tauri's unlisten is not idempotent, and the listen promise can resolve
+        // after unmount — call it then instead of leaking the handler.
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [qc, t]);
 }

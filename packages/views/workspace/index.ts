@@ -1,5 +1,6 @@
 export { WorkspaceLayout } from "./workspace-layout";
 export type {
+  LocalTranscriptionUpdate,
   SttDownloadProgress,
   SttModelInfo,
   SttProviderConfig,

@@ -16,17 +16,21 @@ export function isLocalTranscriptionActive({
   );
 }
 
-/** Detail-panel pill labels for the in-flight / failed states. A completed
+/** Translation keys for the in-flight / failed states, rendered as a pill in the
+ *  note's detail header and as the list row's spinner tooltip. A completed
  *  transcription gets no pill — completion is evident from the content. A
  *  `recorded` (audio-only) record gets none either: there is nothing
- *  transcribing to report. */
-export const LOCAL_STATUS_LABEL: Record<
+ *  transcribing to report.
+ *
+ *  Keys, not literals: these strings render in two components and had been
+ *  hardcoded Chinese, so they never reached the other four locales. */
+export const LOCAL_STATUS_LABEL_KEY: Record<
   Exclude<LocalTranscriptionStatus, "completed" | "recorded">,
   string
 > = {
-  queued: "排队中",
-  transcribing: "转写中",
-  failed: "失败",
-  recording: "录音中",
-  saving: "保存中",
+  queued: "workspace.local_status_queued",
+  transcribing: "workspace.local_status_transcribing",
+  failed: "workspace.local_status_failed",
+  recording: "workspace.local_status_recording",
+  saving: "workspace.local_status_saving",
 };

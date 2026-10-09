@@ -61,7 +61,7 @@ import {
   usePendingRecordingStore,
 } from "../live-translation/pending-recording-store";
 import { retryLocalTranscription } from "./local-transcription-retry";
-import { isLocalTranscriptionActive, LOCAL_STATUS_LABEL } from "./local-transcription-status";
+import { isLocalTranscriptionActive, LOCAL_STATUS_LABEL_KEY } from "./local-transcription-status";
 import { wrapCjkSpacing } from "./cjk-spacing";
 import { MilkdownViewer } from "./milkdown-viewer";
 import {
@@ -990,7 +990,7 @@ export function ContentPanel() {
                     effectiveLocalStatus !== "completed" &&
                     effectiveLocalStatus !== "recorded" && (
                       <span className="rounded-full bg-muted px-2 py-0.5 text-muted-foreground">
-                        {LOCAL_STATUS_LABEL[effectiveLocalStatus]}
+                        {t(LOCAL_STATUS_LABEL_KEY[effectiveLocalStatus])}
                       </span>
                     )}
                   {localStatus === "failed" && !selectedLocalRetrying && (
@@ -1000,7 +1000,7 @@ export function ContentPanel() {
                       className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
                       <RefreshCw className="size-3" />
-                      重试
+                      {t("workspace.retry")}
                     </button>
                   )}
                   <button
@@ -1042,6 +1042,11 @@ export function ContentPanel() {
                         ) : (
                           <div className="content-preview-inner" dangerouslySetInnerHTML={{ __html: wrapCjkSpacing(outlineBody) }} />
                         )
+                      ) : localTranscriptionActive ? (
+                        /* An outline cannot exist before the transcript does, so
+                           "暂无大纲" would read as a failure while a local job is
+                           still running. Same predicate as the 转写 tab. */
+                        <LocalTranscriptionPendingState retrying={selectedLocalRetrying} />
                       ) : (
                         <NoContentState label={t("workspace.no_outline")} />
                       )
@@ -1717,6 +1722,7 @@ function OfflineVaultView({ markdown }: { markdown: string }) {
 }
 
 function LocalTranscriptionPendingState({ retrying }: { retrying: boolean }) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-1 items-center justify-center py-12">
       <div className="flex flex-col items-center gap-3 text-center">
@@ -1726,8 +1732,12 @@ function LocalTranscriptionPendingState({ retrying }: { retrying: boolean }) {
           <Loader2 className="relative size-5 animate-spin text-primary" />
         </div>
         <div>
-          <p className="text-sm font-medium">{retrying ? "正在重新转写" : "正在本地转写"}</p>
-          <p className="mt-1 text-xs text-muted-foreground">FunASR 正在处理音频，请稍候</p>
+          <p className="text-sm font-medium">
+            {t(retrying ? "workspace.local_retranscribing" : "workspace.local_transcribing")}
+          </p>
+          {/* No engine name here: this panel serves every offline engine, and
+              naming one aged badly the moment it was retired. */}
+          <p className="mt-1 text-xs text-muted-foreground">{t("workspace.local_transcribing_hint")}</p>
         </div>
       </div>
     </div>

@@ -12,6 +12,16 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.1.10 (2026-10-09)
+
+### Fixed
+
+- Fixed cross-device sync for Records (quick notes): a note created on one computer now shows up on the other after opening the Records page. The cloud pull step was silently discarding incoming changes — uploading was never affected.
+
+### 修复
+
+- 修复「记录」跨设备同步：在一台电脑新建的记录，另一台打开记录页即可看到。此前云端拉取步骤会静默丢弃变更，上传一直正常。
+
 ## 1.1.9 (2026-10-08)
 
 ### Fixed

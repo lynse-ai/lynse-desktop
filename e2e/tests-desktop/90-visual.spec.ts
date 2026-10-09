@@ -38,7 +38,8 @@ test.describe("desktop visual baselines", () => {
 
   test("settings dialog", async ({ page, mockServer }) => {
     await openWorkspace(page, mockServer.url);
-    await page.getByRole("complementary").getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "E2", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
     await page.waitForTimeout(600);
     await expect(page).toHaveScreenshot("settings.png", { fullPage: false });

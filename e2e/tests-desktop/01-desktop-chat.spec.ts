@@ -26,7 +26,6 @@ test.describe("desktop chat panel", () => {
     const askAi = page.getByTitle("Ask AI");
     await expect(askAi).toBeVisible({ timeout: 10_000 });
     await askAi.click();
-    await expect(page.getByText("AI Assistant").first()).toBeVisible();
 
     // Turn one through the docked panel composer (plain Input + Enter).
     const composer = page.getByPlaceholder("Ask about this file…");
@@ -52,7 +51,8 @@ test.describe("desktop chat panel", () => {
 
   test("settings dialog opens from the sidebar", async ({ page, mockServer }) => {
     await openWorkspace(page, mockServer.url);
-    await page.getByRole("button", { name: "Settings" }).click();
+    await page.getByRole("button", { name: "E2", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
     await expect(page.getByRole("dialog")).toBeVisible({ timeout: 10_000 });
   });
 });

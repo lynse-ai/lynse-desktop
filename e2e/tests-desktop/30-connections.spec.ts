@@ -212,7 +212,7 @@ test.describe("connections contract", () => {
 });
 
 test.describe("connections UI", () => {
-  test("the section stays hidden while featureFlags.connections is off", async ({
+  test("the released section opens from Settings", async ({
     page,
     mockServer,
   }) => {
@@ -223,8 +223,8 @@ test.describe("connections UI", () => {
     await page.getByRole("menuitem", { name: "Settings" }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
 
-    // Flip packages/views/feature-flags.ts to `connections: true` and this
-    // assertion becomes the entry point for the row-level flow tests.
-    await expect(page.getByRole("button", { name: "Connections" })).toHaveCount(0);
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("button", { name: "Connections", exact: true }).click();
+    await expect(dialog.getByText("Feishu", { exact: true })).toBeVisible();
   });
 });

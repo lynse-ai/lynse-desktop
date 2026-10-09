@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -112,6 +113,14 @@ jobs:
   windows-audio:
     name: Windows capture engine check
     runs-on: windows-latest
+    # PR gate stays Linux-only: the two cargo passes are the slowest job and
+    # Windows-side results are verified locally before pushing. It still runs
+    # on every push to main, on demand, and on PRs labelled `windows-audio`
+    # when a capture-engine change genuinely needs the remote compile gate.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'windows-audio'))
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -359,6 +359,16 @@ pub fn install_device_notifications() -> bool {
         };
         let client: windows::Win32::Media::Audio::IMMNotificationClient =
             DeviceNotificationClient.into();
-        unsafe { enumerator.RegisterEndpointNotificationCallback(&client) }.is_ok()
+        if unsafe { enumerator.RegisterEndpointNotificationCallback(&client) }.is_err() {
+            return false;
+        }
+        // The enumerator calls back without owning a reference of its own, so
+        // releasing these leaves it dispatching into freed memory: the next
+        // device event becomes an indirect call through a dead vtable (CFG
+        // fastfail) or through whatever reused that block. The callback is
+        // never unregistered, so holding these for the whole process is the
+        // documented lifetime — one leaked pair of refs, by design.
+        std::mem::forget((enumerator, client));
+        true
     })
 }

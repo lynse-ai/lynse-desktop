@@ -24,6 +24,7 @@ import { FileRowContextMenu } from "../workspace/middle-panel/file-row-context-m
 import { DeleteConfirmDialog } from "../workspace/delete-confirm-dialog";
 import { filterWorkspaceFilesByFolder } from "../workspace/middle-panel/file-list-filter";
 import { LOCAL_TRANSCRIPTION_FOLDER_ID, isLocalFileId } from "../workspace/local-transcription";
+import { LOCAL_STATUS_LABEL_KEY } from "../workspace/local-transcription-status";
 import {
   pendingRecordingRecordId,
   usePendingRecordingStore,
@@ -1116,6 +1117,12 @@ function FileRow({
 }) {
   const { t } = useTranslation();
   const press = useLongPressSelection({ multiMode, onOpen, onToggleSelect, onLongPressSelect });
+  // A local transcription now runs detached from the upload dialog, so the row
+  // itself has to carry the in-flight state — otherwise a job that takes
+  // minutes is invisible until it finishes.
+  const status = file.localStatus;
+  const localBusy =
+    status === "queued" || status === "transcribing" || status === "recording" || status === "saving";
   return (
     <button
       {...press}
@@ -1139,7 +1146,11 @@ function FileRow({
         <h3 className="truncate text-sm font-semibold text-foreground" title={file.title}>{file.title}</h3>
         <NoteMetadata file={file} />
       </div>
-      {isSummarizing ? (
+      {localBusy ? (
+        <span className="ms-2 shrink-0" title={t(LOCAL_STATUS_LABEL_KEY[status!])}>
+          <Loader2 className="size-3.5 animate-spin text-primary" />
+        </span>
+      ) : isSummarizing ? (
         <span className="ms-2 shrink-0" title={t("workspace.summarizing")}>
           <Loader2 className="size-3.5 animate-spin text-primary" />
         </span>

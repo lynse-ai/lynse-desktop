@@ -11,7 +11,7 @@ import { startMockServer } from "../fixtures/mock-server";
 // links exist but the pages 404) — excluded until the routes ship.
 const routes: { path: string; proof: () => string }[] = [
   { path: "/home", proof: () => "h1, main, [role=main]" },
-  { path: "/chat", proof: () => "textarea" },
+  { path: "/chat", proof: () => 'textarea[placeholder^="Ask about your recordings"]' },
   { path: "/recordings", proof: () => "main, [role=main]" },
   { path: "/meetings", proof: () => "main, [role=main]" },
   { path: "/files", proof: () => "main, [role=main]" },
@@ -38,10 +38,7 @@ test("sidebar navigation reaches key sections", async ({ page }) => {
   await page.goto("/home");
   await expect(page.locator("main, [role=main]").first()).toBeVisible({ timeout: 20_000 });
   // Follow the sidebar to the chat section.
-  const chatLink = page.getByRole("link", { name: /chat/i }).first();
-  if (await chatLink.isVisible().catch(() => false)) {
-    await chatLink.click();
-    await expect(page.locator("textarea").first()).toBeVisible({ timeout: 20_000 });
-  }
+  await page.getByRole("complementary").getByRole("button", { name: "AI Chat", exact: true }).click();
+  await expect(page.getByPlaceholder("Ask about your recordings, meetings")).toBeVisible({ timeout: 20_000 });
   await server.close();
 });

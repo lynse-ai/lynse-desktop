@@ -735,6 +735,7 @@ function MarkdownAttachmentCard({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <button
         type="button"
+        onClick={() => onOpenChange(true)}
         className="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent"
       >
         <FileText className="size-3.5 shrink-0 text-muted-foreground" />

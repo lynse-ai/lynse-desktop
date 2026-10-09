@@ -14,7 +14,6 @@ import {
   useTranscriptionStatus,
   useRerunSummary,
   useTemplateCategories,
-  useLocalTranscriptionUpdates,
   isTranscriptionCompleted,
   NOTES_WIDE_WINDOW_START,
   notesWideWindowEnd,
@@ -492,10 +491,6 @@ export function NotesPage() {
       setVaultSyncing(false);
     }
   }, [vaultApi, vaultSyncing, vaultConfig?.enabled, sourceFiles, t]);
-
-  // Local transcription runs detached from the upload dialog; this is how the
-  // list learns about completion (and the user gets the outcome toast).
-  useLocalTranscriptionUpdates();
 
   const folderList: FolderInfo[] = Array.isArray(folders) ? folders : [];
   const currentFolderName = useMemo(() => {

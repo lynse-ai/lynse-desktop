@@ -58,6 +58,8 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
   const [uploadPct, setUploadPct] = useState(0);
   const [errorMsg, setErrorMsg] = useState("");
   const [dragOver, setDragOver] = useState(false);
+  const [localSubmitting, setLocalSubmitting] = useState(false);
+  const localSubmittingRef = useRef(false);
   // Desktop defaults to on-device transcription: keeping the audio local is the
   // safe assumption, and uploading to the cloud is the explicit choice. The web
   // build has no local engine, so it stays on cloud.
@@ -91,7 +93,7 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
     ? t("upload.membership_pending")
     : t("upload.membership_required");
 
-  const isProcessing = phase !== "idle" && phase !== "complete" && phase !== "error";
+  const isProcessing = localSubmitting || (phase !== "idle" && phase !== "complete" && phase !== "error");
 
   useEffect(() => {
     if (!open) return;
@@ -171,6 +173,7 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
 
   // Main upload pipeline
   const handleStart = useCallback(async () => {
+    if (localSubmittingRef.current) return;
     if (!hasSelectedSource) return;
     if (!useOfflineTranscription && !file) return;
     // Belt and braces: the cloud card is already disabled, but a keyboard or a
@@ -185,6 +188,9 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
     try {
       if (useOfflineTranscription) {
         if (!localAudioPath || !localApi) return;
+        // Lock before preflight awaits so rapid clicks cannot enqueue duplicates.
+        localSubmittingRef.current = true;
+        setLocalSubmitting(true);
         // Pre-flight: the resolved engine's model must be installed.
         const sttConfig = await localApi.getSttConfig().catch(() => ({ default: null, per_language: {} }));
         const { models } = await localApi.listSttModels().catch(() => ({ models: [] }));
@@ -265,6 +271,9 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
         isCreditsError ? t("upload.credits_insufficient") : t("upload.failed"),
         { description: isCreditsError ? undefined : msg },
       );
+    } finally {
+      localSubmittingRef.current = false;
+      setLocalSubmitting(false);
     }
   }, [file, transferFile, qc, t, reset, onOpenChange, hasSelectedSource, localApi, localAudioPath, useOfflineTranscription, expectedSpeakers, selectedHotwordPackageId, canCloud, cloudLockReason]);
 
@@ -317,14 +326,16 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
           )}
           {(phase === "idle" || phase === "error") && (
             <>
-              <Button variant="outline" onClick={() => handleClose(false)}>
+              <Button variant="outline" onClick={() => handleClose(false)} disabled={isProcessing}>
                 {t("upload.cancel")}
               </Button>
               <Button
                 onClick={handleStart}
-                disabled={!hasSelectedSource || (!useOfflineTranscription && !canCloud)}
+                disabled={isProcessing || !hasSelectedSource || (!useOfflineTranscription && !canCloud)}
               >
-                <Sparkles className="size-3.5 mr-1.5" />
+                {localSubmitting
+                  ? <Loader2 className="size-3.5 mr-1.5 animate-spin" />
+                  : <Sparkles className="size-3.5 mr-1.5" />}
                 {useOfflineTranscription ? t("upload.local_start") : t("upload.start")}
               </Button>
             </>

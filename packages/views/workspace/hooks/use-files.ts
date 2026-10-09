@@ -1126,8 +1126,8 @@ export function useRerunSummary() {
  * `local-transcription-updated`; this is what refetches the list and tells the
  * user the outcome once they have long since left the dialog.
  *
- * Mount it once, on the screen the user waits on — several copies would each
- * refetch the list on the same event.
+ * Mount it once in the dashboard shell so navigation does not drop job
+ * outcomes or leave cached lists stale. Multiple copies would duplicate toasts.
  */
 export function useLocalTranscriptionUpdates() {
   const qc = useQueryClient();
@@ -1140,6 +1140,7 @@ export function useLocalTranscriptionUpdates() {
     let disposed = false;
     void localApi
       .onTranscriptionUpdate((update) => {
+        if (disposed) return;
         qc.invalidateQueries({ queryKey: ["files"] });
         qc.invalidateQueries({ queryKey: ["notes"] });
         qc.invalidateQueries({ queryKey: ["file-transcription", update.id] });

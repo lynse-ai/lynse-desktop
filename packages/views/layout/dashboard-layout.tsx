@@ -6,6 +6,7 @@ import { AppTitleBar } from "./app-title-bar";
 import { CalendarReminderBanner } from "../connections";
 import { DndProvider } from "../workspace/dnd-provider";
 import { AboutDialog } from "../about/about-dialog";
+import { useLocalTranscriptionUpdates } from "../workspace/hooks/use-files";
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -16,6 +17,7 @@ interface DashboardLayoutProps {
 }
 
 export function DashboardLayout({ children, extra }: DashboardLayoutProps) {
+  useLocalTranscriptionUpdates();
   return (
     <DndProvider>
       {/* .lyse-shell: under light-mode vibrancy the CSS paints this shell with

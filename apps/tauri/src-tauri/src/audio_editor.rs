@@ -8,7 +8,7 @@
 // via `local-media://`, and available for offline transcription.
 
 use serde_json::{json, Value};
-use std::io::{BufRead, BufReader};
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -96,22 +96,38 @@ const STDERR_TAIL_LINES: usize = 12;
 /// it blocks on its next write and never exits — the job would sit at
 /// "processing" until the user cancels.
 fn read_stderr_tail(pipe: Option<std::process::ChildStderr>) -> Vec<String> {
-    let Some(pipe) = pipe else { return Vec::new() };
-    let mut lines: Vec<String> = Vec::new();
-    for line in BufReader::new(pipe).lines() {
-        let Ok(line) = line else { break };
-        // ffmpeg rewrites its progress line with `\r`, so only the text after
-        // the last one is the current status.
-        let current = line.rsplit('\r').next().unwrap_or_default().trim_end();
-        if current.is_empty() {
-            continue;
+    pipe.map(read_stderr_tail_from).unwrap_or_default()
+}
+
+fn read_stderr_tail_from(reader: impl Read) -> Vec<String> {
+    const MAX_LINE_BYTES: usize = 800;
+    let mut lines = Vec::new();
+    let mut current = Vec::new();
+    for byte in BufReader::new(reader).bytes() {
+        match byte {
+            Ok(b'\r' | b'\n') => push_stderr_line(&mut lines, &mut current),
+            Ok(byte) => {
+                if current.len() < MAX_LINE_BYTES {
+                    current.push(byte);
+                }
+            }
+            Err(_) => break,
         }
+    }
+    push_stderr_line(&mut lines, &mut current);
+    lines
+}
+
+fn push_stderr_line(lines: &mut Vec<String>, current: &mut Vec<u8>) {
+    let text = String::from_utf8_lossy(current);
+    let text = text.trim_end();
+    if !text.is_empty() {
         if lines.len() == STDERR_TAIL_LINES {
             lines.remove(0);
         }
-        lines.push(current.chars().take(200).collect());
+        lines.push(text.chars().take(200).collect());
     }
-    lines
+    current.clear();
 }
 
 /// Turn ffmpeg's tail into the user-facing failure. Without it every ffmpeg
@@ -121,7 +137,8 @@ fn ffmpeg_failure(lines: &[String]) -> String {
     if detail.is_empty() {
         return "FFmpeg 处理音频失败".to_owned();
     }
-    let bounded: String = detail.chars().take(400).collect();
+    let tail: Vec<char> = detail.chars().rev().take(400).collect();
+    let bounded: String = tail.into_iter().rev().collect();
     format!("FFmpeg 处理音频失败：{bounded}")
 }
 
@@ -498,6 +515,31 @@ mod tests {
         let message = ffmpeg_failure(&lines);
         let detail = message.split_once('：').unwrap().1;
         assert_eq!(detail.chars().count(), 400);
+    }
+
+    #[test]
+    fn stderr_tail_handles_carriage_return_progress_and_unterminated_errors() {
+        let progress = "frame=1\r".repeat(1000);
+        let input = format!("{progress}具体失败原因");
+        let lines = read_stderr_tail_from(input.as_bytes());
+        assert_eq!(lines.len(), STDERR_TAIL_LINES);
+        assert_eq!(lines.last().unwrap(), "具体失败原因");
+    }
+
+    #[test]
+    fn stderr_tail_bounds_a_line_without_delimiters() {
+        let input = format!("{}\nfinal error\n", "x".repeat(100_000));
+        let lines = read_stderr_tail_from(input.as_bytes());
+        assert_eq!(lines[0].chars().count(), 200);
+        assert_eq!(lines[1], "final error");
+    }
+
+    #[test]
+    fn ffmpeg_failure_preserves_the_final_error_after_long_progress() {
+        let mut lines = vec!["progress".repeat(25); STDERR_TAIL_LINES - 1];
+        lines.push("disk full".to_owned());
+        let error = ffmpeg_failure(&lines);
+        assert!(error.ends_with("disk full"));
     }
 
     #[test]

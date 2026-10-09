@@ -14,6 +14,7 @@ export function isEmptyAssistantPlaceholder(message: ChatMessage): boolean {
     message.role === "assistant" &&
     !message.content &&
     !message.workbuddyAuthRequired &&
+    !message.workbuddyStopReason &&
     !message.attachments?.length &&
     !message.connectionRequests?.length &&
     !message.sources?.length &&

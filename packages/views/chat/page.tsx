@@ -36,8 +36,8 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import {
   getWorkBuddyToken,
   isWorkBuddyNotBoundError,
-  pollWorkBuddyAuthorization,
-  startWorkBuddyAuthorization,
+  runWorkBuddyAuthorization,
+  workbuddyErrorCopy,
 } from "@lynse/core/auth/workbuddy";
 import { openExternalUrl, getDesktopAppApi } from "../app-update";
 import { useNavigation } from "../navigation";
@@ -57,6 +57,7 @@ import {
 } from "@lynse/ui/components/ui/popover";
 import { WaitingText } from "../workspace/hooks/waiting-text";
 import { ConfirmDialog } from "../workspace/ConfirmDialog";
+import { hasWorkBuddyAcpBridge, hasWorkBuddyCloudScopes } from "@lynse/core/workbuddy";
 import { isFreshlyRevealed } from "../workspace/chat-reveal";
 import { ChatAttachments } from "./chat-attachments";
 import { ChatConnectionCards } from "./chat-connection-cards";
@@ -173,6 +174,10 @@ export function ChatPage() {
     setActiveAssistant,
   } = useChat({ persistHistory: true });
   const isWorkBuddy = activeAssistant === "workbuddy";
+  const isWorkBuddyCloud = isWorkBuddy && hasWorkBuddyAcpBridge();
+  const showHistory = historyOpen && (!isWorkBuddy || isWorkBuddyCloud);
+  const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
+  const isLegacyWorkBuddy = isWorkBuddyCloud && activeConversation?.provider === "workbuddy" && !activeConversation.workbuddySession;
   // Active conversation's provider drives the per-message label/avatar (one
   // conversation never mixes providers, so a single lookup covers the buffer).
   const activeProvider = useMemo(
@@ -186,13 +191,13 @@ export function ChatPage() {
   // browser authorization flow the settings card runs, inline.
   const [wbAuth, setWbAuth] = useState<"unknown" | "ok" | "no">("unknown");
   const [wbAuthorizing, setWbAuthorizing] = useState(false);
-  const wbCancelPollRef = useRef(false);
+  const wbAuthorizeAttemptRef = useRef(0);
 
   const checkWorkBuddyAuth = useCallback(() => {
     let cancelled = false;
     getWorkBuddyToken()
       .then((info) => {
-        if (!cancelled) setWbAuth(info.authorized && !info.expired ? "ok" : "no");
+        if (!cancelled) setWbAuth(info.authorized && !info.expired && (!isWorkBuddyCloud || hasWorkBuddyCloudScopes(info.scope)) ? "ok" : "no");
       })
       .catch((error: unknown) => {
         // Unbound is the normal first-run state, not an error.
@@ -202,7 +207,7 @@ export function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isWorkBuddyCloud]);
 
   useEffect(() => {
     if (activeAssistant !== "workbuddy") return;
@@ -211,43 +216,54 @@ export function ChatPage() {
 
   // A turn that failed on authorization flips the banner on immediately.
   useEffect(() => {
-    if (isWorkBuddy && messages.some((m) => m.workbuddyAuthRequired)) setWbAuth("no");
+    if (isWorkBuddy && messages.findLast((message) => message.role === "assistant")?.workbuddyAuthRequired) setWbAuth("no");
   }, [messages, isWorkBuddy]);
 
   // Leaving the page cancels a running authorization poll.
   useEffect(
     () => () => {
-      wbCancelPollRef.current = true;
+      wbAuthorizeAttemptRef.current += 1;
     },
     [],
   );
 
   const startWorkBuddyAuthorize = useCallback(async () => {
     if (wbAuthorizing) return;
+    setWbAuthorizing(true);
+    const attempt = ++wbAuthorizeAttemptRef.current;
     try {
-      const { authorizeUrl } = await startWorkBuddyAuthorization();
-      if (getDesktopAppApi()) openExternalUrl(authorizeUrl);
-      else window.open(authorizeUrl, "_blank", "noopener");
-      setWbAuthorizing(true);
-      wbCancelPollRef.current = false;
-      try {
-        await pollWorkBuddyAuthorization({ isCancelled: () => wbCancelPollRef.current });
-        setWbAuth("ok");
-      } catch (error) {
-        if (!wbCancelPollRef.current) {
-          console.warn("[workbuddy-chat] authorization did not complete", error);
-          setWbAuth("no");
-        }
-      } finally {
-        setWbAuthorizing(false);
-      }
+      // Shared runner (same loop the settings card uses): the poll only
+      // resolves once the stored binding actually moves, so the banner flips
+      // to "ok" on a real consent, not on a stale pre-existing grant.
+      const grant = await runWorkBuddyAuthorization({
+        cloud: isWorkBuddyCloud,
+        openUrl: (url) => {
+          if (getDesktopAppApi()) openExternalUrl(url);
+          else window.open(url, "_blank", "noopener");
+        },
+        isCancelled: () => wbAuthorizeAttemptRef.current !== attempt,
+      });
+      if (wbAuthorizeAttemptRef.current !== attempt) return;
+      if (isWorkBuddyCloud && !hasWorkBuddyCloudScopes(grant.scope)) {
+        toast.error(t("workbuddy.cloud_scope_required"));
+        setWbAuth("no");
+      } else setWbAuth("ok");
     } catch (error) {
-      console.warn("[workbuddy-chat] could not start authorization", error);
+      if (wbAuthorizeAttemptRef.current === attempt) {
+        console.warn("[workbuddy-chat] authorization did not complete", error);
+        // The banner alone used to swallow the reason; surface it like the
+        // settings card does.
+        const copy = workbuddyErrorCopy(error, "workbuddy.err_failed");
+        toast.error(t(copy.key, copy.params));
+        setWbAuth("no");
+      }
+    } finally {
+      if (wbAuthorizeAttemptRef.current === attempt) setWbAuthorizing(false);
     }
-  }, [wbAuthorizing]);
+  }, [wbAuthorizing, isWorkBuddyCloud, t]);
 
   const cancelWorkBuddyAuthorize = useCallback(() => {
-    wbCancelPollRef.current = true;
+    wbAuthorizeAttemptRef.current += 1;
     setWbAuthorizing(false);
   }, []);
 
@@ -515,7 +531,7 @@ export function ChatPage() {
     if (isWorkBuddy) {
       // The WorkBuddy thread has no local context channel (mentions, files):
       // the turn is plain text, authorization is a precondition.
-      if (wbAuth === "no" || wbAuthorizing) return;
+      if (wbAuth !== "ok" || wbAuthorizing || isLegacyWorkBuddy) return;
       sendMessage(trimmedContent);
       setInput("");
       return;
@@ -635,7 +651,7 @@ export function ChatPage() {
         }
         titleAlign="center"
         middleToggle={
-          !isWorkBuddy
+          (!isWorkBuddy || isWorkBuddyCloud)
             ? {
                 collapsed: !historyOpen,
                 onToggle: () => setHistoryOpen((open) => !open),
@@ -645,7 +661,7 @@ export function ChatPage() {
             : undefined
         }
         actions={
-          !isWorkBuddy ? (
+          (!isWorkBuddy || isWorkBuddyCloud) ? (
             <Button
               variant="ghost"
               size="icon"
@@ -661,7 +677,7 @@ export function ChatPage() {
       />
 
       <AnimatePresence initial={false}>
-        {!isWorkBuddy && historyOpen && (
+        {showHistory && (
           <motion.aside
             key="history"
             initial={reduceMotion ? false : { x: "-100%" }}
@@ -671,7 +687,7 @@ export function ChatPage() {
             className="absolute bottom-0 left-0 top-0 z-20 flex w-56 flex-col border-r border-border/60"
           >
             <ChatHistorySidebar
-              conversations={conversations.filter((c) => c.provider !== "workbuddy")}
+              conversations={conversations.filter((c) => isWorkBuddy ? c.provider === "workbuddy" : c.provider !== "workbuddy")}
               activeConversationId={activeConversationId}
               workingConversationIds={workingConversationIds}
               onSelect={selectConversation}
@@ -685,8 +701,9 @@ export function ChatPage() {
         <main
           ref={scrollRef}
           onScroll={handleListScroll}
-          className={`${historyOpen ? "ml-56" : "ml-0"} h-full overflow-y-auto overscroll-contain transition-[margin] duration-150`}
+          className={`${showHistory ? "ml-56" : "ml-0"} h-full overflow-y-auto overscroll-contain transition-[margin] duration-150`}
         >
+        {isLegacyWorkBuddy && <p className="mx-auto max-w-4xl px-6 py-3 text-sm text-muted-foreground">{t("workbuddy.cloud_legacy_history")}</p>}
         {isWorkBuddy && wbAuth !== "ok" && (
           <div className="mx-auto w-full max-w-4xl px-6 pt-6">
             <div className="flex items-start gap-3 rounded-xl border border-border bg-card px-4 py-3.5">
@@ -742,7 +759,7 @@ export function ChatPage() {
             <EmptyChat
               icon={<WorkBuddy className="size-10 text-primary/70" />}
               title={t("chat.assistant_workbuddy")}
-              hint={t("chat.workbuddy_history_hint")}
+              hint={t(isWorkBuddyCloud ? "workbuddy.cloud_history_hint" : "chat.workbuddy_history_hint")}
             />
           ) : (
             <EmptyChat />
@@ -845,7 +862,7 @@ export function ChatPage() {
       </div>
 
       <div
-        className={`${historyOpen ? "ml-56" : "ml-0"} pointer-events-none shrink-0 bg-background/95 pb-3 pt-2 transition-[margin] duration-150 dark:bg-background/75 dark:backdrop-blur-xl`}
+        className={`${showHistory ? "ml-56" : "ml-0"} pointer-events-none shrink-0 bg-background/95 pb-3 pt-2 transition-[margin] duration-150 dark:bg-background/75 dark:backdrop-blur-xl`}
       >
         <div className="lyse-chat-column pointer-events-auto mx-auto w-full max-w-4xl px-6">
           {!isWorkBuddy && (
@@ -966,7 +983,7 @@ export function ChatPage() {
                   disabled={
                     !input.trim() ||
                     hasUploadingAttachments ||
-                    (isWorkBuddy && (wbAuth === "no" || wbAuthorizing))
+                    (isWorkBuddy && (wbAuth !== "ok" || wbAuthorizing || isLegacyWorkBuddy))
                   }
                   title={t("chat.send")}
                   aria-label={t("chat.send")}
@@ -1316,7 +1333,7 @@ function AssistantMessage({
         <div className="rounded-xl border border-border bg-card px-4 py-3">
           <p className="text-sm font-medium text-foreground">{t("chat.assistant_workbuddy")}</p>
           <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
-            {t("chat.workbuddy_not_authorized")}
+            {message.workbuddyAuthReason || t("chat.workbuddy_not_authorized")}
           </p>
           {onAuthorizeWorkBuddy && (
             <Button
@@ -1350,7 +1367,7 @@ function AssistantMessage({
             <div className="rounded-2xl rounded-tl-md border border-border bg-card px-4 py-3.5 text-sm leading-6 text-foreground shadow-sm">
               <StreamingMarkdown content={message.content} isStreaming={isStreaming} mode="minimal" />
             </div>
-          ) : message.attachments?.length || message.sources?.length || message.humanSupportLink?.url || message.connectionRequests?.length ? (
+          ) : message.attachments?.length || message.sources?.length || message.humanSupportLink?.url || message.connectionRequests?.length || message.workbuddyStopReason ? (
             // Attachment-only reply: the report-PDF turn empties the body
             // server-side and speaks through attachment cards, which render
             // below — keep the bubble body empty instead of spinning forever.
@@ -1371,6 +1388,13 @@ function AssistantMessage({
             </div>
           )}
         </>
+      )}
+
+      {message.workbuddyStopReason && message.workbuddyStopReason !== "end_turn" && (
+        <p className="mt-2 text-xs text-muted-foreground">{t(`workbuddy.cloud_stop_${
+          ["max_tokens", "max_turn_requests", "refusal", "cancelled"].includes(message.workbuddyStopReason)
+            ? message.workbuddyStopReason : "unknown"
+        }`)}</p>
       )}
 
       <div

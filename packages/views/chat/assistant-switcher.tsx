@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "@lynse/core/i18n/react";
+import { hasWorkBuddyAcpBridge } from "@lynse/core/workbuddy";
 import { cn } from "@lynse/ui/lib/utils";
 import {
   DropdownMenu,
@@ -30,7 +31,7 @@ export function AssistantSwitcher({
 
   const options: { id: ChatAssistant; label: string; icon: typeof Bot }[] = [
     { id: "lynse", label: t("chat.assistant_lynse"), icon: Bot },
-    { id: "workbuddy", label: t("chat.assistant_workbuddy"), icon: WorkBuddy },
+    { id: "workbuddy", label: t(hasWorkBuddyAcpBridge() ? "chat.assistant_workbuddy_cloud" : "chat.assistant_workbuddy"), icon: WorkBuddy },
   ];
   const current = options.find((option) => option.id === activeAssistant) ?? options[0]!;
 

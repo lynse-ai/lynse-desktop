@@ -315,19 +315,21 @@ export interface ChatMessage {
    * expired). Renders an inline authorize card instead of the error text.
    */
   workbuddyAuthRequired?: boolean;
+  workbuddyAuthReason?: string;
+  workbuddyStopReason?: string;
 }
 
 /**
  * Which backend serves a chat session. `"qoder"` is legacy: conversations
  * stored by the removed Qoder Cloud Agent channel keep the marker so old
- * histories still load; everything now runs on the cloud channel. `"workbuddy"`
- * is the single continuous WorkBuddy local-assistant thread.
+ * histories still load. `"workbuddy"` uses independent cloud tasks on desktop;
+ * old local-assistant histories have no workbuddySession marker.
  */
 export type ChatProvider = "cloud" | "qoder" | "workbuddy";
 
 /**
  * Which assistant the chat UI is talking to: the Lynse cloud channel
- * ("小灵助手") or the user's authorized WorkBuddy local assistant.
+ * ("小灵助手") or the user's authorized WorkBuddy assistant.
  */
 export type ChatAssistant = "lynse" | "workbuddy";
 
@@ -347,6 +349,13 @@ export interface ChatConversation {
   createdAt: number;
   updatedAt: number;
   qoderSession?: QoderChatSessionState;
+  /** Missing on legacy local-assistant history. Never contains credentials. */
+  workbuddySession?: WorkBuddyCloudSession;
+}
+
+export interface WorkBuddyCloudSession {
+  mode: "cloud";
+  taskId?: string;
 }
 
 export interface ChatAttachment {
@@ -357,6 +366,8 @@ export interface ChatAttachment {
   url?: string;
   downloadUrl?: string;
   thumbnailUrl?: string;
+  text?: string;
+  workbuddyArtifact?: { taskId: string; uri: string; revision?: string };
   /**
    * When the signed download URL expires (server-provided, often absent).
    * lynclaw signed URLs die after ~1h regardless; `id` (the artifact id)
@@ -387,6 +398,10 @@ export interface ChatConfirm {
   riskLevel?: string;
   /** Frozen context action fields shown to the user before authorization. */
   preview?: Record<string, ChatConfirmPreviewValue>;
+  workbuddy?: {
+    requestId: string | number;
+    questions?: { id: string; question: string; multiSelect: boolean; options: ChatConfirmOption[] }[];
+  };
 }
 
 export type ChatConfirmPreviewValue = string | number | boolean | null | ChatConfirmPreviewValue[] | { [key: string]: ChatConfirmPreviewValue };
@@ -418,8 +433,11 @@ export type ChatStreamEvent =
       attachments?: ChatAttachment[];
       humanSupportLink?: ChatHumanSupportLink;
       connectionRequests?: ConnectorConnectionRequest[];
+      workbuddyStopReason?: string;
     }
   | { type: "error"; message: string; /** True when the fix is re-authorizing WorkBuddy. */ workbuddyAuthRequired?: boolean }
+  | { type: "workbuddy_session"; session: WorkBuddyCloudSession }
+  | { type: "confirm_resolved"; requestId: string | number }
   /**
    * WorkBuddy transport: a server history message is now mirrored by a local
    * message (the assistant placeholder for "assistant", the just-sent user

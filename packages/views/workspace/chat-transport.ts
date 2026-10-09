@@ -5,6 +5,7 @@ import type {
   ChatConfirmOption,
   ChatAttachment,
   ChatHumanSupportLink,
+  WorkBuddyCloudSession,
 } from "./types";
 import { api, ApiError, normalizeConnectionRequest, type ConnectorConnectionRequest } from "@lynse/core/api";
 
@@ -17,6 +18,7 @@ export interface SendChatOptions {
   token?: string | null;
   /** `confirmation.confirmToken` of the card this turn answers, if any. */
   confirmToken?: string | null;
+  workbuddySession?: WorkBuddyCloudSession;
   onEvent: (event: ChatStreamEvent) => void;
   signal?: AbortSignal;
 }
@@ -30,6 +32,7 @@ export interface ChatTransport {
   readonly provider: ChatProvider;
   send(opts: SendChatOptions): Promise<void>;
   cancel(): void;
+  answerConfirmation?(confirm: ChatConfirm, value: string | null): Promise<void>;
 }
 
 /**

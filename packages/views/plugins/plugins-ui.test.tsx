@@ -264,7 +264,7 @@ describe("community model card uninstall guard (P4)", () => {
     );
   });
 
-  it("hides the MLX/venv-bound engine cards off macOS (Windows build)", async () => {
+  it("shows FunASR and sidecar engines while hiding macOS-only engines on Windows", async () => {
     sttPlatform.mac = false;
     mockLocalApi(
       { default: { provider: "whisper", model: "large-v3-turbo-q5_0" }, per_language: {} },
@@ -273,10 +273,8 @@ describe("community model card uninstall guard (P4)", () => {
     seedEntry("lynse.model.funasr-latest", true);
     render(<PluginCommunitySection />);
 
-    // Only the sidecar engines (whisper tiers + VibeVoice) are listed;
-    // funasr/qwen3/whisperx cannot even create their venvs on Windows, so
-    // their cards must not offer downloads.
-    expect(screen.queryByText("plugins.models.funasr.name")).toBeNull();
+    // Windows supports FunASR and the sidecar engines; Qwen3 and WhisperX remain macOS-only.
+    expect(await screen.findByText("plugins.models.funasr.name")).toBeTruthy();
     expect(screen.queryByText("plugins.models.qwen3Large.name")).toBeNull();
     expect(screen.queryByText("plugins.models.whisperx.name")).toBeNull();
     expect(await screen.findByText("plugins.models.whisperTurbo.name")).toBeTruthy();

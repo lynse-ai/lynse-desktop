@@ -4,6 +4,7 @@ import { clearListQueryCache } from "../query-persistence";
 import { AGENT_API_URL_STORAGE_KEY, agentUrlForApiUrl } from "../config";
 import type { StorageAdapter } from "../types/storage";
 import type { AuthSession } from "./session";
+import { clearWorkBuddyTokenCache } from "./workbuddy";
 import {
   buildWechatQrUrl,
   createWechatState,
@@ -73,6 +74,7 @@ export function createAuthStore(opts: AuthOpts) {
      * chosen at connect time (e.g. typed into the API-config page).
      */
     function persistSession(result: AuthSession, apiUrl?: string) {
+      clearWorkBuddyTokenCache();
       if (apiUrl) {
         opts.api.setBaseUrl(apiUrl);
         opts.storage.setItem("lynse_api_url", apiUrl);
@@ -153,6 +155,7 @@ export function createAuthStore(opts: AuthOpts) {
       persistSession(result, apiUrl),
 
     logout: () => {
+      clearWorkBuddyTokenCache();
       if (!opts.cookieAuth) {
         opts.storage.removeItem("lynse_api_key");
         opts.storage.removeItem("lynse_token");

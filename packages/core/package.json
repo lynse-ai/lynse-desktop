@@ -19,6 +19,7 @@
     "./auth/sms": "./auth/sms.ts",
     "./auth/wechat": "./auth/wechat.ts",
     "./auth/workbuddy": "./auth/workbuddy.ts",
+    "./workbuddy": "./workbuddy/index.ts",
     "./config": "./config/index.ts",
     "./navigation": "./navigation/index.ts",
     "./query-client": "./query-client.ts",

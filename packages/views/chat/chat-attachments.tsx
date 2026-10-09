@@ -20,6 +20,7 @@ import type { AttachmentDraft } from "./chat-attachment-upload";
 import { formatFileSize } from "./chat-attachment-upload";
 import type { ChatAttachment } from "../workspace/types";
 import { refreshAttachmentUrl } from "../workspace/chat-transport";
+import { fetchWorkBuddyArtifact } from "@lynse/core/workbuddy";
 
 function attachmentKind(
   attachment: ChatAttachment,
@@ -38,6 +39,7 @@ function attachmentKind(
 type DesktopDownloadBridge = {
   attachment?: {
     save?: (url: string, fileName: string) => Promise<{ path: string } | null>;
+    saveBytes?: (bytes: number[], fileName: string) => Promise<{ path: string } | null>;
     text?: (url: string) => Promise<string>;
   };
   openExternal?: (url: string) => Promise<void>;
@@ -49,6 +51,7 @@ type DesktopDownloadBridge = {
  * renderer fetch dies there (see `attachment_save` in the shell).
  */
 async function loadAttachmentText(url: string): Promise<string> {
+  if (/^(blob:|data:)/.test(url)) return (await fetch(url)).text();
   const desktop = (window as Window & { desktopAPI?: DesktopDownloadBridge }).desktopAPI;
   if (desktop?.attachment?.text) return desktop.attachment.text(url);
   const response = await fetch(url, { mode: "cors" });
@@ -70,6 +73,12 @@ async function downloadAttachment(
   savedMessage?: string,
 ): Promise<void> {
   const desktop = (window as Window & { desktopAPI?: DesktopDownloadBridge }).desktopAPI;
+  if (/^(blob:|data:)/.test(url) && desktop?.attachment?.saveBytes) {
+    const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
+    const saved = await desktop.attachment.saveBytes(Array.from(bytes), filename || "attachment");
+    if (saved && savedMessage) toast.success(savedMessage);
+    return;
+  }
   if (desktop?.attachment?.save) {
     try {
       const saved = await desktop.attachment.save(url, filename || "attachment");
@@ -112,17 +121,47 @@ function useAttachmentUrls(attachment: ChatAttachment) {
   );
   const [imgSrc, setImgSrc] = useState(attachment.thumbnailUrl || attachment.url || href);
   const attempted = useRef(false);
+  const ownedUrl = useRef<string | null>(null);
+  const generation = useRef(0);
+
+  useEffect(() => {
+    generation.current += 1;
+    attempted.current = false;
+    let url = attachment.downloadUrl || attachment.url || attachment.thumbnailUrl || "";
+    if (attachment.text !== undefined) {
+      url = URL.createObjectURL(new Blob([attachment.text], { type: "text/markdown;charset=utf-8" }));
+      ownedUrl.current = url;
+    }
+    setHref(url);
+    setImgSrc(attachment.thumbnailUrl || url);
+    return () => {
+      generation.current += 1;
+      if (ownedUrl.current) { URL.revokeObjectURL(ownedUrl.current); ownedUrl.current = null; }
+    };
+  }, [attachment.id, attachment.url, attachment.downloadUrl, attachment.thumbnailUrl, attachment.text, attachment.workbuddyArtifact?.revision]);
 
   const refresh = useCallback(async (): Promise<string | null> => {
     if (attempted.current) return null;
     attempted.current = true;
+    const requestGeneration = generation.current;
     let userId: string | null = null;
     try {
       userId = getAuthStore()?.getState().user?.id ?? null;
     } catch {
       userId = null; // auth store not registered (tests, early boot)
     }
-    const fresh = await refreshAttachmentUrl(attachment, { userId });
+    let fresh: string | null;
+    if (attachment.workbuddyArtifact) {
+      try {
+        const context = `${api().getBaseUrl()}|${api().getToken()}`;
+        const response = await fetchWorkBuddyArtifact(attachment.workbuddyArtifact.taskId, attachment.workbuddyArtifact.uri);
+        if (requestGeneration !== generation.current || context !== `${api().getBaseUrl()}|${api().getToken()}`
+          || userId !== (getAuthStore()?.getState().user?.id ?? null)) return null;
+        fresh = URL.createObjectURL(new Blob([new Uint8Array(response.bytes ?? [])], { type: response.mimeType || "application/octet-stream" }));
+        if (ownedUrl.current) URL.revokeObjectURL(ownedUrl.current);
+        ownedUrl.current = fresh;
+      } catch { attempted.current = false; return null; }
+    } else fresh = await refreshAttachmentUrl(attachment, { userId });
     if (fresh) {
       setHref(fresh);
       setImgSrc(fresh);
@@ -562,7 +601,11 @@ function AttachmentItem({
   const { t } = useTranslation();
   const [downloading, setDownloading] = useState(false);
   const { href, imgSrc, refresh } = useAttachmentUrls(attachment);
-  if (!href) return null;
+  if (!href) return attachment.workbuddyArtifact ? <button type="button"
+    className="flex items-center gap-2 rounded-lg border border-border p-3 text-sm"
+    onClick={() => void refresh().then((fresh) => { if (!fresh) toast.error(t("chat.attachment_preview_failed")); })}>
+    <FileText className="size-4 text-muted-foreground" />{attachment.name}<Download className="size-4 text-muted-foreground" />
+  </button> : null;
   const kind = attachmentKind(attachment);
   const name = attachment.name || "附件";
 
@@ -713,8 +756,9 @@ function MarkdownAttachmentCard({
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const [text, setText] = useState<string | null>(null);
+  const [text, setText] = useState<string | null>(attachment.text ?? null);
   const [failed, setFailed] = useState(false);
+  useEffect(() => { if (attachment.text !== undefined) setText(attachment.text); }, [attachment.text]);
 
   const onOpenChange = (next: boolean) => {
     setOpen(next);
@@ -735,6 +779,7 @@ function MarkdownAttachmentCard({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <button
         type="button"
+        onClick={() => onOpenChange(true)}
         className="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent"
       >
         <FileText className="size-3.5 shrink-0 text-muted-foreground" />

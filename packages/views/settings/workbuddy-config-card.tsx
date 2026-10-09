@@ -6,49 +6,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/u
 import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
 import {
+  clearWorkBuddyTokenCache,
   getWorkBuddyProfile,
   getWorkBuddyToken,
   isWorkBuddyNotBoundError,
-  pollWorkBuddyAuthorization,
-  startWorkBuddyAuthorization,
-  WORKBUDDY_ERROR,
-  WorkBuddyPollTimeoutError,
+  runWorkBuddyAuthorization,
+  workbuddyErrorCopy,
   type WorkBuddyProfile,
   type WorkBuddyTokenInfo,
 } from "@lynse/core/auth/workbuddy";
+import { hasWorkBuddyCloudScopes } from "@lynse/core/workbuddy";
 import { Loader2, RefreshCw, WorkBuddy } from "../icons";
 import { getDesktopAppApi, openExternalUrl } from "../app-update";
-
-/**
- * Structured error copy rendered with the real `t` so interpolation params
- * survive (the Feishu card's registerError uses the same shape). Known dotted
- * server keys map to dedicated lines; everything else interpolates the raw
- * message into the fallback, which carries an {{error}} slot.
- */
-type WorkBuddyErrorCopy = { key: string; params?: Record<string, unknown> };
-
-function workbuddyErrorCopy(error: unknown, fallbackKey: string): WorkBuddyErrorCopy {
-  if (error instanceof WorkBuddyPollTimeoutError) return { key: "workbuddy.err_timeout" };
-  const raw = error instanceof Error && error.message ? error.message.trim() : "";
-  switch (raw) {
-    case WORKBUDDY_ERROR.CONFIG_INVALID:
-      return { key: "workbuddy.err_config_invalid" };
-    case WORKBUDDY_ERROR.EXCHANGE_FAILED:
-      return { key: "workbuddy.err_exchange_failed" };
-    case WORKBUDDY_ERROR.STATE_INVALID:
-      return { key: "workbuddy.err_state_invalid" };
-    case WORKBUDDY_ERROR.NOT_BOUND:
-      return { key: "workbuddy.err_not_bound" };
-    case WORKBUDDY_ERROR.TOKEN_EXPIRED:
-      return { key: "workbuddy.err_token_expired" };
-    case WORKBUDDY_ERROR.CALLBACK_FAILED:
-      return { key: "workbuddy.err_callback_failed" };
-    case "system.error.busy":
-      return { key: "workbuddy.err_server_busy" };
-    default:
-      return { key: fallbackKey, params: { error: raw } };
-  }
-}
 
 /** WorkBuddy authorization status and (re-)authorization entry. The flow runs
  *  in the system browser; this card polls the backend until the ticket shows
@@ -60,17 +29,24 @@ export function WorkBuddyConfigCard() {
   /** WorkBuddy user profile (nickname/avatar), loaded when bound. */
   const [profile, setProfile] = useState<WorkBuddyProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<WorkBuddyErrorCopy | null>(null);
+  const [error, setError] = useState<ReturnType<typeof workbuddyErrorCopy> | null>(null);
   /** Non-null while the browser authorization is in flight and being polled. */
   const [authorizing, setAuthorizing] = useState(false);
-  const cancelPollRef = useRef(false);
+  const [stateReset, setStateReset] = useState(false);
+  const authorizeAttemptRef = useRef(0);
+  const statusReadRef = useRef(0);
 
   const loadStatus = useCallback(async () => {
+    const read = ++statusReadRef.current;
     setLoading(true);
     setError(null);
     try {
-      setInfo(await getWorkBuddyToken());
+      const result = await getWorkBuddyToken();
+      if (statusReadRef.current !== read) return;
+      setInfo(result);
+      setStateReset(false);
     } catch (e: unknown) {
+      if (statusReadRef.current !== read) return;
       // Unbound is the normal first-run state, not an error.
       if (isWorkBuddyNotBoundError(e)) {
         setInfo({ authorized: false });
@@ -78,9 +54,9 @@ export function WorkBuddyConfigCard() {
         setError(workbuddyErrorCopy(e, "workbuddy.status_refresh_failed"));
       }
     } finally {
-      setLoading(false);
+      if (statusReadRef.current === read) setLoading(false);
     }
-  }, [t]);
+  }, []);
 
   useEffect(() => {
     void loadStatus();
@@ -109,7 +85,8 @@ export function WorkBuddyConfigCard() {
   // Leaving the settings page cancels a running poll.
   useEffect(
     () => () => {
-      cancelPollRef.current = true;
+      authorizeAttemptRef.current += 1;
+      statusReadRef.current += 1;
     },
     [],
   );
@@ -117,44 +94,58 @@ export function WorkBuddyConfigCard() {
   async function handleAuthorize() {
     if (authorizing || loading) return;
     setError(null);
+    setAuthorizing(true);
+    const attempt = ++authorizeAttemptRef.current;
     try {
-      const { authorizeUrl } = await startWorkBuddyAuthorization();
-      // TEMP diagnostics: the backend's authorize URL scope param broke the
-      // callback (error.missing.parameters) after the scope change — remove
-      // once the server-side scope format is confirmed.
-      console.warn("[workbuddy] authorizeUrl:", authorizeUrl);
-      if (isDesktop) {
-        // The authorize page must open outside the app shell.
-        openExternalUrl(authorizeUrl);
-      } else {
-        window.open(authorizeUrl, "_blank", "noopener");
-      }
-      setAuthorizing(true);
-      cancelPollRef.current = false;
-      try {
-        const result = await pollWorkBuddyAuthorization({
-          isCancelled: () => cancelPollRef.current,
-        });
-        setInfo(result);
-        toast.success(t("workbuddy.authorize_success"));
-      } catch (e: unknown) {
-        if (!cancelPollRef.current) {
-          setError(workbuddyErrorCopy(e, "workbuddy.err_failed"));
-        }
-      } finally {
-        setAuthorizing(false);
-      }
+      // The shared runner snapshots the current binding first and the poll
+      // only resolves once that fingerprint moves — a stale pre-existing
+      // grant can no longer be mistaken for a completed re-consent.
+      const result = await runWorkBuddyAuthorization({
+        cloud: isDesktop,
+        openUrl: (url) => {
+          if (isDesktop) {
+            // The authorize page must open outside the app shell.
+            openExternalUrl(url);
+          } else {
+            window.open(url, "_blank", "noopener");
+          }
+        },
+        isCancelled: () => authorizeAttemptRef.current !== attempt,
+      });
+      if (authorizeAttemptRef.current !== attempt) return;
+      setInfo(result);
+      setStateReset(false);
+      if (isDesktop && !hasWorkBuddyCloudScopes(result.scope)) {
+        toast.error(t("workbuddy.cloud_scope_required"));
+      } else toast.success(t("workbuddy.authorize_success"));
     } catch (e: unknown) {
-      setError(workbuddyErrorCopy(e, "workbuddy.err_failed"));
+      if (authorizeAttemptRef.current === attempt) {
+        setError(workbuddyErrorCopy(e, "workbuddy.err_failed"));
+      }
+    } finally {
+      if (authorizeAttemptRef.current === attempt) setAuthorizing(false);
     }
   }
 
   function handleCancelAuthorize() {
-    cancelPollRef.current = true;
+    authorizeAttemptRef.current += 1;
     setAuthorizing(false);
   }
 
+  function handleResetState() {
+    authorizeAttemptRef.current += 1;
+    statusReadRef.current += 1;
+    clearWorkBuddyTokenCache();
+    setAuthorizing(false);
+    setLoading(false);
+    setInfo(null);
+    setProfile(null);
+    setError(null);
+    setStateReset(true);
+  }
+
   const bound = !!info?.authorized;
+  const needsCloudScope = isDesktop && bound && !hasWorkBuddyCloudScopes(info?.scope);
 
   return (
     <Card>
@@ -169,12 +160,14 @@ export function WorkBuddyConfigCard() {
                 : "ms-auto rounded-full bg-muted px-2 py-0.5 text-2xs font-medium text-muted-foreground"
             }
           >
-            {bound ? t("workbuddy.status_bound") : t("workbuddy.status_unbound")}
+            {stateReset ? t("workbuddy.status_reset") : needsCloudScope ? t("workbuddy.status_scope_required") : bound ? t("workbuddy.status_bound") : t("workbuddy.status_unbound")}
           </span>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-2xs leading-relaxed text-muted-foreground">{t("workbuddy.hint")}</p>
+        {stateReset && <p role="status" className="text-2xs leading-relaxed text-muted-foreground">{t("workbuddy.reset_hint")}</p>}
+        {needsCloudScope && <p className="text-2xs leading-relaxed text-destructive">{t("workbuddy.cloud_scope_required")}</p>}
 
         {error && (
           <p className="text-2xs leading-relaxed text-destructive">
@@ -236,7 +229,7 @@ export function WorkBuddyConfigCard() {
           </div>
         )}
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {authorizing ? (
             <Button size="sm" variant="outline" className="h-8 text-xs" onClick={handleCancelAuthorize}>
               {t("workbuddy.authorize_cancel")}
@@ -264,6 +257,9 @@ export function WorkBuddyConfigCard() {
               <RefreshCw className="size-3.5" />
             )}
             {t("workbuddy.refresh")}
+          </Button>
+          <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={handleResetState}>
+            {t("workbuddy.reset_state")}
           </Button>
         </div>
       </CardContent>

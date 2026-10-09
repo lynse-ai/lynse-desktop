@@ -9,6 +9,23 @@ vi.mock("@lynse/core/i18n/react", () => ({ useTranslation: () => ({ t: (key: str
 afterEach(() => cleanup());
 
 describe("context confirmation preview", () => {
+  it("requires answers for all WorkBuddy questions and submits single, multi and custom values", () => {
+    const select = vi.fn();
+    render(<ConfirmDialog onSelect={select} onDismiss={vi.fn()} confirm={{ question: "Choose", options: [], workbuddy: {
+      requestId: "questions-1", questions: [
+        { id: "q_0", question: "Single", multiSelect: false, options: [{ label: "A", value: "A" }] },
+        { id: "q_1", question: "Multiple", multiSelect: true, options: [{ label: "X", value: "X" }, { label: "Y", value: "Y" }] },
+      ],
+    } }} />);
+    const submit = screen.getByRole("button", { name: "workbuddy.cloud_submit" });
+    expect(submit.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByRole("radio", { name: "A" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "X" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Y" }));
+    fireEvent.change(screen.getByRole("textbox", { name: /^Single / }), { target: { value: "Custom" } });
+    fireEvent.click(submit);
+    expect(select).toHaveBeenCalledWith(JSON.stringify({ q_0: "Custom", q_1: ["X", "Y"] }));
+  });
   it("renders frozen scope, source, intent, criteria and monitoring choices in the actual dialog", () => {
     const preview = {
       目标: "Release project A", 动作: "create", 关联会议: [{ title: "Review meeting", source_id: "meeting-1" }],

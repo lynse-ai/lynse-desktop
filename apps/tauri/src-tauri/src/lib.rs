@@ -4826,6 +4826,7 @@ pub fn run() {
         .manage(LiveTranslationManager::default())
         .manage(meeting_detector::MeetingDetectorHandle::default())
         .manage(feishu::FeishuHandle::default())
+        .manage(workbuddy::WorkBuddyAcpState::default())
         .register_asynchronous_uri_scheme_protocol("local-media", |context, request, responder| {
             // WKURLSchemeHandler fires this on the MAIN thread; a long
             // meeting's WAV is 100+ MB, so the file read must leave the main
@@ -4893,6 +4894,9 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
+                let connections = window.state::<workbuddy::WorkBuddyAcpState>().inner().clone();
+                let owner = window.label().to_string();
+                tauri::async_runtime::spawn(async move { connections.close_owner(&owner).await; });
                 // All windows destroyed is what makes Tauri exit the app with
                 // no other trace (e.g. a WebView2 browser-process crash takes
                 // every webview window down at once) — log it so the "app
@@ -4976,6 +4980,11 @@ pub fn run() {
             webdav::webdav_config_get, webdav::webdav_config_save, webdav::webdav_set_password,
             webdav::webdav_test_connection, webdav::webdav_sync_now, webdav::webdav_put_notes,
             workbuddy::workbuddy_openapi,
+            workbuddy::workbuddy_acp_open,
+            workbuddy::workbuddy_acp_post,
+            workbuddy::workbuddy_acp_close,
+            workbuddy::workbuddy_cloud_resource,
+            workbuddy::workbuddy_cloud_save_bytes,
             feishu::feishu_config_get, feishu::feishu_config_save, feishu::feishu_config_reset,
             bots::bot_config_get, bots::bot_config_save, bots::bot_reset, bots::bot_start,
             bots::bot_stop, bots::bot_state,

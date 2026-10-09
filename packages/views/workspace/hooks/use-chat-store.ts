@@ -1,5 +1,9 @@
 import { create } from "zustand";
+import i18next from "i18next";
 import { api } from "@lynse/core/api";
+import { clearWorkBuddyTokenCache } from "@lynse/core/auth/workbuddy";
+import { hasWorkBuddyAcpBridge } from "@lynse/core/workbuddy";
+import { WorkBuddyCloudChatTransport } from "../workbuddy-cloud-chat-transport";
 import type {
   ChatAssistant,
   ChatMessage,
@@ -188,10 +192,11 @@ function makeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-/** The single continuous WorkBuddy thread (locally: newest one wins). */
+/** Restore the newest conversation for the host's WorkBuddy mode. */
 function latestWorkBuddyConversation(conversations: ChatConversation[]): ChatConversation | undefined {
   return conversations
-    .filter((c) => c.provider === "workbuddy")
+    .filter((c) => c.provider === "workbuddy" && (hasWorkBuddyAcpBridge()
+      ? c.workbuddySession?.mode === "cloud" : !c.workbuddySession))
     .sort((a, b) => b.updatedAt - a.updatedAt)[0];
 }
 
@@ -259,6 +264,7 @@ interface ChatStoreState {
   activeAssistant: ChatAssistant;
   /** Cloud conversation to restore when switching back from WorkBuddy. */
   lastCloudConversationId: string | null;
+  lastWorkBuddyConversationId: string | null;
   pendingConfirm: { messageId: string; confirm: ChatConfirm } | null;
   /** Conversations with a reply currently streaming (active + background). */
   workingConversationIds: string[];
@@ -302,6 +308,7 @@ interface ChatRun {
 
 // Engine state that doesn't need to trigger re-renders — kept at module scope.
 const runs = new Map<string, ChatRun>();
+const historyLoads = new Map<string, AbortController>();
 let hydrated = false;
 let switchingAccount = false;
 
@@ -483,6 +490,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           // Poll delivers the whole answer at once — let the UI play its
           // two-phase reveal (text first, attachments/cards after).
           revealedAt: Date.now(),
+          workbuddyStopReason: evt.workbuddyStopReason,
         }));
         // Confirm dialogs only pop for the conversation on screen; a
         // background conversation's choice menu stays as plain text until
@@ -534,6 +542,15 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         writeMessage((m) => ({ ...m, confirm: evt.confirm }));
         if (isActive()) set({ pendingConfirm: { messageId: assistantId, confirm: evt.confirm } });
         break;
+      case "workbuddy_session":
+        setConversations((prev) => prev.map((conversation) => conversation.id === conversationId
+          ? { ...conversation, workbuddySession: evt.session } : conversation));
+        break;
+      case "confirm_resolved":
+        writeMessage((message) => message.confirm?.workbuddy?.requestId === evt.requestId
+          ? { ...message, confirm: undefined } : message);
+        if (get().pendingConfirm?.confirm.workbuddy?.requestId === evt.requestId) set({ pendingConfirm: null });
+        break;
       case "workbuddy_seen": {
         // Mirror the server message id onto the local message so thread
         // catch-ups skip what a live turn already rendered.
@@ -569,6 +586,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           content: evt.workbuddyAuthRequired ? m.content : m.content || `Error: ${evt.message}`,
           error: true,
           workbuddyAuthRequired: evt.workbuddyAuthRequired || m.workbuddyAuthRequired,
+          workbuddyAuthReason: evt.workbuddyAuthRequired ? evt.message : m.workbuddyAuthReason,
           status: undefined,
         }));
         break;
@@ -600,10 +618,14 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       return;
     }
 
-    // Resolve the turn's conversation. WorkBuddy is a single continuous
-    // thread: reuse it when it exists instead of starting a new conversation.
+    // Desktop WorkBuddy owns independent cloud tasks. Legacy local history
+    // stays readable and is never silently repurposed as a cloud session.
     let conversationId = get().activeConversationId;
     const currentConv = get().conversations.find((c) => c.id === conversationId);
+    if (assistant === "workbuddy" && hasWorkBuddyAcpBridge() && currentConv?.provider === "workbuddy" && !currentConv.workbuddySession) {
+      toast.error(i18next.t("workbuddy.cloud_legacy_history"));
+      return;
+    }
     const currentMatches =
       assistant === "workbuddy"
         ? currentConv?.provider === "workbuddy"
@@ -635,6 +657,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           title: conversationTitle(content),
           messages: [],
           provider: assistant === "workbuddy" ? "workbuddy" : "cloud",
+          workbuddySession: assistant === "workbuddy" && hasWorkBuddyAcpBridge() ? { mode: "cloud" } : undefined,
           createdAt: now,
           updatedAt: now,
         };
@@ -645,6 +668,8 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       }
     }
 
+    historyLoads.get(conversationId)?.abort();
+    historyLoads.delete(conversationId);
     const assistantId = makeId("assistant");
     const userMsg: ChatMessage = {
       id: makeId("user"),
@@ -668,7 +693,9 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     set({ isLoading: true });
 
     const transport: ChatTransport =
-      assistant === "workbuddy" ? new WorkBuddyChatTransport() : new PollChatTransport();
+      assistant === "workbuddy"
+        ? hasWorkBuddyAcpBridge() ? new WorkBuddyCloudChatTransport() : new WorkBuddyChatTransport()
+        : new PollChatTransport();
     const controller = new AbortController();
     runs.set(conversationId, { conversationId, assistantId, transport, controller });
     syncRunState();
@@ -713,6 +740,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         userSpecifiedFile: hasContextFiles,
         token: readLynseToken(),
         confirmToken,
+        workbuddySession: get().conversations.find((conversation) => conversation.id === conversationId)?.workbuddySession,
         signal: controller.signal,
         onEvent: (evt) => {
           if (controller.signal.aborted || get().userId !== userId) return;
@@ -738,11 +766,15 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         // WorkBuddy authorize card) keeps the message.
         const emptyPlaceholder = (m: ChatMessage) =>
           m.id === assistantId && isEmptyAssistantPlaceholder(m);
-        setMessages((prev) => prev.filter((m) => !emptyPlaceholder(m)));
+        const settle = (m: ChatMessage): ChatMessage => m.id === assistantId ? {
+          ...m, status: undefined, thinkingActive: false, toolUses: closeRunningTools(m.toolUses),
+          confirm: m.confirm?.workbuddy ? undefined : m.confirm,
+        } : m;
+        setMessages((prev) => prev.filter((m) => !emptyPlaceholder(m)).map(settle));
         setConversations((prev) =>
           prev.map((c) =>
             c.id === conversationId
-              ? { ...c, messages: c.messages.filter((m) => !emptyPlaceholder(m)) }
+              ? { ...c, messages: c.messages.filter((m) => !emptyPlaceholder(m)).map(settle) }
               : c,
           ),
         );
@@ -769,6 +801,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     activeConversationId: null,
     activeAssistant: "lynse",
     lastCloudConversationId: null,
+    lastWorkBuddyConversationId: null,
     pendingConfirm: null,
     workingConversationIds: [],
     unreadCounts: {},
@@ -782,6 +815,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       if (get().userId === nextUserId) return;
       switchingAccount = true;
       try {
+        clearWorkBuddyTokenCache();
         if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
         syncActiveConversation();
         if (get().userId) saveChatHistoryNow();
@@ -790,9 +824,11 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           run.transport.cancel();
         }
         runs.clear();
+        for (const controller of historyLoads.values()) controller.abort();
+        historyLoads.clear();
         hydrated = false;
         set({ userId: nextUserId, messages: [], conversations: [], activeConversationId: null,
-          activeAssistant: "lynse", lastCloudConversationId: null, pendingConfirm: null,
+          activeAssistant: "lynse", lastCloudConversationId: null, lastWorkBuddyConversationId: null, pendingConfirm: null,
           workingConversationIds: [], unreadCounts: {}, isLoading: false });
         for (const notification of useNotificationStore.getState().items) {
           if (notification.type === "chat") useNotificationStore.getState().remove(notification.id);
@@ -818,10 +854,11 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       // own thread on screen and a background catch-up for missed replies.
       const assistant = loadAssistantChoice(userId);
       if (assistant === "workbuddy") {
-        const wb = latestWorkBuddyConversation(history.conversations);
+        const wb = active?.provider === "workbuddy" ? active : latestWorkBuddyConversation(history.conversations);
         set({
           activeAssistant: "workbuddy",
-          lastCloudConversationId: history.activeConversationId,
+          lastCloudConversationId: active?.provider !== "workbuddy" ? history.activeConversationId : latestCloudConversation(history.conversations)?.id ?? null,
+          lastWorkBuddyConversationId: wb?.id ?? null,
           activeConversationId: wb?.id ?? null,
           messages: wb?.messages ?? [],
         });
@@ -839,31 +876,77 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           currentConv && currentConv.provider !== "workbuddy"
             ? currentConv.id
             : get().lastCloudConversationId;
-        const wb = latestWorkBuddyConversation(get().conversations);
+        const wb = get().conversations.find((conversation) => conversation.id === get().lastWorkBuddyConversationId)
+          ?? latestWorkBuddyConversation(get().conversations);
+        const pending = wb?.messages.findLast((message) => message.confirm && (!message.confirm.workbuddy || runs.has(wb.id)));
         set({
           activeAssistant: "workbuddy",
           lastCloudConversationId: lastCloudId,
+          lastWorkBuddyConversationId: wb?.id ?? null,
           activeConversationId: wb?.id ?? null,
           messages: wb?.messages ?? [],
-          pendingConfirm: null,
+          pendingConfirm: pending?.confirm ? { messageId: pending.id, confirm: pending.confirm } : null,
+          isLoading: wb ? runs.has(wb.id) : false,
         });
         void get().syncWorkBuddyThread();
       } else {
+        const current = get().conversations.find((conversation) => conversation.id === get().activeConversationId);
         const cloudId = get().lastCloudConversationId;
         const conv = cloudId
           ? get().conversations.find((c) => c.id === cloudId && c.provider !== "workbuddy")
           : undefined;
         set({
           activeAssistant: "lynse",
+          lastWorkBuddyConversationId: current?.provider === "workbuddy" ? current.id : get().lastWorkBuddyConversationId,
           activeConversationId: conv?.id ?? null,
           messages: conv?.messages ?? [],
           pendingConfirm: null,
+          isLoading: conv ? runs.has(conv.id) : false,
         });
       }
     },
 
     syncWorkBuddyThread: async () => {
       if (get().activeAssistant !== "workbuddy") return;
+      if (hasWorkBuddyAcpBridge()) {
+        const conv = get().conversations.find((entry) => entry.id === get().activeConversationId);
+        const taskId = conv?.workbuddySession?.taskId;
+        if (!conv || !taskId || runs.has(conv.id) || historyLoads.has(conv.id)) return;
+        const userId = get().userId;
+        const controller = new AbortController();
+        historyLoads.set(conv.id, controller);
+        try {
+          const history = await new WorkBuddyCloudChatTransport().loadHistory(taskId, controller.signal);
+          const current = get().conversations.find((entry) => entry.id === conv.id);
+          if (controller.signal.aborted || get().userId !== userId || runs.has(conv.id)
+            || current?.workbuddySession?.taskId !== taskId) return;
+          if (!history.messages.length && !history.attachments.length) return;
+          const old = current.messages;
+          const messages: ChatMessage[] = history.messages.map((entry, index) => {
+            const previous = old[index]?.role === entry.role ? old[index] : undefined;
+            return {
+              id: previous?.id ?? makeId("wb"), role: entry.role, content: entry.content,
+              timestamp: previous?.timestamp ?? Date.now() + index,
+              serverId: entry.serverId ?? `workbuddy:${taskId}:replay:${index}`,
+              workbuddyStopReason: previous?.content === entry.content ? previous.workbuddyStopReason : undefined,
+            };
+          });
+          if (history.attachments.length) {
+            let last = messages.findLast((entry) => entry.role === "assistant");
+            if (!last) {
+              last = { id: makeId("wb"), role: "assistant", content: "", timestamp: Date.now() };
+              messages.push(last);
+            }
+            last.attachments = history.attachments;
+          }
+          set((state) => ({
+            messages: state.activeConversationId === conv.id ? messages : state.messages,
+            conversations: state.conversations.map((entry) => entry.id === conv.id ? { ...entry, messages } : entry),
+          }));
+        } catch { /* Cached history remains available when the cloud is offline. */ }
+        finally { if (historyLoads.get(conv.id) === controller) historyLoads.delete(conv.id); }
+        return;
+      }
       // A live turn owns the thread view; its own polling covers new messages.
       const inFlight = latestWorkBuddyConversation(get().conversations);
       if (inFlight && runs.has(inFlight.id)) return;
@@ -955,6 +1038,13 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     },
 
     answerConfirm: (messageId, value) => {
+      const message = get().messages.find((entry) => entry.id === messageId);
+      if (message?.confirm?.workbuddy) {
+        const run = get().activeConversationId ? runs.get(get().activeConversationId!) : undefined;
+        if (run?.assistantId !== messageId || !run.transport.answerConfirmation) return;
+        void run.transport.answerConfirmation(message.confirm, value).catch((error: unknown) => toast.error(errorMessage(error)));
+        return;
+      }
       // The card's confirmToken must ride along as `confirm_token`, or the
       // backend treats the tap as a fresh question instead of a card answer.
       const confirmToken =
@@ -965,6 +1055,13 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     },
 
     dismissConfirm: (messageId) => {
+      const message = get().messages.find((entry) => entry.id === messageId);
+      if (message?.confirm?.workbuddy) {
+        const run = get().activeConversationId ? runs.get(get().activeConversationId!) : undefined;
+        if (run?.assistantId !== messageId || !run.transport.answerConfirmation) return;
+        void run.transport.answerConfirmation(message.confirm, null).catch((error: unknown) => toast.error(errorMessage(error)));
+        return;
+      }
       setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, confirm: undefined } : m)));
       set({ pendingConfirm: null });
     },
@@ -976,6 +1073,19 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       if (!run) return;
       run.transport.cancel();
       run.controller.abort();
+      const settle = (messages: ChatMessage[]) => messages
+        .filter((message) => message.id !== run.assistantId || !isEmptyAssistantPlaceholder(message))
+        .map((message) => message.id === run.assistantId ? {
+          ...message, status: undefined, thinkingActive: false, toolUses: closeRunningTools(message.toolUses),
+          confirm: message.confirm?.workbuddy ? undefined : message.confirm,
+        } : message);
+      setMessages(settle);
+      setConversations((conversations) => conversations.map((conversation) => conversation.id === activeId
+        ? { ...conversation, messages: settle(conversation.messages) } : conversation));
+      // Local stop must not depend on a remote cancel or stream close reply.
+      runs.delete(activeId!);
+      syncRunState();
+      set({ pendingConfirm: null });
     },
 
     clearMessages: () => {
@@ -983,7 +1093,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       // and writes into its own conversation — the user can stop it from the
       // composer after switching back to that conversation. WorkBuddy has a
       // single continuous server thread, so "new chat" does not apply there.
-      if (get().activeAssistant === "workbuddy") return;
+      if (get().activeAssistant === "workbuddy" && !hasWorkBuddyAcpBridge()) return;
       set({
         activeConversationId: null,
         messages: [],
@@ -1000,7 +1110,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       if (!conversation) return;
       // Picking the WorkBuddy thread is an assistant switch, not a
       // conversation switch — it carries its own provider everywhere.
-      if (conversation.provider === "workbuddy") {
+      if (conversation.provider === "workbuddy" && !hasWorkBuddyAcpBridge()) {
         get().setActiveAssistant("workbuddy");
         return;
       }
@@ -1010,14 +1120,22 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         const unreadCounts = { ...s.unreadCounts };
         delete unreadCounts[conversationId];
         return {
+          activeAssistant: conversation.provider === "workbuddy" ? "workbuddy" : "lynse",
+          lastCloudConversationId: conversation.provider !== "workbuddy" ? conversationId : s.lastCloudConversationId,
+          lastWorkBuddyConversationId: conversation.provider === "workbuddy" ? conversationId : s.lastWorkBuddyConversationId,
           activeConversationId: conversationId,
           messages: conversation.messages,
-          pendingConfirm: null,
+          pendingConfirm: (() => {
+            const pending = conversation.messages.findLast((message) => message.confirm && (!message.confirm.workbuddy || runs.has(conversationId)));
+            return pending?.confirm ? { messageId: pending.id, confirm: pending.confirm } : null;
+          })(),
           unreadCounts,
           isLoading: s.workingConversationIds.includes(conversationId),
         };
       });
+      saveAssistantChoice(get().userId, get().activeAssistant);
       useNotificationStore.getState().markRead(`chat:${conversationId}`);
+      if (conversation.workbuddySession?.taskId) void get().syncWorkBuddyThread();
     },
 
     openLatestUnread: (preferredConversationId) => {

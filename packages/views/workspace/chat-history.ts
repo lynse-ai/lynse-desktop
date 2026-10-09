@@ -36,6 +36,10 @@ function isConversation(value: unknown): value is ChatConversation {
     typeof conversation.updatedAt === "number" &&
     Array.isArray(conversation.messages) &&
     conversation.messages.every(isChatMessage) &&
+    (conversation.workbuddySession === undefined ||
+      (conversation.provider === "workbuddy" && conversation.workbuddySession?.mode === "cloud" &&
+        (conversation.workbuddySession.taskId === undefined ||
+          (typeof conversation.workbuddySession.taskId === "string" && !!conversation.workbuddySession.taskId)))) &&
     (conversation.qoderSession === undefined ||
       (typeof conversation.qoderSession.sessionId === "string" &&
         conversation.qoderSession.sessionId.startsWith("sess_") &&
@@ -47,10 +51,14 @@ function isConversation(value: unknown): value is ChatConversation {
 
 function messagesForStorage(messages: ChatMessage[]): ChatMessage[] {
   return messages
-    .filter((message) => message.role !== "assistant" || !!message.content || !!message.error || !!message.connectionRequests?.length)
+    .filter((message) => message.role !== "assistant" || !!message.content || !!message.error || !!message.connectionRequests?.length || !!message.attachments?.length || !!message.workbuddyStopReason)
     // `status` is transient progress; `revealedAt` is the one-shot reveal
     // marker — neither belongs in persisted history.
-    .map(({ status: _status, revealedAt: _revealedAt, ...message }) => message);
+    .map(({ status: _status, revealedAt: _revealedAt, ...message }) => ({
+      ...message,
+      // A saved permission cannot answer a request on a closed connection.
+      confirm: message.confirm?.workbuddy ? undefined : message.confirm,
+    }));
 }
 
 export function conversationTitle(firstMessage: string): string {
@@ -111,6 +119,9 @@ export function saveChatHistory(userId: string, history: StoredChatHistory): voi
   const conversations = history.conversations.map((conversation) => ({
     ...conversation,
     messages: messagesForStorage(conversation.messages),
+    workbuddySession: conversation.workbuddySession ? {
+      mode: "cloud" as const, taskId: conversation.workbuddySession.taskId,
+    } : undefined,
   }));
   try {
     window.localStorage.setItem(

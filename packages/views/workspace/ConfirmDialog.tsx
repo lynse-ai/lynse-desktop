@@ -1,5 +1,8 @@
 "use client";
 
+import { useState } from "react";
+import { Input } from "@lynse/ui/components/ui/input";
+
 import {
   Dialog,
   DialogContent,
@@ -27,7 +30,7 @@ interface ConfirmDialogProps {
 export function ConfirmDialog({ confirm, onSelect, onDismiss }: ConfirmDialogProps) {
   const { t } = useTranslation();
   const open = !!confirm;
-  const preview = confirm?.kind?.startsWith("context_") ? confirm.preview : undefined;
+  const preview = confirm?.kind?.startsWith("context_") || confirm?.workbuddy ? confirm?.preview : undefined;
   const formatPreview = (value: ChatConfirmPreviewValue): string => {
     if (value === null || value === "" || (Array.isArray(value) && value.length === 0)) return t("notifications.context_unspecified");
     if (typeof value === "boolean") return t(value ? "notifications.context_enabled" : "notifications.context_disabled");
@@ -67,7 +70,9 @@ export function ConfirmDialog({ confirm, onSelect, onDismiss }: ConfirmDialogPro
           </dl>
         )}
 
-        <div className="flex flex-col gap-2">
+        {confirm?.workbuddy?.questions?.length ? (
+          <WorkBuddyQuestions key={String(confirm.workbuddy.requestId)} confirm={confirm} onSelect={onSelect} />
+        ) : <div className="flex flex-col gap-2">
           {confirm?.options.map((opt, i) => (
             <Button
               key={`${opt.value}-${i}`}
@@ -78,7 +83,7 @@ export function ConfirmDialog({ confirm, onSelect, onDismiss }: ConfirmDialogPro
               {opt.label}
             </Button>
           ))}
-        </div>
+        </div>}
 
         <div className="flex justify-end">
           <DialogClose render={<Button variant="ghost" size="sm" />}>
@@ -88,4 +93,48 @@ export function ConfirmDialog({ confirm, onSelect, onDismiss }: ConfirmDialogPro
       </DialogContent>
     </Dialog>
   );
+}
+
+function WorkBuddyQuestions({ confirm, onSelect }: { confirm: ChatConfirm; onSelect: (value: string) => void }) {
+  const { t } = useTranslation();
+  const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
+  const [custom, setCustom] = useState<Record<string, string>>({});
+  const questions = confirm.workbuddy?.questions ?? [];
+  const complete = questions.every((question) => {
+    const answer = answers[question.id];
+    return !!custom[question.id]?.trim() || (question.multiSelect ? Array.isArray(answer) && answer.length > 0 : typeof answer === "string" && !!answer.trim());
+  });
+  return <form className="max-h-[55vh] space-y-4 overflow-y-auto" onSubmit={(event) => {
+    event.preventDefault();
+    if (!complete) return;
+    const result = Object.fromEntries(questions.map((question) => {
+      const freeText = custom[question.id]?.trim();
+      const answer = answers[question.id];
+      return [question.id, question.multiSelect
+        ? [...(Array.isArray(answer) ? answer : []), ...(freeText ? [freeText] : [])]
+        : freeText || answer];
+    }));
+    onSelect(JSON.stringify(result));
+  }}>
+    {questions.map((question) => <fieldset key={question.id} className="space-y-2">
+      <legend className="mb-2 text-sm font-medium">{question.question}</legend>
+      {question.options.map((option) => <label key={option.value} className="flex cursor-pointer items-start gap-2 rounded-md border border-border p-2 text-sm">
+        <input type={question.multiSelect ? "checkbox" : "radio"} name={question.id} className="mt-0.5 accent-primary"
+          checked={question.multiSelect ? Array.isArray(answers[question.id]) && answers[question.id]!.includes(option.value) : answers[question.id] === option.value && !custom[question.id]}
+          onChange={(event) => {
+            if (!question.multiSelect) setCustom((previous) => ({ ...previous, [question.id]: "" }));
+            setAnswers((previous) => {
+              const current = Array.isArray(previous[question.id]) ? previous[question.id] as string[] : [];
+              return { ...previous, [question.id]: question.multiSelect
+                ? event.target.checked ? [...current, option.value] : current.filter((value) => value !== option.value)
+                : option.value };
+            });
+          }} />
+        <span>{option.label}</span>
+      </label>)}
+      <Input aria-label={`${question.question} ${t("workbuddy.cloud_answer_placeholder")}`} placeholder={t("workbuddy.cloud_answer_placeholder")}
+        value={custom[question.id] ?? ""} onChange={(event) => setCustom((previous) => ({ ...previous, [question.id]: event.target.value }))} />
+    </fieldset>)}
+    <Button type="submit" disabled={!complete} className="w-full">{t("workbuddy.cloud_submit")}</Button>
+  </form>;
 }

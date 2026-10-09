@@ -6,6 +6,31 @@ import { conversationTitle, loadChatHistory, saveChatHistory } from "./chat-hist
 afterEach(() => window.localStorage.clear());
 
 describe("AI chat history", () => {
+  it("keeps cloud task mappings and artifact-only replies, stripping tickets and stale approvals", () => {
+    const session = { mode: "cloud" as const, taskId: "remote-task", token: "never-persist", link: "never-persist" };
+    saveChatHistory("wb", { activeConversationId: "cloud-task", conversations: [{
+      id: "cloud-task", title: "WorkBuddy", provider: "workbuddy", createdAt: 1, updatedAt: 2, workbuddySession: session,
+      messages: [
+        { id: "files", role: "assistant", content: "", timestamp: 1, attachments: [{ name: "plan.md", type: "markdown", text: "# Plan" }],
+          confirm: { question: "Approve", options: [], workbuddy: { requestId: "expired-request" } } },
+        { id: "refusal", role: "assistant", content: "", timestamp: 2, workbuddyStopReason: "refusal" },
+      ],
+    }] });
+    const loaded = loadChatHistory("wb").conversations[0]!;
+    expect(loaded.workbuddySession).toEqual({ mode: "cloud", taskId: "remote-task" });
+    expect(loaded.messages.map((message) => message.id)).toEqual(["files", "refusal"]);
+    expect(loaded.messages[0]?.confirm).toBeUndefined();
+    expect(window.localStorage.getItem("lynse_ai_chat_history_v1:wb")).not.toContain("never-persist");
+    expect(window.localStorage.getItem("lynse_ai_chat_history_v1:wb")).not.toContain("expired-request");
+  });
+  it("keeps legacy WorkBuddy history distinct and rejects malformed cloud mappings", () => {
+    const legacy = { id: "legacy", title: "Old", provider: "workbuddy", createdAt: 1, updatedAt: 2, messages: [] };
+    window.localStorage.setItem("lynse_ai_chat_history_v1:wb", JSON.stringify({ conversations: [legacy,
+      { ...legacy, id: "invalid", workbuddySession: { mode: "cloud", taskId: 42 } },
+    ] }));
+    expect(loadChatHistory("wb").conversations.map((conversation) => conversation.id)).toEqual(["legacy"]);
+    expect(loadChatHistory("wb").conversations[0]?.workbuddySession).toBeUndefined();
+  });
   it("persists conversations per user and removes transient progress", () => {
     saveChatHistory("user-1", {
       activeConversationId: "conversation-1",

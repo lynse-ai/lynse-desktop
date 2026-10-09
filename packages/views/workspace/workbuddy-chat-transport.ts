@@ -1,7 +1,10 @@
+import i18next from "i18next";
 import type { ChatAttachment } from "./types";
 import {
   callWorkBuddyOpenApi,
+  getWorkBuddyOnlineStatus,
   WORKBUDDY_ERROR,
+  WorkBuddyRateLimitError,
 } from "@lynse/core/auth/workbuddy";
 import type { ChatTransport, SendChatOptions } from "./chat-transport";
 import { chatPollTiming, safeSliceEnd } from "./chat-transport";
@@ -10,11 +13,20 @@ import { chatPollTiming, safeSliceEnd } from "./chat-transport";
  * WorkBuddy local-assistant chat transport (OpenAPI v2).
  *
  * The local assistant exposes no push channel and no per-turn task id —
- * a turn is: `POST /localassistant/message`, then short-poll the shared
+ * a turn is: `POST /localassistant/message`, then poll the shared
  * `GET /localassistant/message` history until the assistant's reply lands.
- * The history stream is continuous across turns (and devices), so the turn
- * snapshots the newest server message ids BEFORE posting and only considers
- * messages past that baseline.
+ * Polls use the documented incremental mode (`?message_id=<cursor>` returns
+ * only later messages) so a turn costs one small request per tick instead of
+ * re-downloading the whole window; the full-window `?limit=50` shape remains
+ * the fallback while no cursor is known (baseline read failed). The history
+ * stream is continuous across turns (and devices), so the turn snapshots the
+ * newest server message id BEFORE posting and only considers messages past
+ * that cursor — the id set stays as a second dedup line for servers that
+ * ignore the parameter.
+ *
+ * Before posting, the assistant's online status is probed (`GET
+ * /localassistant`): a message to an offline desktop client is never
+ * answered, so the user would poll to the deadline for nothing.
  *
  * Server message ids are mirrored onto the local messages through
  * `workbuddy_seen` events: the later thread catch-up dedupes against them,
@@ -35,9 +47,17 @@ export const workbuddyChatTiming = {
   /** Quiet gap after the last reply fragment before the turn is "done". */
   graceMs: 4_000,
   maxNetworkFailures: 5,
+  /** Extra backoff after a rate-limited poll (not counted as a failure). */
+  rateLimitWaitMs: 4_000,
 };
 
 const HISTORY_PATH = "/localassistant/message";
+
+/** Localize at emit time; falls back to the zh copy when i18next has not
+ *  been initialized yet (bare unit tests, pre-init windows). */
+function wt(key: string, fallback: string): string {
+  return i18next.isInitialized ? i18next.t(key) : fallback;
+}
 
 export interface WorkBuddyServerMessage {
   message_id?: string;
@@ -127,6 +147,40 @@ export function normalizeWorkBuddyAttachments(raw: unknown): ChatAttachment[] {
     .filter((a): a is ChatAttachment => a != null);
 }
 
+/**
+ * Heuristic permission-request marker: the documented `permission_response`
+ * answer format is keyed by `requestId`, and the incoming request metadata
+ * carries the same field. Textless assistant messages with such metadata are
+ * surfaced instead of silently skipped — the previous behavior let the turn
+ * sit out its whole deadline with nothing on screen.
+ */
+export function looksLikePermissionRequest(metadata: unknown): boolean {
+  if (metadata == null) return false;
+  const text = typeof metadata === "string" ? metadata : JSON.stringify(metadata);
+  return !!text && text.includes("requestId");
+}
+
+/** Newest message by `created_at`; falls back to the raw-first (newest-first
+ *  history order) entry when timestamps are missing or unparseable. */
+export function newestWorkBuddyMessageId(messages: WorkBuddyServerMessage[]): string | null {
+  let newest: WorkBuddyServerMessage | null = null;
+  let newestAt = Number.NaN;
+  for (const message of messages) {
+    if (!workbuddyMessageId(message)) continue;
+    if (!newest) {
+      newest = message;
+      newestAt = Date.parse(message.created_at ?? "");
+      continue;
+    }
+    const at = Date.parse(message.created_at ?? "");
+    if (!Number.isNaN(at) && (Number.isNaN(newestAt) || at >= newestAt)) {
+      newest = message;
+      newestAt = at;
+    }
+  }
+  return newest ? workbuddyMessageId(newest) : null;
+}
+
 /** True when the error means "send the user through WorkBuddy authorization". */
 export function isWorkBuddyAuthError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error ?? "");
@@ -135,11 +189,13 @@ export function isWorkBuddyAuthError(error: unknown): boolean {
   );
 }
 
-const AUTH_ERROR_EVENT = {
-  type: "error",
-  message: "Work buddy 尚未授权，请先完成授权",
-  workbuddyAuthRequired: true,
-} as const;
+function authErrorEvent() {
+  return {
+    type: "error",
+    message: wt("workbuddy.chat_not_authorized", "WorkBuddy 尚未授权，请先完成授权"),
+    workbuddyAuthRequired: true,
+  } as const;
+}
 
 function sleep(ms: number, cancelled: () => boolean): Promise<void> {
   return new Promise((resolve) => {
@@ -189,21 +245,45 @@ export class WorkBuddyChatTransport implements ChatTransport {
     const { query, onEvent, signal } = opts;
     onEvent({ type: "status", text: "thinking" });
 
+    // A message to an offline desktop client is never answered — say so up
+    // front instead of polling to the deadline. A failed probe is "unknown",
+    // not "offline", and must not block the send.
+    try {
+      if (!(await getWorkBuddyOnlineStatus())) {
+        onEvent({
+          type: "error",
+          message: wt(
+            "workbuddy.chat_offline",
+            "WorkBuddy 桌面端当前不在线，请打开 WorkBuddy 后重试",
+          ),
+        });
+        return;
+      }
+    } catch (error) {
+      console.warn(
+        "[workbuddy-chat] online preflight failed, continuing:",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    if (this.cancelled || signal?.aborted) return;
+
     // Baseline: everything already in the thread predates this turn. One GET
-    // per turn is enough — replies during the turn are new ids by definition.
+    // per turn is enough — replies during the turn are past the cursor by
+    // definition. The newest baseline id seeds the incremental cursor.
     let baselineIds = new Set<string>();
+    let cursor: string | null = null;
     try {
       const before = await callWorkBuddyOpenApi<WorkBuddyEnvelope>(
         `${HISTORY_PATH}?limit=50`,
       );
+      const beforeMessages = extractWorkBuddyMessages(before);
       baselineIds = new Set(
-        extractWorkBuddyMessages(before)
-          .map(workbuddyMessageId)
-          .filter((id): id is string => !!id),
+        beforeMessages.map(workbuddyMessageId).filter((id): id is string => !!id),
       );
+      cursor = newestWorkBuddyMessageId(beforeMessages);
     } catch (error) {
       if (isWorkBuddyAuthError(error)) {
-        onEvent({ ...AUTH_ERROR_EVENT });
+        onEvent({ ...authErrorEvent() });
         return;
       }
       // A failed baseline read must not block the send; the echo matcher
@@ -221,7 +301,10 @@ export class WorkBuddyChatTransport implements ChatTransport {
         body: { content: query, msg_type: "text" },
       });
       if (typeof post?.code === "number" && post.code !== 0) {
-        onEvent({ type: "error", message: "发送失败，请稍后重试" });
+        onEvent({
+          type: "error",
+          message: wt("workbuddy.chat_send_failed", "发送失败，请稍后重试"),
+        });
         return;
       }
     } catch (error) {
@@ -232,15 +315,26 @@ export class WorkBuddyChatTransport implements ChatTransport {
       if (!this.cancelled) {
         onEvent(
           isWorkBuddyAuthError(error)
-            ? { ...AUTH_ERROR_EVENT }
-            : { type: "error", message: "发送失败，请稍后重试" },
+            ? { ...authErrorEvent() }
+            : error instanceof WorkBuddyRateLimitError
+              ? {
+                  type: "error",
+                  message: wt(
+                    "workbuddy.chat_rate_limited",
+                    "WorkBuddy 请求过于频繁，请稍后再试",
+                  ),
+                }
+              : {
+                  type: "error",
+                  message: wt("workbuddy.chat_send_failed", "发送失败，请稍后重试"),
+                },
         );
       }
       return;
     }
     if (this.cancelled) return;
 
-    await this.pollReplies(query, baselineIds, onEvent);
+    await this.pollReplies(query, baselineIds, cursor, onEvent);
   }
 
   cancel(): void {
@@ -248,18 +342,21 @@ export class WorkBuddyChatTransport implements ChatTransport {
   }
 
   /**
-   * Poll the shared history until the quiet gap closes the turn. Messages
-   * past the baseline are mirrored onto the local bubble; the user's own
-   * echo only donates its server id. Renders in posting order so
-   * multi-message turns (text, then a document) read sequentially.
+   * Poll the shared history until the quiet gap closes the turn. Each poll
+   * fetches incrementally past the cursor (`?message_id=…`); messages past
+   * the baseline are mirrored onto the local bubble; the user's own echo
+   * only donates its server id. Renders in posting order so multi-message
+   * turns (text, then a document) read sequentially.
    */
   private async pollReplies(
     query: string,
     baselineIds: Set<string>,
+    initialCursor: string | null,
     onEvent: SendChatOptions["onEvent"],
   ): Promise<void> {
     const startedAt = Date.now();
     const seen = new Set(baselineIds);
+    let cursor = initialCursor;
     /** Rendered turn text so far, and how much of it the typewriter finished. */
     let accumulated = "";
     let typedCount = 0;
@@ -288,17 +385,30 @@ export class WorkBuddyChatTransport implements ChatTransport {
       await sleep(Math.max(50, waitMs), () => this.cancelled);
       if (this.cancelled) return;
 
+      // Incremental past the cursor; full window while no cursor is known.
+      const path = cursor
+        ? `${HISTORY_PATH}?message_id=${encodeURIComponent(cursor)}`
+        : `${HISTORY_PATH}?limit=50`;
       let messages: WorkBuddyServerMessage[] = [];
+      let rateLimited = false;
       let networkError: unknown;
       try {
-        const body = await callWorkBuddyOpenApi<WorkBuddyEnvelope>(
-          `${HISTORY_PATH}?limit=50`,
-        );
+        const body = await callWorkBuddyOpenApi<WorkBuddyEnvelope>(path);
         messages = extractWorkBuddyMessages(body);
       } catch (error) {
-        networkError = error;
+        if (error instanceof WorkBuddyRateLimitError) {
+          // Throttling is not a transport failure: keep the failure counter
+          // at zero and back off longer before the next tick.
+          rateLimited = true;
+        } else {
+          networkError = error;
+        }
       }
 
+      if (rateLimited) {
+        await sleep(workbuddyChatTiming.rateLimitWaitMs, () => this.cancelled);
+        continue;
+      }
       if (networkError) {
         networkFailures += 1;
         console.error(
@@ -326,16 +436,31 @@ export class WorkBuddyChatTransport implements ChatTransport {
           }
           continue;
         }
-        if (message.metadata) {
-          // Permission prompts and other structured payloads are not
-          // interpreted yet — log for later contract work.
-          console.debug("[workbuddy-chat] message metadata", message.metadata);
-        }
-
         const text = workbuddyContentToText(message.content);
         const newAttachments = normalizeWorkBuddyAttachments(message.attachments);
+        if (!text && newAttachments.length === 0) {
+          // A textless structured message (e.g. a permission prompt) used to
+          // be dropped silently, stalling the turn with nothing on screen.
+          // Surface it so the user knows to confirm on the WorkBuddy side,
+          // and keep polling for the reply that follows the confirmation.
+          if (message.metadata && looksLikePermissionRequest(message.metadata)) {
+            lastActivityAt = Date.now();
+            firstReplyAt ??= lastActivityAt;
+            onEvent({ type: "workbuddy_seen", serverId: id, role: "assistant" });
+            const notice = wt(
+              "workbuddy.chat_permission_wait",
+              "WorkBuddy 请求确认一项操作，请在 WorkBuddy 应用中完成确认",
+            );
+            accumulated += accumulated ? `\n\n${notice}` : notice;
+            await typewriter(accumulated, typedCount, onEvent, () => this.cancelled);
+            typedCount = accumulated.length;
+          } else {
+            console.debug("[workbuddy-chat] textless message", message.metadata);
+          }
+          continue;
+        }
+
         const knownLength = renderedLengths.get(id) ?? 0;
-        if (!text && newAttachments.length === 0) continue;
         if (text.length <= knownLength && newAttachments.length === 0) continue;
 
         lastActivityAt = Date.now();
@@ -355,6 +480,11 @@ export class WorkBuddyChatTransport implements ChatTransport {
           onEvent({ type: "meta", sources: [], attachments: [...attachments] });
         }
       }
+
+      // Advance the incremental cursor to the newest id in the batch, even
+      // when the batch carried nothing renderable.
+      const batchNewest = newestWorkBuddyMessageId(messages);
+      if (batchNewest) cursor = batchNewest;
     }
   }
 
@@ -369,8 +499,8 @@ export class WorkBuddyChatTransport implements ChatTransport {
       onEvent({
         type: "error",
         message: interrupted
-          ? "Work buddy 回复超时，请稍后重试"
-          : "Work buddy 没有返回内容，请稍后重试",
+          ? wt("workbuddy.chat_timeout", "WorkBuddy 回复超时，请稍后重试")
+          : wt("workbuddy.chat_empty_reply", "WorkBuddy 没有返回内容，请稍后重试"),
       });
       return;
     }

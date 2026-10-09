@@ -7,7 +7,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { setApiTransportMode } from "@lynse/core/api/client";
-import { setWorkBuddyHttpRelay } from "@lynse/core/auth/workbuddy";
+import { installWorkBuddyBridge } from "./workbuddy-bridge";
 import { hydrateSecrets, refreshSecret, registerSecretKeys, removeSecret, secureStorage, setSecret } from "./secure-storage";
 import {
   collectLegacyLiveTranslationSnapshot,
@@ -102,6 +102,7 @@ type DesktopApi = {
   // it to the picked path. Resolves null when the user cancels the dialog.
   attachment: {
     save: (url: string, fileName: string) => Promise<{ path: string } | null>;
+    saveBytes: (bytes: number[], fileName: string) => Promise<{ path: string } | null>;
     // Fetch an attachment's body for the in-app preview, over the same Rust
     // route as `save` — the renderer cannot reach the signed hosts itself.
     text: (url: string) => Promise<string>;
@@ -291,7 +292,7 @@ export async function installTauriBridge(): Promise<void> {
   // no CORS headers for the tauri origin, so renderer fetch dies as "Load
   // failed". Relay them through the reqwest-backed Rust command; the token
   // and its refresh flow stay in core.
-  setWorkBuddyHttpRelay((req) => invoke("workbuddy_openapi", { req }));
+  installWorkBuddyBridge();
 
   await getCurrentWebview().listen<LiveTranslationTrayAction>(
     LIVE_TRANSLATION_TRAY_EVENT,
@@ -562,6 +563,13 @@ export async function installTauriBridge(): Promise<void> {
         command<void>("set_compact_window_mode", { active }),
     },
     attachment: {
+      saveBytes: async (bytes, fileName) => {
+        const target = await save({ defaultPath: fileName });
+        if (!target) return null;
+        await command("workbuddy_cloud_save_bytes", { bytes, path: target });
+        await revealItemInDir(target);
+        return { path: target };
+      },
       // Native "where to save" dialog first; the picked path goes to Rust
       // for the fetch + write, then the file is revealed in the manager.
       save: async (url, fileName) => {

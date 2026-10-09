@@ -107,11 +107,10 @@ fn log_files(log_dir: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Free space of the volume holding `path`. POSIX only via `libc::statvfs`;
-/// Windows has no equivalent in the current dependency set, so callers must
-/// treat `None` as "unknown" rather than zero.
+/// Free space of the volume holding `path`, in bytes. `None` means "unknown"
+/// rather than zero, so callers must skip the check instead of failing.
 #[cfg(unix)]
-fn free_bytes(path: &Path) -> Option<u64> {
+pub(crate) fn free_bytes(path: &Path) -> Option<u64> {
     let c_path = std::ffi::CString::new(path.to_str()?).ok()?;
     let mut vfs: libc::statvfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::statvfs(c_path.as_ptr(), &mut vfs) } != 0 {
@@ -120,8 +119,34 @@ fn free_bytes(path: &Path) -> Option<u64> {
     Some(vfs.f_bavail as u64 * vfs.f_bsize as u64)
 }
 
-#[cfg(not(unix))]
-fn free_bytes(_path: &Path) -> Option<u64> {
+/// Windows: declared directly rather than through the `windows` crate, whose
+/// generated signature for this call has changed between the versions this
+/// repo has pinned. kernel32 is always loaded, so this links either way.
+#[cfg(windows)]
+pub(crate) fn free_bytes(path: &Path) -> Option<u64> {
+    extern "system" {
+        fn GetDiskFreeSpaceExW(
+            directory: *const u16,
+            available_to_caller: *mut u64,
+            total_bytes: *mut u64,
+            total_free_bytes: *mut u64,
+        ) -> i32;
+    }
+    let wide: Vec<u16> = path.to_string_lossy().encode_utf16().chain(std::iter::once(0)).collect();
+    let mut available = 0u64;
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(available)
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn free_bytes(_path: &Path) -> Option<u64> {
     None
 }
 

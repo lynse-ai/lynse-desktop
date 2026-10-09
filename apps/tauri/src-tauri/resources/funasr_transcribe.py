@@ -9,6 +9,13 @@ import sys
 if sys.platform == "darwin":
     os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
+# The transcript is emitted as UTF-8 JSON with ensure_ascii=False, but Python
+# encodes stdout with the *locale* codec when it is redirected to a pipe —
+# cp936 on a Chinese Windows. The client reads the bytes as UTF-8, so every
+# transcript would have failed to decode. Declaring the stream's encoding is the
+# bridge's job, not each caller's.
+sys.stdout.reconfigure(encoding="utf-8")
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()

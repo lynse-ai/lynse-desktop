@@ -19,6 +19,7 @@ import {
   getDesktopLocalTranscriptionApi,
   providerEngine,
   providerModelId,
+  NON_MAC_ENGINES,
 } from "../workspace/local-transcription";
 import { isMacDesktop } from "../layout/use-maximized";
 import { definePlugin, registerPlugin } from "./registry";
@@ -36,12 +37,12 @@ import type { PluginManifest } from "./types";
  * desktop platforms; MOSS waits until quantization/adaptation lands; the
  * vibeasr/mlx tiers stay functional for existing installs but are not listed.
  *
- * Off macOS the catalog is filtered down to the sidecar engines (whisper +
- * vibeasr, see visibleModelCatalog): the MLX/venv-bound engines (Qwen3, MOSS,
- * FunASR, WhisperX) hard-error there on first use, so their cards are hidden
- * rather than listed as permanently failing downloads. VibeVoice runs on
- * Windows too — its statically-linked `vibeasr.exe` sidecar ships in the same
- * shared runtime.
+ * Off macOS the catalog is filtered by `NON_MAC_ENGINES`: the sidecar engines
+ * (whisper + vibeasr, both statically-linked binaries in the shared runtime)
+ * and FunASR, which prepares its own Python venv on first use. The MLX-bound
+ * engines (Qwen3, MOSS, MLX-Whisper) stay hidden because their backend does not
+ * exist off Apple Silicon; WhisperX is hidden until its venv bootstrap learns
+ * the Windows interpreter layout.
  */
 
 export interface TranscriptionModelEntry {
@@ -120,18 +121,24 @@ export const TRANSCRIPTION_MODEL_CATALOG: TranscriptionModelEntry[] = [
   },
 ];
 
-/** Model cards listed on this desktop, mirroring VISIBLE_ENGINE_OPTIONS in
- *  settings/stt-config-section: only the sidecar engines (whisper.cpp's
- *  whisper + VibeASR.cpp's vibeasr, both shipped in the shared runtime
- *  archive) work outside macOS, so every MLX/venv-bound engine's cards are
- *  hidden there. Resolved at render time (not module scope) so tests can flip
- *  the platform. */
-const SIDECAR_ENGINES: ReadonlySet<SttEngine> = new Set(["whisper", "vibeasr"]);
+/** The shared-runtime phases that precede a model download, keyed to the label
+ *  each one shows. Rust reports them under the card the user clicked so the
+ *  runtime and the model read as one flow — without these, verify + install
+ *  look like a download stuck at 100%. */
+const RUNTIME_PHASE_LABELS: Partial<Record<SttDownloadProgress["phase"], string>> = {
+  runtime_downloading: "settings.stt_status_runtime_downloading",
+  runtime_verifying: "settings.stt_status_runtime_verifying",
+  runtime_installing: "settings.stt_status_runtime_installing",
+};
 
+/** Model cards listed on this desktop, filtered by the shared `NON_MAC_ENGINES`
+ *  set so the engine list in settings and the cards here can no longer drift
+ *  apart. Resolved at render time (not module scope) so tests can flip the
+ *  platform. */
 function visibleModelCatalog(): TranscriptionModelEntry[] {
   return isMacDesktop
     ? TRANSCRIPTION_MODEL_CATALOG
-    : TRANSCRIPTION_MODEL_CATALOG.filter((entry) => SIDECAR_ENGINES.has(entry.engine));
+    : TRANSCRIPTION_MODEL_CATALOG.filter((entry) => NON_MAC_ENGINES.has(entry.engine));
 }
 
 function modelManifest(entry: TranscriptionModelEntry): PluginManifest {
@@ -373,9 +380,9 @@ export function TranscriptionModelsSection({
                     </p>
                   </div>
                 )}
-                {isThisDownloading && progress?.phase === "runtime_downloading" && (
+                {isThisDownloading && RUNTIME_PHASE_LABELS[progress.phase] && (
                   <p className="text-2xs text-muted-foreground">
-                    {t("settings.stt_status_runtime_downloading")}
+                    {t(RUNTIME_PHASE_LABELS[progress.phase]!)}
                   </p>
                 )}
                 <div className="mt-2 flex flex-wrap items-center gap-2">

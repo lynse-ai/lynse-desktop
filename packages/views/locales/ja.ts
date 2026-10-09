@@ -1509,6 +1509,9 @@ const ja = {
     "reminder_dismiss": "閉じる",
     "reminder_in_app_only": "アプリ内の通知のみ — Lynse がバックグラウンドのときは通知できません",
     "disconnected": "接続を解除しました",
+    "reconnect": "再接続",
+    "calendar_reconnect_required": "カレンダーサービスの接続が失効しました。再接続してください。",
+    "calendar_unavailable": "カレンダーを読み込めませんでした。もう一度お試しください。",
     "connect": "接続",
     "add_account": "アカウントを追加",
     "disconnect": "接続を解除",
@@ -1549,6 +1552,7 @@ const ja = {
       "feishu": "1回の認証でカレンダー・タスク・ドキュメント・メールをカバーします"
     },
     "error": {
+      "unauthorized": "このサービスの接続が失効しました。再接続してください。",
       "generic": "問題が発生しました: {{error}}",
       "requires_pro": "これは Lynse Pro の機能です",
       "not_configured": "この連携はまだ設定されていません",

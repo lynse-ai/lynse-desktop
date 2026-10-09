@@ -13,7 +13,7 @@ import {
 } from "@lynse/ui/components/ui/select";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
-import type { IntegrationAccount } from "@lynse/core/integrations";
+import { isIntegrationAuthError, type IntegrationAccount } from "@lynse/core/integrations";
 import { Loader2, Plus, RefreshCw } from "../icons";
 import { DeleteConfirmDialog } from "../workspace/delete-confirm-dialog";
 import { FeishuSetupDialog } from "./feishu-setup-dialog";
@@ -46,7 +46,9 @@ export function FeishuRow({ isAuthenticated }: { isAuthenticated: boolean }) {
   const [disconnectTarget, setDisconnectTarget] = useState<IntegrationAccount | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
   const flow = useConnectFlow("feishu-calendar", { isAuthenticated });
-  const status = flow.query.data;
+  const requestError = flow.error ?? flow.query.error;
+  const reconnectRequired = isIntegrationAuthError(requestError);
+  const status = flow.query.isError ? undefined : flow.query.data;
   const destinations = useDestinations("feishu-tasks", Boolean(status?.connected));
   const setDestination = useDefaultDestination("feishu-tasks");
   const autoExport = useAutoExport("feishu-tasks");
@@ -95,12 +97,12 @@ export function FeishuRow({ isAuthenticated }: { isAuthenticated: boolean }) {
             disabled={flow.connecting}
             onClick={() => setSetupOpen(true)}
           >
-            {t("connections.connect")}
+            {t(reconnectRequired ? "connections.reconnect" : "connections.connect")}
           </Button>
         )}
       </div>
 
-      {flow.error && <p className="text-2xs text-destructive">{errorCopy(flow.error, t)}</p>}
+      {requestError && <p role="alert" className="text-2xs text-destructive">{errorCopy(requestError, t)}</p>}
 
       {account && (
         <div className="space-y-2.5 rounded-md bg-background/40 px-2.5 py-2">

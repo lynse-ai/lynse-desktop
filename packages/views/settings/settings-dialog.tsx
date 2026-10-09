@@ -29,7 +29,7 @@ import {
 } from "../workspace/local-transcription";
 import { getDesktopMeetingDetectorApi } from "../live-translation";
 import { getDesktopLiveTranslationApi } from "../live-translation/desktop-api";
-import { featureFlags } from "../feature-flags";
+import { featureFlags, isConnectionsEnabled } from "../feature-flags";
 import { getDesktopVaultApi } from "../workspace/note-vault";
 import { getDesktopWebdavSyncApi } from "./webdav-sync";
 import { AboutContent } from "../about/about-content";
@@ -84,13 +84,15 @@ interface SettingsSection {
 export function SettingsDialog({
   open,
   onOpenChange,
+  initialSectionId = "account",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  initialSectionId?: SettingsSectionId;
 }) {
   const { t } = useTranslation();
 
-  const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>("account");
+  const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>(initialSectionId);
   const pluginEntries = usePluginStore((s) => s.entries);
   const localTranscriptionApi = getDesktopLocalTranscriptionApi();
   const hasLocalTranscription = !!localTranscriptionApi;
@@ -215,7 +217,10 @@ export function SettingsDialog({
   // Desktop only, per PRD §2 ("P0-P2 不做 Web 端 UI"): the flag is global, so
   // without this check flipping it on would surface the section in the web app
   // too, where there is no deep-link or native surface for the flows.
-  if (featureFlags.connections && !isWebPlatform()) {
+  //
+  // The gate is also channel-aware (isConnectionsEnabled): still under
+  // debugging, so official builds hide the section entirely.
+  if (isConnectionsEnabled() && !isWebPlatform()) {
     sections.push({
       id: "connections",
       label: t("settings.connections"),

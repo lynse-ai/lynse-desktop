@@ -1507,6 +1507,9 @@ const en = {
     "reminder_dismiss": "Dismiss",
     "reminder_in_app_only": "In-app reminder only — Lynse cannot notify you while it is in the background",
     "disconnected": "Disconnected",
+    "reconnect": "Reconnect",
+    "calendar_reconnect_required": "The calendar connection has expired. Reconnect your calendar service.",
+    "calendar_unavailable": "Calendar events could not be loaded. Please try again.",
     "connect": "Connect",
     "add_account": "Add account",
     "disconnect": "Disconnect",
@@ -1547,6 +1550,7 @@ const en = {
       "feishu": "One authorization covers calendar, tasks, docs and mail"
     },
     "error": {
+      "unauthorized": "This service connection has expired. Please reconnect.",
       "generic": "Something went wrong: {{error}}",
       "requires_pro": "This is a Lynse Pro feature",
       "not_configured": "This integration is not configured yet",

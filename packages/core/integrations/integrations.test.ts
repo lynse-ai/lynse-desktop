@@ -8,7 +8,7 @@ const apiMocks = vi.hoisted(() => ({
   put: vi.fn(),
   delete: vi.fn(),
   // The Connections BFF origin override (lynse_integrations_api_url); tests
-  // run with it unset, so every call carries a trailing `{}` options object.
+  // run with it unset, so calls still carry their integration auth scope.
   getIntegrationsBaseUrl: vi.fn(() => null),
 }));
 
@@ -31,6 +31,7 @@ const {
   isNoDestinationError,
   isNotConfiguredError,
   isRequiresProError,
+  isIntegrationAuthError,
 } = await import("./errors");
 
 beforeEach(() => {
@@ -44,7 +45,7 @@ describe("integrations api", () => {
     expect(apiMocks.getWithParams).toHaveBeenCalledWith(
       "/api/v2/integrations/google-calendar/oauth-state",
       { platform: "desktop", origin: undefined },
-      {},
+      { authScope: "integration" },
     );
   });
 
@@ -53,7 +54,7 @@ describe("integrations api", () => {
     await disconnectAccount("todoist", "acct/2");
     expect(apiMocks.delete).toHaveBeenCalledWith(
       "/api/v2/integrations/todoist/disconnect?account_id=acct%2F2",
-      {},
+      { authScope: "integration" },
     );
   });
 
@@ -66,7 +67,7 @@ describe("integrations api", () => {
         account_id: "a1",
         destination_id: "proj-1",
       },
-      {},
+      { authScope: "integration" },
     );
   });
 
@@ -82,12 +83,20 @@ describe("integrations api", () => {
         action_item_ids: ["t1"],
         default_task_list_id: "list-1",
       },
-      {},
+      { authScope: "integration" },
     );
   });
 });
 
 describe("error predicates", () => {
+  it("recognises service auth failures without treating outages or plan limits as expired connections", () => {
+    for (const status of [401, 2000, 2013]) {
+      expect(isIntegrationAuthError(new ApiError(status, "expired"))).toBe(true);
+    }
+    expect(isIntegrationAuthError(INTEGRATIONS_ERROR.UNAUTHORIZED)).toBe(true);
+    expect(isIntegrationAuthError(new ApiError(503, "unavailable"))).toBe(false);
+    expect(isIntegrationAuthError(new ApiError(403, INTEGRATIONS_ERROR.REQUIRES_PRO))).toBe(false);
+  });
   it("requires both the 403 status and the pro key", () => {
     expect(isRequiresProError(new ApiError(403, INTEGRATIONS_ERROR.REQUIRES_PRO))).toBe(true);
     // A 403 for some other reason must not render the paywall copy.

@@ -20,7 +20,11 @@ export const featureFlags = {
   /** Settings → Connections (third-party integrations: calendar, Notion, task
    * tools). Off until the backend's /api/v2/integrations contract is deployed —
    * the rows degrade to a 503 "not configured" line while dark. Flip here alone
-   * to expose the section (PRD: docs/connections-api-contract.md). */
+   * to expose the section (PRD: docs/connections-api-contract.md).
+   *
+   * Even when `true`, exposure is narrowed to debug-channel builds via
+   * `isConnectionsEnabled()` below: the integration backend is still under
+   * active debugging, so official builds hide the section until it ships. */
   connections: true,
   /** Settings → Plugins community (browse/install/enable/uninstall plugins).
    * When off, plugin-contributed settings sections render unconditionally —
@@ -28,6 +32,17 @@ export const featureFlags = {
    * plugin system (PRD: docs/plugin-architecture-prd.md). */
   pluginMarketplace: true,
 } as const;
+
+/**
+ * Whether Settings → Connections (third-party integrations) is exposed. The
+ * single gate every entry point reads: the flag above AND the build channel —
+ * debug-channel builds and dev shells show it, official builds hide it while
+ * the integration flows are still being debugged. The runtime test mode
+ * (login-logo 5-tap) unlocks it inside an official build for the team.
+ */
+export function isConnectionsEnabled(): boolean {
+  return featureFlags.connections && (getBuildChannel() === "debug" || isTestMode());
+}
 
 /**
  * Build channel, selected at packaging time via an env var:
@@ -38,9 +53,11 @@ export const featureFlags = {
  *                   only channel distributed: installers are published to
  *                   Tencent CloudBase (website download + in-app auto-update),
  *                   see apps/tauri/scripts/publish-cloudbase.sh.
- *   - "debug"     — the DEBUG channel build. Login page shows the API-key
- *                   form only; no phone/WeChat login. Dev shells default to
- *                   it; packaged explicitly via the `build:debug` scripts.
+ *   - "debug"     — the DEBUG channel build. No phone/WeChat login; the
+ *                   API-key sign-in unlocks via the login-page logo 5-tap
+ *                   (test mode), so the locked face is the "more ways"
+ *                   chooser. Dev shells default to it; packaged explicitly
+ *                   via the `build:debug` scripts.
  *
  * Each app shell calls `configureBuildChannel` at startup with its own env
  * (`NEXT_PUBLIC_BUILD_CHANNEL` on web, `VITE_BUILD_CHANNEL` in Tauri), falling
@@ -66,16 +83,14 @@ export function hasPasswordlessAuth(): boolean {
 }
 
 /**
- * Dev-only API-key sign-in on the login page. Injected per app shell from
- * its own env (`import.meta.env.DEV` in Tauri, `process.env.NODE_ENV` on
- * web); packaged official builds start without it but can unlock the same
- * surface at runtime via the test mode below. Like the build channel, the
- * gate lives in feature-flags so every entry point reads one source.
+ * API-key sign-in on the login page. Hidden by default in EVERY build —
+ * dev shells and debug-channel builds included, so a dev screenshot shows
+ * the same face as production. The only way in is the runtime test mode
+ * below: five taps on the login-page logo unlock the API sign-in panel,
+ * and the unlock persists in localStorage until explicitly exited.
  */
-let devApiAuth = false;
-
-export function configureDevApiAuth(enabled: boolean): void {
-  devApiAuth = enabled;
+export function hasDevApiAuth(): boolean {
+  return loadTestMode();
 }
 
 /**
@@ -119,12 +134,3 @@ export function setTestMode(enabled: boolean): void {
   }
 }
 
-/** The environment-injected dev flag alone (dev shells), without the
- *  runtime test mode — used to tell the two unlock paths apart. */
-export function isDevShell(): boolean {
-  return devApiAuth;
-}
-
-export function hasDevApiAuth(): boolean {
-  return devApiAuth || loadTestMode();
-}

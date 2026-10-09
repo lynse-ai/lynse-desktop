@@ -1505,6 +1505,9 @@ const zhHant = {
     "reminder_dismiss": "忽略",
     "reminder_in_app_only": "僅應用內提醒 — Lynse 在背景時無法通知你",
     "disconnected": "已中斷連接",
+    "reconnect": "重新連接",
+    "calendar_reconnect_required": "日曆服務連接失效，請重新連接日曆服務。",
+    "calendar_unavailable": "暫時無法載入日曆服務，請重試。",
     "connect": "連接",
     "add_account": "新增帳號",
     "disconnect": "中斷連接",
@@ -1545,6 +1548,7 @@ const zhHant = {
       "feishu": "一次授權，覆蓋日曆、任務、文檔與郵箱"
     },
     "error": {
+      "unauthorized": "此服務的連接已失效，請重新連接。",
       "generic": "發生錯誤：{{error}}",
       "requires_pro": "這是 Lynse 專業版功能",
       "not_configured": "該整合尚未啟用",

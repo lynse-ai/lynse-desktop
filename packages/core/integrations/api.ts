@@ -27,13 +27,12 @@ const V2 = "/api/v2";
 /**
  * Per-call origin override. When the Connections BFF origin is configured
  * (lynse_integrations_api_url), these calls go there instead of the main
- * backend — the same seam the AI-assistant transport uses. The BFF ignores
- * session credentials, but carrying them is harmless and keeps this module
- * agnostic to which backend answers.
+ * backend. The BFF verifies the current user's Bearer token; integration
+ * failures stay local to the service and never end the main login session.
  */
-function override(): { baseUrl?: string } {
+function override(): { baseUrl?: string; authScope: "integration" } {
   const url = api().getIntegrationsBaseUrl();
-  return url ? { baseUrl: url } : {};
+  return { ...(url ? { baseUrl: url } : {}), authScope: "integration" };
 }
 
 function providerPath(provider: IntegrationsProvider, verb: string): string {

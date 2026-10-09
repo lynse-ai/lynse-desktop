@@ -10,6 +10,8 @@ import { ApiError } from "../api/client";
  * ever renders a raw dotted code.
  */
 export const INTEGRATIONS_ERROR = {
+  /** Service credentials were rejected; reconnect without signing out of Lynse. */
+  UNAUTHORIZED: "error.integrations.unauthorized",
   /** Free-tier wall: the provider needs a paid plan. */
   REQUIRES_PRO: "error.integrations.requires_pro",
   /** The provider is not deployed/configured server-side (HTTP 503). */
@@ -52,6 +54,11 @@ export function isNoDestinationError(error: unknown): boolean {
 
 export function isNotConnectedError(error: unknown): boolean {
   return hasKey(error, INTEGRATIONS_ERROR.NOT_CONNECTED);
+}
+
+export function isIntegrationAuthError(error: unknown): boolean {
+  return (error instanceof ApiError && [401, 2000, 2013].includes(error.status))
+    || hasKey(error, INTEGRATIONS_ERROR.UNAUTHORIZED);
 }
 
 /** The OAuth session died (expired or the tab was closed) — restart the flow. */

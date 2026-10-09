@@ -5,7 +5,6 @@ import { CoreProvider } from "@lynse/core/platform";
 import { configureWechatLogin } from "@lynse/core/auth/wechat";
 import {
   configureBuildChannel,
-  configureDevApiAuth,
   type BuildChannel,
 } from "@lynse/views/feature-flags";
 import { WebNavigationProvider } from "@/platform/navigation";
@@ -21,9 +20,6 @@ configureBuildChannel(
   (process.env.NEXT_PUBLIC_BUILD_CHANNEL as BuildChannel | undefined) ??
     (process.env.NODE_ENV === "production" ? "official" : "debug"),
 );
-// Dev runs get the API-key sign-in as an extra login-page entry; production
-// builds never ship it.
-configureDevApiAuth(process.env.NODE_ENV !== "production");
 configureWechatLogin({
   appId: process.env.NEXT_PUBLIC_WECHAT_APP_ID ?? "",
 });

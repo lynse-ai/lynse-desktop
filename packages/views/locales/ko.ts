@@ -1508,6 +1508,9 @@ const ko = {
     "reminder_dismiss": "닫기",
     "reminder_in_app_only": "앱 내 알림만 지원 — Lynse가 백그라운드일 때는 알림을 보낼 수 없습니다",
     "disconnected": "연결이 해제되었습니다",
+    "reconnect": "다시 연결",
+    "calendar_reconnect_required": "캘린더 서비스 연결이 만료되었습니다. 다시 연결해 주세요.",
+    "calendar_unavailable": "캘린더를 불러올 수 없습니다. 다시 시도해 주세요.",
     "connect": "연결",
     "add_account": "계정 추가",
     "disconnect": "연결 해제",
@@ -1548,6 +1551,7 @@ const ko = {
       "feishu": "한 번 인증으로 캘린더, 작업, 문서, 메일을 포괄합니다"
     },
     "error": {
+      "unauthorized": "이 서비스 연결이 만료되었습니다. 다시 연결해 주세요.",
       "generic": "문제가 발생했습니다: {{error}}",
       "requires_pro": "Lynse Pro 기능입니다",
       "not_configured": "아직 설정된 연동이 없습니다",

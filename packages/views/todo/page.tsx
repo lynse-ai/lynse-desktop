@@ -6,7 +6,7 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { Sheet, SheetContent } from "@lynse/ui/components/ui/sheet";
 import { Button } from "@lynse/ui/components/ui/button";
 import { toast } from "sonner";
-import { featureFlags } from "../feature-flags";
+import { featureFlags, isConnectionsEnabled } from "../feature-flags";
 import { getDesktopInspirationApi } from "../inspiration/desktop-api";
 import { isWebPlatform } from "../platform";
 import { useInspirationCaptureStore } from "../inspiration/capture-store";
@@ -601,7 +601,7 @@ export function TodoPage() {
       <TitleBarSlot
         actions={
           <>
-            {featureFlags.connections && exportSelection.exportableIds.size > 0 && (
+            {isConnectionsEnabled() && exportSelection.exportableIds.size > 0 && (
               <button
                 onClick={() => {
                   setExportMode((prev) => !prev);

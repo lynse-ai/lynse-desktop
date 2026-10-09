@@ -1,18 +1,21 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@lynse/ui/components/ui/button";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useAuthStore } from "@lynse/core/auth";
+import { isIntegrationAuthError, isNotConnectedError } from "@lynse/core/integrations";
 import { X } from "../icons";
 import { useNavigation } from "../navigation";
-import { featureFlags } from "../feature-flags";
+import { isConnectionsEnabled } from "../feature-flags";
+import { SettingsDialog } from "../settings/settings-dialog";
 import { useIntegrationStatus } from "./use-connect-flow";
 import { useCalendarEvents } from "./use-connections";
 import {
   findReminderDueEvents,
   loadCalendarReminderConfig,
   minutesUntilStart,
+  REMINDER_POLL_MS,
 } from "./calendar-reminder";
 
 /**
@@ -32,20 +35,30 @@ export function CalendarReminderBanner() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const config = useMemo(() => loadCalendarReminderConfig(), []);
   const [dismissed, setDismissed] = useState<Map<string, number>>(() => new Map());
+  const [dismissedError, setDismissedError] = useState<unknown>(null);
+  const [reconnectOpen, setReconnectOpen] = useState(false);
 
-  const status = useIntegrationStatus("google-calendar", isAuthenticated && featureFlags.connections);
-  const now = Date.now();
+  const status = useIntegrationStatus("google-calendar", isAuthenticated && isConnectionsEnabled());
+  const [now, setNow] = useState(Date.now);
   const window = useMemo(
     () => ({
       from: new Date(now - 60 * 60_000).toISOString(),
       to: new Date(now + (config.leadMinutes + 15) * 60_000).toISOString(),
     }),
-    // Recomputed on each poll tick via `enabled`/staleTime, not every render.
+    // Keep the query range stable between poll ticks, including error renders.
     [now, config.leadMinutes],
   );
   // No polling at all while the feature is off — the banner renders nothing,
-// so an unrequested query would just be traffic on every authenticated page.
-  const events = useCalendarEvents(window, featureFlags.connections);
+  // so an unrequested query would just be traffic on every authenticated page.
+  const events = useCalendarEvents(window, isConnectionsEnabled());
+
+  useEffect(() => {
+    if (!isAuthenticated || !isConnectionsEnabled() || events.isError || status.isError) return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") setNow(Date.now());
+    }, REMINDER_POLL_MS);
+    return () => clearInterval(timer);
+  }, [isAuthenticated, events.isError, status.isError]);
 
   const notifyAccounts = useMemo(
     () =>
@@ -63,8 +76,52 @@ export function CalendarReminderBanner() {
     [events.data, config, dismissed, notifyAccounts],
   );
 
-  const next = due[0];
-  if (!featureFlags.connections || !next) return null;
+  if (!isConnectionsEnabled() || !isAuthenticated) return null;
+
+  const calendarError = events.error ?? status.error;
+  if (calendarError && calendarError !== dismissedError) {
+    const reconnectRequired = isIntegrationAuthError(calendarError) || isNotConnectedError(calendarError);
+    return (
+      <>
+        <div className="pointer-events-auto absolute inset-x-0 bottom-4 z-40 flex justify-center px-4">
+          <div role="alert" className="flex max-w-lg items-center gap-3 rounded-xl border border-border/60 bg-card/95 px-3.5 py-2.5 shadow-lg backdrop-blur-xl">
+            <p className="min-w-0 flex-1 text-2xs text-destructive">
+              {t(reconnectRequired ? "connections.calendar_reconnect_required" : "connections.calendar_unavailable")}
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              className="h-7 shrink-0 text-2xs"
+              disabled={events.isFetching || status.isFetching}
+              onClick={() => {
+                if (reconnectRequired) setReconnectOpen(true);
+                else {
+                  void events.refetch();
+                  void status.refetch();
+                }
+              }}
+            >
+              {t(reconnectRequired ? "connections.reconnect" : "connections.retry")}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-7 w-7 shrink-0 p-0"
+              aria-label={t("connections.reminder_dismiss")}
+              onClick={() => setDismissedError(calendarError)}
+            >
+              <X className="size-3.5" />
+            </Button>
+          </div>
+        </div>
+        {reconnectOpen && <SettingsDialog open onOpenChange={setReconnectOpen} initialSectionId="connections" />}
+      </>
+    );
+  }
+
+  const next = events.isError || status.isError ? undefined : due[0];
+  if (!next) return null;
 
   const minutes = minutesUntilStart(next, Date.now());
 

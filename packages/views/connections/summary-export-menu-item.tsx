@@ -4,7 +4,7 @@ import { DropdownMenuItem } from "@lynse/ui/components/ui/dropdown-menu";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useAuthStore } from "@lynse/core/auth";
 import { Loader2 } from "../icons";
-import { featureFlags } from "../feature-flags";
+import { isConnectionsEnabled } from "../feature-flags";
 import { useIntegrationStatus } from "./use-connect-flow";
 import { useDestinations } from "./use-connections";
 import { useSummaryExport } from "./export-summary";
@@ -29,7 +29,7 @@ export function SummaryExportMenuItem({
 }) {
   const { t } = useTranslation();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-  const status = useIntegrationStatus("notion", featureFlags.connections && isAuthenticated);
+  const status = useIntegrationStatus("notion", isConnectionsEnabled() && isAuthenticated);
   const account = status.data?.accounts.find((candidate) => candidate.is_primary)
     ?? status.data?.accounts[0] ?? null;
   const exporter = useSummaryExport("notion", fileId, account);
@@ -40,7 +40,7 @@ export function SummaryExportMenuItem({
     ? destinations.data?.destinations.find((d) => d.id === account.default_destination_id)?.name
     : undefined;
 
-  if (!featureFlags.connections || !status.data?.connected || !account) return null;
+  if (!isConnectionsEnabled() || !status.data?.connected || !account) return null;
 
   const ready = Boolean(account.default_destination_id);
 

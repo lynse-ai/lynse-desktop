@@ -18,7 +18,7 @@
 
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
-import { featureFlags } from "../feature-flags";
+import { isConnectionsEnabled } from "../feature-flags";
 import { findCalendarEventForDetection } from "../connections";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useLiveTranslation } from "./use-live-translation";
@@ -110,7 +110,7 @@ export function MeetingAutoRecordAgent() {
       // Calendar attribution (PRD FR-1). Log-only until the backend gains
       // `file.calendar_event_id` — the association has nowhere to be stored
       // yet, and inventing a local one would be a second source of truth.
-      if (featureFlags.connections) {
+      if (isConnectionsEnabled()) {
         void findCalendarEventForDetection(Date.parse(event.detectedAt)).then((matched) => {
           if (!matched) return;
           console.warn(

@@ -1505,6 +1505,9 @@ const zh = {
     "reminder_dismiss": "忽略",
     "reminder_in_app_only": "仅应用内提醒 — Lynse 在后台时无法通知你",
     "disconnected": "已断开连接",
+    "reconnect": "重新连接",
+    "calendar_reconnect_required": "日历服务连接失效，请重新连接日历服务。",
+    "calendar_unavailable": "日历服务暂时无法加载，请重试。",
     "connect": "连接",
     "add_account": "添加账号",
     "disconnect": "断开连接",
@@ -1545,6 +1548,7 @@ const zh = {
       "feishu": "一次授权，覆盖日历、任务、文档与邮箱"
     },
     "error": {
+      "unauthorized": "该服务的连接已失效，请重新连接。",
       "generic": "出错了：{{error}}",
       "requires_pro": "这是 Lynse 专业版功能",
       "not_configured": "该集成尚未开通",

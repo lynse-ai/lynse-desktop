@@ -9,6 +9,8 @@ type RequestOptions = RequestInit & {
    *  transport uses it to target the dedicated agent server (route B direct
    *  CloudRun connection) while session credentials stay unchanged. */
   baseUrl?: string;
+  /** Integrations use Bearer tokens; their auth failures never end the main session. */
+  authScope?: "session" | "integration";
   /** Context APIs require a current login token and never send deployment/API keys. */
   tokenOnly?: boolean;
   /** Bind a request to the session which started it; reject account changes. */
@@ -116,7 +118,8 @@ export class ApiClient {
     path: string,
     options: RequestOptions = {},
   ): Promise<T> {
-    const { baseUrl: overrideBase, tokenOnly, sessionToken, responseType, ...init } = options;
+    const { baseUrl: overrideBase, authScope = "session", tokenOnly, sessionToken, responseType, ...init } = options;
+    const integrationAuth = authScope === "integration";
     const requestToken = this.token;
     if (tokenOnly && (!requestToken || (sessionToken !== undefined && sessionToken !== requestToken))) {
       throw new ApiError(401, "Session changed or unavailable");
@@ -129,9 +132,9 @@ export class ApiClient {
       ...(init.headers as Record<string, string>),
     };
     if (requestToken) {
-      headers["Authorization"] = requestToken;
+      headers["Authorization"] = integrationAuth ? `Bearer ${requestToken}` : requestToken;
     }
-    if (this.apiKey && !tokenOnly) {
+    if (this.apiKey && !tokenOnly && !integrationAuth) {
       headers["X-API-Key"] = this.apiKey;
     }
     if (this.identity?.platform) {
@@ -150,8 +153,10 @@ export class ApiClient {
     }
 
     if (res.status === 401) {
-      this.onUnauthorized?.();
-      throw new ApiError(res.status, "Unauthorized");
+      if (!integrationAuth) {
+        this.onUnauthorized?.();
+        throw new ApiError(res.status, "Unauthorized");
+      }
     }
     if (!res.ok) {
       const body = await res.text().catch(() => "");
@@ -195,11 +200,11 @@ export class ApiClient {
         // sibling gateways that phrase the same condition under other codes.
         const envelopeMessage =
           typeof json.msg === "string" ? json.msg : typeof json.message === "string" ? json.message : "";
-        if (
+        if (!integrationAuth && (
           json.code === GATEWAY_AUTH_ERROR_CODE ||
           json.code === GATEWAY_SESSION_EXPIRED_CODE ||
           /not logged in|session has expired/i.test(envelopeMessage)
-        ) {
+        )) {
           this.onUnauthorized?.();
         }
         // `data` may carry useful fields even on failure (e.g. `cooldown`

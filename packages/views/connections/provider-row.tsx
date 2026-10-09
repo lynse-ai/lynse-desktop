@@ -15,6 +15,7 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
 import {
   INTEGRATIONS_ERROR,
+  isIntegrationAuthError,
   isNoDestinationError,
   isNotConfiguredError,
   isRequiresProError,
@@ -57,6 +58,7 @@ export interface ProviderRowProps {
 
 /** Map the server's dotted keys to copy; unknown errors interpolate raw. */
 export function errorCopy(error: unknown, t: (key: string, options?: Record<string, unknown>) => string): string {
+  if (isIntegrationAuthError(error)) return t("connections.error.unauthorized");
   if (isRequiresProError(error)) return t("connections.requires_pro");
   if (isNotConfiguredError(error)) return t("connections.not_configured");
   if (isNoDestinationError(error)) return t("connections.pick_a_destination_first");
@@ -77,7 +79,9 @@ export function ProviderRow({
   const [disconnectTarget, setDisconnectTarget] = useState<IntegrationAccount | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
   const flow = useConnectFlow(provider, { isAuthenticated });
-  const status = flow.query.data;
+  const requestError = flow.error ?? flow.query.error;
+  const reconnectRequired = isIntegrationAuthError(requestError);
+  const status = flow.query.isError ? undefined : flow.query.data;
   const destinations = useDestinations(provider, kind === "destination" && Boolean(status?.connected));
   const disconnect = useDisconnect(provider);
   const toggles = useAccountToggles(provider);
@@ -134,13 +138,13 @@ export function ProviderRow({
             disabled={flow.connecting}
             onClick={() => (needsSetup ? setSetupOpen(true) : flow.start())}
           >
-            {t("connections.connect")}
+            {t(reconnectRequired ? "connections.reconnect" : "connections.connect")}
           </Button>
         )}
       </div>
 
-      {flow.error && (
-        <p className="text-2xs text-destructive">{errorCopy(flow.error, t)}</p>
+      {requestError && (
+        <p role="alert" className="text-2xs text-destructive">{errorCopy(requestError, t)}</p>
       )}
 
       {accounts.length > 0 && (

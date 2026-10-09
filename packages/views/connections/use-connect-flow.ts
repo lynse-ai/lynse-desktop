@@ -234,6 +234,10 @@ async function pollLoop(provider: IntegrationsProvider, state: string, attempt: 
  */
 function invalidateIntegrationStatus(provider: IntegrationsProvider): void {
   void getActiveQueryClient()?.invalidateQueries({ queryKey: integrationStatusKey(provider) });
+  // Successful calendar reauthorization must also clear the failed events query.
+  if (provider.endsWith("-calendar")) {
+    void getActiveQueryClient()?.invalidateQueries({ queryKey: ["calendar-events"] });
+  }
 }
 
 export function integrationStatusKey(provider: IntegrationsProvider) {

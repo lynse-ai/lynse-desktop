@@ -28,7 +28,6 @@ import { getDesktopAppApi, openExternalUrl } from "../app-update";
 import {
   hasDevApiAuth,
   hasPasswordlessAuth,
-  isDevShell,
   isTestMode,
   setTestMode,
 } from "../feature-flags";
@@ -59,10 +58,12 @@ const CODE_AUTO_SUBMIT_DELAY_MS = 600;
  * card on the right (LOGIN_ARTWORK_SRC, user-provided).
  *
  * Form content differs by build channel:
- *  - "testflight": phone + SMS code form; a "more ways to sign in" screen
- *    holds WeChat, the app-scanned QR code and — in dev builds — the API
- *    form (server selection + API key, the same UI as /api-config).
- *  - "github": the API form as the main sign-in form.
+ *  - "official": phone + SMS code form; a "more ways to sign in" screen
+ *    holds WeChat and the app-scanned QR code.
+ *  - "debug": no phone/WeChat auth — while the API face is locked, the
+ *    page shows the "more ways" chooser.
+ * The API form (server selection + API key, the same UI as /api-config)
+ * is hidden by default in EVERY build; five taps on the logo unlock it.
  *
  * Server / API-key configuration lives inside the API form itself (and the
  * standalone /api-config route); the page keeps no extra link to it.
@@ -76,6 +77,13 @@ export function LoginPage() {
   // Active sign-in view. Phone is the default: unlike the QR flow it needs no
   // Lynse mobile app, and it also covers registration.
   const [view, setView] = useState<LoginView>("phone");
+
+  // The API sign-in face is locked until the logo 5-tap unlock in every
+  // build. A debug channel has no phone/WeChat auth to fall back on, so
+  // while locked it shows the "more ways" chooser (API entry hidden).
+  const lockedFromApi = !passwordless && !devApiAuth;
+  const effectiveView: LoginView =
+    lockedFromApi && view !== "more" ? "more" : view;
 
   // QR channel (testflight build): create a challenge, show its QR, then
   // poll until the Lynse mobile app scans + confirms it.
@@ -237,9 +245,9 @@ export function LoginPage() {
   }
 
   // Hidden maintenance entry: five taps on the logo (each within two
-  // seconds of the previous) unlock the test mode — the API sign-in panel
-  // of the debug builds — in packaged official builds. Dev shells already
-  // ship the API entry, so there the tap only navigates to it.
+  // seconds of the previous) unlock the test mode — the API sign-in panel —
+  // in every build, dev shells included. The unlock persists in
+  // localStorage until it is exited from the "more ways" screen.
   const logoTapsRef = useRef({ count: 0, at: 0 });
 
   function handleLogoTap() {
@@ -249,7 +257,7 @@ export function LoginPage() {
     logoTapsRef.current = { count: streak, at: now };
     if (streak < 5) return;
     logoTapsRef.current = { count: 0, at: 0 };
-    if (!isDevShell()) setTestMode(true);
+    setTestMode(true);
     setView("api");
   }
 
@@ -343,7 +351,7 @@ export function LoginPage() {
         </p>
 
         <div className="mt-7 w-full max-w-[260px] flex-1 overflow-y-auto">
-        {view === "more" ? (
+        {effectiveView === "more" ? (
           /* ── More ways to sign in ─────────────────────── */
           <div className="space-y-4">
             <p className="text-center text-sm font-medium">
@@ -389,7 +397,7 @@ export function LoginPage() {
               >
                 {t("auth.back_to_phone")}
               </Button>
-              {!isDevShell() && isTestMode() && (
+              {isTestMode() && (
                 <Button
                   size="sm"
                   variant="ghost"
@@ -404,7 +412,7 @@ export function LoginPage() {
               )}
             </div>
           </div>
-        ) : passwordless && view !== "api" ? (
+        ) : passwordless && effectiveView !== "api" ? (
           view === "phone" ? (
             <>
               {/* ── Phone number pill ──────────────────────── */}
@@ -557,9 +565,9 @@ export function LoginPage() {
             </div>
           )
         ) : (
-          /* ── API sign-in: server selection + API key in one form. The main
-             sign-in form on "github" builds, a "more ways" view on
-             "testflight"; the same UI the /api-config page renders. ─────── */
+          /* ── API sign-in: server selection + API key in one form; the
+             same UI the /api-config page renders. Locked behind the logo
+             5-tap (test mode) in every build. ─────── */
           <>
             <ApiAuthPanel />
             {passwordless && (

@@ -8,18 +8,18 @@ import { registerAuthStore, createAuthStore } from "@lynse/core/auth";
 import { initI18n } from "@lynse/core/i18n";
 import { ThemeProvider } from "@lynse/ui/components/common/theme-provider";
 import { RESOURCES } from "@lynse/views/locales";
-import { configureBuildChannel, configureDevApiAuth } from "@lynse/views/feature-flags";
+import { configureBuildChannel, setTestMode } from "@lynse/views/feature-flags";
 import { LoginPage } from "@lynse/views/auth";
 import "./globals.css";
 
 const params = new URLSearchParams(window.location.search);
 
 initI18n({ locale: params.get("lng") ?? undefined, resources: RESOURCES });
-// ?channel=debug renders the DEBUG-channel face (API-key form as the main
-// sign-in surface, no phone/WeChat); default is official. The dev API entry
-// under 更多登录方式 is also exposed for the official face.
+// ?channel=debug renders the DEBUG-channel face (no phone/WeChat); default
+// is official. Test mode is force-on so the preview can also show the API
+// sign-in face and the "more ways" API entry.
 configureBuildChannel(params.get("channel") === "debug" ? "debug" : "official");
-configureDevApiAuth(true);
+setTestMode(true);
 
 // The real app registers the auth store from CoreProvider; the preview has
 // no provider, so register a sessionless stub backed by localStorage.

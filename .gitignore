@@ -38,6 +38,7 @@ coverage/
 
 # AI tooling local state (session skills / editor specs / lock files)
 .agents/
+.claude/
 .qoder/
 skills-lock.json
 

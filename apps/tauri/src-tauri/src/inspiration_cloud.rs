@@ -321,7 +321,22 @@ pub(crate) fn apply_server_changes(
     let mut upserted = Vec::new();
     let mut deleted = Vec::new();
     for change in changes {
-        let Some(entity_id) = change.get("entityId").and_then(Value::as_str) else {
+        // The server wire format is snake_case (entity_id/entity_type, plan
+        // openapi/v1.yaml); camelCase mirrors are accepted for robustness.
+        // Non-inspiration entities (goals, memories, media) never mirror
+        // into this store.
+        let entity_type = change
+            .get("entityType")
+            .or_else(|| change.get("entity_type"))
+            .and_then(Value::as_str);
+        if entity_type.is_some() && entity_type != Some("inspiration") {
+            continue;
+        }
+        let Some(entity_id) = change
+            .get("entityId")
+            .or_else(|| change.get("entity_id"))
+            .and_then(Value::as_str)
+        else {
             continue;
         };
         let entity_version = change.get("version").and_then(Value::as_i64).unwrap_or(0);
@@ -338,6 +353,20 @@ pub(crate) fn apply_server_changes(
                 // `fetched` bodies keyed by id.
                 if let Some(record) = change.get("record").filter(|record| record.is_object()) {
                     let mut record = record.clone();
+                    // Server bodies never carry attachment references; keep
+                    // the local ones so a pulled overwrite doesn't unbind
+                    // already-saved audio/images (media sync is a later step).
+                    if let Some(existing) = cache.records.iter().find(|existing| {
+                        existing.get("id").and_then(Value::as_str) == Some(entity_id)
+                    }) {
+                        for key in ["audio", "images"] {
+                            if record.get(key).is_none() {
+                                if let Some(value) = existing.get(key) {
+                                    record[key] = value.clone();
+                                }
+                            }
+                        }
+                    }
                     record["version"] = json!(entity_version);
                     record["syncState"] = json!("synced");
                     upsert_record(&mut cache.records, record);
@@ -965,7 +994,20 @@ pub(crate) async fn sync_once(app: &AppHandle, token: &str) -> CommandResult<Val
             let mut enriched: Vec<Value> = Vec::new();
             for change in page.get("changes").and_then(Value::as_array).cloned().unwrap_or_default() {
                 let is_upsert = change.get("op").and_then(Value::as_str) == Some("upsert");
-                let entity_id = change.get("entityId").and_then(Value::as_str).unwrap_or_default().to_owned();
+                let entity_type = change
+                    .get("entityType")
+                    .or_else(|| change.get("entity_type"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let entity_id = change
+                    .get("entityId")
+                    .or_else(|| change.get("entity_id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                if entity_type.is_empty() || entity_type != "inspiration" {
+                    continue; // only inspirations mirror into the desktop cache
+                }
                 let has_pending = ops.iter().any(|op| {
                     op.get("entityId").and_then(Value::as_str) == Some(entity_id.as_str())
                 });
@@ -988,11 +1030,20 @@ pub(crate) async fn sync_once(app: &AppHandle, token: &str) -> CommandResult<Val
             let (upserted, deleted) = apply_server_changes(&mut cache, &mut ops, &enriched);
             synced_entities.extend(upserted);
             deleted_entities.extend(deleted);
-            if let Some(next) = page.get("nextCursor").and_then(Value::as_str) {
+            if let Some(next) = page
+                .get("nextCursor")
+                .or_else(|| page.get("next_cursor"))
+                .and_then(Value::as_str)
+            {
                 cursor = next.to_owned();
                 cache.cursor = cursor.clone();
             }
-            if page.get("hasMore").and_then(Value::as_bool) != Some(true) {
+            if page
+                .get("hasMore")
+                .or_else(|| page.get("has_more"))
+                .and_then(Value::as_bool)
+                != Some(true)
+            {
                 break;
             }
         }
@@ -1022,16 +1073,22 @@ pub(crate) async fn sync_once(app: &AppHandle, token: &str) -> CommandResult<Val
     }))
 }
 
-/// Map a server inspiration row onto the desktop record shape.
+/// Map a server inspiration row onto the desktop record shape. The server
+/// row is snake_case (openapi/v1.yaml); camelCase fallbacks stay for the
+/// mirrored fields some proxy layers may rewrite.
 fn normalize_inspiration(body: &Value) -> Value {
     json!({
         "id": body.get("id"),
         "text": body.get("text").cloned().unwrap_or(json!("")),
         "tags": body.get("tags").cloned().unwrap_or(json!([])),
         "transcript": body.get("transcript").cloned().unwrap_or(json!("")),
-        "transcriptStatus": body.get("transcriptStatus").cloned().unwrap_or(json!("none")),
+        "transcriptStatus": body.get("transcriptStatus")
+            .or_else(|| body.get("transcript_status"))
+            .cloned().unwrap_or(json!("none")),
         "sensitivity": body.get("sensitivity").cloned().unwrap_or(json!("normal")),
-        "aiContextEnabled": body.get("aiContextEnabled").cloned().unwrap_or(json!(true)),
+        "aiContextEnabled": body.get("aiContextEnabled")
+            .or_else(|| body.get("ai_context_enabled"))
+            .cloned().unwrap_or(json!(true)),
         "createdAt": body.get("createdAt").or_else(|| body.get("created_at")).cloned().unwrap_or(json!(null)),
         "updatedAt": body.get("updatedAt").or_else(|| body.get("updated_at")).cloned().unwrap_or(json!(null)),
         "version": body.get("version").cloned().unwrap_or(json!(0)),
@@ -1144,8 +1201,9 @@ mod tests {
         upsert_record(&mut cache.records, local.clone());
         enqueue_local_change(&mut ops, "update", &local);
 
+        // Wire shape: snake_case keys, exactly what lynse-memory /v1/sync emits.
         let changes = vec![json!({
-            "seq": 1, "entityType": "inspiration", "entityId": "inspiration:a",
+            "seq": 1, "entity_type": "inspiration", "entity_id": "inspiration:a",
             "version": 2, "op": "upsert",
             "record": { "id": "inspiration:a", "text": "other device" },
         })];
@@ -1153,6 +1211,53 @@ mod tests {
         assert!(upserted.is_empty(), "pending local op must win over pull");
         assert_eq!(cache.records[0]["text"], "local edit");
         assert!(deleted.is_empty());
+    }
+
+    #[test]
+    fn snake_case_change_keys_and_entity_type_filter() {
+        let mut cache = AccountCache::default();
+        let mut ops = Vec::new();
+
+        // A local record with a voice attachment already in the cache.
+        let mut local = record("a", "memo");
+        local["audio"] = json!({ "file": "audio.wav", "durationMs": 1200 });
+        upsert_record(&mut cache.records, local);
+
+        // An inspiration upsert with wire keys applies…
+        let inspiration = json!({
+            "seq": 1, "entity_type": "inspiration", "entity_id": "inspiration:a",
+            "version": 1, "op": "upsert",
+            "record": { "id": "inspiration:a", "text": "from B" },
+        });
+        // …and a goal change must never mirror into the inspiration cache.
+        let goal = json!({
+            "seq": 2, "entity_type": "goal", "entity_id": "goal-x",
+            "version": 1, "op": "upsert",
+            "record": { "id": "goal-x", "text": "not an inspiration" },
+        });
+        let (upserted, deleted) = apply_server_changes(&mut cache, &mut ops, &[inspiration, goal]);
+        assert_eq!(upserted, vec!["inspiration:a".to_owned()]);
+        assert!(deleted.is_empty());
+        assert_eq!(cache.records.len(), 1, "goal rows stay out of the cache");
+        assert_eq!(cache.records[0]["text"], "from B");
+        // The local attachment reference survives the pulled overwrite.
+        assert_eq!(cache.records[0]["audio"]["file"], "audio.wav");
+    }
+
+    #[test]
+    fn normalize_maps_server_snake_case_row() {
+        let row = json!({
+            "id": "inspiration:a", "text": "hello", "tags": ["x"],
+            "transcript": "t", "transcript_status": "completed",
+            "sensitivity": "normal", "ai_context_enabled": false,
+            "created_at": "2026-10-08T15:00:00Z", "updated_at": "2026-10-08T15:01:00Z",
+            "version": 2,
+        });
+        let record = normalize_inspiration(&row);
+        assert_eq!(record["transcriptStatus"], "completed");
+        assert_eq!(record["aiContextEnabled"], false);
+        assert_eq!(record["createdAt"], "2026-10-08T15:00:00Z");
+        assert_eq!(record["version"], 2);
     }
 
     #[test]

@@ -23,8 +23,8 @@ for (const route of routes) {
     const server = await startMockServer();
     await bootstrapApp(page, server.url);
     await page.goto(route.path);
-    await page.waitForLoadState("networkidle");
-    // Primary surface exists and the page didn't crash into an error boundary.
+    // Assert the rendered surface; background polling and dev event streams
+    // do not become network-idle.
     await expect(page.locator("body")).toBeVisible();
     const main = page.locator(route.proof().split(",")[0]!.trim()).first();
     await expect(main).toBeVisible({ timeout: 20_000 });

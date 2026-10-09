@@ -22,6 +22,9 @@ export const test = base.extend<{ mockServer: MockServer; chatScript: ChatScript
 export async function bootstrapApp(page: import("@playwright/test").Page, serverUrl: string) {
   await page.addInitScript((url: string) => {
     localStorage.setItem("lynse_api_url", url);
+    // Calendar and Connections use a separate backend origin. Keep fake
+    // credentials and background requests on the per-test mock server.
+    localStorage.setItem("lynse_integrations_api_url", url);
     localStorage.setItem("lynse_token", "e2e-access-token");
     localStorage.setItem("lynse_locale", "en");
     // Past first-run: since v1.1.6 the desktop shell renders the permission

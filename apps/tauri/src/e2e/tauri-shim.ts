@@ -24,7 +24,7 @@ interface LynseE2EHooks {
 }
 
 const COMMAND_PREFIX_STUBS: Array<[RegExp, unknown]> = [
-  [/^(local_transcription_list|todo_list|inspiration_list)$/, []],
+  [/^(local_transcription_list|todo_list|inspiration_list|live_translation_recoveries)$/, []],
   [/^local_stt_model_status$/, { models: [] }],
   [/^storage_usage$/, { items: [] }],
 ];

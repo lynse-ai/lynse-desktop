@@ -110,11 +110,30 @@ build_vibeasr() {
     -DBUILD_SHARED_LIBS=OFF "${gen_args[@]+"${gen_args[@]}"}"
   cmake --build "$src/build" --config Release -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
   local bin
-  # The streaming binary (src/asr_server.cpp, OUTPUT_NAME asr_stream_server) is
-  # the one our adapter talks to: it prints `---READY---`, reads one audio path
-  # per line on stdin, and with `--no-token-stream` emits the transcript then
-  # `---END---`, exiting on stdin EOF. Prefer it over the one-shot `asr_infer`.
-  bin="$(find "$src/build" -type f \( -name 'asr_stream_server' -o -name 'asr_stream_server.exe' -o -name 'asr_infer' -o -name 'asr_infer.exe' \) | head -n1)"
+  # The adapter talks to the streaming server (src/asr_server.cpp, OUTPUT_NAME
+  # asr_stream_server): it prints `---READY---`, reads one audio path per line on
+  # stdin, and with `--no-token-stream` emits the transcript then `---END---`.
+  # The one-shot `asr_infer` (demo/asr_infer.cpp) instead REQUIRES `--audio` and
+  # has no token-stream flag at all. CMake builds both into the same tree, so a
+  # single find over both name sets picks whichever one the traversal meets
+  # first — which shipped an asr_infer as vibeasr.exe and failed every Windows
+  # transcription with "Unknown argument: --no-token-stream". Ask for the server
+  # by name; only fall back when it genuinely was not built.
+  bin="$(find "$src/build" -type f \( -name 'asr_stream_server' -o -name 'asr_stream_server.exe' \) | head -n1)"
+  if [[ -z "$bin" ]]; then
+    echo "    WARNING: asr_stream_server missing, falling back to one-shot asr_infer" >&2
+    bin="$(find "$src/build" -type f \( -name 'asr_infer' -o -name 'asr_infer.exe' \) | head -n1)"
+  fi
+  if [[ -z "$bin" ]]; then
+    echo "ERROR: no VibeASR binary found under $src/build" >&2
+    exit 1
+  fi
+  # A wrong-generation sidecar still launches fine and only dies at transcribe
+  # time, so verify the protocol marker here — before it is packaged.
+  if ! grep -aq -- '---READY---' "$bin"; then
+    echo "ERROR: $bin is not the streaming server (no ---READY--- marker); the adapter cannot drive it" >&2
+    exit 1
+  fi
   local name
   name="$(basename "$bin")"
   local target="$SIDECARS/vibeasr"

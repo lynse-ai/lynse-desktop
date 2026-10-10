@@ -45,15 +45,12 @@ export interface AuthLoginVo {
 /** Default resend wait when the backend omits the cooldown on success. */
 export const SMS_RESEND_DEFAULT_SECONDS = 60;
 
-/** SMS code lengths the backend may issue — the form accepts either. */
-export const SMS_CODE_LENGTHS = [4, 6] as const;
+/** SMS code length the backend issues. */
+export const SMS_CODE_LENGTH = 6;
 
-/** Upper bound for the code input (the longer of SMS_CODE_LENGTHS). */
-export const SMS_CODE_MAX_LENGTH = 6;
-
-/** Whether a code has a complete length (4 or 6 digits). */
+/** Whether a code has all its digits. */
 export function isCompleteSmsCode(code: string): boolean {
-  return (SMS_CODE_LENGTHS as readonly number[]).includes(code.length);
+  return code.length === SMS_CODE_LENGTH;
 }
 
 /** Mainland-China mobile number (no + prefix, no dial code), 11 digits. */

@@ -12,8 +12,7 @@ import {
 } from "@lynse/core/auth/qrcode";
 import { pollWechatSession } from "@lynse/core/auth/wechat";
 import {
-  SMS_CODE_LENGTHS,
-  SMS_CODE_MAX_LENGTH,
+  SMS_CODE_LENGTH,
   SMS_RESEND_DEFAULT_SECONDS,
   cooldownSecondsFromError,
   isCompleteSmsCode,
@@ -45,10 +44,6 @@ type QrPhase = "creating" | "ready" | "scanned" | "expired" | "error";
 /** Sign-in views: phone + SMS form, the "more ways" screen (WeChat / QR /
  *  dev API entry), the app-scanned QR code, or the API form. */
 type LoginView = "phone" | "more" | "qr" | "api";
-
-// A 4-digit code waits this long before auto-submitting, in case the user is
-// still typing towards a 6-digit one; 6 digits submit without waiting.
-const CODE_AUTO_SUBMIT_DELAY_MS = 600;
 
 /**
  * Startup login page, shown by the AuthGate before any session exists, in
@@ -101,16 +96,6 @@ export function LoginPage() {
   const [agreed, setAgreed] = useState(false);
   const [smsError, setSmsError] = useState<string | null>(null);
 
-  // Deferred auto-submit for 4-digit codes (see handleSmsCodeChange).
-  const codeSubmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  function clearPendingCodeSubmit() {
-    if (codeSubmitTimerRef.current) {
-      clearTimeout(codeSubmitTimerRef.current);
-      codeSubmitTimerRef.current = null;
-    }
-  }
-
   // WeChat channel (testflight build). On desktop the QR page opens in the
   // system browser and we poll the backend for the session it publishes.
   const startWechatLogin = useAuthStore((s) => s.startWechatLogin);
@@ -160,9 +145,7 @@ export function LoginPage() {
   }, [passwordless, view, startQrLogin]);
 
   useEffect(() => {
-    // Stop the QR poll and drop any pending code auto-submit when the login
-    // page unmounts (e.g. after sign-in).
-    clearPendingCodeSubmit();
+    // Stop the QR poll when the login page unmounts (e.g. after sign-in).
     return () => {
       qrCancelledRef.current = true;
     };
@@ -210,7 +193,6 @@ export function LoginPage() {
       smsSubmitting
     )
       return;
-    clearPendingCodeSubmit();
     setSmsError(null);
     setSmsSubmitting(true);
     try {
@@ -224,20 +206,10 @@ export function LoginPage() {
   }
 
   function handleSmsCodeChange(value: string) {
-    const digits = value.replace(/\D/g, "").slice(0, SMS_CODE_MAX_LENGTH);
+    const digits = value.replace(/\D/g, "").slice(0, SMS_CODE_LENGTH);
     setSmsCode(digits);
-    clearPendingCodeSubmit();
-    // Six digits are unambiguously complete — submit immediately. A 4-digit
-    // code auto-submits after a short pause, so a user still typing towards
-    // six digits cancels it by simply keeping on typing.
-    if (digits.length === SMS_CODE_MAX_LENGTH) {
-      void handleSmsLogin(digits);
-    } else if (digits.length === SMS_CODE_LENGTHS[0]) {
-      codeSubmitTimerRef.current = setTimeout(() => {
-        codeSubmitTimerRef.current = null;
-        void handleSmsLogin(digits);
-      }, CODE_AUTO_SUBMIT_DELAY_MS);
-    }
+    // All six digits in — submit right away.
+    if (digits.length === SMS_CODE_LENGTH) void handleSmsLogin(digits);
   }
 
   function handleAgreeLink(url: string) {
@@ -438,7 +410,7 @@ export function LoginPage() {
               <div className="relative mt-3.5">
                 <Input
                   inputMode="numeric"
-                  maxLength={SMS_CODE_MAX_LENGTH}
+                  maxLength={SMS_CODE_LENGTH}
                   placeholder={t("auth.sms_code_placeholder")}
                   value={smsCode}
                   onChange={(e) => handleSmsCodeChange(e.target.value)}

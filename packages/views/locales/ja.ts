@@ -1,5 +1,20 @@
 const ja = {
   app_name: "Lynse",
+  mcp: {
+      "title": "MCP 接続",
+      "enable": "ローカル AI に Lynse へのアクセスを許可",
+      "hint": "ローカルの会議、メモ、タスクと、ログイン中のアカウントのクラウドデータを読み取り専用で公開します。AI コンテキストから除外されたメモや制限付きメモは公開しません。",
+      "port": "ポート",
+      "running": "Lynse を起動したままにしてください。クラウドにはログインが必要です。muse.ai はリモートサービスを利用します。設定内の認証情報は信頼するクライアントだけに共有してください。",
+      "copy_codex": "Codex 設定をコピー",
+      "copy_workbuddy": "WorkBuddy 設定をコピー",
+      "rotate": "認証情報を更新",
+      "copied": "接続設定をコピーしました",
+      "copy_failed": "コピーできませんでした",
+      "load_failed": "MCP 設定を読み込めません",
+      "invalid_port": "ポートは 1〜65535 の整数です",
+      "start_failed": "MCP を更新できません。ポートが使用中でないか確認してください"
+  },
   auth: {
     login_title: "Lynse にログイン",
     login_subtitle: "録音・文字起こし・議事録・ナレッジ管理",
@@ -417,10 +432,9 @@ const ja = {
     ai_assistant: "AI アシスタント",
     agent_server_title: "小靈アシスタントの接続先サーバー",
     agent_server_hint:
-      "小靈アシスタントは通常、メインの Lynse サーバー経由で接続します。専用の AI サービスに直接接続する場合（ゲートウェイを経由しない CloudRun デプロイなど）は、ここでサーバーアドレスを指定できます。ログインサーバーを切り替えると、アシスタントも自動的に対応する環境に切り替わります。",
+      "小靈アシスタントは通常、CloudBase 上の AI サービスに直接接続します。別のサーバーアドレスが必要な場合のみ、ここで指定できます。ログインサーバーを切り替えると、アシスタントも自動的に対応する環境に切り替わります。",
     agent_server_label: "サーバーアドレス",
-    agent_server_follow: "メインサーバーに合わせる",
-    agent_server_cloudrun: "CloudRun ダイレクト",
+    agent_server_cloudbase: "CloudBase ダイレクト",
     agent_server_custom: "カスタムアドレス",
     agent_server_invalid:
       "アドレスが無効です。http(s):// で始まる完全な URL を入力してください",

@@ -12,6 +12,26 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.1.12 (2026-10-10)
+
+### New Features
+
+- Connect the Xiaoling assistant straight to the CloudBase-hosted AI service by default on every environment — no gateway hop — and simplify the assistant server setting to CloudBase direct or a custom URL.
+- Serve the assistant and inspiration cloud sync from their CloudBase default domains, with automatic migration of previously saved addresses.
+
+### Fixed
+
+- Standardize phone sign-in verification codes at 6 digits and drop the legacy 4-digit input handling.
+
+### 新功能
+
+- 小灵助手在所有环境默认直连 CloudBase 上的 AI 服务，不再经网关中转；助手服务器设置简化为「CloudBase 直连」与自定义地址两项。
+- 小灵助手与灵感云同步统一切换到 CloudBase 默认域名，历史保存的旧地址自动迁移。
+
+### 修复
+
+- 手机登录验证码统一为 6 位，移除 4 位码的兼容输入逻辑。
+
 ## 1.1.11 (2026-10-09)
 
 ### New Features

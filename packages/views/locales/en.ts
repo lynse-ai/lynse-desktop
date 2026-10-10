@@ -1,5 +1,20 @@
 const en = {
   app_name: "Lynse",
+  mcp: {
+      "title": "MCP connections",
+      "enable": "Allow local AI clients to access Lynse",
+      "hint": "Let Codex, WorkBuddy and other local clients read local meetings, inspiration notes and todos, plus cloud meetings, folders and todos for the signed-in account. Read-only. Notes excluded from AI context or marked restricted stay private.",
+      "port": "Port",
+      "running": "Keep Lynse running. Sign in for cloud data. Use the remote service for muse.ai. Configuration includes a local credential; share it only with trusted clients.",
+      "copy_codex": "Copy Codex config",
+      "copy_workbuddy": "Copy WorkBuddy config",
+      "rotate": "Rotate access credential",
+      "copied": "Connection configuration copied",
+      "copy_failed": "Could not copy; try again",
+      "load_failed": "Could not load MCP settings",
+      "invalid_port": "Port must be an integer from 1 to 65535",
+      "start_failed": "Could not update MCP; check whether its port is in use"
+  },
   auth: {
     login_title: "Sign in to Lynse",
     login_subtitle: "Record, transcribe, and organize your meetings",
@@ -416,10 +431,9 @@ const en = {
     ai_assistant: "AI Assistant",
     agent_server_title: "Xiaoling Assistant Server",
     agent_server_hint:
-      "The Xiaoling assistant connects through the main Lynse server by default. To reach a dedicated AI service directly (bypassing the gateway, e.g. a CloudRun deployment), set a separate server address here. Switching the signed-in server moves the assistant to the matching environment automatically.",
+      "The Xiaoling assistant connects directly to the CloudBase-hosted AI service by default. Set a separate server address here only if you need a different one. Switching the signed-in server moves the assistant to the matching environment automatically.",
     agent_server_label: "Server address",
-    agent_server_follow: "Follow main server",
-    agent_server_cloudrun: "CloudRun (direct)",
+    agent_server_cloudbase: "CloudBase (direct)",
     agent_server_custom: "Custom URL",
     agent_server_invalid: "Invalid address — enter a full URL starting with http(s)://",
     agent_server_current: "Connected to: {{target}}",

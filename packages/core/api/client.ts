@@ -7,7 +7,7 @@ type ClientOptions = {
 type RequestOptions = RequestInit & {
   /** Alternate backend origin for this one call. The AI-assistant chat
    *  transport uses it to target the dedicated agent server (route B direct
-   *  CloudRun connection) while session credentials stay unchanged. */
+   *  CloudBase connection) while session credentials stay unchanged. */
   baseUrl?: string;
   /** Integrations use Bearer tokens; their auth failures never end the main session. */
   authScope?: "session" | "integration";

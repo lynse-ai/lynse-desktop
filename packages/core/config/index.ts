@@ -61,26 +61,30 @@ export const LYNSE_EDITION: LynseEdition =
 export const DEV_BUILD: boolean = typeof __LYNSE_DEV__ === "boolean" ? __LYNSE_DEV__ : false;
 
 /**
- * Route B preset: the lynclaw agent service deployed on Tencent CloudRun,
- * connected to directly — no Lynse gateway in between. The service accepts
- * the Lynse session token and the poll chat contract.
+ * Route B preset: the lynclaw agent service deployed on Tencent CloudBase
+ * (云托管), connected to directly — no Lynse gateway in between. The service
+ * accepts the Lynse session token and the poll chat contract.
  *
- * Deployment `lynclaw-api-321192-9` replaced the retired `319577-10` one
- * (user-confirmed 2026-09-30); the old host must not be referenced anywhere.
+ * The host is the service's default domain per the CloudBase console
+ * (`lynclaw-api-319577-10`, user-confirmed 2026-10-10). The earlier
+ * `lynclaw-api-321192-9` deployment host routes to the same service and is
+ * kept as LEGACY_CLOUDBASE_AGENT_URL only so saved values migrate (see
+ * core-provider's boot heal).
  */
-export const CLOUDRUN_AGENT_URL =
+export const CLOUDBASE_AGENT_URL =
+  "https://lynclaw-api-319577-10-1401959758.sh.run.tcloudbase.com";
+
+/** Pre-2026-10-10 preset host; routes to the same lynclaw-api service. */
+export const LEGACY_CLOUDBASE_AGENT_URL =
   "https://lynclaw-api-321192-9-1401959758.sh.run.tcloudbase.com";
 
 /**
- * Canonical assistant origin per business backend. File ids (notes, mentions,
- * conclusion inserts) are minted per environment, so the assistant must serve
- * the same environment the business session is on — a test-backend session
- * chats with the test lynclaw deployment, and production rides the production
- * gateway. Returning null means "follow the main backend" (route A).
+ * Canonical assistant origin: the CloudBase-hosted lynclaw deployment on
+ * every environment (user decision 2026-10-10 — the gateway hop is no longer
+ * the default). The service derives the caller's identity from the Lynse
+ * token itself, so direct connection works for both backend environments.
  */
 export function agentUrlForApiUrl(apiUrl: string | null | undefined): string | null {
   if (!apiUrl) return null;
-  const url = apiUrl.replace(/\/+$/, "");
-  if (url === TEST_API_URL) return CLOUDRUN_AGENT_URL;
-  return null;
+  return CLOUDBASE_AGENT_URL;
 }

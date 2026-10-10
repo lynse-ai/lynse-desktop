@@ -977,7 +977,7 @@ describe("transport selection by server", () => {
   });
 
   it("targets the dedicated agent base URL with native lynclaw paths when configured (route B)", async () => {
-    const agentBase = "https://lynclaw-api-321192-9-1401959758.sh.run.tcloudbase.com";
+    const agentBase = "https://lynclaw-api-319577-10-1401959758.sh.run.tcloudbase.com";
     apiMocks.getAgentBaseUrl.mockReturnValue(agentBase);
     apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
     apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
@@ -986,7 +986,7 @@ describe("transport selection by server", () => {
     await new PollChatTransport().send(sendOptions({ onEvent }));
 
     // Direct connections skip the gateway prefix: the service serves
-    // /api/chat/* natively (verified against the CloudRun deployment).
+    // /api/chat/* natively (verified against the CloudBase deployment).
     expect(apiMocks.post).toHaveBeenCalledWith(
       "/api/chat/poll",
       expect.objectContaining({ query: "hello", sessionId: "session-1" }),

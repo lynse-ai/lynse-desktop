@@ -24,16 +24,27 @@ import type { InspirationCloudStatus, InspirationCloudSyncReport } from "./types
 export const LYNSE_MEMORY_API_URL_KEY = "lynse_memory_api_url";
 
 /**
- * Production Lynse Memory CloudRun service. Override (or disable with an
- * empty override) via localStorage[LYNSE_MEMORY_API_URL_KEY].
+ * Production Lynse Memory CloudBase service — the service's default domain
+ * per the CloudBase console (`lynse-memory-319577-10`, user-confirmed
+ * 2026-10-10). Override (or disable with an empty override) via
+ * localStorage[LYNSE_MEMORY_API_URL_KEY].
  */
 export const DEFAULT_MEMORY_API_URL =
+  "https://lynse-memory-319577-10-1401959758.sh.run.tcloudbase.com";
+
+/** Pre-2026-10-10 default host; routes to the same lynse-memory service. */
+export const LEGACY_MEMORY_API_URL =
   "https://lynse-memory-321192-9-1401959758.sh.run.tcloudbase.com";
 
 export function memoryApiBase(): string {
   if (typeof window === "undefined") return "";
   const configured = (window.localStorage.getItem(LYNSE_MEMORY_API_URL_KEY) ?? "").trim();
-  if (configured !== "") return configured;
+  if (configured !== "") {
+    // A manual override pinned to the pre-migration host keeps working, but
+    // it should ride the current default like the unset case does.
+    if (configured === LEGACY_MEMORY_API_URL) return DEFAULT_MEMORY_API_URL;
+    return configured;
+  }
   // Empty override = explicitly disabled; unset = production default.
   if (window.localStorage.getItem(LYNSE_MEMORY_API_URL_KEY) === "") return "";
   return DEFAULT_MEMORY_API_URL;

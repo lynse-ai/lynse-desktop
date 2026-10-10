@@ -58,7 +58,7 @@ const chatPollTaskPath = (taskId: string) =>
 /**
  * Route B: the assistant can be pointed at a dedicated agent backend
  * (lynse_agent_api_url, set in Settings → AI Assistant) and connect straight
- * to it — typically the CloudRun-hosted lynclaw service, bypassing the Lynse
+ * to it — typically the CloudBase-hosted lynclaw service, bypassing the Lynse
  * gateway. Undefined = ride the main backend like every other business API.
  * Chat always uses the poll contract; the direct service supports it natively.
  */

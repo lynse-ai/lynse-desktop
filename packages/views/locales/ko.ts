@@ -1,5 +1,20 @@
 const ko = {
   app_name: "Lynse",
+  mcp: {
+      "title": "MCP 연결",
+      "enable": "로컬 AI의 Lynse 접근 허용",
+      "hint": "로컬 회의, 메모, 할 일과 로그인한 계정의 클라우드 데이터를 읽기 전용으로 공유합니다. AI 컨텍스트에서 제외되거나 제한된 메모는 공유하지 않습니다.",
+      "port": "포트",
+      "running": "Lynse를 실행한 상태로 유지하세요. 클라우드는 로그인이 필요하며 muse.ai는 원격 서비스를 사용합니다. 설정의 인증 정보는 신뢰하는 클라이언트에만 공유하세요.",
+      "copy_codex": "Codex 설정 복사",
+      "copy_workbuddy": "WorkBuddy 설정 복사",
+      "rotate": "접근 인증 정보 교체",
+      "copied": "연결 설정을 복사했습니다",
+      "copy_failed": "복사하지 못했습니다",
+      "load_failed": "MCP 설정을 읽을 수 없습니다",
+      "invalid_port": "포트는 1~65535의 정수여야 합니다",
+      "start_failed": "MCP를 변경하지 못했습니다. 포트 사용 여부를 확인하세요"
+  },
   auth: {
     login_title: "Lynse 로그인",
     login_subtitle: "녹음, 문자 변환, 회의록, 지식 관리",
@@ -416,10 +431,9 @@ const ko = {
     ai_assistant: "AI 어시스턴트",
     agent_server_title: "샤오링 어시스턴트 서버 주소",
     agent_server_hint:
-      "샤오링 어시스턴트는 기본적으로 Lynse 메인 서버를 통해 연결됩니다. 전용 AI 서비스에 직접 연결하려면(게이트웨이 우회, 예: CloudRun 배포) 여기서 서버 주소를 지정하세요. 로그인 서버를 전환하면 어시스턴트도 자동으로 해당 환경을 따릅니다.",
+      "샤오링 어시스턴트는 기본적으로 CloudBase의 AI 서비스에 직접 연결됩니다. 다른 서버 주소가 필요한 경우에만 여기서 지정하세요. 로그인 서버를 전환하면 어시스턴트도 자동으로 해당 환경을 따릅니다.",
     agent_server_label: "서버 주소",
-    agent_server_follow: "메인 서버 따르기",
-    agent_server_cloudrun: "CloudRun 직접 연결",
+    agent_server_cloudbase: "CloudBase 직접 연결",
     agent_server_custom: "사용자 지정 주소",
     agent_server_invalid:
       "주소가 올바르지 않습니다. http(s)://로 시작하는 전체 URL을 입력하세요",

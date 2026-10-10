@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { ApiClient, setApiInstance } from "../api/client";
 import { createAuthStore, getAuthStore, registerAuthStore } from "../auth";
-import { DEFAULT_API_URL, AGENT_API_URL_STORAGE_KEY, CLOUDRUN_AGENT_URL, agentUrlForApiUrl, DEFAULT_INTEGRATIONS_API_URL, INTEGRATIONS_API_URL_STORAGE_KEY } from "../config";
+import { DEFAULT_API_URL, AGENT_API_URL_STORAGE_KEY, CLOUDBASE_AGENT_URL, LEGACY_CLOUDBASE_AGENT_URL, agentUrlForApiUrl, DEFAULT_INTEGRATIONS_API_URL, INTEGRATIONS_API_URL_STORAGE_KEY } from "../config";
 import { defaultStorage } from "./storage";
 import { QueryProvider } from "../provider";
 import { initI18n } from "../i18n";
@@ -42,15 +42,19 @@ export function initCore(
     },
     identity,
   });
-  // The AI assistant targets a dedicated backend (route B direct CloudRun);
+  // The AI assistant targets a dedicated backend (route B direct CloudBase);
   // absent/empty means it follows the main URL above. Server switches keep
   // the persisted agent in sync (auth login / api-config panel), but installs
   // saved before that rule may still carry an agent pinned to the *other*
   // environment — heal those at boot so a session can never chat across
-  // environments. Hand-typed custom URLs are left untouched.
+  // environments. Hand-typed custom URLs are left untouched. The legacy
+  // preset host (pre-2026-10-10 build) counts as the preset too, so its
+  // saved value migrates instead of stranding as a frozen custom URL.
   const savedAgentUrl = storage.getItem(AGENT_API_URL_STORAGE_KEY);
   const agentUrl =
-    !savedAgentUrl || savedAgentUrl === CLOUDRUN_AGENT_URL
+    !savedAgentUrl ||
+    savedAgentUrl === CLOUDBASE_AGENT_URL ||
+    savedAgentUrl === LEGACY_CLOUDBASE_AGENT_URL
       ? agentUrlForApiUrl(effectiveUrl)
       : savedAgentUrl;
   apiClient.setAgentBaseUrl(agentUrl);

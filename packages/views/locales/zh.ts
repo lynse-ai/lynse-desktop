@@ -1,5 +1,20 @@
 const zh = {
   app_name: "Lynse",
+  mcp: {
+      "title": "MCP 连接",
+      "enable": "允许本机 AI 访问 Lynse",
+      "hint": "开启后，Codex、WorkBuddy 等本机客户端可以读取本地会议、灵感笔记和待办，以及当前登录账号的云端会议、文件夹和待办。不会修改数据；不分享已关闭 AI 上下文或受限的灵感笔记。",
+      "port": "端口",
+      "running": "Lynse 需保持运行。云端数据需要登录；muse.ai 网页连接器使用远程服务。配置含本机访问凭据，请仅交给你信任的客户端。",
+      "copy_codex": "复制 Codex 配置",
+      "copy_workbuddy": "复制 WorkBuddy 配置",
+      "rotate": "更换访问凭据",
+      "copied": "已复制连接配置",
+      "copy_failed": "复制失败，请重试",
+      "load_failed": "无法读取 MCP 设置",
+      "invalid_port": "端口需为 1 至 65535 的整数",
+      "start_failed": "无法更新 MCP 服务，请检查端口是否被占用"
+  },
   auth: {
     login_title: "登录 Lynse",
     login_subtitle: "录音转写、会议纪要、知识管理",
@@ -414,10 +429,9 @@ const zh = {
     ai_assistant: "AI 助手",
     agent_server_title: "小灵助手服务地址",
     agent_server_hint:
-      "小灵助手默认通过 Lynse 主服务连接。如需直连独立的 AI 服务（绕开网关，例如 CloudRun 部署），可在此单独指定服务器地址。切换登录服务器时会自动跟随对应环境。",
+      "小灵助手默认直连 CloudBase 上的 AI 服务。如需指定其他服务器地址，可在此单独配置；切换登录服务器时会自动跟随对应环境。",
     agent_server_label: "服务器地址",
-    agent_server_follow: "跟随主服务地址",
-    agent_server_cloudrun: "CloudRun 直连",
+    agent_server_cloudbase: "CloudBase 直连",
     agent_server_custom: "自定义地址",
     agent_server_invalid: "地址无效，请输入以 http(s):// 开头的完整服务器地址",
     agent_server_current: "当前连接：{{target}}",

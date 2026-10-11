@@ -9,7 +9,7 @@ import type {
   WorkspaceItem,
 } from "./types";
 
-export type SttEngine = "qwen3" | "funasr" | "whisper" | "whisperx" | "vibeasr" | "mlx" | "moss" | "sherpa";
+export type SttEngine = "qwen3" | "funasr" | "whisper" | "whisperx" | "vibeasr" | "mlx" | "sherpa";
 
 /** Engines selectable outside macOS. Defined once because the engine list and
  *  the model cards must agree — they used to each keep a private copy of this
@@ -53,14 +53,6 @@ export const QWEN3_MODEL_LABELS: Record<Qwen3Model, string> = {
 };
 export const DEFAULT_QWEN3_MODEL: Qwen3Model = "qwen3-asr-1.7b-8bit";
 
-/** MOSS-Transcribe-Diarize catalog ids (must mirror the Rust `STT_MODELS`). */
-export type MossModel = "moss-transcribe-8bit";
-export const MOSS_MODELS: MossModel[] = ["moss-transcribe-8bit"];
-export const MOSS_MODEL_LABELS: Record<MossModel, string> = {
-  "moss-transcribe-8bit": "MOSS-Transcribe-Diarize 0.9B（说话人分离，MLX 8-bit，~1.1 GiB）",
-};
-export const DEFAULT_MOSS_MODEL: MossModel = "moss-transcribe-8bit";
-
 export type SttProviderConfig =
   | { provider: "qwen3"; model?: Qwen3Model | string; hotword_package_id?: string | null }
   | { provider: "funasr"; expected_speakers?: number | null; hotword_package_id?: string | null }
@@ -73,8 +65,7 @@ export type SttProviderConfig =
       hotword_package_id?: string | null;
     }
   | { provider: "vibeasr"; hotword_package_id?: string | null }
-  | { provider: "mlx"; model?: string; hotword_package_id?: string | null }
-  | { provider: "moss"; model?: MossModel | string; hotword_package_id?: string | null };
+  | { provider: "mlx"; model?: string; hotword_package_id?: string | null };
 
 export type TranscribeConfig = {
   default?: SttProviderConfig | null;
@@ -312,9 +303,12 @@ export function migrateSttProviderConfig(value: unknown): SttProviderConfig | nu
     };
   }
   if (provider === "moss") {
+    // MOSS-Transcribe-Diarize was removed — legacy saved selections migrate to
+    // the default engine. Hotword packages are engine-agnostic, so they carry
+    // over.
     return {
-      provider: "moss",
-      model: (record.model as MossModel | string | undefined) ?? DEFAULT_MOSS_MODEL,
+      provider: "qwen3",
+      model: DEFAULT_QWEN3_MODEL,
       hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
     };
   }
@@ -370,8 +364,6 @@ export function providerModelId(config: SttProviderConfig): string {
       return VIBEVOICE_MODEL_ID;
     case "mlx":
       return config.model ?? "whisper-large-v3-turbo";
-    case "moss":
-      return config.model ?? DEFAULT_MOSS_MODEL;
   }
 }
 

@@ -34,13 +34,13 @@ import type { PluginManifest } from "./types";
  * Community lineup (PRD v0.5): FunASR latest + WhisperX latest first, Qwen3
  * both tiers retained, plus the whisper.cpp tiers and VibeVoice-ASR-BitNet.
  * The sidecar engines (whisper on Metal/Vulkan, vibeasr on CPU) ship on both
- * desktop platforms; MOSS waits until quantization/adaptation lands; the
- * vibeasr/mlx tiers stay functional for existing installs but are not listed.
+ * desktop platforms; the vibeasr/mlx tiers stay functional for existing
+ * installs but are not listed.
  *
  * Off macOS the catalog is filtered by `NON_MAC_ENGINES`: the sidecar engines
  * (whisper + vibeasr, both statically-linked binaries in the shared runtime)
  * and FunASR, which prepares its own Python venv on first use. The MLX-bound
- * engines (Qwen3, MOSS, MLX-Whisper) stay hidden because their backend does not
+ * engines (Qwen3, MLX-Whisper) stay hidden because their backend does not
  * exist off Apple Silicon; WhisperX is hidden until its venv bootstrap learns
  * the Windows interpreter layout.
  */

@@ -105,8 +105,6 @@ pub fn model_file_name(provider: &str, model_id: &str) -> Option<String> {
         // MLX keeps a directory of weights (marked ready with a `.ready` file),
         // so there is no single downloadable artifact to name.
         "mlx" => None,
-        // MOSS (converted MLX weights) downloads via its Python bridge too.
-        "moss" => None,
         // WhisperX (faster-whisper CTranslate2 weights + wav2vec2 aligner)
         // downloads via its Python bridge as well.
         "whisperx" => None,
@@ -180,28 +178,6 @@ pub fn qwen3_hf_repo(model_id: &str) -> &'static str {
     }
 }
 
-/// MOSS-Transcribe-Diarize (OpenMOSS) on Apple MLX — the local speaker
-/// attribution engine. Unlike the single-speaker bridges, its transcript
-/// segments carry native S01-style speaker labels and timestamps.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct MossProviderConfig {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hotword_package_id: Option<String>,
-}
-
-/// Catalog id of the model used when a MOSS config names none: the 8-bit
-/// conversion (gate-matrix winner — 4-bit collapses speaker clusters).
-pub const MOSS_DEFAULT_MODEL_ID: &str = "moss-transcribe-8bit";
-
-/// HF repo backing a MOSS catalog id (converted MLX weights, 8-bit).
-pub fn moss_hf_repo(model_id: &str) -> &'static str {
-    match model_id {
-        _ => "lynse-ai/moss-transcribe-diarize-mlx-8bit",
-    }
-}
-
 /// WhisperX (faster-whisper on CTranslate2) — the local CPU engine.
 /// Transcription + best-effort word alignment; speaker diarization stays out
 /// until the pyannote distribution channel is settled (PRD §12 Q7).
@@ -234,7 +210,6 @@ pub enum ProviderConfig {
     VibeVoice(VibeVoiceProviderConfig),
     Mlx(MlxProviderConfig),
     Qwen3(Qwen3ProviderConfig),
-    Moss(MossProviderConfig),
     #[serde(rename = "whisperx")]
     WhisperX(WhisperXProviderConfig),
 }
@@ -260,7 +235,6 @@ impl ProviderConfig {
             ProviderConfig::VibeVoice(_) => "vibeasr",
             ProviderConfig::Mlx(_) => "mlx",
             ProviderConfig::Qwen3(_) => "qwen3",
-            ProviderConfig::Moss(_) => "moss",
             ProviderConfig::WhisperX(_) => "whisperx",
         }
     }
@@ -272,7 +246,6 @@ impl ProviderConfig {
             ProviderConfig::VibeVoice(config) => config.hotword_package_id.as_deref(),
             ProviderConfig::Mlx(config) => config.hotword_package_id.as_deref(),
             ProviderConfig::Qwen3(config) => config.hotword_package_id.as_deref(),
-            ProviderConfig::Moss(config) => config.hotword_package_id.as_deref(),
             ProviderConfig::WhisperX(config) => config.hotword_package_id.as_deref(),
         }
     }
@@ -284,7 +257,6 @@ impl ProviderConfig {
             ProviderConfig::VibeVoice(_) => None,
             ProviderConfig::Mlx(_) => None,
             ProviderConfig::Qwen3(_) => None,
-            ProviderConfig::Moss(_) => None,
             ProviderConfig::WhisperX(config) => config.expected_speakers,
         }
     }
@@ -296,8 +268,7 @@ impl ProviderConfig {
             ProviderConfig::Funasr(config) => config.expected_speakers = expected,
             ProviderConfig::Whisper(config) => config.expected_speakers = expected,
             ProviderConfig::WhisperX(config) => config.expected_speakers = expected,
-            ProviderConfig::VibeVoice(_) | ProviderConfig::Mlx(_) | ProviderConfig::Qwen3(_)
-            | ProviderConfig::Moss(_) => {}
+            ProviderConfig::VibeVoice(_) | ProviderConfig::Mlx(_) | ProviderConfig::Qwen3(_) => {}
         }
     }
 
@@ -310,7 +281,6 @@ impl ProviderConfig {
             ProviderConfig::VibeVoice(config) => config.hotword_package_id = package_id,
             ProviderConfig::Mlx(config) => config.hotword_package_id = package_id,
             ProviderConfig::Qwen3(config) => config.hotword_package_id = package_id,
-            ProviderConfig::Moss(config) => config.hotword_package_id = package_id,
             ProviderConfig::WhisperX(config) => config.hotword_package_id = package_id,
         }
     }
@@ -322,7 +292,6 @@ impl ProviderConfig {
             ProviderConfig::VibeVoice(_) => &VibeVoiceAdapter,
             ProviderConfig::Mlx(_) => &MlxAdapter,
             ProviderConfig::Qwen3(_) => &Qwen3Adapter,
-            ProviderConfig::Moss(_) => &MossAdapter,
             ProviderConfig::WhisperX(_) => &WhisperXAdapter,
         }
     }
@@ -1197,90 +1166,6 @@ impl BatchSttAdapter for Qwen3Adapter {
     }
 }
 
-/// MOSS-Transcribe-Diarize (OpenMOSS) on Apple MLX — local engine with native
-/// speaker attribution. Runs the in-repo `moss_mlx` port through the
-/// `moss_transcribe.py` bridge in the shared MLX venv (mlx-lm + tokenizers +
-/// soundfile + vendored ffmpeg); no shared STT runtime is required. Refused
-/// on non-Apple-Silicon platforms. Speaker labels come straight from the
-/// model (S01...) and are preserved instead of being forced single-speaker.
-///
-/// `--context` is still forwarded (the bridge accepts it for parity), but the
-/// model has no context-bias input; hotword correction remains the
-/// engine-agnostic Rust-side post-process.
-pub struct MossAdapter;
-
-impl MossAdapter {
-    /// Bridge-agnostic pipeline: build args, spawn the Python bridge, parse
-    /// and normalize its transcript. Free of the `AppHandle` so tests can run
-    /// the real subprocess against a mock Tauri runtime.
-    pub(crate) fn transcribe_via_bridge(
-        python: &str,
-        script: &Path,
-        request: &SttRequest,
-        model_id: &str,
-    ) -> CommandResult<SttOutput> {
-        let output_json = request.model_directory.join("moss-output.json");
-        let mut args = vec![
-            script.to_string_lossy().into_owned(),
-            request.audio_path.clone(),
-            "--model-dir".to_owned(),
-            request.model_directory.to_string_lossy().into_owned(),
-            "--model".to_owned(),
-            moss_hf_repo(model_id).to_owned(),
-            "--region".to_owned(),
-            crate::detect_net_region().to_owned(),
-            "--output".to_owned(),
-            output_json.to_string_lossy().into_owned(),
-        ];
-        if !request.hotword.is_empty() {
-            args.extend(["--context".to_owned(), request.hotword.trim().to_owned()]);
-        }
-
-        crate::run_python_with_model_cache(python, &args, &request.model_directory)?;
-
-        let parsed: Value = {
-            let content = std::fs::read_to_string(&output_json).map_err(|error| error.to_string())?;
-            serde_json::from_str(&content).map_err(|error| error.to_string())?
-        };
-        // normalize_whisper_output already maps each segment's `speaker` field
-        // into speakerId/speakerName/rawSpeaker — keep those native labels.
-        let segments = normalize_whisper_output(&parsed);
-
-        let text = segments
-            .iter()
-            .filter_map(|segment| segment.get("text").and_then(Value::as_str))
-            .collect::<String>();
-        Ok(SttOutput { text, segments })
-    }
-}
-
-impl BatchSttAdapter for MossAdapter {
-    fn engine(&self) -> &'static str {
-        "moss"
-    }
-
-    fn transcribe(&self, app: &tauri::AppHandle, request: &SttRequest) -> CommandResult<SttOutput> {
-        if std::env::consts::OS != "macos" || std::env::consts::ARCH != "aarch64" {
-            return Err("MOSS 转写引擎（MLX）仅支持 macOS（Apple Silicon）。请在设置中改用 Whisper / VibeVoice。".to_owned());
-        }
-
-        let ProviderConfig::Moss(config) = &request.provider else {
-            return Err("MOSS 适配器收到非 MOSS 配置".to_owned());
-        };
-        let model_id = config.model.as_deref().unwrap_or(MOSS_DEFAULT_MODEL_ID);
-
-        let python = crate::ensure_mlx_venv(app)?;
-        crate::ensure_moss_packages(app, &python)?;
-
-        Self::transcribe_via_bridge(
-            &python,
-            &crate::moss_script_path(app)?,
-            request,
-            model_id,
-        )
-    }
-}
-
 /// WhisperX (faster-whisper on CTranslate2) — the local CPU engine. Runs the
 /// `whisperx_transcribe.py` bridge through a dedicated venv (`whisperx` pulls
 /// torch/ctranslate2/faster-whisper at creation; imageio-ffmpeg vendors the
@@ -1881,78 +1766,6 @@ mod tests {
         assert!(!output.segments.is_empty(), "chunk segments must be present");
         for segment in &output.segments {
             assert_eq!(segment.get("speakerId").and_then(Value::as_str), Some("spk-1"));
-            assert!(segment.get("startMs").and_then(Value::as_i64).is_some());
-            assert!(segment.get("endMs").and_then(Value::as_i64).is_some());
-        }
-    }
-
-    /// Full end-to-end for the MOSS bridge: spawns the real
-    /// `moss_transcribe.py` through the moss-mlx venv and parses its
-    /// speaker-attributed transcript. Skips silently unless
-    /// `LYNSE_MOSS_TEST_MODEL_DIR` / `LYNSE_MOSS_TEST_AUDIO` point at a
-    /// converted model and a sample clip.
-    #[test]
-    fn moss_adapter_transcribes_real_audio_end_to_end() {
-        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let venv_python = std::env::var_os("LYNSE_MOSS_TEST_PYTHON")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| manifest.join("../../../.venv-mlx/bin/python"));
-        let bridge = manifest.join("resources/moss_transcribe.py");
-        let model_dir = std::env::var_os("LYNSE_MOSS_TEST_MODEL_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/tmp/moss-modeldir"));
-        let audio = std::env::var_os("LYNSE_MOSS_TEST_AUDIO")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/tmp/moss-test.wav"));
-        let weights_ready = model_dir.join("weights.safetensors").exists()
-            && model_dir.join("config.json").exists();
-        if !venv_python.exists() || !bridge.exists() || !weights_ready || !audio.exists() {
-            eprintln!(
-                "skipping: missing artifacts (venv={} bridge={} weights={} audio={})",
-                venv_python.exists(),
-                bridge.exists(),
-                weights_ready,
-                audio.exists()
-            );
-            return;
-        }
-
-        let provider: ProviderConfig = serde_json::from_value(json!({
-            "provider": "moss",
-            "hotword_package_id": null
-        }))
-        .unwrap();
-        let request = SttRequest {
-            audio_path: audio.to_string_lossy().into_owned(),
-            model_directory: model_dir,
-            provider,
-            expected_speakers: None,
-            hotword: String::new(),
-            prior_context: None,
-            language: None,
-        };
-        let output = MossAdapter::transcribe_via_bridge(
-            venv_python.to_string_lossy().as_ref(),
-            &bridge,
-            &request,
-            MOSS_DEFAULT_MODEL_ID,
-        )
-        .expect("MOSS adapter end-to-end transcription");
-
-        assert!(!output.text.trim().is_empty(), "transcript must not be empty");
-        assert!(!output.segments.is_empty(), "SATS segments must be present");
-        // MOSS keeps native speaker labels instead of a forced spk-1.
-        let speakers: Vec<&str> = output
-            .segments
-            .iter()
-            .filter_map(|segment| segment.get("rawSpeaker").and_then(Value::as_str))
-            .collect();
-        assert!(!speakers.is_empty(), "segments must carry raw speaker labels");
-        assert!(
-            speakers.iter().all(|speaker| speaker.starts_with('S')),
-            "speaker labels should look like S01: {speakers:?}"
-        );
-        for segment in &output.segments {
             assert!(segment.get("startMs").and_then(Value::as_i64).is_some());
             assert!(segment.get("endMs").and_then(Value::as_i64).is_some());
         }

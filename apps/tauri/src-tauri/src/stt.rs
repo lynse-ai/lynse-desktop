@@ -697,8 +697,9 @@ impl BatchSttAdapter for FunasrAdapter {
     }
 
     fn transcribe(&self, app: &tauri::AppHandle, request: &SttRequest) -> CommandResult<SttOutput> {
+        let python = crate::ensure_funasr_venv(app)?;
         let mut args = vec![
-            script_path(app)?.to_string_lossy().into_owned(),
+            script_path(app, &python)?.to_string_lossy().into_owned(),
             request.audio_path.clone(),
             "--model-dir".to_owned(),
             request.model_directory.to_string_lossy().into_owned(),
@@ -712,7 +713,7 @@ impl BatchSttAdapter for FunasrAdapter {
         if let Some(prior) = request.prior_context.as_deref().filter(|value| !value.trim().is_empty()) {
             args.extend(["--prompt".to_owned(), prior.trim().to_owned()]);
         }
-        let stdout = run_funasr(app, &args, &request.model_directory)?;
+        let stdout = run_funasr(&python, &args, &request.model_directory)?;
         let raw = parse_funasr_json(&stdout)?;
         let normalized = normalize_funasr_output(raw);
         let text = normalized
@@ -1026,7 +1027,7 @@ impl BatchSttAdapter for MlxAdapter {
         let python = ensure_mlx_venv(app)?;
         let output_json = request.model_directory.join("mlx-output.json");
         let mut args = vec![
-            mlx_script_path(app)?.to_string_lossy().into_owned(),
+            mlx_script_path(app, &python)?.to_string_lossy().into_owned(),
             request.audio_path.clone(),
             "--model-dir".to_owned(),
             request.model_directory.to_string_lossy().into_owned(),
@@ -1159,7 +1160,7 @@ impl BatchSttAdapter for Qwen3Adapter {
 
         Self::transcribe_via_bridge(
             &python,
-            &crate::qwen3_script_path(app)?,
+            &crate::qwen3_script_path(app, &python)?,
             request,
             model_id,
         )
@@ -1248,7 +1249,7 @@ impl BatchSttAdapter for WhisperXAdapter {
 
         Self::transcribe_via_bridge(
             &python,
-            &whisperx_script_path(app)?,
+            &whisperx_script_path(app, &python)?,
             request,
             WHISPERX_DEFAULT_MODEL_ID,
         )

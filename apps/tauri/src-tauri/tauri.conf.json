@@ -5,7 +5,7 @@
   "identifier": "com.lynse.sparknote",
   "build": {
     "beforeDevCommand": "pnpm --filter @lynse/tauri build:audio-capture && pnpm --filter @lynse/tauri exec vite --host 127.0.0.1",
-    "beforeBuildCommand": "pnpm --filter @lynse/tauri build:audio-capture && pnpm --filter @lynse/tauri exec vite build",
+    "beforeBuildCommand": "bash scripts/compile-sidecar-bytecode.sh && pnpm --filter @lynse/tauri build:audio-capture && pnpm --filter @lynse/tauri exec vite build",
     "devUrl": "http://127.0.0.1:5174",
     "frontendDist": "../dist"
   },
@@ -57,11 +57,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/funasr_transcribe.py": "funasr_transcribe.py",
-      "resources/mlx_transcribe.py": "mlx_transcribe.py",
-      "resources/qwen3_transcribe.py": "qwen3_transcribe.py",
-      "resources/whisperx_transcribe.py": "whisperx_transcribe.py",
-      "resources/sherpa_voiceprint.py": "sherpa_voiceprint.py",
+      "resources/compiled": "compiled",
       "resources/sidecars/audio-capture": "audio-capture"
     },
     "macOS": {

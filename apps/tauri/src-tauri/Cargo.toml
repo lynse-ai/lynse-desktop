@@ -20,7 +20,12 @@ tauri-build = { version = "2", features = [] }
 aec3 = []
 
 [profile.release]
-strip = "none"
+# Anti-reversing hardening: shipped binaries carry no symbol names, and fat
+# LTO with a single codegen unit gives the linker full cross-crate inlining
+# and dead-code elimination (build time +, binary size −).
+strip = "symbols"
+lto = "fat"
+codegen-units = 1
 
 [dependencies]
 base64 = "0.22"

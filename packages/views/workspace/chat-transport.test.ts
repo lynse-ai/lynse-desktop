@@ -548,6 +548,53 @@ describe("PollChatTransport", () => {
     expect(body.confirmToken).toBeUndefined();
   });
 
+  it("attaches the per-turn modelOverride to the submit body when provided", async () => {
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
+
+    await new PollChatTransport().send(
+      sendOptions({ modelOverride: { preset: "deepseek-official", model: "deepseek-flash" } }),
+    );
+
+    const body = apiMocks.post.mock.calls[0]![1] as Record<string, unknown>;
+    expect(body.modelOverride).toEqual({ preset: "deepseek-official", model: "deepseek-flash" });
+  });
+
+  it("leaves modelOverride out entirely when unset (byte-identical legacy body)", async () => {
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
+
+    await new PollChatTransport().send(sendOptions({ modelOverride: null }));
+
+    const body = apiMocks.post.mock.calls[0]![1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty("modelOverride");
+  });
+
+  it("carries the custom-endpoint override with its key in both transports", async () => {
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
+    const override = { baseUrl: "https://gw.example.com/v1", apiKey: "sk-test", model: "m1" };
+
+    await new PollChatTransport().send(sendOptions({ modelOverride: override }));
+    expect((apiMocks.post.mock.calls[0]![1] as Record<string, unknown>).modelOverride).toEqual(override);
+
+    apiMocks.stream.mockImplementation(
+      (
+        _path: unknown,
+        _body: unknown,
+        onChunk: (data: string) => void,
+        _onError?: (err: Error) => void,
+        onComplete?: () => void,
+      ) => {
+        onChunk(JSON.stringify({ type: "done", text: "ok" }));
+        onComplete?.();
+        return new AbortController();
+      },
+    );
+    await new StreamChatTransport().send(sendOptions({ modelOverride: override }));
+    expect((apiMocks.stream.mock.calls[0]![1] as Record<string, unknown>).modelOverride).toEqual(override);
+  });
+
   it("surfaces the backend error text for status=error turns", async () => {
     apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
     apiMocks.get.mockResolvedValue({ status: "error", error: "当前系统繁忙，请稍后重试。" });

@@ -26,6 +26,7 @@ mod live_translation;
 #[path = "live_translation_stub.rs"]
 mod live_translation;
 mod logging;
+mod desktop_mcp;
 mod inspiration_cloud;
 mod inspiration_voice;
 mod meeting_detector;
@@ -4827,6 +4828,7 @@ pub fn run() {
         .manage(meeting_detector::MeetingDetectorHandle::default())
         .manage(feishu::FeishuHandle::default())
         .manage(workbuddy::WorkBuddyAcpState::default())
+        .manage(desktop_mcp::DesktopMcpState::default())
         .register_asynchronous_uri_scheme_protocol("local-media", |context, request, responder| {
             // WKURLSchemeHandler fires this on the MAIN thread; a long
             // meeting's WAV is 100+ MB, so the file read must leave the main
@@ -4837,6 +4839,7 @@ pub fn run() {
             });
         })
         .setup(|app| {
+            desktop_mcp::bootstrap(app.handle());
             // File logging needs the OS log dir, which only resolves with the
             // app handle — so the plugin registers here rather than on the
             // builder chain, and anything logged before this point reaches
@@ -4955,6 +4958,7 @@ pub fn run() {
             // rail-embedded lights.
         })
         .invoke_handler(tauri::generate_handler![
+            desktop_mcp::desktop_mcp_get, desktop_mcp::desktop_mcp_configure, desktop_mcp::desktop_mcp_complete,
             local_transcription_list, local_transcription_get, local_transcription_delete, local_transcription_audio_url,
             local_transcription_track_audio_url,
             sync_upload::sync_upload_audio_size, sync_upload::sync_upload_put_signed_file,

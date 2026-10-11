@@ -47,7 +47,7 @@ export function SummaryExportMenuItem({
   return (
     <DropdownMenuItem
       disabled={disabled || exporter.isPending || !ready}
-      onSelect={(event) => {
+      onClick={(event) => {
         event.preventDefault();
         exporter.mutate();
       }}

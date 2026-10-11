@@ -28,3 +28,5 @@ export type {
   VaultSyncNoteRef,
   VaultSyncProgress,
 } from "./note-vault";
+
+export { getDesktopLocalTranscriptionApi } from "./local-transcription";

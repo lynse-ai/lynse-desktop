@@ -46,7 +46,7 @@ function applyAgentUrl(url: string) {
 }
 
 /**
- * Server-address picker for the Xiaoling (小灵) assistant. Default is the
+ * Server-address picker for the Xiaoling (小玲同学) assistant. Default is the
  * route-B direct CloudBase connection (the CloudBase-hosted lynclaw
  * deployment, bypassing the gateway); "custom" points it at a hand-typed
  * origin. Applies immediately — the chat transport reads the base URL

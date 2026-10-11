@@ -8,6 +8,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { setApiTransportMode } from "@lynse/core/api/client";
 import { installWorkBuddyBridge } from "./workbuddy-bridge";
+import { desktopMcpApi, installDesktopMcpBridge, type DesktopMcpApi } from "./mcp-bridge";
 import { hydrateSecrets, refreshSecret, registerSecretKeys, removeSecret, secureStorage, setSecret } from "./secure-storage";
 import {
   collectLegacyLiveTranslationSnapshot,
@@ -97,6 +98,7 @@ export type UpdateDownloadProgress = {
 };
 
 type DesktopApi = {
+  mcp: DesktopMcpApi;
   openExternal: (url: string) => Promise<void>;
   // Asks where to save with a native dialog, then Rust fetches the remote
   // attachment (the webview can't — no CORS for the app origin) and writes
@@ -313,6 +315,7 @@ export async function installTauriBridge(): Promise<void> {
   );
 
   const desktopAPI: DesktopApi = {
+    mcp: desktopMcpApi,
     openExternal: async (url) => {
       await openUrl(url);
     },
@@ -738,6 +741,7 @@ export async function installTauriBridge(): Promise<void> {
   };
 
   (window as Window & { desktopAPI?: DesktopApi }).desktopAPI = desktopAPI;
+  await installDesktopMcpBridge();
 
   // Replace the hardcoded fallback with the authoritative version reported by
   // the Rust host (package_info), so the UI version stays correct across

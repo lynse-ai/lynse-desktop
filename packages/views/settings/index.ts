@@ -23,3 +23,7 @@ export {
   type WebdavSyncSummary,
 } from "./webdav-sync";
 export { RecordingDevicesCard } from "./recording-devices-card";
+
+export { McpConfigCard } from "./mcp-config-card";
+
+export { ModelConfigCard } from "./model-config-card";

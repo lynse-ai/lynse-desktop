@@ -8,6 +8,7 @@ import type {
   WorkBuddyCloudSession,
 } from "./types";
 import { api, ApiError, normalizeConnectionRequest, type ConnectorConnectionRequest } from "@lynse/core/api";
+import type { RequestModelOverride } from "./model-override";
 
 export interface SendChatOptions {
   query: string;
@@ -18,6 +19,8 @@ export interface SendChatOptions {
   token?: string | null;
   /** `confirmation.confirmToken` of the card this turn answers, if any. */
   confirmToken?: string | null;
+  /** Per-turn model override (model selection); absent = server default. */
+  modelOverride?: RequestModelOverride | null;
   workbuddySession?: WorkBuddyCloudSession;
   onEvent: (event: ChatStreamEvent) => void;
   signal?: AbortSignal;
@@ -538,7 +541,7 @@ export class PollChatTransport implements ChatTransport {
     this.cancelled = false;
     opts.signal?.addEventListener("abort", () => this.cancel(), { once: true });
 
-    const { query, sessionId, fileIds, userSpecifiedFile, token, confirmToken, onEvent } =
+    const { query, sessionId, fileIds, userSpecifiedFile, token, confirmToken, modelOverride, onEvent } =
       opts;
     // The gateway's poll route keeps the stream endpoint's request contract —
     // same camelCase fields, same auth — only the URL and the two-step
@@ -547,6 +550,7 @@ export class PollChatTransport implements ChatTransport {
     if (sessionId) body.sessionId = sessionId;
     if (token) body.token = token;
     if (fileIds.length && userSpecifiedFile) body.fileIds = fileIds;
+    if (modelOverride) body.modelOverride = modelOverride;
     if (confirmToken) {
       // The card answer is new (no legacy field name); cover both spellings —
       // the doc's `confirm_token` and the card's camelCase `confirmToken`.
@@ -961,11 +965,12 @@ export class StreamChatTransport implements ChatTransport {
   private controller: AbortController | null = null;
 
   async send(opts: SendChatOptions): Promise<void> {
-    const { query, sessionId, fileIds, userSpecifiedFile, token, confirmToken, onEvent } = opts;
+    const { query, sessionId, fileIds, userSpecifiedFile, token, confirmToken, modelOverride, onEvent } = opts;
     const body: Record<string, unknown> = { query };
     if (sessionId) body.sessionId = sessionId;
     if (token) body.token = token;
     if (fileIds.length && userSpecifiedFile) body.fileIds = fileIds;
+    if (modelOverride) body.modelOverride = modelOverride;
     if (confirmToken) {
       body.confirm_token = confirmToken;
       body.confirmToken = confirmToken;

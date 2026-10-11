@@ -23,6 +23,7 @@ import {
   fetchWorkBuddyThreadSlice,
   isWorkBuddyAuthError,
 } from "../workbuddy-chat-transport";
+import { loadChatModelSetting, toRequestOverride } from "../model-override";
 import { redactMeetingIds } from "../meeting-id-redact";
 import {
   isEmptyAssistantPlaceholder,
@@ -260,7 +261,7 @@ interface ChatStoreState {
   isLoading: boolean;
   conversations: ChatConversation[];
   activeConversationId: string | null;
-  /** Which assistant the chat page is talking to ("小灵助手" or WorkBuddy). */
+  /** Which assistant the chat page is talking to ("小玲同学" or WorkBuddy). */
   activeAssistant: ChatAssistant;
   /** Cloud conversation to restore when switching back from WorkBuddy. */
   lastCloudConversationId: string | null;
@@ -510,7 +511,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           }));
           if (get().chatVisible === 0) {
             const doneProvider = get().conversations.find((c) => c.id === conversationId)?.provider;
-            toast.success(doneProvider === "workbuddy" ? "Work buddy 已完成回复" : "小灵助手已完成回复");
+            toast.success(doneProvider === "workbuddy" ? "Work buddy 已完成回复" : "小玲同学已完成回复");
           }
           // Mirror into the unified notification center (drives the Bell badge).
           const convTitle = (get().conversations.find((c) => c.id === conversationId)?.title ?? "").trim();
@@ -740,6 +741,9 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         userSpecifiedFile: hasContextFiles,
         token: readLynseToken(),
         confirmToken,
+        // Read fresh per turn so a settings change lands on the next message;
+        // null (unset/incomplete) keeps the request identical to before.
+        modelOverride: toRequestOverride(loadChatModelSetting()),
         workbuddySession: get().conversations.find((conversation) => conversation.id === conversationId)?.workbuddySession,
         signal: controller.signal,
         onEvent: (evt) => {

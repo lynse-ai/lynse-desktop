@@ -175,7 +175,7 @@ describe("concurrent chat conversations", () => {
 
     // The active conversation (two) is untouched by the background reply.
     expect(conversationByUserText("two").messages.at(-1)!.content).toBe("");
-    expect(toast.success).toHaveBeenCalledWith("小灵助手已完成回复");
+    expect(toast.success).toHaveBeenCalledWith("小玲同学已完成回复");
   });
 
   it("stores the human-support link from the done payload", () => {

@@ -42,6 +42,7 @@ import {
 import { openExternalUrl, getDesktopAppApi } from "../app-update";
 import { useNavigation } from "../navigation";
 import { useChat } from "../workspace/hooks/use-chat";
+import { ChatModelPicker } from "../workspace/model-picker";
 import { useInsertConclusion, useNotes, fetchFileDetail } from "../workspace/hooks/use-files";
 import { useFolders } from "../workspace/hooks/use-folders";
 import { getWorkspaceState } from "../workspace/store";
@@ -962,6 +963,7 @@ export function ChatPage() {
                       ? t("chat.input_hint_workbuddy")
                       : t("chat.input_hint")}
               </span>
+              {!isWorkBuddy && <ChatModelPicker />}
               {isLoading ? (
                 <Button
                   type="button"

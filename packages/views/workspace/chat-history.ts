@@ -67,7 +67,7 @@ export function conversationTitle(firstMessage: string): string {
   return title.length > 36 ? `${title.slice(0, 36)}…` : title;
 }
 
-/** Persisted chat assistant choice ("小灵助手" vs WorkBuddy), per user. */
+/** Persisted chat assistant choice ("小玲同学" vs WorkBuddy), per user. */
 export function loadAssistantChoice(userId: string): ChatAssistant {
   if (typeof window === "undefined") return "lynse";
   try {

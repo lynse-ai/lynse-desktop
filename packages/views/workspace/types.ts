@@ -329,7 +329,7 @@ export type ChatProvider = "cloud" | "qoder" | "workbuddy";
 
 /**
  * Which assistant the chat UI is talking to: the Lynse cloud channel
- * ("小灵助手") or the user's authorized WorkBuddy assistant.
+ * ("小玲同学") or the user's authorized WorkBuddy assistant.
  */
 export type ChatAssistant = "lynse" | "workbuddy";
 

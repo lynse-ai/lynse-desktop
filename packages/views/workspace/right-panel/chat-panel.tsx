@@ -10,6 +10,7 @@ import { useTranslation } from "@lynse/core/i18n/react";
 
 import { useWorkspaceStore } from "../store";
 import { useChat } from "../hooks/use-chat";
+import { ChatModelPicker } from "../model-picker";
 import { useChatStore } from "../hooks/use-chat-store";
 import { WaitingText } from "../hooks/waiting-text";
 import { useFiles } from "../hooks/use-files";
@@ -38,7 +39,7 @@ export function ChatPanel() {
     dismissConfirm,
     setActiveAssistant,
   } = useChat({ persistHistory: true });
-  // The panel is the 小灵助手 surface: it stays on the cloud channel even
+  // The panel is the lynclaw surface: it stays on the cloud channel even
   // while the chat page (the only switcher) is parked on WorkBuddy.
   const workbuddyDetached = useChatStore((s) => s.activeAssistant === "workbuddy");
   // Zustand v5 compares selector output with Object.is on every snapshot
@@ -293,6 +294,7 @@ export function ChatPanel() {
               className="h-8 text-xs"
             />
           </div>
+          <ChatModelPicker />
           {isLoading ? (
             <Button size="icon" variant="destructive" className="size-8 shrink-0" onClick={stopStreaming} style={{ borderRadius: 8 }} title={t("chat.stop")}>
               <Square className="size-3.5 fill-current" />

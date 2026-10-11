@@ -42,6 +42,8 @@ import { AutoRecordConfigCard } from "./auto-record-config-card";
 import { VaultConfigCard } from "./vault-config-card";
 import { WebdavSyncConfigCard } from "./webdav-sync-config-card";
 import { AgentServerCard } from "./agent-server-card";
+import { McpConfigCard } from "./mcp-config-card";
+import { ModelConfigCard } from "./model-config-card";
 import { WorkBuddyConfigCard } from "./workbuddy-config-card";
 import { AppearanceSection } from "./appearance-settings";
 import {
@@ -124,7 +126,7 @@ export function SettingsDialog({
     ),
   });
 
-  // AI assistant: where Xiaoling connects (route B direct agent backend) plus
+  // AI assistant: where lynclaw connects (route B direct agent backend) plus
   // the WorkBuddy account binding, moved in from its former standalone
   // plugin-contributed section.
   sections.push({
@@ -134,7 +136,9 @@ export function SettingsDialog({
     content: (
       <>
         <AgentServerCard />
+        <ModelConfigCard />
         <WorkBuddyConfigCard />
+        <McpConfigCard />
       </>
     ),
   });

@@ -317,6 +317,19 @@ jobs:
           includeRelease: true
           includeUpdater: true
 
+      - name: Notarize and staple macOS installer
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p 'require("./apps/tauri/package.json").version')
+          DMG="apps/tauri/src-tauri/target/release/bundle/dmg/Lynse_${VERSION}_aarch64.dmg"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" --wait --timeout 20m
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+
       - name: Verify actual macOS release artifacts
         if: runner.os == 'macOS'
         shell: bash
@@ -327,6 +340,17 @@ jobs:
           bash apps/tauri/scripts/verify-macos-release.sh \
             "$BUNDLE/macos/Lynse.app.tar.gz" \
             "$BUNDLE/dmg/Lynse_${VERSION}_aarch64.dmg" "$VERSION"
+
+      - name: Upload verified stapled macOS installer
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p 'require("./apps/tauri/package.json").version')
+          gh release upload "${{ github.ref_name }}" \
+            "apps/tauri/src-tauri/target/release/bundle/dmg/Lynse_${VERSION}_aarch64.dmg" \
+            --repo "${{ github.repository }}" --clobber
 
       - name: Upload STT runtime archive to the release
         # Tag builds only (workflow_dispatch has no release to attach to).

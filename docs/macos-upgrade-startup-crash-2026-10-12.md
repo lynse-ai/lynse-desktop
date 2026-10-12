@@ -14,3 +14,5 @@ python3 apps/tauri/scripts/test-logging-relaunch.py
 Before publishing macOS updates, `verify-macos-release.sh` checks the version, bundle identity, Developer ID team, deep signature, Gatekeeper acceptance, stapled notarization, and matching app seals in the actual updater archive and DMG. `publish-cloudbase.sh` runs this gate before uploading or changing the stable manifest.
 
 The original 1.1.12 updater passes system signature verification and Gatekeeper assessment. A sandbox-only codesign failure did not reproduce when system security services were accessible; it is not evidence of a damaged release signature.
+
+The tag workflow runs the isolated closed-pipe regression and validates real macOS artifacts. Build uploads stay in a draft release; successful build gates precede opening the release and publishing the update manifest.

@@ -22,7 +22,7 @@
 #   - Node (for JSON assembly) and curl.
 #   - tcb CLI for uploads: npm i -g @cloudbase/cli  (auto-falls back to
 #     `npx -y @cloudbase/cli` when absent).
-#   - CLOUDBASE_API_KEY env (云开发控制台 → 环境设置 → API 密钥).
+#   - CLOUDBASE_API_KEY env, or --reuse-login with an already authenticated CLI.
 #   - With --build: TAURI_SIGNING_PRIVATE_KEY(/_PASSWORD) env — the updater
 #     key pair at ~/.tauri/lynse-desktop.key. Optionally APPLE_SIGNING_IDENTITY
 #     etc. for Developer ID signing; without it the macOS bundle is ad-hoc
@@ -43,6 +43,7 @@ UPDATES_BASE="${UPDATES_BASE:-https://dl.lynse.cn/updates}"
 
 DRY_RUN=false
 DO_BUILD=false
+REUSE_LOGIN=false
 TAG=""
 
 log() { printf '\n==> %s\n' "$*"; }
@@ -52,6 +53,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=true ;;
     --build) DO_BUILD=true ;;
+    --reuse-login) REUSE_LOGIN=true ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) die "Unknown option: $1" ;;
     *) TAG="$1" ;;
@@ -59,7 +61,7 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-[[ -n "$TAG" ]] || die "Usage: publish-cloudbase.sh <tag> [--build] [--dry-run]
+[[ -n "$TAG" ]] || die "Usage: publish-cloudbase.sh <tag> [--build] [--dry-run] [--reuse-login]
   e.g. publish-cloudbase.sh v1.2.0 --build"
 
 # A build-counter suffix is allowed: this repo's history carries tags like
@@ -226,13 +228,17 @@ if [[ "$DRY_RUN" == true ]]; then
   exit 0
 fi
 
-[[ -n "${CLOUDBASE_API_KEY:-}" ]] || die "CLOUDBASE_API_KEY is not set (云开发控制台 → 环境设置 → API 密钥)."
+if [[ "$REUSE_LOGIN" != true ]]; then
+  [[ -n "${CLOUDBASE_API_KEY:-}" ]] || die "CLOUDBASE_API_KEY is not set; use --reuse-login with an already authenticated tcb CLI."
+fi
 if ! command -v tcb >/dev/null; then
   tcb() { npx -y @cloudbase/cli "$@"; }
 fi
 
 log "Uploading artifacts to updates/$TAG (per-tag copy first…)"
-tcb login --cloudbase-api-key "$CLOUDBASE_API_KEY" -e "$CLOUDBASE_ENV_ID"
+if [[ "$REUSE_LOGIN" != true ]]; then
+  tcb login --cloudbase-api-key "$CLOUDBASE_API_KEY" -e "$CLOUDBASE_ENV_ID"
+fi
 tcb hosting deploy "$DIST" "updates/$TAG" -e "$CLOUDBASE_ENV_ID" --yes
 
 log "Verifying manifest URLs exist under $UPDATES_BASE/$TAG"

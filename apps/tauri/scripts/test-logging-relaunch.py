@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Reproduce updater relaunch with closed output pipes using the production sink."""
 import json
+import re
 from pathlib import Path
 import signal
 import subprocess
@@ -8,6 +9,8 @@ import tempfile
 import time
 
 SOURCE = Path(__file__).resolve().parents[3] / "apps/tauri/src-tauri/src/logging/safe_writer.rs"
+LOCKFILE = SOURCE.parents[2] / "Cargo.lock"
+LOG_VERSION = re.search(r'name = "log"\nversion = "([^"]+)"', LOCKFILE.read_text()).group(1)
 RUST = r'''use std::{fs, io::Write, path::PathBuf, thread, time::Duration};
 #[path = SOURCE_PATH]
 mod safe_writer;
@@ -61,8 +64,8 @@ version = "0.1.0"
 edition = "2021"
 [dependencies]
 fern = "=0.7.1"
-log = "0.4"
-''')
+log = "LOG_VERSION"
+'''.replace("LOG_VERSION", "=" + LOG_VERSION))
         (project / "src/main.rs").write_text(RUST.replace("SOURCE_PATH", json.dumps(str(SOURCE))))
         subprocess.run(["cargo", "build", "--offline", "--manifest-path", str(project / "Cargo.toml")], check=True)
         binary = str(project / "target/debug/lynse-logging-probe")

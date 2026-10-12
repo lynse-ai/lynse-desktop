@@ -273,6 +273,13 @@ jobs:
             echo "NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Verify macOS relaunch logging regression
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cargo fetch --manifest-path apps/tauri/src-tauri/Cargo.toml --locked
+          python3 apps/tauri/scripts/test-logging-relaunch.py
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -305,10 +312,21 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "Lynse ${{ github.ref_name }}"
           releaseBody: ${{ steps.notes.outputs.body }}
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
           includeRelease: true
           includeUpdater: true
+
+      - name: Verify actual macOS release artifacts
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p 'require("./apps/tauri/package.json").version')
+          BUNDLE=apps/tauri/src-tauri/target/release/bundle
+          bash apps/tauri/scripts/verify-macos-release.sh \
+            "$BUNDLE/macos/Lynse.app.tar.gz" \
+            "$BUNDLE/dmg/Lynse_${VERSION}_aarch64.dmg" "$VERSION"
 
       - name: Upload STT runtime archive to the release
         # Tag builds only (workflow_dispatch has no release to attach to).
@@ -374,6 +392,10 @@ jobs:
       - name: Install CloudBase CLI
         if: steps.guard.outputs.configured == 'true'
         run: npm i -g @cloudbase/cli@latest
+
+      - name: Publish the verified GitHub release
+        if: steps.guard.outputs.configured == 'true'
+        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false
 
       - name: Mirror the release to CloudBase hosting
         if: steps.guard.outputs.configured == 'true'

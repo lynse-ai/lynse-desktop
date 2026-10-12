@@ -6,7 +6,13 @@ ARCHIVE="$1"; DMG="$2"; VERSION="$3"
 TEAM="${APPLE_TEAM_ID:-76HBB34PNK}"
 WORK="$(mktemp -d)"
 MOUNT="$WORK/mount"
-cleanup() { if mount | grep -Fq " on $MOUNT "; then hdiutil detach "$MOUNT" >/dev/null; fi; rm -rf "$WORK"; }
+MOUNTED=false
+cleanup() {
+  if [[ "$MOUNTED" == true ]]; then
+    hdiutil detach "$MOUNT" >/dev/null || { echo "Unable to detach verification mount: $MOUNT" >&2; return 1; }
+  fi
+  rm -rf "$WORK"
+}
 trap cleanup EXIT
 mkdir -p "$WORK/update" "$MOUNT"
 tar -xzf "$ARCHIVE" -C "$WORK/update"
@@ -23,8 +29,9 @@ verify_app() {
 verify_app "$APP"
 xcrun stapler validate "$DMG"
 hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$DMG" >/dev/null
+MOUNTED=true
 verify_app "$MOUNT/Lynse.app"
-UPDATER_SEAL="$(codesign -dv "$APP" 2>&1 | sed -n 's/^CDHash=//p')"
-INSTALLER_SEAL="$(codesign -dv "$MOUNT/Lynse.app" 2>&1 | sed -n 's/^CDHash=//p')"
+UPDATER_SEAL="$(codesign -dv --verbose=4 "$APP" 2>&1 | sed -n 's/^CDHash=//p')"
+INSTALLER_SEAL="$(codesign -dv --verbose=4 "$MOUNT/Lynse.app" 2>&1 | sed -n 's/^CDHash=//p')"
 [[ -n "$UPDATER_SEAL" && "$UPDATER_SEAL" == "$INSTALLER_SEAL" ]] || { echo "Updater and installer app seals differ" >&2; exit 1; }
 echo "Verified notarized macOS $VERSION updater and installer with matching app seal."

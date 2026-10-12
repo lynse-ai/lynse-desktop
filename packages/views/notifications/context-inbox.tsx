@@ -10,6 +10,7 @@ import type { ContextInboxAction, ContextInboxItem, ContextInboxResponse } from 
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useChatStore } from "../workspace/hooks/use-chat-store";
 import { useNotificationStore, type NotificationItem } from "./use-notification-store";
+import { useContextInboxEnabled } from "./context-inbox-preferences";
 
 interface InboxController {
   userId: string;
@@ -44,8 +45,24 @@ export async function openContextNotification(notification: NotificationItem, pu
   await controller.open(context.item, push);
 }
 
-/** Kept outside AuthGate so logout always cancels requests and removes the mirror. */
+/** Account isolation remains active even while suggestions are disabled. */
 export function ContextInboxNotifier() {
+  const authenticated = useAuthStore((s) => s.isAuthenticated);
+  const userId = useAuthStore((s) => s.user?.id || null);
+  const enabled = useContextInboxEnabled(authenticated ? userId : null);
+  const identityRef = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    const identity = `${authenticated ? "signed-in" : "signed-out"}:${userId ?? "pending"}`;
+    if (identityRef.current !== identity) {
+      identityRef.current = identity;
+      useChatStore.getState().switchUser(null);
+    }
+  }, [authenticated, userId]);
+  return enabled ? <EnabledContextInboxNotifier /> : null;
+}
+
+/** Unmounting cancels inbox/sync requests, removes cached results and stops polling. */
+function EnabledContextInboxNotifier() {
   const authenticated = useAuthStore((s) => s.isAuthenticated);
   const knownUserId = useAuthStore((s) => s.user?.id ?? null);
   const { t } = useTranslation();
@@ -57,9 +74,6 @@ export function ContextInboxNotifier() {
   useLayoutEffect(() => {
     tRef.current = t;
   }, [t]);
-  // Tracks the last identity the chat store was cleared for (see the session
-  // effect below).
-  const identityRef = useRef<string | null>(null);
   // Consecutive inbox failures drive the poll backoff; counted here because
   // TanStack's fetchFailureCount stays flat when retry is disabled.
   const consecutiveFailures = useRef(0);
@@ -95,16 +109,10 @@ export function ContextInboxNotifier() {
     store.setContextUser(null);
     activeInbox = null;
     consecutiveFailures.current = 0;
-    // Clear chat state only when the logged-in identity changes; a token
-    // refresh for the same account must never wipe an in-progress chat.
-    const identity = `${authenticated ? "signed-in" : "signed-out"}:${knownUserId ?? "pending"}`;
-    if (identityRef.current !== identity) {
-      identityRef.current = identity;
-      useChatStore.getState().switchUser(null);
-    }
     return () => {
       activeInbox = null;
       useNotificationStore.getState().setContextUser(null);
+      useNotificationStore.getState().setContextUnavailable(false);
       void queryClient.cancelQueries({ queryKey });
       queryClient.removeQueries({ queryKey });
     };

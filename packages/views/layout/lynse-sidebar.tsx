@@ -6,6 +6,8 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
 import { getDesktopInspirationApi } from "../inspiration";
 import { isWebPlatform } from "../platform";
+import { useAuthStore } from "@lynse/core/auth";
+import { useContextInboxEnabled } from "../notifications/context-inbox-preferences";
 import { useUserCredits } from "./use-user-credits";
 import { useChatStore, selectChatUnreadCount } from "../workspace/hooks/use-chat-store";
 import {
@@ -61,6 +63,8 @@ export function LynseSidebar() {
   const systemUnread = useNotificationStore(selectSystemUnread);
   const notesUnread = useNotificationStore(selectNotesUnread);
   const contextCount = useNotificationStore(selectContextCount);
+  const contextUserId = useAuthStore((s) => s.isAuthenticated ? s.user?.id ?? null : null);
+  const contextEnabled = useContextInboxEnabled(contextUserId);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Shared update store (already polled by the mounted AppUpdateDialog) — the
   // rail badge is just another subscriber.
@@ -195,7 +199,7 @@ export function LynseSidebar() {
         {/* Context suggestions surface as a badge on the notifications entry
             only; the open / dismiss / snooze actions live in the notifications
             page, which is the single handler for the context inbox. */}
-        {contextCount > 0 && (
+        {contextEnabled && (
           <NavButton
             active={isNavActive(pathname, "/notifications")}
             badgeCount={contextCount}

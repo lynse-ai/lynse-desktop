@@ -1,5 +1,5 @@
 //! Date-based file logging. tauri-plugin-log stays the global logger — it
-//! keeps stdout, the webview IPC commands, level filtering, and the default
+//! keeps best-effort stdout, the webview IPC commands, level filtering, and the default
 //! `[date][time][target][LEVEL] message` line format. Only the file sink is
 //! custom, wired through the plugin's `TargetKind::Dispatch` fern target,
 //! because the plugin's built-in file target rotates by size only and has no
@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use chrono::{Duration as ChronoDuration, Local};
+
+mod safe_writer;
+use safe_writer::BestEffortWriter;
 
 /// Daily files untouched for this many days (by modified time) are pruned at
 /// startup, replacing the old size-based rotation's unbounded `KeepAll`.
@@ -24,7 +27,7 @@ const REOPEN_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 /// `Write` sink that appends to `lynse-YYYY-MM-DD.log` for the current local
 /// date and swaps files when the date rolls over. File I/O failures are
 /// swallowed (bytes reported as written) so the sink can never error out of
-/// fern or panic the logger; stdout still carries every record regardless.
+/// fern or panic the logger; a failed output stream must never terminate the app.
 struct DailyLogFile {
     dir: PathBuf,
     /// Date key of the currently open file; `None` until the first open
@@ -67,21 +70,21 @@ impl Write for DailyLogFile {
             self.last_reopen_check = Some(Instant::now());
             self.open(&date);
         }
-        match self.file.as_mut() {
-            Some(file) => file.write(buf),
-            None => Ok(buf.len()),
+        if let Some(file) = self.file.as_mut() {
+            let _ = file.write_all(buf);
         }
+        Ok(buf.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
         if let Some(file) = self.file.as_mut() {
-            file.flush()?;
+            let _ = file.flush();
         }
         Ok(())
     }
 }
 
-/// Build the log plugin: stdout plus the daily-rolling file sink. The fern
+/// Build the log plugin: best-effort stdout plus the daily-rolling file sink. The fern
 /// dispatch carries no format of its own, so records inherit the plugin's
 /// default format and the file lines look exactly like the old single-file
 /// log; `Output::writer`'s `"\n"` terminator matches what the plugin's own
@@ -90,7 +93,10 @@ pub fn build_plugin(log_dir: &Path) -> tauri::plugin::TauriPlugin<tauri::Wry> {
     if let Err(error) = fs::create_dir_all(log_dir) {
         // No logger is installed yet at this point, so report on stderr; the
         // writer keeps failing silently afterwards and stdout still logs.
-        eprintln!("Failed to create log dir {}: {error}", log_dir.display());
+        report_initialization_error(&format!(
+            "Failed to create log dir {}: {error}",
+            log_dir.display()
+        ));
     }
     let writer = DailyLogFile {
         dir: log_dir.to_path_buf(),
@@ -102,7 +108,14 @@ pub fn build_plugin(log_dir: &Path) -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .level(log::LevelFilter::Info)
         .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
         .targets([
-            tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+            // A GUI relaunch can inherit closed stdout/stderr pipes. Fern's
+            // built-in stdout target panics when both writes fail.
+            tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Dispatch(
+                fern::Dispatch::new().chain(fern::Output::writer(
+                    Box::new(BestEffortWriter(std::io::stdout())),
+                    "\n",
+                )),
+            )),
             tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Dispatch(
                 // fern wraps chained writers in its own Mutex, so the raw
                 // sink needs no external lock.
@@ -112,19 +125,24 @@ pub fn build_plugin(log_dir: &Path) -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
-/// Route panics into the log file: the default hook only writes to stderr, which
-/// is invisible for packaged (non-terminal) launches.
-///
-/// Must be called *after* [`build_plugin`] is registered. Until a logger exists
-/// `log::error!` has no backend and silently drops the record, so installing
-/// earlier replaced the default hook with one that printed nothing — a startup
-/// panic looked like the app simply exiting.
-pub fn install_panic_hook() {
-    std::panic::set_hook(Box::new(|info| {
+/// Report startup diagnostics without panicking on a closed stderr pipe.
+pub fn report_initialization_error(message: &str) {
+    let _ = writeln!(std::io::stderr().lock(), "{message}");
+}
+
+/// Persist panics directly, without re-entering a potentially failing logger.
+/// The direct writer is independent of fern's locks and swallows I/O failures.
+pub fn install_panic_hook(log_dir: Option<PathBuf>) {
+    std::panic::set_hook(Box::new(move |info| {
         let location = info
             .location()
             .map(|location| {
-                format!("{}:{}:{}", location.file(), location.line(), location.column())
+                format!(
+                    "{}:{}:{}",
+                    location.file(),
+                    location.line(),
+                    location.column()
+                )
             })
             .unwrap_or_else(|| "unknown".to_string());
         let payload = info.payload();
@@ -135,7 +153,21 @@ pub fn install_panic_hook() {
         } else {
             "non-string panic payload".to_string()
         };
-        log::error!("panic at {location}: {message}");
+        let diagnostic = format!(
+            "[{}][panic][ERROR] panic at {location}: {message}",
+            Local::now().format("%Y-%m-%d %H:%M:%S")
+        );
+        if let Some(dir) = &log_dir {
+            let mut writer = DailyLogFile {
+                dir: dir.clone(),
+                date: None,
+                file: None,
+                last_reopen_check: None,
+            };
+            let _ = writeln!(writer, "{diagnostic}");
+            let _ = writer.flush();
+        }
+        report_initialization_error(&diagnostic);
     }));
 }
 
@@ -144,7 +176,8 @@ pub fn install_panic_hook() {
 /// Runs once at startup, before the plugin opens the live file, so a crash
 /// history stays bounded without a background pruning task.
 pub fn prune_old_logs(log_dir: &Path) {
-    let cutoff: std::time::SystemTime = (Local::now() - ChronoDuration::days(RETENTION_DAYS)).into();
+    let cutoff: std::time::SystemTime =
+        (Local::now() - ChronoDuration::days(RETENTION_DAYS)).into();
     let entries = match fs::read_dir(log_dir) {
         Ok(entries) => entries,
         Err(_) => return,

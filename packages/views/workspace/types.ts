@@ -264,7 +264,7 @@ export interface ChatToolUse {
   id: string;
   /** Raw backend tool name, e.g. "search_meetings". */
   name: string;
-  state: "running" | "done";
+  state: "running" | "done" | "error";
 }
 
 export interface ChatMessage {
@@ -284,8 +284,10 @@ export interface ChatMessage {
   sources?: string[];
   /** Report / visual-card / image attachments. */
   attachments?: ChatAttachment[];
-  /** Marks an errored assistant message so the UI can style it. */
+  /** Marks an incomplete or failed reply; answer text keeps normal formatting. */
   error?: boolean;
+  /** Failure detail stored separately from any streamed answer. */
+  errorMessage?: string;
   /**
    * Cloud file ids this turn referenced (@ mentions / the selected meeting).
    * Kept on the user message so reply actions — e.g. filing an assistant
@@ -424,7 +426,7 @@ export type ChatStreamEvent =
   /** Chain-of-thought delta; an empty delta closes the reasoning trace. */
   | { type: "thinking"; delta: string }
   /** Tool activity; `id` optional, `state` defaults to "running". */
-  | { type: "tool"; name: string; id?: string; state?: "running" | "done" }
+  | { type: "tool"; name: string; id?: string; state?: "running" | "done" | "error" }
   | { type: "meta"; sources: string[]; attachments: ChatAttachment[]; connectionRequests?: ConnectorConnectionRequest[] }
   | {
       type: "done";

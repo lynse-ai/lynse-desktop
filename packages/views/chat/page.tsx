@@ -29,7 +29,7 @@ import {
 } from "../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Textarea } from "@lynse/ui/components/ui/textarea";
-import { StreamingMarkdown } from "@lynse/ui/markdown";
+import { ChatReplyBody } from "./chat-reply-body";
 import { toast } from "sonner";
 import { AssistantAvatar } from "../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
@@ -1361,14 +1361,12 @@ function AssistantMessage({
             </div>
           )}
 
-          {message.error ? (
-            <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm leading-6 text-destructive">
-              {message.content}
-            </div>
-          ) : message.content ? (
-            <div className="rounded-2xl rounded-tl-md border border-border bg-card px-4 py-3.5 text-sm leading-6 text-foreground shadow-sm">
-              <StreamingMarkdown content={message.content} isStreaming={isStreaming} mode="minimal" />
-            </div>
+          {message.content || message.error ? (
+            <ChatReplyBody
+              message={message}
+              isStreaming={isStreaming}
+              className="rounded-2xl rounded-tl-md border border-border bg-card px-4 py-3.5 text-sm leading-6 text-foreground shadow-sm"
+            />
           ) : message.attachments?.length || message.sources?.length || message.humanSupportLink?.url || message.connectionRequests?.length || message.workbuddyStopReason ? (
             // Attachment-only reply: the report-PDF turn empties the body
             // server-side and speaks through attachment cards, which render
@@ -1377,7 +1375,7 @@ function AssistantMessage({
           ) : message.status ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <span className="size-1.5 animate-pulse rounded-full bg-current" />
-              <WaitingText status={message.status} />
+              <WaitingText status={message.status} startedAt={message.timestamp} />
             </div>
           ) : (
             <ThinkingIndicator />
@@ -1386,7 +1384,7 @@ function AssistantMessage({
           {message.content && message.status && (
             <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
               <span className="size-1.5 animate-pulse rounded-full bg-current" />
-              <WaitingText status={message.status} />
+              <WaitingText status={message.status} startedAt={message.timestamp} />
             </div>
           )}
         </>

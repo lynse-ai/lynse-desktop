@@ -35,6 +35,15 @@ function requestOptions(sessionToken: string, signal?: AbortSignal) {
   };
 }
 
+/** Verify an account for an explicit opt-in when the login has no profile. */
+export async function getContextIdentity(sessionToken: string) {
+  const response = await api().get<{ user_id: string }>(
+    "/api/connectors/identity", requestOptions(sessionToken),
+  );
+  if (!response.user_id?.trim()) throw new Error("Context identity unavailable");
+  return response;
+}
+
 /** Available only on cloud live + PostgreSQL; unknown/offline modes fail closed. */
 export async function listContextInbox(sessionToken: string, signal?: AbortSignal) {
   const response = await api().get<ContextInboxResponse>(

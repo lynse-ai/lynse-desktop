@@ -12,6 +12,34 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.1.13 (2026-10-12)
+
+### New Features
+
+- Show assistant submission, processing, tool progress and elapsed waiting time immediately, while preserving streamed typewriter replies.
+- Add a per-account personal-context inbox switch in Settings, disabled by default; enabling it exposes the inbox in the notification center.
+- Add the local desktop MCP host and assistant model selection.
+
+### Fixed
+
+- Prevent a macOS startup crash after an upgrade when the launcher closes stdout and stderr; logging now tolerates write failures and panic diagnostics avoid recursive logging.
+- Render successful assistant replies as Markdown; show errors separately without coloring a normal reply red. Preserve partial replies on failures and correctly mark failed tools.
+- Keep polling progress after the server event window rolls over, and apply stop/deadline handling throughout submission and polling.
+- Back off failed inbox polling and skip inbox synchronization while the setting is disabled.
+
+### 新功能
+
+- 小灵助手即时显示提交、处理及工具进度和等待时长，保留正文打字机流式输出。
+- 设置中增加按账号保存的个人上下文收件箱开关，默认关闭；开启后可从通知中心查看。
+- 增加桌面端本地 MCP 服务和助手模型选择。
+
+### 修复
+
+- 修复 macOS 从旧版本升级后首次启动时，启动器关闭标准输出和错误输出引起的闪退；日志写入失败不再触发递归崩溃。
+- AI 正常回复按 Markdown 显示，错误信息独立提示；失败时保留已有回复，并正确标记失败工具。
+- 修复进度事件滚动后客户端停止更新的问题，提交和轮询均支持停止及等待截止时间。
+- 收件箱关闭时停止轮询和同步，获取失败时自动延长重试间隔。
+
 ## 1.1.12 (2026-10-10)
 
 ### New Features

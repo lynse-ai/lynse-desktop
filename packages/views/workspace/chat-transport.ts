@@ -95,10 +95,8 @@ export const chatPollTiming = {
   submitRetryDelayMs: 2_000,
   /** Gap between typewriter slices replayed over the finished answer. */
   typewriterTickMs: 24,
-  /** Cap on the whole typewriter playback so long answers don't crawl. */
+  /** Cap on the whole typewriter playback so long answers do not crawl. */
   typewriterMaxMs: 4_800,
-  /** Elapsed-turn thresholds (ms) that advance the pending stage caption. */
-  pendingStageMs: [0, 6_000, 15_000],
 };
 
 interface ChatPollSubmitResponse {
@@ -108,6 +106,7 @@ interface ChatPollSubmitResponse {
   status?: string;
   session_id?: string;
   user_id?: string;
+  timings_ms?: Record<string, number>;
 }
 
 /**
@@ -125,6 +124,8 @@ export interface ChatPollProgressEvent {
   duration_ms?: number;
   result_summary?: string;
   success?: boolean;
+  /** Monotonic sequence, unaffected by the server's rolling 40-event cap. */
+  seq?: number;
   /** Server-side unix timestamp (seconds). */
   at?: number;
 }
@@ -514,13 +515,7 @@ function sleep(ms: number, cancelled: () => boolean, wakeOnForeground = false): 
   });
 }
 
-/**
- * Stage captions emitted while a poll turn is still pending. The poll
- * protocol carries no per-step progress, so elapsed turn time drives these
- * stable keys and the UI rotates localized WAITING_POOL phrases per key
- * (each key has a matching entry in use-chat-store's WAITING_POOL).
- */
-export const CHAT_PENDING_STAGE_KEYS = ["thinking", "researching", "composing"] as const;
+interface ProgressCursor { sequence: number; at: number; length: number }
 
 /**
  * HTTP-polling chat transport (the lynclaw poll standard): submit the turn
@@ -536,10 +531,29 @@ export const CHAT_PENDING_STAGE_KEYS = ["thinking", "researching", "composing"] 
 export class PollChatTransport implements ChatTransport {
   readonly provider = "cloud" as const;
   private cancelled = false;
+  private requestController: AbortController | null = null;
 
   async send(opts: SendChatOptions): Promise<void> {
     this.cancelled = false;
-    opts.signal?.addEventListener("abort", () => this.cancel(), { once: true });
+    this.requestController = new AbortController();
+    const abort = () => this.cancel();
+    opts.signal?.addEventListener("abort", abort, { once: true });
+    if (opts.signal?.aborted) { this.cancel(); return; }
+    // Bound submission too: a stalled POST must not wait forever before
+    // entering the poll loop, and cancellation aborts its network request.
+    const deadline = setTimeout(() => {
+      if (!this.cancelled) opts.onEvent({ type: "error", message: "回复生成超时，请重新发送" });
+      this.cancel();
+    }, chatPollTiming.deadlineMs);
+    try { await this.sendTurn(opts); }
+    finally {
+      clearTimeout(deadline);
+      opts.signal?.removeEventListener("abort", abort);
+      this.requestController = null;
+    }
+  }
+
+  private async sendTurn(opts: SendChatOptions): Promise<void> {
 
     const { query, sessionId, fileIds, userSpecifiedFile, token, confirmToken, modelOverride, onEvent } =
       opts;
@@ -559,14 +573,14 @@ export class PollChatTransport implements ChatTransport {
     }
 
     const startedAt = Date.now();
-    // Show the first pending caption right away (submit itself can take
-    // seconds on busy retries) — the bubble reads as "working" from the click.
-    const stage = this.emitPendingStages(startedAt, -1, onEvent);
+    // This is a client-side submission state, not a claim that the server
+    // has started searching or generating an answer.
+    onEvent({ type: "status", text: "submitting" });
     if (this.cancelled) return;
 
     let taskId: string;
     try {
-      taskId = await this.submit(body);
+      taskId = await this.submit(body, onEvent);
     } catch (error) {
       console.error("[chat-poll] submit failed", chatPollPath(), error);
       if (!this.cancelled) onEvent({ type: "error", message: submitErrorMessage(error) });
@@ -574,47 +588,28 @@ export class PollChatTransport implements ChatTransport {
     }
     if (this.cancelled) return;
 
-    await this.pollUntilDone(taskId, startedAt, stage, onEvent);
+    onEvent({ type: "status", text: "waiting" });
+    await this.pollUntilDone(taskId, startedAt, onEvent);
   }
 
   cancel(): void {
     this.cancelled = true;
-  }
-
-  /**
-   * Emit every pending stage the elapsed turn time has reached (skipping
-   * ahead, never repeating) and return the now-current stage index.
-   */
-  private emitPendingStages(
-    startedAt: number,
-    emittedThrough: number,
-    onEvent: SendChatOptions["onEvent"],
-  ): number {
-    const elapsed = Date.now() - startedAt;
-    const thresholds = chatPollTiming.pendingStageMs;
-    let reached = emittedThrough;
-    for (let i = reached + 1; i < CHAT_PENDING_STAGE_KEYS.length; i += 1) {
-      const threshold = thresholds[i];
-      // A stage with no threshold (shorter array) never fires.
-      if (threshold == null || elapsed < threshold) break;
-      reached = i;
-      onEvent({ type: "status", text: CHAT_PENDING_STAGE_KEYS[i]! });
-    }
-    return reached;
+    this.requestController?.abort();
   }
 
   private postTurn(body: Record<string, unknown>): Promise<ChatPollSubmitResponse> {
     return api().post<ChatPollSubmitResponse>(chatPollPath(), body, {
       baseUrl: chatAgentBaseUrl(),
+      signal: this.requestController?.signal,
     });
   }
 
   private getTask(path: string): Promise<ChatPollTaskResponse> {
-    return api().get<ChatPollTaskResponse>(path, { baseUrl: chatAgentBaseUrl() });
+    return api().get<ChatPollTaskResponse>(path, { baseUrl: chatAgentBaseUrl(), signal: this.requestController?.signal });
   }
 
   /** POST the turn; on busy (503/429 or the gateway busy key) retry with backoff. */
-  private async submit(body: Record<string, unknown>): Promise<string> {
+  private async submit(body: Record<string, unknown>, onEvent: SendChatOptions["onEvent"]): Promise<string> {
     for (let attempt = 0; ; attempt += 1) {
       try {
         const res = await this.postTurn(body);
@@ -627,7 +622,10 @@ export class PollChatTransport implements ChatTransport {
           attempt < chatPollTiming.maxSubmitRetries &&
           !this.cancelled;
         if (!retryable) throw error;
+        onEvent({ type: "status", text: "retrying" });
         await sleep(chatPollTiming.submitRetryDelayMs * 2 ** attempt, () => this.cancelled);
+        if (this.cancelled) throw error;
+        onEvent({ type: "status", text: "submitting" });
       }
     }
   }
@@ -635,14 +633,11 @@ export class PollChatTransport implements ChatTransport {
   private async pollUntilDone(
     taskId: string,
     startedAt: number,
-    stage: number,
     onEvent: SendChatOptions["onEvent"],
   ): Promise<void> {
-    let emittedStage = stage;
     let networkFailures = 0;
-    // Progress events arrive as a full list each poll; this cursor counts how
-    // many have been surfaced so each one emits exactly once.
-    let seenProgress = 0;
+    // Sequence/timestamp cursors survive the server's rolling event window.
+    let seenProgress: ProgressCursor = { sequence: 0, at: 0, length: 0 };
     // How many answer characters have already been streamed from pending
     // payloads' partial `text`; the done replay only types the remainder.
     let streamedChars = 0;
@@ -654,7 +649,6 @@ export class PollChatTransport implements ChatTransport {
         onEvent({ type: "error", message: "回复生成超时，请重新发送" });
         return;
       }
-      emittedStage = this.emitPendingStages(startedAt, emittedStage, onEvent);
       if (wait) {
         const elapsed = Date.now() - startedAt;
         const interval =
@@ -746,12 +740,19 @@ export class PollChatTransport implements ChatTransport {
    */
   private emitProgressEvents(
     data: ChatPollTaskResponse | null,
-    seen: number,
+    seen: ProgressCursor,
     onEvent: SendChatOptions["onEvent"],
-  ): number {
+  ): ProgressCursor {
     const events = Array.isArray(data?.progress_events) ? data!.progress_events! : [];
-    for (let i = seen; i < events.length; i += 1) {
+    const next = { ...seen, length: events.length };
+    for (let i = 0; i < events.length; i += 1) {
       const event = events[i]!;
+      const seq = typeof event.seq === "number" && Number.isFinite(event.seq) ? event.seq : 0;
+      const at = typeof event.at === "number" && Number.isFinite(event.at) ? event.at : 0;
+      const fresh = seq > 0 ? seq > seen.sequence : at > 0 ? at > seen.at : i >= seen.length;
+      next.sequence = Math.max(next.sequence, seq);
+      next.at = Math.max(next.at, at);
+      if (!fresh) continue;
       const label = firstString(event.label, event.tool);
       if (event.type === "round_start") {
         const caption = (event.content ?? "").trim();
@@ -759,10 +760,10 @@ export class PollChatTransport implements ChatTransport {
       } else if (event.type === "tool_start" && label) {
         onEvent({ type: "tool", name: label, state: "running" });
       } else if (event.type === "tool_end" && label) {
-        onEvent({ type: "tool", name: label, state: "done" });
+        onEvent({ type: "tool", name: label, state: event.success === false ? "error" : "done" });
       }
     }
-    return events.length;
+    return next;
   }
 
   /**

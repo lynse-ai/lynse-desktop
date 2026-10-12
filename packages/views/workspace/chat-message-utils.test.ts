@@ -55,6 +55,7 @@ describe("isEmptyAssistantPlaceholder", () => {
       ),
     ).toBe(false);
     expect(isEmptyAssistantPlaceholder(msg({ content: "Error: boom" }))).toBe(false);
+    expect(isEmptyAssistantPlaceholder(msg({ error: true, errorMessage: "timeout" }))).toBe(false);
     expect(isEmptyAssistantPlaceholder(msg({ workbuddyAuthRequired: true }))).toBe(false);
   });
 });

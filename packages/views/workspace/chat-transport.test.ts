@@ -54,7 +54,7 @@ beforeEach(() => {
   // simple; dedicated tests below exercise the real slicing and staging.
   chatPollTiming.typewriterTickMs = 1;
   chatPollTiming.typewriterMaxMs = 1;
-  chatPollTiming.pendingStageMs = [0];
+  chatPollTiming.deadlineMs = 190_000;
   // No dedicated agent backend unless a test opts in (mockReturnValue from a
   // previous test would otherwise leak past clearAllMocks).
   apiMocks.getAgentBaseUrl.mockReturnValue(null);
@@ -355,7 +355,7 @@ describe("PollChatTransport", () => {
     });
 
     const types = onEvent.mock.calls.map((call) => (call[0] as { type: string }).type);
-    expect(types).toEqual(["status", "content", "done", "confirm"]);
+    expect(types).toEqual(["status", "status", "content", "done", "confirm"]);
 
     const events = onEvent.mock.calls.map((call) => call[0] as Record<string, unknown>);
     const done = events.find((event) => event.type === "done")!;
@@ -469,7 +469,8 @@ describe("PollChatTransport", () => {
     // The local "thinking" placeholder fires first; the server's round_start
     // caption then replaces it exactly once (no re-emission on later polls).
     expect(statuses).toEqual([
-      { type: "status", text: "thinking" },
+      { type: "status", text: "submitting" },
+      { type: "status", text: "waiting" },
       { type: "status", text: "我去会议记录里翻一翻…" },
     ]);
     // tool_start/tool_end drive the tool row lifecycle.
@@ -505,7 +506,8 @@ describe("PollChatTransport", () => {
     // The local "thinking" placeholder aside, thinking/content poll events
     // and label-less tool events never reach the UI.
     expect(relevant).toEqual([
-      { type: "status", text: "thinking" },
+      { type: "status", text: "submitting" },
+      { type: "status", text: "waiting" },
       { type: "tool", name: "生成报告", state: "running" },
     ]);
   });
@@ -630,7 +632,7 @@ describe("PollChatTransport", () => {
 
     expect(apiMocks.post).toHaveBeenCalledTimes(2);
     expect(onEvent.mock.calls.map((c) => (c[0] as { type: string }).type)).toEqual([
-      "status",
+      "status", "status", "status", "status",
       "content",
       "done",
     ]);
@@ -705,7 +707,7 @@ describe("PollChatTransport", () => {
 
     expect(apiMocks.post).toHaveBeenCalledTimes(2);
     expect(onEvent.mock.calls.map((c) => (c[0] as { type: string }).type)).toEqual([
-      "status",
+      "status", "status", "status", "status",
       "content",
       "done",
     ]);
@@ -863,9 +865,8 @@ describe("PollChatTransport", () => {
     expect(Date.now() - returnedAt).toBeLessThan(2_000);
   });
 
-  it("advances pending stage captions while the turn stays pending", async () => {
+  it("keeps truthful waiting copy instead of inventing search/composition phases", async () => {
     chatPollTiming.intervalMs = 1;
-    chatPollTiming.pendingStageMs = [0, 4, 8];
     chatPollTiming.deadlineMs = 40;
     apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
     apiMocks.get.mockResolvedValue({ status: "pending", text: null });
@@ -878,8 +879,65 @@ describe("PollChatTransport", () => {
       .map((call) => call[0] as { type: string; text?: string })
       .filter((event) => event.type === "status")
       .map((event) => event.text!);
-    expect(statuses).toEqual(["thinking", "researching", "composing"]);
+    expect(statuses).toEqual(["submitting", "waiting"]);
     expect(onEvent).toHaveBeenCalledWith({ type: "error", message: "回复生成超时，请重新发送" });
+  });
+
+  it("shows submission before a slow POST resolves and cancels the actual request", async () => {
+    let requestSignal!: AbortSignal;
+    apiMocks.post.mockImplementationOnce((_path, _body, options: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+      requestSignal = options.signal;
+      requestSignal.addEventListener("abort", () => reject(new DOMException("Cancelled", "AbortError")), { once: true });
+    }));
+    const transport = new PollChatTransport();
+    const onEvent = vi.fn();
+    const sending = transport.send(sendOptions({ onEvent }));
+    expect(onEvent.mock.calls.map((call) => call[0])).toEqual([{ type: "status", text: "submitting" }]);
+    expect(apiMocks.get).not.toHaveBeenCalled();
+    transport.cancel();
+    await sending;
+    expect(requestSignal.aborted).toBe(true);
+    expect(onEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
+  });
+
+  it("bounds a stalled submit by the turn deadline", async () => {
+    chatPollTiming.deadlineMs = 15;
+    apiMocks.post.mockImplementationOnce((_path, _body, options: { signal: AbortSignal }) => new Promise((_resolve, reject) => {
+      options.signal.addEventListener("abort", () => reject(new DOMException("Timed out", "AbortError")), { once: true });
+    }));
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+    expect(apiMocks.get).not.toHaveBeenCalled();
+    expect(onEvent).toHaveBeenCalledWith({ type: "error", message: "回复生成超时，请重新发送" });
+  });
+
+  it("receives new progress after the server's 40-event window fills", async () => {
+    apiMocks.post.mockResolvedValue({ task_id: "rolling" });
+    const events = Array.from({ length: 41 }, (_, i) => ({ type: "tool_start", tool: `tool-${i + 1}`, seq: i + 1 }));
+    apiMocks.get.mockResolvedValueOnce({ status: "pending", progress_events: events.slice(0, 40) })
+      .mockResolvedValueOnce({ status: "pending", progress_events: events.slice(1) })
+      .mockResolvedValueOnce({ status: "done", text: "ok", progress_events: events.slice(1) });
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+    const tools = onEvent.mock.calls.map((call) => call[0]).filter((event) => event.type === "tool");
+    expect(tools).toHaveLength(41);
+    expect(tools.at(-1)).toEqual({ type: "tool", name: "tool-41", state: "running" });
+  });
+
+  it("uses timestamps on older servers and keeps real status throughout a long wait", async () => {
+    chatPollTiming.deadlineMs = 35;
+    apiMocks.post.mockResolvedValue({ task_id: "legacy" });
+    apiMocks.get.mockResolvedValueOnce({ status: "pending", progress_events: [
+      { type: "round_start", content: "Loading history", at: 1 },
+      { type: "round_start", content: "Waiting for model", at: 2 },
+    ] }).mockResolvedValue({ status: "pending", progress_events: [
+      { type: "round_start", content: "Waiting for model", at: 2 },
+      { type: "round_start", content: "Searching meetings", at: 3 },
+    ] });
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+    const statuses = onEvent.mock.calls.map((call) => call[0]).filter((event) => event.type === "status").map((event) => event.text);
+    expect(statuses).toEqual(["submitting", "waiting", "Loading history", "Waiting for model", "Searching meetings"]);
   });
 
   it("cancel() mid-typewriter keeps the partial text and never emits done", async () => {
@@ -1037,10 +1095,11 @@ describe("transport selection by server", () => {
     expect(apiMocks.post).toHaveBeenCalledWith(
       "/api/chat/poll",
       expect.objectContaining({ query: "hello", sessionId: "session-1" }),
-      { baseUrl: agentBase },
+      { baseUrl: agentBase, signal: expect.any(AbortSignal) },
     );
     expect(apiMocks.get).toHaveBeenCalledWith("/api/chat/poll/task-1", {
       baseUrl: agentBase,
+      signal: expect.any(AbortSignal),
     });
     expect(apiMocks.stream).not.toHaveBeenCalled();
     expect(events.at(-1)).toMatchObject({ type: "done" });
@@ -1143,4 +1202,18 @@ describe("typewriter slice integrity", () => {
     expect(deltas.join("")).toBe("好的 😀 完成");
     expect(deltas.some((delta) => /[\uD800-\uDBFF]$/.test(delta))).toBe(false);
   });
+});
+
+it("preserves a server-reported tool failure even when the turn completes", async () => {
+  apiMocks.post.mockResolvedValueOnce({ task_id: "failed-tool" });
+  apiMocks.get.mockResolvedValueOnce({ status: "done", text: "图文生成失败", progress_events: [
+    { type: "tool_start", tool: "generate_visual_summary", label: "生成图文", seq: 1 },
+    { type: "tool_end", tool: "generate_visual_summary", label: "生成图文", success: false, seq: 2 },
+  ] });
+  const onEvent = vi.fn();
+  await new PollChatTransport().send(sendOptions({ onEvent }));
+  expect(onEvent.mock.calls.map(([event]) => event).filter((event) => event.type === "tool")).toEqual([
+    { type: "tool", name: "生成图文", state: "running" },
+    { type: "tool", name: "生成图文", state: "error" },
+  ]);
 });

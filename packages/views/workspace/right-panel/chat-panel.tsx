@@ -4,7 +4,7 @@ import { useRef, useEffect, useState, useMemo } from "react";
 import { X, Send, FileText, Plus, Square, Clock, Image as ImageIcon, Headphones } from "../../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
-import { StreamingMarkdown } from "@lynse/ui/markdown";
+import { ChatReplyBody } from "../../chat/chat-reply-body";
 import { AssistantAvatar } from "../../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
 
@@ -194,9 +194,7 @@ export function ChatPanel() {
                 className={`max-w-[85%] rounded-lg px-3 py-2 text-xs leading-relaxed ${
                   msg.role === "user"
                     ? "bg-primary text-primary-foreground"
-                    : msg.error
-                      ? "border border-destructive/40 bg-destructive/10 text-destructive"
-                      : "bg-muted text-foreground"
+                    : "bg-muted text-foreground"
                 }`}
               >
                 {msg.role === "user" ? (
@@ -225,17 +223,15 @@ export function ChatPanel() {
                       <span className="text-muted-foreground">{msg.status || "…"}</span>
                     )}
                   </>
-                ) : msg.error ? (
-                  <div className="whitespace-pre-wrap break-words text-destructive">{msg.content}</div>
-                ) : msg.content ? (
-                  <StreamingMarkdown content={msg.content} isStreaming={isLoading} mode="minimal" />
+                ) : msg.content || msg.error ? (
+                  <ChatReplyBody message={msg} isStreaming={isLoading} />
                 ) : msg.attachments?.length || msg.sources?.length || msg.humanSupportLink?.url || msg.connectionRequests?.length ? (
                   // Attachment-only reply (empty body server-side): the cards
                   // render below — don't keep "typing" forever.
                   null
                 ) : msg.status ? (
                   <span className="text-muted-foreground">
-                    <WaitingText status={msg.status} />
+                    <WaitingText status={msg.status} startedAt={msg.timestamp} />
                   </span>
                 ) : (
                   <span className="flex items-center gap-1.5">
@@ -247,7 +243,7 @@ export function ChatPanel() {
                 {msg.role === "assistant" && msg.content && msg.status && (
                   <div className="mt-2 flex items-center gap-1.5 text-3xs text-muted-foreground">
                     <span className="size-1.5 animate-pulse rounded-full bg-current" />
-                    <WaitingText status={msg.status} />
+                    <WaitingText status={msg.status} startedAt={msg.timestamp} />
                   </div>
                 )}
                 {msg.role === "assistant" && msg.humanSupportLink?.url && (

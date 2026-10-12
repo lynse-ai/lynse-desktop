@@ -4839,24 +4839,25 @@ pub fn run() {
             });
         })
         .setup(|app| {
-            desktop_mcp::bootstrap(app.handle());
             // File logging needs the OS log dir, which only resolves with the
             // app handle — so the plugin registers here rather than on the
             // builder chain, and anything logged before this point reaches
             // stdout only. Daily files beyond the retention window are pruned
             // first, so the crash history stays bounded (see logging.rs).
-            match app.path().app_log_dir() {
+            let log_dir = app.path().app_log_dir();
+            match &log_dir {
                 Ok(log_dir) => {
                     logging::prune_old_logs(&log_dir);
                     if let Err(error) = app.handle().plugin(logging::build_plugin(&log_dir)) {
-                        eprintln!("Failed to initialize file logging: {error}");
+                        logging::report_initialization_error(&format!("Failed to initialize file logging: {error}"));
                     }
                 }
-                Err(error) => eprintln!("Failed to resolve log dir: {error}"),
+                Err(error) => logging::report_initialization_error(&format!("Failed to resolve log dir: {error}")),
             }
-            // After the logger exists, so panics reach the file instead of
-            // being dropped by a logger-less `log::error!` (see logging.rs).
-            logging::install_panic_hook();
+            // The panic hook writes independently of the logger so an I/O
+            // failure cannot recursively panic during startup diagnostics.
+            logging::install_panic_hook(log_dir.ok());
+            desktop_mcp::bootstrap(app.handle());
             app.manage(recording_card::RecordingCardManager::new(app.handle().clone()));
             if let Err(error) = migrate_electron_data(&app.handle()) {
                 log::error!("Failed to migrate Electron local data: {error}");

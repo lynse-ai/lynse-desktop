@@ -131,6 +131,7 @@ if [[ "$PLATFORM" == macos ]]; then
   DMG_SRC="$(ls -t "$BUNDLE_DIR"/dmg/Lynse_*.dmg 2>/dev/null | head -n1 || true)"
   [[ -s "$UPDATER_SRC" ]] || die "Missing $UPDATER_SRC — run with --build first (or point OUT_DIR at a prepared dist)."
   [[ -n "${DMG_SRC:-}" && -s "$DMG_SRC" ]] || die "No dmg found in $BUNDLE_DIR/dmg — run with --build first."
+  bash "$ROOT/apps/tauri/scripts/verify-macos-release.sh" "$UPDATER_SRC" "$DMG_SRC" "$VERSION"
   cp "$UPDATER_SRC" "$DIST/Lynse_${VERSION}_aarch64.app.tar.gz"
   cp "$UPDATER_SRC.sig" "$DIST/Lynse_${VERSION}_aarch64.app.tar.gz.sig"
   cp "$DMG_SRC" "$DIST/"

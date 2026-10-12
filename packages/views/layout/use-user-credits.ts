@@ -1,6 +1,26 @@
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { api } from "@lynse/core/api/client";
-import { useAuthStore } from "@lynse/core/auth";
+import { getAuthStore, useAuthStore } from "@lynse/core/auth";
+
+// A disposable key shares the profile request within one session without
+// retaining credentials in query keys or reusing another account's cache.
+const profileSessions = new WeakMap<object, { token: string | null; key: string }>();
+function profileSessionKey() {
+  try {
+    const client = api();
+    const token = client.getToken();
+    let session = profileSessions.get(client);
+    if (!session || session.token !== token) {
+      session = { token, key: crypto.randomUUID() };
+      profileSessions.set(client, session);
+    }
+    return session.key;
+  } catch {
+    // A mounted, closed dialog need not have a client yet. Query execution
+    // still reports initialization failures through its normal error state.
+    return "not-initialized";
+  }
+}
 
 export interface CustomerInfo {
   id: string;
@@ -128,9 +148,18 @@ export function useUserCredits() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
   return useQuery<CustomerInfo>({
-    queryKey: ["user", "credits"],
+    queryKey: ["user", "credits", profileSessionKey()],
     queryFn: async () => {
-      const data = await api().get<Record<string, unknown>>("/api/business/customer/current");
+      const client = api();
+      const token = client.getToken();
+      const data = await client.get<Record<string, unknown>>("/api/business/customer/current");
+      const auth = getAuthStore()?.getState();
+      const id = String(data.userId ?? data.user_id ?? data.id ?? data.customerId ?? "").trim();
+      // Session identity comes from the business profile, independently of
+      // whether the optional suggestion inbox is enabled.
+      if (id && client.getToken() === token && auth?.isAuthenticated && !auth.user?.id) {
+        auth.setUser({ id, name: String(data.nickname ?? ""), email: String(data.email ?? "") });
+      }
       return data as unknown as CustomerInfo;
     },
     enabled: isAuthenticated,

@@ -10,6 +10,7 @@ import { ContextInboxNotifier, actOnContextNotification, isBenignContextOpenErro
 import { NotificationList } from "./notification-list";
 import { useNotificationStore } from "./use-notification-store";
 import { useChat } from "../workspace/hooks/use-chat";
+import { setContextInboxEnabled } from "./context-inbox-preferences";
 
 const fakeChat = vi.hoisted(() => ({ setUserId: vi.fn(), switchUser: vi.fn(), hydrate: vi.fn(), setChatVisible: vi.fn(), setActiveAssistant: vi.fn(), clearMessages: vi.fn(), sendMessage: vi.fn(), unreadCounts: {} }));
 vi.mock("../workspace/hooks/use-chat-store", () => ({
@@ -47,6 +48,9 @@ async function visibleRows() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.localStorage.clear();
+  setContextInboxEnabled("u1", true);
+  setContextInboxEnabled("u2", true);
   item = { ...initialItem };
   userId = "u1";
   canDisplay = true;
@@ -96,6 +100,68 @@ afterEach(() => {
 });
 
 describe("persistent context inbox bridge", () => {
+  it("makes no inbox or sync requests by default, including timers and window resumes", async () => {
+    setContextInboxEnabled("u1", false);
+    vi.useFakeTimers();
+    start();
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(300_000);
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(useNotificationStore.getState().items).toHaveLength(0);
+  });
+
+  it("starts immediately when enabled and stops requests and clears only suggestions when disabled", async () => {
+    setContextInboxEnabled("u1", false);
+    start();
+    const switches = fakeChat.switchUser.mock.calls.length;
+    await act(async () => { setContextInboxEnabled("u1", true); });
+    await waitFor(() => expect(useNotificationStore.getState().items).toHaveLength(1));
+    useNotificationStore.getState().add({ id: "sync:existing", type: "sync", title: "Existing notification" });
+    const notification = useNotificationStore.getState().items.find((entry) => entry.type === "context")!;
+    await act(async () => { setContextInboxEnabled("u1", false); });
+    expect(useNotificationStore.getState().items.map((entry) => entry.id)).toEqual(["sync:existing"]);
+    expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
+    expect(useNotificationStore.getState().contextUnavailable).toBe(false);
+    const count = fetchMock.mock.calls.length;
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      await openContextNotification(notification, vi.fn());
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(count);
+    expect(fakeChat.switchUser).toHaveBeenCalledTimes(switches);
+  });
+
+  it("aborts an in-flight inbox and discards its late result when switched off", async () => {
+    let resolve!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((done) => { resolve = done; }));
+    start();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const signal = fetchMock.mock.calls[0]?.[1].signal as AbortSignal;
+    await act(async () => { setContextInboxEnabled("u1", false); });
+    expect(signal.aborted).toBe(true);
+    await act(async () => { resolve(Response.json({ status: "ok", available: true, user_id: "u1", items: [item], can_display: true })); });
+    expect(useNotificationStore.getState().items).toHaveLength(0);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not inherit opt-in when switching to another account", async () => {
+    setContextInboxEnabled("u2", false);
+    start();
+    await waitFor(() => expect(useNotificationStore.getState().items).toHaveLength(1));
+    const count = fetchMock.mock.calls.length;
+    await act(async () => {
+      client.setToken("session-u2");
+      auth.setState({ user: { id: "u2", name: "Other", email: "" } });
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(useNotificationStore.getState().items).toHaveLength(0);
+    expect(fetchMock).toHaveBeenCalledTimes(count);
+  });
+
   it("mirrors fetch results without acknowledging delivery or persisting their text", async () => {
     start();
     await waitFor(() => expect(useNotificationStore.getState().items).toHaveLength(1));
@@ -194,9 +260,11 @@ describe("persistent context inbox bridge", () => {
     expect(fakeChat.sendMessage).not.toHaveBeenCalled();
   });
 
-  it("binds profile-less login to the verified account before opening context chat", async () => {
+  it("starts a profile-less session only after explicit identity binding and opt-in", async () => {
     auth.setState({ user: null });
     start();
+    expect(fetchMock).not.toHaveBeenCalled();
+    await act(async () => { auth.setState({ user: { id: "u1", name: "User", email: "" } }); });
     await waitFor(() => expect(auth.getState().user?.id).toBe("u1"));
     await waitFor(() => expect(useNotificationStore.getState().items).toHaveLength(1));
     await openContextNotification(useNotificationStore.getState().items[0]!, vi.fn());

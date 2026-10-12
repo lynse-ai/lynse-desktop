@@ -349,7 +349,8 @@ describe("stopping a pending poll turn", () => {
     const last = store.getState().messages.at(-1)!;
     expect(last.role).toBe("assistant");
     expect(last.error).toBe(true);
-    expect(last.content).toContain("boom");
+    expect(last.content).toBe("");
+    expect(last.errorMessage).toBe("boom");
   });
 
   it("stamps revealedAt when the finished answer lands", () => {
@@ -399,5 +400,38 @@ describe("confirmation cards", () => {
     expect(fake.runs[1]!.opts!.confirmToken).toBe("card-token-1");
     // The card is cleared from the answered message.
     expect(store.getState().messages.find((m) => m.id === pending!.messageId)?.confirm).toBeUndefined();
+  });
+});
+
+describe("interrupted reply details", () => {
+  it("keeps streamed content and the actual failure separate, including history", async () => {
+    store.getState().setUserId("error-user");
+    store.getState().sendMessage("做成图文纪要");
+    const run = fake.runs[0]!;
+    emit(run, { type: "content", delta: "**会议纪要**" });
+    emit(run, { type: "tool", name: "render_preview", state: "running" });
+    emit(run, { type: "error", message: "图文生成超时" });
+    run.cancel();
+    await vi.waitFor(() => expect(store.getState().isLoading).toBe(false));
+    expect(store.getState().messages.at(-1)).toMatchObject({
+      content: "**会议纪要**", error: true, errorMessage: "图文生成超时",
+      toolUses: [{ id: "render_preview", name: "render_preview", state: "error" }],
+    });
+    await vi.waitFor(() => expect(window.localStorage.getItem("lynse_ai_chat_history_v1:error-user")).toContain("图文生成超时"));
+  });
+  it("removes a stale failure when an authoritative done result arrives", () => {
+    store.getState().sendMessage("hello");
+    const run = fake.runs[0]!;
+    emit(run, { type: "error", message: "temporary" });
+    emit(run, { type: "done", text: "完整答案" });
+    const message = store.getState().messages.at(-1)!;
+    expect(message.content).toBe("完整答案");
+    expect(message.error).toBeUndefined();
+    expect(message.errorMessage).toBeUndefined();
+  });
+  it("does not fabricate a generic tool row from an unclassified status", () => {
+    store.getState().sendMessage("hello");
+    emit(fake.runs[0]!, { type: "status", text: "调用工具: create_visual_card" });
+    expect(store.getState().messages.at(-1)?.toolUses).toBeUndefined();
   });
 });

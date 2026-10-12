@@ -4,8 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useNotificationStore } from "../notifications/use-notification-store";
 import { LynseSidebar } from "./lynse-sidebar";
+import { setContextInboxEnabled } from "../notifications/context-inbox-preferences";
 
 const push = vi.hoisted(() => vi.fn());
+vi.mock("@lynse/core/auth", () => ({ useAuthStore: (selector: (state: unknown) => unknown) => selector({ isAuthenticated: true, user: { id: "u1" } }) }));
 vi.mock("../navigation", () => ({ useNavigation: () => ({ pathname: "/home", push }) }));
 vi.mock("@lynse/core/i18n/react", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock("./use-user-credits", () => ({ useUserCredits: () => ({ data: { nickname: "Alice" } }) }));
@@ -22,12 +24,22 @@ vi.mock("./user-profile-dropdown", () => ({ UserProfileDropdown: ({ trigger }: {
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
   useNotificationStore.setState({ items: [], contextUserId: null });
   push.mockClear();
 });
 
 describe("context inbox entry on the current sidebar", () => {
+  it("keeps notifications discoverable after opt-in even when the inbox is empty", () => {
+    setContextInboxEnabled("u1", true);
+    useNotificationStore.setState({ items: [] });
+    render(<LynseSidebar />);
+    fireEvent.click(screen.getByRole("button", { name: /nav.notifications/ }));
+    expect(push).toHaveBeenCalledWith("/notifications");
+  });
+
   it("opens the existing notification page when a context item is available", () => {
+    setContextInboxEnabled("u1", true);
     useNotificationStore.setState({ items: [{
       id: "context:one", type: "context", title: "Review",
       createdAt: Date.now(), read: false,

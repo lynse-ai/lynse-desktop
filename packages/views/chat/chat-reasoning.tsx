@@ -10,6 +10,7 @@
 import * as React from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
+  AlertCircle,
   Brain,
   Check,
   ChevronDown,
@@ -94,6 +95,8 @@ export function ToolActivity({ tools }: { tools: ChatToolUse[] }) {
             <span className="min-w-0 truncate font-mono">{tool.name}</span>
             {tool.state === "running" ? (
               <Loader2 className="size-3 shrink-0 animate-spin" />
+            ) : tool.state === "error" ? (
+              <AlertCircle className="size-3 shrink-0 text-destructive" aria-label={t("chat.tool_failed")} />
             ) : (
               <Check className="size-3 shrink-0 text-success" />
             )}

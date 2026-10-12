@@ -106,23 +106,21 @@ export const WAITING_POOL: Record<string, { zh: string; en: string; ja: string }
     { zh: "把长话短说…", en: "Condensing the long bits…", ja: "長い話を短くしています…" },
     { zh: "提炼成要点…", en: "Distilling into bullets…", ja: "箇条書きに絞り込んでいます…" },
   ],
-  // Pending-stage captions emitted by the poll transport while a turn runs
-  // (CHAT_PENDING_STAGE_KEYS in chat-transport.ts). Poll carries no per-tool
-  // progress, so these elapsed-time stages stand in for the old tool pools.
+  // Submission/retry states are local facts. Once accepted, server events
+  // describe actual work; elapsed time never fabricates a search phase.
+  submitting: [
+    { zh: "正在提交你的问题…", en: "Sending your question…", ja: "質問を送信しています…" },
+    { zh: "等待服务端接收…", en: "Waiting for the server to accept it…", ja: "サーバーの受信を待っています…" },
+  ],
+  retrying: [
+    { zh: "服务暂时不可用，正在重试提交…", en: "The service is temporarily unavailable. Retrying…", ja: "サービスが一時的に利用できません。再試行中…" },
+  ],
+  waiting: [
+    { zh: "问题已收到，等待处理进度…", en: "Your request is received. Waiting for progress…", ja: "質問を受け付けました。進捗を待っています…" },
+    { zh: "还在等待服务端更新…", en: "Still waiting for a server update…", ja: "サーバーの更新を待っています…" },
+  ],
   thinking: [
-    { zh: "正在思考你的问题…", en: "Thinking about your question…", ja: "質問について考えています…" },
-    { zh: "理一理思路…", en: "Getting thoughts in order…", ja: "思考を整理しています…" },
-    { zh: "答案马上就来…", en: "Answer coming right up…", ja: "もうすぐ回答します…" },
-  ],
-  researching: [
-    { zh: "翻翻你的会议和笔记…", en: "Digging through meetings and notes…", ja: "会議とノートを調べています…" },
-    { zh: "把相关内容捞出来…", en: "Pulling up relevant content…", ja: "関連する内容を探しています…" },
-    { zh: "比对几份资料…", en: "Cross-checking the material…", ja: "資料を照らし合わせています…" },
-  ],
-  composing: [
-    { zh: "把答案组织成一段话…", en: "Putting the answer into words…", ja: "回答をまとめています…" },
-    { zh: "润色一下表述…", en: "Polishing the wording…", ja: "表現を整えています…" },
-    { zh: "这就来…", en: "Almost there…", ja: "もう少しです…" },
+    { zh: "正在处理你的问题…", en: "Working on your question…", ja: "質問を処理しています…" },
   ],
   // Unknown tool, or a generic "calling tool" status without a known name.
   __unknown__: [
@@ -161,7 +159,7 @@ export function upsertToolUse(
   uses: ChatToolUse[] | undefined,
   name: string,
   id: string | undefined,
-  state: "running" | "done",
+  state: ChatToolUse["state"],
 ): ChatToolUse[] {
   const list = uses ? [...uses] : [];
   const key = id || name;
@@ -175,18 +173,18 @@ export function upsertToolUse(
   }
 
   if (index >= 0) {
-    list[index] = { ...list[index]!, state: "done" };
+    list[index] = { ...list[index]!, state };
     return list;
   }
   return list.map((t) =>
-    t.state === "running" && (!name || t.name === name) ? { ...t, state: "done" as const } : t,
+    t.state === "running" && (!name || t.name === name) ? { ...t, state } : t,
   );
 }
 
 /** Mark every running tool done (used when the answer or the turn completes). */
-export function closeRunningTools(uses: ChatToolUse[] | undefined): ChatToolUse[] | undefined {
+export function closeRunningTools(uses: ChatToolUse[] | undefined, state: "done" | "error" = "done"): ChatToolUse[] | undefined {
   if (!uses?.some((t) => t.state === "running")) return uses;
-  return uses.map((t) => (t.state === "running" ? { ...t, state: "done" as const } : t));
+  return uses.map((t) => (t.state === "running" ? { ...t, state } : t));
 }
 
 function makeId(prefix: string): string {
@@ -433,7 +431,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         writeMessage((m) => ({
           ...m,
           status: toolKey ?? evt.text,
-          toolUses: toolKey ? upsertToolUse(m.toolUses, toolKey, undefined, "running") : m.toolUses,
+          toolUses: toolKey && toolKey !== STATUS_FALLBACK ? upsertToolUse(m.toolUses, toolKey, undefined, "running") : m.toolUses,
         }));
         break;
       }
@@ -481,6 +479,8 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
             stripAttachmentDuplicateImages(finalContent, evt.attachments),
           ),
           status: undefined,
+          error: undefined,
+          errorMessage: undefined,
           thinkingActive: false,
           toolUses: closeRunningTools(m.toolUses),
           sources: evt.sources ? evt.sources.map(redactMeetingIds) : m.sources,
@@ -582,10 +582,13 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       case "error":
         writeMessage((m) => ({
           ...m,
-          // An authorization failure renders its own inline authorize card —
-          // keep the placeholder content clean instead of "Error: <key>".
-          content: evt.workbuddyAuthRequired ? m.content : m.content || `Error: ${evt.message}`,
+          // Keep streamed Markdown separate from the failure detail. The
+          // WorkBuddy authorization card handles its own error copy.
+          content: m.content,
           error: true,
+          errorMessage: evt.message,
+          thinkingActive: false,
+          toolUses: closeRunningTools(m.toolUses, "error"),
           workbuddyAuthRequired: evt.workbuddyAuthRequired || m.workbuddyAuthRequired,
           workbuddyAuthReason: evt.workbuddyAuthRequired ? evt.message : m.workbuddyAuthReason,
           status: undefined,

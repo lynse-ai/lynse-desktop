@@ -46,6 +46,7 @@ import { McpConfigCard } from "./mcp-config-card";
 import { ModelConfigCard } from "./model-config-card";
 import { WorkBuddyConfigCard } from "./workbuddy-config-card";
 import { AppearanceSection } from "./appearance-settings";
+import { ContextInboxCard } from "./context-inbox-card";
 import {
   getSettingsSections,
   PluginCommunitySection,
@@ -135,6 +136,7 @@ export function SettingsDialog({
     icon: Bot,
     content: (
       <>
+        {!isWebPlatform() && <ContextInboxCard onOpenChat={() => onOpenChange(false)} />}
         <AgentServerCard />
         <ModelConfigCard />
         <WorkBuddyConfigCard />

@@ -6,7 +6,7 @@ import { getAuthStore, useAuthStore } from "@lynse/core/auth";
 import { api } from "@lynse/core/api/client";
 import { ApiError } from "@lynse/core/api";
 import { actOnContextInbox, getContextInboxItem, listContextInbox, syncContextMeetings } from "@lynse/core/api";
-import type { ContextInboxAction, ContextInboxItem, ContextInboxResponse } from "@lynse/core/api";
+import type { ContextInboxAction, ContextInboxItem, ContextInboxResult } from "@lynse/core/api";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useChatStore } from "../workspace/hooks/use-chat-store";
 import { useNotificationStore, type NotificationItem } from "./use-notification-store";
@@ -97,9 +97,15 @@ function EnabledContextInboxNotifier() {
     enabled: !!sessionToken,
     staleTime: 0,
     retry: false,
-    // Back off when the inbox keeps failing (server off) so the poll stops
+    // A closed server gate is terminal: stop the timer entirely (a window
+    // focus still re-checks once, so a later enable is discovered). Otherwise
+    // back off when the inbox keeps failing (server off) so the poll stops
     // hammering a closed endpoint every minute.
-    refetchInterval: () => (consecutiveFailures.current >= 3 ? 300_000 : 60_000),
+    refetchInterval: (query) => {
+      const data = query.state.data as ContextInboxResult | undefined;
+      if (data?.available === false) return false;
+      return consecutiveFailures.current >= 3 ? 300_000 : 60_000;
+    },
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
   });
@@ -118,7 +124,7 @@ function EnabledContextInboxNotifier() {
     };
   }, [queryClient, queryKey, authenticated, knownUserId]);
 
-  const userId = sessionToken && inbox.data && !inbox.isError
+  const userId = sessionToken && inbox.data?.available === true && !inbox.isError
     && (!knownUserId || knownUserId === inbox.data.user_id) ? inbox.data.user_id : null;
   useEffect(() => {
     useNotificationStore.getState().setContextUnavailable(!!sessionToken && inbox.isError);
@@ -153,7 +159,7 @@ function EnabledContextInboxNotifier() {
         if (pending) return pending;
         if (!current()) return Promise.resolve();
         if (action === "displayed") {
-          if (displayInFlight || !queryClient.getQueryData<ContextInboxResponse>(queryKey)?.can_display) return Promise.resolve();
+          if (displayInFlight || !queryClient.getQueryData<ContextInboxResult>(queryKey)?.can_display) return Promise.resolve();
         }
         const operation = operations.get(key) ?? {
           id: crypto.randomUUID(),
@@ -163,7 +169,7 @@ function EnabledContextInboxNotifier() {
         const run = (async () => {
           const result = await actOnContextInbox(item, action, sessionToken, operation.id, operation.snoozedUntil, controller.signal);
           if (!current()) return;
-          queryClient.setQueryData<ContextInboxResponse>(queryKey, (old) => old ? {
+          queryClient.setQueryData<ContextInboxResult>(queryKey, (old) => old && old.available === true ? {
             ...old,
             can_display: action === "displayed" ? false : old.can_display,
             items: old.items.map((entry) => entry.item_id === item.item_id ? result.item : entry),
@@ -215,7 +221,7 @@ function EnabledContextInboxNotifier() {
   }, [userId, knownUserId, sessionToken, queryClient, queryKey]);
 
   useEffect(() => {
-    if (userId && inbox.data && !inbox.isFetching) {
+    if (userId && inbox.data?.available === true && !inbox.isFetching) {
       useNotificationStore.getState().mirrorContext(userId, inbox.data.items, inbox.data.can_display);
     }
   }, [inbox.data, inbox.dataUpdatedAt, inbox.isFetching, userId]);

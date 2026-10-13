@@ -3,4 +3,4 @@ export { normalizeConnectionRequest, getConnectorRequest, resumeConnectorRequest
 export type { ConnectorConnectionRequest, ConnectorRequestResult, ConnectorAccount, ConnectorRequestStatus } from "./connectors";
 export { parseWithFallback } from "./schema";
 export { getContextIdentity, listContextInbox, getContextInboxItem, actOnContextInbox, syncContextMeetings, downloadContextReview, isContextExportPath } from "./context";
-export type { ContextInboxItem, ContextInboxResponse, ContextInboxAction } from "./context";
+export type { ContextInboxItem, ContextInboxResponse, ContextInboxDisabledResponse, ContextInboxResult, ContextInboxAction } from "./context";

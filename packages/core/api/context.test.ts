@@ -62,13 +62,17 @@ describe("context API session boundary", () => {
     expect(JSON.parse(fetchMock.mock.calls[0]?.[1].body)).toEqual({ action: "dismiss", base_version: 2, operation_id: "op-1" });
   });
 
-  it("treats HTTP200 domain failures and unavailable feature responses as failures", async () => {
+  it("treats HTTP200 domain failures as failures and a closed gate as a business state", async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ status: "error", item })));
     await expect(actOnContextInbox(item, "dismiss", "test-session", "op-1")).rejects.toThrow("not accepted");
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ status: "ok", user_id: "u1", items: [] })));
     await expect(listContextInbox("test-session")).rejects.toThrow("unavailable");
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "context_unavailable" }), { status: 503 }));
     await expect(listContextInbox("test-session")).rejects.toMatchObject({ status: 503 });
+    // The disabled gate arrives as HTTP 200 + available:false: a terminal
+    // business state the poller stops on, never an error.
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ status: "ok", available: false, items: [], can_display: false })));
+    await expect(listContextInbox("test-session")).resolves.toEqual({ status: "ok", available: false, items: [], can_display: false });
   });
 
   it("downloads Markdown through the authenticated endpoint and rejects external paths and error payloads", async () => {

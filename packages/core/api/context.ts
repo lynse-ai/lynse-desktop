@@ -23,6 +23,19 @@ export interface ContextInboxResponse {
   available: true;
 }
 
+/**
+ * Terminal business state: the value-added context service is not enabled
+ * server-side. Not an error — the poller stops instead of retrying.
+ */
+export interface ContextInboxDisabledResponse {
+  status: "ok";
+  available: false;
+  items: [];
+  can_display: false;
+}
+
+export type ContextInboxResult = ContextInboxResponse | ContextInboxDisabledResponse;
+
 export type ContextInboxAction = "displayed" | "dismiss" | "snooze";
 
 function requestOptions(sessionToken: string, signal?: AbortSignal) {
@@ -44,13 +57,19 @@ export async function getContextIdentity(sessionToken: string) {
   return response;
 }
 
-/** Available only on cloud live + PostgreSQL; unknown/offline modes fail closed. */
-export async function listContextInbox(sessionToken: string, signal?: AbortSignal) {
-  const response = await api().get<ContextInboxResponse>(
+/** Cloud live + PostgreSQL only; a closed server gate is a business state, not a failure. */
+export async function listContextInbox(sessionToken: string, signal?: AbortSignal): Promise<ContextInboxResult> {
+  const response = await api().get<ContextInboxResult>(
     "/api/context/inbox?status=pending",
     requestOptions(sessionToken, signal),
   );
-  if (response.status !== "ok" || response.available !== true || !response.user_id || !Array.isArray(response.items)) {
+  if (response.status !== "ok" || !Array.isArray(response.items)) {
+    throw new Error("Context inbox unavailable");
+  }
+  if (response.available === false) {
+    return { status: "ok", available: false, items: [], can_display: false };
+  }
+  if (response.available !== true || !response.user_id) {
     throw new Error("Context inbox unavailable");
   }
   return response;

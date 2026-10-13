@@ -408,4 +408,39 @@ describe("persistent context inbox bridge", () => {
     expect(useNotificationStore.getState().contextUnavailable).toBe(false);
     expect(useNotificationStore.getState().items).toHaveLength(1);
   });
+
+  it("treats a closed server gate as terminal: no timer, no error flag, focus re-check, resumes on enable", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(async (url: string) => String(url).includes("/inbox?")
+      ? Response.json({ status: "ok", available: false, items: [], can_display: false })
+      : Response.json({ status: "accepted", queued: true }));
+    start();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    const lists = () => fetchMock.mock.calls.filter(([url]) => String(url).includes("/inbox?"));
+    expect(lists()).toHaveLength(1);
+    expect(useNotificationStore.getState().contextUnavailable).toBe(false);
+    expect(useNotificationStore.getState().items).toHaveLength(0);
+    // Terminal state: the interval timer is gone entirely.
+    await act(async () => { await vi.advanceTimersByTimeAsync(600_000); });
+    expect(lists()).toHaveLength(1);
+    // A visibility change still re-checks exactly once (TanStack v5 listens on
+    // window) so a later server-side enable is discovered without a timer.
+    await act(async () => {
+      window.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(lists()).toHaveLength(2);
+    // The gate opens server-side: the next check restores the normal poll loop.
+    fetchMock.mockImplementation(async (url: string) => String(url).includes("/inbox?")
+      ? Response.json({ status: "ok", available: true, user_id: userId, items: [item], can_display: canDisplay })
+      : Response.json({ status: "accepted", queued: true }));
+    await act(async () => {
+      window.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(useNotificationStore.getState().items).toHaveLength(1);
+    const afterEnable = lists().length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(lists().length).toBeGreaterThan(afterEnable);
+  });
 });

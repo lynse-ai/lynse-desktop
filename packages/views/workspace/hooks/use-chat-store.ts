@@ -14,7 +14,7 @@ import type {
   ChatToolUse,
 } from "../types";
 import {
-  PollChatTransport,
+  StreamChatTransport,
   extractConfirmFromText,
   type ChatTransport,
 } from "../chat-transport";
@@ -699,7 +699,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     const transport: ChatTransport =
       assistant === "workbuddy"
         ? hasWorkBuddyAcpBridge() ? new WorkBuddyCloudChatTransport() : new WorkBuddyChatTransport()
-        : new PollChatTransport();
+        : new StreamChatTransport();
     const controller = new AbortController();
     runs.set(conversationId, { conversationId, assistantId, transport, controller });
     syncRunState();
@@ -766,7 +766,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         if (get().userId !== userId || runs.get(conversationId)?.controller !== controller) return;
         // A turn that resolves without `done` was aborted or cut short.
         recordPerf(timing.completed);
-        // Poll has no partial content: a stopped turn leaves an empty
+        // A turn stopped before any content leaves an empty
         // placeholder bubble that would otherwise spin "thinking" forever —
         // drop it. Anything renderable (error text, an attachment-only reply
         // like the weekly-report PDF whose body is empty server-side, the

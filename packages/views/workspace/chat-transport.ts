@@ -17,6 +17,10 @@ export interface SendChatOptions {
   fileIds: string[];
   userSpecifiedFile: boolean;
   token?: string | null;
+  /** Stable per-turn key shared by stream retries and poll recovery. */
+  requestId?: string;
+  /** Internal recovery handshake; never treated as a user-visible event. */
+  onTaskId?: (taskId: string) => void;
   /** `confirmation.confirmToken` of the card this turn answers, if any. */
   confirmToken?: string | null;
   /** Per-turn model override (model selection); absent = server default. */
@@ -39,9 +43,8 @@ export interface ChatTransport {
 }
 
 /**
- * The lynclaw agent service exposes `POST /api/chat/poll` plus
- * `GET /api/chat/poll/{task_id}` (submit, then short-poll until the full
- * answer is ready — no SSE). The Lynse gateway fronts that service under
+ * The lynclaw agent service exposes SSE and submit/GET polling routes.
+ * The Lynse gateway fronts that service under
  * `/api/business/ai`, while the service itself serves the native
  * `/api/chat/*` routes — so a direct agent connection (route B) uses the
  * unprefixed paths and the main backend keeps the gateway ones.
@@ -63,7 +66,7 @@ const chatPollTaskPath = (taskId: string) =>
  * (lynse_agent_api_url, set in Settings → AI Assistant) and connect straight
  * to it — typically the CloudBase-hosted lynclaw service, bypassing the Lynse
  * gateway. Undefined = ride the main backend like every other business API.
- * Chat always uses the poll contract; the direct service supports it natively.
+ * Both transports use the same request contract and route selection.
  */
 function chatAgentBaseUrl(): string | undefined {
   try {
@@ -74,7 +77,7 @@ function chatAgentBaseUrl(): string | undefined {
 }
 
 /**
- * Poll timing, readable at send-time so tests can shrink the waits. The
+ * Chat timing, readable at send-time so tests can shrink the waits. The
  * standard advises a 500–1000ms interval (never below 200ms) and an overall
  * wait above the server's turn timeout (180s by default) plus headroom.
  */
@@ -147,6 +150,22 @@ interface ChatPollTaskResponse {
   confirmation?: unknown;
   connection_requests?: unknown;
   error?: string | null;
+}
+
+/** Keep stream, busy retries and poll recovery on the same authenticated turn. */
+function chatTurnBody(opts: SendChatOptions): Record<string, unknown> {
+  const { query, sessionId, fileIds, userSpecifiedFile, token, confirmToken, modelOverride } = opts;
+  const body: Record<string, unknown> = { query };
+  if (opts.requestId) body.requestId = opts.requestId;
+  if (sessionId) body.sessionId = sessionId;
+  if (token) body.token = token;
+  if (fileIds.length && userSpecifiedFile) body.fileIds = fileIds;
+  if (modelOverride) body.modelOverride = modelOverride;
+  if (confirmToken) {
+    body.confirm_token = confirmToken;
+    body.confirmToken = confirmToken;
+  }
+  return body;
 }
 
 const firstString = (...values: unknown[]): string | null => {
@@ -534,20 +553,39 @@ export class PollChatTransport implements ChatTransport {
   private requestController: AbortController | null = null;
 
   async send(opts: SendChatOptions): Promise<void> {
+    await this.run(opts, () => this.sendTurn(opts));
+  }
+
+  /** Resume an existing task without submitting the user query a second time. */
+  async resume(taskId: string, opts: SendChatOptions): Promise<void> {
+    await this.run(opts, () => this.pollUntilDone(taskId, Date.now(), opts.onEvent));
+  }
+
+  private async run(opts: SendChatOptions, work: () => Promise<void>): Promise<void> {
     this.cancelled = false;
     this.requestController = new AbortController();
     const abort = () => this.cancel();
     opts.signal?.addEventListener("abort", abort, { once: true });
-    if (opts.signal?.aborted) { this.cancel(); return; }
+    if (opts.signal?.aborted) {
+      this.cancel();
+      opts.signal.removeEventListener("abort", abort);
+      this.requestController = null;
+      return;
+    }
+    const requestSignal = this.requestController.signal;
+    let settleAbort!: () => void;
+    const aborted = new Promise<void>((resolve) => { settleAbort = resolve; });
+    requestSignal.addEventListener("abort", settleAbort, { once: true });
     // Bound submission too: a stalled POST must not wait forever before
     // entering the poll loop, and cancellation aborts its network request.
     const deadline = setTimeout(() => {
       if (!this.cancelled) opts.onEvent({ type: "error", message: "回复生成超时，请重新发送" });
       this.cancel();
     }, chatPollTiming.deadlineMs);
-    try { await this.sendTurn(opts); }
+    try { await Promise.race([work(), aborted]); }
     finally {
       clearTimeout(deadline);
+      requestSignal.removeEventListener("abort", settleAbort);
       opts.signal?.removeEventListener("abort", abort);
       this.requestController = null;
     }
@@ -555,22 +593,8 @@ export class PollChatTransport implements ChatTransport {
 
   private async sendTurn(opts: SendChatOptions): Promise<void> {
 
-    const { query, sessionId, fileIds, userSpecifiedFile, token, confirmToken, modelOverride, onEvent } =
-      opts;
-    // The gateway's poll route keeps the stream endpoint's request contract —
-    // same camelCase fields, same auth — only the URL and the two-step
-    // submit/poll flow differ. The server derives the user from the token.
-    const body: Record<string, unknown> = { query };
-    if (sessionId) body.sessionId = sessionId;
-    if (token) body.token = token;
-    if (fileIds.length && userSpecifiedFile) body.fileIds = fileIds;
-    if (modelOverride) body.modelOverride = modelOverride;
-    if (confirmToken) {
-      // The card answer is new (no legacy field name); cover both spellings —
-      // the doc's `confirm_token` and the card's camelCase `confirmToken`.
-      body.confirm_token = confirmToken;
-      body.confirmToken = confirmToken;
-    }
+    const { onEvent } = opts;
+    const body = chatTurnBody(opts);
 
     const startedAt = Date.now();
     // This is a client-side submission state, not a claim that the server
@@ -586,6 +610,7 @@ export class PollChatTransport implements ChatTransport {
       if (!this.cancelled) onEvent({ type: "error", message: submitErrorMessage(error) });
       return;
     }
+    opts.onTaskId?.(taskId);
     if (this.cancelled) return;
 
     onEvent({ type: "status", text: "waiting" });
@@ -671,6 +696,7 @@ export class PollChatTransport implements ChatTransport {
         if (error instanceof ApiError && error.status === 404) notFound = true;
         else networkError = error;
       }
+      if (this.cancelled) return;
 
       if (networkError) {
         // A dropped GET is not fatal; give the network a few chances.
@@ -956,50 +982,174 @@ export function parseChatStreamData(payload: string): ChatStreamEvent[] {
 }
 
 /**
- * SSE transport over the pre-poll stream contract (`POST /api/chat/stream`).
- * Not on the chat hot path — the poll transport is the only production
- * transport — but kept as a complete implementation of the stream contract
- * (covered by tests) for backends that only expose it.
+ * SSE is the cloud-chat default. Busy submissions retry with exponential
+ * backoff; an interrupted stream recovers through polling in the same UI
+ * turn. A pollable task_id/taskId frame allows true task resumption. Without
+ * one, recovery uses the same requestId to let the backend deduplicate the
+ * submission. Older backends may ignore that key. All attempts share the
+ * original turn's deadline and abort signal.
  */
 export class StreamChatTransport implements ChatTransport {
   readonly provider = "cloud" as const;
-  private controller: AbortController | null = null;
+  private turnController: AbortController | null = null;
+  private streamController: AbortController | null = null;
 
   async send(opts: SendChatOptions): Promise<void> {
-    const { query, sessionId, fileIds, userSpecifiedFile, token, confirmToken, modelOverride, onEvent } = opts;
-    const body: Record<string, unknown> = { query };
-    if (sessionId) body.sessionId = sessionId;
-    if (token) body.token = token;
-    if (fileIds.length && userSpecifiedFile) body.fileIds = fileIds;
-    if (modelOverride) body.modelOverride = modelOverride;
-    if (confirmToken) {
-      body.confirm_token = confirmToken;
-      body.confirmToken = confirmToken;
-    }
-    await new Promise<void>((resolve) => {
-      this.controller = api().stream(
-        chatStreamPath(),
-        body,
-        (data) => {
-          for (const event of parseChatStreamData(data)) onEvent(event);
-        },
-        (err) => {
-          if (!opts.signal?.aborted) {
-            onEvent({ type: "error", message: submitErrorMessage(err) });
+    this.cancel();
+    opts = { ...opts, requestId: opts.requestId ?? crypto.randomUUID() };
+    const turn = new AbortController();
+    this.turnController = turn;
+    const abort = () => turn.abort();
+    opts.signal?.addEventListener("abort", abort, { once: true });
+    if (opts.signal?.aborted) abort();
+
+    let terminal = false;
+    let hasPartialText = false;
+    let taskId: string | null = null;
+    const cancelTask = () => {
+      if (!taskId) return;
+      try {
+        // A dropped reader must not cancel a recoverable task; only the turn's
+        // explicit abort (Stop, account switch or deadline) calls this endpoint.
+        void Promise.resolve(api().post(`${chatPollTaskPath(taskId)}/cancel`, {}, {
+          baseUrl: chatAgentBaseUrl(), sessionToken: opts.token ?? undefined,
+        })).catch(() => {});
+      } catch { /* Best effort; server timeout still bounds the worker. */ }
+    };
+    turn.signal.addEventListener("abort", cancelTask, { once: true });
+    const emit = (event: ChatStreamEvent) => {
+      if (turn.signal.aborted) return;
+      if (event.type === "done" || event.type === "error") terminal = true;
+      if (event.type === "content" && event.delta) hasPartialText = true;
+      opts.onEvent(event);
+    };
+    const deadline = setTimeout(() => {
+      if (!terminal) emit({ type: "error", message: "回复生成超时，请重新发送" });
+      turn.abort();
+    }, chatPollTiming.deadlineMs);
+
+    try {
+      if (turn.signal.aborted) return;
+      const body = chatTurnBody(opts);
+      emit({ type: "status", text: "submitting" });
+      for (let attempt = 0; !turn.signal.aborted; attempt += 1) {
+        const result = await this.streamAttempt(body, turn.signal, (payload) => {
+          try {
+            const frame = JSON.parse(payload) as Record<string, unknown> | null;
+            taskId = firstString(frame?.task_id, frame?.taskId) ?? taskId;
+          } catch { /* Raw text deltas do not carry a task id. */ }
+          const events = parseChatStreamData(payload);
+          for (const event of events) {
+            // The server may send the confirmation after done. Keep that
+            // frame, but never turn a completed answer into a network error.
+            if (!terminal || event.type === "confirm") emit(event);
           }
-          resolve();
-        },
-        () => resolve(),
-        { baseUrl: chatAgentBaseUrl() },
-      );
-    });
-    this.controller = null;
+          return events.some((event) => event.type === "error");
+        });
+        if (turn.signal.aborted || terminal) return;
+
+        if (!result.receivedFrame && isBusySubmitError(result.error)) {
+          if (attempt >= chatPollTiming.maxSubmitRetries) {
+            emit({ type: "error", message: submitErrorMessage(result.error) });
+            return;
+          }
+          emit({ type: "status", text: "retrying" });
+          await sleep(chatPollTiming.submitRetryDelayMs * 2 ** attempt, () => turn.signal.aborted);
+          if (!turn.signal.aborted) emit({ type: "status", text: "submitting" });
+          continue;
+        }
+
+        const error = result.error;
+        if (error instanceof ApiError && (
+          isIdentityFailureError(error) ||
+          ![0, 404, 405, 408].includes(error.status) && error.status < 500
+        )) {
+          emit({ type: "error", message: submitErrorMessage(error) });
+          return;
+        }
+
+        // EOF without done is also a dropped stream. Fall back once, keeping
+        // the same pending message and request fields. If text already arrived,
+        // leave it visible until poll's authoritative done replaces it; replaying
+        // a new answer's deltas here would append duplicate or divergent text.
+        emit({ type: "status", text: "retrying" });
+        const poll = new PollChatTransport();
+        const suppressRecoveryText = hasPartialText;
+        const recoveryOpts: SendChatOptions = {
+          ...opts,
+          signal: turn.signal,
+          onTaskId: (id) => {
+            taskId = id;
+            if (turn.signal.aborted) cancelTask();
+          },
+          onEvent: (event) => {
+            if (event.type !== "content" || !suppressRecoveryText) emit(event);
+          },
+        };
+        let settleAbort!: () => void;
+        const aborted = new Promise<void>((resolve) => { settleAbort = resolve; });
+        turn.signal.addEventListener("abort", settleAbort, { once: true });
+        try {
+          await Promise.race([
+            taskId ? poll.resume(taskId, recoveryOpts) : poll.send(recoveryOpts),
+            aborted,
+          ]);
+        } finally {
+          turn.signal.removeEventListener("abort", settleAbort);
+          poll.cancel();
+        }
+        return;
+      }
+    } finally {
+      clearTimeout(deadline);
+      turn.signal.removeEventListener("abort", cancelTask);
+      opts.signal?.removeEventListener("abort", abort);
+      if (this.turnController === turn) this.turnController = null;
+    }
   }
 
   cancel(): void {
-    this.controller?.abort();
-    this.controller = null;
+    this.turnController?.abort();
+    this.streamController?.abort();
   }
 
-
+  private streamAttempt(
+    body: Record<string, unknown>,
+    signal: AbortSignal,
+    onChunk: (payload: string) => boolean,
+  ): Promise<{ error?: unknown; receivedFrame: boolean }> {
+    return new Promise((resolve) => {
+      let settled = false;
+      let receivedFrame = false;
+      let controller: AbortController | null = null;
+      const finish = (error?: unknown) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener("abort", abort);
+        if (this.streamController === controller) this.streamController = null;
+        controller?.abort();
+        resolve({ error, receivedFrame });
+      };
+      const abort = () => finish();
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) { finish(); return; }
+      try {
+        controller = api().stream(
+          chatStreamPath(), body,
+          (payload) => {
+            if (settled || signal.aborted) return;
+            if (payload) receivedFrame = true;
+            // Explicit backend errors are terminal even if the socket stays open.
+            if (onChunk(payload)) finish();
+          },
+          (error) => finish(error),
+          () => finish(),
+          { baseUrl: chatAgentBaseUrl() },
+        );
+        // Mocks and adapters can complete synchronously before returning a controller.
+        if (settled || signal.aborted) controller.abort();
+        else this.streamController = controller;
+      } catch (error) { finish(error); }
+    });
+  }
 }

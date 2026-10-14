@@ -1044,29 +1044,27 @@ describe("transport selection by server", () => {
     );
   }
 
-  it("always polls — even on the managed gateway host — and never touches stream", async () => {
+  it("streams on the managed gateway host", async () => {
     apiMocks.getBaseUrl.mockReturnValue("https://api.lynse.cn");
-    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
-    apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
+    apiMocks.stream = streamReplaying([{ type: "done", text: "ok" }]);
 
     const { events, onEvent } = collector();
-    await new PollChatTransport().send(sendOptions({ onEvent }));
+    await new StreamChatTransport().send(sendOptions({ onEvent }));
 
-    expect(apiMocks.post.mock.calls[0]![0]).toBe("/api/business/ai/chat/poll");
-    expect(apiMocks.stream).not.toHaveBeenCalled();
+    expect(apiMocks.stream.mock.calls[0]![0]).toBe("/api/business/ai/chat/stream");
+    expect(apiMocks.post).not.toHaveBeenCalled();
     expect(events.at(-1)).toMatchObject({ type: "done" });
   });
 
-  it("uses poll on every other server and never touches stream", async () => {
+  it("uses the gateway stream path on custom business servers", async () => {
     apiMocks.getBaseUrl.mockReturnValue("http://10.20.0.5:10060");
-    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
-    apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
+    apiMocks.stream = streamReplaying([{ type: "done", text: "ok" }]);
 
     const { events, onEvent } = collector();
-    await new PollChatTransport().send(sendOptions({ onEvent }));
+    await new StreamChatTransport().send(sendOptions({ onEvent }));
 
-    expect(apiMocks.post).toHaveBeenCalledTimes(1);
-    expect(apiMocks.stream).not.toHaveBeenCalled();
+    expect(apiMocks.stream.mock.calls[0]![0]).toBe("/api/business/ai/chat/stream");
+    expect(apiMocks.post).not.toHaveBeenCalled();
     expect(events.at(-1)).toMatchObject({ type: "done" });
   });
 
@@ -1081,27 +1079,23 @@ describe("transport selection by server", () => {
     expect(events.at(-1)).toMatchObject({ type: "error" });
   });
 
-  it("targets the dedicated agent base URL with native lynclaw paths when configured (route B)", async () => {
+  it("streams to the dedicated agent with native lynclaw paths (route B)", async () => {
     const agentBase = "https://lynclaw-api-319577-10-1401959758.sh.run.tcloudbase.com";
     apiMocks.getAgentBaseUrl.mockReturnValue(agentBase);
-    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
-    apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
+    apiMocks.stream = streamReplaying([{ type: "done", text: "ok" }]);
 
     const { events, onEvent } = collector();
-    await new PollChatTransport().send(sendOptions({ onEvent }));
+    await new StreamChatTransport().send(sendOptions({ onEvent }));
 
     // Direct connections skip the gateway prefix: the service serves
     // /api/chat/* natively (verified against the CloudBase deployment).
-    expect(apiMocks.post).toHaveBeenCalledWith(
-      "/api/chat/poll",
+    expect(apiMocks.stream).toHaveBeenCalledWith(
+      "/api/chat/stream",
       expect.objectContaining({ query: "hello", sessionId: "session-1" }),
-      { baseUrl: agentBase, signal: expect.any(AbortSignal) },
+      expect.any(Function), expect.any(Function), expect.any(Function),
+      { baseUrl: agentBase },
     );
-    expect(apiMocks.get).toHaveBeenCalledWith("/api/chat/poll/task-1", {
-      baseUrl: agentBase,
-      signal: expect.any(AbortSignal),
-    });
-    expect(apiMocks.stream).not.toHaveBeenCalled();
+    expect(apiMocks.post).not.toHaveBeenCalled();
     expect(events.at(-1)).toMatchObject({ type: "done" });
   });
 
@@ -1124,8 +1118,8 @@ describe("transport selection by server", () => {
     const { events, onEvent } = collector();
     await new StreamChatTransport().send(sendOptions({ onEvent }));
 
-    expect(events.map((e) => e.type)).toEqual(["done", "confirm"]);
-    expect(events[1]).toMatchObject({ type: "confirm", confirm: { confirmToken: "t1" } });
+    expect(events.map((e) => e.type)).toEqual(["status", "done", "confirm"]);
+    expect(events[2]).toMatchObject({ type: "confirm", confirm: { confirmToken: "t1" } });
   });
 });
 

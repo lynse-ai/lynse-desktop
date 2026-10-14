@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The store is tested against a fake transport so its event contract
 // (status/content/thinking/tool/done/confirm/error) can be driven directly;
-// the real poll transport's HTTP behavior is covered in chat-transport.test.ts.
+// the real stream/poll HTTP behavior is covered in chat-transport.test.ts.
 const fake = vi.hoisted(() => {
   interface SendOptions {
     query: string;
@@ -34,7 +34,7 @@ const fake = vi.hoisted(() => {
 
 vi.mock("../chat-transport", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../chat-transport")>();
-  return { ...actual, PollChatTransport: fake.FakeTransport };
+  return { ...actual, StreamChatTransport: fake.FakeTransport };
 });
 
 vi.mock("sonner", () => ({

@@ -1,4 +1,5 @@
 import type { ChatAssistant, ChatConversation, ChatMessage } from "./types";
+import { stripSkillMarker } from "./chat-skill-ref";
 
 const CHAT_HISTORY_STORAGE_PREFIX = "lynse_ai_chat_history_v1";
 const ASSISTANT_STORAGE_PREFIX = "lynse_chat_assistant_v1";
@@ -62,7 +63,8 @@ function messagesForStorage(messages: ChatMessage[]): ChatMessage[] {
 }
 
 export function conversationTitle(firstMessage: string): string {
-  const title = firstMessage.trim().replace(/\s+/g, " ");
+  // Skill quick prompts keep their `skill://` marker out of sidebar titles.
+  const title = stripSkillMarker(firstMessage).trim().replace(/\s+/g, " ");
   if (!title) return "新对话";
   return title.length > 36 ? `${title.slice(0, 36)}…` : title;
 }

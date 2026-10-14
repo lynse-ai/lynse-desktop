@@ -20,12 +20,14 @@ import {
 } from "@lynse/core/config";
 import { Sparkles } from "../icons";
 
-/** Where the assistant connects. Default (and the "cloudbase" mode) is the
- *  route-B direct CloudBase preset; "custom" is a hand-typed origin. */
-type AgentServerMode = "cloudbase" | "custom";
+/** Where the assistant connects. "follow" (empty setting) rides the main
+ *  backend gateway; "cloudbase" is the route-B direct CloudRun preset;
+ *  "custom" is a hand-typed origin. */
+type AgentServerMode = "follow" | "cloudbase" | "custom";
 
 function modeForUrl(url: string | null): AgentServerMode {
-  if (!url || url === CLOUDBASE_AGENT_URL || url === LEGACY_CLOUDBASE_AGENT_URL)
+  if (!url) return "follow";
+  if (url === CLOUDBASE_AGENT_URL || url === LEGACY_CLOUDBASE_AGENT_URL)
     return "cloudbase";
   return "custom";
 }
@@ -46,21 +48,25 @@ function applyAgentUrl(url: string) {
 }
 
 /**
- * Server-address picker for the Xiaoling (小玲同学) assistant. Default is the
- * route-B direct CloudBase connection (the CloudBase-hosted lynclaw
- * deployment, bypassing the gateway); "custom" points it at a hand-typed
- * origin. Applies immediately — the chat transport reads the base URL
- * per request, so mid-conversation switches land on the next turn.
+ * Server-address picker for the Xiaoling (小玲同学) assistant. "follow" rides
+ * the main Lynse backend (gateway-fronted agent routes); "cloudbase" points
+ * straight at the CloudBase-hosted lynclaw deployment (route B, bypassing the
+ * gateway — the default after login via the agent-URL mapping); "custom"
+ * targets a hand-typed origin. Applies immediately — the chat transport reads
+ * the base URL per request, so mid-conversation switches land on the next
+ * turn.
  */
 export function AgentServerCard() {
   const { t } = useTranslation();
-  const [mode, setMode] = useState<AgentServerMode>("cloudbase");
+  const [mode, setMode] = useState<AgentServerMode>("follow");
   const [customUrl, setCustomUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [mainUrl, setMainUrl] = useState("");
   const [agentUrl, setAgentUrl] = useState<string | null>(null);
 
   useEffect(() => {
     try {
+      setMainUrl(api().getBaseUrl());
       const saved = api().getAgentBaseUrl();
       setAgentUrl(saved);
       const savedMode = modeForUrl(saved);
@@ -74,7 +80,10 @@ export function AgentServerCard() {
   function switchMode(next: AgentServerMode) {
     setMode(next);
     setError(null);
-    if (next === "cloudbase") {
+    if (next === "follow") {
+      applyAgentUrl("");
+      setAgentUrl(null);
+    } else if (next === "cloudbase") {
       applyAgentUrl(CLOUDBASE_AGENT_URL);
       setAgentUrl(CLOUDBASE_AGENT_URL);
     }
@@ -85,11 +94,11 @@ export function AgentServerCard() {
     setCustomUrl(value);
     const trimmed = value.trim().replace(/\/+$/, "");
     if (!trimmed) {
-      // Cleared: fall back to the CloudBase default.
+      // Cleared: fall back to following the main backend.
       setError(null);
-      applyAgentUrl(CLOUDBASE_AGENT_URL);
-      setAgentUrl(CLOUDBASE_AGENT_URL);
-      setMode("cloudbase");
+      applyAgentUrl("");
+      setAgentUrl(null);
+      setMode("follow");
       return;
     }
     if (!isValidServerUrl(trimmed)) {
@@ -101,7 +110,15 @@ export function AgentServerCard() {
     setAgentUrl(trimmed);
   }
 
-  const currentTarget = agentUrl ?? CLOUDBASE_AGENT_URL;
+  const currentTarget = agentUrl
+    ? agentUrl
+    : `${t("settings.agent_server_follow")} · ${mainUrl}`;
+
+  const modeItems = {
+    follow: t("settings.agent_server_follow"),
+    cloudbase: t("settings.agent_server_cloudbase"),
+    custom: t("settings.agent_server_custom"),
+  };
 
   return (
     <Card>
@@ -120,11 +137,16 @@ export function AgentServerCard() {
           <Label htmlFor="agent-server-url" className="text-xs text-muted-foreground">
             {t("settings.agent_server_label")}
           </Label>
-          <Select value={mode} onValueChange={(value) => switchMode(value as AgentServerMode)}>
+          <Select
+            value={mode}
+            items={modeItems}
+            onValueChange={(value) => switchMode(value as AgentServerMode)}
+          >
             <SelectTrigger id="agent-server-url" className="h-9 text-xs">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="follow">{t("settings.agent_server_follow")}</SelectItem>
               <SelectItem value="cloudbase">{t("settings.agent_server_cloudbase")}</SelectItem>
               <SelectItem value="custom">{t("settings.agent_server_custom")}</SelectItem>
             </SelectContent>

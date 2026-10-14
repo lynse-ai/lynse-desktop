@@ -28,6 +28,11 @@ import {
  * The window is re-read on `REMINDER_POLL_MS`, matching the app's other
  * background-ish polls; dismissed events stay dismissed until their start time
  * passes, so a user who ignores a meeting never sees it again.
+ *
+ * Everything past the status probe is gated on actually having a connected
+ * account: a user who never linked a calendar gets no events query and no
+ * error card — a backend outage must not ask them to "reconnect" a service
+ * they never signed in to.
  */
 export function CalendarReminderBanner() {
   const { t } = useTranslation();
@@ -39,6 +44,9 @@ export function CalendarReminderBanner() {
   const [reconnectOpen, setReconnectOpen] = useState(false);
 
   const status = useIntegrationStatus("google-calendar", isAuthenticated && isConnectionsEnabled());
+  // The single "is this banner relevant at all" gate: no account on file means
+  // nothing to remind and nothing to reconnect, so the events query stays off.
+  const hasAccount = (status.data?.accounts?.length ?? 0) > 0;
   const [now, setNow] = useState(Date.now);
   const window = useMemo(
     () => ({
@@ -48,9 +56,9 @@ export function CalendarReminderBanner() {
     // Keep the query range stable between poll ticks, including error renders.
     [now, config.leadMinutes],
   );
-  // No polling at all while the feature is off — the banner renders nothing,
-  // so an unrequested query would just be traffic on every authenticated page.
-  const events = useCalendarEvents(window, isConnectionsEnabled());
+  // No polling at all while the feature is off or nothing is connected — the
+  // banner renders nothing, so an unrequested query would just be traffic.
+  const events = useCalendarEvents(window, isConnectionsEnabled() && hasAccount);
 
   useEffect(() => {
     if (!isAuthenticated || !isConnectionsEnabled() || events.isError || status.isError) return;
@@ -76,7 +84,7 @@ export function CalendarReminderBanner() {
     [events.data, config, dismissed, notifyAccounts],
   );
 
-  if (!isConnectionsEnabled() || !isAuthenticated) return null;
+  if (!isConnectionsEnabled() || !isAuthenticated || !hasAccount) return null;
 
   const calendarError = events.error ?? status.error;
   if (calendarError && calendarError !== dismissedError) {

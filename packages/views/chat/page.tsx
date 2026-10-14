@@ -15,6 +15,7 @@ import {
   Globe,
   Headphones,
   Image,
+  Layers,
   ListChecks,
   ListOrdered,
   Loader2,
@@ -23,6 +24,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  ScrollText,
   Sparkles,
   Square,
   WorkBuddy,
@@ -42,6 +44,7 @@ import {
 import { openExternalUrl, getDesktopAppApi } from "../app-update";
 import { useNavigation } from "../navigation";
 import { useChat } from "../workspace/hooks/use-chat";
+import { extractSkillMarker, stripSkillMarker, type SkillMarker } from "../workspace/chat-skill-ref";
 import { ChatModelPicker } from "../workspace/model-picker";
 import { useInsertConclusion, useNotes, fetchFileDetail } from "../workspace/hooks/use-files";
 import { useFolders } from "../workspace/hooks/use-folders";
@@ -149,6 +152,11 @@ function ThinkingIndicator() {
 
 export function ChatPage() {
   const [input, setInput] = useState("");
+  // Skill quick prompts hide their `skill://` marker from the composer: the
+  // chip drops only the prompt body and the marker waits here until the send
+  // re-attaches it, so the backend agent still receives the skill reference.
+  // The chip above the composer shows the marker's label while it is pending.
+  const [pendingSkillMarker, setPendingSkillMarker] = useState<SkillMarker | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [insertingMessageId, setInsertingMessageId] = useState<string | null>(null);
   const [insertedMessageId, setInsertedMessageId] = useState<string | null>(null);
@@ -268,19 +276,33 @@ export function ChatPage() {
     setWbAuthorizing(false);
   }, []);
 
-  // Floating quick prompts above the composer: the prompts users type most
-  // often, one click to send. The first/third/fifth entries are the cards
-  // that used to sit in the middle of the empty state — moved down here.
-  const quickPrompts = [
-    { key: "chat.suggestion_summary", icon: Sparkles, label: t("chat.suggestion_summary") },
-    { key: "chat.quick_minutes", icon: FileText, label: t("chat.quick_minutes") },
-    { key: "chat.suggestion_actions", icon: ListChecks, label: t("chat.suggestion_actions") },
-    { key: "chat.quick_todos", icon: ListOrdered, label: t("chat.quick_todos") },
-    { key: "chat.suggestion_notes", icon: BookOpen, label: t("chat.suggestion_notes") },
-    { key: "chat.quick_plan", icon: CalendarDays, label: t("chat.quick_plan") },
-    { key: "chat.quick_translate", icon: Globe, label: t("chat.quick_translate") },
-    { key: "chat.quick_rewrite", icon: Pencil, label: t("chat.quick_rewrite") },
-  ];
+  // Floating quick prompts above the composer: each chip shows a short label
+  // but drops the full prompt into the composer for editing before sending —
+  // skill prompts carry a `skill://` marker the backend agent picks up and
+  // executes, held out of the composer and re-attached at send. The
+  // first/third/fifth entries are the cards that used to sit
+  // in the middle of the empty state — moved down here.
+  const quickPrompts = (
+    [
+      { key: "chat.suggestion_summary", icon: Sparkles, label: t("chat.suggestion_summary"), prompt: t("chat.prompt_summary") },
+      { key: "chat.quick_minutes", icon: FileText, label: t("chat.quick_minutes"), prompt: t("chat.prompt_minutes") },
+      { key: "chat.quick_visual_summary", icon: Image, label: t("chat.quick_visual_summary"), prompt: t("chat.prompt_visual_summary") },
+      { key: "chat.quick_html_report", icon: ScrollText, label: t("chat.quick_html_report"), prompt: t("chat.prompt_html_report") },
+      { key: "chat.suggestion_actions", icon: ListChecks, label: t("chat.suggestion_actions"), prompt: t("chat.prompt_actions") },
+      { key: "chat.quick_todos", icon: ListOrdered, label: t("chat.quick_todos"), prompt: t("chat.prompt_todos") },
+      { key: "chat.suggestion_notes", icon: BookOpen, label: t("chat.suggestion_notes"), prompt: t("chat.prompt_notes") },
+      { key: "chat.quick_plan", icon: CalendarDays, label: t("chat.quick_plan"), prompt: t("chat.prompt_plan") },
+      { key: "chat.quick_translate", icon: Globe, label: t("chat.quick_translate"), prompt: t("chat.prompt_translate") },
+      { key: "chat.quick_rewrite", icon: Pencil, label: t("chat.quick_rewrite"), prompt: t("chat.prompt_rewrite") },
+    ] as QuickPrompt[]
+  ).map((prompt) => {
+    // Skill chips surface the marker's label + body: the label renders as the
+    // accent-colored skill name, the body as the instruction preview.
+    const marker = extractSkillMarker(prompt.prompt);
+    return marker
+      ? { ...prompt, skill: { label: marker.label, body: marker.body } }
+      : prompt;
+  });
 
   // ── @ note / # group mentions ───────────────────────────
   // Stable "end of today" so the notes query key doesn't churn per render
@@ -535,6 +557,7 @@ export function ChatPage() {
       if (wbAuth !== "ok" || wbAuthorizing || isLegacyWorkBuddy) return;
       sendMessage(trimmedContent);
       setInput("");
+      setPendingSkillMarker(null);
       return;
     }
     // Wait for in-flight uploads — sending without their fileIds would lose
@@ -552,17 +575,23 @@ export function ChatPage() {
     const attachmentMeta = attachmentDrafts
       .filter((d) => d.status !== "error")
       .map((d) => ({ id: d.fileId, name: d.name, type: d.kind }));
+    // The composer only ever held the prompt body; the skill marker rides
+    // along here so the outgoing message still carries the skill reference.
+    const outgoing = pendingSkillMarker
+      ? `${pendingSkillMarker.marker} ${trimmedContent}`
+      : trimmedContent;
     if (fileIds.length > 0 || attachmentMeta.length > 0) {
       sendMessage(
-        trimmedContent,
+        outgoing,
         fileIds.length > 0 ? fileIds : undefined,
         fileIds.length > 0,
         attachmentMeta.length > 0 ? attachmentMeta : undefined,
       );
     } else {
-      sendMessage(trimmedContent);
+      sendMessage(outgoing);
     }
     setInput("");
+    setPendingSkillMarker(null);
     setMentions([]);
     resetMentionState();
     clearAttachmentDrafts();
@@ -571,6 +600,7 @@ export function ChatPage() {
   const handleNewChat = () => {
     clearMessages();
     setInput("");
+    setPendingSkillMarker(null);
     setMentions([]);
     resetMentionState();
     clearAttachmentDrafts();
@@ -790,7 +820,7 @@ export function ChatPage() {
                       </div>
                     )}
                     <div className="whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-primary px-4 py-2.5 text-sm leading-6 text-primary-foreground shadow-sm">
-                      {message.content}
+                      {stripSkillMarker(message.content)}
                     </div>
                   </div>
                 </div>
@@ -869,7 +899,16 @@ export function ChatPage() {
           {!isWorkBuddy && (
             <QuickPromptStrip
               prompts={quickPrompts}
-              onSelect={(prompt) => handleSend(prompt)}
+              onSelect={(prompt) => {
+                const marker = extractSkillMarker(prompt);
+                setPendingSkillMarker(marker);
+                const body = marker?.body ?? prompt;
+                setInput(body);
+                requestAnimationFrame(() => {
+                  textareaRef.current?.focus();
+                  textareaRef.current?.setSelectionRange(body.length, body.length);
+                });
+              }}
               disabled={isLoading}
             />
           )}
@@ -885,7 +924,14 @@ export function ChatPage() {
                 />
               </div>
             )}
-            {!isWorkBuddy && <MentionChips mentions={activeChips} onRemove={removeMention} />}
+            {!isWorkBuddy && (
+              <MentionChips
+                mentions={activeChips}
+                onRemove={removeMention}
+                skill={pendingSkillMarker ? { label: pendingSkillMarker.label } : undefined}
+                onRemoveSkill={() => setPendingSkillMarker(null)}
+              />
+            )}
             {/* Attachment upload is not implemented yet; entry points hidden until it ships. */}
             <Textarea
               ref={textareaRef}
@@ -893,6 +939,8 @@ export function ChatPage() {
               onChange={(event) => {
                 const value = event.target.value;
                 setInput(value);
+                // Wiping the draft drops the pending skill marker with it.
+                if (!value.trim()) setPendingSkillMarker(null);
                 syncMentionDetection(value, event.target.selectionStart ?? value.length);
               }}
               onSelect={(event) => {
@@ -1017,16 +1065,22 @@ export function ChatPage() {
 interface QuickPrompt {
   key: string;
   icon: ComponentType<{ className?: string }>;
+  /** Short chip text shown in the strip. */
   label: string;
+  /** Full text source for the chip; skill prompts carry a `skill://` marker that is stripped before the composer shows it and re-attached on send. */
+  prompt: string;
+  /** Marker label + body for skill chips: rendered as accent skill name + instruction preview. */
+  skill?: { label: string; body: string };
 }
 
 /**
  * Floating quick-prompt chips anchored right above the composer: one row,
- * horizontally scrollable, each a one-click send of a frequently typed
- * question. Dims (without collapsing) while a reply is streaming so the
- * composer height stays stable. The row hides its scrollbar, so chevron
- * buttons on each overflowing edge do the scrolling with the mouse; each
- * button only shows while that side actually has more content.
+ * horizontally scrollable, each dropping a frequently typed question into
+ * the composer for editing before sending. Dims (without collapsing) while
+ * a reply is streaming so the composer height stays stable. The row hides
+ * its scrollbar, so chevron buttons on each overflowing edge do the
+ * scrolling with the mouse; each button only shows while that side actually
+ * has more content.
  */
 function QuickPromptStrip({
   prompts,
@@ -1105,11 +1159,28 @@ function QuickPromptStrip({
           <button
             key={prompt.key}
             type="button"
-            onClick={() => onSelect(prompt.label)}
+            onClick={() => onSelect(prompt.prompt)}
             className="flex shrink-0 items-center gap-1.5 rounded-full border border-border/70 bg-card px-3 py-1.5 text-xs text-muted-foreground shadow-sm transition-[border-color,background-color,color] hover:border-primary/25 hover:bg-accent/50 hover:text-foreground"
           >
-            <prompt.icon className="size-3.5 shrink-0 text-primary/70" />
-            <span className="whitespace-nowrap">{prompt.label}</span>
+            {prompt.skill ? (
+              // Skill chip: layered-skill glyph + accent skill name + plain
+              // instruction preview, mirroring the reference recommendation
+              // cards (icon and name carry the accent, body stays neutral).
+              <>
+                <Layers className="size-3.5 shrink-0 text-primary" />
+                <span className="whitespace-nowrap font-medium text-primary">
+                  {prompt.skill.label}
+                </span>
+                <span className="max-w-48 truncate whitespace-nowrap text-foreground/75">
+                  {prompt.skill.body}
+                </span>
+              </>
+            ) : (
+              <>
+                <prompt.icon className="size-3.5 shrink-0 text-primary/70" />
+                <span className="whitespace-nowrap">{prompt.label}</span>
+              </>
+            )}
           </button>
         ))}
       </div>

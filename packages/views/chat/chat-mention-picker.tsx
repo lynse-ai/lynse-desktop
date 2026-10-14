@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { FileText, Hash, X } from "../icons";
+import { FileText, Hash, Layers, X } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
 import type { ChatMention, MentionOption, MentionTrigger } from "./chat-mentions";
 
@@ -89,15 +89,37 @@ export function MentionPicker({
 export function MentionChips({
   mentions,
   onRemove,
+  skill,
+  onRemoveSkill,
 }: {
   mentions: ChatMention[];
   onRemove: (mention: ChatMention) => void;
+  /** Pending skill quick prompt: rendered as a leading accent chip. */
+  skill?: { label: string };
+  onRemoveSkill?: () => void;
 }) {
   const { t } = useTranslation();
-  if (mentions.length === 0) return null;
+  if (mentions.length === 0 && !skill) return null;
 
   return (
     <div className="flex flex-wrap gap-1 px-2.5 pt-2">
+      {skill && (
+        <span
+          className="flex max-w-56 items-center gap-1 rounded-full border border-primary/20 bg-primary/10 py-0.5 pl-2 pr-0.5 text-2xs leading-4 text-accent-brand-text"
+        >
+          <Layers className="size-3 shrink-0" />
+          <span className="min-w-0 truncate">{skill.label}</span>
+          <button
+            type="button"
+            className="flex size-4 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-foreground/10"
+            onClick={onRemoveSkill}
+            title={t("chat.mention_remove")}
+            aria-label={`${t("chat.mention_remove")}: ${skill.label}`}
+          >
+            <X className="size-2.5" />
+          </button>
+        </span>
+      )}
       {mentions.map((mention) => (
         <span
           key={`${mention.kind}-${mention.id}`}

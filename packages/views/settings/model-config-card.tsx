@@ -177,7 +177,15 @@ export function ModelConfigCard() {
           <Label htmlFor="model-mode" className="text-xs text-muted-foreground">
             {t("settings.model_mode_label")}
           </Label>
-          <Select value={mode} onValueChange={(value) => switchMode(value as ModelMode)}>
+          <Select
+            value={mode}
+            items={{
+              default: t("settings.model_mode_default"),
+              preset: t("settings.model_mode_preset"),
+              custom: t("settings.model_mode_custom"),
+            }}
+            onValueChange={(value) => switchMode(value as ModelMode)}
+          >
             <SelectTrigger id="model-mode" className="h-9 text-xs">
               <SelectValue />
             </SelectTrigger>
@@ -195,7 +203,12 @@ export function ModelConfigCard() {
               <Label htmlFor="model-preset" className="text-xs text-muted-foreground">
                 {t("settings.model_preset_label")}
               </Label>
-              <Select value={presetId} onValueChange={choosePreset} disabled={!presets}>
+              <Select
+                value={presetId}
+                items={Object.fromEntries((presets ?? []).map((p) => [p.id, p.label]))}
+                onValueChange={choosePreset}
+                disabled={!presets}
+              >
                 <SelectTrigger id="model-preset" className="h-9 text-xs">
                   <SelectValue placeholder={presets ? t("settings.model_preset_label") : t("settings.model_presets_loading")} />
                 </SelectTrigger>

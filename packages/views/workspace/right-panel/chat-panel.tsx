@@ -16,6 +16,7 @@ import { WaitingText } from "../hooks/waiting-text";
 import { useFiles } from "../hooks/use-files";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { isFreshlyRevealed } from "../chat-reveal";
+import { stripSkillMarker } from "../chat-skill-ref";
 import { ChatAttachments } from "../../chat/chat-attachments";
 import { ChatConnectionCards } from "../../chat/chat-connection-cards";
 import { ChatHistorySidebar } from "../../chat/chat-history-sidebar";
@@ -218,7 +219,7 @@ export function ChatPanel() {
                       </div>
                     )}
                     {msg.content ? (
-                      <div className="whitespace-pre-wrap break-words">{msg.content}</div>
+                      <div className="whitespace-pre-wrap break-words">{stripSkillMarker(msg.content)}</div>
                     ) : (
                       <span className="text-muted-foreground">{msg.status || "…"}</span>
                     )}

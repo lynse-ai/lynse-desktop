@@ -143,12 +143,14 @@ describe("ChatPage", () => {
     expect((input as HTMLInputElement).value).toBe("");
   });
 
-  it("starts a chat from a suggested prompt", () => {
+  it("fills the composer with a suggested prompt instead of sending it", () => {
     render(<ChatPage />);
 
     fireEvent.click(screen.getByText("chat.suggestion_summary"));
 
-    expect(chat.sendMessage).toHaveBeenCalledWith("chat.suggestion_summary");
+    expect(chat.sendMessage).not.toHaveBeenCalled();
+    const input = screen.getByPlaceholderText("chat.page_placeholder");
+    expect((input as HTMLTextAreaElement).value).toBe("chat.prompt_summary");
   });
 
   it("does not send when Shift+Enter is pressed", () => {

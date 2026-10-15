@@ -6,9 +6,11 @@ import type { StorageAdapter } from "../types/storage";
 import type { AuthSession } from "./session";
 import { clearWorkBuddyTokenCache } from "./workbuddy";
 import {
-  buildWechatQrUrl,
+  buildWechatQrConnectUrl,
   createWechatState,
-  defaultWechatRedirectUri,
+  isWechatQrLoginConfigured,
+  renderWechatLoginUrl,
+  stateFromAuthorizeUrl,
 } from "./wechat";
 
 interface User {
@@ -24,14 +26,14 @@ interface AuthState {
   isAuthenticated: boolean;
   login: (apiKey: string, apiUrl?: string) => Promise<void>;
   /**
-   * Persist any pending API-base-URL change, mint a `state`, and return the
-   * WeChat QR-code authorize URL to navigate to (web: same-window redirect;
-   * desktop: open in the system browser).
+   * Persist any pending API-base-URL change, fetch the WeChat authorize URL
+   * from the backend (which bakes in its own `state`), and return it —
+   * web: same-window redirect; desktop: embedded auth window.
    */
-  startWechatLogin: (opts?: { apiUrl?: string; redirectUri?: string }) => {
+  startWechatLogin: (opts?: { apiUrl?: string }) => Promise<{
     authorizeUrl: string;
     state: string;
-  };
+  }>;
   /** Persist the session returned by the WeChat exchange/poll. */
   completeLogin: (result: AuthSession, apiUrl?: string) => void;
   logout: () => void;
@@ -133,21 +135,31 @@ export function createAuthStore(opts: AuthOpts) {
       opts.onLogin?.();
     },
 
-    startWechatLogin: (startOpts) => {
+    startWechatLogin: async (startOpts) => {
       const apiUrl = startOpts?.apiUrl;
       if (apiUrl) {
         opts.api.setBaseUrl(apiUrl);
         opts.storage.setItem("lynse_api_url", apiUrl);
         applyAgentUrlForApi(opts, apiUrl);
       }
-      const state = createWechatState();
+      // PC 扫码 (qrconnect): when the website-app appid + redirect_uri are
+      // provided at build time, the client builds the authorize URL itself —
+      // the backend's render returns the in-WeChat H5 link, which no PC
+      // browser can open.
+      if (isWechatQrLoginConfigured()) {
+        const state = createWechatState();
+        opts.storage.setItem("lynse_wechat_state", state);
+        return { authorizeUrl: buildWechatQrConnectUrl(state), state };
+      }
+      // Otherwise fall back to the backend-built authorize URL (appid, scope
+      // and its own random `state` baked in server-side).
+      const authorizeUrl = await renderWechatLoginUrl();
+      const state = stateFromAuthorizeUrl(authorizeUrl) ?? "";
       // The callback page reads this back to reject forged redirects (the
-      // `state` query param must match what we generated).
-      opts.storage.setItem("lynse_wechat_state", state);
-      const authorizeUrl = buildWechatQrUrl(
-        startOpts?.redirectUri ?? defaultWechatRedirectUri(),
-        state,
-      );
+      // `state` query param must match what the authorize URL carried).
+      if (state) {
+        opts.storage.setItem("lynse_wechat_state", state);
+      }
       return { authorizeUrl, state };
     },
 

@@ -9,7 +9,7 @@ import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useAppUpdate, getAppInfoSync } from "../app-update";
 import { openAboutWindow } from "../about/open-about";
 import { openFeedbackWindow } from "../feedback/open-feedback";
-import { openReportProblemDialog } from "../diagnostics";
+import { openReportProblem } from "../diagnostics";
 import { useUserCredits, useMembership, useUpdateNickname } from "./use-user-credits";
 import { UserActivityHeatmap } from "./user-activity-heatmap";
 import {
@@ -275,7 +275,7 @@ export function UserProfileDropdown({
         </DropdownMenuSub>
 
         {/* ── Help & Feedback ─────────────────────────── */}
-        <DropdownMenuItem onClick={openReportProblemDialog}>
+        <DropdownMenuItem onClick={openReportProblem}>
           <HelpCircle className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_help_feedback")}</span>
         </DropdownMenuItem>

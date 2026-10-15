@@ -27,6 +27,7 @@ import {
   type ModelPreset,
 } from "./model-override";
 import { Check, ChevronDown, Cpu } from "../icons";
+import { BetaBadge } from "../beta-badge";
 
 /**
  * Composer model picker (bottom-right, left of the send button). Edits the
@@ -143,6 +144,11 @@ export function ChatModelPicker() {
           <ChevronDown className="size-3 shrink-0 opacity-60" />
         </DropdownMenuTrigger>
         <DropdownMenuContent side="top" align="end" className="min-w-44 text-xs">
+          <div className="flex items-center justify-between gap-2 px-2 py-1.5 text-2xs text-muted-foreground">
+            <span>{t("chat.model_picker_label")}</span>
+            <BetaBadge />
+          </div>
+          <DropdownMenuSeparator />
           <DropdownMenuItem className="gap-2 text-xs" onClick={pickDefault}>
             <span className="min-w-0 flex-1 truncate">{t("settings.model_mode_default")}</span>
             {setting.mode === "default" && <Check className="size-3.5 shrink-0 text-primary" />}

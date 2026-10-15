@@ -21,6 +21,7 @@ import {
   type ModelPreset,
 } from "../workspace/model-override";
 import { Cpu } from "../icons";
+import { BetaBadge } from "../beta-badge";
 
 type ModelMode = ChatModelSetting["mode"];
 
@@ -168,6 +169,7 @@ export function ModelConfigCard() {
         <CardTitle className="flex items-center gap-2 text-xs">
           <Cpu className="size-3.5" />
           {t("settings.model_title")}
+          <BetaBadge />
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">

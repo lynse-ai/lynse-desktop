@@ -1,30 +1,32 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ClipboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
-  DialogTitle,
 } from "@lynse/ui/components/ui/dialog";
 import { Button } from "@lynse/ui/components/ui/button";
-import { Label } from "@lynse/ui/components/ui/label";
-import { Switch } from "@lynse/ui/components/ui/switch";
 import { Textarea } from "@lynse/ui/components/ui/textarea";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
-import { Check, Copy, FolderOpen, Image, Loader2, X } from "./icons";
+import { Camera, Check, Loader2, RefreshCw, X } from "./icons";
+import { initI18n } from "@lynse/core/i18n";
 import { getAppInfoSync } from "./app-update";
 import {
   buildIssueUrl,
   getDesktopDiagnosticsApi,
+  getReportChannel,
+  takePendingScreenshot,
   useReportProblemDialog,
   type LogTail,
+  type StagedScreenshot,
 } from "./diagnostics";
-import { getDesktopInspirationApi } from "./inspiration/desktop-api";
+import { RESOURCES } from "./locales";
+import { isTauri } from "./layout/use-maximized";
 
-type StagedAttachment = { path: string; url: string };
 type Phase = "compose" | "submitting" | "submitted";
+type Submitted = { number: number };
 
 /** Open a URL in the system browser, falling back to window.open on web. */
 function openInBrowser(url: string): void {
@@ -38,349 +40,357 @@ function openInBrowser(url: string): void {
   window.open(url, "_blank", "noopener");
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+function clampText(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  return `…[截断 / truncated]…\n${text.slice(-limit)}`;
+}
+
+/** Markdown body for the CNB issue: description + environment + log tail. */
+function composeIssueBody(input: { description: string; logTail: LogTail | null }): string {
+  const appInfo = getAppInfoSync();
+  const lines = [
+    "## 问题描述 / What happened",
+    input.description.trim(),
+    "",
+    "## 环境 / Environment",
+    `- App: v${appInfo?.version ?? "unknown"}`,
+    `- Platform: ${appInfo?.platform ?? "unknown"}`,
+    `- User agent: ${typeof navigator !== "undefined" ? navigator.userAgent : "unknown"}`,
+    `- Date: ${new Date().toISOString()}`,
+  ];
+  if (input.logTail?.tail) {
+    lines.push("", "## 日志（尾部）/ Logs (tail)", "```text", clampText(input.logTail.tail, 6000), "```");
+  }
+  return lines.join("\n");
 }
 
 /**
- * In-app bug report dialog: the user describes the problem, attaches
- * screenshots (clipboard paste or image picker), and the recent app log tail
- * rides along automatically. Submission opens the prefilled GitHub issue form
- * and assembles a local report folder (markdown + screenshots + log copies)
- * for drag-and-drop attachments, since the issue API needs a token that can't
- * ship in a client build.
+ * The problem report surface, shared by its two faces: the standalone
+ * report window (macOS) and the in-app dialog (Windows/web fallback).
+ * Auto-screenshots the main window at open time; submission creates the
+ * CNB issue directly, with the prefilled GitHub form as the manual
+ * fallback when the report channel fails.
  */
-export function ReportProblemDialog() {
-  const { open, setOpen } = useReportProblemDialog();
+function ReportProblemForm({
+  variant,
+  onCapturingChange,
+}: {
+  variant: "dialog" | "window";
+  onCapturingChange?: (capturing: boolean) => void;
+}) {
   const { t } = useTranslation();
+  const { setOpen } = useReportProblemDialog();
 
   const [description, setDescription] = useState("");
-  const [steps, setSteps] = useState("");
-  const [attachments, setAttachments] = useState<StagedAttachment[]>([]);
-  const [includeLogs, setIncludeLogs] = useState(true);
+  const [screenshot, setScreenshot] = useState<StagedScreenshot | null>(() =>
+    // The dialog's screenshot was captured before the store opened it; the
+    // standalone window captures on mount (the main window stays visible).
+    variant === "window" ? null : takePendingScreenshot(),
+  );
+  const [capturing, setCapturing] = useState(false);
   const [logTail, setLogTail] = useState<LogTail | null>(null);
-  const [logFailed, setLogFailed] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>("compose");
-  const [submitted, setSubmitted] = useState<{ dir: string; url: string } | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [submitted, setSubmitted] = useState<Submitted | null>(null);
 
-  const diagnosticsApi = getDesktopDiagnosticsApi();
-  const inspirationApi = getDesktopInspirationApi();
+  function close() {
+    if (variant === "window") {
+      void getCurrentWindow().close();
+      return;
+    }
+    setOpen(false);
+  }
 
-  // A submitted dialog returns to the compose form on reopen; text drafts are
-  // kept so an accidental close doesn't lose the description.
+  // The standalone window has no store open/close cycle to reset from; keys
+  // in App.tsx remount it per open, the dialog resets below.
   useEffect(() => {
-    if (!open) return;
+    if (variant !== "window") return;
     setPhase("compose");
     setSubmitted(null);
-  }, [open]);
-
-  // Load the log tail once per open so the "logs attached" line can show real
-  // status instead of a promise.
-  useEffect(() => {
-    if (!open || !diagnosticsApi) return;
+    setSubmitError(null);
     let cancelled = false;
-    setLogFailed(null);
-    diagnosticsApi
-      .readLogs()
-      .then((tail) => {
-        if (!cancelled) setLogTail(tail);
+    const api = getDesktopDiagnosticsApi();
+    api
+      ?.captureScreenshot?.()
+      .then((shot) => {
+        if (!cancelled) setScreenshot(shot);
       })
-      .catch((e: unknown) => {
-        if (!cancelled) setLogFailed(e instanceof Error ? e.message : String(e));
-      });
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [open, diagnosticsApi]);
+  }, [variant]);
 
-  const stageFromClipboard = useCallback(async () => {
-    if (!inspirationApi) return;
-    try {
-      const staged = await inspirationApi.stageImageFromClipboard();
-      setAttachments((current) =>
-        current.some((item) => item.path === staged.path) ? current : [...current, staged],
-      );
-    } catch {
-      toast.error(t("settings.report_clipboard_empty"));
-    }
-  }, [inspirationApi, t]);
-
-  const stageFromFiles = useCallback(async () => {
-    if (!inspirationApi) return;
-    const picked = await inspirationApi.pickImages().catch(() => [] as string[]);
-    for (const path of picked) {
-      try {
-        const staged = await inspirationApi.stageImageFromPath(path);
-        setAttachments((current) =>
-          current.some((item) => item.path === staged.path) ? current : [...current, staged],
-        );
-      } catch {
-        toast.error(t("settings.report_attach_failed"));
-      }
-    }
-  }, [inspirationApi, t]);
-
-  // Paste with focus inside the dialog: attach image clips directly without
-  // disturbing plain-text paste into the description fields.
-  const handlePaste = (event: ClipboardEvent<HTMLDivElement>) => {
-    const file = Array.from(event.clipboardData?.files ?? []).find((item) =>
-      item.type.startsWith("image/"),
-    );
-    if (!file) return;
-    event.preventDefault();
-    void file
-      .arrayBuffer()
-      .then(async (buffer) => {
-        if (!inspirationApi) return;
-        const staged = await inspirationApi.stageImage(new Uint8Array(buffer));
-        setAttachments((current) =>
-          current.some((item) => item.path === staged.path) ? current : [...current, staged],
-        );
+  // Log tail rides along automatically (no UI toggle): read once, attach on
+  // submit, stay silent on failure.
+  useEffect(() => {
+    let cancelled = false;
+    getDesktopDiagnosticsApi()
+      ?.readLogs()
+      .then((tail) => {
+        if (!cancelled) setLogTail(tail);
       })
-      .catch(() => stageFromClipboard());
-  };
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  function removeAttachment(index: number) {
-    setAttachments((current) => current.filter((_, i) => i !== index));
-  }
-
-  function composeMarkdown(): string {
-    const appInfo = getAppInfoSync();
-    const lines = [
-      "## 问题描述 / What happened",
-      description.trim(),
-      "",
-      "## 复现步骤 / Steps to reproduce",
-      steps.trim() || "（未提供 / not provided）",
-      "",
-      "## 环境 / Environment",
-      `- App: v${appInfo?.version ?? "unknown"}`,
-      `- Platform: ${appInfo?.platform ?? "unknown"}`,
-      `- User agent: ${typeof navigator !== "undefined" ? navigator.userAgent : "unknown"}`,
-      `- Date: ${new Date().toISOString()}`,
-      `- Screenshots: ${attachments.length}`,
-    ];
-    if (includeLogs && logTail?.tail) {
-      lines.push("", "## 日志（尾部）/ Logs (tail)", "```text", logTail.tail, "```");
+  const retake = useCallback(async () => {
+    const api = getDesktopDiagnosticsApi();
+    if (!api?.captureScreenshot || capturing) return;
+    setCapturing(true);
+    onCapturingChange?.(true);
+    try {
+      // The in-app dialog must actually leave the screen before the capture
+      // runs — give the compositor a beat to drop it.
+      await new Promise((resolve) => setTimeout(resolve, variant === "dialog" ? 200 : 0));
+      const shot = await api.captureScreenshot();
+      setScreenshot(shot);
+    } catch {
+      toast.error(t("settings.report_capture_failed"));
+    } finally {
+      setCapturing(false);
+      onCapturingChange?.(false);
     }
-    return lines.join("\n");
-  }
+  }, [capturing, onCapturingChange, t, variant]);
 
   async function handleSubmit() {
     if (!description.trim() || phase === "submitting") return;
-    setPhase("submitting");
-    const url = buildIssueUrl({
-      description,
-      steps,
-      logTail: includeLogs ? (logTail?.tail ?? undefined) : undefined,
-    });
-    let dir: string | null = null;
-    if (diagnosticsApi) {
-      try {
-        dir = (
-          await diagnosticsApi.prepareReport({
-            markdown: composeMarkdown(),
-            attachments: attachments.map((attachment) => attachment.path),
-            includeLogs,
-          })
-        ).dir;
-      } catch {
-        // The bundle is a convenience copy; the issue form still opens.
-      }
+    const api = getDesktopDiagnosticsApi();
+    const channel = getReportChannel();
+    if (!api?.submitCnbIssue || !channel) {
+      setSubmitError(t("settings.report_channel_missing"));
+      return;
     }
-    openInBrowser(url);
-    setSubmitted(dir ? { dir, url } : { dir: "", url });
-    setPhase("submitted");
+    setPhase("submitting");
+    setSubmitError(null);
+    const appInfo = getAppInfoSync();
+    const version = appInfo?.version || "unknown";
+    const platform = appInfo?.platform ?? "unknown";
+    try {
+      const result = await api.submitCnbIssue({
+        endpoint: channel.endpoint,
+        title: `[报告] v${version} / ${platform}`,
+        body: composeIssueBody({ description, logTail }),
+        screenshotPath: screenshot?.path ?? null,
+      });
+      setSubmitted(result);
+      setPhase("submitted");
+    } catch (error) {
+      setPhase("compose");
+      setSubmitError(
+        t("settings.report_submit_failed", { error: String(error).slice(0, 200) }),
+      );
+    }
   }
 
-  // When screenshots were attached, reveal the report folder so the user can
-  // drag them onto the GitHub issue form.
-  useEffect(() => {
-    if (phase !== "submitted" || !submitted?.dir || attachments.length === 0) return;
-    void diagnosticsApi?.revealReportFolder(submitted.dir).catch(() => {});
-  }, [phase, submitted, attachments.length, diagnosticsApi]);
+  /** Manual fallback: the prefilled GitHub issue form in the system browser. */
+  function submitInBrowser() {
+    openInBrowser(buildIssueUrl({ description, logTail: logTail?.tail ?? undefined }));
+    close();
+  }
+
+  if (phase === "submitted" && submitted) {
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+        <div className="flex size-10 items-center justify-center rounded-full bg-success/15">
+          <Check className="size-5 text-success" />
+        </div>
+        <p className="text-sm font-medium">{t("settings.report_created_title")}</p>
+        <p className="max-w-sm text-2xs leading-relaxed text-muted-foreground text-pretty">
+          {t("settings.report_created_hint", { number: submitted.number })}
+        </p>
+        <Button size="sm" className="mt-1 h-7 text-xs" onClick={close}>
+          {t("settings.report_done")}
+        </Button>
+      </div>
+    );
+  }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent
-        className="grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:max-w-lg"
-        onPaste={handlePaste}
-      >
-        {phase === "submitted" && submitted ? (
-          <div className="flex flex-col items-center gap-3 px-6 py-8 text-center">
-            <div className="flex size-10 items-center justify-center rounded-full bg-success/15">
-              <Check className="size-5 text-success" />
-            </div>
-            <p className="text-sm font-medium">{t("settings.report_submitted_title")}</p>
-            <p className="max-w-sm text-2xs leading-relaxed text-muted-foreground text-pretty">
-              {t("settings.report_submitted_hint")}
-            </p>
-            <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
-              {submitted.dir && diagnosticsApi && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs"
-                  onClick={() => void diagnosticsApi.revealReportFolder(submitted.dir)}
-                >
-                  <FolderOpen className="size-3.5" />
-                  {t("settings.report_open_folder")}
-                </Button>
-              )}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
+        <div className="space-y-1.5">
+          <label htmlFor="report-description" className="text-sm font-medium">
+            {t("settings.report_problem_label")}
+          </label>
+          <Textarea
+            id="report-description"
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            placeholder={t("settings.report_description_placeholder")}
+            className="min-h-28 text-sm"
+            autoFocus
+          />
+        </div>
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-sm font-medium">{t("settings.report_screenshot_label")}</span>
+            <div className="flex items-center gap-2">
               <Button
+                type="button"
                 size="sm"
                 variant="outline"
                 className="h-7 text-xs"
-                onClick={() => openInBrowser(submitted.url)}
+                disabled={capturing}
+                onClick={() => void retake()}
               >
-                {t("settings.report_open_issue")}
+                {capturing ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-3.5" />
+                )}
+                {t("settings.report_retake")}
               </Button>
-              <Button size="sm" className="h-7 text-xs" onClick={() => setOpen(false)}>
-                {t("settings.report_done")}
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <>
-            <DialogHeader className="border-b px-4 py-3 pr-12">
-              <DialogTitle>{t("settings.report_title")}</DialogTitle>
-            </DialogHeader>
-
-            <div className="min-h-0 space-y-4 overflow-y-auto px-4 py-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="report-description" className="text-xs">
-                  {t("settings.report_description_label")}
-                </Label>
-                <Textarea
-                  id="report-description"
-                  value={description}
-                  onChange={(event) => setDescription(event.target.value)}
-                  placeholder={t("settings.report_description_placeholder")}
-                  className="min-h-20 text-xs"
-                  autoFocus
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="report-steps" className="text-xs">
-                  {t("settings.report_steps_label")}
-                </Label>
-                <Textarea
-                  id="report-steps"
-                  value={steps}
-                  onChange={(event) => setSteps(event.target.value)}
-                  placeholder={t("settings.report_steps_placeholder")}
-                  className="min-h-16 text-xs"
-                />
-              </div>
-
-              {inspirationApi && (
-                <div className="space-y-1.5">
-                  <Label className="text-xs">{t("settings.report_attachments_label")}</Label>
-                  {attachments.length > 0 && (
-                    <div className="flex flex-wrap gap-2">
-                      {attachments.map((attachment, index) => (
-                        <div
-                          key={attachment.path}
-                          className="relative size-16 overflow-hidden rounded-md border"
-                        >
-                          <img src={attachment.url} alt="" loading="lazy" decoding="async" className="size-full object-cover outline outline-1 -outline-offset-1 outline-black/10 dark:outline-white/10" />
-                          <button
-                            type="button"
-                            aria-label={t("settings.report_remove_attachment")}
-                            onClick={() => removeAttachment(index)}
-                            className="absolute top-0.5 right-0.5 rounded-full bg-background/85 p-0.5 text-foreground transition-colors hover:bg-background"
-                          >
-                            <X className="size-3" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-xs"
-                      onClick={() => void stageFromClipboard()}
-                    >
-                      <Copy className="size-3.5" />
-                      {t("settings.report_attach_clipboard")}
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-xs"
-                      onClick={() => void stageFromFiles()}
-                    >
-                      <Image className="size-3.5" />
-                      {t("settings.report_attach_files")}
-                    </Button>
-                  </div>
-                </div>
-              )}
-
-              {diagnosticsApi && (
-                <div className="rounded-md border bg-muted/30 p-2.5">
-                  <div className="flex items-center justify-between gap-3">
-                    <Label htmlFor="report-logs" className="text-xs">
-                      {t("settings.report_logs_label")}
-                    </Label>
-                    <Switch
-                      id="report-logs"
-                      checked={includeLogs}
-                      onCheckedChange={setIncludeLogs}
-                    />
-                  </div>
-                  <p className="mt-1 text-2xs leading-relaxed text-muted-foreground text-pretty">
-                    {logFailed
-                      ? t("settings.report_logs_failed", { error: logFailed })
-                      : logTail
-                        ? t("settings.report_logs_ready", { size: formatBytes(logTail.tail.length) })
-                        : t("settings.report_logs_loading")}
-                  </p>
-                  {logTail?.truncated && !logFailed && (
-                    <p className="mt-0.5 text-2xs leading-relaxed text-muted-foreground text-pretty">
-                      {t("settings.report_logs_truncated")}
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between gap-3 border-t px-4 py-3">
-              <p className="min-w-0 text-2xs leading-relaxed text-muted-foreground text-pretty">
-                {t("settings.report_footer_hint")}
-              </p>
-              <div className="flex shrink-0 items-center gap-2">
+              {screenshot && (
                 <Button
+                  type="button"
                   size="sm"
                   variant="outline"
                   className="h-7 text-xs"
-                  onClick={() => setOpen(false)}
+                  onClick={() => setScreenshot(null)}
                 >
-                  {t("settings.report_cancel")}
+                  <X className="size-3.5" />
+                  {t("settings.report_remove")}
                 </Button>
-                <Button
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => void handleSubmit()}
-                  disabled={!description.trim() || phase === "submitting"}
-                >
-                  {phase === "submitting" && <Loader2 className="size-3.5 animate-spin" />}
-                  {phase === "submitting"
-                    ? t("settings.report_submitting")
-                    : t("settings.report_submit")}
-                </Button>
-              </div>
+              )}
             </div>
-          </>
+          </div>
+          {screenshot ? (
+            <div className="overflow-hidden rounded-lg border bg-muted/30">
+              <img
+                src={screenshot.url}
+                alt={t("settings.report_screenshot_label")}
+                decoding="async"
+                className="max-h-72 w-full object-contain"
+              />
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void retake()}
+              disabled={capturing}
+              className="flex aspect-video max-h-72 w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed text-muted-foreground transition-colors hover:bg-muted/30 disabled:opacity-60"
+            >
+              <Camera className="size-5" />
+              <span className="text-xs">{t("settings.report_capture_missing")}</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2 border-t px-5 py-3">
+        {submitError && (
+          <p className="text-2xs leading-relaxed text-destructive text-pretty">{submitError}</p>
         )}
+        <div className="flex items-center justify-between gap-3">
+          <p className="min-w-0 text-2xs leading-relaxed text-muted-foreground text-pretty">
+            {t("settings.report_footer_hint")}
+          </p>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={close}>
+              {t("settings.report_cancel")}
+            </Button>
+            {submitError && (
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={submitInBrowser}>
+                {t("settings.report_browser_fallback")}
+              </Button>
+            )}
+            <Button
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => void handleSubmit()}
+              disabled={!description.trim() || phase === "submitting"}
+            >
+              {phase === "submitting" && <Loader2 className="size-3.5 animate-spin" />}
+              {phase === "submitting"
+                ? t("settings.report_submitting")
+                : t("settings.report_submit")}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * In-app problem report dialog — the Windows/web face of the report flow.
+ * The whole content fades out while a retake captures the main window, so
+ * the dialog never photographs itself.
+ */
+export function ReportProblemDialog() {
+  const { open, setOpen } = useReportProblemDialog();
+  const [capturing, setCapturing] = useState(false);
+  const contentClassName = useMemo(
+    () =>
+      `grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 transition-opacity sm:max-w-xl ${
+        capturing ? "opacity-0" : "opacity-100"
+      }`,
+    [capturing],
+  );
+
+  // A submitted dialog returns to the compose form on reopen.
+  useEffect(() => {
+    if (!open) return;
+    setCapturing(false);
+  }, [open]);
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent className={contentClassName} showCloseButton={false}>
+        <DialogHeaderLike />
+        <ReportProblemForm variant="dialog" onCapturingChange={setCapturing} />
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Title block matching the reference layout (kept dialog-sized). */
+function DialogHeaderLike() {
+  const { t } = useTranslation();
+  return (
+    <div className="border-b px-5 py-3.5 pr-12">
+      <h2 className="text-base font-semibold leading-tight">{t("settings.report_title")}</h2>
+      <p className="mt-0.5 text-2xs leading-relaxed text-muted-foreground text-pretty">
+        {t("settings.report_subtitle")}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Standalone problem-report window (macOS) — the `?window=report` route
+ * created by the Rust `open_report_window` command, laid out per the
+ * reference: title + subtitle, description box, screenshot with retake and
+ * remove, cancel/submit.
+ *
+ * Runs outside CoreProvider, so it bootstraps i18n itself (see the init
+ * below). Re-asserting the native window title keeps it correct if the
+ * locale changed since the window was opened.
+ */
+export function ReportProblemWindow() {
+  // The init must happen during render, before useTranslation() below: a
+  // passive effect is too late (see about-window.tsx for the full story).
+  useMemo(() => initI18n({ resources: RESOURCES }), []);
+  const { t } = useTranslation();
+
+  useEffect(() => {
+    if (!isTauri) return;
+    void getCurrentWindow().setTitle(t("settings.report_title")).catch(() => {});
+  }, [t]);
+
+  return (
+    <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+      <div className="border-b px-6 py-5">
+        <h1 className="text-xl font-semibold leading-tight">{t("settings.report_title")}</h1>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground text-pretty">
+          {t("settings.report_subtitle")}
+        </p>
+      </div>
+      <ReportProblemForm variant="window" />
+    </div>
   );
 }

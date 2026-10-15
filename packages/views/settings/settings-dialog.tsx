@@ -29,7 +29,8 @@ import {
 } from "../workspace/local-transcription";
 import { getDesktopMeetingDetectorApi } from "../live-translation";
 import { getDesktopLiveTranslationApi } from "../live-translation/desktop-api";
-import { featureFlags, isConnectionsEnabled } from "../feature-flags";
+import { featureFlags, isConnectionsEnabled, isBetaFeaturesUnlocked } from "../feature-flags";
+import { BetaBadge } from "../beta-badge";
 import { getDesktopVaultApi } from "../workspace/note-vault";
 import { getDesktopWebdavSyncApi } from "./webdav-sync";
 import { AboutContent } from "../about/about-content";
@@ -82,6 +83,8 @@ interface SettingsSection {
   label: string;
   icon: typeof Sun;
   content: ReactNode;
+  /** Renders a Beta chip next to the nav label (beta-gated sections only). */
+  beta?: boolean;
 }
 
 export function SettingsDialog({
@@ -130,15 +133,21 @@ export function SettingsDialog({
   // AI assistant: where lynclaw connects (route B direct agent backend) plus
   // the WorkBuddy account binding, moved in from its former standalone
   // plugin-contributed section.
+  //
+  // The first three cards are beta surfaces (see feature-flags.ts): debug
+  // builds and dev shells show them with a Beta badge; official builds hide
+  // them so the features stay off by default.
   sections.push({
     id: "ai_assistant",
     label: t("settings.ai_assistant"),
     icon: Bot,
     content: (
       <>
-        {!isWebPlatform() && <ContextInboxCard onOpenChat={() => onOpenChange(false)} />}
-        <AgentServerCard />
-        <ModelConfigCard />
+        {!isWebPlatform() && isBetaFeaturesUnlocked() && (
+          <ContextInboxCard onOpenChat={() => onOpenChange(false)} />
+        )}
+        {isBetaFeaturesUnlocked() && <AgentServerCard />}
+        {isBetaFeaturesUnlocked() && <ModelConfigCard />}
         <WorkBuddyConfigCard />
         <McpConfigCard />
       </>
@@ -224,14 +233,15 @@ export function SettingsDialog({
   // without this check flipping it on would surface the section in the web app
   // too, where there is no deep-link or native surface for the flows.
   //
-  // The gate is also channel-aware (isConnectionsEnabled): still under
-  // debugging, so official builds hide the section entirely.
+  // The gate is also channel-aware (isConnectionsEnabled): still in beta, so
+  // official builds hide the section entirely.
   if (isConnectionsEnabled() && !isWebPlatform()) {
     sections.push({
       id: "connections",
       label: t("settings.connections"),
       icon: Plug,
       content: <ConnectionsCard />,
+      beta: true,
     });
   }
 
@@ -282,7 +292,8 @@ export function SettingsDialog({
                   )}
                 >
                   <Icon className={cn("size-3.5 shrink-0", isActive && "text-primary")} />
-                  <span className="truncate">{section.label}</span>
+                  <span className="min-w-0 flex-1 truncate">{section.label}</span>
+                  {section.beta && <BetaBadge />}
                 </button>
               );
             })}

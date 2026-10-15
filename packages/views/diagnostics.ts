@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import i18next from "i18next";
 import { getAppInfoSync, openExternalUrl } from "./app-update";
+import { isMacDesktop } from "./layout/use-maximized";
 
 const ISSUE_TRACKER_URL = "https://github.com/lynse-ai/lynse-desktop/issues/new";
 
@@ -18,6 +20,9 @@ export function openLogsFolder(): void {
   void desktopWindow.desktopAPI?.app?.openLogsFolder?.();
 }
 
+/** A staged image (capture or paste): absolute path + local-media preview URL. */
+export type StagedScreenshot = { path: string; url: string };
+
 /** Tail of the app log files returned by the desktop host. */
 export type LogTail = {
   dir: string;
@@ -26,7 +31,7 @@ export type LogTail = {
   files: number;
 };
 
-/** Host commands backing the in-app bug report dialog (Tauri only). */
+/** Host commands backing the problem report flow (Tauri only). */
 export type DesktopDiagnosticsApi = {
   readLogs: (maxBytes?: number) => Promise<LogTail>;
   prepareReport: (report: {
@@ -35,6 +40,15 @@ export type DesktopDiagnosticsApi = {
     includeLogs: boolean;
   }) => Promise<{ dir: string }>;
   revealReportFolder: (path: string) => Promise<void>;
+  // Optional: missing on an older host build still installed.
+  captureScreenshot?: () => Promise<StagedScreenshot>;
+  submitCnbIssue?: (request: {
+    endpoint: string;
+    title: string;
+    body: string;
+    screenshotPath?: string | null;
+  }) => Promise<{ issueUrl: string; number: number }>;
+  openReportWindow?: (title?: string) => Promise<void>;
 };
 
 /** Access the diagnostics host API, or null outside the Tauri desktop host. */
@@ -47,9 +61,26 @@ export function getDesktopDiagnosticsApi(): DesktopDiagnosticsApi | null {
   return app?.readLogs && app?.prepareReport ? (app as DesktopDiagnosticsApi) : null;
 }
 
-// ── Shared report dialog (singleton store) ─────────────────────────────────
-// Every entry point (settings, profile menu, sidebar help) opens the same
-// dialog instance through this store, mirroring the app-update dialog.
+// ── Report channel (CNB issue tracker) ─────────────────────────────────────
+// Reports go through the CloudBase `cnb-report` function, which owns the
+// CNB token server-side. Only the endpoint URL is build-time config here —
+// injected by the app layer at startup; views stay free of env access.
+
+let reportChannel: { endpoint: string } | null = null;
+
+/** Install the build-time report endpoint (no-op without one). */
+export function setReportChannel(channel: { endpoint: string } | null): void {
+  reportChannel = channel?.endpoint ? channel : null;
+}
+
+export function getReportChannel(): { endpoint: string } | null {
+  return reportChannel;
+}
+
+// ── Shared report flow (singleton dialog store + entry point) ──────────────
+// Every entry point (profile menu, sidebar, About window) opens the same
+// flow through this store: a standalone window on macOS, the in-app dialog
+// elsewhere (window creation can deadlock on Windows, see open-about.ts).
 let reportDialogOpen = false;
 const reportDialogListeners = new Set<() => void>();
 
@@ -59,9 +90,43 @@ function setReportDialogOpen(open: boolean): void {
   reportDialogListeners.forEach((listener) => listener());
 }
 
-/** Open the in-app bug report dialog. */
-export function openReportProblemDialog(): void {
+// Screenshot captured at open time, shown in the report surface and consumed
+// once by whichever face (window or dialog) mounts.
+let pendingScreenshot: StagedScreenshot | null = null;
+
+/** Consume the screenshot captured at open time (single-shot). */
+export function takePendingScreenshot(): StagedScreenshot | null {
+  const screenshot = pendingScreenshot;
+  pendingScreenshot = null;
+  return screenshot;
+}
+
+async function openReportDialog(): Promise<void> {
+  // Capture while the main window still shows what the user was looking at —
+  // the in-app dialog would otherwise cover it. In the standalone window the
+  // retake button re-captures the main window directly.
+  const api = getDesktopDiagnosticsApi();
+  pendingScreenshot = api?.captureScreenshot
+    ? await api.captureScreenshot().catch(() => null)
+    : null;
   setReportDialogOpen(true);
+}
+
+/**
+ * Open the problem report flow: the standalone report window on macOS, the
+ * in-app dialog everywhere else (with the GitHub prefilled form as the
+ * submission fallback when the CNB channel fails).
+ */
+export function openReportProblem(): void {
+  const api = getDesktopDiagnosticsApi();
+  if (isMacDesktop && api?.openReportWindow) {
+    const title = i18next.isInitialized ? i18next.t("settings.report_title") : "Lynse";
+    api.openReportWindow(title).catch(() => {
+      void openReportDialog();
+    });
+    return;
+  }
+  void openReportDialog();
 }
 
 export function closeReportProblemDialog(): void {

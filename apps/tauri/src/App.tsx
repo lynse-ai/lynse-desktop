@@ -15,6 +15,7 @@ import { DevicesPage } from "@lynse/views/devices";
 import { SettingsDialog, useWebdavAutoSync } from "@lynse/views/settings";
 import { AboutWindow } from "@lynse/views/about";
 import { FeedbackWindow } from "@lynse/views/feedback";
+import { ReportProblemWindow } from "@lynse/views/report-problem-dialog";
 import { BotAgent, BotAuthSupervisor } from "@lynse/views/bots";
 import { PluginHost } from "@lynse/views/plugins";
 import { AudioEditorPage } from "@lynse/views/audio-editor";
@@ -33,26 +34,37 @@ import {
 import { featureFlags } from "@lynse/views/feature-flags";
 import { AuthGate, ApiConfigPage } from "@lynse/views/auth";
 import { PermissionOnboardingGate } from "@lynse/views/onboarding";
-import { configureWechatLogin } from "@lynse/core/auth/wechat";
+import { configureWechatQrLogin } from "@lynse/core/auth/wechat";
 import { useMaximized } from "@lynse/views/layout";
 import { cn } from "@lynse/ui/lib/utils";
 import { DesktopNavigationProvider } from "./platform/navigation";
 import { NativeThemeSync } from "./platform/native-theme";
 import { AppThemeSync } from "@lynse/views/settings/app-theme";
 import { clearAuthSecrets, secureStorage } from "./secure-storage";
+import { setReportChannel } from "@lynse/views/diagnostics";
 
-// Build channel (official | debug) + WeChat Open Platform appid, injected
-// by Vite at build time — see apps/tauri/.env.example. Unset builds are
-// OFFICIAL when packaged (the distributable default) and DEBUG in dev.
+// Build channel (official | debug), injected by Vite at build time — see
+// apps/tauri/.env.example. Unset builds are OFFICIAL when packaged (the
+// distributable default) and DEBUG in dev.
 configureBuildChannel(
   (import.meta.env.VITE_BUILD_CHANNEL as BuildChannel | undefined) ??
     (import.meta.env.PROD ? "official" : "debug"),
 );
-configureWechatLogin({
+// PC 扫码登录 (qrconnect) needs the 微信开放平台「网站应用」appid + a
+// redirect_uri under its configured 授权回调域. Set = the client builds the
+// authorize URL itself; unset = fall back to the backend's /api/auth/render.
+configureWechatQrLogin({
   appId: import.meta.env.VITE_WECHAT_APP_ID ?? "",
-  // The desktop app can't be a WeChat redirect target; send the QR page to
-  // the web app's callback, which publishes the session for the desktop poll.
-  redirectOrigin: import.meta.env.VITE_WEB_APP_URL ?? "",
+  redirectUri: import.meta.env.VITE_WECHAT_REDIRECT_URI ?? "",
+});
+// Problem-report channel: submitted reports are filed as CNB issues by the
+// CloudBase `cnb-report` function (the CNB token lives in the function's env
+// config, never in the client). The deployed function URL is the default;
+// VITE_CNB_REPORT_URL overrides it for dev/staging.
+const DEFAULT_REPORT_ENDPOINT =
+  "https://lynse-d8g49o1i956741f9e.service.tcloudbase.com/cnb-report";
+setReportChannel({
+  endpoint: import.meta.env.VITE_CNB_REPORT_URL || DEFAULT_REPORT_ENDPOINT,
 });
 
 // How long the recording page's slide layers stay mounted — must cover the
@@ -237,6 +249,7 @@ export default function App() {
   const recordingIslandWindow = windowKind === "recording-island";
   const aboutWindow = windowKind === "about";
   const feedbackWindow = windowKind === "feedback";
+  const reportWindow = windowKind === "report";
   const identity = useMemo(() => {
     const appInfo = (window as unknown as { desktopAPI?: { appInfo?: { version: string } } })
       .desktopAPI?.appInfo;
@@ -264,6 +277,8 @@ export default function App() {
         <AboutWindow />
       ) : feedbackWindow ? (
         <FeedbackWindow getStoredValue={(key) => secureStorage.getItem(key)} />
+      ) : reportWindow ? (
+        <ReportProblemWindow />
       ) : (
         <CoreProvider
           apiBaseUrl={import.meta.env.VITE_API_URL}

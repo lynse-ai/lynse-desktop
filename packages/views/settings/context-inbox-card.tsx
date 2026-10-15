@@ -9,6 +9,7 @@ import { getAuthStore, useAuthStore } from "@lynse/core/auth";
 import { api, getContextIdentity } from "@lynse/core/api";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
+import { BetaBadge } from "../beta-badge";
 import { useChatStore } from "../workspace/hooks/use-chat-store";
 import { useNotificationStore } from "../notifications/use-notification-store";
 import { setContextInboxEnabled, useContextInboxEnabled } from "../notifications/context-inbox-preferences";
@@ -57,7 +58,10 @@ export function ContextInboxCard({ onOpenChat }: { onOpenChat: () => void }) {
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="text-xs">{t("settings.context_inbox_title")}</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-xs">
+          {t("settings.context_inbox_title")}
+          <BetaBadge />
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex items-center justify-between gap-3">

@@ -138,6 +138,20 @@ type DesktopApi = {
     }>;
     openAboutWindow: (title?: string) => Promise<void>;
     openFeedbackWindow: (title?: string) => Promise<void>;
+    // Opens (or focuses) the standalone problem-report window (macOS; other
+    // platforms use the in-app dialog).
+    openReportWindow: (title?: string) => Promise<void>;
+    // Capture the main window's content as PNG, staged like pasted images:
+    // `{path, url}` where url is a local-media:// preview link.
+    captureScreenshot: () => Promise<{ path: string; url: string }>;
+    // File the report through the CloudBase cnb-report function (which owns
+    // the CNB token server-side); returns the created issue number.
+    submitCnbIssue: (req: {
+      endpoint: string;
+      title: string;
+      body: string;
+      screenshotPath?: string | null;
+    }) => Promise<{ number: number }>;
     openLogsFolder: () => Promise<void>;
     // Tail of the app log files for the bug report dialog. `truncated` marks
     // that older rotated archives were left out of the tail.
@@ -155,6 +169,15 @@ type DesktopApi = {
     downloadAndInstallUpdate: (onProgress: (progress: UpdateDownloadProgress) => void) => Promise<void>;
     relaunchApp: () => Promise<void>;
     setCompactWindowSize: (active: boolean) => Promise<void>;
+    // WeChat OAuth sign-in window: the authorize page opens in an embedded
+    // window and the code+state redirect is relayed back as a URL event.
+    wechat: {
+      openAuthWindow: (url: string) => Promise<void>;
+      closeAuthWindow: () => Promise<void>;
+      onAuthCallback: (
+        callback: (callbackUrl: string) => void,
+      ) => Promise<() => void>;
+    };
   };
 }
 
@@ -500,6 +523,24 @@ export async function installTauriBridge(): Promise<void> {
       // FeedLog widget. Same localized-title convention as openAboutWindow.
       openFeedbackWindow: (title?: string) =>
         command<void>("open_feedback_window", { title: title ?? null }),
+      openReportWindow: (title?: string) =>
+        command<void>("open_report_window", { title: title ?? null }),
+      captureScreenshot: () =>
+        command<{ path: string; url: string }>("report_capture_main_screenshot"),
+      submitCnbIssue: (req: {
+        endpoint: string;
+        title: string;
+        body: string;
+        screenshotPath?: string | null;
+      }) =>
+        command<{ number: number }>("report_submit_cnb_issue", {
+          req: {
+            endpoint: req.endpoint,
+            title: req.title,
+            body: req.body,
+            screenshotPath: req.screenshotPath ?? null,
+          },
+        }),
       openLogsFolder: () => command<void>("open_logs_folder"),
       readLogs: (maxBytes?: number) =>
         command<{ dir: string; tail: string; truncated: boolean; files: number }>(
@@ -565,12 +606,22 @@ export async function installTauriBridge(): Promise<void> {
           }
         });
       },
-      relaunchApp: () => relaunch(),
-      // Pre-auth compact welcome window (690×450) vs dashboard size — see
-      // the Rust command for the shape table.
-      setCompactWindowSize: (active: boolean) =>
-        command<void>("set_compact_window_mode", { active }),
+    relaunchApp: () => relaunch(),
+    // Pre-auth compact welcome window (690×450) vs dashboard size — see
+    // the Rust command for the shape table.
+    setCompactWindowSize: (active: boolean) =>
+      command<void>("set_compact_window_mode", { active }),
+    // WeChat OAuth sign-in window: the authorize page opens in an embedded
+    // window and the code+state redirect is relayed back as a URL event.
+    wechat: {
+      openAuthWindow: (url: string) => command<void>("wechat_auth_window", { url }),
+      closeAuthWindow: () => command<void>("wechat_auth_window_close"),
+      onAuthCallback: (callback: (callbackUrl: string) => void) =>
+        getCurrentWebview().listen<string>("wechat-auth-callback", (event) =>
+          callback(event.payload),
+        ),
     },
+  },
     attachment: {
       saveBytes: async (bytes, fileName) => {
         const target = await save({ defaultPath: fileName });

@@ -23,6 +23,8 @@
     "./settings/app-theme-boot": "./settings/app-theme-boot.ts",
     "./about": "./about/index.ts",
     "./feedback": "./feedback/index.ts",
+    "./diagnostics": "./diagnostics.ts",
+    "./report-problem-dialog": "./report-problem-dialog.tsx",
     "./files": "./files/index.ts",
     "./workspace": "./workspace/index.ts",
     "./todo": "./todo/index.ts",

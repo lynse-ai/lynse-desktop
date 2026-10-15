@@ -19,6 +19,7 @@ import {
   LEGACY_CLOUDBASE_AGENT_URL,
 } from "@lynse/core/config";
 import { Sparkles } from "../icons";
+import { BetaBadge } from "../beta-badge";
 
 /** Where the assistant connects. "follow" (empty setting) rides the main
  *  backend gateway; "cloudbase" is the route-B direct CloudRun preset;
@@ -126,6 +127,7 @@ export function AgentServerCard() {
         <CardTitle className="flex items-center gap-2 text-xs">
           <Sparkles className="size-3.5" />
           {t("settings.agent_server_title")}
+          <BetaBadge />
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">

@@ -34,14 +34,25 @@ export const featureFlags = {
 } as const;
 
 /**
+ * Beta-exposure gate shared by the WIP surfaces marked with a Beta badge
+ * (主动建议, 小玲同学服务地址, 对话模型, 连接). Beta surfaces stay visible in
+ * debug-channel builds and dev shells so the team can keep iterating; official
+ * builds hide them from the UI entirely and the features stay off by default.
+ * The runtime test mode (login-logo 5-tap) unlocks them inside an official
+ * build for the team.
+ */
+export function isBetaFeaturesUnlocked(): boolean {
+  return getBuildChannel() === "debug" || isTestMode();
+}
+
+/**
  * Whether Settings → Connections (third-party integrations) is exposed. The
- * single gate every entry point reads: the flag above AND the build channel —
- * debug-channel builds and dev shells show it, official builds hide it while
- * the integration flows are still being debugged. The runtime test mode
- * (login-logo 5-tap) unlocks it inside an official build for the team.
+ * single gate every entry point reads: the flag above AND the beta channel
+ * gate — debug-channel builds and dev shells show it, official builds hide it
+ * while the integration flows are still being debugged.
  */
 export function isConnectionsEnabled(): boolean {
-  return featureFlags.connections && (getBuildChannel() === "debug" || isTestMode());
+  return featureFlags.connections && isBetaFeaturesUnlocked();
 }
 
 /**

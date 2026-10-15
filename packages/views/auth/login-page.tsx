@@ -10,7 +10,13 @@ import {
   pollQrLogin,
   QrLoginExpiredError,
 } from "@lynse/core/auth/qrcode";
-import { pollWechatSession } from "@lynse/core/auth/wechat";
+import {
+  isWechatBindRequired,
+  loginByWechat,
+  wechatCallbackParams,
+  wechatSessionFromVo,
+  type WechatLoginVo,
+} from "@lynse/core/auth/wechat";
 import {
   SMS_CODE_LENGTH,
   SMS_RESEND_DEFAULT_SECONDS,
@@ -22,7 +28,7 @@ import {
   smsSessionFromLogin,
 } from "@lynse/core/auth/sms";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { ArrowRight, ChevronRight, KeyRound, Loader2, QrCode } from "../icons";
+import { ArrowRight, Check, ChevronRight, KeyRound, Loader2, QrCode } from "../icons";
 import { getDesktopAppApi, openExternalUrl } from "../app-update";
 import {
   hasDevApiAuth,
@@ -33,6 +39,7 @@ import {
 import { PRIVACY_URL, TERMS_URL } from "../about/links";
 import { WindowControls } from "../layout/app-title-bar";
 import { WechatIcon } from "./wechat-icon";
+import { WechatBindForm } from "./wechat-bind-form";
 import { authErrorText } from "./auth-errors";
 import { ApiAuthPanel } from "./api-auth-panel";
 import { LYNSE_LOGO_SRC } from "./lynse-logo";
@@ -44,6 +51,56 @@ type QrPhase = "creating" | "ready" | "scanned" | "expired" | "error";
 /** Sign-in views: phone + SMS form, the "more ways" screen (WeChat / QR /
  *  dev API entry), the app-scanned QR code, or the API form. */
 type LoginView = "phone" | "more" | "qr" | "api";
+
+/** The user-agreement round check + inline terms/privacy links, shared by
+ *  the phone sign-in form and the WeChat bind form. */
+function AgreementCheckbox({
+  agreed,
+  onToggle,
+  onLink,
+}: {
+  agreed: boolean;
+  onToggle: () => void;
+  onLink: (url: string) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="mt-4 flex items-start gap-2">
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={agreed}
+        onClick={onToggle}
+        className={`mt-0.5 flex size-3.5 shrink-0 items-center justify-center rounded-full border transition-colors ${
+          agreed ? "border-primary bg-primary" : "border-muted-foreground/60"
+        }`}
+      >
+        {agreed && (
+          <Check className="size-2.5 text-primary-foreground" strokeWidth={3.5} />
+        )}
+      </button>
+      <p className="text-left text-2xs leading-relaxed text-muted-foreground text-pretty">
+        {t("auth.agree_prefix")}
+        <button
+          type="button"
+          onClick={() => onLink(TERMS_URL)}
+          className="underline decoration-from-font underline-offset-2 transition-colors hover:text-foreground"
+        >
+          {t("auth.agree_terms")}
+        </button>
+        {t("auth.agree_join")}
+        <button
+          type="button"
+          onClick={() => onLink(PRIVACY_URL)}
+          className="underline decoration-from-font underline-offset-2 transition-colors hover:text-foreground"
+        >
+          {t("auth.agree_privacy")}
+        </button>
+        {t("auth.agree_autocreate")}
+      </p>
+    </div>
+  );
+}
 
 /**
  * Startup login page, shown by the AuthGate before any session exists, in
@@ -67,7 +124,6 @@ export function LoginPage() {
   const { t } = useTranslation();
   const passwordless = hasPasswordlessAuth();
   const devApiAuth = hasDevApiAuth();
-  const isDesktop = !!getDesktopAppApi();
 
   // Active sign-in view. Phone is the default: unlike the QR flow it needs no
   // Lynse mobile app, and it also covers registration.
@@ -96,11 +152,18 @@ export function LoginPage() {
   const [agreed, setAgreed] = useState(false);
   const [smsError, setSmsError] = useState<string | null>(null);
 
-  // WeChat channel (testflight build). On desktop the QR page opens in the
-  // system browser and we poll the backend for the session it publishes.
+  // WeChat channel (official build). The authorize URL comes from the
+  // backend's /api/auth/render; on desktop the page opens in an embedded
+  // window whose code+state redirect is relayed back as an event, on web the
+  // same window leaves for it and /auth/wechat receives the redirect.
   const startWechatLogin = useAuthStore((s) => s.startWechatLogin);
   const [wechatWaiting, setWechatWaiting] = useState(false);
   const wechatCancelledRef = useRef(false);
+  const wechatUnlistenRef = useRef<(() => void) | null>(null);
+  const wechatStateRef = useRef("");
+  // Bind-required login response — shows the phone + SMS form instead of
+  // the sign-in views until the bind completes.
+  const [wechatBindVo, setWechatBindVo] = useState<WechatLoginVo | null>(null);
 
   const [error, setError] = useState<string | null>(null);
 
@@ -145,9 +208,13 @@ export function LoginPage() {
   }, [passwordless, view, startQrLogin]);
 
   useEffect(() => {
-    // Stop the QR poll when the login page unmounts (e.g. after sign-in).
+    // Stop the QR poll and the WeChat auth-window listener when the login
+    // page unmounts (e.g. after sign-in).
     return () => {
       qrCancelledRef.current = true;
+      wechatCancelledRef.current = true;
+      wechatUnlistenRef.current?.();
+      wechatUnlistenRef.current = null;
     };
   }, []);
 
@@ -233,30 +300,82 @@ export function LoginPage() {
     setView("api");
   }
 
+  function stopWechatListener() {
+    wechatUnlistenRef.current?.();
+    wechatUnlistenRef.current = null;
+  }
+
+  /** Shared tail for the desktop callback and the bind form: exchange or
+   *  bind resolved into a session — persist it. */
+  function completeWechatSession(vo: WechatLoginVo) {
+    const session = wechatSessionFromVo(vo);
+    if (!session) {
+      setError(t("auth.login_failed"));
+      return;
+    }
+    completeLogin(session);
+  }
+
+  /** Desktop auth-window redirect landed: relay URL carried code+state. */
+  async function finishWechatLogin(code: string, state: string | null) {
+    if (wechatCancelledRef.current) return;
+    if (wechatStateRef.current && state !== wechatStateRef.current) {
+      setWechatWaiting(false);
+      stopWechatListener();
+      setError(t("wechat.callback_invalid_state"));
+      return;
+    }
+    try {
+      const vo = await loginByWechat(code, state ?? undefined);
+      if (isWechatBindRequired(vo)) {
+        setWechatBindVo(vo);
+        return;
+      }
+      completeWechatSession(vo);
+    } catch (e: unknown) {
+      if (!wechatCancelledRef.current) {
+        setError(authErrorText(e, t, "auth.login_failed"));
+      }
+    } finally {
+      setWechatWaiting(false);
+      stopWechatListener();
+      void getDesktopAppApi()?.wechat?.closeAuthWindow();
+    }
+  }
+
   async function handleWechatLogin() {
     setError(null);
-    const { authorizeUrl, state } = startWechatLogin();
-    if (isDesktop) {
-      // WeChat only redirects back to the registered web domain, so the QR
-      // page opens in the system browser; the web callback publishes the
-      // session under the same `state` for us to poll.
+    let authorizeUrl: string;
+    try {
+      const started = await startWechatLogin();
+      authorizeUrl = started.authorizeUrl;
+      wechatStateRef.current = started.state;
+    } catch (e: unknown) {
+      setError(authErrorText(e, t, "auth.login_failed"));
+      return;
+    }
+    const desktopApi = getDesktopAppApi();
+    if (desktopApi?.wechat) {
+      // The QR page runs in an embedded window; the Rust side intercepts the
+      // code+state redirect before it loads and emits the callback URL here.
       wechatCancelledRef.current = false;
       setWechatWaiting(true);
-      openExternalUrl(authorizeUrl);
+      wechatUnlistenRef.current = await desktopApi.wechat.onAuthCallback(
+        (callbackUrl) => {
+          const { code, state } = wechatCallbackParams(callbackUrl);
+          if (!code) return;
+          void finishWechatLogin(code, state);
+        },
+      );
       try {
-        const result = await pollWechatSession(state, {
-          isCancelled: () => wechatCancelledRef.current,
-        });
-        completeLogin(result);
+        await desktopApi.wechat.openAuthWindow(authorizeUrl);
       } catch (e: unknown) {
-        if (!wechatCancelledRef.current) {
-          setError(authErrorText(e, t, "auth.login_failed"));
-        }
-      } finally {
+        stopWechatListener();
         setWechatWaiting(false);
+        setError(authErrorText(e, t, "auth.login_failed"));
       }
     } else {
-      // Web: leave for the WeChat QR page; it redirects back to /auth/wechat.
+      // Web: leave for the WeChat page; it redirects back to /auth/wechat.
       window.location.assign(authorizeUrl);
     }
   }
@@ -264,6 +383,8 @@ export function LoginPage() {
   function handleCancelWechatLogin() {
     wechatCancelledRef.current = true;
     setWechatWaiting(false);
+    stopWechatListener();
+    void getDesktopAppApi()?.wechat?.closeAuthWindow();
   }
 
   const qrHint =
@@ -323,7 +444,21 @@ export function LoginPage() {
         </p>
 
         <div className="mt-7 w-full max-w-[260px] flex-1 overflow-y-auto">
-        {effectiveView === "more" ? (
+        {wechatBindVo ? (
+          /* ── WeChat first sign-in: link a phone number ── */
+          <div className="space-y-4">
+            <WechatBindForm
+              thirdPartyId={wechatBindVo.thirdPartyId ?? ""}
+              agreed={agreed}
+              onBound={completeWechatSession}
+            />
+            <AgreementCheckbox
+              agreed={agreed}
+              onToggle={() => setAgreed(!agreed)}
+              onLink={handleAgreeLink}
+            />
+          </div>
+        ) : effectiveView === "more" ? (
           /* ── More ways to sign in ─────────────────────── */
           <div className="space-y-4">
             <p className="text-center text-sm font-medium">
@@ -457,36 +592,11 @@ export function LoginPage() {
               {smsError && (
                 <p className="mt-3 text-left text-xs text-destructive">{smsError}</p>
               )}
-              <div className="mt-4 flex items-start gap-2">
-                <button
-                  type="button"
-                  role="checkbox"
-                  aria-checked={agreed}
-                  onClick={() => setAgreed(!agreed)}
-                  className={`mt-0.5 size-3.5 shrink-0 rounded-full border transition-colors ${
-                    agreed ? "border-primary bg-primary" : "border-muted-foreground/60"
-                  }`}
-                />
-                <p className="text-left text-2xs leading-relaxed text-muted-foreground text-pretty">
-                  {t("auth.agree_prefix")}
-                  <button
-                    type="button"
-                    onClick={() => handleAgreeLink(TERMS_URL)}
-                    className="underline decoration-from-font underline-offset-2 transition-colors hover:text-foreground"
-                  >
-                    {t("auth.agree_terms")}
-                  </button>
-                  {t("auth.agree_join")}
-                  <button
-                    type="button"
-                    onClick={() => handleAgreeLink(PRIVACY_URL)}
-                    className="underline decoration-from-font underline-offset-2 transition-colors hover:text-foreground"
-                  >
-                    {t("auth.agree_privacy")}
-                  </button>
-                  {t("auth.agree_autocreate")}
-                </p>
-              </div>
+              <AgreementCheckbox
+                agreed={agreed}
+                onToggle={() => setAgreed(!agreed)}
+                onLink={handleAgreeLink}
+              />
             </>
           ) : (
             /* ── App-scanned QR code sign-in ──────────────── */

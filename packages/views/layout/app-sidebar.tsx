@@ -63,7 +63,7 @@ import { SettingsDialog } from "../settings/settings-dialog";
 import { UploadDialog } from "../workspace/upload-dialog";
 import { TemplateManager } from "../workspace/template-manager";
 import { AppUpdateDialog } from "../app-update-dialog";
-import { openReportProblemDialog } from "../diagnostics";
+import { openReportProblem } from "../diagnostics";
 import { openFeedbackWindow } from "../feedback/open-feedback";
 import { ReportProblemDialog } from "../report-problem-dialog";
 import { LayoutTemplate, MessageSquarePlus } from "lucide-react";
@@ -500,7 +500,7 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
         </DropdownMenuSub>
 
         {/* ── Help & Feedback ─────────────────────────── */}
-        <DropdownMenuItem onClick={openReportProblemDialog}>
+        <DropdownMenuItem onClick={openReportProblem}>
           <HelpCircle className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_help_feedback")}</span>
         </DropdownMenuItem>

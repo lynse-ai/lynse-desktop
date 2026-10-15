@@ -7,7 +7,9 @@
     "live-subtitles",
     "recording-island",
     "about",
-    "feedback"
+    "feedback",
+    "report",
+    "wechat-auth"
   ],
   "permissions": [
     "core:default",

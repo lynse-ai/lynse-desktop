@@ -70,6 +70,11 @@ mod content_migration;
 mod window_effects;
 // Client-direct OSS upload for the recording cloud-sync chain.
 mod sync_upload;
+// WeChat OAuth sign-in window (backend WECHAT_JUMP flow).
+mod wechat_auth;
+// Problem report: main-window screenshot capture + CNB issue submission.
+mod report_screenshot;
+mod cnb_report;
 
 use live_translation::LiveTranslationManager;
 
@@ -3012,7 +3017,7 @@ fn sniff_image_extension(bytes: &[u8]) -> &'static str {
     }
 }
 
-fn inspiration_staging_dir(app: &AppHandle) -> CommandResult<PathBuf> {
+pub(crate) fn inspiration_staging_dir(app: &AppHandle) -> CommandResult<PathBuf> {
     let directory = app_data_dir(app)?.join("inspirations").join("staging");
     fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
     Ok(directory)
@@ -3028,7 +3033,7 @@ fn staged_image_response(path: &Path, file_name: &str) -> Value {
     })
 }
 
-fn write_staged_image(app: &AppHandle, bytes: Vec<u8>, prefix: &str, extension: &str) -> CommandResult<Value> {
+pub(crate) fn write_staged_image(app: &AppHandle, bytes: Vec<u8>, prefix: &str, extension: &str) -> CommandResult<Value> {
     if bytes.is_empty() {
         return Err("Image payload is empty".to_owned());
     }
@@ -4563,6 +4568,12 @@ const ABOUT_WINDOW_HEIGHT: f64 = 460.0;
 const FEEDBACK_WINDOW_WIDTH: f64 = 440.0;
 const FEEDBACK_WINDOW_HEIGHT: f64 = 760.0;
 
+/// Logical size of the standalone problem-report window: wide enough for the
+/// description box plus a 16:9-ish screenshot preview, per the reference
+/// layout (title / description / screenshot with retake & remove / submit).
+const REPORT_WINDOW_WIDTH: f64 = 720.0;
+const REPORT_WINDOW_HEIGHT: f64 = 640.0;
+
 /// Center `window` over the main window (falling back to the screen center),
 /// so the About popup reads as attached to the app instead of free-floating.
 fn center_window_over_main(
@@ -4731,6 +4742,58 @@ fn open_feedback_window(app: AppHandle, title: Option<String>) -> CommandResult<
     center_window_over_main(&app, &window, FEEDBACK_WINDOW_WIDTH, FEEDBACK_WINDOW_HEIGHT);
     #[cfg(target_os = "windows")]
     ensure_window_revealed(&app, "feedback");
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
+/// Open (or focus) the standalone problem-report window (`?window=report`
+/// route) — the macOS face of the report flow. The in-app dialog stays the
+/// Windows/web fallback: creating windows from `WebviewWindowBuilder` can
+/// deadlock on Windows (see open-about.ts). `title` is the localized window
+/// title picked by the frontend, which knows the active locale.
+#[tauri::command]
+fn open_report_window(app: AppHandle, title: Option<String>) -> CommandResult<()> {
+    log::info!("[window:report] open requested");
+    if let Some(window) = app.get_webview_window("report") {
+        let revealed = window.show().and_then(|_| window.set_focus());
+        log::info!(
+            "[window:report] reusing existing window, reveal ok={:?}",
+            revealed.is_ok()
+        );
+        return revealed.map_err(|error| format!("show report window: {error}"));
+    }
+    let window = WebviewWindowBuilder::new(
+        &app,
+        "report",
+        WebviewUrl::App("index.html?window=report".into()),
+    )
+    .title(title.unwrap_or_else(|| "Lynse".to_string()))
+    .inner_size(REPORT_WINDOW_WIDTH, REPORT_WINDOW_HEIGHT)
+    .min_inner_size(560.0, 480.0)
+    .resizable(true)
+    .maximizable(false)
+    .minimizable(false)
+    .visible(false)
+    .on_page_load(|window, payload| {
+        if payload.event() == PageLoadEvent::Finished {
+            log::info!("[window:report] page load finished, revealing");
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    })
+    .build()
+    .map_err(|error| {
+        log::error!("[window:report] build failed: {error}");
+        format!("failed to create report window: {error}")
+    })?;
+    log::info!("[window:report] created, reveal armed on page load");
+    center_window_over_main(&app, &window, REPORT_WINDOW_WIDTH, REPORT_WINDOW_HEIGHT);
+    #[cfg(target_os = "windows")]
+    ensure_window_revealed(&app, "report");
     #[cfg(not(target_os = "windows"))]
     {
         let _ = window.show();
@@ -5007,7 +5070,11 @@ pub fn run() {
             open_about_window,
             set_compact_window_mode,
             open_feedback_window,
+            open_report_window,
+            report_screenshot::report_capture_main_screenshot,
+            cnb_report::report_submit_cnb_issue,
             open_logs_folder,
+            wechat_auth::wechat_auth_window, wechat_auth::wechat_auth_window_close,
             diagnostics_read_logs, diagnostics_prepare_report, attachment_save,
             attachment_text,
             live_translation::live_translation_permissions,

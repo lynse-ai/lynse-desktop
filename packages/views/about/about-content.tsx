@@ -11,7 +11,7 @@ import {
   useAppUpdate,
   type LatestReleaseNotes,
 } from "../app-update";
-import { openLogsFolder, openReportProblemDialog } from "../diagnostics";
+import { openLogsFolder, openReportProblem } from "../diagnostics";
 import { LYNSE_APP_ICON_SRC } from "./app-icon";
 import { PRIVACY_URL, TERMS_URL, WEBSITE_URL } from "./links";
 
@@ -138,7 +138,7 @@ export function AboutContent() {
       <div className="mt-2.5 flex items-center gap-4 text-2xs text-muted-foreground/80">
         <button
           type="button"
-          onClick={openReportProblemDialog}
+          onClick={openReportProblem}
           className="transition-colors hover:text-foreground"
         >
           {t("settings.report_issue")}

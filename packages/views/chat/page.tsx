@@ -46,6 +46,7 @@ import { useNavigation } from "../navigation";
 import { useChat } from "../workspace/hooks/use-chat";
 import { extractSkillMarker, stripSkillMarker, type SkillMarker } from "../workspace/chat-skill-ref";
 import { ChatModelPicker } from "../workspace/model-picker";
+import { isBetaFeaturesUnlocked } from "../feature-flags";
 import { useInsertConclusion, useNotes, fetchFileDetail } from "../workspace/hooks/use-files";
 import { useFolders } from "../workspace/hooks/use-folders";
 import { getWorkspaceState } from "../workspace/store";
@@ -1011,7 +1012,8 @@ export function ChatPage() {
                       ? t("chat.input_hint_workbuddy")
                       : t("chat.input_hint")}
               </span>
-              {!isWorkBuddy && <ChatModelPicker />}
+              {/* Beta surface: hidden in official builds (feature-flags). */}
+              {!isWorkBuddy && isBetaFeaturesUnlocked() && <ChatModelPicker />}
               {isLoading ? (
                 <Button
                   type="button"

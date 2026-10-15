@@ -83,6 +83,15 @@ type DesktopAppApi = {
   /** Pre-auth compact welcome window (true, 690×450) vs dashboard size
    * (false, 960×600). No-op outside the desktop app. */
   setCompactWindowSize: (active: boolean) => Promise<void>;
+  /** WeChat OAuth sign-in window (desktop only). The authorize page opens in
+   * an embedded window; the code+state redirect is relayed back as a URL. */
+  wechat?: {
+    openAuthWindow: (url: string) => Promise<void>;
+    closeAuthWindow: () => Promise<void>;
+    onAuthCallback: (
+      callback: (callbackUrl: string) => void,
+    ) => Promise<() => void>;
+  };
 };
 
 /** Access the desktop update API, or null when running outside the Tauri host. */

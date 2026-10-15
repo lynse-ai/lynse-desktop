@@ -290,6 +290,11 @@ jobs:
           # (The debug channel — API-key login only — is built via
           # `pnpm build:debug`, e.g. for throwaway test builds.)
           VITE_BUILD_CHANNEL: official
+          # PC 扫码登录 (qrconnect)：两项都有值时客户端自拼授权 URL（后端
+          # render 返回的公众号 H5 链接 PC 无法扫码）。Repo secrets 可选——
+          # 缺省回退后端 render 链接（现状），不阻断发布。
+          VITE_WECHAT_APP_ID: ${{ secrets.VITE_WECHAT_APP_ID }}
+          VITE_WECHAT_REDIRECT_URI: ${{ secrets.VITE_WECHAT_REDIRECT_URI }}
           # audiopus_sys (opus codec) vendors a CMakeLists.txt with an old
           # cmake_minimum_required, which CMake 4.x on the runners rejects.
           # Re-allow the legacy policy so the codec builds.

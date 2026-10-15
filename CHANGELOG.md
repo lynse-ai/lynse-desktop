@@ -12,6 +12,20 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.1.14 (2026-10-15)
+
+### New Features
+
+- Sign in with WeChat: scan a QR code on the login page to sign in, or link WeChat to an existing account from the login screen.
+- Revamped "Report a Problem": the app captures a screenshot of itself automatically (compressed as JPEG) and submissions are filed directly to our issue tracker with the description, environment info and recent app logs attached — no browser detour.
+- Cloud chat answers now stream over server-sent events (with polling fallback), so replies start faster and progress survives flaky connections.
+
+### 新功能
+
+- 支持微信扫码登录：在登录页扫码即可登录，也可在登录页将微信绑定到已有账号。
+- 「报告问题」全新改版：自动截取应用窗口截图（JPEG 压缩），提交后直达问题跟踪仓库并自动附上环境信息与最近日志，无需跳转浏览器。
+- 云端聊天切换为 SSE 流式传输（保留轮询回退），回复出字更快，弱网更稳。
+
 ## 1.1.13 (2026-10-12)
 
 ### New Features

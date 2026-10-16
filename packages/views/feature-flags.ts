@@ -35,7 +35,7 @@ export const featureFlags = {
 
 /**
  * Beta-exposure gate shared by the WIP surfaces marked with a Beta badge
- * (主动建议, 小玲同学服务地址, 对话模型, 连接). Beta surfaces stay visible in
+ * (主动建议, 小灵助手服务地址, 对话模型, 连接). Beta surfaces stay visible in
  * debug-channel builds and dev shells so the team can keep iterating; official
  * builds hide them from the UI entirely and the features stay off by default.
  * The runtime test mode (login-logo 5-tap) unlocks them inside an official

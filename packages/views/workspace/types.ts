@@ -331,7 +331,7 @@ export type ChatProvider = "cloud" | "qoder" | "workbuddy";
 
 /**
  * Which assistant the chat UI is talking to: the Lynse cloud channel
- * ("小玲同学") or the user's authorized WorkBuddy assistant.
+ * ("小灵助手") or the user's authorized WorkBuddy assistant.
  */
 export type ChatAssistant = "lynse" | "workbuddy";
 
@@ -404,6 +404,14 @@ export interface ChatConfirm {
     requestId: string | number;
     questions?: { id: string; question: string; multiSelect: boolean; options: ChatConfirmOption[] }[];
   };
+  /**
+   * Client-side lifecycle marker, never sent to the backend. Undefined = the
+   * card is still awaiting the user; string = the option value the user
+   * tapped (card collapses to a check-marked row); null = dismissed without
+   * answering. Survives persistence so a reloaded history keeps the
+   * answered-looking card instead of re-asking.
+   */
+  resolvedChoice?: string | null;
 }
 
 export type ChatConfirmPreviewValue = string | number | boolean | null | ChatConfirmPreviewValue[] | { [key: string]: ChatConfirmPreviewValue };

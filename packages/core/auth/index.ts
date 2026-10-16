@@ -96,7 +96,27 @@ export function createAuthStore(opts: AuthOpts) {
         isAuthenticated: true,
         isLoading: false,
       });
+      registerBackendHost();
       opts.onLogin?.();
+    }
+
+    /**
+     * 首次登录绑定后端：把当前登录网关告诉聊天 agent，之后该 token 的身份
+     * 验证与 Lynse 数据调用固定在这一个地址（服务端记住绑定，聊天请求无需
+     * 再声明，也绝不验证第二个地址）。Fire-and-forget：注册失败不影响登录
+     * 态，下次启动 restoreSession 会重试。
+     */
+    function registerBackendHost() {
+      try {
+        const agentUrl = opts.api.getAgentBaseUrl();
+        const backendUrl = opts.api.getBaseUrl();
+        if (!agentUrl || !backendUrl) return;
+        void opts.api
+          .post("/api/session/backend", { host: backendUrl }, { baseUrl: agentUrl, tokenOnly: true })
+          .catch(() => undefined);
+      } catch {
+        // Client not fully initialized (e.g. early boot) — skip silently.
+      }
     }
 
     return {
@@ -132,6 +152,7 @@ export function createAuthStore(opts: AuthOpts) {
         opts.api.setToken(res.accessToken);
       }
       set({ isAuthenticated: true, isLoading: false });
+      registerBackendHost();
       opts.onLogin?.();
     },
 
@@ -213,6 +234,7 @@ export function createAuthStore(opts: AuthOpts) {
           opts.storage.setItem("lynse_token", res.accessToken);
           opts.api.setToken(res.accessToken);
           set({ isAuthenticated: true, isLoading: false });
+          registerBackendHost();
         } catch {
           opts.api.setToken(null);
           opts.storage.removeItem("lynse_token");
@@ -224,6 +246,7 @@ export function createAuthStore(opts: AuthOpts) {
         // rejects it (401 clears it via onUnauthorized).
         opts.api.setToken(savedToken);
         set({ isAuthenticated: true, isLoading: false });
+        registerBackendHost();
       } else {
         set({ isLoading: false });
       }

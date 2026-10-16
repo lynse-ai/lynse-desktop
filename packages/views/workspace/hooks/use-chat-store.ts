@@ -15,7 +15,6 @@ import type {
 } from "../types";
 import {
   StreamChatTransport,
-  extractConfirmFromText,
   type ChatTransport,
 } from "../chat-transport";
 import {
@@ -259,7 +258,7 @@ interface ChatStoreState {
   isLoading: boolean;
   conversations: ChatConversation[];
   activeConversationId: string | null;
-  /** Which assistant the chat page is talking to ("小玲同学" or WorkBuddy). */
+  /** Which assistant the chat page is talking to ("小灵助手" or WorkBuddy). */
   activeAssistant: ChatAssistant;
   /** Cloud conversation to restore when switching back from WorkBuddy. */
   lastCloudConversationId: string | null;
@@ -470,7 +469,6 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       case "done": {
         const current = findMessage();
         const finalContent = evt.text ?? current?.content ?? "";
-        const detected = extractConfirmFromText(finalContent);
         writeMessage((m) => ({
           ...m,
           // Images the attachment cards already render (same signed URL) are
@@ -487,18 +485,11 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           attachments: evt.attachments ?? m.attachments,
           humanSupportLink: evt.humanSupportLink,
           connectionRequests: evt.connectionRequests ?? m.connectionRequests,
-          confirm: detected && !m.confirm ? detected : m.confirm,
           // Poll delivers the whole answer at once — let the UI play its
           // two-phase reveal (text first, attachments/cards after).
           revealedAt: Date.now(),
           workbuddyStopReason: evt.workbuddyStopReason,
         }));
-        // Confirm dialogs only pop for the conversation on screen; a
-        // background conversation's choice menu stays as plain text until
-        // that conversation is opened.
-        if (detected && !current?.confirm && isActive()) {
-          set({ pendingConfirm: { messageId: assistantId, confirm: detected } });
-        }
         // A completed reply the user cannot see right now counts as unread:
         // either another conversation is on screen, or no chat UI at all.
         const seen = isActive() && get().chatVisible > 0;
@@ -511,7 +502,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           }));
           if (get().chatVisible === 0) {
             const doneProvider = get().conversations.find((c) => c.id === conversationId)?.provider;
-            toast.success(doneProvider === "workbuddy" ? "Work buddy 已完成回复" : "小玲同学已完成回复");
+            toast.success(doneProvider === "workbuddy" ? "Work buddy 已完成回复" : "小灵助手已完成回复");
           }
           // Mirror into the unified notification center (drives the Bell badge).
           const convTitle = (get().conversations.find((c) => c.id === conversationId)?.title ?? "").trim();
@@ -548,8 +539,12 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           ? { ...conversation, workbuddySession: evt.session } : conversation));
         break;
       case "confirm_resolved":
+        // Keep the card in the transcript, collapsed: an already-answered
+        // card keeps its choice, one resolved server-side (or cleared with
+        // the transport) just dims out.
         writeMessage((message) => message.confirm?.workbuddy?.requestId === evt.requestId
-          ? { ...message, confirm: undefined } : message);
+          ? { ...message, confirm: { ...message.confirm, resolvedChoice: message.confirm.resolvedChoice ?? null } }
+          : message);
         if (get().pendingConfirm?.confirm.workbuddy?.requestId === evt.requestId) set({ pendingConfirm: null });
         break;
       case "workbuddy_seen": {
@@ -885,7 +880,9 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
             : get().lastCloudConversationId;
         const wb = get().conversations.find((conversation) => conversation.id === get().lastWorkBuddyConversationId)
           ?? latestWorkBuddyConversation(get().conversations);
-        const pending = wb?.messages.findLast((message) => message.confirm && (!message.confirm.workbuddy || runs.has(wb.id)));
+        const pending = wb?.messages.findLast((message) => message.confirm
+          && message.confirm.resolvedChoice === undefined
+          && (!message.confirm.workbuddy || runs.has(wb.id)));
         set({
           activeAssistant: "workbuddy",
           lastCloudConversationId: lastCloudId,
@@ -1049,6 +1046,11 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       if (message?.confirm?.workbuddy) {
         const run = get().activeConversationId ? runs.get(get().activeConversationId!) : undefined;
         if (run?.assistantId !== messageId || !run.transport.answerConfirmation) return;
+        // Collapse the card immediately; a failed POST toasts below and the
+        // next thread sync re-emits the permission as a fresh pending card.
+        setMessages((prev) => prev.map((m) => m.id === messageId && m.confirm
+          ? { ...m, confirm: { ...m.confirm, resolvedChoice: value } } : m));
+        set({ pendingConfirm: null });
         void run.transport.answerConfirmation(message.confirm, value).catch((error: unknown) => toast.error(errorMessage(error)));
         return;
       }
@@ -1056,7 +1058,10 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       // backend treats the tap as a fresh question instead of a card answer.
       const confirmToken =
         get().messages.find((m) => m.id === messageId)?.confirm?.confirmToken ?? null;
-      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, confirm: undefined } : m)));
+      // Keep the card collapsed in the transcript with the choice marked;
+      // the answer itself goes out as the next user turn.
+      setMessages((prev) => prev.map((m) => m.id === messageId && m.confirm
+        ? { ...m, confirm: { ...m.confirm, resolvedChoice: value } } : m));
       set({ pendingConfirm: null });
       runSend(value, undefined, false, undefined, confirmToken);
     },
@@ -1066,10 +1071,14 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       if (message?.confirm?.workbuddy) {
         const run = get().activeConversationId ? runs.get(get().activeConversationId!) : undefined;
         if (run?.assistantId !== messageId || !run.transport.answerConfirmation) return;
+        setMessages((prev) => prev.map((m) => m.id === messageId && m.confirm
+          ? { ...m, confirm: { ...m.confirm, resolvedChoice: null } } : m));
+        set({ pendingConfirm: null });
         void run.transport.answerConfirmation(message.confirm, null).catch((error: unknown) => toast.error(errorMessage(error)));
         return;
       }
-      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, confirm: undefined } : m)));
+      setMessages((prev) => prev.map((m) => m.id === messageId && m.confirm
+        ? { ...m, confirm: { ...m.confirm, resolvedChoice: null } } : m));
       set({ pendingConfirm: null });
     },
 
@@ -1133,7 +1142,9 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           activeConversationId: conversationId,
           messages: conversation.messages,
           pendingConfirm: (() => {
-            const pending = conversation.messages.findLast((message) => message.confirm && (!message.confirm.workbuddy || runs.has(conversationId)));
+            const pending = conversation.messages.findLast((message) => message.confirm
+              && message.confirm.resolvedChoice === undefined
+              && (!message.confirm.workbuddy || runs.has(conversationId)));
             return pending?.confirm ? { messageId: pending.id, confirm: pending.confirm } : null;
           })(),
           unreadCounts,

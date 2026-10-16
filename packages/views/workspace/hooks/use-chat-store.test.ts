@@ -175,7 +175,7 @@ describe("concurrent chat conversations", () => {
 
     // The active conversation (two) is untouched by the background reply.
     expect(conversationByUserText("two").messages.at(-1)!.content).toBe("");
-    expect(toast.success).toHaveBeenCalledWith("小玲同学已完成回复");
+    expect(toast.success).toHaveBeenCalledWith("小灵助手已完成回复");
   });
 
   it("stores the human-support link from the done payload", () => {
@@ -398,8 +398,40 @@ describe("confirmation cards", () => {
     // The follow-up turn must carry the card's token as confirm_token.
     expect(fake.runs[1]!.opts!.query).toBe("confirm");
     expect(fake.runs[1]!.opts!.confirmToken).toBe("card-token-1");
-    // The card is cleared from the answered message.
-    expect(store.getState().messages.find((m) => m.id === pending!.messageId)?.confirm).toBeUndefined();
+    // The card stays on the message, collapsed with the chosen value marked.
+    expect(store.getState().messages.find((m) => m.id === pending!.messageId)?.confirm).toMatchObject({
+      resolvedChoice: "confirm",
+    });
+  });
+
+  it("does not fabricate a card from an A/B/C menu in plain text", () => {
+    const { sendMessage } = store.getState();
+    sendMessage("给我列一下选项");
+    emit(fake.runs[0]!, { type: "done", text: "怎么处理？\nA) 重启设备\nB) 暂不处理" });
+    // Only the structured `confirm` event renders a card now; the text
+    // heuristic that popped the dialog mis-triggered too often.
+    expect(store.getState().pendingConfirm).toBeNull();
+    expect(store.getState().messages.at(-1)?.confirm).toBeUndefined();
+  });
+
+  it("keeps a dismissed card collapsed and never re-pends it after switching", async () => {
+    const { sendMessage, dismissConfirm, selectConversation } = store.getState();
+    sendMessage("清理待办");
+    const run = fake.runs[0]!;
+    emit(run, { type: "confirm", confirm: { question: "清理待办", options: [{ label: "确认", value: "confirm" }, { label: "先不了", value: "cancel" }] } });
+    run.cancel();
+    await vi.waitFor(() => expect(store.getState().workingConversationIds).toHaveLength(0));
+
+    const messageId = store.getState().pendingConfirm!.messageId;
+    dismissConfirm(messageId);
+    expect(store.getState().messages.find((m) => m.id === messageId)?.confirm).toMatchObject({ resolvedChoice: null });
+
+    // Switching away and back must not resurrect the dismissed card.
+    const conversationId = store.getState().activeConversationId!;
+    store.getState().clearMessages();
+    selectConversation(conversationId);
+    expect(store.getState().pendingConfirm).toBeNull();
+    expect(store.getState().messages.find((m) => m.id === messageId)?.confirm).toMatchObject({ resolvedChoice: null });
   });
 });
 

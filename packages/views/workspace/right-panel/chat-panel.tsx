@@ -15,7 +15,7 @@ import { isBetaFeaturesUnlocked } from "../../feature-flags";
 import { useChatStore } from "../hooks/use-chat-store";
 import { WaitingText } from "../hooks/waiting-text";
 import { useFiles } from "../hooks/use-files";
-import { ConfirmDialog } from "../ConfirmDialog";
+import { ConfirmCard } from "../confirm-card";
 import { isFreshlyRevealed } from "../chat-reveal";
 import { stripSkillMarker } from "../chat-skill-ref";
 import { ChatAttachments } from "../../chat/chat-attachments";
@@ -36,7 +36,6 @@ export function ChatPanel() {
     clearMessages,
     selectConversation,
     stopStreaming,
-    pendingConfirm,
     answerConfirm,
     dismissConfirm,
     setActiveAssistant,
@@ -261,6 +260,15 @@ export function ChatPanel() {
                     {msg.humanSupportLink.label?.trim() || t("chat.contact_support")}
                   </a>
                 )}
+                {msg.role === "assistant" && msg.confirm && (
+                  <div className="mt-2">
+                    <ConfirmCard
+                      confirm={msg.confirm}
+                      onSelect={(value) => answerConfirm(msg.id, value)}
+                      onDismiss={() => dismissConfirm(msg.id)}
+                    />
+                  </div>
+                )}
                 {msg.role === "assistant" ? (
                   <div
                     className={
@@ -316,15 +324,6 @@ export function ChatPanel() {
         </div>
       </div>
 
-      <ConfirmDialog
-        confirm={pendingConfirm?.confirm ?? null}
-        onSelect={(value) => {
-          if (pendingConfirm) answerConfirm(pendingConfirm.messageId, value);
-        }}
-        onDismiss={() => {
-          if (pendingConfirm) dismissConfirm(pendingConfirm.messageId);
-        }}
-      />
     </aside>
   );
 }

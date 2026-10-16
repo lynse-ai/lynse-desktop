@@ -61,7 +61,7 @@ import {
   PopoverTrigger,
 } from "@lynse/ui/components/ui/popover";
 import { WaitingText } from "../workspace/hooks/waiting-text";
-import { ConfirmDialog } from "../workspace/ConfirmDialog";
+import { ConfirmCard } from "../workspace/confirm-card";
 import { hasWorkBuddyAcpBridge, hasWorkBuddyCloudScopes } from "@lynse/core/workbuddy";
 import { isFreshlyRevealed } from "../workspace/chat-reveal";
 import { ChatAttachments } from "./chat-attachments";
@@ -178,7 +178,6 @@ export function ChatPage() {
     clearMessages,
     selectConversation,
     stopStreaming,
-    pendingConfirm,
     answerConfirm,
     dismissConfirm,
     setActiveAssistant,
@@ -864,6 +863,8 @@ export function ChatPage() {
                           : undefined
                       }
                       onAuthorizeWorkBuddy={() => void startWorkBuddyAuthorize()}
+                      onConfirmSelect={answerConfirm}
+                      onConfirmDismiss={dismissConfirm}
                       resolveSourceLabel={resolveSourceLabel}
                       onOpenSource={handleOpenSource}
                     />
@@ -1050,16 +1051,6 @@ export function ChatPage() {
           </p>
         </div>
       </div>
-
-      <ConfirmDialog
-        confirm={pendingConfirm?.confirm ?? null}
-        onSelect={(value) => {
-          if (pendingConfirm) answerConfirm(pendingConfirm.messageId, value);
-        }}
-        onDismiss={() => {
-          if (pendingConfirm) dismissConfirm(pendingConfirm.messageId);
-        }}
-      />
     </div>
   );
 }
@@ -1339,6 +1330,10 @@ interface AssistantMessageProps {
   onInsertToNote?: () => void;
   /** Shown on a WorkBuddy auth-failure bubble instead of the error text. */
   onAuthorizeWorkBuddy?: () => void;
+  /** Answers the inline confirmation card on this message (store action). */
+  onConfirmSelect?: (messageId: string, value: string) => void;
+  /** Dismisses the inline confirmation card on this message (store action). */
+  onConfirmDismiss?: (messageId: string) => void;
   /** Resolves a raw citation source (meeting ID or title) to a display label. */
   resolveSourceLabel: (source: string) => string;
   /** Opens a cited source's note. */
@@ -1354,6 +1349,8 @@ function AssistantMessage({
   insertState = "idle",
   onInsertToNote,
   onAuthorizeWorkBuddy,
+  onConfirmSelect,
+  onConfirmDismiss,
   resolveSourceLabel,
   onOpenSource,
 }: AssistantMessageProps) {
@@ -1458,6 +1455,16 @@ function AssistantMessage({
             <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
               <span className="size-1.5 animate-pulse rounded-full bg-current" />
               <WaitingText status={message.status} startedAt={message.timestamp} />
+            </div>
+          )}
+
+          {message.confirm && (
+            <div className="mt-2 max-w-md">
+              <ConfirmCard
+                confirm={message.confirm}
+                onSelect={(value) => onConfirmSelect?.(message.id, value)}
+                onDismiss={() => onConfirmDismiss?.(message.id)}
+              />
             </div>
           )}
         </>

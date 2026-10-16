@@ -857,7 +857,7 @@ const en = {
     sources: "Sources",
     source_not_found: "Couldn't find the matching note",
     contact_support: "Contact support",
-    assistant_lynse: "Xiaoling",
+    assistant_lynse: "Xiaoling Assistant",
     assistant_workbuddy: "Work buddy",
     assistant_workbuddy_cloud: "WorkBuddy Cloud",
     switch_assistant: "Switch assistant",

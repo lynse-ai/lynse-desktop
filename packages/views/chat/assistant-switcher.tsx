@@ -15,7 +15,7 @@ import type { ChatAssistant } from "../workspace/types";
 /**
  * Header assistant switcher for the chat page: shows the active assistant's
  * name with a disclosure chevron; the dropdown swaps between the Lynse cloud
- * assistant ("小玲同学") and the user's authorized WorkBuddy. The choice is
+ * assistant ("小灵助手") and the user's authorized WorkBuddy. The choice is
  * global (store-owned and persisted), so the right-hand chat panel follows it.
  */
 export function AssistantSwitcher({

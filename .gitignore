@@ -85,3 +85,6 @@ apps/tauri/audio-capture/vendor/build/
 # Vendored WebRTC AEC3 static library (scripts/build-lynse-aec3.ps1) — the
 # real artifact is built per machine / CI, never committed.
 apps/tauri/src-tauri/aec3/lib/
+
+# Sidecar bytecode generated at build time by scripts/compile-sidecar-bytecode.sh
+apps/tauri/src-tauri/resources/compiled/

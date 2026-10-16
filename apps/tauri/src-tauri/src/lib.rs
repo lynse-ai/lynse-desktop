@@ -465,14 +465,66 @@ pub(crate) fn request_calendar_permission() {
     }
 }
 
-pub(crate) fn script_path(app: &AppHandle) -> CommandResult<PathBuf> {
+/// CPython minor versions the shipped sidecar bytecode covers. MUST mirror the
+/// VERSIONS list in `apps/tauri/scripts/compile-sidecar-bytecode.sh` — the
+/// build script emits one `-O` bytecode set per tag under
+/// `resources/compiled/`, and release bundles ship no Python sources.
+pub(crate) const SIDECAR_PYTHON_TAGS: &[&str] = &["309", "310", "311", "312", "313", "314"];
+
+/// Two-digit CPython version tag ("3.9" -> "309"), the bytecode file suffix.
+fn format_version_tag(major: u32, minor: u32) -> String {
+    format!("{major}{minor:02}")
+}
+
+/// Ask `python` for its version and return the bytecode tag (e.g. "312").
+fn python_version_tag(python: &str) -> CommandResult<String> {
+    let output = Command::new(python)
+        .args(["-c", "import sys; print(f'{sys.version_info[0]} {sys.version_info[1]}')"])
+        .output()
+        .map_err(|error| format!("无法运行 Python（{python}）：{error}"))?;
+    if !output.status.success() {
+        return Err(format!("Python 无法报告版本（{python}）"));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let (major, minor) = stdout
+        .trim()
+        .split_once(' ')
+        .and_then(|(major, minor)| {
+            Some((major.parse::<u32>().ok()?, minor.parse::<u32>().ok()?))
+        })
+        .ok_or_else(|| format!("无法解析 Python 版本输出：{}", stdout.trim()))?;
+    Ok(format_version_tag(major, minor))
+}
+
+/// Production-bundle path of a bridge's bytecode: release builds ship only
+/// `-O` bytecode under `resources/compiled/<stem>.<tag>.pyc`, one file per
+/// supported interpreter tag — the `.py` sources never leave the repo. Dev
+/// builds short-circuit to the plain sources before this runs.
+fn bridge_bytecode_path(app: &AppHandle, python: &str, stem: &str) -> CommandResult<PathBuf> {
+    let tag = python_version_tag(python)?;
+    if !SIDECAR_PYTHON_TAGS.contains(&tag.as_str()) {
+        return Err(format!(
+            "本地引擎不支持 Python {tag}（支持 3.9–3.14）。请安装受支持版本的 Python 后重试。"
+        ));
+    }
+    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
+    let compiled = resources.join("compiled").join(format!("{stem}.{tag}.pyc"));
+    if !compiled.exists() {
+        return Err(format!(
+            "本地引擎字节码缺失（{}）——安装包不完整，请重新安装应用",
+            compiled.display()
+        ));
+    }
+    Ok(compiled)
+}
+
+pub(crate) fn script_path(app: &AppHandle, python: &str) -> CommandResult<PathBuf> {
     let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("resources/funasr_transcribe.py");
     if development.exists() {
         return Ok(development);
     }
-    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
-    Ok(resources.join("funasr_transcribe.py"))
+    bridge_bytecode_path(app, python, "funasr_transcribe")
 }
 
 /// Locate or create a per-engine Python venv and return its interpreter.
@@ -568,8 +620,11 @@ fn ensure_funasr_packages(python: &str) -> CommandResult<()> {
     Ok(())
 }
 
-pub(crate) fn run_funasr(app: &AppHandle, arguments: &[String], model_directory: &Path) -> CommandResult<String> {
-    let python = ensure_funasr_venv(app)?;
+pub(crate) fn run_funasr(
+    python: &str,
+    arguments: &[String],
+    model_directory: &Path,
+) -> CommandResult<String> {
     let output = Command::new(python)
         .args(arguments)
         .env("MODELSCOPE_CACHE", model_directory)
@@ -587,55 +642,40 @@ pub(crate) fn run_funasr(app: &AppHandle, arguments: &[String], model_directory:
 }
 
 /// Resource path to the MLX-Whisper bridge, mirroring [`script_path`].
-pub(crate) fn mlx_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
+pub(crate) fn mlx_script_path(app: &AppHandle, python: &str) -> CommandResult<PathBuf> {
     let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/mlx_transcribe.py");
     if development.exists() {
         return Ok(development);
     }
-    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
-    Ok(resources.join("mlx_transcribe.py"))
+    bridge_bytecode_path(app, python, "mlx_transcribe")
 }
 
 /// Resource path to the Qwen3-ASR bridge, mirroring [`mlx_script_path`].
-pub(crate) fn qwen3_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
+pub(crate) fn qwen3_script_path(app: &AppHandle, python: &str) -> CommandResult<PathBuf> {
     let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/qwen3_transcribe.py");
     if development.exists() {
         return Ok(development);
     }
-    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
-    Ok(resources.join("qwen3_transcribe.py"))
+    bridge_bytecode_path(app, python, "qwen3_transcribe")
 }
 
-/// Resource path to the MOSS-Transcribe-Diarize bridge, mirroring
-/// [`qwen3_script_path`].
-pub(crate) fn moss_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
-    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/moss_transcribe.py");
-    if development.exists() {
-        return Ok(development);
-    }
-    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
-    Ok(resources.join("moss_transcribe.py"))
-}
-
-/// Resource path to the WhisperX bridge, mirroring [`moss_script_path`].
-pub(crate) fn whisperx_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
+/// Resource path to the WhisperX bridge, mirroring [`qwen3_script_path`].
+pub(crate) fn whisperx_script_path(app: &AppHandle, python: &str) -> CommandResult<PathBuf> {
     let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/whisperx_transcribe.py");
     if development.exists() {
         return Ok(development);
     }
-    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
-    Ok(resources.join("whisperx_transcribe.py"))
+    bridge_bytecode_path(app, python, "whisperx_transcribe")
 }
 
 /// Resource path to the sherpa-onnx voiceprint bridge, mirroring
 /// [`whisperx_script_path`].
-pub(crate) fn sherpa_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
+pub(crate) fn sherpa_script_path(app: &AppHandle, python: &str) -> CommandResult<PathBuf> {
     let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/sherpa_voiceprint.py");
     if development.exists() {
         return Ok(development);
     }
-    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
-    Ok(resources.join("sherpa_voiceprint.py"))
+    bridge_bytecode_path(app, python, "sherpa_voiceprint")
 }
 
 /// Path of the downloaded 3D-Speaker CAM++ ONNX checkpoint.
@@ -688,10 +728,9 @@ pub(crate) fn ensure_sherpa_venv(app: &AppHandle) -> CommandResult<String> {
 
 /// Run the sherpa-onnx voiceprint bridge on its dedicated venv; returns
 /// captured stdout (a single JSON line, parsed by [`parse_funasr_json`]).
-fn run_sherpa(app: &AppHandle, arguments: &[String]) -> CommandResult<String> {
-    let python = ensure_sherpa_venv(app)?;
+fn run_sherpa(python: &str, app: &AppHandle, arguments: &[String]) -> CommandResult<String> {
     let model_directory = engine_model_dir(app, SHERPA_PROVIDER, SHERPA_MODEL_ID)?;
-    run_python_with_model_cache(&python, arguments, &model_directory)
+    run_python_with_model_cache(python, arguments, &model_directory)
 }
 
 /// Ensure `mlx-qwen3-asr` (+ its vendored ffmpeg helper) is importable in the
@@ -719,32 +758,6 @@ pub(crate) fn ensure_qwen3_asr_package(_app: &AppHandle, python: &str) -> Comman
         .map_err(|error| format!("安装 mlx-qwen3-asr 失败：{error}"))?;
     if !install.success() {
         return Err("安装 mlx-qwen3-asr 失败（请检查网络，或手动安装到 MLX 虚拟环境）".to_owned());
-    }
-    Ok(())
-}
-
-/// Ensure the MOSS bridge's Python dependencies are importable in the shared
-/// MLX venv (mlx-lm for the Qwen3 backbone, tokenizers + soundfile for the
-/// port, imageio-ffmpeg for audio decode), pip-installing on first use. The
-/// MOSS model weights download through the bridge itself, like Qwen3.
-pub(crate) fn ensure_moss_packages(_app: &AppHandle, python: &str) -> CommandResult<()> {
-    let check = Command::new(python)
-        .args(["-c", "import mlx_lm, tokenizers, soundfile, imageio_ffmpeg"])
-        .env("HF_HUB_OFFLINE", "1")
-        .output()
-        .map_err(|error| format!("无法运行 MLX Python：{error}"))?;
-    if check.status.success() {
-        return Ok(());
-    }
-    // Some venvs (e.g. the dev `.venv-mlx`) ship no `bin/pip` wrapper, so go
-    // through the interpreter's pip module instead of a path that may not exist.
-    log::info!("[stt] 首次使用 MOSS 引擎，安装 mlx-lm/tokenizers/soundfile 依赖…");
-    let install = Command::new(python)
-        .args(["-m", "pip", "install", "--quiet", "--disable-pip-version-check", "mlx-lm", "tokenizers", "soundfile", "imageio-ffmpeg"])
-        .status()
-        .map_err(|error| format!("安装 MOSS 转写依赖失败：{error}"))?;
-    if !install.success() {
-        return Err("安装 MOSS 转写依赖失败（请检查网络，或手动安装到 MLX 虚拟环境）".to_owned());
     }
     Ok(())
 }
@@ -1104,15 +1117,6 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         files: &[],
     },
     SttModelEntry {
-        provider: "moss",
-        id: "moss-transcribe-8bit",
-        label: "MOSS-Transcribe-Diarize 0.9B（本地·说话人分离·时间戳，Apple Silicon MLX 8-bit，~1.1 GiB）",
-        size_bytes: 1_181_116_006,
-        download_url: "",
-        sha256: "",
-        files: &[],
-    },
-    SttModelEntry {
         provider: "whisper",
         id: "small-q5_1",
         label: "Whisper small (q5_1, ~190 MB)",
@@ -1243,7 +1247,7 @@ fn model_is_installed(app: &AppHandle, provider: &str, model_id: &str) -> bool {
     // ships its own bundle, the MLX-family engines run through a
     // self-contained Python venv with a vendored ffmpeg (imageio-ffmpeg),
     // and sherpa-onnx is a single ONNX file on its own lightweight venv.
-    if provider != "funasr" && provider != "mlx" && provider != "qwen3" && provider != "moss" && provider != SHERPA_PROVIDER {
+    if provider != "funasr" && provider != "mlx" && provider != "qwen3" && provider != SHERPA_PROVIDER {
         let version = format!("v{}", app.package_info().version);
         let runtime = stt::runtime_dir(app, &version);
         if !stt::runtime_is_complete(&runtime) {
@@ -2160,14 +2164,15 @@ pub(crate) fn run_voiceprint_extraction(app: &AppHandle, audio_path: &str, candi
     let payload = serde_json::to_string(&segments).map_err(|error| error.to_string())?;
     std::fs::write(&segments_file, payload)
         .map_err(|error| format!("无法写入声纹分段文件：{error}"))?;
+    let python = ensure_sherpa_venv(app)?;
     // The sherpa-onnx bridge decodes audio with its own vendored ffmpeg and
     // prints a single JSON line, parsed by the shared parser below.
     let arguments = vec![
-        sherpa_script_path(app)?.to_string_lossy().into_owned(), audio_path.to_owned(),
+        sherpa_script_path(app, &python)?.to_string_lossy().into_owned(), audio_path.to_owned(),
         "--model".to_owned(), sherpa_model_path(app)?.to_string_lossy().into_owned(),
         "--segments-json-file".to_owned(), segments_file.to_string_lossy().into_owned(),
     ];
-    embeddings_from_stdout(&run_sherpa(app, &arguments)?)
+    embeddings_from_stdout(&run_sherpa(&python, app, &arguments)?)
 }
 
 fn apply_voiceprints(app: &AppHandle, audio_path: &str, segments: &mut [Value]) -> CommandResult<()> {
@@ -2263,7 +2268,6 @@ fn create_queued_record(app: &AppHandle, audio_path: &str, options: Option<&Valu
         stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
         stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
         stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
-        stt::ProviderConfig::Moss(config) => config.model.as_deref().unwrap_or(stt::MOSS_DEFAULT_MODEL_ID),
         stt::ProviderConfig::WhisperX(_) => stt::WHISPERX_DEFAULT_MODEL_ID,
     };
     Ok(json!({
@@ -2470,7 +2474,6 @@ fn transcribe_single_track(
         stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
         stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
         stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
-        stt::ProviderConfig::Moss(config) => config.model.as_deref().unwrap_or(stt::MOSS_DEFAULT_MODEL_ID),
         stt::ProviderConfig::WhisperX(_) => stt::WHISPERX_DEFAULT_MODEL_ID,
     });
     ensure_model_installed(app, provider.engine(), model_id)?;
@@ -2855,7 +2858,6 @@ fn transcribe_inspiration(app: &AppHandle, record: Value, audio_path: PathBuf) -
         stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
         stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
         stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
-        stt::ProviderConfig::Moss(config) => config.model.as_deref().unwrap_or(stt::MOSS_DEFAULT_MODEL_ID),
         stt::ProviderConfig::WhisperX(_) => stt::WHISPERX_DEFAULT_MODEL_ID,
     };
     if !model_is_installed(app, provider.engine(), model_id) {
@@ -3309,7 +3311,7 @@ fn local_stt_download_model(
             emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
             return Err(error);
         }
-        if provider == "funasr" || provider == "mlx" || provider == "qwen3" || provider == "moss" || provider == "whisperx" {
+        if provider == "funasr" || provider == "mlx" || provider == "qwen3" || provider == "whisperx" {
             // FunASR, MLX and Qwen3 download through their Python helpers rather
             // than a fixed URL. The indeterminate event makes the UI react at
             // once; run_python_model_download_with_progress then streams real
@@ -3320,7 +3322,7 @@ fn local_stt_download_model(
                 fs::create_dir_all(&directory).ok();
                 let python = ensure_mlx_venv(&app)?;
                 let args = vec![
-                    mlx_script_path(&app)?.to_string_lossy().into_owned(),
+                    mlx_script_path(&app, &python)?.to_string_lossy().into_owned(),
                     "--download-models".to_owned(),
                     "--model-dir".to_owned(),
                     directory.to_string_lossy().into_owned(),
@@ -3342,7 +3344,7 @@ fn local_stt_download_model(
                 let python = ensure_mlx_venv(&app)?;
                 ensure_qwen3_asr_package(&app, &python)?;
                 let args = vec![
-                    qwen3_script_path(&app)?.to_string_lossy().into_owned(),
+                    qwen3_script_path(&app, &python)?.to_string_lossy().into_owned(),
                     "--download-models".to_owned(),
                     "--model-dir".to_owned(),
                     directory.to_string_lossy().into_owned(),
@@ -3367,7 +3369,7 @@ fn local_stt_download_model(
                 fs::create_dir_all(&directory).ok();
                 let python = ensure_whisperx_venv(&app)?;
                 let args = vec![
-                    whisperx_script_path(&app)?.to_string_lossy().into_owned(),
+                    whisperx_script_path(&app, &python)?.to_string_lossy().into_owned(),
                     "--download-models".to_owned(),
                     "--model-dir".to_owned(),
                     directory.to_string_lossy().into_owned(),
@@ -3387,36 +3389,11 @@ fn local_stt_download_model(
                     emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
                     return Err(error);
                 }
-            } else if provider == "moss" {
-                let directory = engine_model_dir(&app, &provider, &model_id)?;
-                fs::create_dir_all(&directory).ok();
-                let python = ensure_mlx_venv(&app)?;
-                ensure_moss_packages(&app, &python)?;
-                let args = vec![
-                    moss_script_path(&app)?.to_string_lossy().into_owned(),
-                    "--download-models".to_owned(),
-                    "--model-dir".to_owned(),
-                    directory.to_string_lossy().into_owned(),
-                    "--model".to_owned(),
-                    stt::moss_hf_repo(&model_id).to_owned(),
-                    "--region".to_owned(),
-                    detect_net_region().to_owned(),
-                ];
-                if let Err(error) = run_python_model_download_with_progress(
-                    &app,
-                    &provider,
-                    &model_id,
-                    &directory,
-                    total_bytes,
-                    || run_mlx(&app, &python, &args, &directory),
-                ) {
-                    emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
-                    return Err(error);
-                }
             } else {
                 let directory = model_dir(&app)?;
+                let python = ensure_funasr_venv(&app)?;
                 let args = vec![
-                    script_path(&app)?.to_string_lossy().into_owned(),
+                    script_path(&app, &python)?.to_string_lossy().into_owned(),
                     "--download-models".to_owned(),
                     "--model-dir".to_owned(),
                     directory.to_string_lossy().into_owned(),
@@ -3427,7 +3404,7 @@ fn local_stt_download_model(
                     &model_id,
                     &directory,
                     total_bytes,
-                    || run_funasr(&app, &args, &directory),
+                    || run_funasr(&python, &args, &directory),
                 ) {
                     emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
                     return Err(error);
@@ -5162,6 +5139,16 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_tags_match_the_bytecode_naming() {
+        assert_eq!(format_version_tag(3, 9), "309");
+        assert_eq!(format_version_tag(3, 10), "310");
+        assert_eq!(format_version_tag(3, 14), "314");
+        // The shipped bytecode sets — keep in lockstep with the VERSIONS list
+        // in scripts/compile-sidecar-bytecode.sh.
+        assert_eq!(SIDECAR_PYTHON_TAGS, ["309", "310", "311", "312", "313", "314"]);
+    }
 
     #[test]
     fn parses_partial_ranges() {

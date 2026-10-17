@@ -24,6 +24,11 @@ import {
   DEFAULT_MOSS_MODEL,
   NON_MAC_ENGINES,
   STT_LANGUAGE_OPTIONS,
+  FUNASR_MODEL_OPTIONS,
+  FUNASR_MODEL_ID,
+  FUNASR_NANO_MODEL_ID,
+  providerModelId,
+  sttSupportsLanguage,
   findModelStatus,
 } from "../workspace/local-transcription";
 import type { LocalHotwordPackage } from "../workspace/types";
@@ -66,6 +71,7 @@ function providerForEngine(engine: SttEngine, prev?: SttProviderConfig): SttProv
     case "funasr":
       return {
         provider: "funasr",
+        model: prev?.provider === "funasr" ? prev.model ?? FUNASR_MODEL_ID : FUNASR_MODEL_ID,
         campp_diarization: prev?.provider === "funasr" ? prev.campp_diarization ?? false : false,
         expected_speakers: prev?.provider === "funasr" ? prev.expected_speakers ?? null : null,
         language: prev?.provider === "funasr" ? prev.language ?? null : null,
@@ -242,23 +248,45 @@ function EngineFields({
         <>
           <p className="text-2xs text-muted-foreground">{t("settings.stt_funasr_hint")}</p>
           <div className="space-y-1">
-            <Label className="text-2xs">{t("settings.stt_language")}</Label>
+            <Label className="text-2xs">{t("settings.stt_funasr_model")}</Label>
             <select
-              // "auto" is stored as the literal value, never as null: null means
-              // "this config predates the field", which the backend migrates to
-              // the locale default instead of silently pinning Chinese.
-              value={config.language ?? "auto"}
-              onChange={(event) => onChange({ ...config, language: event.target.value })}
+              value={providerModelId(config)}
+              onChange={(event) => onChange({ ...config, model: event.target.value })}
               className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
             >
-              {STT_LANGUAGE_OPTIONS.map((option) => (
+              {FUNASR_MODEL_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {t(option.labelKey)}
                 </option>
               ))}
             </select>
-            <p className="text-2xs text-muted-foreground">{t("settings.stt_language_hint")}</p>
+            <p className="text-2xs text-muted-foreground">
+              {providerModelId(config) === FUNASR_NANO_MODEL_ID
+                ? t("settings.stt_funasr_nano_hint")
+                : t("settings.stt_funasr_sensevoice_hint")}
+            </p>
           </div>
+          {sttSupportsLanguage(config) && (
+            <div className="space-y-1">
+              <Label className="text-2xs">{t("settings.stt_language")}</Label>
+              <select
+                // "auto" is stored as the literal value, never as null: null
+                // means "this config predates the field", which the backend
+                // migrates to the locale default instead of silently pinning
+                // Chinese.
+                value={config.language ?? "auto"}
+                onChange={(event) => onChange({ ...config, language: event.target.value })}
+                className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
+              >
+                {STT_LANGUAGE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {t(option.labelKey)}
+                  </option>
+                ))}
+              </select>
+              <p className="text-2xs text-muted-foreground">{t("settings.stt_language_hint")}</p>
+            </div>
+          )}
           <label className="flex items-center gap-2 text-2xs">
             <input
               type="checkbox"

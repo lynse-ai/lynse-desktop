@@ -123,6 +123,11 @@ pub fn model_file_name(provider: &str, model_id: &str) -> Option<String> {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FunasrProviderConfig {
+    /// Which FunASR GGUF model to run: `funasr-sensevoice-q8` (default) or
+    /// `funasr-nano-q8`. Unknown values fall back to the default rather than
+    /// failing, so a config written by a newer build still transcribes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// Optional CAM++ speaker separation. The GGUF binaries transcribe only —
     /// upstream states plainly that they do not implement CAM++ embeddings or
     /// clustering — so speaker labels come from the same post-pass Whisper uses.
@@ -351,7 +356,14 @@ impl ProviderConfig {
     /// because the MLX-family engines carry their model id as an `Option<String>`.
     pub fn model_id(&self) -> &str {
         match self {
-            ProviderConfig::Funasr(_) => FUNASR_DEFAULT_MODEL_ID,
+            // FunASR ships two GGUF models (SenseVoice default, Fun-ASR-Nano);
+            // an unknown or absent id falls back to the default rather than
+            // failing, so a config written by a newer build still transcribes.
+            ProviderConfig::Funasr(config) => config
+                .model
+                .as_deref()
+                .filter(|model| FUNASR_MODEL_IDS.contains(model))
+                .unwrap_or(FUNASR_DEFAULT_MODEL_ID),
             ProviderConfig::Whisper(config) => config.model.as_model_id(),
             ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
             ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
@@ -691,9 +703,13 @@ pub(crate) fn runtime_platform_dir() -> &'static str {
 }
 
 /// The binaries that together make up a complete shared STT runtime. FunASR
-/// joined as a native GGUF sidecar, so the archive is now the whole offline
-/// story: no engine in here needs a Python venv to transcribe.
-pub(crate) const RUNTIME_BINARIES: &[&str] = &["whisper", "vibeasr", "funasr", "ffmpeg", "ffprobe"];
+/// joined as native GGUF sidecars, so the archive is now the whole offline
+/// story: no engine in here needs a Python venv to transcribe. Both FunASR
+/// binaries are required because the model a user picks decides which one runs,
+/// and a runtime missing one would only fail after the other model's 1.27 GB
+/// download had already completed.
+pub(crate) const RUNTIME_BINARIES: &[&str] =
+    &["whisper", "vibeasr", "funasr", "funasr-nano", "ffmpeg", "ffprobe"];
 
 /// Windows-only non-binary file shipped in the runtime archive: the Vulkan
 /// loader DLL bundled next to `whisper.exe` so the Vulkan-enabled build gets
@@ -1053,6 +1069,112 @@ pub const FUNASR_VAD_FILE: &str = "fsmn-vad.gguf";
 /// 30 s (the default) produced 677 segments averaging 3.9 s; this bound keeps
 /// segments sentence-sized, which is also what CAM++ needs to cluster.
 pub const FUNASR_VAD_MAX_SEGMENT_MS: &str = "15000";
+/// Fun-ASR-Nano: the same `funasr` engine's second, heavier model — a 70-layer
+/// SenseVoice SAN-M encoder plus a Qwen3-0.6B LLM decoder, driven by the
+/// `llama-funasr-cli` binary. Upstream's own repo (`QwenAudio/Fun-ASR`) pitches
+/// it at 7 Chinese dialect groups, 26 regional accents, far-field/high-noise
+/// pickup and lyrics under music; on the 184-clip human-referenced Mandarin set
+/// its Q8 GGUF scores micro-CER 8.30% against SenseVoice's 8.01%.
+///
+/// It is deliberately NOT the default: measured on the 09-17 meeting with the
+/// upstream-required `--chunk 15`, it ran at **RTF 1.68** (a 44-minute meeting
+/// in ~74 minutes) versus SenseVoice's 0.289, for 1.27 GB of weights instead of
+/// 244 MB. It is offered because its dialect/accents reach is real and because
+/// on that same meeting it beat pinned SenseVoice on overlap with the human
+/// reference (0.652 vs 0.615) — a comparison biased toward the Paraformer
+/// family that produced the reference, so it is not a CER claim.
+pub const FUNASR_NANO_MODEL_ID: &str = "funasr-nano-q8";
+pub const FUNASR_NANO_ENCODER_FILE: &str = "funasr-encoder-f16.gguf";
+pub const FUNASR_NANO_LLM_FILE: &str = "qwen3-0.6b-q8_0.gguf";
+/// Autoregressive decoding over a whole 60 s VAD segment is out-of-distribution
+/// and makes greedy repetition loop — upstream reports micro-CER 29% vs 9.5%
+/// for 15 s windows. The first Nano run here omitted `--chunk` and printed
+/// `chunk=0s`; this constant is why that cannot happen from the app.
+pub const FUNASR_NANO_CHUNK_SECONDS: &str = "15";
+
+/// Sidecar base names. `funasr` is SenseVoice (`llama-funasr-sensevoice`),
+/// `funasr-nano` is the LLM-decoded path (`llama-funasr-cli`). Both are shipped
+/// inside the shared runtime archive, so the completeness gate covers both.
+pub const FUNASR_SIDECAR: &str = "funasr";
+pub const FUNASR_NANO_SIDECAR: &str = "funasr-nano";
+
+/// The two FunASR model ids the catalog and the UI agree on.
+pub const FUNASR_MODEL_IDS: &[&str] = &[FUNASR_DEFAULT_MODEL_ID, FUNASR_NANO_MODEL_ID];
+
+/// Files that must exist in the model directory before a run, per model id.
+pub fn funasr_model_files(model_id: &str) -> &'static [&'static str] {
+    if model_id == FUNASR_NANO_MODEL_ID {
+        &[FUNASR_NANO_ENCODER_FILE, FUNASR_NANO_LLM_FILE, FUNASR_VAD_FILE]
+    } else {
+        &[FUNASR_SENSEVOICE_FILE, FUNASR_VAD_FILE]
+    }
+}
+
+/// Only SenseVoice reads a language from `sv.query_tokens`. Fun-ASR-Nano is an
+/// LLM decoder with no query-token prompt at all, so the language control has
+/// nothing to write there and the UI must not imply otherwise.
+pub fn funasr_supports_language_pin(model_id: &str) -> bool {
+    model_id != FUNASR_NANO_MODEL_ID
+}
+
+/// Which sidecar runs a given FunASR model. Separate from the argv builder so
+/// the runtime/completeness gate and the caller can both resolve it without
+/// inventing a throwaway audio path.
+pub fn funasr_sidecar_base(model_id: &str) -> &'static str {
+    if model_id == FUNASR_NANO_MODEL_ID {
+        FUNASR_NANO_SIDECAR
+    } else {
+        FUNASR_SIDECAR
+    }
+}
+
+/// The exact argv for one FunASR model.
+///
+/// Pure so a unit test pins both argument shapes: the two binaries take
+/// different flags for the same job, and a mix-up only shows up as a failed
+/// transcription minutes after the user waited for one.
+pub(crate) fn funasr_command_args(model_id: &str, model_directory: &Path, wav: &Path) -> Vec<String> {
+    let srt = "--srt".to_owned();
+    let audio = "-a".to_owned();
+    let vad_args = vec![
+        "--vad".to_owned(),
+        model_directory.join(FUNASR_VAD_FILE).to_string_lossy().into_owned(),
+    ];
+    if model_id == FUNASR_NANO_MODEL_ID {
+        return [
+            vec![
+                "--enc".to_owned(),
+                model_directory.join(FUNASR_NANO_ENCODER_FILE).to_string_lossy().into_owned(),
+                "-m".to_owned(),
+                model_directory.join(FUNASR_NANO_LLM_FILE).to_string_lossy().into_owned(),
+            ],
+            vad_args,
+            vec![
+                "--chunk".to_owned(),
+                FUNASR_NANO_CHUNK_SECONDS.to_owned(),
+                audio,
+                wav.to_string_lossy().into_owned(),
+                srt,
+            ],
+        ]
+        .concat();
+    }
+    [
+        vec![
+            "-m".to_owned(),
+            model_directory.join(FUNASR_SENSEVOICE_FILE).to_string_lossy().into_owned(),
+        ],
+        vad_args,
+        vec![
+            "--vad-maxseg".to_owned(),
+            FUNASR_VAD_MAX_SEGMENT_MS.to_owned(),
+            audio,
+            wav.to_string_lossy().into_owned(),
+            srt,
+        ],
+    ]
+    .concat()
+}
 
 /// Re-join an entry that the sidecar wrapped over several lines. A wrapped
 /// entry is one sentence, so the lines must become one text value — but the
@@ -1209,24 +1331,40 @@ impl BatchSttAdapter for FunasrAdapter {
         let ProviderConfig::Funasr(config) = &request.provider else {
             return Err("FunASR 适配器收到非 FunASR 配置".to_owned());
         };
-        let model_path = request.model_directory.join(FUNASR_SENSEVOICE_FILE);
-        let vad_path = request.model_directory.join(FUNASR_VAD_FILE);
-        if !model_path.exists() {
-            return Err(format!("FunASR 模型缺失：{}", model_path.display()));
-        }
-        if !vad_path.exists() {
-            return Err(format!(
-                "FunASR 的 VAD 模型缺失：{}（没有它长音频会退化成单段解码，请重新下载模型）",
-                vad_path.display()
-            ));
+        let model_id = config
+            .model
+            .as_deref()
+            .filter(|model| FUNASR_MODEL_IDS.contains(model))
+            .unwrap_or(FUNASR_DEFAULT_MODEL_ID)
+            .to_owned();
+        // Every file the chosen model needs must be present. FunASR's readiness
+        // used to be a `.ready` sentinel for a Python bundle, so a half-installed
+        // GGUF directory would otherwise fail deep inside the sidecar.
+        for file in funasr_model_files(&model_id) {
+            let path = request.model_directory.join(file);
+            let hint = if *file == FUNASR_VAD_FILE {
+                "（没有它长音频会退化成单段解码，请重新下载模型）"
+            } else {
+                ""
+            };
+            if !path.exists() {
+                return Err(format!("FunASR 模型缺失：{}{}", path.display(), hint));
+            }
         }
         // Pin the decode language before anything expensive runs. The dialog's
         // per-task choice wins over the engine default; an absent both means
-        // `auto`, exactly what the installed file already says.
-        let language = request.language.clone().or_else(|| config.language.clone());
-        let row = sensevoice_language_row(language.as_deref());
-        if let Some(previous) = pin_sensevoice_language(&model_path, row)? {
-            log::info!("[stt] funasr 语种切换：query_token {previous} → {row}（{:?}）", language);
+        // `auto`, exactly what the installed file already says. Fun-ASR-Nano has
+        // no query-token prompt at all, so pinning there would be a lie — the
+        // log says so instead of silently ignoring the user's choice.
+        if funasr_supports_language_pin(&model_id) {
+            let language = request.language.clone().or_else(|| config.language.clone());
+            let row = sensevoice_language_row(language.as_deref());
+            let model_path = request.model_directory.join(FUNASR_SENSEVOICE_FILE);
+            if let Some(previous) = pin_sensevoice_language(&model_path, row)? {
+                log::info!("[stt] funasr 语种切换：query_token {previous} → {row}（{:?}）", language);
+            }
+        } else if let Some(language) = request.language.as_deref().or(config.language.as_deref()) {
+            log::info!("[stt] funasr：{model_id} 为 LLM 解码，无语种 prompt，忽略 language={language}");
         }
         // Pre-flight the speaker-separation dependency before converting audio,
         // for the same reason Whisper does: it is only needed after a transcript
@@ -1235,33 +1373,21 @@ impl BatchSttAdapter for FunasrAdapter {
             return Err("声纹模型未安装，请在设置中下载 3D-Speaker 声纹模型".to_owned());
         }
         // Resolve the sidecar before spending minutes on ffmpeg.
-        let sidecar = sidecar_path(app, "funasr")?;
+        let sidecar_base = funasr_sidecar_base(&model_id);
+        let sidecar = sidecar_path(app, sidecar_base)?;
 
         let scratch = ScratchDir::new()?;
         let wav = scratch.join("input.wav");
         convert_to_wav(app, &request.audio_path, &wav)?;
-
-        // SenseVoice's GGUF front end assumes 16 kHz mono PCM16, which is
-        // exactly what `convert_to_wav` produces for Whisper.
-        let threads = sidecar_threads();
-        let args: Vec<String> = vec![
-            "-m".to_owned(),
-            model_path.to_string_lossy().into_owned(),
-            "--vad".to_owned(),
-            vad_path.to_string_lossy().into_owned(),
-            "--vad-maxseg".to_owned(),
-            FUNASR_VAD_MAX_SEGMENT_MS.to_owned(),
-            "-a".to_owned(),
-            wav.to_string_lossy().into_owned(),
-            "--srt".to_owned(),
-        ];
+        // Both binaries take 16 kHz mono PCM16, exactly what `convert_to_wav`
+        // produces for Whisper; the argv is derived from the real scratch path.
+        let args = funasr_command_args(&model_id, &request.model_directory, &wav);
         // These binaries expose no `--threads`; the value is logged anyway
         // because ggml's own thread pick is the first thing to suspect when a
         // run is slower than the published real-time factor.
+        let threads = sidecar_threads();
         log::info!(
-            "[stt] funasr 启动：model={} vad-maxseg={}ms threads={threads} wav={} bytes",
-            model_path.file_name().and_then(|name| name.to_str()).unwrap_or("?"),
-            FUNASR_VAD_MAX_SEGMENT_MS,
+            "[stt] funasr 启动：sidecar={sidecar_base} model={model_id} wav={} bytes threads={threads}",
             std::fs::metadata(&wav).map(|meta| meta.len()).unwrap_or_default()
         );
         let run = Command::new(&sidecar)
@@ -2174,6 +2300,7 @@ mod tests {
                 "whisper".to_owned(),
                 "vibeasr".to_owned(),
                 "funasr".to_owned(),
+                "funasr-nano".to_owned(),
                 "ffmpeg".to_owned(),
                 "ffprobe".to_owned()
             ]
@@ -2185,6 +2312,7 @@ mod tests {
                 "whisper.exe".to_owned(),
                 "vibeasr.exe".to_owned(),
                 "funasr.exe".to_owned(),
+                "funasr-nano.exe".to_owned(),
                 "ffmpeg.exe".to_owned(),
                 "ffprobe.exe".to_owned(),
                 "vulkan-1.dll".to_owned()
@@ -2523,6 +2651,90 @@ mod tests {
         let row = u32_at(&bytes, offset).expect("array item readable");
         eprintln!("sv.query_tokens[0] = {row} at byte offset {offset}, file bytes {}", bytes.len());
         assert!(row < 16, "the language row must index the 16×560 embed table, got {row}");
+    }
+
+    /// The two FunASR binaries want different flags for the same job. Swapping
+    /// them is invisible until a transcription fails minutes in, so both shapes
+    /// are pinned — including the `--chunk 15` that upstream says is the
+    /// difference between micro-CER 9.5% and 29% on long audio.
+    #[test]
+    fn funasr_argument_shapes_differ_per_model_and_both_request_srt() {
+        let dir = PathBuf::from("/models/funasr");
+        let wav = PathBuf::from("/tmp/input.wav");
+        // Built with the same `join` the argv builder uses: a literal
+        // `/models/funasr/x.gguf` expectation fails on Windows, where the
+        // separator is `\`, and that would look like a code bug.
+        let at = |file: &str| dir.join(file).to_string_lossy().into_owned();
+        let wav_str = wav.to_string_lossy().into_owned();
+
+        let sensevoice = funasr_command_args(FUNASR_DEFAULT_MODEL_ID, &dir, &wav);
+        assert_eq!(funasr_sidecar_base(FUNASR_DEFAULT_MODEL_ID), "funasr");
+        assert_eq!(
+            sensevoice,
+            vec![
+                "-m".to_owned(),
+                at(FUNASR_SENSEVOICE_FILE),
+                "--vad".to_owned(),
+                at(FUNASR_VAD_FILE),
+                "--vad-maxseg".to_owned(),
+                FUNASR_VAD_MAX_SEGMENT_MS.to_owned(),
+                "-a".to_owned(),
+                wav_str.clone(),
+                "--srt".to_owned(),
+            ]
+        );
+        assert!(!sensevoice.contains(&"--chunk".to_owned()));
+
+        let nano = funasr_command_args(FUNASR_NANO_MODEL_ID, &dir, &wav);
+        assert_eq!(funasr_sidecar_base(FUNASR_NANO_MODEL_ID), "funasr-nano");
+        assert!(
+            nano.windows(2).any(|w| w[0] == "--chunk" && w[1] == FUNASR_NANO_CHUNK_SECONDS),
+            "{nano:?}"
+        );
+        assert!(nano.windows(2).any(|w| w[0] == "--enc" && w[1] == at(FUNASR_NANO_ENCODER_FILE)), "{nano:?}");
+        assert!(nano.windows(2).any(|w| w[0] == "-m" && w[1] == at(FUNASR_NANO_LLM_FILE)), "{nano:?}");
+        assert!(nano.windows(2).any(|w| w[0] == "-a" && w[1] == wav_str), "{nano:?}");
+        assert!(nano.last().map(|v| v == "--srt").unwrap_or(false));
+        // Both binaries accept --vad-maxseg (verified against `--help`); we pass
+        // `--chunk` to Nano because that is the flag upstream ties to the
+        // 29% → 9.5% CER difference, and `--vad-maxseg` to SenseVoice because
+        // that is what keeps its ~60 s encoder window off degenerate segments.
+        assert!(!nano.iter().any(|a| a == "--vad-maxseg"), "{nano:?}");
+    }
+
+    #[test]
+    fn funasr_model_files_and_language_support_follow_the_model() {
+        assert_eq!(
+            funasr_model_files(FUNASR_DEFAULT_MODEL_ID),
+            [FUNASR_SENSEVOICE_FILE, FUNASR_VAD_FILE]
+        );
+        assert_eq!(
+            funasr_model_files(FUNASR_NANO_MODEL_ID),
+            [FUNASR_NANO_ENCODER_FILE, FUNASR_NANO_LLM_FILE, FUNASR_VAD_FILE]
+        );
+        // Only SenseVoice carries the `sv.query_tokens` prompt the language
+        // selector writes; Nano is an LLM decoder with nothing to pin.
+        assert!(funasr_supports_language_pin(FUNASR_DEFAULT_MODEL_ID));
+        assert!(!funasr_supports_language_pin(FUNASR_NANO_MODEL_ID));
+        // An unknown id must not resolve to a model whose files do not exist.
+        assert_eq!(funasr_sidecar_base("nonsense"), "funasr");
+    }
+
+    #[test]
+    fn funasr_model_id_falls_back_to_sensevoice_for_unknown_values() {
+        let nano: ProviderConfig = serde_json::from_value(json!({
+            "provider": "funasr", "model": FUNASR_NANO_MODEL_ID
+        }))
+        .expect("funasr with a model id");
+        assert_eq!(nano.model_id(), FUNASR_NANO_MODEL_ID);
+        let unknown: ProviderConfig = serde_json::from_value(json!({
+            "provider": "funasr", "model": "funasr-typo"
+        }))
+        .expect("funasr with an unknown model id");
+        assert_eq!(unknown.model_id(), FUNASR_DEFAULT_MODEL_ID);
+        let legacy: ProviderConfig = serde_json::from_value(json!({ "provider": "funasr" }))
+            .expect("pre-nano config without a model field");
+        assert_eq!(legacy.model_id(), FUNASR_DEFAULT_MODEL_ID);
     }
 
     #[test]

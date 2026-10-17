@@ -51,9 +51,16 @@ export const STT_LANGUAGE_OPTIONS: { value: string; labelKey: string }[] = [
   { value: "ja", labelKey: "settings.stt_language_ja" },
   { value: "yue", labelKey: "settings.stt_language_yue" },
 ];
-/** Engines with a language setting at all. VibeVoice exposes no language
- *  argument, so the control would be inert there. */
-export const LANGUAGE_CAPABLE_ENGINES: ReadonlySet<SttEngine> = new Set(["funasr", "whisper"]);
+/** Whether a language control does anything for this engine config. SenseVoice
+ *  reads it from `sv.query_tokens`; Fun-ASR-Nano is an autoregressive LLM
+ *  decoder with no language prompt to write, and VibeVoice has no language
+ *  argument at all — so showing the control there would be a knob wired to
+ *  nothing, which is the mistake the hotword picker already made here. */
+export function sttSupportsLanguage(config: SttProviderConfig): boolean {
+  if (config.provider === "whisper") return true;
+  if (config.provider === "funasr") return providerModelId(config) !== FUNASR_NANO_MODEL_ID;
+  return false;
+}
 export const VIBEVOICE_MODEL_ID = "vibeasr-bitnet-1.5b";
 /** FunASR's single shipped GGUF model (SenseVoice-Small, Q8). Mirrors the Rust
  *  `FUNASR_DEFAULT_MODEL_ID`. SenseVoice is the default because it is both the
@@ -61,6 +68,19 @@ export const VIBEVOICE_MODEL_ID = "vibeasr-bitnet-1.5b";
  *  184-clip human-referenced Mandarin set (micro-CER 8.01% vs Paraformer's
  *  9.85%, at ~20x realtime) — and unlike Paraformer it punctuates by itself. */
 export const FUNASR_MODEL_ID = "funasr-sensevoice-q8";
+/** Fun-ASR-Nano (SAN-M encoder + Qwen3-0.6B LLM): upstream's dialect/accents and
+ *  far-field/high-noise model. Offered as a card, never the default — measured
+ *  on the 09-17 meeting it ran at RTF 1.68 with the required `--chunk 15`
+ *  (a 44-minute meeting in ~74 minutes) against SenseVoice's 0.289, for 1.27 GB
+ *  of weights, and upstream's own Chinese CER is slightly worse (8.30% vs 8.01%). */
+export const FUNASR_NANO_MODEL_ID = "funasr-nano-q8";
+export const FUNASR_MODELS = [FUNASR_MODEL_ID, FUNASR_NANO_MODEL_ID] as const;
+/** Picker labels, shared by Settings and any later surface so the two can never
+ *  disagree about what the same model is called. */
+export const FUNASR_MODEL_OPTIONS: { value: string; labelKey: string }[] = [
+  { value: FUNASR_MODEL_ID, labelKey: "settings.stt_funasr_model_sensevoice" },
+  { value: FUNASR_NANO_MODEL_ID, labelKey: "settings.stt_funasr_model_nano" },
+];
 
 /** WhisperX catalog ids (must mirror the Rust `STT_MODELS`). First cut runs
  * transcription + word alignment; diarization ships once the pyannote model
@@ -89,12 +109,15 @@ export type SttProviderConfig =
   | { provider: "qwen3"; model?: Qwen3Model | string; hotword_package_id?: string | null }
   | {
       provider: "funasr";
+      /** "funasr-sensevoice-q8" (default) or "funasr-nano-q8". */
+      model?: string | null;
       campp_diarization?: boolean;
       expected_speakers?: number | null;
       /** SenseVoice query-token language: "auto" | "zh" | "en" | "ja" | "yue".
        *  Written into the model file before the run — `auto` (what upstream
        *  ships) self-reported Japanese on 49 of 191 crosstalk-heavy Mandarin
-       *  segments, so Chinese users default to "zh". */
+       *  segments, so Chinese users default to "zh". Ignored by Fun-ASR-Nano,
+       *  which has no language prompt; see `sttSupportsLanguage`. */
       language?: string | null;
       /** Accepted, never applied: the GGUF binaries have no hotword argument. */
       hotword_package_id?: string | null;
@@ -365,8 +388,13 @@ export function migrateSttProviderConfig(value: unknown): SttProviderConfig | nu
     };
   }
   if (provider === "funasr") {
+    const model = record.model as string | null | undefined;
     return {
       provider: "funasr",
+      // Mirror the Rust `model_id()`: an unknown id falls back to SenseVoice
+      // rather than pointing the adapter at a model directory that was never
+      // downloaded.
+      model: model && (FUNASR_MODELS as readonly string[]).includes(model) ? model : FUNASR_MODEL_ID,
       campp_diarization: Boolean(record.campp_diarization),
       expected_speakers: (record.expected_speakers as number | null | undefined) ?? null,
       language: (record.language as string | null | undefined) ?? null,
@@ -426,7 +454,9 @@ export function providerModelId(config: SttProviderConfig): string {
     case "qwen3":
       return config.model ?? DEFAULT_QWEN3_MODEL;
     case "funasr":
-      return FUNASR_MODEL_ID;
+      return config.model && (FUNASR_MODELS as readonly string[]).includes(config.model)
+        ? config.model
+        : FUNASR_MODEL_ID;
     case "whisperx":
       return WHISPERX_MODEL_ID;
     case "whisper":

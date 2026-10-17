@@ -549,6 +549,11 @@ const en = {
     stt_language_en: "English",
     stt_language_ja: "Japanese",
     stt_language_yue: "Cantonese",
+    stt_funasr_model: "FunASR model",
+    stt_funasr_model_sensevoice: "SenseVoice-Small (default, fastest, best Chinese CER)",
+    stt_funasr_model_nano: "Fun-ASR-Nano (best dialects and far-field, ~6x slower)",
+    stt_funasr_sensevoice_hint: "A 44-minute meeting finishes in about 12 minutes; weights are ~244 MiB. English words in mixed speech are still recognised.",
+    stt_funasr_nano_hint: "Covers 7 Chinese dialect groups, 26 regional accents, far-field/high-noise pickup and lyrics under music; ~1.2 GiB of weights, measured ~74 minutes for the same audio, and it has no language prompt to pin.",
     stt_vibeasr_hint: "A CPU-only engine covering 7 languages (zh / en / fr / it / ko / pt / vi). The first run downloads about 1.6 GiB of weights and requires the offline transcription component.",
     stt_whisper_model: "Whisper model",
     stt_campp_diarization: "CAM++ speaker diarization",
@@ -1119,6 +1124,10 @@ const en = {
       funasr: {
         name: "FunASR SenseVoice-Small",
         description: "Native GGUF engine, about 244 MiB — no Python and no torch. The most accurate local engine for Chinese, and it punctuates on its own; for speaker labels install the separate 3D-Speaker voiceprint model.",
+      },
+      funasrNano: {
+        name: "FunASR Fun-ASR-Nano",
+        description: "The strongest local option for dialects, accents and far-field noise. About 1.2 GiB, roughly six times slower than SenseVoice, with no language or hotword pinning.",
       },
       whisperx: {
         name: "WhisperX (latest)",

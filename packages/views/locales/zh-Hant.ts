@@ -543,6 +543,11 @@ const zhHant = {
     stt_language_en: "英語",
     stt_language_ja: "日語",
     stt_language_yue: "粵語",
+    stt_funasr_model: "FunASR 模型",
+    stt_funasr_model_sensevoice: "SenseVoice-Small（預設，最快，中文準確率最高）",
+    stt_funasr_model_nano: "Fun-ASR-Nano（方言與遠場最強，速度慢約六倍）",
+    stt_funasr_sensevoice_hint: "44 分鐘會議約 12 分鐘完成，權重約 244 MiB。中英混說仍會辨識英文。",
+    stt_funasr_nano_hint: "支援 7 大方言、26 種地方口音、遠場高噪與背景音樂下的歌詞；權重約 1.2 GiB，同段音訊實測約 74 分鐘，且沒有可鎖定的語種 prompt。",
     stt_vibeasr_hint: "純 CPU 引擎，支援中/英/法/義/韓/葡/越 7 種語言；首次下載約 1.6 GiB 權重，並需要離線轉寫元件。",
     stt_whisper_model: "Whisper 模型",
     stt_campp_diarization: "CAM++ 說話人分離",
@@ -1113,6 +1118,10 @@ const zhHant = {
       funasr: {
         name: "FunASR SenseVoice-Small",
         description: "GGUF 原生引擎，約 244 MiB，不需要 Python 或 torch。本地中文準確率最高，輸出自帶標點；如需區分說話人，請另行安裝 3D-Speaker 聲紋模型。",
+      },
+      funasrNano: {
+        name: "FunASR Fun-ASR-Nano",
+        description: "方言、口音與遠場高噪最強的本地選項，約 1.2 GiB；速度約為 SenseVoice 的六分之一，且不支援語種指定與熱詞。",
       },
       whisperx: {
         name: "WhisperX 最新版",

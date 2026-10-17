@@ -120,7 +120,7 @@ if [[ "$DO_BUILD" == true ]]; then
   # incomplete archive can never satisfy the check, the user would loop on
   # "组件未下载" with no way out. FunASR is in this list now that it is a sidecar.
   extension=""; [[ "$PLATFORM" == windows ]] && extension=".exe"
-  for required in whisper vibeasr funasr ffmpeg ffprobe; do
+  for required in whisper vibeasr funasr funasr-nano ffmpeg ffprobe; do
     [[ -s "$SIDECARS/${required}${extension}" ]] \
       || die "${required}${extension} missing from sidecars — run fetch-sidecars.sh first; this archive would fail the client's runtime check"
   done

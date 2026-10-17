@@ -546,6 +546,11 @@ const ko = {
     stt_language_en: "영어",
     stt_language_ja: "일본어",
     stt_language_yue: "광둥어",
+    stt_funasr_model: "FunASR 모델",
+    stt_funasr_model_sensevoice: "SenseVoice-Small(기본, 가장 빠르고 중국어 정확도 최고)",
+    stt_funasr_model_nano: "Fun-ASR-Nano(방언·원거리 최강, 약 6배 느림)",
+    stt_funasr_sensevoice_hint: "44분 회의는 약 12분에 완료되고 가중치는 약 244MiB입니다. 중영 혼용 발화에서도 영어가 인식됩니다.",
+    stt_funasr_nano_hint: "7대 방언·26종 억양·원거리 고소음과 BGM 가사를 인식합니다. 가중치는 약 1.2GiB이고 동일 음성 실측은 약 74분이며 언어 프롬프트 고정 지원하지 않습니다.",
     stt_vibeasr_hint: "CPU 전용 엔진으로 7개 언어(중/영/불/이/한/포/베)를 지원합니다. 첫 실행 시 약 1.6GiB의 가중치를 다운로드하며 오프라인 문자 변환 구성 요소가 필요합니다.",
     stt_whisper_model: "Whisper 모델",
     stt_campp_diarization: "CAM++ 화자 분리",
@@ -1116,6 +1121,10 @@ const ko = {
       funasr: {
         name: "FunASR SenseVoice-Small",
         description: "GGUF 네이티브 엔진, 약 244MiB — Python과 torch 불필요. 로컬에서 중국어 정확도가 가장 높고 구두점까지 직접 출력합니다. 화자 분리는 3D-Speaker 성문 모델을 별도 설치해야 합니다.",
+      },
+      funasrNano: {
+        name: "FunASR Fun-ASR-Nano",
+        description: "방언·억양·원거리 소음에 가장 강한 로컬 선택지입니다. 약 1.2GiB, SenseVoice보다 약 6배 느리고 언어 지정과 핫워드를 지원하지 않습니다.",
       },
       whisperx: {
         name: "WhisperX(최신)",

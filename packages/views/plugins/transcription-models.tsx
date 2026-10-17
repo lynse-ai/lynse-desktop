@@ -14,6 +14,7 @@ import {
   type SttModelInfo,
   type TranscribeConfig,
   FUNASR_MODEL_ID,
+  FUNASR_NANO_MODEL_ID,
   WHISPERX_MODEL_ID,
   VIBEVOICE_MODEL_ID,
   getDesktopLocalTranscriptionApi,
@@ -57,12 +58,20 @@ export interface TranscriptionModelEntry {
 
 export const TRANSCRIPTION_MODEL_CATALOG: TranscriptionModelEntry[] = [
   {
-    pluginId: "lynse.model.funasr-latest",
+    pluginId: "lynse.model.funasr-sensevoice",
     engine: "funasr",
     modelId: FUNASR_MODEL_ID,
     nameKey: "plugins.models.funasr.name",
     descriptionKey: "plugins.models.funasr.description",
-    badges: ["recommended", "voiceprint"],
+    badges: ["recommended"],
+  },
+  {
+    pluginId: "lynse.model.funasr-nano",
+    engine: "funasr",
+    modelId: FUNASR_NANO_MODEL_ID,
+    nameKey: "plugins.models.funasrNano.name",
+    descriptionKey: "plugins.models.funasrNano.description",
+    badges: [],
   },
   {
     pluginId: "lynse.model.whisperx-latest",

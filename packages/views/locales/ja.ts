@@ -547,6 +547,11 @@ const ja = {
     stt_language_en: "英語",
     stt_language_ja: "日本語",
     stt_language_yue: "広東語",
+    stt_funasr_model: "FunASR モデル",
+    stt_funasr_model_sensevoice: "SenseVoice-Small（既定・最速・中国語精度最高）",
+    stt_funasr_model_nano: "Fun-ASR-Nano（方言・遠距離に最強、約6倍遅い）",
+    stt_funasr_sensevoice_hint: "44分の会議は約12分で完了、重みは約244 MiB。中英混在でも英語は認識されます。",
+    stt_funasr_nano_hint: "7大方言・26種の口音・遠距離高ノイズ・BGM下の特徴を認識。重みは約1.2 GiB、同一音声の実測は約74分、语种プロンプトの固定はできません。",
     stt_vibeasr_hint: "CPU 専用エンジンで、中/英/仏/伊/韓/葡/越の 7 言語に対応します。初回は約 1.6 GiB の重みをダウンロードし、オフライン文字起こしコンポーネントが必要です。",
     stt_whisper_model: "Whisper モデル",
     stt_campp_diarization: "CAM++ 話者分離",
@@ -1117,6 +1122,10 @@ const ja = {
       funasr: {
         name: "FunASR SenseVoice-Small",
         description: "GGUF ネイティブエンジン、約244 MiB。Python と torch 不要。ローカルで中国語の精度が最も高く、句読点も自ら出力します。話者の分離は 3D-Speaker 声紋モデルの追加インストールが必要です。",
+      },
+      funasrNano: {
+        name: "FunASR Fun-ASR-Nano",
+        description: "方言・口音・遠距離ノイズに最も強いローカル選択肢。約1.2 GiB、SenseVoice の約6分の1の速度で、语种指定とホットワードには非対応。",
       },
       whisperx: {
         name: "WhisperX（最新版）",

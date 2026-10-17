@@ -29,10 +29,10 @@ import {
   OFFLINE_TRANSCRIPTION_ENABLED_KEY,
   resolveSttProvider,
   findModelStatus,
-  LANGUAGE_CAPABLE_ENGINES,
+  sttSupportsLanguage,
   STT_LANGUAGE_OPTIONS,
 } from "./local-transcription";
-import type { SttEngine, SttProviderConfig, TranscribeConfig } from "./local-transcription";
+import type { SttProviderConfig, TranscribeConfig } from "./local-transcription";
 import { isInsufficientCreditsError, useMembership, useUserCredits } from "../layout/use-user-credits";
 import { canUploadToCloud } from "../layout/membership-entitlement";
 import { useAuthStore } from "@lynse/core/auth";
@@ -74,9 +74,10 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
    *  Japanese on crosstalk-heavy Mandarin, so the dialog lets the user say
    *  which language the audio is. */
   const [sttLanguage, setSttLanguage] = useState("");
-  /** The engine this import will actually use, so the language control only
-   *  appears for engines that have one. */
-  const [localEngine, setLocalEngine] = useState<SttEngine | null>(null);
+  /** The provider this import will resolve to, asked from the desktop so the
+   *  language control appears only where it does something (Nano has no
+   *  language prompt; VibeVoice has no language argument at all). */
+  const [localProvider, setLocalProvider] = useState<SttProviderConfig | null>(null);
   const [selectedHotwordPackageId, setSelectedHotwordPackageId] = useState("");
   const [hotwordPackages, setHotwordPackages] = useState<LocalHotwordPackage[]>([]);
 
@@ -122,9 +123,8 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
         api.getSttConfig().catch(() => ({ default: null, per_language: {} }) as TranscribeConfig),
         (api.getDefaultSttProvider?.(i18n.language ?? null) ?? Promise.resolve(null)).catch(() => null),
       ])
-        .then(([config, fallback]) =>
-          setLocalEngine(resolveSttProvider(config, undefined, undefined, fallback).provider))
-        .catch(() => setLocalEngine(null));
+        .then(([config, fallback]) => setLocalProvider(resolveSttProvider(config, undefined, undefined, fallback)))
+        .catch(() => setLocalProvider(null));
     }
   }, [open, i18n.language]);
 
@@ -341,7 +341,7 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
             dragOver={dragOver}
             expectedSpeakers={expectedSpeakers}
             sttLanguage={sttLanguage}
-            showLanguageSelect={!!localEngine && LANGUAGE_CAPABLE_ENGINES.has(localEngine)}
+            showLanguageSelect={!!localProvider && sttSupportsLanguage(localProvider)}
             onSttLanguageChange={setSttLanguage}
             hotwordPackages={hotwordPackages}
             selectedHotwordPackageId={selectedHotwordPackageId}

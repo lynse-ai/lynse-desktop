@@ -965,6 +965,38 @@ pub const FUNASR_SENSEVOICE_FILES: &[SttModelFile] = &[
     },
 ];
 
+/// Fun-ASR-Nano's GGUF bundle: the SAN-M encoder, the Qwen3-0.6B LLM decoder
+/// and the same shared FSMN-VAD weight. Digests are HuggingFace LFS OIDs that
+/// 魔搭's own per-file `Sha256` listing agrees with, and that were re-verified
+/// against the bytes downloaded on this machine.
+///
+/// The encoder download is the reason `verify_and_install` checks size AND hash
+/// before promoting: the first attempt at this exact URL from a CN network
+/// reported success and delivered 4,194,304 bytes instead of 469,331,008.
+pub const FUNASR_NANO_FILES: &[SttModelFile] = &[
+    SttModelFile {
+        file_name: stt::FUNASR_NANO_ENCODER_FILE,
+        size_bytes: 469_331_008,
+        download_url:
+            "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-GGUF/resolve/main/funasr-encoder-f16.gguf",
+        sha256: "f92f91d01a24fbed6c863495b2ee8c6a6788144a02858b75743f0946668de8a2",
+    },
+    SttModelFile {
+        file_name: stt::FUNASR_NANO_LLM_FILE,
+        size_bytes: 804_753_280,
+        download_url:
+            "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-GGUF/resolve/main/qwen3-0.6b-q8_0.gguf",
+        sha256: "819f385dc0e035dccc3d9e7edaf6b7b044b8ba7ace63cbcbf84c7e397eecbf27",
+    },
+    SttModelFile {
+        file_name: stt::FUNASR_VAD_FILE,
+        size_bytes: 1_720_512,
+        download_url:
+            "https://huggingface.co/FunAudioLLM/fsmn-vad-GGUF/resolve/main/fsmn-vad.gguf",
+        sha256: "1270f2559c495f4e7b6e739541151027d360761a3fda43fc147034f5719f5479",
+    },
+];
+
 pub const STT_MODELS: &[SttModelEntry] = &[
     SttModelEntry {
         provider: "funasr",
@@ -977,6 +1009,16 @@ pub const STT_MODELS: &[SttModelEntry] = &[
         download_url: "",
         sha256: "",
         files: FUNASR_SENSEVOICE_FILES,
+    },
+    SttModelEntry {
+        provider: "funasr",
+        id: stt::FUNASR_NANO_MODEL_ID,
+        label: "FunASR Fun-ASR-Nano（本地·方言与远场最强·慢 6 倍，~1.2 GiB）",
+        // Sum of FUNASR_NANO_FILES (469,331,008 + 804,753,280 + 1,720,512).
+        size_bytes: 1_275_804_800,
+        download_url: "",
+        sha256: "",
+        files: FUNASR_NANO_FILES,
     },
     SttModelEntry {
         provider: "qwen3",
@@ -5127,16 +5169,38 @@ mod tests {
         assert!(stt::model_file_name("funasr", stt::FUNASR_DEFAULT_MODEL_ID).is_none());
     }
 
-    /// A GGUF engine is runtime-dependent: it needs the `funasr` sidecar from the
-    /// shared archive. Losing it from `RUNTIME_BINARIES` would let a half-installed
-    /// runtime pass `model_is_installed` and then fail on first transcription, so
-    /// both platform spellings are pinned here.
+    /// A GGUF engine is runtime-dependent: it needs BOTH FunASR sidecars from
+    /// the shared archive — SenseVoice for the default model, `funasr-nano` for
+    /// Fun-ASR-Nano. Losing either from `RUNTIME_BINARIES` would let a
+    /// half-installed runtime pass `model_is_installed` and then fail on first
+    /// transcription, so both platform spellings are pinned here.
     #[test]
     fn funasr_sidecar_is_part_of_the_shared_runtime() {
         let names = stt::required_runtime_names(true);
         assert!(names.contains(&"funasr.exe".to_owned()), "{names:?}");
+        assert!(names.contains(&"funasr-nano.exe".to_owned()), "{names:?}");
         let unix = stt::required_runtime_names(false);
         assert!(unix.contains(&"funasr".to_owned()), "{unix:?}");
+        assert!(unix.contains(&"funasr-nano".to_owned()), "{unix:?}");
+    }
+
+    /// Fun-ASR-Nano is a three-file bundle, and the extra ~1 GiB is the reason it
+    /// is an opt-in card rather than the default.
+    #[test]
+    fn funasr_nano_is_a_pinned_three_file_bundle() {
+        let entry = stt_model_entry("funasr", stt::FUNASR_NANO_MODEL_ID).expect("nano catalog entry");
+        let targets = model_download_targets(entry);
+        assert_eq!(targets.len(), 3, "encoder + Qwen3 LLM + FSMN-VAD");
+        assert_eq!(
+            targets.iter().map(|(_, _, _, size)| *size).sum::<u64>(),
+            entry.size_bytes,
+            "advertised size must equal the sum of what is fetched"
+        );
+        for (file_name, url, sha, _) in &targets {
+            assert!(!sha.is_empty(), "{file_name} ships without a pinned SHA-256");
+            assert!(url.starts_with("https://huggingface.co/FunAudioLLM/"), "{url}");
+        }
+        assert!(!stt::funasr_supports_language_pin(stt::FUNASR_NANO_MODEL_ID));
     }
 
     /// Replays the app's SRT parsing over a real FunASR transcript captured on

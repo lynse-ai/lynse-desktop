@@ -37,7 +37,7 @@ export function tagChatSessionsWithRunId(page: Page, runId: string): void {
       return {};
     }
   };
-  let counter = readMap().__next ?? 1;
+  let counter = Number(readMap().__next ?? 1);
 
   const rewrite = (body: string | null): string | null => {
     if (!body) return body;
@@ -49,7 +49,7 @@ export function tagChatSessionsWithRunId(page: Page, runId: string): void {
       const tagged = `${runId}-${counter++}`;
       const map = readMap();
       map[parsed.sessionId] = tagged;
-      map.__next = counter;
+      map.__next = String(counter);
       writeFileSync(mappingFile, JSON.stringify(map, null, 2));
       parsed.sessionId = tagged;
       return JSON.stringify(parsed);

@@ -203,7 +203,20 @@ export async function startMockServer(script?: ChatScript): Promise<MockServer> 
         return;
       }
 
-      if (ctx.method === "POST" && path === CHAT_POLL_PATH) {
+      const route = matchRoute(jsonRoutes, ctx.method, path);
+      if (route === undefined && ctx.method === "POST" && path === "/api/session/backend") {
+        respondJson(res, 200, { host: ctx.body.host, user_id: "user-e2e" });
+        return;
+      }
+      const pollPath = path.startsWith("/api/chat/") ? "/api/chat/poll" : CHAT_POLL_PATH;
+      // Exercise SSE fallback against a backend that explicitly lacks streaming.
+      if (route === undefined && ctx.method === "POST" &&
+          (path === "/api/chat/stream" || path === "/api/business/ai/chat/stream")) {
+        respondJson(res, 404, { detail: "Streaming is unavailable on the scripted backend" });
+        return;
+      }
+
+      if (route === undefined && ctx.method === "POST" && path === pollPath) {
         handleChatSubmit(ctx, tasks, res, () => {
           const sessionId = String(ctx.body.sessionId ?? "default");
           const index = turnCounters.get(sessionId) ?? 0;
@@ -213,8 +226,8 @@ export async function startMockServer(script?: ChatScript): Promise<MockServer> 
         return;
       }
 
-      if (ctx.method === "GET" && path.startsWith(`${CHAT_POLL_PATH}/`)) {
-        const taskId = decodeURIComponent(path.slice(CHAT_POLL_PATH.length + 1));
+      if (route === undefined && ctx.method === "GET" && path.startsWith(`${pollPath}/`)) {
+        const taskId = decodeURIComponent(path.slice(pollPath.length + 1));
         handleChatPoll(taskId, tasks, origin, res, mintUrls);
         return;
       }
@@ -232,7 +245,6 @@ export async function startMockServer(script?: ChatScript): Promise<MockServer> 
 
       // JSON routes: method-qualified keys win over path-only keys, exact
       // beats prefix, longest prefix wins.
-      const route = matchRoute(jsonRoutes, ctx.method, path);
       if (route === undefined) {
         respondJson(res, 200, {});
         return;

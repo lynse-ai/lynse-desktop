@@ -118,10 +118,10 @@ test("WorkBuddy cloud streams, reuses tasks, answers approvals and restores hist
   await composer.fill("follow-up"); await composer.press("Enter");
   await expect(page.getByText("云端回复 follow-up (task-1)", { exact: true })).toBeVisible();
   await composer.fill("approval"); await composer.press("Enter");
-  const dialog = page.getByRole("dialog");
-  await expect(dialog.getByText("Read cloud file")).toBeVisible();
-  await dialog.getByRole("button", { name: "Allow once" }).click();
+  await expect(page.getByText("Read cloud file", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Allow once", exact: true }).click();
   await expect(page.getByText("云端回复 approval (task-1)", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Allow once", exact: true })).toBeDisabled();
   const stats = await page.evaluate(() => (window as unknown as { __workbuddyTest: { created: number; prompts: { taskId: string; query: string }[]; answers: unknown[] } }).__workbuddyTest);
   expect(stats.created).toBe(2);
   expect(stats.prompts.map((entry) => entry.taskId)).toEqual(["task-1", "task-2", "task-1", "task-1"]);

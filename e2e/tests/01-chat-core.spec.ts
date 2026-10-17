@@ -84,6 +84,8 @@ test.describe("chat core", () => {
     // Poll keeps the turn pending with no partial text; the Stop button is
     // the way out.
     await expect(page.getByRole("button", chatSelectors.stop)).toBeVisible();
+    // Wait for submission so cancelling does not leave this scripted turn unused.
+    await expect.poll(() => mockServer.requests({ method: "POST", path: "/api/chat/poll" }).length).toBe(1);
     await page.getByRole("button", chatSelectors.stop).click();
     await waitForTurnDone(page);
     // The cancelled turn left no half-finished bubble behind.
@@ -120,7 +122,7 @@ test.describe("chat core", () => {
     await expectAssistantSaid(page, fullText(script.turns[2]!));
   });
 
-  test("clarify dialog pops and clicking an option answers", async ({
+  test("inline clarification card answers and retains the selected option", async ({
     page,
     mockServer,
   }) => {
@@ -130,24 +132,28 @@ test.describe("chat core", () => {
 
     await sendChatMessage(page, script.turns[0]!.user);
     const clarify = script.turns[0]!.response;
-    await expect(page.getByText(chatSelectors.confirmTitle)).toBeVisible({ timeout: 20_000 });
     if (clarify.type === "clarify") {
-      await expect(page.getByText(clarify.question)).toBeVisible();
+      await expect(page.getByText(clarify.question)).toBeVisible({ timeout: 20_000 });
       await page.getByRole("button", { name: clarify.options[0]!.label }).click();
+      await expect(page.getByRole("button", { name: clarify.options[0]!.label })).toBeDisabled();
     }
     await waitForTurnDone(page);
     await expectAssistantSaid(page, fullText(script.turns[1]!));
   });
 
-  test("clarify dialog can be cancelled", async ({ page, mockServer }) => {
+  test("inline clarification card can be dismissed while retaining its question", async ({ page, mockServer }) => {
     const script = loadScript("core-clarify");
     mockServer.setChatScript(script);
     await openChat(page, mockServer.url);
 
     await sendChatMessage(page, script.turns[0]!.user);
-    await expect(page.getByText(chatSelectors.confirmTitle)).toBeVisible({ timeout: 20_000 });
+    const clarify = script.turns[0]!.response;
+    if (clarify.type !== "clarify") throw new Error("expected a clarification fixture");
+    await expect(page.getByText(clarify.question)).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", chatSelectors.confirmCancel).click();
-    await expect(page.getByText(chatSelectors.confirmTitle)).toBeHidden();
+    await expect(page.getByText(clarify.question)).toBeVisible();
+    await expect(page.getByRole("button", { name: clarify.options[0]!.label })).toBeDisabled();
+    await expect(page.getByRole("button", chatSelectors.confirmCancel)).toBeHidden();
     // Composer is usable again.
     await expect(page.locator(chatSelectors.composer)).toBeEnabled();
   });

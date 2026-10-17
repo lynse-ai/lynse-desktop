@@ -12,6 +12,44 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.1.15 (2026-10-17)
+
+### New Features
+
+- Run FunASR transcription with a native GGUF runtime on macOS and Windows, with SenseVoice and optional Fun-ASR-Nano models.
+- Choose the spoken language for a local transcription import; Chinese defaults keep SenseVoice on the intended language.
+- Answer assistant confirmation cards directly in the conversation and retain the selected answer in chat history.
+
+### Fixed
+
+- Validate WeChat login callbacks against the server-provided authorization configuration and show clearer guidance for accounts already linked to a phone number.
+- Upload problem-report screenshots through temporary upload slots while keeping issue-tracker credentials on the server.
+- Preserve local-media error responses so unavailable audio files can be distinguished from connection failures.
+- Include and verify every required transcription runtime binary in release archives, and complete missing WeChat translations.
+
+### Changed
+
+- Remove the NewView recording-card integration and its device page. Microphone and system-audio recording remain available.
+- Update the client license to AGPL-3.0-only and clarify the license boundaries in the repository notices.
+
+### 新功能
+
+- macOS 与 Windows 的 FunASR 本地转写改用原生 GGUF 运行时，支持 SenseVoice 和可选的 Fun-ASR-Nano 模型。
+- 导入音频时可选择本地转写语种，中文默认配置会固定 SenseVoice 识别语言。
+- 助手确认卡片直接显示在对话中，选择结果保留在聊天记录里。
+
+### 修复
+
+- 微信登录使用服务端下发的授权配置校验回调，手机号已绑定账号时提供更明确的提示。
+- 问题报告截图改用临时上传槽位直传，问题跟踪服务凭证仅保留在服务端。
+- 补全本地媒体错误响应，便于区分音频文件不可用和连接失败。
+- 发布时逐项校验转写运行时文件，补齐微信登录缺失的多语言文案。
+
+### 调整
+
+- 移除 NewView 录音卡集成及设备页面；麦克风与系统声音录制继续可用。
+- 客户端许可更新为 AGPL-3.0-only，并在仓库声明中明确许可范围。
+
 ## 1.1.14 (2026-10-15)
 
 ### New Features

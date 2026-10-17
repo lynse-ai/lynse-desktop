@@ -789,7 +789,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           m.id === assistantId && isEmptyAssistantPlaceholder(m);
         const settle = (m: ChatMessage): ChatMessage => m.id === assistantId ? {
           ...m, status: undefined, thinkingActive: false, toolUses: closeRunningTools(m.toolUses),
-          confirm: m.confirm?.workbuddy ? undefined : m.confirm,
+          confirm: m.confirm?.workbuddy && m.confirm.resolvedChoice === undefined ? undefined : m.confirm,
         } : m;
         setMessages((prev) => prev.filter((m) => !emptyPlaceholder(m)).map(settle));
         setConversations((prev) =>

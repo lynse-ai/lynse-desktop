@@ -41,6 +41,25 @@ describe("AI chat history", () => {
     expect(loadChatHistory("wb").conversations.map((conversation) => conversation.id)).toEqual(["legacy"]);
     expect(loadChatHistory("wb").conversations[0]?.workbuddySession).toBeUndefined();
   });
+  it("retains resolved WorkBuddy approval choices as disabled history cards", () => {
+    saveChatHistory("wb", { activeConversationId: "resolved", conversations: [{
+      id: "resolved", title: "WorkBuddy", provider: "workbuddy", createdAt: 1, updatedAt: 2,
+      messages: [{ id: "answer", role: "assistant", content: "", timestamp: 2,
+        confirm: { question: "Read cloud file", options: [{ label: "Allow once", value: "allow" }],
+          resolvedChoice: "allow", workbuddy: { requestId: "answered-request" } } }],
+    }] });
+    expect(loadChatHistory("wb").conversations[0]?.messages[0]?.confirm).toMatchObject({
+      question: "Read cloud file", resolvedChoice: "allow",
+    });
+  });
+  it("keeps cloud confirmation-only messages when restoring a conversation", () => {
+    saveChatHistory("u", { activeConversationId: "confirmation", conversations: [{
+      id: "confirmation", title: "Choose a meeting", provider: "cloud", createdAt: 1, updatedAt: 2,
+      messages: [{ id: "card", role: "assistant", content: "", timestamp: 2,
+        confirm: { question: "Which meeting?", options: [{ label: "Review", value: "review" }], resolvedChoice: "review" } }],
+    }] });
+    expect(loadChatHistory("u").conversations[0]?.messages[0]?.confirm?.resolvedChoice).toBe("review");
+  });
   it("persists conversations per user and removes transient progress", () => {
     saveChatHistory("user-1", {
       activeConversationId: "conversation-1",

@@ -27,7 +27,7 @@ interface EventPluginInternals {
   lynseUnlistenGuardInstalled?: boolean;
 }
 
-interface WindowWithInternals extends Window {
+interface WindowWithInternals extends Omit<Window, "__TAURI_EVENT_PLUGIN_INTERNALS__"> {
   __TAURI_EVENT_PLUGIN_INTERNALS__?: EventPluginInternals;
 }
 

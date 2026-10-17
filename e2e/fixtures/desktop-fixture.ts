@@ -21,6 +21,7 @@ export { expect, bootstrapApp };
 export async function openWorkspace(page: import("@playwright/test").Page, serverUrl: string) {
   await bootstrapApp(page, serverUrl);
   await page.goto("/");
+  await expect(page.getByRole("heading", { name: /E2E Tester/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "Home" })).toBeVisible({ timeout: 20_000 });
 }
 

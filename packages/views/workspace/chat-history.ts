@@ -54,13 +54,14 @@ function isConversation(value: unknown): value is ChatConversation {
 
 function messagesForStorage(messages: ChatMessage[]): ChatMessage[] {
   return messages
-    .filter((message) => message.role !== "assistant" || !!message.content || !!message.error || !!message.connectionRequests?.length || !!message.attachments?.length || !!message.workbuddyStopReason)
+    .filter((message) => message.role !== "assistant" || !!message.content || !!message.error || !!message.connectionRequests?.length || !!message.attachments?.length || !!message.workbuddyStopReason
+      || !!message.confirm && (!message.confirm.workbuddy || message.confirm.resolvedChoice !== undefined))
     // `status` is transient progress; `revealedAt` is the one-shot reveal
     // marker — neither belongs in persisted history.
     .map(({ status: _status, revealedAt: _revealedAt, ...message }) => ({
       ...message,
-      // A saved permission cannot answer a request on a closed connection.
-      confirm: message.confirm?.workbuddy ? undefined : message.confirm,
+      // Pending permissions require a live connection; resolved cards are history.
+      confirm: message.confirm?.workbuddy && message.confirm.resolvedChoice === undefined ? undefined : message.confirm,
     }));
 }
 

@@ -22,6 +22,8 @@ export const test = base.extend<{ mockServer: MockServer; chatScript: ChatScript
 export async function bootstrapApp(page: import("@playwright/test").Page, serverUrl: string) {
   await page.addInitScript((url: string) => {
     localStorage.setItem("lynse_api_url", url);
+    // The assistant has its own origin; keep scripted turns on this mock too.
+    localStorage.setItem("lynse_agent_api_url", url);
     // Calendar and Connections use a separate backend origin. Keep fake
     // credentials and background requests on the per-test mock server.
     localStorage.setItem("lynse_integrations_api_url", url);
@@ -41,6 +43,8 @@ export async function bootstrapApp(page: import("@playwright/test").Page, server
 export async function openChat(page: import("@playwright/test").Page, serverUrl: string) {
   await bootstrapApp(page, serverUrl);
   await page.goto("/chat");
+  // Account hydration resets chat history; wait before sending the first turn.
+  await expect(page.getByRole("button", { name: /E2E Tester/ })).toBeVisible();
   // The composer placeholder is a stable render proof for the chat page.
   await expect(
     page.getByPlaceholder("Ask about your recordings, meetings"),

@@ -198,7 +198,7 @@ describe("PluginHost subscriber gating (P3)", () => {
 describe("community model card uninstall guard (P4)", () => {
   const modelInfo: SttModelInfo = {
     provider: "funasr",
-    id: "funasr-paraformer",
+    id: "funasr-sensevoice-q8",
     label: "FunASR",
     sizeBytes: 0,
     status: "installed",
@@ -216,7 +216,7 @@ describe("community model card uninstall guard (P4)", () => {
 
   it("blocks deleting a model referenced by the default engine", async () => {
     mockLocalApi({ default: { provider: "funasr" }, per_language: {} });
-    seedEntry("lynse.model.funasr-latest", true);
+    seedEntry("lynse.model.funasr-sensevoice", true);
     render(<PluginCommunitySection />);
 
     // Model statuses load asynchronously; wait until the funasr row shows
@@ -238,7 +238,7 @@ describe("community model card uninstall guard (P4)", () => {
       default: { provider: "qwen3", model: "qwen3-asr-1.7b-8bit" },
       per_language: {},
     });
-    seedEntry("lynse.model.funasr-latest", true);
+    seedEntry("lynse.model.funasr-sensevoice", true);
     render(<PluginCommunitySection />);
 
     await screen.findByText("settings.stt_status_installed");
@@ -246,7 +246,7 @@ describe("community model card uninstall guard (P4)", () => {
     fireEvent.click(screen.getByText("plugins.action.uninstall_confirm"));
 
     await waitFor(() => expect(localApi.deleteSttModel).toHaveBeenCalledTimes(1));
-    expect(localApi.deleteSttModel).toHaveBeenCalledWith("funasr", "funasr-paraformer");
+    expect(localApi.deleteSttModel).toHaveBeenCalledWith("funasr", "funasr-sensevoice-q8");
   });
 
   it("routes the download button to the existing model-download command", async () => {
@@ -254,13 +254,13 @@ describe("community model card uninstall guard (P4)", () => {
       { default: { provider: "qwen3", model: "qwen3-asr-1.7b-8bit" }, per_language: {} },
       "not_installed",
     );
-    seedEntry("lynse.model.funasr-latest", true);
+    seedEntry("lynse.model.funasr-sensevoice", true);
     render(<PluginCommunitySection />);
 
     await screen.findAllByText("settings.stt_status_not_installed");
     fireEvent.click(firstMatch(screen.getAllByText("settings.stt_download_model")));
     await waitFor(() =>
-      expect(localApi.downloadSttModel).toHaveBeenCalledWith("funasr", "funasr-paraformer"),
+      expect(localApi.downloadSttModel).toHaveBeenCalledWith("funasr", "funasr-sensevoice-q8"),
     );
   });
 
@@ -270,7 +270,7 @@ describe("community model card uninstall guard (P4)", () => {
       { default: { provider: "whisper", model: "large-v3-turbo-q5_0" }, per_language: {} },
       "not_installed",
     );
-    seedEntry("lynse.model.funasr-latest", true);
+    seedEntry("lynse.model.funasr-sensevoice", true);
     render(<PluginCommunitySection />);
 
     // Windows supports FunASR and the sidecar engines; Qwen3 and WhisperX remain macOS-only.

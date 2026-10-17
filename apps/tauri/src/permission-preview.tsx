@@ -8,7 +8,7 @@ import { useState } from "react";
 import { initI18n } from "@lynse/core/i18n";
 import { ThemeProvider } from "@lynse/ui/components/common/theme-provider";
 import { RESOURCES } from "@lynse/views/locales";
-import type { LivePermissionStatus } from "@lynse/views/live-translation/types";
+import type { LivePermissionStatus } from "@lynse/views/live-translation";
 import { PermissionOnboarding } from "@lynse/views/onboarding";
 import "./globals.css";
 

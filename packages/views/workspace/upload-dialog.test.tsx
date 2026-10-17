@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
     listHotwordPackages: vi.fn(), start: vi.fn() },
   success: vi.fn(), error: vi.fn(), transfer: vi.fn(),
 }));
-vi.mock("@lynse/core/i18n/react", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock("@lynse/core/i18n/react", () => ({ useTranslation: () => ({ t: (key: string) => key, i18n: { language: "en" } }) }));
 vi.mock("@lynse/core/auth", () => ({ useAuthStore: (select: (state: { isAuthenticated: boolean }) => unknown) => select({ isAuthenticated: true }) }));
 vi.mock("sonner", () => ({ toast: { success: mocks.success, error: mocks.error } }));
 vi.mock("../layout/use-user-credits", () => ({
@@ -21,7 +21,8 @@ vi.mock("./hooks/use-files", () => ({
   useTransferFile: () => ({ mutateAsync: mocks.transfer }), uploadFileToOSS: vi.fn(),
   waitForTranscriptionCompletion: vi.fn(),
 }));
-vi.mock("./local-transcription", () => ({
+vi.mock("./local-transcription", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./local-transcription")>(),
   getDesktopLocalTranscriptionApi: () => mocks.local,
   OFFLINE_TRANSCRIPTION_ENABLED_KEY: "lynse_offline_transcription_enabled",
   resolveSttProvider: () => ({ provider: "whisper", model: "installed" }),
@@ -50,10 +51,11 @@ describe("local import queueing", () => {
     mocks.local.start.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
     const onOpenChange = showDialog();
     await chooseLocalFile();
+    const configReadsBeforeSubmit = mocks.local.getSttConfig.mock.calls.length;
     const start = screen.getByRole("button", { name: "upload.local_start" });
     act(() => { fireEvent.click(start); fireEvent.click(start); });
     await waitFor(() => expect(mocks.local.start).toHaveBeenCalledTimes(1));
-    expect(mocks.local.getSttConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.local.getSttConfig).toHaveBeenCalledTimes(configReadsBeforeSubmit + 1);
     expect((start as HTMLButtonElement).disabled).toBe(true);
     expect(onOpenChange).not.toHaveBeenCalled();
     await act(async () => finish({ id: "local:queued", title: "meeting.wav" }));

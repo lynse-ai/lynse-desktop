@@ -17,7 +17,6 @@ export const chatSelectors = {
   welcomeTitle: "What would you like to know?",
   responding: "Generating a response…",
   thinking: "Thinking",
-  confirmTitle: "Confirmation needed",
   confirmCancel: { role: "button", name: "Cancel" },
   mic: { role: "button", name: "Voice input" },
   attach: { role: "button", name: "Add attachments" },
@@ -32,20 +31,18 @@ export function sendButton(page: Page): Locator {
 }
 
 export function stopButton(page: Page): Locator {
-  // CSS attribute locator on purpose: the confirm dialog (Base UI) marks the
-  // page background aria-hidden while open, which hides it from role queries
-  // and would let `waitForTurnDone` pass while a turn is still running.
+  // Match the labels used by both full-page and docked chat surfaces.
   return page.locator('button[title="Stop"], button[aria-label="Stop"]');
 }
 
 /** Quick-prompt chips by i18n key → English label (chat/page.tsx QUICK_PROMPTS). */
-export const quickPromptLabels: Record<string, string> = {
-  "chat.suggestion_summary": "Summarize my recent meetings",
-  "chat.quick_minutes": "Turn it into meeting minutes",
+export const quickPromptLabels: Record<string, string | RegExp> = {
+  "chat.suggestion_summary": /^Meeting summary /,
+  "chat.quick_minutes": /^Meeting minutes /,
   "chat.suggestion_actions": "Find key decisions and action items",
-  "chat.quick_todos": "Extract a to-do list",
-  "chat.suggestion_notes": "Review highlights from this week's notes",
-  "chat.quick_plan": "Draft a next-step action plan",
+  "chat.quick_todos": /^To-do list /,
+  "chat.suggestion_notes": /^Note digest /,
+  "chat.quick_plan": /^Action plan /,
   "chat.quick_translate": "Translate the key points into English",
   "chat.quick_rewrite": "Rewrite this more concisely",
 };
@@ -126,6 +123,9 @@ export async function replayScript(page: Page, script: ChatScript) {
       const label = quickPromptLabels[turn.quickPrompt];
       if (!label) throw new Error(`Unknown quickPrompt key: ${turn.quickPrompt}`);
       await page.getByRole("button", { name: label }).click();
+      // Quick prompts now fill the composer for review before submission.
+      await expect(composer(page)).not.toHaveValue("");
+      await composer(page).press("Enter");
     } else {
       await sendChatMessage(page, turn.user);
     }
@@ -134,10 +134,11 @@ export async function replayScript(page: Page, script: ChatScript) {
       await expectAssistantSaid(page, fullText(turn));
     } else if (turn.response.type === "clarify") {
       await expect(page.getByText(turn.response.question)).toBeVisible({ timeout: 20_000 });
-    } else if (turn.response.type === "error") {
+    } else if (turn.response.type === "error" || turn.response.type === "http-error") {
       await expect(page.getByText(turn.response.message).last()).toBeVisible({
         timeout: 20_000,
       });
+      await waitForTurnDone(page);
     } else if (turn.response.type === "stream-abort") {
       // The turn stays pending with no partial text — the caller stops it.
       await stopButton(page).click();

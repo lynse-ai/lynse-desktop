@@ -224,7 +224,7 @@ test.describe("connections UI", () => {
     await expect(page.getByRole("dialog")).toBeVisible();
 
     const dialog = page.getByRole("dialog");
-    await dialog.getByRole("button", { name: "Connections", exact: true }).click();
+    await dialog.getByRole("button", { name: /^Connections(?: Beta)?$/ }).click();
     await expect(dialog.getByText("Feishu", { exact: true })).toBeVisible();
   });
 });

@@ -112,7 +112,7 @@ fn emit_error(app: &AppHandle, message: impl Into<String>) {
 }
 
 /// RMS level (0..1) of one 16-bit little-endian mono PCM frame, mirroring the
-/// meter behaviour of the recording-card feed in live_translation.
+/// mic-level meter behaviour in live_translation.
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn frame_level(payload: &[u8]) -> f32 {
     let mut sum = 0.0f64;

@@ -110,45 +110,6 @@ fn enqueue_audio(
     }
 }
 
-/// The running live session, reachable from other modules (the recording-card
-/// audio feed). Kept in sync with the managed session at start/stop.
-static CARD_FEED_TARGET: Mutex<Option<Arc<LiveSession>>> = Mutex::new(None);
-
-fn set_card_feed_target(session: &Arc<LiveSession>) {
-    *CARD_FEED_TARGET.lock().expect("card feed lock") = Some(session.clone());
-}
-
-fn clear_card_feed_target() {
-    *CARD_FEED_TARGET.lock().expect("card feed lock") = None;
-}
-
-/// Route decoded recording-card PCM (16 kHz mono Int16) into the active live
-/// session as the mic ("我") source, chunked to the same 640-byte frame size
-/// the capture sidecar produces. Returns false when no session is running.
-pub fn feed_recording_card_pcm(pcm: &[i16], elapsed_ms: u64) -> bool {
-    let Some(session) = CARD_FEED_TARGET.lock().expect("card feed lock").clone() else {
-        return false;
-    };
-    for chunk in pcm.chunks(PCM_FRAME_BYTES / 2) {
-        if chunk.len() < PCM_FRAME_BYTES / 2 {
-            break;
-        }
-        let mut frame = Vec::with_capacity(PCM_FRAME_BYTES);
-        for sample in chunk {
-            frame.extend_from_slice(&sample.to_le_bytes());
-        }
-        enqueue_audio(&session, AudioSource::Mic, elapsed_ms, frame);
-    }
-    // Mirror the sidecar's mic-level behaviour so the UI meter reacts to the
-    // card audio even while the macOS capture sidecar is not feeding "我".
-    let sum: f64 = pcm.iter().map(|sample| (*sample as f64 / 32768.0).powi(2)).sum();
-    if !pcm.is_empty() {
-        let level = ((sum / pcm.len() as f64).sqrt()).min(1.0) as f32;
-        session.mic_level.store(level.to_bits(), Ordering::Relaxed);
-    }
-    true
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AudioSource {
@@ -1041,7 +1002,6 @@ pub async fn live_translation_start(
         .map_err(|_| "live session lock is poisoned")? = Some(session.clone());
     spawn_silence_watchdog(app.clone(), session.clone());
     spawn_capture_start_watchdog(app.clone(), session.clone());
-    set_card_feed_target(&session);
     emit_snapshot(&app, &session);
     // The island webview is the only receiver for the tray's pause/stop
     // actions, so it must exist for the session's whole life. Pop it when the
@@ -2266,7 +2226,6 @@ pub async fn live_translation_stop(
         .map_err(|_| "live session lock is poisoned")?
         .take()
         .ok_or("no live translation session")?;
-    clear_card_feed_target();
     session.set_state("stopping");
     emit_snapshot(&app, &session);
     // Drop the floating island immediately: the capsule has nothing left to
@@ -2341,7 +2300,6 @@ fn spawn_silence_watchdog(app: AppHandle, session: Arc<LiveSession>) {
                 }
                 None => return,
             }
-            clear_card_feed_target();
             session.set_state("stopping");
             emit_snapshot(&app, &session);
             set_recording_island_visible(&app, false);
@@ -2375,7 +2333,6 @@ fn fail_capture_start(app: &AppHandle, session: &Arc<LiveSession>, message: impl
     }
     session.capture_stop.store(false, Ordering::Relaxed);
     voice_end(session);
-    clear_card_feed_target();
     session.set_state("failed");
     emit_snapshot(app, session);
     set_recording_island_visible(app, false);

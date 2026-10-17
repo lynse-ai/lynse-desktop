@@ -15,11 +15,13 @@ export type SttEngine = "qwen3" | "funasr" | "whisper" | "whisperx" | "vibeasr" 
  *  the model cards must agree — they used to each keep a private copy of this
  *  set, which is how an engine that works came to stay hidden.
  *
- *  `whisper` + `vibeasr` are sidecar binaries shipped in the shared runtime.
- *  `funasr` runs in its own pip venv, bootstrapped on first use with a
- *  Windows-aware interpreter layout and CPU torch wheels, so it is no longer
- *  the hard-erroring engine it used to be off macOS. MLX-family engines stay
- *  Apple-only by definition (their backend is MLX). */
+ *  `whisper`, `vibeasr` and `funasr` are all sidecar binaries shipped in the
+ *  shared runtime now: FunASR moved off its Python venv + CPU torch wheel onto
+ *  the llama.cpp/GGUF runtime, so it needs no interpreter at all. MLX-family
+ *  engines stay Apple-only by definition (their backend is MLX).
+ *
+ *  Note this is a floor, not a ceiling — `funasr` runs on macOS too, which is
+ *  why the settings list shows it there as well. */
 export const NON_MAC_ENGINES: ReadonlySet<SttEngine> = new Set([
   "whisper",
   "vibeasr",
@@ -35,8 +37,50 @@ export const WHISPER_MODEL_LABELS: Record<WhisperModel, string> = {
   "large-v3-turbo-q5_0": "Whisper large-v3-turbo (q5_0, ~574 MB)",
 };
 export const DEFAULT_WHISPER_MODEL: WhisperModel = "large-v3-turbo-q5_0";
+
+/** Languages the local engines can actually be pinned to. This list is exactly
+ *  the SenseVoice query-token rows verified against real meeting audio
+ *  (auto=0, zh=3, en=4, yue=6, ja=11) — offering 韩语 there would be a control
+ *  that silently resolves to "auto", which is the bug this selector exists to
+ *  fix. Whisper accepts a wider set; an unmapped tag falls back to its own
+ *  detection, never to English. */
+export const STT_LANGUAGE_OPTIONS: { value: string; labelKey: string }[] = [
+  { value: "auto", labelKey: "settings.stt_language_auto" },
+  { value: "zh", labelKey: "settings.stt_language_zh" },
+  { value: "en", labelKey: "settings.stt_language_en" },
+  { value: "ja", labelKey: "settings.stt_language_ja" },
+  { value: "yue", labelKey: "settings.stt_language_yue" },
+];
+/** Whether a language control does anything for this engine config. SenseVoice
+ *  reads it from `sv.query_tokens`; Fun-ASR-Nano is an autoregressive LLM
+ *  decoder with no language prompt to write, and VibeVoice has no language
+ *  argument at all — so showing the control there would be a knob wired to
+ *  nothing, which is the mistake the hotword picker already made here. */
+export function sttSupportsLanguage(config: SttProviderConfig): boolean {
+  if (config.provider === "whisper") return true;
+  if (config.provider === "funasr") return providerModelId(config) !== FUNASR_NANO_MODEL_ID;
+  return false;
+}
 export const VIBEVOICE_MODEL_ID = "vibeasr-bitnet-1.5b";
-export const FUNASR_MODEL_ID = "funasr-paraformer";
+/** FunASR's single shipped GGUF model (SenseVoice-Small, Q8). Mirrors the Rust
+ *  `FUNASR_DEFAULT_MODEL_ID`. SenseVoice is the default because it is both the
+ *  most accurate and the fastest of the CPU-viable GGUF configs on upstream's
+ *  184-clip human-referenced Mandarin set (micro-CER 8.01% vs Paraformer's
+ *  9.85%, at ~20x realtime) — and unlike Paraformer it punctuates by itself. */
+export const FUNASR_MODEL_ID = "funasr-sensevoice-q8";
+/** Fun-ASR-Nano (SAN-M encoder + Qwen3-0.6B LLM): upstream's dialect/accents and
+ *  far-field/high-noise model. Offered as a card, never the default — measured
+ *  on the 09-17 meeting it ran at RTF 1.68 with the required `--chunk 15`
+ *  (a 44-minute meeting in ~74 minutes) against SenseVoice's 0.289, for 1.27 GB
+ *  of weights, and upstream's own Chinese CER is slightly worse (8.30% vs 8.01%). */
+export const FUNASR_NANO_MODEL_ID = "funasr-nano-q8";
+export const FUNASR_MODELS = [FUNASR_MODEL_ID, FUNASR_NANO_MODEL_ID] as const;
+/** Picker labels, shared by Settings and any later surface so the two can never
+ *  disagree about what the same model is called. */
+export const FUNASR_MODEL_OPTIONS: { value: string; labelKey: string }[] = [
+  { value: FUNASR_MODEL_ID, labelKey: "settings.stt_funasr_model_sensevoice" },
+  { value: FUNASR_NANO_MODEL_ID, labelKey: "settings.stt_funasr_model_nano" },
+];
 
 /** WhisperX catalog ids (must mirror the Rust `STT_MODELS`). First cut runs
  * transcription + word alignment; diarization ships once the pyannote model
@@ -63,7 +107,21 @@ export const DEFAULT_MOSS_MODEL: MossModel = "moss-transcribe-8bit";
 
 export type SttProviderConfig =
   | { provider: "qwen3"; model?: Qwen3Model | string; hotword_package_id?: string | null }
-  | { provider: "funasr"; expected_speakers?: number | null; hotword_package_id?: string | null }
+  | {
+      provider: "funasr";
+      /** "funasr-sensevoice-q8" (default) or "funasr-nano-q8". */
+      model?: string | null;
+      campp_diarization?: boolean;
+      expected_speakers?: number | null;
+      /** SenseVoice query-token language: "auto" | "zh" | "en" | "ja" | "yue".
+       *  Written into the model file before the run — `auto` (what upstream
+       *  ships) self-reported Japanese on 49 of 191 crosstalk-heavy Mandarin
+       *  segments, so Chinese users default to "zh". Ignored by Fun-ASR-Nano,
+       *  which has no language prompt; see `sttSupportsLanguage`. */
+      language?: string | null;
+      /** Accepted, never applied: the GGUF binaries have no hotword argument. */
+      hotword_package_id?: string | null;
+    }
   | { provider: "whisperx"; expected_speakers?: number | null; hotword_package_id?: string | null }
   | {
       provider: "whisper";
@@ -79,6 +137,9 @@ export type SttProviderConfig =
 export type TranscribeConfig = {
   default?: SttProviderConfig | null;
   per_language: Record<string, SttProviderConfig>;
+  /** The UI language the desktop last recorded, mirrored by `setSttLocale`.
+   *  Background transcription paths read the engine default from it. */
+  ui_locale?: string | null;
 };
 
 export const LOCAL_FILE_ID_PREFIX = "local:";
@@ -164,6 +225,14 @@ export interface DesktopLocalTranscriptionApi {
   }>;
   getSttConfig: () => Promise<TranscribeConfig>;
   saveSttConfig: (config: TranscribeConfig) => Promise<TranscribeConfig>;
+  /** Mirror the active UI language into the engine router, so a voice memo or a
+   *  retried meeting uses the same engine the Settings page shows. */
+  setSttLocale?: (locale: string) => Promise<TranscribeConfig>;
+  /** Ask the desktop which engine it would pick for `locale` when the user has
+   *  configured nothing. Only Rust can answer: it depends on the compile
+   *  target, and a UI that guesses is how Windows imports came to pre-flight
+   *  `qwen3` while Settings displayed Whisper. */
+  getDefaultSttProvider?: (locale: string | null) => Promise<SttProviderConfig>;
 }
 
 export function getDesktopLocalTranscriptionApi(): DesktopLocalTranscriptionApi | null {
@@ -318,6 +387,20 @@ export function migrateSttProviderConfig(value: unknown): SttProviderConfig | nu
       hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
     };
   }
+  if (provider === "funasr") {
+    const model = record.model as string | null | undefined;
+    return {
+      provider: "funasr",
+      // Mirror the Rust `model_id()`: an unknown id falls back to SenseVoice
+      // rather than pointing the adapter at a model directory that was never
+      // downloaded.
+      model: model && (FUNASR_MODELS as readonly string[]).includes(model) ? model : FUNASR_MODEL_ID,
+      campp_diarization: Boolean(record.campp_diarization),
+      expected_speakers: (record.expected_speakers as number | null | undefined) ?? null,
+      language: (record.language as string | null | undefined) ?? null,
+      hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
+    };
+  }
   if (provider === "whisperx") {
     return {
       provider: "whisperx",
@@ -333,11 +416,16 @@ export function migrateSttProviderConfig(value: unknown): SttProviderConfig | nu
   };
 }
 
-/** Resolve the effective provider, mirroring the Rust `TranscribeConfig::resolve`. */
+/** Resolve the effective provider, mirroring the Rust `TranscribeConfig::resolve`.
+ *
+ *  `fallback` is the engine the desktop itself would choose for this language —
+ *  ask for it with `getDefaultSttProvider(i18n.language)`. Leaving it out is the
+ *  web build's case, where whisper is the only engine that exists. */
 export function resolveSttProvider(
   config: TranscribeConfig,
   language: string | null | undefined,
   perNote?: SttProviderConfig | null,
+  fallback?: SttProviderConfig | null,
 ): SttProviderConfig {
   const fromNote = perNote ? migrateSttProviderConfig(perNote) : null;
   if (fromNote) return fromNote;
@@ -349,7 +437,12 @@ export function resolveSttProvider(
     const migrated = migrateSttProviderConfig(config.default);
     if (migrated) return migrated;
   }
-  return { provider: "qwen3", model: DEFAULT_QWEN3_MODEL };
+  if (fallback) return fallback;
+  // Nothing configured and nothing asked: the previous answer here was a
+  // hardcoded `qwen3`, which an Intel Mac or any Windows machine cannot run —
+  // the import then died on "offline model missing" while Settings showed
+  // Whisper, because the two sides had different guesses.
+  return { provider: "whisper", model: DEFAULT_WHISPER_MODEL };
 }
 
 export function providerEngine(config: SttProviderConfig): SttEngine {
@@ -361,7 +454,9 @@ export function providerModelId(config: SttProviderConfig): string {
     case "qwen3":
       return config.model ?? DEFAULT_QWEN3_MODEL;
     case "funasr":
-      return FUNASR_MODEL_ID;
+      return config.model && (FUNASR_MODELS as readonly string[]).includes(config.model)
+        ? config.model
+        : FUNASR_MODEL_ID;
     case "whisperx":
       return WHISPERX_MODEL_ID;
     case "whisper":

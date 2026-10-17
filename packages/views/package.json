@@ -33,7 +33,6 @@
     "./inspiration": "./inspiration/index.ts",
     "./home": "./home/index.ts",
     "./notifications": "./notifications/index.ts",
-    "./devices": "./devices/index.ts",
     "./audio-editor": "./audio-editor/index.ts",
     "./feishu": "./feishu/index.ts",
     "./bots": "./bots/index.ts",

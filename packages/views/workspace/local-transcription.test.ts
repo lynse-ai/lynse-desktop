@@ -199,7 +199,7 @@ describe("STT provider config", () => {
     });
   });
 
-  it("resolves per-note > language > default > qwen3", () => {
+  it("resolves per-note > language > default > desktop-provided fallback", () => {
     const config: TranscribeConfig = {
       default: { provider: "qwen3" },
       per_language: { zh: { provider: "whisper", model: "small-q5_1" } },
@@ -207,8 +207,17 @@ describe("STT provider config", () => {
     expect(resolveSttProvider(config, null, null).provider).toBe("qwen3");
     expect(resolveSttProvider(config, "zh", null).provider).toBe("whisper");
     expect(resolveSttProvider(config, "en", { provider: "vibeasr" }).provider).toBe("vibeasr");
-    // With no config at all the default engine is Qwen3-ASR.
-    expect(resolveSttProvider({ per_language: {} }, null, null).provider).toBe("qwen3");
+    // An engine the user configured is never overridden by the locale default.
+    expect(resolveSttProvider(config, null, null, { provider: "funasr" }).provider).toBe("qwen3");
+    // With no config at all the desktop decides: it is the only side that knows
+    // the compile target and the UI language.
+    expect(
+      resolveSttProvider({ per_language: {} }, null, null, { provider: "funasr" }).provider,
+    ).toBe("funasr");
+    // And when it cannot answer (web build, or an app predating the command),
+    // fall back to the engine that runs everywhere — not to `qwen3`, which used
+    // to be hardcoded here and cannot run at all outside Apple Silicon.
+    expect(resolveSttProvider({ per_language: {} }, null, null).provider).toBe("whisper");
   });
 
   it("derives the backing model id per engine", () => {

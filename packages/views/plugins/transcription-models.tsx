@@ -14,6 +14,7 @@ import {
   type SttModelInfo,
   type TranscribeConfig,
   FUNASR_MODEL_ID,
+  FUNASR_NANO_MODEL_ID,
   WHISPERX_MODEL_ID,
   VIBEVOICE_MODEL_ID,
   getDesktopLocalTranscriptionApi,
@@ -37,12 +38,13 @@ import type { PluginManifest } from "./types";
  * desktop platforms; MOSS waits until quantization/adaptation lands; the
  * vibeasr/mlx tiers stay functional for existing installs but are not listed.
  *
- * Off macOS the catalog is filtered by `NON_MAC_ENGINES`: the sidecar engines
- * (whisper + vibeasr, both statically-linked binaries in the shared runtime)
- * and FunASR, which prepares its own Python venv on first use. The MLX-bound
- * engines (Qwen3, MOSS, MLX-Whisper) stay hidden because their backend does not
- * exist off Apple Silicon; WhisperX is hidden until its venv bootstrap learns
- * the Windows interpreter layout.
+ * Off macOS the catalog is filtered by `NON_MAC_ENGINES`: the three sidecar
+ * engines (whisper + vibeasr + funasr), all statically-linked binaries in the
+ * shared runtime. FunASR stopped being a Python engine when it moved to the
+ * llama.cpp/GGUF runtime, so it now belongs in that set for the same reason
+ * whisper does. The MLX-bound engines (Qwen3, MOSS, MLX-Whisper) stay hidden
+ * because their backend does not exist off Apple Silicon; WhisperX is hidden
+ * until its venv bootstrap learns the Windows interpreter layout.
  */
 
 export interface TranscriptionModelEntry {
@@ -56,12 +58,20 @@ export interface TranscriptionModelEntry {
 
 export const TRANSCRIPTION_MODEL_CATALOG: TranscriptionModelEntry[] = [
   {
-    pluginId: "lynse.model.funasr-latest",
+    pluginId: "lynse.model.funasr-sensevoice",
     engine: "funasr",
     modelId: FUNASR_MODEL_ID,
     nameKey: "plugins.models.funasr.name",
     descriptionKey: "plugins.models.funasr.description",
-    badges: ["recommended", "voiceprint"],
+    badges: ["recommended"],
+  },
+  {
+    pluginId: "lynse.model.funasr-nano",
+    engine: "funasr",
+    modelId: FUNASR_NANO_MODEL_ID,
+    nameKey: "plugins.models.funasrNano.name",
+    descriptionKey: "plugins.models.funasrNano.description",
+    badges: [],
   },
   {
     pluginId: "lynse.model.whisperx-latest",

@@ -21,9 +21,6 @@
   <!-- Microphone recording / live captions -->
   <key>com.apple.security.device.audio-input</key>
   <true/>
-  <!-- Bluetooth recording card (btleplug) -->
-  <key>com.apple.security.device.bluetooth</key>
-  <true/>
   <!-- Calendar todo write-back (EventKit) -->
   <key>com.apple.security.personal-information.calendars</key>
   <true/>

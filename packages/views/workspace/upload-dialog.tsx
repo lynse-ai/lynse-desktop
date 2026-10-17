@@ -29,7 +29,10 @@ import {
   OFFLINE_TRANSCRIPTION_ENABLED_KEY,
   resolveSttProvider,
   findModelStatus,
+  sttSupportsLanguage,
+  STT_LANGUAGE_OPTIONS,
 } from "./local-transcription";
+import type { SttProviderConfig, TranscribeConfig } from "./local-transcription";
 import { isInsufficientCreditsError, useMembership, useUserCredits } from "../layout/use-user-credits";
 import { canUploadToCloud } from "../layout/membership-entitlement";
 import { useAuthStore } from "@lynse/core/auth";
@@ -48,7 +51,7 @@ interface UploadDialogProps {
 }
 
 export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const qc = useQueryClient();
 
   // State
@@ -67,6 +70,14 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
     prefersLocalByDefault() ? "local" : "cloud",
   );
   const [expectedSpeakers, setExpectedSpeakers] = useState("");
+  /** Per-task decode language: "" = 跟随引擎默认. SenseVoice's `auto` mis-picks
+   *  Japanese on crosstalk-heavy Mandarin, so the dialog lets the user say
+   *  which language the audio is. */
+  const [sttLanguage, setSttLanguage] = useState("");
+  /** The provider this import will resolve to, asked from the desktop so the
+   *  language control appears only where it does something (Nano has no
+   *  language prompt; VibeVoice has no language argument at all). */
+  const [localProvider, setLocalProvider] = useState<SttProviderConfig | null>(null);
   const [selectedHotwordPackageId, setSelectedHotwordPackageId] = useState("");
   const [hotwordPackages, setHotwordPackages] = useState<LocalHotwordPackage[]>([]);
 
@@ -103,7 +114,19 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
     getDesktopLocalTranscriptionApi()?.listHotwordPackages()
       .then(setHotwordPackages)
       .catch(() => setHotwordPackages([]));
-  }, [open]);
+    // Resolve which engine this import will use, so the language control is shown
+    // only for engines that take one. Same path as the submit-time pre-flight:
+    // the desktop answers the locale-aware default, the dialog does not guess.
+    const api = getDesktopLocalTranscriptionApi();
+    if (api) {
+      Promise.all([
+        api.getSttConfig().catch(() => ({ default: null, per_language: {} }) as TranscribeConfig),
+        (api.getDefaultSttProvider?.(i18n.language ?? null) ?? Promise.resolve(null)).catch(() => null),
+      ])
+        .then(([config, fallback]) => setLocalProvider(resolveSttProvider(config, undefined, undefined, fallback)))
+        .catch(() => setLocalProvider(null));
+    }
+  }, [open, i18n.language]);
 
   // Once the account is known to lack the entitlement, do not leave the dialog
   // sitting on the option it cannot use — desktop falls back to local.
@@ -120,6 +143,7 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
     setErrorMsg("");
     setDragOver(false);
     setExpectedSpeakers("");
+    setSttLanguage("");
     setSelectedHotwordPackageId("");
   }, []);
 
@@ -194,7 +218,17 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
         // Pre-flight: the resolved engine's model must be installed.
         const sttConfig = await localApi.getSttConfig().catch(() => ({ default: null, per_language: {} }));
         const { models } = await localApi.listSttModels().catch(() => ({ models: [] }));
-        const provider = resolveSttProvider(sttConfig, undefined, undefined);
+        // Ask the desktop which engine IT would use for this language. Resolving
+        // locally is what made a Windows import pre-flight `qwen3` — an engine
+        // that cannot run there — while Settings showed Whisper, so the user got
+        // an "offline model missing" toast for a model that was installed.
+        const locale = i18n.language ?? null;
+        if (locale) await localApi.setSttLocale?.(locale).catch(() => undefined);
+        let platformDefault: SttProviderConfig | null = null;
+        if (localApi.getDefaultSttProvider) {
+          platformDefault = await localApi.getDefaultSttProvider(locale).catch(() => null);
+        }
+        const provider = resolveSttProvider(sttConfig, undefined, undefined, platformDefault);
         const status = findModelStatus(models, provider);
         if (!status || status.status !== "installed") {
           toast.error(t("upload.offline_model_missing"));
@@ -207,6 +241,13 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
         // carries the outcome to the notes list.
         const expectedSpeakersValue = Number.parseInt(expectedSpeakers, 10);
         const record = await localApi.start(localAudioPath, {
+          // The engine is already frozen onto the record by `start`; the locale
+          // rides along so a task that falls through to the default resolves the
+          // same way this dialog just did.
+          locale: locale ?? undefined,
+          // Per-task decode language. `undefined` leaves the engine's own
+          // default in place (which for Chinese users is already `zh`).
+          language: sttLanguage || undefined,
           expectedSpeakers: Number.isFinite(expectedSpeakersValue) && expectedSpeakersValue > 0
             ? expectedSpeakersValue
             : undefined,
@@ -275,7 +316,7 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
       localSubmittingRef.current = false;
       setLocalSubmitting(false);
     }
-  }, [file, transferFile, qc, t, reset, onOpenChange, hasSelectedSource, localApi, localAudioPath, useOfflineTranscription, expectedSpeakers, selectedHotwordPackageId, canCloud, cloudLockReason]);
+  }, [file, transferFile, qc, t, reset, onOpenChange, hasSelectedSource, localApi, localAudioPath, useOfflineTranscription, expectedSpeakers, sttLanguage, i18n.language, selectedHotwordPackageId, canCloud, cloudLockReason]);
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -299,6 +340,9 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
             errorMsg={errorMsg}
             dragOver={dragOver}
             expectedSpeakers={expectedSpeakers}
+            sttLanguage={sttLanguage}
+            showLanguageSelect={!!localProvider && sttSupportsLanguage(localProvider)}
+            onSttLanguageChange={setSttLanguage}
             hotwordPackages={hotwordPackages}
             selectedHotwordPackageId={selectedHotwordPackageId}
             onFileSelect={handleFileSelect}
@@ -363,6 +407,10 @@ interface IdleContentProps {
   errorMsg: string;
   dragOver: boolean;
   expectedSpeakers: string;
+  /** Per-task decode language; "" means follow the engine's default. */
+  sttLanguage: string;
+  showLanguageSelect: boolean;
+  onSttLanguageChange: (value: string) => void;
   hotwordPackages: LocalHotwordPackage[];
   selectedHotwordPackageId: string;
   onFileSelect: (e: React.ChangeEvent<HTMLInputElement>) => void;
@@ -388,6 +436,9 @@ function IdleContent({
   errorMsg,
   dragOver,
   expectedSpeakers,
+  sttLanguage,
+  showLanguageSelect,
+  onSttLanguageChange,
   hotwordPackages,
   selectedHotwordPackageId,
   onFileSelect,
@@ -496,6 +547,23 @@ function IdleContent({
       {offlineMode && (
         <div className="flex flex-col gap-3">
           <div className="grid grid-cols-2 gap-3">
+            {showLanguageSelect && (
+              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                {t("upload.language")}
+                <select
+                  value={sttLanguage}
+                  onChange={(event) => onSttLanguageChange(event.target.value)}
+                  className="h-9 rounded-md border border-border bg-background px-3 text-sm text-foreground outline-none focus:border-primary"
+                >
+                  <option value="">{t("upload.language_engine_default")}</option>
+                  {STT_LANGUAGE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {t(option.labelKey)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <label className="flex flex-col gap-1 text-xs text-muted-foreground">
               {t("upload.expected_speakers")}
               <input

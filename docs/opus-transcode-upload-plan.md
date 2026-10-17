@@ -20,7 +20,7 @@ runCloudSync (use-recording-cloud-sync.ts:53)
 - **Content-Type 是渲染层传参**（`SignedOssPut.content_type`，sync_upload.rs:41），V1 签名把 Content-Type 算进 string-to-sign——**切 `audio/ogg` 不需要改任何 Rust 签名代码**。
 - 上传文件由 `recorded_audio_path`（sync_upload.rs:114）从记录 `sourcePath` 解析；`sync_upload_audio_size` 同源，fileSize 自动一致。
 - 文件名 `deriveFilename` 取 playbackPath 文件名（现以 .wav 结尾），随 `saveFilename` 走 `sync/pre/create`；objectKey 由服务端生成（测试样例 `recording/<uid>/<fileId>.wav`，扩展名来源待确认）。
-- `opus = "0.3"` 已在 Cargo.toml（BLE 录音卡解码用）；audio_editor 的 ffmpeg 是 sidecar 条件可用，**不作为转码依赖**。
+- Opus 依赖需按本方案自行引入：原先的 `opus = "0.3"` 只服务蓝牙录音卡解码，该集成已整体移除；audio_editor 的 ffmpeg 是 sidecar 条件可用，**不作为转码依赖**。
 
 ## 1. 技术选型
 
@@ -82,7 +82,7 @@ runCloudSync (use-recording-cloud-sync.ts:53)
 
 - **批次 1.2（自动补传 worker）**：B3 的 ensure-ogg 逻辑直接长在 worker 里，两批共用；1.2 先落也不冲突（先传 WAV，后切 flag）。
 - **批次 4.2（波形 peaks）**：A1 的读 pass 已经全量扫过 PCM——顺带按固定窗口取峰值，可同遍产出 `peaks.json`；若 4.2 先落地则直接复用其结果，二选一避免双读。
-- **不做**：录制期流式 Opus（多轨 WAV 是 AEC 重处理/恢复的地基，架构不动）；BLE 录音卡路径（后续单独评估）；原始轨保留策略（另议）。
+- **不做**：录制期流式 Opus（多轨 WAV 是 AEC 重处理/恢复的地基，架构不动）；原始轨保留策略（另议）。
 
 ## 5. 风险与回退
 

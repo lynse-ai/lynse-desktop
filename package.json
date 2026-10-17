@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Local-first meeting minutes tool — import audio/video, transcribe locally, generate structured notes.",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lynse-ai/lynse-desktop.git"

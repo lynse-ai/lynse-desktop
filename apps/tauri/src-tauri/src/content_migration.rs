@@ -19,22 +19,18 @@ use tauri::{AppHandle, Manager};
 use crate::vault::{self, ContentKind, VaultConfig};
 use crate::{local_store_path, read_array, write_array, CommandResult};
 
-/// Relocation order puts `CardRecordings` before its `Recordings` parent so
-/// the nested `Card` folder is never dragged along by the parent's move.
 const CONTENT_KINDS: &[ContentKind] = &[
-    ContentKind::CardRecordings,
     ContentKind::Recordings,
     ContentKind::EditExports,
     ContentKind::Inspirations,
 ];
 
-/// Directory children excluded when relocating a kind: `Card` travels through
-/// its own entry and `staging` is disposable scratch (wiped on every launch).
+/// Directory children excluded when relocating a kind: `staging` is
+/// disposable scratch (wiped on every launch).
 fn relocate_skip(kind: ContentKind) -> &'static [&'static str] {
     match kind {
         ContentKind::Inspirations => &["staging"],
-        ContentKind::Recordings => &["Card"],
-        ContentKind::EditExports | ContentKind::CardRecordings => &[],
+        ContentKind::Recordings | ContentKind::EditExports => &[],
     }
 }
 
@@ -49,7 +45,6 @@ fn label(kind: ContentKind) -> &'static str {
         ContentKind::Inspirations => "inspirations",
         ContentKind::Recordings => "recordings",
         ContentKind::EditExports => "audio-editor exports",
-        ContentKind::CardRecordings => "recording-card files",
     }
 }
 

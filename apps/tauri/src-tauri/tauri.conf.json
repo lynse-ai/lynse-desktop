@@ -57,7 +57,6 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/funasr_transcribe.py": "funasr_transcribe.py",
       "resources/mlx_transcribe.py": "mlx_transcribe.py",
       "resources/qwen3_transcribe.py": "qwen3_transcribe.py",
       "resources/moss_transcribe.py": "moss_transcribe.py",

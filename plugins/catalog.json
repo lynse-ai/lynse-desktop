@@ -9,12 +9,6 @@
       "comingSoon": true
     },
     {
-      "id": "lynse.plugin.recording-card",
-      "name": "Recording Card",
-      "description": "NewView Bluetooth recording card: scan, live feed and file transfer.",
-      "comingSoon": true
-    },
-    {
       "id": "lynse.plugin.webdav-sync",
       "name": "WebDAV Sync",
       "description": "Two-way sync of notes and recordings to your own WebDAV server.",

@@ -1,27 +1,27 @@
-//! Problem-report submission: direct to CNB with credentials from CloudBase.
+//! Problem-report submission: the CloudBase `cnb-report` function files the
+//! issue on CNB server-side.
 //!
-//! The CloudBase `cnb-report` function owns the CNB access token (nothing
-//! CNB-related ships in the client build) and hands out `{repo, token}` on a
-//! GET. The report itself cannot proxy through that gateway — its request
-//! body cap measured at ~64 KB — so the multi-MB screenshot and the issue
-//! creation go straight to api.cnb.cool from here, with short-lived-ish
-//! credentials fetched fresh per submission.
+//! The CNB token never leaves the function. The gateway in front of the
+//! function caps request bodies at ~64 KB, so a multi-MB screenshot cannot
+//! ride in the report POST: the client first asks the function for a
+//! presigned CNB asset slot, PUTs the screenshot bytes straight to that URL
+//! (no credentials involved), then submits the report referencing the
+//! uploaded asset.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::time::Duration;
 use tauri::{command, AppHandle};
 
-const CNB_API_BASE: &str = "https://api.cnb.cool";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_SCREENSHOT_BYTES: usize = 12 * 1024 * 1024;
-const MAX_BODY_BYTES: usize = 64 * 1024;
+// Headroom under the ~64 KB gateway body cap.
+const MAX_BODY_BYTES: usize = 48 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CnbIssueRequest {
-    /// CloudBase `cnb-report` function URL handing out the channel
-    /// credentials (build-time config).
+    /// CloudBase `cnb-report` function that files reports (build-time config).
     pub endpoint: String,
     pub title: String,
     pub body: String,
@@ -34,12 +34,6 @@ pub struct CnbIssueRequest {
 #[serde(rename_all = "camelCase")]
 pub struct CnbIssueResult {
     pub number: i64,
-}
-
-#[derive(Debug, Deserialize)]
-struct ReportTicket {
-    repo: String,
-    token: String,
 }
 
 /// Only https endpoints on the CloudBase access-service hosts (the env's
@@ -62,29 +56,6 @@ fn validate_endpoint(endpoint: &str) -> Result<reqwest::Url, String> {
     Ok(url)
 }
 
-/// The repo slug arrives from the ticket response and is spliced into CNB
-/// URLs, so confine it to `org/repo` shape before building anything.
-fn validate_repo(repo: &str) -> Result<(), String> {
-    let mut parts = repo.split('/');
-    let (Some(group), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {
-        return Err(format!("invalid repo slug: {repo}"));
-    };
-    let ok = |part: &str| {
-        !part.is_empty()
-            && part.len() <= 100
-            && !part.starts_with('.')
-            && !part.ends_with(".git")
-            && part
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-    };
-    if ok(group) && ok(name) {
-        Ok(())
-    } else {
-        Err(format!("invalid repo slug: {repo}"))
-    }
-}
-
 fn api_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
@@ -93,53 +64,88 @@ fn api_client() -> Result<reqwest::Client, String> {
         .map_err(|error| error.to_string())
 }
 
-async fn fetch_ticket(client: &reqwest::Client, endpoint: reqwest::Url) -> Result<ReportTicket, String> {
+/// POST a JSON payload to the report function and parse the JSON response,
+/// surfacing the function's error body on failure.
+async fn post_json(
+    client: &reqwest::Client,
+    url: reqwest::Url,
+    body: &impl serde::Serialize,
+) -> Result<Value, String> {
     let response = client
-        .get(endpoint)
+        .post(url)
         .header("Accept", "application/json")
+        .json(body)
         .send()
         .await
         .map_err(|error| format!("report channel unreachable: {error}"))?;
     let status = response.status();
-    let ticket: ReportTicket = response
-        .json()
-        .await
-        .map_err(|error| format!("report channel response unreadable ({status}): {error}"))?;
-    if !status.is_success() || ticket.repo.is_empty() || ticket.token.is_empty() {
-        return Err(format!(
-            "report channel not configured ({status})"
-        ));
-    }
-    validate_repo(&ticket.repo)?;
-    Ok(ticket)
-}
-
-async fn cnb_json(
-    client: &reqwest::Client,
-    method: reqwest::Method,
-    url: String,
-    token: &str,
-    body: Value,
-) -> Result<Value, String> {
-    let response = client
-        .request(method, url)
-        .bearer_auth(token)
-        // CNB content-negotiates hard: a missing Accept header is a 406.
-        .header("Accept", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| format!("CNB request failed: {error}"))?;
-    let status = response.status();
     let text = response
         .text()
         .await
-        .map_err(|error| format!("CNB response unreadable: {error}"))?;
+        .map_err(|error| format!("report channel response unreadable ({status}): {error}"))?;
     if !status.is_success() {
         let hint: String = text.chars().take(300).collect();
-        return Err(format!("CNB API {status}: {hint}"));
+        return Err(format!("report channel rejected the request ({status}): {hint}"));
     }
-    serde_json::from_str(&text).map_err(|error| format!("CNB response malformed: {error}"))
+    serde_json::from_str(&text).map_err(|error| format!("report channel response malformed: {error}"))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadSlotRequest<'a> {
+    action: &'a str,
+    size: usize,
+    content_type: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadSlot {
+    upload_url: String,
+    download_url: String,
+}
+
+/// Reserve a CNB asset slot via the function, then PUT the bytes to the
+/// presigned URL (the Authorization header must not ride along) and return
+/// the repo-scoped URL that serves the image.
+async fn upload_screenshot(
+    client: &reqwest::Client,
+    endpoint: &reqwest::Url,
+    bytes: &[u8],
+) -> Result<String, String> {
+    let slot: UploadSlot = serde_json::from_value(
+        post_json(
+            client,
+            endpoint.clone(),
+            &UploadSlotRequest {
+                action: "upload",
+                size: bytes.len(),
+                content_type: "image/jpeg",
+            },
+        )
+        .await?,
+    )
+    .map_err(|error| format!("report channel response malformed: {error}"))?;
+
+    client
+        .put(&slot.upload_url)
+        .header("Content-Type", "image/jpeg")
+        .body(bytes.to_vec())
+        .send()
+        .await
+        .map_err(|error| format!("screenshot upload failed: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("screenshot upload rejected: {error}"))?;
+    Ok(slot.download_url)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SubmitIssueRequest<'a> {
+    title: &'a str,
+    body: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    screenshot_url: Option<&'a str>,
 }
 
 /// Read the staged screenshot back, refusing anything outside the staging
@@ -175,66 +181,9 @@ fn parse_issue_number(issue: &Value) -> Result<i64, String> {
     }
 }
 
-/// Upload the staged screenshot as an issue image asset and return its
-/// markdown-ready URL: create an asset group with one image slot, then PUT
-/// the bytes to the presigned URL (no Authorization header rides along).
-/// The response's `asset_link` is an `<img>` snippet with a repo-relative
-/// src that serves an HTML page to anonymous visitors — the repo-scoped
-/// `download_url` is the one that actually serves image bytes, so that is
-/// what goes into the body.
-async fn upload_issue_image(
-    client: &reqwest::Client,
-    repo: &str,
-    token: &str,
-    bytes: Vec<u8>,
-) -> Result<String, String> {
-    let group = cnb_json(
-        client,
-        reqwest::Method::POST,
-        format!("{CNB_API_BASE}/{repo}/-/issues/asset-groups"),
-        token,
-        json!({
-            "image_assets": [{
-                "name": "screenshot.jpg",
-                "size": bytes.len(),
-                "content_type": "image/jpeg",
-            }]
-        }),
-    )
-    .await?;
-    let upload = group
-        .get("image_upload_urls")
-        .and_then(|urls| urls.get(0))
-        .cloned()
-        .ok_or("CNB asset group returned no upload URL")?;
-    let upload_url = upload
-        .get("upload_url")
-        .and_then(Value::as_str)
-        .ok_or("CNB upload URL missing")?
-        .to_string();
-    let download_url = upload
-        .get("download_url")
-        .and_then(Value::as_str)
-        .ok_or("CNB download URL missing")?
-        .to_string();
-
-    // Presigned target: the Authorization header must not ride along.
-    client
-        .put(&upload_url)
-        .header("Content-Type", "image/jpeg")
-        .body(bytes)
-        .send()
-        .await
-        .map_err(|error| format!("screenshot upload failed: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("screenshot upload rejected: {error}"))?;
-    Ok(download_url)
-}
-
-/// File the report on CNB directly: fetch the channel credentials from the
-/// CloudBase function, upload the staged screenshot as an issue image asset,
-/// then create the issue. A screenshot failure degrades to a note in the
-/// body — the text report still lands.
+/// Submit the report through the CloudBase function, which files the issue on
+/// CNB with its own credentials. A screenshot failure degrades to a note in
+/// the body — the text report still lands.
 #[command]
 pub async fn report_submit_cnb_issue(
     app: AppHandle,
@@ -248,15 +197,14 @@ pub async fn report_submit_cnb_issue(
     }
 
     let client = api_client()?;
-    let ticket = fetch_ticket(&client, endpoint).await?;
 
     // Keep the screenshot failure non-fatal: submit the text with a note.
     let mut body = body.to_owned();
+    let mut screenshot_url: Option<String> = None;
     if let Some(path) = req.screenshot_path.as_deref() {
         match read_staged_screenshot(&app, path) {
-            Ok(bytes) => match upload_issue_image(&client, &ticket.repo, &ticket.token, bytes).await
-            {
-                Ok(url) => body.push_str(&format!("\n\n![screenshot]({url})\n")),
+            Ok(bytes) => match upload_screenshot(&client, &endpoint, &bytes).await {
+                Ok(url) => screenshot_url = Some(url),
                 Err(error) => {
                     log::warn!("[cnb-report] screenshot upload failed, submitting text only: {error}");
                     body.push_str(&format!(
@@ -273,12 +221,14 @@ pub async fn report_submit_cnb_issue(
         }
     }
 
-    let issue = cnb_json(
+    let issue = post_json(
         &client,
-        reqwest::Method::POST,
-        format!("{CNB_API_BASE}/{}/-/issues", ticket.repo),
-        &ticket.token,
-        json!({ "title": title, "body": body.trim_end() }),
+        endpoint,
+        &SubmitIssueRequest {
+            title,
+            body: body.trim_end(),
+            screenshot_url: screenshot_url.as_deref(),
+        },
     )
     .await?;
     let number = parse_issue_number(&issue)?;
@@ -288,25 +238,6 @@ pub async fn report_submit_cnb_issue(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn repo_slugs_accept_org_repo_and_reject_traversal() {
-        assert!(validate_repo("lynse.ai/lynse-desktop").is_ok());
-        assert!(validate_repo("my-org_1.x/repo.name-2").is_ok());
-        for slug in [
-            "",
-            "just-a-group",
-            "a/b/c",
-            ".hidden/repo",
-            "org/./repo",
-            "org/../repo",
-            "org/repo/",
-            "org/repo.git",
-            "org/repo?x=1",
-        ] {
-            assert!(validate_repo(slug).is_err(), "accepted {slug}");
-        }
-    }
 
     #[test]
     fn endpoints_accept_cloudbase_hosts_and_reject_others() {
@@ -331,5 +262,25 @@ mod tests {
         assert_eq!(parse(r#"{"number": "42"}"#), 42);
         assert!(parse_issue_number(&serde_json::from_str("{}").unwrap()).is_err());
         assert!(parse_issue_number(&serde_json::from_str(r#"{"number": "x"}"#).unwrap()).is_err());
+    }
+
+    /// The function treats an absent `screenshotUrl` as text-only and a null
+    /// one as invalid — the submit payload must omit the key entirely.
+    #[test]
+    fn submit_request_omits_absent_screenshot_url() {
+        let value = serde_json::to_value(&SubmitIssueRequest {
+            title: "t",
+            body: "b",
+            screenshot_url: None,
+        })
+        .unwrap();
+        assert!(value.get("screenshotUrl").is_none());
+        let value = serde_json::to_value(&SubmitIssueRequest {
+            title: "t",
+            body: "b",
+            screenshot_url: Some("https://cnb.cool/x"),
+        })
+        .unwrap();
+        assert_eq!(value["screenshotUrl"], "https://cnb.cool/x");
     }
 }

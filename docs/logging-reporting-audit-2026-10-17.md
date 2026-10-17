@@ -38,6 +38,8 @@
 
 证据：[云函数 GET](/Users/lynse/Documents/lynse-app/lynse-desktop/cloudfunctions/cnb-report/index.js:109)、[原生获取凭据](/Users/lynse/Documents/lynse-app/lynse-desktop/apps/tauri/src-tauri/src/cnb_report.rs:96)。
 
+> 处置记录（2026-10-17 当天）：已按本节方案改造并部署。云函数移除 GET 凭据入口（两个线上域名实测均返回 405），新增 `action: "upload"` 返回 CNB 预签名上传槽位（客户端凭匿名 PUT 直传字节，不接触凭据），工单改由函数服务端创建；客户端 Rust 路径同步改为「申请槽位 → 直传 → 提交」两段式，不再持有任何 CNB 凭据；cargo 3 项单测通过；线上 upload→PUT→submit 端到端验证通过（验证工单 lynse.ai/lynse-desktop#9，确认后可关闭）。**token 轮换已全部完成（2026-10-17）**：新令牌（名 "issue"，repo-issue:rw 仅限 lynse.ai/lynse-desktop）已写入函数 env 并经线上建单回归确认生效（验证工单 #10）；旧令牌（名 "Issue"）已从 CNB 令牌列表删除，直连验证返回 401（已失效）。**本 P0 关闭**。令牌管理入口：cnb.cool → 头像 → 个人设置 → 访问令牌（cnb.cool/profile/token）；CNB OpenAPI 无令牌管理端点，吊销只能网页端操作。另注：账户下还有一个名 "MacBook air" 的令牌（应用于全部仓库，registry-package:rw + repo-code:rw），从未经过上报通道暴露，不涉本次事件，但其范围较宽，可自行评估是否收紧。已发布客户端（v1.1.14）的直连路径随 GET 关闭失效，报告自动降级为 GitHub 预填链接，属预期。另注意：CloudBase getFunctionDetail 接口会在返回中明文回显 env 变量值，查询函数详情时不要把输出原样转发。
+
 ### P1：版本信息无法区分同版本的不同测试包
 
 报告有 appVersion，但没有 build、commit、channel、arch、osVersion、osBuild。启动日志也没有统一环境摘要。检查当天本机日志，只发现 7 条前端启动标记，没有明确的软件或系统版本字段。本机当前包的 version 和 build 都是 1.1.14，仅凭报告中的版本号无法区分多个同版本测试包。

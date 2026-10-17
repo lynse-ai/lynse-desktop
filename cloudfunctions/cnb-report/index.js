@@ -1,19 +1,21 @@
 /**
- * cnb-report — hands the client the credentials to file problem reports as
- * issues on CNB.
+ * cnb-report — files problem reports as CNB issues, server-side.
  *
  * The CNB access token lives in this function's env config (CNB_TOKEN,
- * issue-write scope on CNB_REPO only) and never ships in the client build.
- * The CloudBase access gateway caps request bodies at ~64 KB, so report
- * payloads (multi-MB screenshots) cannot proxy through here — instead the
- * client fetches the channel credentials with a GET and talks to
- * api.cnb.cool directly.
+ * issue-write scope on CNB_REPO only) and never leaves this function: the
+ * client cannot create issues or asset groups on its own.
  *
- * Contract:
- *   GET  → 200 { repo, token }   (channel credentials for the CNB flow)
- *   POST { title, body, screenshot? } → 201 { number, issueUrl }
- *   (POST remains for small text-only reports; screenshots must use the
- *    direct-to-CNB path above.)
+ * The CloudBase access gateway caps request bodies at ~64 KB, so multi-MB
+ * screenshots cannot ride in the report POST. Instead the client asks for an
+ * upload slot, PUTs the bytes straight to CNB's presigned URL (no
+ * Authorization header, no credentials involved), and references the asset
+ * in its report; the function embeds the link when filing.
+ *
+ * Contract (everything is POST + JSON; GET is not part of the channel):
+ *   { action: "upload", size, contentType }
+ *       → 200 { uploadUrl, downloadUrl }   presigned CNB asset slot
+ *   { title, body, screenshotUrl? }        (a body without `action` is a submit)
+ *       → 201 { number, issueUrl }         issue filed by this function
  */
 
 const CNB_API_BASE = "https://api.cnb.cool";
@@ -23,10 +25,10 @@ const CNB_REPO = process.env.CNB_REPO || "";
 const CNB_TOKEN = process.env.CNB_TOKEN || "";
 
 const MAX_TITLE = 200;
-const MAX_BODY = 64 * 1024;
-// SCF sync-invoke payload caps the whole request at ~6 MB; keep the base64
-// screenshot slice under that with room for the text fields.
-const MAX_SCREENSHOT_BASE64 = 6 * 1024 * 1024; // ~4.5 MB binary PNG
+// Headroom under the ~64 KB gateway body cap.
+const MAX_BODY = 48 * 1024;
+const MAX_SCREENSHOT_BYTES = 12 * 1024 * 1024;
+const SCREENSHOT_CONTENT_TYPES = new Set(["image/png", "image/jpeg"]);
 
 const CORS_HEADERS = {
   "Content-Type": "application/json",
@@ -65,61 +67,44 @@ async function cnb(method, path, payload) {
 }
 
 /**
- * Upload one PNG as an issue image asset and return its markdown-ready
- * link: create an asset group with a single image slot, then PUT the bytes
- * to the presigned URL (no Authorization header rides along). On failure
- * the issue is still filed — the caller degrades to a note in the body.
+ * Reserve an issue image asset slot and hand back the presigned pair: the
+ * client PUTs the bytes to `uploadUrl`, the filed issue references
+ * `downloadUrl` (the repo-scoped URL that serves image bytes to anonymous
+ * visitors — `asset_link` would serve an HTML page instead).
  */
-async function uploadScreenshot(base64Data, contentType) {
-  const bytes = Buffer.from(base64Data, "base64");
-  if (bytes.length === 0) throw new Error("screenshot is empty");
-  const type = contentType || "image/png";
-  const group = await cnb("POST", `/${CNB_REPO}/-/issues/asset-groups`, {
-    image_assets: [
-      {
-        name: type === "image/png" ? "screenshot.png" : "screenshot.jpg",
-        size: bytes.length,
-        content_type: type,
-      },
-    ],
-  });
-  const upload = group && group.image_upload_urls && group.image_upload_urls[0];
-  if (!upload || !upload.upload_url || !upload.asset_link) {
-    throw new Error("CNB asset group returned no upload URL");
+async function prepareScreenshotUpload(payload) {
+  const size = Number(payload.size);
+  const contentType = payload.contentType || "image/jpeg";
+  if (!Number.isInteger(size) || size <= 0 || size > MAX_SCREENSHOT_BYTES) {
+    return json(400, { error: "screenshot size out of range" });
   }
-  const put = await fetch(upload.upload_url, {
-    method: "PUT",
-    headers: { "Content-Type": contentType || "image/png" },
-    body: bytes,
-  });
-  if (!put.ok) {
-    throw new Error(`screenshot upload rejected: HTTP ${put.status}`);
+  if (!SCREENSHOT_CONTENT_TYPES.has(contentType)) {
+    return json(400, { error: "unsupported screenshot content type" });
   }
-  return upload.asset_link;
+  try {
+    const group = await cnb("POST", `/${CNB_REPO}/-/issues/asset-groups`, {
+      image_assets: [
+        {
+          name: contentType === "image/png" ? "screenshot.png" : "screenshot.jpg",
+          size,
+          content_type: contentType,
+        },
+      ],
+    });
+    const upload = group && group.image_upload_urls && group.image_upload_urls[0];
+    if (!upload || !upload.upload_url || !upload.download_url) {
+      throw new Error("CNB asset group returned no upload URL");
+    }
+    return json(200, {
+      uploadUrl: upload.upload_url,
+      downloadUrl: upload.download_url,
+    });
+  } catch (error) {
+    return json(502, { error: String((error && error.message) || error).slice(0, 400) });
+  }
 }
 
-exports.main = async (event) => {
-  if (event.httpMethod === "OPTIONS") {
-    return { statusCode: 204, headers: CORS_HEADERS, body: "" };
-  }
-  if (!CNB_REPO || !CNB_TOKEN) {
-    return json(503, { error: "report channel is not configured (CNB_REPO/CNB_TOKEN missing)" });
-  }
-  // Credential fetch for the client-side direct-to-CNB flow.
-  if (event.httpMethod === "GET") {
-    return json(200, { repo: CNB_REPO, token: CNB_TOKEN });
-  }
-  if (event.httpMethod !== "POST") {
-    return json(405, { error: "method not allowed" });
-  }
-
-  let payload;
-  try {
-    payload = readJsonBody(event);
-  } catch {
-    return json(400, { error: "request body is not valid JSON" });
-  }
-
+async function submitIssue(payload) {
   const title = typeof payload.title === "string" ? payload.title.trim() : "";
   const body = typeof payload.body === "string" ? payload.body.trim() : "";
   if (!title || title.length > MAX_TITLE) {
@@ -128,23 +113,24 @@ exports.main = async (event) => {
   if (!body || body.length > MAX_BODY) {
     return json(400, { error: "body missing or too large" });
   }
-  const screenshot = payload.screenshot;
-  const screenshotData =
-    screenshot && typeof screenshot.data === "string" ? screenshot.data : null;
-  if (screenshotData && screenshotData.length > MAX_SCREENSHOT_BASE64) {
-    return json(413, { error: "screenshot too large" });
+  // The body itself is free text, so a strict origin check on screenshotUrl
+  // adds nothing — just keep it a bounded https URL.
+  let screenshotUrl = null;
+  if (payload.screenshotUrl !== undefined) {
+    if (
+      typeof payload.screenshotUrl !== "string" ||
+      !payload.screenshotUrl.startsWith("https://") ||
+      payload.screenshotUrl.length > 2048
+    ) {
+      return json(400, { error: "invalid screenshotUrl" });
+    }
+    screenshotUrl = payload.screenshotUrl;
   }
+  const fullBody = screenshotUrl
+    ? `${body}\n\n![screenshot](${screenshotUrl})\n`
+    : body;
 
   try {
-    let fullBody = body;
-    if (screenshotData) {
-      try {
-        const link = await uploadScreenshot(screenshotData, screenshot.contentType);
-        fullBody = `${body}\n\n![screenshot](${link})\n`;
-      } catch (error) {
-        fullBody = `${body}\n\n> 截图上传失败 / screenshot upload failed: ${error.message}\n`;
-      }
-    }
     const issue = await cnb("POST", `/${CNB_REPO}/-/issues`, {
       title,
       body: fullBody,
@@ -164,4 +150,28 @@ exports.main = async (event) => {
   } catch (error) {
     return json(502, { error: String((error && error.message) || error).slice(0, 400) });
   }
+}
+
+exports.main = async (event) => {
+  if (event.httpMethod === "OPTIONS") {
+    return { statusCode: 204, headers: CORS_HEADERS, body: "" };
+  }
+  if (!CNB_REPO || !CNB_TOKEN) {
+    return json(503, { error: "report channel is not configured (CNB_REPO/CNB_TOKEN missing)" });
+  }
+  if (event.httpMethod !== "POST") {
+    return json(405, { error: "method not allowed" });
+  }
+
+  let payload;
+  try {
+    payload = readJsonBody(event);
+  } catch {
+    return json(400, { error: "request body is not valid JSON" });
+  }
+
+  if (payload.action === "upload") {
+    return prepareScreenshotUpload(payload);
+  }
+  return submitIssue(payload);
 };

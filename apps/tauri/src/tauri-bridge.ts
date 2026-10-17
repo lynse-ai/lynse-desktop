@@ -60,10 +60,6 @@ import type {
   WebdavSyncProgress,
 } from "@lynse/views/settings";
 import type {
-  DesktopRecordingCardApi,
-  RecordingCardEvent,
-} from "@lynse/views/devices";
-import type {
   DesktopFeishuApi,
   FeishuChatSummary,
   FeishuConfig,
@@ -115,7 +111,6 @@ type DesktopApi = {
   cloudSync: DesktopCloudSyncApi;
   liveTranslation: DesktopLiveTranslationApi;
   meetingDetector: DesktopMeetingDetectorApi;
-  recordingCard: DesktopRecordingCardApi;
   vault: DesktopVaultApi;
   todo: Record<string, (...args: any[]) => Promise<unknown>>;
   inspiration: DesktopInspirationApi;
@@ -476,39 +471,6 @@ export async function installTauriBridge(): Promise<void> {
         getCurrentWebview().listen<MeetingDetectorEvent>("meeting-detector-event", (event) =>
           callback(event.payload),
         ),
-    },
-    recordingCard: {
-      state: () => command("recording_card_state"),
-      scanStart: () => command<void>("recording_card_scan_start"),
-      scanStop: () => command<void>("recording_card_scan_stop"),
-      setManufacturerCode: (code: string) =>
-        command<void>("recording_card_set_manufacturer_code", { code }),
-      setLiveFeed: (enabled: boolean) =>
-        command<void>("recording_card_set_live_feed", { enabled }),
-      connect: (device: unknown) =>
-        command("recording_card_connect", { device }),
-      disconnect: () => command<void>("recording_card_disconnect"),
-      query: (kind: "battery" | "version" | "memory") =>
-        command<void>("recording_card_query", { kind }),
-      record: (action: string, mode?: string) =>
-        command<void>("recording_card_record", { action, mode }),
-      listFiles: () => command("recording_card_list_files"),
-      download: (
-        file: { sn: number; name: string; size: number; frameBytes: number },
-        autoDelete: boolean,
-      ) => command<void>("recording_card_download", { ...file, autoDelete }),
-      cancelDownload: () => command<void>("recording_card_cancel_download"),
-      deleteFile: (sn: number, name: string) =>
-        command<void>("recording_card_delete_file", { sn, name }),
-      transcribeSource: (name: string, sn: number, frameBytes: number) =>
-        command<string>("recording_card_transcribe_source", { name, sn, frameBytes }),
-      onEvent: async (callback: (event: RecordingCardEvent) => void) => {
-        const unlisten = await getCurrentWebview().listen<RecordingCardEvent>(
-          "recording-card-event",
-          (event) => callback(event.payload),
-        );
-        return unlisten;
-      },
     },
     appInfo: { version: "0.1.0", build: null, platform: "darwin", sandboxed: false },
     app: {

@@ -124,8 +124,8 @@ pub(crate) fn vault_user_dir(app: &AppHandle) -> CommandResult<Option<PathBuf>> 
 
 // ── Unified user-content root ───────────────────────────────────────────
 // Once the vault folder is enabled it doubles as the root for app-managed
-// user content (inspiration memos, live recordings, audio-editor exports,
-// recording-card imports), so everything the user owns lives under one
+// user content (inspiration memos, live recordings, audio-editor exports),
+// so everything the user owns lives under one
 // folder — one subfolder per kind, English-named to match the existing
 // Journal/Tasks/attachments convention. While the vault is disabled each
 // kind stays at its historical app-data location.
@@ -143,8 +143,6 @@ pub(crate) enum ContentKind {
     Recordings,
     /// Audio-editor exports, registered as local transcription records.
     EditExports,
-    /// Recording-card (hardware recorder) imports.
-    CardRecordings,
 }
 
 impl ContentKind {
@@ -159,8 +157,6 @@ impl ContentKind {
             (Self::Recordings, true) => &["Recordings"],
             (Self::EditExports, false) => &["audio-edits"],
             (Self::EditExports, true) => &["Transcriptions"],
-            (Self::CardRecordings, false) => &["recordings", "card"],
-            (Self::CardRecordings, true) => &["Recordings", "Card"],
         }
     }
 }

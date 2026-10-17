@@ -27,7 +27,6 @@ import {
   ListChecks,
   FolderOpen,
   Bot,
-  Bluetooth,
 } from "../icons";
 
 // Module-level constants keep the notification selector identities stable across renders.
@@ -102,17 +101,8 @@ export function LynseSidebar() {
         push("/chat");
       },
     },
-    {
-      key: "devices",
-      label: t("nav.devices"),
-      icon: Bluetooth,
-      path: "/devices",
-      // Open stroke path — filling it closes into a solid blob.
-      solid: false,
-    },
   ].filter((item) =>
     item.key === "inspiration" ? featureFlags.inspiration && Boolean(getDesktopInspirationApi())
-    : item.key === "devices" ? featureFlags.devices
     : true,
   );
 

@@ -11,7 +11,6 @@ import { TodoPage } from "@lynse/views/todo";
 import { NotesPage } from "@lynse/views/notes";
 import { InspirationCaptureSheet, InspirationPage } from "@lynse/views/inspiration";
 import { NotificationsPage, AppUpdateNotifier, ContextInboxNotifier } from "@lynse/views/notifications";
-import { DevicesPage } from "@lynse/views/devices";
 import { SettingsDialog, useWebdavAutoSync } from "@lynse/views/settings";
 import { AboutWindow } from "@lynse/views/about";
 import { FeedbackWindow } from "@lynse/views/feedback";
@@ -99,9 +98,6 @@ function PageRouter() {
   } else if (pathname.startsWith("/notifications")) {
     page = <NotificationsPage />;
     route = "notifications";
-  } else if (featureFlags.devices && pathname.startsWith("/devices")) {
-    page = <DevicesPage />;
-    route = "devices";
   } else if (pathname.startsWith("/audio-editor")) {
     page = <AudioEditorPage />;
     route = "audio-editor";

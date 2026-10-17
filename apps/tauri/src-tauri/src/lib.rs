@@ -32,7 +32,6 @@ mod inspiration_voice;
 mod meeting_detector;
 mod feishu;
 mod bots;
-mod recording_card;
 mod audio_editor;
 mod stt;
 // Microphone TCC prompt from the main app process (macOS); stubs elsewhere.
@@ -4903,7 +4902,6 @@ pub fn run() {
             // failure cannot recursively panic during startup diagnostics.
             logging::install_panic_hook(log_dir.ok());
             desktop_mcp::bootstrap(app.handle());
-            app.manage(recording_card::RecordingCardManager::new(app.handle().clone()));
             if let Err(error) = migrate_electron_data(&app.handle()) {
                 log::error!("Failed to migrate Electron local data: {error}");
             }
@@ -4926,7 +4924,6 @@ pub fn run() {
             if let Err(error) = setup_tray(&app.handle()) {
                 log::error!("Failed to setup system tray: {error}");
             }
-            recording_card::spawn_reconnect_watcher(app.handle().clone());
             // Auto-record on detected meetings: polls OS audio sessions for
             // whitelisted meeting apps; runs whether or not the main window
             // is visible, and no-ops until the webview enables it.
@@ -5085,20 +5082,6 @@ pub fn run() {
             live_translation::live_translation_set_mode,
             meeting_detector::meeting_detector_set_config,
             meeting_detector::meeting_detector_get_state,
-            recording_card::recording_card_state,
-            recording_card::recording_card_scan_start,
-            recording_card::recording_card_scan_stop,
-            recording_card::recording_card_set_manufacturer_code,
-            recording_card::recording_card_set_live_feed,
-            recording_card::recording_card_connect,
-            recording_card::recording_card_disconnect,
-            recording_card::recording_card_query,
-            recording_card::recording_card_record,
-            recording_card::recording_card_list_files,
-            recording_card::recording_card_download,
-            recording_card::recording_card_cancel_download,
-            recording_card::recording_card_delete_file,
-            recording_card::recording_card_transcribe_source,
             window_effects::window_effects_mode,
             audio_editor::audio_editor_status,
             audio_editor::audio_editor_ensure_runtime,

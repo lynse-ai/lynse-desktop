@@ -63,7 +63,6 @@ function defaultInvoke(cmd: string, args: Record<string, unknown>): unknown {
     "feishu_config_get",
     "feishu_state",
     "audio_editor_status",
-    "recording_card_state",
     "local_stt_config_get",
     "inspiration_voice_state",
   ]);

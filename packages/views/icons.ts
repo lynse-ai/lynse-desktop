@@ -25,9 +25,6 @@ export {
   Lightbulb,        // Inspiration
   MessageSquare,    // Generic message placeholder (transcription prompt)
   Settings,         // Settings
-  Bluetooth,        // Recording card / devices page
-  BatteryFull,      // Device battery (healthy)
-  BatteryLow,       // Device battery (low)
   HardDrive,        // Device storage
   Cpu,              // Device firmware
   CircleDot,        // Live recording dot

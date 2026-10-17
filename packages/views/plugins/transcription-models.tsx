@@ -37,12 +37,13 @@ import type { PluginManifest } from "./types";
  * desktop platforms; MOSS waits until quantization/adaptation lands; the
  * vibeasr/mlx tiers stay functional for existing installs but are not listed.
  *
- * Off macOS the catalog is filtered by `NON_MAC_ENGINES`: the sidecar engines
- * (whisper + vibeasr, both statically-linked binaries in the shared runtime)
- * and FunASR, which prepares its own Python venv on first use. The MLX-bound
- * engines (Qwen3, MOSS, MLX-Whisper) stay hidden because their backend does not
- * exist off Apple Silicon; WhisperX is hidden until its venv bootstrap learns
- * the Windows interpreter layout.
+ * Off macOS the catalog is filtered by `NON_MAC_ENGINES`: the three sidecar
+ * engines (whisper + vibeasr + funasr), all statically-linked binaries in the
+ * shared runtime. FunASR stopped being a Python engine when it moved to the
+ * llama.cpp/GGUF runtime, so it now belongs in that set for the same reason
+ * whisper does. The MLX-bound engines (Qwen3, MOSS, MLX-Whisper) stay hidden
+ * because their backend does not exist off Apple Silicon; WhisperX is hidden
+ * until its venv bootstrap learns the Windows interpreter layout.
  */
 
 export interface TranscriptionModelEntry {

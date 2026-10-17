@@ -537,6 +537,8 @@ const ko = {
     stt_engine_moss: "MOSS 전사 (로컬 · 화자 분리)",
     stt_moss_model: "MOSS 전사 모델",
     stt_moss_hint: "OpenMOSS의 MOSS-Transcribe-Diarize(0.9B)가 MLX를 통해 Apple Silicon GPU에서 로컬로 실행되며, 화자 라벨과 타임스탬프가 포함된 전사를 한 번의 추론으로 출력합니다(최대 90분, 다인 회의에 적합). 처음 사용 시 런타임과 8-bit 양자화 모델(약 1.1 GiB)이 자동으로 다운로드됩니다.",
+    stt_funasr_hint: "SenseVoice-Small(GGUF 네이티브 엔진, 약 244MiB, Python 불필요). 로컬 엔진 중 중국어 정확도가 가장 높으며 자체적으로 구두점과 숫자 표기를 출력합니다. 화자 분리를 아래 성문 옵션을 선택하고 기대 화자 수를 입력하면 안정적인 결과를 얻습니다.",
+    stt_funasr_no_hotword: "GGUF 버전 FunASR에는 핫워드 인자가 없어 저장된 핫워드 패키지는 이 엔진에 적용되지 않습니다.",
     stt_vibeasr_hint: "CPU 전용 엔진으로 7개 언어(중/영/불/이/한/포/베)를 지원합니다. 첫 실행 시 약 1.6GiB의 가중치를 다운로드하며 오프라인 문자 변환 구성 요소가 필요합니다.",
     stt_whisper_model: "Whisper 모델",
     stt_campp_diarization: "CAM++ 화자 분리",
@@ -1105,8 +1107,8 @@ const ko = {
       badge_voiceprint: "성문 포함",
       uninstall_blocked: "이 모델은 기본 엔진 또는 언어별 라우팅에서 사용 중입니다. 먼저 전환하세요.",
       funasr: {
-        name: "FunASR(최신)",
-        description: "Paraformer 전사 + CAM++ 화자 라벨. 설치하면 성문 기능도 활성화됩니다.",
+        name: "FunASR SenseVoice-Small",
+        description: "GGUF 네이티브 엔진, 약 244MiB — Python과 torch 불필요. 로컬에서 중국어 정확도가 가장 높고 구두점까지 직접 출력합니다. 화자 분리는 3D-Speaker 성문 모델을 별도 설치해야 합니다.",
       },
       whisperx: {
         name: "WhisperX(최신)",

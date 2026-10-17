@@ -540,6 +540,8 @@ const en = {
     stt_engine_moss: "MOSS-Transcribe-Diarize (local · speaker attribution)",
     stt_moss_model: "MOSS-Transcribe-Diarize model",
     stt_moss_hint: "MOSS-Transcribe-Diarize (OpenMOSS, 0.9B) runs locally on the Apple Silicon GPU via MLX and outputs speaker-attributed, timestamped transcripts in a single pass (up to 90 minutes) — ideal for multi-speaker meetings. The runtime and 8-bit weights (~1.1 GiB) are downloaded automatically on first use.",
+    stt_funasr_hint: "SenseVoice-Small (native GGUF engine, about 244 MiB, no Python needed). The most accurate local engine for Chinese, and it punctuates and normalizes numbers by itself. Tick the voiceprint option below to separate speakers, and set an expected speaker count for a stable result.",
+    stt_funasr_no_hotword: "The GGUF build of FunASR has no hotword parameter, so a saved hotword package has no effect on this engine.",
     stt_vibeasr_hint: "A CPU-only engine covering 7 languages (zh / en / fr / it / ko / pt / vi). The first run downloads about 1.6 GiB of weights and requires the offline transcription component.",
     stt_whisper_model: "Whisper model",
     stt_campp_diarization: "CAM++ speaker diarization",
@@ -1108,8 +1110,8 @@ const en = {
       badge_voiceprint: "Includes voiceprints",
       uninstall_blocked: "This model backs the default engine or a per-language routing rule — switch it first.",
       funasr: {
-        name: "FunASR (latest)",
-        description: "Paraformer transcription with CAM++ speaker labels — installing it also enables voiceprints.",
+        name: "FunASR SenseVoice-Small",
+        description: "Native GGUF engine, about 244 MiB — no Python and no torch. The most accurate local engine for Chinese, and it punctuates on its own; for speaker labels install the separate 3D-Speaker voiceprint model.",
       },
       whisperx: {
         name: "WhisperX (latest)",

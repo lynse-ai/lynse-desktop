@@ -83,7 +83,16 @@ mkdir -p "$DIST"
 
 OS="$(uname -s)"
 if [[ "$OS" == Darwin ]]; then
-  PLATFORM=macos; RUNTIME_PLATFORM=macos-aarch64; SHA_VAR=LYNSE_RUNTIME_SHA_MACOS_AARCH64
+  # The runtime archive is cut per OS+arch and the Rust side resolves
+  # `stt-runtimes/v<version>/macos-aarch64|macos-x86_64`, so hardcoding aarch64
+  # here would publish an arm64 archive under whichever name the host happened to
+  # build it — and an Intel Mac would install arm64 binaries it cannot exec.
+  PLATFORM=macos
+  if [[ "$(uname -m)" == "x86_64" ]]; then
+    RUNTIME_PLATFORM=macos-x86_64; SHA_VAR=LYNSE_RUNTIME_SHA_MACOS_X86_64
+  else
+    RUNTIME_PLATFORM=macos-aarch64; SHA_VAR=LYNSE_RUNTIME_SHA_MACOS_AARCH64
+  fi
 elif [[ "$OS" == MINGW* || "$OS" == MSYS* ]]; then
   PLATFORM=windows; RUNTIME_PLATFORM=windows-x86_64; SHA_VAR=LYNSE_RUNTIME_SHA_WINDOWS_X86_64
 else
@@ -105,6 +114,16 @@ if [[ "$DO_BUILD" == true ]]; then
     # CPU-only (the same hard gate the old release workflow had).
     [[ -s "$SIDECARS/vulkan-1.dll" ]] || die "vulkan-1.dll missing from sidecars — the whisper build went out CPU-only"
   fi
+  # Everything `stt::required_runtime_names` demands must be present, or the
+  # archive fails the client's own completeness gate: `model_is_installed` would
+  # report FunASR/Whisper as missing, and because re-downloading the same
+  # incomplete archive can never satisfy the check, the user would loop on
+  # "组件未下载" with no way out. FunASR is in this list now that it is a sidecar.
+  extension=""; [[ "$PLATFORM" == windows ]] && extension=".exe"
+  for required in whisper vibeasr funasr ffmpeg ffprobe; do
+    [[ -s "$SIDECARS/${required}${extension}" ]] \
+      || die "${required}${extension} missing from sidecars — run fetch-sidecars.sh first; this archive would fail the client's runtime check"
+  done
 
   log "Packaging STT runtime archive (SHA exported as $SHA_VAR)"
   ARCHIVE="lynse-stt-runtime-$RUNTIME_PLATFORM.tar.gz"

@@ -8,8 +8,8 @@
 //! per transcription request.
 
 use crate::{
-    ensure_mlx_venv, ensure_whisperx_venv, mlx_script_path, normalize_funasr_output,
-    parse_funasr_json, run_funasr, run_mlx, script_path, whisperx_script_path, CommandResult,
+    ensure_mlx_venv, ensure_whisperx_venv, mlx_script_path, run_mlx, whisperx_script_path,
+    CommandResult,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -96,12 +96,16 @@ impl WhisperModel {
 }
 
 /// Filename of the on-disk model artifact for a (provider, model_id) pair.
-/// Returns `None` for engines whose download is handled specially (FunASR).
+/// Returns `None` for multi-file models and for engines whose download is
+/// handled specially (the MLX-family Python bridges).
 pub fn model_file_name(provider: &str, model_id: &str) -> Option<String> {
     match provider {
         "whisper" => WhisperModel::from_model_id(model_id).map(|model| model.file_name().to_owned()),
         // VibeVoice ships two GGUF weights (VAE + LM); readiness is checked per-file.
         "vibeasr" => None,
+        // FunASR ships a model GGUF plus the shared FSMN-VAD GGUF, both listed
+        // in the catalog entry's `files`, so there is no single name here.
+        "funasr" => None,
         // MLX keeps a directory of weights (marked ready with a `.ready` file),
         // so there is no single downloadable artifact to name.
         "mlx" => None,
@@ -119,8 +123,17 @@ pub fn model_file_name(provider: &str, model_id: &str) -> Option<String> {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FunasrProviderConfig {
+    /// Optional CAM++ speaker separation. The GGUF binaries transcribe only —
+    /// upstream states plainly that they do not implement CAM++ embeddings or
+    /// clustering — so speaker labels come from the same post-pass Whisper uses.
+    #[serde(default)]
+    pub campp_diarization: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_speakers: Option<u64>,
+    /// Accepted and ignored: the llama.cpp binaries have no hotword or context
+    /// prompt argument (`-m/--vad/--vad-maxseg/-a/--backend/--srt/--ids/--keep-tags`
+    /// is the whole surface). Kept so stored configs from the PyTorch bridge
+    /// still deserialize, and so the UI can tell the user rather than pretend.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hotword_package_id: Option<String>,
 }
@@ -241,18 +254,38 @@ pub enum ProviderConfig {
 
 impl Default for ProviderConfig {
     fn default() -> Self {
-        // Qwen3-ASR (MLX) is the primary local engine on Apple Silicon. Every
-        // other platform only ships the whisper.cpp sidecar, so default there
-        // instead of an engine that hard-errors on first use.
-        if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        ProviderConfig::default_for_locale(None)
+    }
+}
+
+impl ProviderConfig {
+    /// The engine to transcribe with when the user has not chosen one.
+    ///
+    /// Two facts drive it and they live on opposite sides of the bridge: the
+    /// compile target (only Rust knows it — Qwen3-ASR needs Apple Silicon, so an
+    /// Intel Mac must never be defaulted into an engine that hard-refuses to
+    /// run) and the app's UI locale (only the frontend knows it). Hence
+    /// `locale` is a parameter rather than something guessed from env here.
+    pub fn default_for_locale(locale: Option<&str>) -> Self {
+        let apple_silicon = cfg!(all(target_os = "macos", target_arch = "aarch64"));
+        // For Chinese audio on every other target, FunASR's GGUF SenseVoice is
+        // the strongest sidecar ASR available: micro-CER 8.01% against
+        // whisper.cpp large-v3-turbo's 23.15% on upstream's 184-clip
+        // human-referenced Mandarin set, measured at RTF 0.289 on a 44-minute
+        // meeting. SenseVoice covers zh/en/ja/ko/yue only, so the multilingual
+        // tail stays on Whisper, and Apple Silicon keeps Qwen3-ASR.
+        let chinese = locale
+            .map(|value| value.to_ascii_lowercase().starts_with("zh"))
+            .unwrap_or(false);
+        if chinese && !apple_silicon {
+            ProviderConfig::Funasr(FunasrProviderConfig::default())
+        } else if apple_silicon {
             ProviderConfig::Qwen3(Qwen3ProviderConfig::default())
         } else {
             ProviderConfig::Whisper(WhisperProviderConfig::default())
         }
     }
-}
 
-impl ProviderConfig {
     pub fn engine(&self) -> &'static str {
         match self {
             ProviderConfig::Funasr(_) => "funasr",
@@ -286,6 +319,34 @@ impl ProviderConfig {
             ProviderConfig::Qwen3(_) => None,
             ProviderConfig::Moss(_) => None,
             ProviderConfig::WhisperX(config) => config.expected_speakers,
+        }
+    }
+
+    /// Whether the CAM++ voiceprint post-pass should run after transcription.
+    /// Only Whisper and FunASR support speaker labels today: Whisper's own
+    /// output has none, and neither do the FunASR GGUF binaries, so both reuse
+    /// `assign_campp_speakers`. The other engines either diarize internally or
+    /// are single-speaker by design.
+    pub fn campp_diarization(&self) -> bool {
+        match self {
+            ProviderConfig::Funasr(config) => config.campp_diarization,
+            ProviderConfig::Whisper(config) => config.campp_diarization,
+            _ => false,
+        }
+    }
+
+    /// The catalog id this engine transcribes with. FunASR ships exactly one GGUF
+    /// model, so it has no per-model choice to record. Borrows from `self`
+    /// because the MLX-family engines carry their model id as an `Option<String>`.
+    pub fn model_id(&self) -> &str {
+        match self {
+            ProviderConfig::Funasr(_) => FUNASR_DEFAULT_MODEL_ID,
+            ProviderConfig::Whisper(config) => config.model.as_model_id(),
+            ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
+            ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
+            ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(QWEN3_DEFAULT_MODEL_ID),
+            ProviderConfig::Moss(config) => config.model.as_deref().unwrap_or(MOSS_DEFAULT_MODEL_ID),
+            ProviderConfig::WhisperX(_) => WHISPERX_DEFAULT_MODEL_ID,
         }
     }
 
@@ -329,22 +390,39 @@ impl ProviderConfig {
 }
 
 /// Single source of truth for STT routing. Resolution order:
-/// `per_note` → `per_language[lang]` → `default` → Qwen3.
+/// `per_note` → `per_language[lang]` → `default` → the platform/locale default.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TranscribeConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<ProviderConfig>,
     #[serde(default)]
     pub per_language: BTreeMap<String, ProviderConfig>,
+    /// The app's UI language, mirrored by the frontend on boot and on every
+    /// save. Background paths — voice memos, retries of an interrupted record —
+    /// have no dialog to read a locale from, and without this they would pick a
+    /// different engine than the one the user sees in Settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_locale: Option<String>,
 }
 
 impl TranscribeConfig {
-    pub fn resolve(&self, language: Option<&str>, per_note: Option<&ProviderConfig>) -> ProviderConfig {
+    /// `locale` is the caller's own knowledge of the UI language (the import
+    /// dialog has it); when absent — a background job — the persisted
+    /// `ui_locale` is used. Nothing here guesses from env: only the frontend
+    /// knows which language the user chose inside the app.
+    pub fn resolve(
+        &self,
+        language: Option<&str>,
+        per_note: Option<&ProviderConfig>,
+        locale: Option<&str>,
+    ) -> ProviderConfig {
         per_note
             .cloned()
             .or_else(|| language.and_then(|lang| self.per_language.get(lang).cloned()))
             .or_else(|| self.default.clone())
-            .unwrap_or_else(ProviderConfig::default)
+            .unwrap_or_else(|| {
+                ProviderConfig::default_for_locale(locale.or(self.ui_locale.as_deref()))
+            })
     }
 }
 
@@ -376,8 +454,10 @@ pub(crate) fn runtime_platform_dir() -> &'static str {
     }
 }
 
-/// The four binaries that together make up a complete shared STT runtime.
-pub(crate) const RUNTIME_BINARIES: &[&str] = &["whisper", "vibeasr", "ffmpeg", "ffprobe"];
+/// The binaries that together make up a complete shared STT runtime. FunASR
+/// joined as a native GGUF sidecar, so the archive is now the whole offline
+/// story: no engine in here needs a Python venv to transcribe.
+pub(crate) const RUNTIME_BINARIES: &[&str] = &["whisper", "vibeasr", "funasr", "ffmpeg", "ffprobe"];
 
 /// Windows-only non-binary file shipped in the runtime archive: the Vulkan
 /// loader DLL bundled next to `whisper.exe` so the Vulkan-enabled build gets
@@ -720,6 +800,156 @@ fn sidecar_failure_reason(stderr: &[u8]) -> String {
     kept.join(" | ")
 }
 
+/// FunASR's GGUF runtime ships one non-autoregressive CTC encoder and reads a
+/// single weight file, so the artifact name is fixed per model id.
+pub const FUNASR_DEFAULT_MODEL_ID: &str = "funasr-sensevoice-q8";
+/// GGUF weight for the default FunASR model, named exactly as the upstream
+/// release asset (`FunAudioLLM/SenseVoiceSmall-GGUF`).
+pub const FUNASR_SENSEVOICE_FILE: &str = "sensevoice-small-q8.gguf";
+/// FSMN-VAD is shared by every FunASR GGUF model and is only 1.7 MB, so it
+/// ships inside each model bundle instead of as a separate catalog entry. The
+/// binary refuses long audio without it: a whole-clip decode is
+/// out-of-distribution and CER degrades measurably.
+pub const FUNASR_VAD_FILE: &str = "fsmn-vad.gguf";
+/// Upper bound handed to `--vad-maxseg`. SenseVoice's own encoder window is
+/// ~60 s and the upstream docs report that long VAD segments degrade the
+/// decode, so cap below that. Measured on a 44-minute Mandarin meeting:
+/// 30 s (the default) produced 677 segments averaging 3.9 s; this bound keeps
+/// segments sentence-sized, which is also what CAM++ needs to cluster.
+pub const FUNASR_VAD_MAX_SEGMENT_MS: &str = "15000";
+
+/// Re-join an entry that the sidecar wrapped over several lines. A wrapped
+/// entry is one sentence, so the lines must become one text value — but the
+/// separator cannot be a blanket space: these binaries wrap at a column, not at
+/// a word, and Mandarin carries no spaces between words. Inserting one in the
+/// middle of "…轻一点｜好？…" would put visible artifacts into every Chinese
+/// note. A space is only added where both sides are ASCII word characters,
+/// which is the space-separated-script case.
+fn join_wrapped_lines(lines: &[&str]) -> String {
+    let mut out = String::new();
+    for line in lines {
+        let needs_space = match (out.chars().next_back(), line.chars().next()) {
+            (Some(previous), Some(next)) => {
+                previous.is_ascii_alphanumeric() && next.is_ascii_alphanumeric()
+            }
+            _ => false,
+        };
+        if needs_space {
+            out.push(' ');
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// Parse the SubRip stream the FunASR GGUF binaries emit for `--srt`: a
+/// counter line, an `HH:MM:SS,mmm --> HH:MM:SS,mmm` line, then one or more
+/// text lines, blocks separated by blank lines. Progress and timing
+/// diagnostics go to the binary's stderr, so stdout is this stream alone.
+///
+/// Segment offsets are absolute to the input file, which is what
+/// `assign_campp_speakers` cuts its voiceprint windows from.
+pub(crate) fn parse_srt_segments(stdout: &str) -> Vec<Value> {
+    // Sidecars run on Windows too, where the stream separates lines with CRLF.
+    // Splitting blocks on "\n\n" without normalizing first collapses the WHOLE
+    // file into one block — every entry's text concatenated under the last
+    // entry's timing. This was caught only by counting segments in a real
+    // 44-minute transcript: 677 expected, 1 produced.
+    let normalized = stdout.replace("\r\n", "\n").replace('\r', "\n");
+    let mut segments: Vec<Value> = Vec::new();
+    for block in normalized.split("\n\n") {
+        let mut time_line: Option<&str> = None;
+        let mut text: Vec<&str> = Vec::new();
+        for raw in block.lines().map(str::trim) {
+            if raw.is_empty() || raw.chars().all(|character| character.is_ascii_digit()) {
+                continue;
+            }
+            if time_line.is_none() && raw.contains("-->") {
+                time_line = Some(raw);
+                continue;
+            }
+            if raw.contains("-->") {
+                // A second arrow line means the block was not a plain entry;
+                // keep the last one so the timings stay monotonic.
+                time_line = Some(raw);
+                continue;
+            }
+            text.push(raw);
+        }
+        let Some(line) = time_line else { continue };
+        let (start, end) = line.split_once("-->").unwrap_or((line, ""));
+        let (Some(start_ms), Some(end_ms)) = (srt_timestamp_ms(start.trim()), srt_timestamp_ms(end.trim())) else {
+            continue;
+        };
+        // SenseVoice interleaves its `<|lang|><|emotion|><|event|><|itn|>`
+        // prediction tags unless `--keep-tags` is used. They must never reach a
+        // user's note, so strip them here regardless of what a future build
+        // decides to print.
+        let joined = strip_sensevoice_tags(&join_wrapped_lines(&text));
+        let joined = joined.trim();
+        if joined.is_empty() {
+            continue;
+        }
+        segments.push(json!({
+            "id": format!("seg-{}", segments.len() + 1),
+            "text": joined,
+            "startMs": start_ms,
+            "endMs": end_ms,
+            "speakerId": Value::Null,
+            "speakerName": Value::Null,
+            "rawSpeaker": Value::Null,
+        }));
+    }
+    segments
+}
+
+/// `00:01:23,456` -> 83456 milliseconds. Tolerates a missing millisecond field
+/// and comma-or-dot separators because the separator is locale-adjacent code in
+/// the binary, not something we control.
+fn srt_timestamp_ms(value: &str) -> Option<i64> {
+    let normalized = value.replace(',', ".");
+    let parts: Vec<&str> = normalized.split(':').collect();
+    let (hours, minutes, seconds) = match parts.len() {
+        3 => (parts[0], parts[1], parts[2]),
+        2 => ("0", parts[0], parts[1]),
+        _ => return None,
+    };
+    let hours: i64 = hours.parse().ok()?;
+    let minutes: i64 = minutes.parse().ok()?;
+    let (whole, fraction) = seconds.split_once('.').unwrap_or((seconds, "0"));
+    let whole: i64 = whole.parse().ok()?;
+    // Right-pad to three digits: `,5` is 500 ms, not 5. Taking the first three
+    // characters by index would have to be `get(..3)`, and `str::get` returns
+    // `None` for an out-of-range end — which quietly turned every short
+    // fraction into 0 ms in the first version of this helper.
+    let digits: String = fraction.chars().take(3).collect();
+    let mut padded = digits;
+    while padded.len() < 3 {
+        padded.push('0');
+    }
+    let millis: i64 = padded.parse().unwrap_or(0);
+    Some(((hours * 60 + minutes) * 60 + whole) * 1000 + millis)
+}
+
+/// Remove `<|...|>` prediction tags (and any stray `<|` fragment) from decoded
+/// text.
+pub(crate) fn strip_sensevoice_tags(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find("<|") {
+        match rest[start..].find("|>") {
+            Some(relative_end) => {
+                out.push_str(&rest[..start]);
+                rest = &rest[start + relative_end + 2..];
+            }
+            // Unterminated tag: keep the remainder rather than eat real text.
+            None => break,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 pub struct FunasrAdapter;
 
 impl BatchSttAdapter for FunasrAdapter {
@@ -727,35 +957,90 @@ impl BatchSttAdapter for FunasrAdapter {
         "funasr"
     }
 
+    /// FunASR on the llama.cpp / GGUF runtime: one native sidecar, quantized
+    /// weights, no Python and no torch at transcription time.
+    ///
+    /// Replaces the PyTorch bridge that ran here until 2026-10-17. The trade is
+    /// measured, not assumed — SenseVoice-Small q8 scores micro-CER 8.01% on
+    /// upstream's 184-clip human-referenced Mandarin set versus whisper.cpp
+    /// large-v3-turbo's 23.15%, at ~0.29 RTF on a 44-minute meeting, for 244 MB
+    /// instead of the 2.2 GB weights + CPU torch wheel the Python path needed.
+    /// What the GGUF binaries do NOT provide: an engine-side punctuation model
+    /// (SenseVoice predicts punctuation itself, so this survives), hotwords, and
+    /// speaker diarization — hence the CAM++ pass below, which is the same one
+    /// Whisper uses.
     fn transcribe(&self, app: &tauri::AppHandle, request: &SttRequest) -> CommandResult<SttOutput> {
-        let mut args = vec![
-            script_path(app)?.to_string_lossy().into_owned(),
-            request.audio_path.clone(),
-            "--model-dir".to_owned(),
-            request.model_directory.to_string_lossy().into_owned(),
+        let model_path = request.model_directory.join(FUNASR_SENSEVOICE_FILE);
+        let vad_path = request.model_directory.join(FUNASR_VAD_FILE);
+        if !model_path.exists() {
+            return Err(format!("FunASR 模型缺失：{}", model_path.display()));
+        }
+        if !vad_path.exists() {
+            return Err(format!(
+                "FunASR 的 VAD 模型缺失：{}（没有它长音频会退化成单段解码，请重新下载模型）",
+                vad_path.display()
+            ));
+        }
+        // Pre-flight the speaker-separation dependency before converting audio,
+        // for the same reason Whisper does: it is only needed after a transcript
+        // that costs ten minutes to produce.
+        if request.provider.campp_diarization() && !crate::voiceprint_backend_available(app)? {
+            return Err("声纹模型未安装，请在设置中下载 3D-Speaker 声纹模型".to_owned());
+        }
+        // Resolve the sidecar before spending minutes on ffmpeg.
+        let sidecar = sidecar_path(app, "funasr")?;
+
+        let scratch = ScratchDir::new()?;
+        let wav = scratch.join("input.wav");
+        convert_to_wav(app, &request.audio_path, &wav)?;
+
+        // SenseVoice's GGUF front end assumes 16 kHz mono PCM16, which is
+        // exactly what `convert_to_wav` produces for Whisper.
+        let threads = sidecar_threads();
+        let args: Vec<String> = vec![
+            "-m".to_owned(),
+            model_path.to_string_lossy().into_owned(),
+            "--vad".to_owned(),
+            vad_path.to_string_lossy().into_owned(),
+            "--vad-maxseg".to_owned(),
+            FUNASR_VAD_MAX_SEGMENT_MS.to_owned(),
+            "-a".to_owned(),
+            wav.to_string_lossy().into_owned(),
+            "--srt".to_owned(),
         ];
-        if let Some(expected) = request.expected_speakers.filter(|value| *value > 0) {
-            args.extend(["--expected-speakers".to_owned(), expected.to_string()]);
+        // These binaries expose no `--threads`; the value is logged anyway
+        // because ggml's own thread pick is the first thing to suspect when a
+        // run is slower than the published real-time factor.
+        log::info!(
+            "[stt] funasr 启动：model={} vad-maxseg={}ms threads={threads} wav={} bytes",
+            model_path.file_name().and_then(|name| name.to_str()).unwrap_or("?"),
+            FUNASR_VAD_MAX_SEGMENT_MS,
+            std::fs::metadata(&wav).map(|meta| meta.len()).unwrap_or_default()
+        );
+        let run = Command::new(&sidecar)
+            .args(&args)
+            .output()
+            .map_err(|error| format!("无法启动 FunASR：{error}"))?;
+        if !run.status.success() {
+            return Err(format!("FunASR 转写失败：{}", sidecar_failure_reason(&run.stderr)));
         }
-        if !request.hotword.is_empty() {
-            args.extend(["--hotword".to_owned(), request.hotword.clone()]);
+        let stdout = String::from_utf8_lossy(&run.stdout).into_owned();
+        let mut segments = parse_srt_segments(&stdout);
+        if segments.is_empty() {
+            return Err("FunASR 未识别到语音，请确认音频不是静音".to_owned());
         }
-        if let Some(prior) = request.prior_context.as_deref().filter(|value| !value.trim().is_empty()) {
-            args.extend(["--prompt".to_owned(), prior.trim().to_owned()]);
+        log::info!("[stt] funasr 输出：{} 段", segments.len());
+
+        if request.provider.campp_diarization() {
+            crate::assign_campp_speakers(app, &request.audio_path, &mut segments, request.expected_speakers)?;
+        } else {
+            crate::label_single_speaker(&mut segments);
         }
-        let stdout = run_funasr(app, &args, &request.model_directory)?;
-        let raw = parse_funasr_json(&stdout)?;
-        let normalized = normalize_funasr_output(raw);
-        let text = normalized
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let segments = normalized
-            .get("segments")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
+
+        let text = segments
+            .iter()
+            .filter_map(|segment| segment.get("text").and_then(Value::as_str))
+            .collect::<String>();
         Ok(SttOutput { text, segments })
     }
 }
@@ -1641,6 +1926,7 @@ mod tests {
             vec![
                 "whisper".to_owned(),
                 "vibeasr".to_owned(),
+                "funasr".to_owned(),
                 "ffmpeg".to_owned(),
                 "ffprobe".to_owned()
             ]
@@ -1651,6 +1937,7 @@ mod tests {
             vec![
                 "whisper.exe".to_owned(),
                 "vibeasr.exe".to_owned(),
+                "funasr.exe".to_owned(),
                 "ffmpeg.exe".to_owned(),
                 "ffprobe.exe".to_owned(),
                 "vulkan-1.dll".to_owned()
@@ -1746,7 +2033,97 @@ mod tests {
             model_file_name("vibeasr", "vibeasr-bitnet-1.5b"),
             None
         );
-        assert_eq!(model_file_name("funasr", "funasr-paraformer"), None);
+        assert_eq!(model_file_name("funasr", FUNASR_DEFAULT_MODEL_ID), None);
+    }
+
+    /// The exact shape `llama-funasr-sensevoice --srt` writes: a counter, an
+    /// arrow line, then the text. Text can wrap over several lines, and the
+    /// timings are what CAM++ cuts speaker windows from — a parse that lost
+    /// them would look like one continuous utterance.
+    #[test]
+    fn parse_srt_reads_the_funasr_sidecar_stream() {
+        let stream = "1\n00:00:00,000 --> 00:00:04,120\n四万美金嗯，就你不需要依赖于什么其他用户上。\n\n2\n00:00:04,120 --> 00:01:03,540\n那是不是轻一点\n好？他说他老板这个。\n\n3\n00:01:08,040 --> 00:01:10,940\n我就做超休闲。\n\n";
+        let segments = parse_srt_segments(stream);
+        assert_eq!(segments.len(), 3);
+        assert_eq!(segments[0]["id"], "seg-1");
+        assert_eq!(segments[0]["startMs"], 0);
+        assert_eq!(segments[0]["endMs"], 4120);
+        assert_eq!(segments[0]["text"], "四万美金嗯，就你不需要依赖于什么其他用户上。");
+        // A wrapped Chinese entry rejoins WITHOUT a space: the wrap is a column
+        // break in the middle of a sentence, not a word boundary.
+        assert_eq!(segments[1]["text"], "那是不是轻一点好？他说他老板这个。");
+        assert_eq!(segments[1]["endMs"], 63540);
+        assert_eq!(segments[2]["startMs"], 68040);
+        assert_eq!(segments[2]["endMs"], 70940);
+        // The GGUF binaries carry no speaker model, so nothing is claimed here.
+        assert_eq!(segments[0]["speakerId"], Value::Null);
+    }
+
+    #[test]
+    fn parse_srt_skips_progress_noise_and_empty_entries() {
+        let stream = "\n\n1\n00:00:00,000 --> 00:00:01,000\n   \n\n2\n00:00:01,000 --> 00:00:02,000\n有内容。\n\n";
+        let segments = parse_srt_segments(stream);
+        assert_eq!(segments.len(), 1, "a text-less entry must not become an empty segment");
+        assert_eq!(segments[0]["id"], "seg-1", "ids stay contiguous after a skip");
+    }
+
+    /// Windows writes CRLF, so the block split must be newline-agnostic. A naive
+    /// `split("\n\n")` merged every entry of a real 44-minute transcript into ONE
+    /// segment holding all 15k characters under the last entry's timing — the
+    /// failure was invisible in the transcript text and fatal for speaker
+    /// clustering, which cuts one voiceprint window per segment.
+    #[test]
+    fn parse_srt_handles_windows_line_endings() {
+        let crlf = "1\r\n00:00:00,000 --> 00:00:02,000\r\n第一句。\r\n\r\n2\r\n00:00:02,000 --> 00:00:04,000\r\n第二句。\r\n\r\n";
+        let segments = parse_srt_segments(crlf);
+        assert_eq!(segments.len(), 2, "CRLF blocks must not merge into one segment");
+        assert_eq!(segments[0]["text"], "第一句。");
+        assert_eq!(segments[1]["text"], "第二句。");
+        assert_eq!(segments[1]["startMs"], 2000);
+    }
+
+    #[test]
+    fn parse_srt_survives_a_stream_without_a_trailing_blank_line() {
+        let segments = parse_srt_segments("1\n00:02:00,000 --> 00:02:03,000\n最后一句。");
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0]["startMs"], 120000);
+    }
+
+    /// SenseVoice predicts language/emotion/event/ITN tags. They are suppressed
+    /// without `--keep-tags`, but a future build that prints them must not be
+    /// able to put `<|zh|>` into a user's note.
+    #[test]
+    fn sensevoice_prediction_tags_are_stripped() {
+        assert_eq!(strip_sensevoice_tags("<|zh|><|NEUTRAL|><|Speech|><|withitn|>你好。"), "你好。");
+        assert_eq!(strip_sensevoice_tags("前面<|en|>中间"), "前面中间");
+        // An unterminated tag is real text as far as we can tell: keep it.
+        assert_eq!(strip_sensevoice_tags("异常<|zh"), "异常<|zh");
+        let segments = parse_srt_segments("1\n00:00:00,000 --> 00:00:01,000\n<|zh|><|withitn|>tagged。\n\n");
+        assert_eq!(segments[0]["text"], "tagged。");
+        // Latin text wraps at word boundaries, so the join must keep the space.
+        assert_eq!(
+            parse_srt_segments("1\n00:00:00,000 --> 00:00:01,000\nhello\nworld\n\n")[0]["text"],
+            "hello world"
+        );
+    }
+
+    #[test]
+    fn srt_timestamp_accepts_dot_milliseconds_and_missing_hours() {
+        assert_eq!(srt_timestamp_ms("00:01:02,345"), Some(62345));
+        assert_eq!(srt_timestamp_ms("00:01:02.345"), Some(62345));
+        assert_eq!(srt_timestamp_ms("01:02.5"), Some(62500));
+        assert_eq!(srt_timestamp_ms("00:00:03"), Some(3000));
+        assert_eq!(srt_timestamp_ms("nonsense"), None);
+    }
+
+    #[test]
+    fn provider_model_id_resolves_every_engine_to_a_catalog_entry() {
+        assert_eq!(ProviderConfig::Funasr(FunasrProviderConfig::default()).model_id(), FUNASR_DEFAULT_MODEL_ID);
+        assert_eq!(
+            ProviderConfig::Whisper(WhisperProviderConfig::default()).model_id(),
+            WhisperModel::default().as_model_id()
+        );
+        assert_eq!(ProviderConfig::VibeVoice(VibeVoiceProviderConfig::default()).model_id(), "vibeasr-bitnet-1.5b");
     }
 
     #[test]
@@ -1789,24 +2166,49 @@ mod tests {
         let config = TranscribeConfig {
             default: Some(qwen3.clone()),
             per_language,
+            ui_locale: None,
         };
         // per-note wins over everything
-        assert_eq!(config.resolve(Some("zh"), Some(&qwen3)).engine(), "qwen3");
+        assert_eq!(config.resolve(Some("zh"), Some(&qwen3), None).engine(), "qwen3");
         // per-language beats default
-        assert_eq!(config.resolve(Some("zh"), None).engine(), "whisper");
+        assert_eq!(config.resolve(Some("zh"), None, None).engine(), "whisper");
         // default when nothing else matches
-        assert_eq!(config.resolve(Some("en"), None).engine(), "qwen3");
-        // Empty config falls back to the platform default (Qwen3 on Apple
-        // Silicon, whisper elsewhere) — mirror
-        // `default_provider_follows_platform_engine_availability`.
-        let expected_default = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-            "qwen3"
-        } else {
-            "whisper"
+        assert_eq!(config.resolve(Some("en"), None, None).engine(), "qwen3");
+        // A locale only decides the engine when the user has configured
+        // nothing: an explicit default must never be overridden by it.
+        assert_eq!(config.resolve(None, None, Some("zh-CN")).engine(), "qwen3");
+
+        // With an empty config the platform decides for everyone, and Chinese
+        // audio additionally selects FunASR off Apple Silicon.
+        let apple_silicon = cfg!(all(target_os = "macos", target_arch = "aarch64"));
+        let unconfigured = TranscribeConfig::default();
+        let expected_platform_default = if apple_silicon { "qwen3" } else { "whisper" };
+        assert_eq!(unconfigured.resolve(None, None, None).engine(), expected_platform_default);
+        assert_eq!(unconfigured.resolve(None, None, Some("en-US")).engine(), expected_platform_default);
+        assert_eq!(
+            unconfigured.resolve(None, None, Some("zh-CN")).engine(),
+            if apple_silicon { "qwen3" } else { "funasr" }
+        );
+        // Both Chinese spellings route the same way; only the primary subtag matters.
+        assert_eq!(
+            unconfigured.resolve(None, None, Some("zh-Hant")).engine(),
+            if apple_silicon { "qwen3" } else { "funasr" }
+        );
+        // A background job (voice memo, restart retry) has no dialog to ask, so
+        // it reads the locale persisted in the config itself.
+        let remembered = TranscribeConfig {
+            default: None,
+            per_language: BTreeMap::new(),
+            ui_locale: Some("zh-CN".to_owned()),
         };
         assert_eq!(
-            TranscribeConfig::default().resolve(None, None).engine(),
-            expected_default
+            remembered.resolve(None, None, None).engine(),
+            if apple_silicon { "qwen3" } else { "funasr" }
+        );
+        // A locale supplied by the caller wins over the remembered one.
+        assert_eq!(
+            remembered.resolve(None, None, Some("de-DE")).engine(),
+            if apple_silicon { "qwen3" } else { "whisper" }
         );
     }
 

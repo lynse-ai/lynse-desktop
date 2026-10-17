@@ -538,6 +538,8 @@ const ja = {
     stt_engine_moss: "MOSS 文字起こし（ローカル・話者分離）",
     stt_moss_model: "MOSS 文字起こしモデル",
     stt_moss_hint: "OpenMOSS の MOSS-Transcribe-Diarize（0.9B）が MLX 経由で Apple Silicon GPU 上でローカル実行され、話者ラベルとタイムスタンプ付きの文字起こしを 1 回の推論で出力します（最大 90 分、複数話者の会議に最適）。初回利用時にランタイムと 8-bit 量子化モデル（約 1.1 GiB）を自動ダウンロードします。",
+    stt_funasr_hint: "SenseVoice-Small（GGUF ネイティブエンジン、約244 MiB、Python 不要）。ローカルエンジンの中で中国語の精度が最も高く、句読点と数字の正規化を自ら出力します。話者を分けたい場合は下の声紋オプションを選び、期待人数を入力すると安定した結果になります。",
+    stt_funasr_no_hotword: "GGUF 版 FunASR にはホットワード引数がなく、保存済みのホットワードパックはこのエンジンでは効果を持ちません。",
     stt_vibeasr_hint: "CPU 専用エンジンで、中/英/仏/伊/韓/葡/越の 7 言語に対応します。初回は約 1.6 GiB の重みをダウンロードし、オフライン文字起こしコンポーネントが必要です。",
     stt_whisper_model: "Whisper モデル",
     stt_campp_diarization: "CAM++ 話者分離",
@@ -1106,8 +1108,8 @@ const ja = {
       badge_voiceprint: "声紋付き",
       uninstall_blocked: "このモデルは既定エンジンまたは言語別ルーティングで使用中です。先に切り替えてください。",
       funasr: {
-        name: "FunASR（最新版）",
-        description: "Paraformer 文字起こし + CAM++ 話者ラベル。インストールで声紋機能も有効に。",
+        name: "FunASR SenseVoice-Small",
+        description: "GGUF ネイティブエンジン、約244 MiB。Python と torch 不要。ローカルで中国語の精度が最も高く、句読点も自ら出力します。話者の分離は 3D-Speaker 声紋モデルの追加インストールが必要です。",
       },
       whisperx: {
         name: "WhisperX（最新版）",

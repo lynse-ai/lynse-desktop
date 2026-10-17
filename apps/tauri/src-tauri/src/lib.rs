@@ -145,19 +145,18 @@ pub(crate) fn local_store_path(app: &AppHandle, directory: &str) -> CommandResul
     Ok(path)
 }
 
+/// Root of the LEGACY FunASR bundle: the flat directory the PyTorch bridge
+/// filled from ModelScope (paraformer + VAD + punctuation + CAM++, ~2.2 GB).
+/// The GGUF engine keeps its weights in a per-model subfolder like every other
+/// engine, so this path now exists only so an upgrade can reclaim the space.
 pub(crate) fn model_dir(app: &AppHandle) -> CommandResult<PathBuf> {
-    let path = app_data_dir(app)?.join("local-asr-models").join("funasr");
-    fs::create_dir_all(&path).map_err(|error| error.to_string())?;
-    Ok(path)
+    Ok(app_data_dir(app)?.join("local-asr-models").join("funasr"))
 }
 
-/// Directory holding a concrete engine/model's artifacts. FunASR kept a single
-/// model bundle at the base (legacy); Qwen3/Whisper/VibeVoice/MLX use a
-/// per-model subfolder.
+/// Directory holding a concrete engine/model's artifacts. Every engine uses a
+/// per-model subfolder; FunASR joined them when it stopped downloading a
+/// bundle through Python.
 pub(crate) fn engine_model_dir(app: &AppHandle, engine: &str, model_id: &str) -> CommandResult<PathBuf> {
-    if engine == "funasr" {
-        return model_dir(app);
-    }
     let path = app_data_dir(app)?
         .join("local-asr-models")
         .join(engine)
@@ -465,16 +464,6 @@ pub(crate) fn request_calendar_permission() {
     }
 }
 
-pub(crate) fn script_path(app: &AppHandle) -> CommandResult<PathBuf> {
-    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("resources/funasr_transcribe.py");
-    if development.exists() {
-        return Ok(development);
-    }
-    let resources = app.path().resource_dir().map_err(|error| error.to_string())?;
-    Ok(resources.join("funasr_transcribe.py"))
-}
-
 /// Locate or create a per-engine Python venv and return its interpreter.
 ///
 /// The layout differs per platform and this is the trap that has bitten twice:
@@ -522,69 +511,12 @@ fn ensure_python_venv(app: &AppHandle, env_var: &str, development_relative: &str
     Ok(python.to_string_lossy().into_owned())
 }
 
-/// Interpreter for the FunASR bridge, pip-installing its dependencies the first
-/// time the engine is used.
-pub(crate) fn ensure_funasr_venv(app: &AppHandle) -> CommandResult<String> {
-    let python = ensure_python_venv(app, "LYNSE_FUNASR_PYTHON", "../../../.venv-funasr", "funasr-venv")?;
-    ensure_funasr_packages(&python)?;
-    Ok(python)
-}
-
-/// Ensure `funasr` and its ModelScope downloader import in the FunASR venv.
-///
-/// torch is the trap on Windows: the default PyPI wheel is the CUDA build, which
-/// drags several GB of nvidia packages onto a machine that may have no GPU. This
-/// engine runs on CPU off Apple Silicon — the bridge resolves `auto` to `cpu` —
-/// so Windows pins the CPU index deliberately instead of hoping for the best.
-fn ensure_funasr_packages(python: &str) -> CommandResult<()> {
-    let check = Command::new(python)
-        .args(["-c", "import funasr, torch, modelscope"])
-        .output()
-        .map_err(|error| format!("无法运行 FunASR Python：{error}"))?;
-    if check.status.success() {
-        return Ok(());
-    }
-    if cfg!(windows) {
-        log::info!("[stt] 首次使用 FunASR 引擎，安装 CPU 版 torch…");
-        let torch = Command::new(python)
-            .args([
-                "-m", "pip", "install", "--quiet", "--disable-pip-version-check",
-                "torch", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cpu",
-            ])
-            .status()
-            .map_err(|error| format!("安装 torch 失败：{error}"))?;
-        if !torch.success() {
-            return Err("安装 CPU 版 torch 失败，请检查网络后重试".to_owned());
-        }
-    }
-    log::info!("[stt] 安装 FunASR 依赖…");
-    let install = Command::new(python)
-        .args(["-m", "pip", "install", "--quiet", "--disable-pip-version-check", "funasr", "modelscope", "librosa", "soundfile"])
-        .status()
-        .map_err(|error| format!("安装 FunASR 依赖失败：{error}"))?;
-    if !install.success() {
-        return Err("安装 FunASR 依赖失败，请检查网络后重试".to_owned());
-    }
-    Ok(())
-}
-
-pub(crate) fn run_funasr(app: &AppHandle, arguments: &[String], model_directory: &Path) -> CommandResult<String> {
-    let python = ensure_funasr_venv(app)?;
-    let output = Command::new(python)
-        .args(arguments)
-        .env("MODELSCOPE_CACHE", model_directory)
-        .output()
-        .map_err(|error| error.to_string())?;
-    if output.status.success() {
-        return String::from_utf8(output.stdout).map_err(|error| error.to_string());
-    }
-    let error = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    Err(if error.is_empty() {
-        format!("FunASR exited with {}", output.status)
-    } else {
-        error
-    })
-}
+// FunASR used to run through a Python bridge here: a per-engine venv, a
+// pip-installed CPU torch wheel, and `funasr_transcribe.py` printing one JSON
+// line. The engine now runs on its own native GGUF sidecar (see
+// `stt::FunasrAdapter`), which removed the venv bootstrap, the wheel-index
+// pinning, the cp936 stdout re-encode workaround, and 2.2 GB of ModelScope
+// weights. Only the MLX-family engines still need `ensure_python_venv`.
 
 /// Resource path to the MLX-Whisper bridge, mirroring [`script_path`].
 pub(crate) fn mlx_script_path(app: &AppHandle) -> CommandResult<PathBuf> {
@@ -940,68 +872,6 @@ fn value_text(value: Option<&Value>) -> String {
     value.and_then(Value::as_str).map(clean_text).unwrap_or_default()
 }
 
-fn speaker_raw(value: Option<&Value>) -> Option<String> {
-    match value {
-        Some(Value::String(value)) if !value.trim().is_empty() => Some(value.trim().to_owned()),
-        Some(Value::Number(value)) => Some(value.to_string()),
-        _ => None,
-    }
-}
-
-fn normalize_funasr_output(raw: Value) -> Value {
-    let root = raw.as_array().and_then(|items| items.first()).unwrap_or(&raw);
-    let sentences = root.get("sentence_info").and_then(Value::as_array).cloned().unwrap_or_default();
-    let mut segments = Vec::new();
-    for (index, sentence) in sentences.iter().enumerate() {
-        let text = value_text(sentence.get("sentence")).or_else_if_empty(value_text(sentence.get("text")));
-        if text.is_empty() {
-            continue;
-        }
-        let raw_speaker = speaker_raw(sentence.get("spk").or_else(|| sentence.get("speaker")));
-        let speaker_name = value_text(sentence.get("speakerName")).or_else_if_empty(value_text(sentence.get("speaker_name")));
-        let speaker_name = if speaker_name.is_empty() {
-            raw_speaker.as_deref().map(|speaker| match speaker.parse::<usize>() {
-                Ok(number) => format!("发言人{}", number + 1),
-                Err(_) => format!("发言人{speaker}"),
-            })
-        } else {
-            Some(speaker_name)
-        };
-        let speaker_id = raw_speaker.as_deref().map(|speaker| match speaker.parse::<usize>() {
-            Ok(number) => format!("spk-{}", number + 1),
-            Err(_) => format!("spk-{speaker}"),
-        });
-        segments.push(json!({
-            "id": format!("seg-{}", index + 1),
-            "text": text,
-            "startMs": sentence.get("start").cloned().unwrap_or(Value::Null),
-            "endMs": sentence.get("end").cloned().unwrap_or(Value::Null),
-            "speakerId": speaker_id,
-            "speakerName": speaker_name,
-            "rawSpeaker": raw_speaker,
-            "confidence": sentence.get("confidence").or_else(|| sentence.get("score")).cloned().unwrap_or(Value::Null),
-            "voiceprintId": sentence.get("voiceprint_id").cloned().unwrap_or(Value::Null)
-        }));
-    }
-    let text = value_text(root.get("text"));
-    let text = if text.is_empty() {
-        segments.iter().filter_map(|segment| segment.get("text").and_then(Value::as_str)).collect::<String>()
-    } else {
-        text
-    };
-    json!({ "text": text, "segments": segments })
-}
-
-trait StringFallback {
-    fn or_else_if_empty(self, fallback: String) -> String;
-}
-
-impl StringFallback for String {
-    fn or_else_if_empty(self, fallback: String) -> String {
-        if self.is_empty() { fallback } else { self }
-    }
-}
-
 fn apply_hotwords(text: String, terms: &[Value]) -> String {
     terms.iter().fold(text, |result, term| {
         if term.get("enabled").and_then(Value::as_bool) == Some(false) {
@@ -1071,18 +941,42 @@ pub const VIBEVOICE_BITNET_FILES: &[SttModelFile] = &[
     },
 ];
 
+/// FunASR's GGUF bundle: the SenseVoice-Small Q8 weights plus the shared
+/// FSMN-VAD weight the binary needs for long audio. Sizes and SHA-256 are the
+/// HuggingFace LFS OIDs of `FunAudioLLM/SenseVoiceSmall-GGUF` and
+/// `FunAudioLLM/fsmn-vad-GGUF`, cross-checked against 魔搭's own recorded
+/// Sha256 and against the bytes actually downloaded on this machine — all three
+/// agree, which is what makes the ModelScope-first candidate order in
+/// `model_download_candidates` safe for a pinned digest.
+pub const FUNASR_SENSEVOICE_FILES: &[SttModelFile] = &[
+    SttModelFile {
+        file_name: stt::FUNASR_SENSEVOICE_FILE,
+        size_bytes: 254_208_320,
+        download_url:
+            "https://huggingface.co/FunAudioLLM/SenseVoiceSmall-GGUF/resolve/main/sensevoice-small-q8.gguf",
+        sha256: "4ae45c94422de949b387e2e0fb10d7e14e4c42c69db30c3444ecc7d4b844b7c5",
+    },
+    SttModelFile {
+        file_name: stt::FUNASR_VAD_FILE,
+        size_bytes: 1_720_512,
+        download_url:
+            "https://huggingface.co/FunAudioLLM/fsmn-vad-GGUF/resolve/main/fsmn-vad.gguf",
+        sha256: "1270f2559c495f4e7b6e739541151027d360761a3fda43fc147034f5719f5479",
+    },
+];
+
 pub const STT_MODELS: &[SttModelEntry] = &[
     SttModelEntry {
         provider: "funasr",
-        id: "funasr-paraformer",
-        label: "FunASR SeACo-Paraformer（本地·中文·带标点与说话人分离，~2.1 GiB）",
-        // Measured on disk after a real download: paraformer-large + FSMN-VAD +
-        // CT-Transformer punctuation + CAM++ speaker model, fetched from
-        // ModelScope by the bridge.
-        size_bytes: 2_218_608_047,
+        id: stt::FUNASR_DEFAULT_MODEL_ID,
+        label: "FunASR SenseVoice-Small（本地·中文准确率第一·自带标点，~244 MiB）",
+        // Sum of FUNASR_SENSEVOICE_FILES, measured byte-for-byte on download.
+        // The PyTorch bridge that used to live here needed 2,218,608,047 B of
+        // ModelScope weights plus a CPU torch wheel on top.
+        size_bytes: 255_928_832,
         download_url: "",
         sha256: "",
-        files: &[],
+        files: FUNASR_SENSEVOICE_FILES,
     },
     SttModelEntry {
         provider: "qwen3",
@@ -1238,12 +1132,15 @@ fn model_is_installed(app: &AppHandle, provider: &str, model_id: &str) -> bool {
             }
         }
     }
-    // Whisper/VibeVoice also require the shared on-demand runtime
-    // (whisper, vibeasr, ffmpeg, ffprobe). FunASR and MLX do not: FunASR
-    // ships its own bundle, the MLX-family engines run through a
-    // self-contained Python venv with a vendored ffmpeg (imageio-ffmpeg),
-    // and sherpa-onnx is a single ONNX file on its own lightweight venv.
-    if provider != "funasr" && provider != "mlx" && provider != "qwen3" && provider != "moss" && provider != SHERPA_PROVIDER {
+    // Whisper/VibeVoice/FunASR also require the shared on-demand runtime
+    // (whisper, vibeasr, funasr, ffmpeg, ffprobe). FunASR no longer belongs in
+    // the exemption list below: as a GGUF sidecar it is runtime-dependent like
+    // Whisper, and a missing sidecar must read as "not installed" rather than
+    // failing ten minutes into a transcription. The MLX-family engines run
+    // through a self-contained Python venv with a vendored ffmpeg
+    // (imageio-ffmpeg), and sherpa-onnx is a single ONNX file on its own
+    // lightweight venv, so those stay exempt.
+    if provider != "mlx" && provider != "qwen3" && provider != "moss" && provider != SHERPA_PROVIDER {
         let version = format!("v{}", app.package_info().version);
         let runtime = stt::runtime_dir(app, &version);
         if !stt::runtime_is_complete(&runtime) {
@@ -2060,9 +1957,14 @@ fn run_python_model_download_with_progress(
     result
 }
 
-fn resolve_provider(app: &AppHandle, language: Option<&str>, per_note: Option<&stt::ProviderConfig>) -> stt::ProviderConfig {
+fn resolve_provider(
+    app: &AppHandle,
+    language: Option<&str>,
+    per_note: Option<&stt::ProviderConfig>,
+    locale: Option<&str>,
+) -> stt::ProviderConfig {
     let config = load_transcribe_config(app).unwrap_or_default();
-    config.resolve(language, per_note)
+    config.resolve(language, per_note, locale)
 }
 
 fn ensure_model_installed(app: &AppHandle, provider: &str, model_id: &str) -> CommandResult<()> {
@@ -2251,21 +2153,14 @@ fn apply_per_task_overrides(provider: &mut stt::ProviderConfig, options: Option<
 fn create_queued_record(app: &AppHandle, audio_path: &str, options: Option<&Value>) -> CommandResult<Value> {
     let created_at = now();
     let language = options.and_then(|value| value.get("language")).and_then(Value::as_str);
+    let locale = options.and_then(|value| value.get("locale")).and_then(Value::as_str);
     let per_note = options
         .and_then(|value| value.get("providerConfig"))
         .filter(|value| !value.is_null())
         .and_then(|value| serde_json::from_value::<stt::ProviderConfig>(value.clone()).ok());
-    let mut provider = resolve_provider(app, language, per_note.as_ref());
+    let mut provider = resolve_provider(app, language, per_note.as_ref(), locale);
     apply_per_task_overrides(&mut provider, options);
-    let model_id = match &provider {
-        stt::ProviderConfig::Funasr(_) => "funasr-paraformer",
-        stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
-        stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
-        stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
-        stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
-        stt::ProviderConfig::Moss(config) => config.model.as_deref().unwrap_or(stt::MOSS_DEFAULT_MODEL_ID),
-        stt::ProviderConfig::WhisperX(_) => stt::WHISPERX_DEFAULT_MODEL_ID,
-    };
+    let model_id = provider.model_id();
     Ok(json!({
         "id": format!("local:{}", Uuid::new_v4()),
         "title": Path::new(audio_path).file_name().and_then(|value| value.to_str()).unwrap_or(audio_path),
@@ -2464,15 +2359,16 @@ fn transcribe_single_track(
         .filter(|value| !value.is_null())
         .and_then(|value| serde_json::from_value::<stt::ProviderConfig>(value.clone()).ok())
         .ok_or("本地转写缺少引擎配置")?;
-    let model_id = record.get("modelId").and_then(Value::as_str).unwrap_or_else(|| match &provider {
-        stt::ProviderConfig::Funasr(_) => "funasr-paraformer",
-        stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
-        stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
-        stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
-        stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
-        stt::ProviderConfig::Moss(config) => config.model.as_deref().unwrap_or(stt::MOSS_DEFAULT_MODEL_ID),
-        stt::ProviderConfig::WhisperX(_) => stt::WHISPERX_DEFAULT_MODEL_ID,
-    });
+    // A record's stored `modelId` is honoured only while it still names a
+    // catalog entry. FunASR moved off the Python `funasr-paraformer` bundle onto
+    // a pinned GGUF, so records created before the switch would otherwise retry
+    // forever against a model id that no longer resolves; falling back to the
+    // engine's current model lets them run instead of failing with "未知模型".
+    let model_id = record
+        .get("modelId")
+        .and_then(Value::as_str)
+        .filter(|stored| STT_MODELS.iter().any(|entry| entry.provider == provider.engine() && entry.id == *stored))
+        .unwrap_or_else(|| provider.model_id());
     ensure_model_installed(app, provider.engine(), model_id)?;
     let directory = engine_model_dir(app, provider.engine(), model_id)?;
     let expected_speakers = provider.expected_speakers();
@@ -2848,16 +2744,11 @@ fn transcribe_inspiration(app: &AppHandle, record: Value, audio_path: PathBuf) -
         vault::sync_journal(app, &updated);
         Ok(Some(updated))
     };
-    let provider = resolve_provider(app, None, None);
-    let model_id = match &provider {
-        stt::ProviderConfig::Funasr(_) => "funasr-paraformer",
-        stt::ProviderConfig::Whisper(config) => config.model.as_model_id(),
-        stt::ProviderConfig::VibeVoice(_) => "vibeasr-bitnet-1.5b",
-        stt::ProviderConfig::Mlx(_) => "whisper-large-v3-turbo",
-        stt::ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(stt::QWEN3_DEFAULT_MODEL_ID),
-        stt::ProviderConfig::Moss(config) => config.model.as_deref().unwrap_or(stt::MOSS_DEFAULT_MODEL_ID),
-        stt::ProviderConfig::WhisperX(_) => stt::WHISPERX_DEFAULT_MODEL_ID,
-    };
+    // No dialog is open here, so no caller-side locale: `resolve` reads the
+    // persisted `ui_locale`, which keeps a voice memo on the same engine the
+    // Settings page shows for this language.
+    let provider = resolve_provider(app, None, None, None);
+    let model_id = provider.model_id();
     if !model_is_installed(app, provider.engine(), model_id) {
         return write_back(app, None, "unavailable", Some("本地 ASR 模型未安装，请先在设置中下载语音识别模型"))?
             .ok_or_else(|| "灵感已删除或音频已更换，转写结果已丢弃".to_owned());
@@ -3309,11 +3200,12 @@ fn local_stt_download_model(
             emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
             return Err(error);
         }
-        if provider == "funasr" || provider == "mlx" || provider == "qwen3" || provider == "moss" || provider == "whisperx" {
-            // FunASR, MLX and Qwen3 download through their Python helpers rather
+        if provider == "mlx" || provider == "qwen3" || provider == "moss" || provider == "whisperx" {
+            // The MLX-family engines download through their Python helpers rather
             // than a fixed URL. The indeterminate event makes the UI react at
             // once; run_python_model_download_with_progress then streams real
             // byte progress once the snapshot download starts writing files.
+            // FunASR used to belong here; it now downloads pinned GGUFs.
             emit_download_progress(&app, &provider, &model_id, 0, 0, None, "downloading", None);
             if provider == "mlx" {
                 let directory = engine_model_dir(&app, &provider, &model_id)?;
@@ -3414,29 +3306,12 @@ fn local_stt_download_model(
                     return Err(error);
                 }
             } else {
-                let directory = model_dir(&app)?;
-                let args = vec![
-                    script_path(&app)?.to_string_lossy().into_owned(),
-                    "--download-models".to_owned(),
-                    "--model-dir".to_owned(),
-                    directory.to_string_lossy().into_owned(),
-                ];
-                if let Err(error) = run_python_model_download_with_progress(
-                    &app,
-                    &provider,
-                    &model_id,
-                    &directory,
-                    total_bytes,
-                    || run_funasr(&app, &args, &directory),
-                ) {
-                    emit_download_progress(&app, &provider, &model_id, 0, 0, None, "error", Some(error.as_str()));
-                    return Err(error);
-                }
+                return Err(format!("未知的模型下载路径：{provider}"));
             }
             emit_download_progress(&app, &provider, &model_id, 0, 0, None, "done", None);
         } else {
-            // Whisper/VibeVoice require the shared on-demand runtime
-            // (whisper, vibeasr, ffmpeg, ffprobe). Download it first if
+            // Whisper/VibeVoice/FunASR require the shared on-demand runtime
+            // (whisper, vibeasr, funasr, ffmpeg, ffprobe). Download it first if
             // missing; a previously-downloaded model skips the model download
             // but still ensures the runtime is present. sherpa-onnx instead
             // needs its own lightweight venv, prepared here so the first
@@ -3477,8 +3352,22 @@ fn local_stt_delete_model(
     let directory = engine_model_dir(&app, &provider, &model_id)?;
     remove_model_dir(&directory)?;
     if provider == "funasr" {
+        // Reclaim the ~2.2 GB flat bundle the old PyTorch bridge filled from
+        // ModelScope. It is identified by the `.ready` sentinel the bridge wrote
+        // there — GGUF models never create it — and the sweep only runs once no
+        // catalog model is left under that base, so deleting one model can never
+        // take another installed model down with it.
         let base = model_dir(&app)?;
-        remove_model_dir(&base)?;
+        if base.join(".ready").exists()
+            && STT_MODELS
+                .iter()
+                .filter(|entry| entry.provider == "funasr")
+                .any(|entry| base.join(entry.id).exists())
+        {
+            log::info!("[stt] 保留 {}：仍有其他 FunASR 模型安装在其中", base.display());
+        } else if base.exists() {
+            remove_model_dir(&base)?;
+        }
     }
     model_status_list(&app)
 }
@@ -3781,8 +3670,48 @@ fn local_stt_config_get(app: AppHandle) -> CommandResult<stt::TranscribeConfig> 
 }
 
 #[tauri::command]
-fn local_stt_config_save(app: AppHandle, config: stt::TranscribeConfig) -> CommandResult<stt::TranscribeConfig> {
+fn local_stt_config_save(app: AppHandle, mut config: stt::TranscribeConfig) -> CommandResult<stt::TranscribeConfig> {
+    // The Settings page saves the engine choice; it does not always know the
+    // locale it was saved under. Preserve the recorded one rather than letting a
+    // save silently drop it — losing it would send voice memos back to the
+    // compile-time default.
+    if config.ui_locale.is_none() {
+        config.ui_locale = load_transcribe_config(&app).unwrap_or_default().ui_locale;
+    }
     save_transcribe_config(&app, config)
+}
+
+/// Record which language the UI is currently in.
+///
+/// The engine that runs when the user has expressed no preference depends on
+/// that language, and the paths that need it are not always opened from a
+/// dialog: a voice memo transcribes from a background job, and an interrupted
+/// meeting retries after a restart. Mirroring the locale here means both of
+/// those pick the same engine the Settings page shows instead of falling back to
+/// a compile-time guess.
+#[tauri::command]
+fn local_stt_set_locale(app: AppHandle, locale: String) -> CommandResult<stt::TranscribeConfig> {
+    let mut config = load_transcribe_config(&app).unwrap_or_default();
+    if config.ui_locale.as_deref() == Some(locale.as_str()) {
+        // Already recorded; skip the write so a locale that settles on every
+        // render does not rewrite the file each time.
+        return Ok(config);
+    }
+    config.ui_locale = Some(locale);
+    save_transcribe_config(&app, config)
+}
+
+/// The engine Lynse would use for `locale` when the user has not chosen one.
+///
+/// Only Rust can answer this: it depends on the compile target (Qwen3-ASR needs
+/// Apple Silicon, so an Intel Mac must not be defaulted into an engine that
+/// refuses to run), and the UI must not show one engine while the resolver uses
+/// another — the exact divergence that made Windows imports fail with
+/// "offline model missing" while Settings displayed Whisper.
+#[tauri::command]
+fn local_stt_default_provider(locale: Option<String>) -> CommandResult<Value> {
+    serde_json::to_value(stt::ProviderConfig::default_for_locale(locale.as_deref()))
+        .map_err(|error| error.to_string())
 }
 
 const SECRET_SERVICE: &str = "com.lynse.sparknote";
@@ -5041,6 +4970,7 @@ pub fn run() {
             local_transcription_update_voiceprint, local_transcription_delete_voiceprint,
             local_voiceprint_backend_status,
             local_stt_config_get, local_stt_config_save,
+            local_stt_set_locale, local_stt_default_provider,
             vault::vault_config_get, vault::vault_config_save, vault::vault_default_path,
             vault::vault_write_note, vault::vault_write_notes, vault::vault_read_note,
             vault::vault_remove_note,
@@ -5170,59 +5100,61 @@ mod tests {
         assert_eq!(parse_range(None, 100), (0, 99, false));
     }
 
-    /// FunASR's retirement was enforced by three gates (no catalog entry, an
-    /// install refusal, a POSIX-only interpreter). This pins the catalog side so
-    /// the engine cannot silently vanish from the model list again.
+    /// FunASR ships pinned GGUF artifacts through the generic downloader now.
+    /// The digest/size assertions are the guard: upstream republishes these GGUFs
+    /// under the same repo path, so a silent content change must fail a test here
+    /// rather than surface as a hash-mismatched download on a user's machine.
     #[test]
-    fn funasr_is_a_selectable_catalog_engine_downloadable_through_its_bridge() {
-        let entry = stt_model_entry("funasr", "funasr-paraformer").expect("funasr catalog entry");
+    fn funasr_is_a_selectable_catalog_engine_with_pinned_gguf_files() {
+        let entry = stt_model_entry("funasr", stt::FUNASR_DEFAULT_MODEL_ID).expect("funasr catalog entry");
         assert_eq!(entry.provider, "funasr");
-        // Measured on disk after a real ModelScope download of the four models.
-        assert_eq!(entry.size_bytes, 2_218_608_047);
-        // The bridge downloads the bundle and marks it `.ready`, so there is no
-        // single named artifact — and no shared-runtime dependency.
-        assert!(model_download_targets(entry).is_empty());
-        assert!(stt::model_file_name("funasr", "funasr-paraformer").is_none());
+        let targets = model_download_targets(entry);
+        assert_eq!(targets.len(), 2, "model GGUF + shared FSMN-VAD GGUF");
+        assert_eq!(
+            targets.iter().map(|(_, _, _, size)| *size).sum::<u64>(),
+            entry.size_bytes,
+            "the catalog's advertised size must be the sum of what is fetched"
+        );
+        for (file_name, url, sha, size) in &targets {
+            assert!(!sha.is_empty(), "{file_name} ships without a pinned SHA-256");
+            assert!(*size > 0, "{file_name} has no pinned size");
+            // Written as a huggingface.co URL so `model_download_candidates` can
+            // rewrite it to 魔搭 / hf-mirror for users in China.
+            assert!(url.starts_with("https://huggingface.co/FunAudioLLM/"), "{url}");
+            let candidates = model_download_candidates(url, "cn");
+            assert!(candidates[0].starts_with("https://modelscope.cn/"), "{file_name} must lead with the domestic CDN");
+        }
+        assert!(stt::model_file_name("funasr", stt::FUNASR_DEFAULT_MODEL_ID).is_none());
     }
 
-    /// The bridge labels speakers 0-based in `sentence_info[].spk`; the app must
-    /// carry every distinct one through, or FunASR's main advantage over the
-    /// whisper.cpp path (native diarization) is silently thrown away.
+    /// A GGUF engine is runtime-dependent: it needs the `funasr` sidecar from the
+    /// shared archive. Losing it from `RUNTIME_BINARIES` would let a half-installed
+    /// runtime pass `model_is_installed` and then fail on first transcription, so
+    /// both platform spellings are pinned here.
     #[test]
-    fn normalize_funasr_preserves_the_bridge_speaker_labels() {
-        let raw = json!([{
-            "text": "甲。乙。",
-            "sentence_info": [
-                { "text": "甲。", "start": 0, "end": 1000, "spk": 0 },
-                { "text": "乙。", "start": 1000, "end": 2000, "spk": 2 },
-                { "text": "甲。", "start": 2000, "end": 3000, "spk": 0 },
-            ]
-        }]);
-        let normalized = normalize_funasr_output(raw);
-        let segments = normalized["segments"].as_array().cloned().unwrap_or_default();
-        assert_eq!(segments.len(), 3);
-        assert_eq!(segments[0]["speakerId"], "spk-1");
-        assert_eq!(segments[1]["speakerId"], "spk-3");
-        assert_eq!(segments[1]["speakerName"], "发言人3");
-        assert_eq!(segments[2]["speakerId"], "spk-1");
+    fn funasr_sidecar_is_part_of_the_shared_runtime() {
+        let names = stt::required_runtime_names(true);
+        assert!(names.contains(&"funasr.exe".to_owned()), "{names:?}");
+        let unix = stt::required_runtime_names(false);
+        assert!(unix.contains(&"funasr".to_owned()), "{unix:?}");
     }
 
-    /// Replays the app's FunASR parsing over a real bridge transcript captured
-    /// on this machine, so a change to the bridge's output shape fails a test
+    /// Replays the app's SRT parsing over a real FunASR transcript captured on
+    /// this machine, so a change to the sidecar's output shape fails a test
     /// instead of quietly producing an empty note. Skips unless
     /// `LYNSE_FUNASR_TEST_OUTPUT` points at a captured stdout file.
     #[test]
-    fn funasr_output_from_a_real_recording_parses_into_a_transcript() {
+    fn funasr_srt_from_a_real_recording_parses_into_a_transcript() {
         let Some(path) = std::env::var_os("LYNSE_FUNASR_TEST_OUTPUT").map(PathBuf::from) else {
             eprintln!("skipping: set LYNSE_FUNASR_TEST_OUTPUT");
             return;
         };
-        let stdout = fs::read_to_string(&path).expect("read captured output");
-        let raw = parse_funasr_json(&stdout).expect("parse bridge json");
-        let root = raw.as_array().and_then(|items| items.first()).cloned().unwrap_or_else(|| raw.clone());
-        let normalized = normalize_funasr_output(raw);
-        let text = normalized.get("text").and_then(Value::as_str).unwrap_or_default().to_owned();
-        let segments = normalized.get("segments").and_then(Value::as_array).cloned().unwrap_or_default();
+        let stdout = fs::read_to_string(&path).expect("read captured srt");
+        let segments = stt::parse_srt_segments(&stdout);
+        let text = segments
+            .iter()
+            .filter_map(|segment| segment.get("text").and_then(Value::as_str))
+            .collect::<String>();
         eprintln!("funasr: {} chars, {} segments", text.chars().count(), segments.len());
         assert!(text.chars().count() > 1000, "transcript unexpectedly short: {}", text.chars().count());
         assert!(
@@ -5230,30 +5162,27 @@ mod tests {
             "expected Chinese speech: {}",
             &text.chars().take(120).collect::<String>()
         );
-        assert!(!segments.is_empty(), "the bridge produced no segments");
-        // Invariant against the real payload: whatever speaker count the bridge
-        // reported must survive normalization. Captured runs of this meeting have
-        // differed between one and ten speakers, so the count itself is not the
-        // assertion — losing the distinction is.
-        let bridge_speakers: Vec<&Value> = root
-            .get("sentence_info")
-            .and_then(Value::as_array)
-            .map(|sentences| sentences.iter().filter_map(|sentence| sentence.get("spk")).collect())
-            .unwrap_or_default();
-        let app_speakers: Vec<String> = segments
+        assert!(!segments.is_empty(), "the sidecar produced no segments");
+        // Conservation, not vibes: every `-->` line in the capture must become
+        // exactly one segment. The first version of the parser returned ONE
+        // segment for a 677-entry CRLF capture and this test still passed,
+        // because a length assertion alone cannot see a collapse.
+        let entries = stdout.lines().filter(|line| line.contains("-->")).count();
+        assert_eq!(
+            segments.len(),
+            entries,
+            "every SRT entry must become a segment (a collapse into one blob is the bug)"
+        );
+        // Timing is what CAM++ cuts its voiceprint windows from, so a parse that
+        // silently yields zeroes for every row would look like one long utterance.
+        let spans = segments
             .iter()
-            .filter_map(|segment| segment.get("rawSpeaker").and_then(Value::as_str).map(str::to_owned))
-            .collect();
-        assert_eq!(
-            bridge_speakers.len(),
-            app_speakers.len(),
-            "sentences carrying a speaker label must all keep one"
-        );
-        assert_eq!(
-            bridge_speakers.iter().map(|value| value.to_string()).collect::<std::collections::HashSet<_>>().len(),
-            app_speakers.iter().cloned().collect::<std::collections::HashSet<_>>().len(),
-            "the bridge's speaker count must not collapse"
-        );
+            .filter(|segment| segment["endMs"].as_i64().unwrap_or(0) > segment["startMs"].as_i64().unwrap_or(0))
+            .count();
+        assert!(spans > segments.len() / 2, "most segments lost their timings");
+        // SenseVoice interleaves prediction tags unless `--keep-tags` is passed;
+        // none of them may reach a user's note.
+        assert!(!text.contains("<|"), "prediction tags leaked into the transcript");
     }
 
     #[test]

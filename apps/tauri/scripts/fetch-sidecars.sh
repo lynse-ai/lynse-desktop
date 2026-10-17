@@ -14,6 +14,14 @@ set -euo pipefail
 # layout) are only guaranteed against a fixed tree.
 VIBEASR_REF="${VIBEASR_REF:-main}"
 WHISPER_REF="${WHISPER_REF:-v1.9.4}"
+# FunASR's llama.cpp runtime is consumed as a signed release tag whose assets are
+# published for exactly the platforms we ship. SHA-256s are the digests GitHub
+# reports for `runtime-llamacpp-v0.2.6`; the windows-x64 one is additionally
+# verified byte-for-byte on this machine.
+FUNASR_REF="${FUNASR_REF:-runtime-llamacpp-v0.2.6}"
+FUNASR_RELEASE_BASE="https://github.com/modelscope/FunASR/releases/download/${FUNASR_REF}"
+FUNASR_SHA_WINDOWS_X64="f6a73a548413ba9fbaf2145263ea66ec53cbdad1fb11790dbeeee493e339492e"
+FUNASR_SHA_MACOS_ARM64="bda59474202b887190f59d25b7b42c714469efae71276072c12fa0a38de68792"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SIDECARS="$ROOT/apps/tauri/src-tauri/resources/sidecars"
@@ -143,6 +151,85 @@ build_vibeasr() {
   echo "    vibeasr -> $(basename "$target")"
 }
 
+# FunASR on the llama.cpp / GGUF runtime: one native binary, quantized weights,
+# no Python at transcription time. Upstream publishes exactly the platforms we
+# ship, so the portable path consumes their signed release assets rather than
+# compiling here — the same choice the CUDA/AVX2 tiering upstream documents.
+#
+# Only llama-funasr-sensevoice is copied out: the release ZIP also carries
+# llama-funasr-{cli,paraformer,embd,encoder,vad}, and shipping binaries the app
+# cannot select would only widen the surface that has to be signed and scanned.
+#
+# The asset is verified against a pinned SHA-256 BEFORE extraction, then the
+# extracted binary is vetted for the flags the adapter actually passes. That
+# second check is not ceremony: a whisper.cpp generation mismatch shipped a
+# one-shot build as `vibeasr` and every Windows transcription died on
+# "Unknown argument: --no-token-stream" (see build_vibeasr below). A wrong
+# FunASR binary would fail the same way, only after the user paid for a download.
+fetch_funasr_prebuilt() {
+  local asset sha archive dir bin target
+  if [[ "$IS_WINDOWS" -eq 1 ]]; then
+    asset="funasr-llamacpp-windows-x64.zip"
+    sha="$FUNASR_SHA_WINDOWS_X64"
+  elif [[ "$(uname -m)" == "arm64" || "$(uname -m)" == "aarch64" ]]; then
+    asset="funasr-llamacpp-macos-arm64.tar.gz"
+    sha="$FUNASR_SHA_MACOS_ARM64"
+  else
+    build_funasr_source
+    return
+  fi
+  archive="$(mktemp)"
+  curl -fL --retry 3 --retry-all-errors "$FUNASR_RELEASE_BASE/$asset" -o "$archive"
+  printf '%s  %s\n' "$sha" "$archive" | sha256sum -c - \
+    || { rm -f "$archive"; return 1; }
+  dir="$(mktemp -d)"
+  case "$asset" in
+    *.zip) (cd "$dir" && unzip -o -q "$archive") ;;
+    *)     (cd "$dir" && tar -xzf "$archive") ;;
+  esac
+  rm -f "$archive"
+  bin="$(find "$dir" -type f -name 'llama-funasr-sensevoice*' | head -n1)"
+  [[ -n "$bin" ]] || { echo "ERROR: $asset contained no llama-funasr-sensevoice" >&2; return 1; }
+  # Vet the CLI surface before packaging, exactly as build_vibeasr vets its
+  # protocol marker. --srt is the only way the adapter gets segment timings,
+  # and --vad/--vad-maxseg are what keep a 44-minute meeting out of the
+  # whole-clip decode path that upstream documents as degraded.
+  if ! "$bin" --help 2>&1 | grep -q -- '--srt'; then
+    echo "ERROR: $bin does not advertise --srt; the adapter cannot get timestamps from it" >&2
+    return 1
+  fi
+  if ! "$bin" --help 2>&1 | grep -q -- '--vad'; then
+    echo "ERROR: $bin does not advertise --vad; long audio would decode as one segment" >&2
+    return 1
+  fi
+  target="$SIDECARS/funasr"
+  [[ "$IS_WINDOWS" -eq 1 ]] && target="$SIDECARS/funasr.exe"
+  cp "$bin" "$target"
+  chmod +x "$target" 2>/dev/null || true
+  rm -rf "$dir"
+  echo "    funasr -> $(basename "$target") ($asset @ $FUNASR_REF)"
+}
+
+# Intel Mac: upstream ships no macos-x86_64 asset, so build the same tag from
+# source. The runtime's own CMake tree fetches its pinned llama.cpp, which is the
+# CI-friendly path upstream documents for exactly this case.
+build_funasr_source() {
+  local src
+  src="$(mktemp -d)"
+  git clone --depth 1 --branch "$FUNASR_REF" --recursive https://github.com/modelscope/FunASR "$src"
+  cmake -S "$src/runtime/llama.cpp" -B "$src/runtime/llama.cpp/build" \
+    -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DGGML_AVX2=ON -DLLAMA_CURL=OFF
+  cmake --build "$src/runtime/llama.cpp/build" --config Release \
+    --target llama-funasr-sensevoice -j"$(sysctl -n hw.ncpu)"
+  local bin target
+  bin="$(find "$src/runtime/llama.cpp/build" -type f -name 'llama-funasr-sensevoice' | head -n1)"
+  [[ -n "$bin" ]] || { echo "ERROR: source build produced no llama-funasr-sensevoice" >&2; return 1; }
+  target="$SIDECARS/funasr"
+  cp "$bin" "$target"
+  rm -rf "$src"
+  echo "    funasr -> funasr (built from $FUNASR_REF source, x86_64)"
+}
+
 build_ffmpeg_source() {
   # Native Apple Silicon build, minimal LGPL config: no GPL extras (x264 etc.),
   # no network, no external libs — everything the app needs (decode to WAV,
@@ -195,6 +282,7 @@ fetch_ffmpeg() {
 
 build_whisper
 build_vibeasr
+fetch_funasr_prebuilt || { echo "ERROR: FunASR sidecar unavailable — the GGUF engine cannot ship without resources/sidecars/funasr" >&2; exit 1; }
 fetch_ffmpeg
 
 # Sidecars are no longer bundled into the app — they are fetched on demand at

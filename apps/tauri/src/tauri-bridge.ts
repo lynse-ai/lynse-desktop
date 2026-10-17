@@ -24,6 +24,7 @@ import type { PersistedLiveTranslationSettings } from "@lynse/views/live-transla
 import type {
   SttDownloadProgress,
   SttModelInfo,
+  SttProviderConfig,
   LocalTranscriptionUpdate,
   TranscribeConfig,
   DesktopCloudSyncApi,
@@ -387,6 +388,9 @@ export async function installTauriBridge(): Promise<void> {
         ),
       getSttConfig: () => command<TranscribeConfig>("local_stt_config_get"),
       saveSttConfig: (config: TranscribeConfig) => command<TranscribeConfig>("local_stt_config_save", { config }),
+      setSttLocale: (locale: string) => command<TranscribeConfig>("local_stt_set_locale", { locale }),
+      getDefaultSttProvider: (locale: string | null) =>
+        command<SttProviderConfig>("local_stt_default_provider", { locale }),
     },
     cloudSync: {
       audioSize: (recordId) => command<number>("sync_upload_audio_size", { recordId }),

@@ -180,6 +180,10 @@ export interface LocalTranscriptionRecord {
 }
 
 export interface LocalTranscriptionOptions {
+  /** The UI language, sent so a task that falls through to the engine default
+   *  resolves the same way the dialog did (Chinese selects FunASR off Apple
+   *  Silicon). Not a claim about the audio's language. */
+  locale?: string;
   expectedSpeakers?: number;
   /** `null` explicitly disables hotwords for this task; `undefined` falls back
    *  to the engine's configured package. */

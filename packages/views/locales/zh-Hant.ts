@@ -534,6 +534,8 @@ const zhHant = {
     stt_engine_moss: "MOSS 轉寫（本機·說話人分離）",
     stt_moss_model: "MOSS 轉寫模型",
     stt_moss_hint: "復旦 OpenMOSS 的 MOSS-Transcribe-Diarize（0.9B）透過 MLX 在 Apple Silicon GPU 上本機執行，單次推理即輸出帶說話人標籤與時間戳的轉寫（最長 90 分鐘），適合多人會議。首次使用會自動下載執行環境與 8-bit 量化權重（約 1.1 GiB）。",
+    stt_funasr_hint: "SenseVoice-Small（GGUF 原生引擎，約 244 MiB，免 Python）。本地引擎裡中文準確率最高，輸出自帶標點與數字規範；如需區分說話人請勾選下方聲紋選項，並填寫預期人數以獲得穩定結果。",
+    stt_funasr_no_hotword: "GGUF 版 FunASR 沒有熱詞參數，已儲存的熱詞包對此引擎無效。",
     stt_vibeasr_hint: "純 CPU 引擎，支援中/英/法/義/韓/葡/越 7 種語言；首次下載約 1.6 GiB 權重，並需要離線轉寫元件。",
     stt_whisper_model: "Whisper 模型",
     stt_campp_diarization: "CAM++ 說話人分離",
@@ -1102,8 +1104,8 @@ const zhHant = {
       badge_voiceprint: "含聲紋",
       uninstall_blocked: "該模型正被預設引擎或分語言路由使用，請先切換後再解除安裝。",
       funasr: {
-        name: "FunASR 最新版",
-        description: "Paraformer 轉寫 + CAM++ 說話人標註，安裝後聲紋功能即可用。",
+        name: "FunASR SenseVoice-Small",
+        description: "GGUF 原生引擎，約 244 MiB，不需要 Python 或 torch。本地中文準確率最高，輸出自帶標點；如需區分說話人，請另行安裝 3D-Speaker 聲紋模型。",
       },
       whisperx: {
         name: "WhisperX 最新版",

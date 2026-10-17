@@ -45,8 +45,10 @@ const VISIBLE_ENGINE_OPTIONS = isMacDesktop
   ? ENGINE_OPTIONS
   : ENGINE_OPTIONS.filter((option) => NON_MAC_ENGINES.has(option.value));
 
-/** Platform-aware stand-in for an unset `config.default` — mirrors the Rust
- *  `ProviderConfig::default()` (Qwen3 on Apple Silicon, whisper elsewhere). */
+/** Fallback for when the desktop cannot answer `getDefaultSttProvider` (web
+ *  build, or an app that predates the command). The real answer comes from Rust,
+ *  which is the only side that knows the compile target AND receives the UI
+ *  locale — see `stt::ProviderConfig::default_for_locale`. */
 const defaultProviderConfig = (): SttProviderConfig =>
   isMacDesktop
     ? { provider: "qwen3", model: DEFAULT_QWEN3_MODEL }
@@ -63,6 +65,7 @@ function providerForEngine(engine: SttEngine, prev?: SttProviderConfig): SttProv
     case "funasr":
       return {
         provider: "funasr",
+        campp_diarization: prev?.provider === "funasr" ? prev.campp_diarization ?? false : false,
         expected_speakers: prev?.provider === "funasr" ? prev.expected_speakers ?? null : null,
         hotword_package_id: prev?.provider === "funasr" ? prev.hotword_package_id ?? null : null,
       };
@@ -233,6 +236,19 @@ function EngineFields({
       {config.provider === "whisperx" && (
         <p className="text-2xs text-muted-foreground">{t("settings.stt_whisperx_hint")}</p>
       )}
+      {config.provider === "funasr" && (
+        <>
+          <p className="text-2xs text-muted-foreground">{t("settings.stt_funasr_hint")}</p>
+          <label className="flex items-center gap-2 text-2xs">
+            <input
+              type="checkbox"
+              checked={config.campp_diarization ?? false}
+              onChange={(event) => onChange({ ...config, campp_diarization: event.target.checked })}
+            />
+            {t("settings.stt_campp_diarization")}
+          </label>
+        </>
+      )}
       {config.provider === "whisper" && (
         <>
           <div className="space-y-1">
@@ -281,14 +297,23 @@ function EngineFields({
           />
         </div>
       )}
-      <div className="space-y-1">
-        <Label className="text-2xs">{t("settings.stt_hotword_package")}</Label>
-        <HotwordSelect
-          value={config.hotword_package_id}
-          packages={hotwordPackages}
-          onChange={(id) => onChange({ ...config, hotword_package_id: id })}
-        />
-      </div>
+      {/* FunASR's GGUF binaries have no hotword argument at all, so offering the
+          picker would promise something the engine silently drops. A package
+          saved from the old Python bridge is called out instead of hidden. */}
+      {config.provider === "funasr" ? (
+        config.hotword_package_id ? (
+          <p className="text-2xs text-muted-foreground">{t("settings.stt_funasr_no_hotword")}</p>
+        ) : null
+      ) : (
+        <div className="space-y-1">
+          <Label className="text-2xs">{t("settings.stt_hotword_package")}</Label>
+          <HotwordSelect
+            value={config.hotword_package_id}
+            packages={hotwordPackages}
+            onChange={(id) => onChange({ ...config, hotword_package_id: id })}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -302,11 +327,30 @@ export function SttConfigSection({
   hotwordPackages: LocalHotwordPackage[];
   onBrowseModels?: () => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [config, setConfig] = useState<TranscribeConfig | null>(null);
   const [models, setModels] = useState<SttModelInfo[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  /** What the desktop would run when nothing is configured, asked from Rust. */
+  const [platformDefault, setPlatformDefault] = useState<SttProviderConfig | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const locale = i18n.language ?? null;
+    // Record the UI language engine-side: a voice memo or a meeting retried
+    // after a restart has no dialog to ask, and without this it would fall back
+    // to a different engine than the one this page shows.
+    if (locale) api.setSttLocale?.(locale).catch(() => undefined);
+    api.getDefaultSttProvider?.(locale)
+      .then((value) => {
+        if (active) setPlatformDefault(value);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [api, i18n.language]);
 
   useEffect(() => {
     let active = true;
@@ -337,6 +381,7 @@ export function SttConfigSection({
       const next: TranscribeConfig = {
         default: config.default ?? null,
         per_language: config.per_language ?? {},
+        ui_locale: i18n.language ?? config.ui_locale ?? null,
       };
       await api.saveSttConfig(next);
       setConfig(next);
@@ -355,7 +400,8 @@ export function SttConfigSection({
     );
   }
 
-  const defaultConfig: SttProviderConfig = config.default ?? defaultProviderConfig();
+  const defaultConfig: SttProviderConfig =
+    config.default ?? platformDefault ?? defaultProviderConfig();
 
   function updateDefault(next: SttProviderConfig) {
     setConfig((current) => (current ? { ...current, default: next } : current));

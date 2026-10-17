@@ -30,6 +30,7 @@ import {
   resolveSttProvider,
   findModelStatus,
 } from "./local-transcription";
+import type { SttProviderConfig } from "./local-transcription";
 import { isInsufficientCreditsError, useMembership, useUserCredits } from "../layout/use-user-credits";
 import { canUploadToCloud } from "../layout/membership-entitlement";
 import { useAuthStore } from "@lynse/core/auth";
@@ -48,7 +49,7 @@ interface UploadDialogProps {
 }
 
 export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const qc = useQueryClient();
 
   // State
@@ -194,7 +195,17 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
         // Pre-flight: the resolved engine's model must be installed.
         const sttConfig = await localApi.getSttConfig().catch(() => ({ default: null, per_language: {} }));
         const { models } = await localApi.listSttModels().catch(() => ({ models: [] }));
-        const provider = resolveSttProvider(sttConfig, undefined, undefined);
+        // Ask the desktop which engine IT would use for this language. Resolving
+        // locally is what made a Windows import pre-flight `qwen3` — an engine
+        // that cannot run there — while Settings showed Whisper, so the user got
+        // an "offline model missing" toast for a model that was installed.
+        const locale = i18n.language ?? null;
+        if (locale) await localApi.setSttLocale?.(locale).catch(() => undefined);
+        let platformDefault: SttProviderConfig | null = null;
+        if (localApi.getDefaultSttProvider) {
+          platformDefault = await localApi.getDefaultSttProvider(locale).catch(() => null);
+        }
+        const provider = resolveSttProvider(sttConfig, undefined, undefined, platformDefault);
         const status = findModelStatus(models, provider);
         if (!status || status.status !== "installed") {
           toast.error(t("upload.offline_model_missing"));
@@ -207,6 +218,10 @@ export function UploadDialog({ open, onOpenChange }: UploadDialogProps) {
         // carries the outcome to the notes list.
         const expectedSpeakersValue = Number.parseInt(expectedSpeakers, 10);
         const record = await localApi.start(localAudioPath, {
+          // The engine is already frozen onto the record by `start`; the locale
+          // rides along so a task that falls through to the default resolves the
+          // same way this dialog just did.
+          locale: locale ?? undefined,
           expectedSpeakers: Number.isFinite(expectedSpeakersValue) && expectedSpeakersValue > 0
             ? expectedSpeakersValue
             : undefined,

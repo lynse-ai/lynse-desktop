@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Local speech-to-text via Apple MLX (mlx-whisper).
 
-Mirrors the `funasr_transcribe.py` bridge: the Rust side spawns this script
-as a subprocess and reads a JSON transcript from `--output`. MLX is Apple
+Shares the shape of the other Python bridges (`qwen3_transcribe.py`,
+`moss_transcribe.py`, `whisperx_transcribe.py`): the Rust side spawns this
+script as a subprocess and reads a JSON transcript from `--output`. MLX is Apple
 Silicon-only, so the Rust `MlxAdapter` guards execution before ever reaching
-here.
+here. (FunASR used to be one of them; it now runs as a native GGUF sidecar.)
 
 Audio decoding is handled internally via `imageio-ffmpeg` (which vendors a
 portable ffmpeg binary) so we never depend on the shared STT runtime's ffmpeg

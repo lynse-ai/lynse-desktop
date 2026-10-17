@@ -102,18 +102,34 @@ jobs:
         # A failure here blocks the msi/dmg build — shipping an archive whose
         # binary cannot start would make the VibeVoice model card uninstalleable
         # end-to-end (download OK, transcribe dead).
+        #
+        # The list is read from the client's own completeness gate
+        # (`stt::RUNTIME_BINARIES`) rather than repeated here: a second copy is
+        # exactly how an archive shipped without a binary that every client then
+        # rejects as permanently "incomplete".
         shell: bash
         run: |
           SIDECARS=apps/tauri/src-tauri/resources/sidecars
-          if [[ "$RUNNER_OS" == "Windows" ]]; then
-            "$SIDECARS/whisper.exe" --help
-            "$SIDECARS/vibeasr.exe" --help
-            "$SIDECARS/ffmpeg.exe" -f lavfi -i "sine=frequency=1000:duration=1" -ar 16000 -ac 1 -c:a pcm_s16le "$RUNNER_TEMP/tone.wav"
-          else
-            "$SIDECARS/whisper" --help
-            "$SIDECARS/vibeasr" --help
-            "$SIDECARS/ffmpeg" -f lavfi -i "sine=frequency=1000:duration=1" -ar 16000 -ac 1 -c:a pcm_s16le "$RUNNER_TEMP/tone.wav"
-          fi
+          EXT=""; [[ "$RUNNER_OS" == "Windows" ]] && EXT=".exe"
+          REQUIRED=$(awk '/pub\(crate\) const RUNTIME_BINARIES/{f=1} f{print} f&&/\];/{exit}' apps/tauri/src-tauri/src/stt.rs | grep -oE '"[a-z0-9-]+"' | tr -d '"')
+          # A parse that silently yielded nothing would vacuously pass the loop.
+          echo "$REQUIRED" | grep -qx whisper \
+            || { echo "::error::could not read RUNTIME_BINARIES from stt.rs"; exit 1; }
+          echo "required runtime binaries: $(echo $REQUIRED | tr '\n' ' ')"
+          # Share one extraction with the packaging gate below rather than
+          # parsing stt.rs twice and letting the two drift.
+          echo "RUNTIME_BINARY_LIST=$(echo $REQUIRED | tr '\n' ' ')" >> "$GITHUB_ENV"
+          for base in $REQUIRED; do
+            test -s "$SIDECARS/$base$EXT" \
+              || { echo "::error::$base$EXT missing from sidecars — fetch-sidecars.sh did not produce it"; exit 1; }
+            if [ "$base" = ffmpeg ] || [ "$base" = ffprobe ]; then
+              "$SIDECARS/$base$EXT" -version > /dev/null || { echo "::error::$base$EXT cannot start"; exit 1; }
+            else
+              "$SIDECARS/$base$EXT" --help > /dev/null || { echo "::error::$base$EXT cannot start"; exit 1; }
+            fi
+            echo "    $base$EXT launches"
+          done
+          "$SIDECARS/ffmpeg$EXT" -f lavfi -i "sine=frequency=1000:duration=1" -ar 16000 -ac 1 -c:a pcm_s16le "$RUNNER_TEMP/tone.wav"
           test -s "$RUNNER_TEMP/tone.wav" && echo "ffmpeg conversion OK"
 
       - name: Package STT runtime archive
@@ -136,15 +152,23 @@ jobs:
             SHA_VAR=LYNSE_RUNTIME_SHA_WINDOWS_X86_64
           fi
           # Hard gate: a Windows archive without the Vulkan loader would pass
-          # the client's completeness check but silently run CPU-only; without
-          # vibeasr.exe the client's completeness check (required_runtime_names)
-          # would reject every archive as permanently "incomplete".
+          # the client's completeness check but silently run CPU-only; and an
+          # archive missing ANY `RUNTIME_BINARIES` entry is rejected by
+          # every client as permanently "incomplete", so it must not ship.
+          # Reuse the list parsed by the smoke step (RUNTIME_BINARY_LIST) —
+          # parsing stt.rs a second time here is how the two gates drift apart,
+          # and a `for` over an empty expansion vacuously passes.
+          EXT=""; [[ "$RUNNER_OS" == "Windows" ]] && EXT=".exe"
           if [[ "$RUNNER_OS" == "Windows" ]]; then
             test -s "$SIDECARS/vulkan-1.dll" \
               || { echo "::error::vulkan-1.dll missing from sidecars — the whisper build went out CPU-only"; exit 1; }
-            test -s "$SIDECARS/vibeasr.exe" \
-              || { echo "::error::vibeasr.exe missing from sidecars — the client requires it in the runtime"; exit 1; }
           fi
+          test -n "${RUNTIME_BINARY_LIST// }" \
+            || { echo "::error::RUNTIME_BINARY_LIST is empty — the smoke step did not export it"; exit 1; }
+          for base in $RUNTIME_BINARY_LIST; do
+            test -s "$SIDECARS/$base$EXT" \
+              || { echo "::error::$base$EXT missing — the client's runtime completeness check would fail"; exit 1; }
+          done
           ARCHIVE="lynse-stt-runtime-$PLATFORM.tar.gz"
           tar -czf "$ARCHIVE" -C "$SIDECARS" .
           SHA=$(sha256sum "$ARCHIVE" | cut -d' ' -f1)

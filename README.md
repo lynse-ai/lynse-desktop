@@ -116,4 +116,6 @@ Pushing a `v*` tag (e.g. `v1.1.6`) triggers GitHub Actions: it builds the macOS 
 
 ## License
 
-[MIT](LICENSE) © 2026 Lynse. Bundled third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[AGPL-3.0-only](LICENSE) © 2026 上海天启灵光科技有限公司 (Shanghai RevelSpark Technologies Co., Ltd.). Bundled third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+AGPL §13 applies to network use: anyone who offers a modified version of this software to users over a network must also make its corresponding source available to them.

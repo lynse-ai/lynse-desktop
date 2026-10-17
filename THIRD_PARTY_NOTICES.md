@@ -1,7 +1,10 @@
 # Third-party notices
 
-This file lists the third-party components that Lynse bundles or adapts, along
-with their licenses and upstream sources. License texts for MIT components are
+Lynse's own source is licensed under the GNU Affero General Public License
+v3.0 only (see [LICENSE](LICENSE)). This file lists the third-party components
+that Lynse bundles or adapts, along with their licenses and upstream sources;
+each of those components remains governed by its own license terms, which are
+not changed by Lynse's license. License texts for the MIT components are
 reproduced at the bottom of this file.
 
 ## Bundled / adapted source code
@@ -24,11 +27,16 @@ The complete corresponding source code for FFmpeg is available from the
 upstream projects linked above. The LGPL license text can be obtained at
 <https://www.gnu.org/licenses/old-licenses/lgpl-2.1.txt>.
 
+FFmpeg and ffprobe are shipped and invoked as separate sidecar executables
+(child processes started by the desktop shell); Lynse does not link against
+them, so the LGPL obligations attach to those binaries and their own source
+offer rather than to Lynse's source.
+
 Model weights (Paraformer / FSMN VAD / CAM++, whisper, VibeVoice) are downloaded at
 runtime from their respective publishers; refer to each model card for its
 license terms.
 
-## MIT License
+## MIT License (third-party components listed above)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

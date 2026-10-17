@@ -37,6 +37,23 @@ export const WHISPER_MODEL_LABELS: Record<WhisperModel, string> = {
   "large-v3-turbo-q5_0": "Whisper large-v3-turbo (q5_0, ~574 MB)",
 };
 export const DEFAULT_WHISPER_MODEL: WhisperModel = "large-v3-turbo-q5_0";
+
+/** Languages the local engines can actually be pinned to. This list is exactly
+ *  the SenseVoice query-token rows verified against real meeting audio
+ *  (auto=0, zh=3, en=4, yue=6, ja=11) — offering 韩语 there would be a control
+ *  that silently resolves to "auto", which is the bug this selector exists to
+ *  fix. Whisper accepts a wider set; an unmapped tag falls back to its own
+ *  detection, never to English. */
+export const STT_LANGUAGE_OPTIONS: { value: string; labelKey: string }[] = [
+  { value: "auto", labelKey: "settings.stt_language_auto" },
+  { value: "zh", labelKey: "settings.stt_language_zh" },
+  { value: "en", labelKey: "settings.stt_language_en" },
+  { value: "ja", labelKey: "settings.stt_language_ja" },
+  { value: "yue", labelKey: "settings.stt_language_yue" },
+];
+/** Engines with a language setting at all. VibeVoice exposes no language
+ *  argument, so the control would be inert there. */
+export const LANGUAGE_CAPABLE_ENGINES: ReadonlySet<SttEngine> = new Set(["funasr", "whisper"]);
 export const VIBEVOICE_MODEL_ID = "vibeasr-bitnet-1.5b";
 /** FunASR's single shipped GGUF model (SenseVoice-Small, Q8). Mirrors the Rust
  *  `FUNASR_DEFAULT_MODEL_ID`. SenseVoice is the default because it is both the
@@ -74,6 +91,11 @@ export type SttProviderConfig =
       provider: "funasr";
       campp_diarization?: boolean;
       expected_speakers?: number | null;
+      /** SenseVoice query-token language: "auto" | "zh" | "en" | "ja" | "yue".
+       *  Written into the model file before the run — `auto` (what upstream
+       *  ships) self-reported Japanese on 49 of 191 crosstalk-heavy Mandarin
+       *  segments, so Chinese users default to "zh". */
+      language?: string | null;
       /** Accepted, never applied: the GGUF binaries have no hotword argument. */
       hotword_package_id?: string | null;
     }
@@ -347,6 +369,7 @@ export function migrateSttProviderConfig(value: unknown): SttProviderConfig | nu
       provider: "funasr",
       campp_diarization: Boolean(record.campp_diarization),
       expected_speakers: (record.expected_speakers as number | null | undefined) ?? null,
+      language: (record.language as string | null | undefined) ?? null,
       hotword_package_id: (record.hotword_package_id as string | null | undefined) ?? null,
     };
   }

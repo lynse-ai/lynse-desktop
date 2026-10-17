@@ -23,6 +23,7 @@ import {
   MOSS_MODEL_LABELS,
   DEFAULT_MOSS_MODEL,
   NON_MAC_ENGINES,
+  STT_LANGUAGE_OPTIONS,
   findModelStatus,
 } from "../workspace/local-transcription";
 import type { LocalHotwordPackage } from "../workspace/types";
@@ -67,6 +68,7 @@ function providerForEngine(engine: SttEngine, prev?: SttProviderConfig): SttProv
         provider: "funasr",
         campp_diarization: prev?.provider === "funasr" ? prev.campp_diarization ?? false : false,
         expected_speakers: prev?.provider === "funasr" ? prev.expected_speakers ?? null : null,
+        language: prev?.provider === "funasr" ? prev.language ?? null : null,
         hotword_package_id: prev?.provider === "funasr" ? prev.hotword_package_id ?? null : null,
       };
     case "whisperx":
@@ -239,6 +241,24 @@ function EngineFields({
       {config.provider === "funasr" && (
         <>
           <p className="text-2xs text-muted-foreground">{t("settings.stt_funasr_hint")}</p>
+          <div className="space-y-1">
+            <Label className="text-2xs">{t("settings.stt_language")}</Label>
+            <select
+              // "auto" is stored as the literal value, never as null: null means
+              // "this config predates the field", which the backend migrates to
+              // the locale default instead of silently pinning Chinese.
+              value={config.language ?? "auto"}
+              onChange={(event) => onChange({ ...config, language: event.target.value })}
+              className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
+            >
+              {STT_LANGUAGE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {t(option.labelKey)}
+                </option>
+              ))}
+            </select>
+            <p className="text-2xs text-muted-foreground">{t("settings.stt_language_hint")}</p>
+          </div>
           <label className="flex items-center gap-2 text-2xs">
             <input
               type="checkbox"

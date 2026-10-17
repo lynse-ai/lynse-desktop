@@ -130,6 +130,13 @@ pub struct FunasrProviderConfig {
     pub campp_diarization: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_speakers: Option<u64>,
+    /// The language to decode as, written into the model's `sv.query_tokens`
+    /// before each run (`"zh"`, `"en"`, `"ja"`, `"yue"`, `"auto"`). `None`
+    /// leaves the installed file as it is — which for upstream's GGUF means
+    /// `auto`, and `auto` self-reported Japanese on 49 of 191 segments of
+    /// crosstalk-heavy Mandarin. See `SENSEVOICE_LANGUAGE_ROWS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
     /// Accepted and ignored: the llama.cpp binaries have no hotword or context
     /// prompt argument (`-m/--vad/--vad-maxseg/-a/--backend/--srt/--ids/--keep-tags`
     /// is the whole surface). Kept so stored configs from the PyTorch bridge
@@ -274,11 +281,15 @@ impl ProviderConfig {
         // human-referenced Mandarin set, measured at RTF 0.289 on a 44-minute
         // meeting. SenseVoice covers zh/en/ja/ko/yue only, so the multilingual
         // tail stays on Whisper, and Apple Silicon keeps Qwen3-ASR.
-        let chinese = locale
-            .map(|value| value.to_ascii_lowercase().starts_with("zh"))
-            .unwrap_or(false);
+        let chinese = is_chinese_locale(locale);
         if chinese && !apple_silicon {
-            ProviderConfig::Funasr(FunasrProviderConfig::default())
+            // Chinese audio gets the language pin, not just the engine: the
+            // GGUF's own `auto` decode self-reports Japanese on a quarter of
+            // crosstalk-heavy Mandarin segments.
+            ProviderConfig::Funasr(FunasrProviderConfig {
+                language: Some("zh".to_owned()),
+                ..FunasrProviderConfig::default()
+            })
         } else if apple_silicon {
             ProviderConfig::Qwen3(Qwen3ProviderConfig::default())
         } else {
@@ -416,14 +427,239 @@ impl TranscribeConfig {
         per_note: Option<&ProviderConfig>,
         locale: Option<&str>,
     ) -> ProviderConfig {
-        per_note
-            .cloned()
-            .or_else(|| language.and_then(|lang| self.per_language.get(lang).cloned()))
-            .or_else(|| self.default.clone())
-            .unwrap_or_else(|| {
-                ProviderConfig::default_for_locale(locale.or(self.ui_locale.as_deref()))
-            })
+        let locale = locale.or(self.ui_locale.as_deref());
+        if let Some(note) = per_note.cloned() {
+            return note;
+        }
+        if let Some(matching) = language.and_then(|lang| self.per_language.get(lang).cloned()) {
+            return matching;
+        }
+        match self.default.clone() {
+            Some(config) => migrate_funasr_language(config, locale),
+            None => ProviderConfig::default_for_locale(locale),
+        }
     }
+}
+
+/// A stored FunASR config that predates the language selector carries
+/// `language: None`, and for a Chinese UI that must NOT be read as "auto" —
+/// auto is precisely the setting that put Japanese kana into 6.9% of a Mandarin
+/// meeting's characters. An explicit choice of auto-detection is stored as the
+/// string `"auto"` and is respected as such.
+fn migrate_funasr_language(config: ProviderConfig, locale: Option<&str>) -> ProviderConfig {
+    let ProviderConfig::Funasr(mut funasr) = config else {
+        return config;
+    };
+    if funasr.language.is_none() && is_chinese_locale(locale) {
+        funasr.language = Some("zh".to_owned());
+        ProviderConfig::Funasr(funasr)
+    } else {
+        ProviderConfig::Funasr(funasr)
+    }
+}
+
+fn is_chinese_locale(locale: Option<&str>) -> bool {
+    locale
+        .map(|value| value.to_ascii_lowercase().starts_with("zh"))
+        .unwrap_or(false)
+}
+
+/// SenseVoice reads its four prompt tokens (language / event / emotion / ITN)
+/// from rows of a 16×560 `embed.weight`, and the GGUF carries the chosen row
+/// indices in the `sv.query_tokens` metadata array. The shipped upstream file is
+/// `[0, 1, 2, 14]` — i.e. **language = auto**, so the model guesses a language
+/// per VAD segment.
+///
+/// Measured on the 09-17 meeting (10 minutes of crosstalk-heavy Mandarin, same
+/// clip, same VAD bounds): auto produced 171 kana characters (6.9% of the 2476
+/// hanzi) spread over 49 of 191 segments that self-reported `<|ja|>`; pinning
+/// `zh` produced **zero** kana and MORE hanzi (2655), i.e. nothing was lost and
+/// short backchannel utterances ("うん对") stopped being decoded as Japanese.
+///
+/// Rows below are the ones calibrated against this audio by rewriting the
+/// metadata and reading the model's own `<|…|>` tags back; rows that were not
+/// identified are deliberately absent rather than guessed.
+pub const SENSEVOICE_LANGUAGE_ROWS: &[(&str, u32)] = &[
+    ("auto", 0),
+    ("zh", 3),
+    ("en", 4),
+    ("ja", 11),
+    ("yue", 6),
+    ("nospeech", 13),
+];
+
+/// Map a UI language (BCP-47, `zh-CN`, `zh-Hant`, `en-US`, `ja-JP`, `yue`) to a
+/// SenseVoice query row. Unknown or missing returns `auto`, never a silent
+/// guess at Chinese — the same rule `whisper_language_arg` follows.
+pub fn sensevoice_language_row(language: Option<&str>) -> u32 {
+    let Some(tag) = language.map(|value| value.to_ascii_lowercase()) else {
+        return 0;
+    };
+    if tag == "auto" {
+        return 0;
+    }
+    let primary = tag.split(['-', '_']).next().unwrap_or(tag.as_str());
+    // SenseVoice's Cantonese row is labelled `yue`; accept the common `zh-HK` /
+    // `zh-Hant` aliases only for Cantonese-specific spellings, not for every
+    // Traditional Chinese locale — those are Standard Mandarin by the numbers.
+    let row = match primary {
+        // Cantonese spellings first: `zh-HK`/`zh-yue` are `zh` by primary subtag
+        // but SenseVoice has a dedicated 粤语 row that fits them better.
+        "zh" if tag.starts_with("zh-hk") || tag.starts_with("zh-yue") || tag.starts_with("zh-hant-yue") => Some("yue"),
+        "yue" => Some("yue"),
+        "zh" => Some("zh"),
+        "en" => Some("en"),
+        "ja" => Some("ja"),
+        _ => None,
+    };
+    row.and_then(|name| SENSEVOICE_LANGUAGE_ROWS.iter().find(|(n, _)| *n == name).map(|(_, index)| *index))
+        .unwrap_or(0)
+}
+
+/// Rewrite `sv.query_tokens[0]` in an already-installed GGUF, in place.
+///
+/// The array length never changes, so this is a 4-byte write at the offset found
+/// by walking the KV section — no re-layout, no re-download, no second 244 MB
+/// copy per language. The upstream SHA-256 stays meaningful because it is
+/// verified when the file is installed (`verify_and_install` on the staging
+/// `.part`, before promotion); the pin is a reversible local mutation, and the
+/// current row is read back from the file itself — there is no sidecar marker to
+/// fall out of sync, and returning the previous row lets the caller log a real
+/// transition instead of claiming one that did not happen.
+///
+/// **Constraint on future work: never re-hash an installed model to decide
+/// whether it is intact.** `model_is_installed` checks existence for exactly
+/// this reason. An integrity scan on launch would flag every legitimately
+/// language-pinned model as corrupt — if such a check is ever added, it must
+/// either compare against the digest of the file as pinned (header aside) or
+/// exclude the 4 metadata bytes at the located offset.
+pub fn pin_sensevoice_language(model_file: &Path, row: u32) -> CommandResult<Option<u32>> {
+    let bytes = std::fs::read(model_file).map_err(|error| format!("无法读取 FunASR 模型：{error}"))?;
+    let Some(offset) = gguf_value_offset(&bytes, "sv.query_tokens") else {
+        return Err("FunASR 模型缺少 sv.query_tokens 元数据，无法设置转写语言".to_owned());
+    };
+    // The array's first item is the language row.
+    let target = offset;
+    let current = u32_at(&bytes, target)
+        .ok_or_else(|| "FunASR 模型的 sv.query_tokens 长度异常".to_owned())?;
+    if current == row {
+        return Ok(None);
+    }
+    let mut patched = bytes;
+    patched[target..target + 4].copy_from_slice(&row.to_le_bytes());
+    let temp = model_file.with_extension("gguf.lang-tmp");
+    std::fs::write(&temp, &patched).map_err(|error| format!("无法写入语言设置：{error}"))?;
+    std::fs::rename(&temp, model_file).map_err(|error| format!("无法应用语言设置：{error}"))?;
+    log::info!("[stt] funasr 语种 token：{current} → {row}（{}）", model_file.display());
+    Ok(Some(current))
+}
+
+/// Byte offset of the first item of a GGUF `UINT32` array metadata key, or `None`
+/// when the key is absent or not that shape. GGUF v2/v3 header layout:
+/// magic(4) version(4) n_tensors(8) n_kv(8), then per KV: key(string) vtype(4)
+/// value; an array value is element-type(4) + count(8) + items.
+fn gguf_value_offset(bytes: &[u8], wanted: &str) -> Option<usize> {
+    if bytes.len() < 24 || &bytes[0..4] != b"GGUF" {
+        return None;
+    }
+    let mut o = 8usize;
+    let _n_tensors = read_u64(bytes, &mut o)?;
+    let n_kv = read_u64(bytes, &mut o)?;
+    for _ in 0..n_kv {
+        let key = read_string(bytes, &mut o)?;
+        let vtype = read_u32(bytes, &mut o)?;
+        if key == wanted && vtype == GGUF_TYPE_UINT32_ARRAY {
+            let element = read_u32(bytes, &mut o)?;
+            let count = read_u64(bytes, &mut o)?;
+            if element != GGUF_TYPE_UINT32 || count == 0 {
+                return None;
+            }
+            // Only the language slot (item 0) is rewritten, but a file truncated
+            // before its first item is not a file we may write into.
+            u32_at(bytes, o)?;
+            return Some(o);
+        }
+        skip_value(bytes, &mut o, vtype)?;
+    }
+    None
+}
+
+const GGUF_TYPE_UINT32: u32 = 5;
+const GGUF_TYPE_UINT32_ARRAY: u32 = 9;
+
+fn read_u32(bytes: &[u8], o: &mut usize) -> Option<u32> {
+    let value = u32_at(bytes, *o)?;
+    *o += 4;
+    Some(value)
+}
+
+fn u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
+    // Bound the slice first: `try_into()` inside a `map` closure would make the
+    // closure return `u32`, and `?` has nothing to propagate out of there.
+    let slice: [u8; 4] = bytes.get(offset..offset + 4)?.try_into().ok()?;
+    Some(u32::from_le_bytes(slice))
+}
+
+fn read_u64(bytes: &[u8], o: &mut usize) -> Option<u64> {
+    let slice = bytes.get(*o..*o + 8)?;
+    *o += 8;
+    Some(u64::from_le_bytes(slice.try_into().ok()?))
+}
+
+fn read_string(bytes: &[u8], o: &mut usize) -> Option<String> {
+    let len = read_u64(bytes, o)? as usize;
+    let slice = bytes.get(*o..*o + len)?;
+    *o += len;
+    Some(String::from_utf8_lossy(slice).into_owned())
+}
+
+/// Advance `o` past one metadata value of the given GGUF type.
+fn skip_value(bytes: &[u8], o: &mut usize, vtype: u32) -> Option<()> {
+    // Fixed-width scalars: type → byte width. Strings and arrays are special.
+    let width = match vtype {
+        0 | 1 | 7 => 1,
+        2 | 3 => 2,
+        4 | 5 | 6 => 4,
+        10 | 11 | 12 => 8,
+        8 => {
+            read_string(bytes, o)?;
+            return Some(());
+        }
+        9 => {
+            let element = read_u32(bytes, o)?;
+            let count = read_u64(bytes, o)? as usize;
+            let width = match element {
+                0 | 1 | 7 => 1,
+                2 | 3 => 2,
+                4 | 5 | 6 => 4,
+                10 | 11 | 12 => 8,
+                8 => {
+                    for _ in 0..count {
+                        read_string(bytes, o)?;
+                    }
+                    return Some(());
+                }
+                9 => return None, // nested arrays: not produced by these exporters
+                _ => return None,
+            };
+            let end = checked_mul(count, width)?;
+            if bytes.get(*o..*o + end).is_none() {
+                return None;
+            }
+            *o += end;
+            return Some(());
+        }
+        _ => return None,
+    };
+    if bytes.get(*o..*o + width).is_none() {
+        return None;
+    }
+    *o += width;
+    Some(())
+}
+
+fn checked_mul(count: usize, width: usize) -> Option<usize> {
+    count.checked_mul(width)
 }
 
 // ── Sidecar / media helpers ──────────────────────────────
@@ -970,6 +1206,9 @@ impl BatchSttAdapter for FunasrAdapter {
     /// speaker diarization — hence the CAM++ pass below, which is the same one
     /// Whisper uses.
     fn transcribe(&self, app: &tauri::AppHandle, request: &SttRequest) -> CommandResult<SttOutput> {
+        let ProviderConfig::Funasr(config) = &request.provider else {
+            return Err("FunASR 适配器收到非 FunASR 配置".to_owned());
+        };
         let model_path = request.model_directory.join(FUNASR_SENSEVOICE_FILE);
         let vad_path = request.model_directory.join(FUNASR_VAD_FILE);
         if !model_path.exists() {
@@ -981,10 +1220,18 @@ impl BatchSttAdapter for FunasrAdapter {
                 vad_path.display()
             ));
         }
+        // Pin the decode language before anything expensive runs. The dialog's
+        // per-task choice wins over the engine default; an absent both means
+        // `auto`, exactly what the installed file already says.
+        let language = request.language.clone().or_else(|| config.language.clone());
+        let row = sensevoice_language_row(language.as_deref());
+        if let Some(previous) = pin_sensevoice_language(&model_path, row)? {
+            log::info!("[stt] funasr 语种切换：query_token {previous} → {row}（{:?}）", language);
+        }
         // Pre-flight the speaker-separation dependency before converting audio,
         // for the same reason Whisper does: it is only needed after a transcript
         // that costs ten minutes to produce.
-        if request.provider.campp_diarization() && !crate::voiceprint_backend_available(app)? {
+        if config.campp_diarization && !crate::voiceprint_backend_available(app)? {
             return Err("声纹模型未安装，请在设置中下载 3D-Speaker 声纹模型".to_owned());
         }
         // Resolve the sidecar before spending minutes on ffmpeg.
@@ -1031,7 +1278,7 @@ impl BatchSttAdapter for FunasrAdapter {
         }
         log::info!("[stt] funasr 输出：{} 段", segments.len());
 
-        if request.provider.campp_diarization() {
+        if config.campp_diarization {
             crate::assign_campp_speakers(app, &request.audio_path, &mut segments, request.expected_speakers)?;
         } else {
             crate::label_single_speaker(&mut segments);
@@ -2114,6 +2361,168 @@ mod tests {
         assert_eq!(srt_timestamp_ms("01:02.5"), Some(62500));
         assert_eq!(srt_timestamp_ms("00:00:03"), Some(3000));
         assert_eq!(srt_timestamp_ms("nonsense"), None);
+    }
+
+    /// Build a minimal-but-real GGUF header carrying `sv.query_tokens` after a
+    /// string key and a string array, so the offset walk is exercised over the
+    /// value types that actually appear in the shipped SenseVoice file.
+    fn synthetic_gguf(query: [u32; 4]) -> Vec<u8> {
+        fn string(bytes: &mut Vec<u8>, value: &str) {
+            bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(value.as_bytes());
+        }
+        let mut b = Vec::new();
+        b.extend_from_slice(b"GGUF");
+        b.extend_from_slice(&3u32.to_le_bytes()); // version
+        b.extend_from_slice(&0u64.to_le_bytes()); // n_tensors
+        b.extend_from_slice(&3u64.to_le_bytes()); // n_kv
+        string(&mut b, "general.architecture");
+        b.extend_from_slice(&8u32.to_le_bytes()); // STRING
+        string(&mut b, "sensevoice-small");
+        string(&mut b, "sv.vocab");
+        b.extend_from_slice(&9u32.to_le_bytes()); // ARRAY
+        b.extend_from_slice(&8u32.to_le_bytes()); // of STRING
+        b.extend_from_slice(&2u64.to_le_bytes());
+        string(&mut b, "▁the");
+        string(&mut b, "s");
+        string(&mut b, "sv.query_tokens");
+        b.extend_from_slice(&9u32.to_le_bytes()); // ARRAY
+        b.extend_from_slice(&5u32.to_le_bytes()); // of UINT32
+        b.extend_from_slice(&4u64.to_le_bytes());
+        for value in query {
+            b.extend_from_slice(&value.to_le_bytes());
+        }
+        b.extend_from_slice(&[7u8; 40]); // trailing tensor-info filler
+        b
+    }
+
+    #[test]
+    fn gguf_offset_walk_finds_query_tokens_past_other_value_types() {
+        let bytes = synthetic_gguf([0, 1, 2, 14]);
+        let offset = gguf_value_offset(&bytes, "sv.query_tokens").expect("key located");
+        assert_eq!(
+            bytes[offset..offset + 16].chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect::<Vec<u32>>(),
+            vec![0, 1, 2, 14]
+        );
+        // A key that is not there must not be guessed at.
+        assert_eq!(gguf_value_offset(&bytes, "sv.does_not_exist"), None);
+        // A file truncated INSIDE the array's first item is not writable: the
+        // walker must refuse rather than hand back an offset past the end.
+        assert_eq!(gguf_value_offset(&bytes[..offset + 2], "sv.query_tokens"), None);
+        // Everything after the items is filler the walker never needs.
+        assert_eq!(
+            gguf_value_offset(&bytes[..bytes.len() - 30], "sv.query_tokens"),
+            Some(offset),
+            "trailing bytes after the array are not part of the header walk"
+        );
+    }
+
+    #[test]
+    fn pin_sensevoice_language_writes_and_skips_noop() {
+        let scratch = ScratchDir::new().expect("scratch");
+        let file = scratch.join("sensevoice-test.gguf");
+        std::fs::write(&file, synthetic_gguf([0, 1, 2, 14])).expect("write fixture");
+
+        // First call changes the language and reports what it replaced.
+        assert_eq!(pin_sensevoice_language(&file, 3).expect("pin"), Some(0));
+        let after = std::fs::read(&file).expect("read back");
+        let offset = gguf_value_offset(&after, "sv.query_tokens").expect("still locatable");
+        assert_eq!(u32::from_le_bytes(after[offset..offset + 4].try_into().unwrap()), 3);
+        // The array length and the rest of the file are untouched.
+        assert_eq!(after.len(), synthetic_gguf([0, 1, 2, 14]).len());
+        // Second identical call is a no-op: nothing rewritten, nothing reported.
+        assert_eq!(pin_sensevoice_language(&file, 3).expect("re-pin"), None);
+        assert_eq!(pin_sensevoice_language(&file, 0).expect("back to auto"), Some(3));
+    }
+
+    #[test]
+    fn sensevoice_language_rows_map_ui_locales_and_never_guess_english() {
+        assert_eq!(sensevoice_language_row(None), 0, "unset means auto");
+        assert_eq!(sensevoice_language_row(Some("auto")), 0);
+        assert_eq!(sensevoice_language_row(Some("zh-CN")), 3);
+        assert_eq!(sensevoice_language_row(Some("zh-Hans")), 3);
+        assert_eq!(sensevoice_language_row(Some("zh-HK")), 6, "Cantonese spelling picks 粤语");
+        assert_eq!(sensevoice_language_row(Some("yue")), 6);
+        assert_eq!(sensevoice_language_row(Some("en-US")), 4);
+        assert_eq!(sensevoice_language_row(Some("ja-JP")), 11);
+        // An unmapped language falls back to auto, NOT to zh and NOT to en.
+        assert_eq!(sensevoice_language_row(Some("de-DE")), 0);
+    }
+
+    #[test]
+    fn chinese_default_carries_the_language_pin() {
+        let apple_silicon = cfg!(all(target_os = "macos", target_arch = "aarch64"));
+        match ProviderConfig::default_for_locale(Some("zh-CN")) {
+            ProviderConfig::Funasr(config) if !apple_silicon => {
+                assert_eq!(config.language.as_deref(), Some("zh"), "Chinese users must not start on auto");
+            }
+            ProviderConfig::Qwen3(_) if apple_silicon => {}
+            other => panic!("unexpected default for zh-CN: {other:?}"),
+        }
+    }
+
+    /// Stored configs predate `language`. Treating that absence as "auto" is
+    /// what shipped the Japanese kana in the first place, so a Chinese UI pins
+    /// zh — while an explicit "auto" from the selector must survive.
+    #[test]
+    fn a_funasr_config_without_a_language_pins_chinese_for_chinese_locales_only() {
+        let legacy = TranscribeConfig {
+            default: Some(
+                serde_json::from_value(json!({ "provider": "funasr", "campp_diarization": true }))
+                    .expect("legacy funasr config deserializes"),
+            ),
+            per_language: BTreeMap::new(),
+            ui_locale: None,
+        };
+        match legacy.resolve(None, None, Some("zh-CN")) {
+            ProviderConfig::Funasr(config) => assert_eq!(config.language.as_deref(), Some("zh")),
+            other => panic!("zh-CN must resolve to funasr, got {other:?}"),
+        }
+        match legacy.resolve(None, None, Some("de-DE")) {
+            ProviderConfig::Funasr(config) => assert_eq!(config.language, None, "no silent pin for other locales"),
+            other => panic!("de-DE with an explicit funasr default must stay funasr: {other:?}"),
+        }
+        // The config's own remembered ui_locale drives background jobs too.
+        let remembered = TranscribeConfig {
+            default: legacy.default.clone(),
+            per_language: BTreeMap::new(),
+            ui_locale: Some("zh-Hant".to_owned()),
+        };
+        match remembered.resolve(None, None, None) {
+            ProviderConfig::Funasr(config) => assert_eq!(config.language.as_deref(), Some("zh")),
+            other => panic!("{other:?}"),
+        }
+        let explicit_auto = TranscribeConfig {
+            default: Some(
+                serde_json::from_value(json!({ "provider": "funasr", "language": "auto" }))
+                    .expect("explicit auto"),
+            ),
+            per_language: BTreeMap::new(),
+            ui_locale: None,
+        };
+        match explicit_auto.resolve(None, None, Some("zh-CN")) {
+            ProviderConfig::Funasr(config) => assert_eq!(config.language.as_deref(), Some("auto")),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Cross-checks the metadata walker against a real SenseVoice GGUF: the
+    /// synthetic fixture proves the logic, this proves the shipped file's layout
+    /// is what the walker expects. Skips unless `LYNSE_FUNASR_MODEL` points at
+    /// one (the app's model dir, or a dev `resources/` copy).
+    #[test]
+    #[ignore = "needs the 244 MB model on disk"]
+    fn gguf_walker_locates_query_tokens_in_a_real_model() {
+        let Some(path) = std::env::var_os("LYNSE_FUNASR_MODEL").map(PathBuf::from) else {
+            eprintln!("skipping: set LYNSE_FUNASR_MODEL");
+            return;
+        };
+        let bytes = std::fs::read(&path).expect("read the real model file");
+        let offset = gguf_value_offset(&bytes, "sv.query_tokens")
+            .expect("a real SenseVoice GGUF must carry sv.query_tokens");
+        let row = u32_at(&bytes, offset).expect("array item readable");
+        eprintln!("sv.query_tokens[0] = {row} at byte offset {offset}, file bytes {}", bytes.len());
+        assert!(row < 16, "the language row must index the 16×560 embed table, got {row}");
     }
 
     #[test]

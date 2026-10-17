@@ -141,6 +141,9 @@ export async function replayScript(page: Page, script: ChatScript) {
       await waitForTurnDone(page);
     } else if (turn.response.type === "stream-abort") {
       // The turn stays pending with no partial text — the caller stops it.
+      // Wait for task polling so cancellation cannot leave the scripted turn unused.
+      await page.waitForResponse((response) => response.request().method() === "GET"
+        && /\/api\/chat\/poll\/[^/?]+$/.test(new URL(response.url()).pathname));
       await stopButton(page).click();
       await waitForTurnDone(page);
     }

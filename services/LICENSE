@@ -1,0 +1,20 @@
+Proprietary — all rights reserved
+
+The code in this directory and its subdirectories is Lynse's closed server-side
+software. It is a separate program from the Lynse desktop and web clients: it
+shares no source with them, is not part of the pnpm workspace, and is reached
+only over the network.
+
+It is NOT covered by the GNU Affero General Public License v3.0 grant made for
+the rest of this repository. No permission is granted to copy, modify, merge,
+publish, distribute, sublicense, reverse engineer, or use this code, in whole or
+in part, except under a separate written agreement.
+
+No source availability obligation attaches to this directory under the AGPL,
+because it is not a work licensed under the AGPL. Anyone who wishes to run a
+modified version of the AGPL-licensed clients must build their own server-side
+endpoints against the documented interface; they may not copy or reuse this
+code.
+
+Copyright (c) 2026 上海天启灵光科技有限公司 (Shanghai RevelSpark Technologies Co., Ltd.)
+All rights reserved.

@@ -17,6 +17,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 The third-party components bundled with or adapted into this software are
 listed in THIRD_PARTY_NOTICES.md and remain governed by their own licenses.
 
+Scope: this license covers the Lynse desktop and web clients (apps/, packages/)
+and the repository tooling. Server-side code under services/ and
+cloudfunctions/ is a separate program, is not part of this work, and is
+proprietary — see the LICENSE file in each of those directories.
+
 ================================================================================
 
                     GNU AFFERO GENERAL PUBLIC LICENSE

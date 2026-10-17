@@ -93,6 +93,9 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Verify runtime help checks
+        run: bash apps/tauri/scripts/test-sidecar-help.sh
+
       - name: Fetch / build STT sidecars
         run: bash apps/tauri/scripts/fetch-sidecars.sh
 
@@ -125,7 +128,8 @@ jobs:
             if [ "$base" = ffmpeg ] || [ "$base" = ffprobe ]; then
               "$SIDECARS/$base$EXT" -version > /dev/null || { echo "::error::$base$EXT cannot start"; exit 1; }
             else
-              "$SIDECARS/$base$EXT" --help > /dev/null || { echo "::error::$base$EXT cannot start"; exit 1; }
+              bash apps/tauri/scripts/verify-sidecar-help.sh "$SIDECARS/$base$EXT" > /dev/null \
+                || { echo "::error::$base$EXT cannot start"; exit 1; }
             fi
             echo "    $base$EXT launches"
           done

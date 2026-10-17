@@ -205,16 +205,9 @@ fetch_funasr_prebuilt() {
     src="${pair%%:*}"; target="${pair##*:}"
     local bin="$dir/$src$extension"
     [[ -f "$bin" ]] || { echo "ERROR: $asset contained no $src$extension" >&2; return 1; }
-    for flag in --srt --vad; do
-      if ! "$bin" --help 2>&1 | grep -q -- "$flag"; then
-        echo "ERROR: $src does not advertise $flag; the adapter cannot drive it" >&2
-        return 1
-      fi
-    done
-    if [[ "$target" == "funasr-nano" ]] && ! "$bin" --help 2>&1 | grep -q -- '--chunk'; then
-      echo "ERROR: $src does not advertise --chunk; Fun-ASR-Nano would decode long segments out-of-distribution" >&2
-      return 1
-    fi
+    local required_flags=(--srt --vad)
+    if [[ "$target" == "funasr-nano" ]]; then required_flags+=(--chunk); fi
+    bash "$ROOT/apps/tauri/scripts/verify-sidecar-help.sh" "$bin" "${required_flags[@]}" > /dev/null || return 1
     cp "$bin" "$SIDECARS/$target$extension"
     chmod +x "$SIDECARS/$target$extension" 2>/dev/null || true
     echo "    funasr -> $target$extension ($src, $asset @ $FUNASR_REF)"
@@ -239,10 +232,9 @@ build_funasr_source() {
     local bin
     bin="$(find "$src/runtime/llama.cpp/build" -type f -name "$srcbin" | head -n1)"
     [[ -n "$bin" ]] || { echo "ERROR: source build produced no $srcbin" >&2; return 1; }
-    if ! "$bin" --help 2>&1 | grep -q -- '--srt'; then
-      echo "ERROR: $srcbin does not advertise --srt; the adapter cannot get timestamps from it" >&2
-      return 1
-    fi
+    local required_flags=(--srt --vad)
+    if [[ "$target" == "funasr-nano" ]]; then required_flags+=(--chunk); fi
+    bash "$ROOT/apps/tauri/scripts/verify-sidecar-help.sh" "$bin" "${required_flags[@]}" > /dev/null || return 1
     cp "$bin" "$SIDECARS/$target"
     echo "    funasr -> $target (built from $FUNASR_REF source, x86_64)"
   done

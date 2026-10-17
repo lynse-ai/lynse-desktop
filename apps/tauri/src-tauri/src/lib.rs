@@ -4085,7 +4085,18 @@ fn media_response_body(app: &AppHandle, request: Request<Vec<u8>>) -> Response<V
             .body(Vec::new())
             .unwrap();
     };
-    let mut file = match File::open(&path) { Ok(file) => file, Err(_) => return Response::builder().status(StatusCode::NOT_FOUND).body(Vec::new()).unwrap() };
+    let mut file = match File::open(&path) {
+        Ok(file) => file,
+        // Same header as every other error path above: a reply without it is
+        // rejected by the webview as a CORS failure, so a plain "file vanished"
+        // 404 surfaces to the UI as `TypeError: Failed to fetch` and the
+        // waveform sits on "loading audio" forever with no usable reason.
+        Err(_) => return Response::builder()
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .status(StatusCode::NOT_FOUND)
+            .body(Vec::new())
+            .unwrap(),
+    };
     // Read exactly the requested span. WebKit probes media with offset
     // ranges (an m4a's moov atom sits at the tail), so a range response must
     // carry `end - start + 1` bytes — a full-file buffer overruns EOF here

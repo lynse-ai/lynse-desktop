@@ -45,6 +45,11 @@ const ja = {
     wechat_waiting_hint:
       "ブラウザーで WeChat ログインページを開きました。QRコードをスキャンして確認してください。",
     wechat_cancel: "キャンセル",
+    wechat_bind_title: "電話番号のリンク",
+    wechat_bind_hint:
+      "WeChatでの初回ログインは電話番号のリンクが必要です。認証後にログインが完了します",
+    wechat_bind_submit: "リンクしてログイン",
+    wechat_bind_failed: "リンクに失敗しました。もう一度お試しください",
     sms_login: "電話番号でログイン",
     sms_phone_label: "電話番号",
     sms_phone_placeholder: "電話番号を入力",

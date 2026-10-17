@@ -116,7 +116,7 @@ Pushing a `v*` tag (e.g. `v1.1.6`) triggers GitHub Actions: it builds the macOS 
 
 ## License
 
-[AGPL-3.0-only](LICENSE) © 2026 上海天启灵光科技有限公司 (Shanghai RevelSpark Technologies Co., Ltd.). Bundled third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[AGPL-3.0-only](LICENSE) © 2026 上海天启灵光科技有限公司 (Shanghai RevelSpark Technologies Co., Ltd.). `LICENSE` holds the verbatim FSF license text; the attribution and what it covers are in [NOTICE.md](NOTICE.md). Bundled third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Scope of the grant: the AGPL covers the desktop and web clients (`apps/tauri`, `apps/web`, `packages/`) and the repository tooling. `services/` and `cloudfunctions/` are separate programs — Lynse's closed server-side code — and are **not** licensed under the AGPL; each carries its own proprietary `LICENSE`.
 

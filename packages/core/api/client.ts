@@ -9,8 +9,8 @@ type RequestOptions = RequestInit & {
    *  transport uses it to target the dedicated agent server (route B direct
    *  CloudBase connection) while session credentials stay unchanged. */
   baseUrl?: string;
-  /** Integrations use Bearer tokens; their auth failures never end the main session. */
-  authScope?: "session" | "integration";
+  /** Auxiliary services cannot expire the main login; only integrations use Bearer tokens. */
+  authScope?: "session" | "integration" | "assistant";
   /** Context APIs require a current login token and never send deployment/API keys. */
   tokenOnly?: boolean;
   /** Bind a request to the session which started it; reject account changes. */
@@ -44,6 +44,26 @@ function apiRequestUrl(backendUrl: string, path: string): string {
   return apiTransportMode === "direct" ? `${backendUrl}${path}` : `${PROXY_PREFIX}${path}`;
 }
 
+/** Bound waits even when a native fetch adapter does not settle on abort. */
+function withAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Promise<T> {
+  if (!signal) return promise;
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener("abort", abort);
+      reject(new DOMException("Request aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then((value) => {
+      signal.removeEventListener("abort", abort);
+      resolve(value);
+    }, (error: unknown) => {
+      signal.removeEventListener("abort", abort);
+      reject(error);
+    });
+    if (signal.aborted) abort();
+  });
+}
+
 export class ApiClient {
   // The actual Lynse backend URL — the address the user entered on the
   // login/API-config page (persisted as lynse_api_url). No default here.
@@ -57,6 +77,8 @@ export class ApiClient {
   private integrationsBaseUrl: string | null = null;
   private token: string | null = null;
   private apiKey: string | null = null;
+  private agentSession: { controller: AbortController; promise: Promise<void> } | null = null;
+  private sessionRevision = 0;
   private onUnauthorized?: () => void;
   private identity?: ClientOptions["identity"];
 
@@ -67,6 +89,7 @@ export class ApiClient {
   }
 
   setToken(token: string | null) {
+    this.clearAgentSession();
     this.token = token;
   }
 
@@ -80,7 +103,9 @@ export class ApiClient {
   }
 
   setBaseUrl(url: string) {
-    this.backendUrl = url.replace(/\/+$/, "");
+    const normalized = url.replace(/\/+$/, "");
+    if (normalized !== this.backendUrl) this.clearAgentSession();
+    this.backendUrl = normalized;
   }
 
   /** The configured backend origin (no trailing slash), e.g. `https://api.lynse.cn`. */
@@ -91,7 +116,9 @@ export class ApiClient {
   /** Point the AI assistant at a dedicated backend origin (null = follow the
    *  main backend). Persisted separately (lynse_agent_api_url); see core/config. */
   setAgentBaseUrl(url: string | null) {
-    this.agentBaseUrl = url ? url.replace(/\/+$/, "") : null;
+    const normalized = url ? url.replace(/\/+$/, "") : null;
+    if (normalized !== this.agentBaseUrl) this.clearAgentSession();
+    this.agentBaseUrl = normalized;
   }
 
   /** The dedicated AI-assistant origin, or null when unset. */
@@ -114,6 +141,98 @@ export class ApiClient {
     return this.integrationsBaseUrl;
   }
 
+  private clearAgentSession() {
+    this.sessionRevision += 1;
+    this.agentSession?.controller.abort();
+    this.agentSession = null;
+  }
+
+  /** Share login registration with chat preflight; failures can be retried by the next turn. */
+  ensureAgentSession(): Promise<void> {
+    const host = this.backendUrl;
+    const agentUrl = this.agentBaseUrl;
+    const token = this.token;
+    if (!agentUrl || !host) return Promise.resolve();
+    if (!token) return Promise.reject(new ApiError(401, "Session changed or unavailable"));
+    if (this.agentSession) return this.agentSession.promise;
+    const state = { controller: new AbortController(), promise: Promise.resolve() };
+    this.agentSession = state;
+    state.promise = this.registerAgentSession(host, agentUrl, token, state.controller.signal).catch((error: unknown) => {
+      if (this.agentSession === state) this.agentSession = null;
+      throw error;
+    });
+    return state.promise;
+  }
+
+  private async registerAgentSession(host: string, agentUrl: string, token: string, signal: AbortSignal): Promise<void> {
+    for (let attempt = 0; ; attempt += 1) {
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+      const timeout = setTimeout(abort, 8_000);
+      let retry = false;
+      try {
+        if (controller.signal.aborted) throw new DOMException("Request aborted", "AbortError");
+        const result = await withAbort(this.request<{ host: string; user_id: string }>("/api/session/backend", {
+          method: "POST", body: JSON.stringify({ host }), baseUrl: agentUrl,
+          tokenOnly: true, sessionToken: token, authScope: "assistant", signal: controller.signal,
+        }), controller.signal);
+        if (result?.host?.replace(/\/+$/, "") !== host || !result?.user_id?.trim()) {
+          throw new ApiError(412, "助手未能确认当前服务器，请稍后重试");
+        }
+        return;
+      } catch (error) {
+        if (signal.aborted) throw new DOMException("Request aborted", "AbortError");
+        retry = attempt < 2 && (!(error instanceof ApiError) || error.status === 429 || (error.status >= 500 && error.status < 600));
+        if (!retry) {
+          const message = error instanceof ApiError && error.status === 400
+            ? "助手无法连接当前服务器，请检查助手的服务器配置"
+            : error instanceof ApiError && [404, 405].includes(error.status)
+              ? "助手服务需要更新，请更新后重试"
+            : error instanceof ApiError && [401, 403, 2000, 2013].includes(error.status)
+              ? "助手登录验证失败，请重新登录后重试"
+              : "助手连接尚未完成，请稍后重试";
+          // A terminal preflight error must not trigger stream-to-poll resubmission.
+          throw new ApiError(412, message);
+        }
+      } finally {
+        clearTimeout(timeout);
+        signal.removeEventListener("abort", abort);
+      }
+      if (retry) {
+        await new Promise<void>((resolve, reject) => {
+          const abortWait = () => {
+            clearTimeout(timer);
+            signal.removeEventListener("abort", abortWait);
+            reject(new DOMException("Request aborted", "AbortError"));
+          };
+          const timer = setTimeout(() => {
+            signal.removeEventListener("abort", abortWait);
+            resolve();
+          }, 1_000 * 2 ** attempt);
+          signal.addEventListener("abort", abortWait, { once: true });
+          if (signal.aborted) abortWait();
+        });
+      }
+    }
+  }
+
+  private isAgentChat(path: string, baseUrl: string) {
+    return !!this.agentBaseUrl && baseUrl === this.agentBaseUrl && /^\/api\/chat(?:\/|$)/.test(path);
+  }
+
+  private async waitForAgentSession(revision: number, signal?: AbortSignal | null) {
+    try {
+      await withAbort(this.ensureAgentSession(), signal);
+    } catch (error) {
+      if (!signal?.aborted && revision !== this.sessionRevision) {
+        throw new ApiError(401, "Session changed or unavailable");
+      }
+      throw error;
+    }
+  }
+
   private async request<T>(
     path: string,
     options: RequestOptions = {},
@@ -121,10 +240,17 @@ export class ApiClient {
     const { baseUrl: overrideBase, authScope = "session", tokenOnly, sessionToken, responseType, ...init } = options;
     const integrationAuth = authScope === "integration";
     const requestToken = this.token;
-    if (tokenOnly && (!requestToken || (sessionToken !== undefined && sessionToken !== requestToken))) {
+    const revision = this.sessionRevision;
+    const baseUrl = overrideBase ?? this.backendUrl;
+    const agentChat = this.isAgentChat(path, baseUrl);
+    const requireToken = tokenOnly || agentChat;
+    if ((requireToken && !requestToken) || (sessionToken !== undefined && sessionToken !== requestToken)) {
       throw new ApiError(401, "Session changed or unavailable");
     }
-    const baseUrl = overrideBase ?? this.backendUrl;
+    if (init.signal?.aborted) throw new DOMException("Request aborted", "AbortError");
+    if (agentChat) await this.waitForAgentSession(revision, init.signal);
+    if (init.signal?.aborted) throw new DOMException("Request aborted", "AbortError");
+    if (requireToken && (this.token !== requestToken || this.sessionRevision !== revision)) throw new ApiError(401, "Session changed or unavailable");
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       // Tell the proxy where to forward
@@ -134,7 +260,7 @@ export class ApiClient {
     if (requestToken) {
       headers["Authorization"] = integrationAuth ? `Bearer ${requestToken}` : requestToken;
     }
-    if (this.apiKey && !tokenOnly && !integrationAuth) {
+    if (this.apiKey && !requireToken && !integrationAuth) {
       headers["X-API-Key"] = this.apiKey;
     }
     if (this.identity?.platform) {
@@ -148,12 +274,12 @@ export class ApiClient {
       ...init,
       headers,
     });
-    if (tokenOnly && this.token !== requestToken) {
+    if (requireToken && (this.token !== requestToken || this.sessionRevision !== revision)) {
       throw new ApiError(401, "Session changed or unavailable");
     }
 
     if (res.status === 401) {
-      if (!integrationAuth) {
+      if (authScope === "session") {
         this.onUnauthorized?.();
         throw new ApiError(res.status, "Unauthorized");
       }
@@ -186,7 +312,7 @@ export class ApiClient {
     if (responseType === "blob") return await res.blob() as T;
 
     const json = await res.json();
-    if (tokenOnly && this.token !== requestToken) {
+    if (requireToken && (this.token !== requestToken || this.sessionRevision !== revision)) {
       throw new ApiError(401, "Session changed or unavailable");
     }
 
@@ -200,7 +326,7 @@ export class ApiClient {
         // sibling gateways that phrase the same condition under other codes.
         const envelopeMessage =
           typeof json.msg === "string" ? json.msg : typeof json.message === "string" ? json.message : "";
-        if (!integrationAuth && (
+        if (authScope === "session" && (
           json.code === GATEWAY_AUTH_ERROR_CODE ||
           json.code === GATEWAY_SESSION_EXPIRED_CODE ||
           /not logged in|session has expired/i.test(envelopeMessage)
@@ -283,30 +409,40 @@ export class ApiClient {
     onChunk: (data: string) => void,
     onError?: (err: Error) => void,
     onComplete?: () => void,
-    options?: { baseUrl?: string },
+    options?: { baseUrl?: string; sessionToken?: string },
   ): AbortController {
     const controller = new AbortController();
     const baseUrl = options?.baseUrl ?? this.backendUrl;
+    const requestToken = this.token;
+    const revision = this.sessionRevision;
+    const agentChat = this.isAgentChat(path, baseUrl);
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
       "X-Lynse-Api-Url": baseUrl,
     };
-    if (this.token) headers["Authorization"] = this.token;
-    if (this.apiKey) headers["X-API-Key"] = this.apiKey;
+    if (requestToken) headers["Authorization"] = requestToken;
+    if (this.apiKey && !agentChat) headers["X-API-Key"] = this.apiKey;
     if (this.identity?.platform) headers["X-Client-Platform"] = this.identity.platform;
 
     const url = apiRequestUrl(baseUrl, path);
 
     (async () => {
       try {
+        if ((agentChat && !requestToken) || (options?.sessionToken !== undefined && options.sessionToken !== requestToken)) {
+          throw new ApiError(401, "Session changed or unavailable");
+        }
+        if (agentChat) await this.waitForAgentSession(revision, controller.signal);
+        if (controller.signal.aborted) throw new DOMException("Request aborted", "AbortError");
+        if (agentChat && (this.token !== requestToken || this.sessionRevision !== revision)) throw new ApiError(401, "Session changed or unavailable");
         const res = await fetch(url, {
           method: "POST",
           headers,
           body: JSON.stringify(body),
           signal: controller.signal,
         });
+        if (agentChat && (this.token !== requestToken || this.sessionRevision !== revision)) throw new ApiError(401, "Session changed or unavailable");
 
         if (res.status === 401) {
           this.onUnauthorized?.();
@@ -326,6 +462,7 @@ export class ApiClient {
 
         while (true) {
           const { done, value } = await reader.read();
+          if (agentChat && (this.token !== requestToken || this.sessionRevision !== revision)) throw new ApiError(401, "Session changed or unavailable");
           if (done) break;
 
           buffer += decoder.decode(value, { stream: true });

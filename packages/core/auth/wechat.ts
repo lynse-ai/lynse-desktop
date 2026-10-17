@@ -1,4 +1,4 @@
-import { api } from "../api/client";
+import { api, type ApiClient } from "../api/client";
 import type { AuthSession } from "./session";
 
 /**
@@ -22,53 +22,42 @@ import type { AuthSession } from "./session";
  */
 
 export const WECHAT_AUTH_TYPE = "WECHAT_JUMP";
-
-type WechatQrLoginConfig = {
-  /** 微信开放平台「网站应用」appid (public — safe to ship to the client). */
-  appId: string;
-  /** OAuth redirect_uri — must be under the app's configured 授权回调域. */
-  redirectUri: string;
-};
-
-let qrLoginConfig: WechatQrLoginConfig = { appId: "", redirectUri: "" };
+/** Registered website-app callback origin, shared by both backend environments. */
+export const WECHAT_CALLBACK_ORIGIN = "https://www.lynse.cn";
 
 /**
- * Called once at app startup with the platform's build-time env values. When
- * set, the desktop shell builds the PC qrconnect authorize URL itself — the
- * backend's `render` returns the in-WeChat H5 link
- * (`connect/oauth2/authorize`), which no PC browser can open.
+ * Use the selected backend's appid and state for desktop QR sign-in. Some
+ * deployments still render the mobile OAuth endpoint and a stale callback
+ * origin; retain the callback path on the registered website callback domain.
+ * The native window intercepts that callback before the page is requested.
  */
-export function configureWechatQrLogin(
-  config: Partial<WechatQrLoginConfig>,
-): void {
-  qrLoginConfig = {
-    appId: config.appId ?? qrLoginConfig.appId,
-    redirectUri: config.redirectUri ?? qrLoginConfig.redirectUri,
-  };
-}
-
-export function isWechatQrLoginConfigured(): boolean {
-  return qrLoginConfig.appId !== "" && qrLoginConfig.redirectUri !== "";
-}
-
-/** Random `state` for CSRF protection (the backend echoes it back). */
-export function createWechatState(): string {
-  return crypto.randomUUID().replace(/-/g, "");
-}
-
-/** WeChat Open Platform PC QR-code login URL (scope snsapi_login). */
-export function buildWechatQrConnectUrl(state: string): string {
-  if (!isWechatQrLoginConfigured()) {
-    throw new Error("WeChat QR login is not configured");
+export function desktopWechatAuthorizeUrl(authorizeUrl: string): string {
+  const url = new URL(authorizeUrl);
+  if (
+    url.origin !== "https://open.weixin.qq.com" ||
+    !["/connect/qrconnect", "/connect/oauth2/authorize"].includes(url.pathname) ||
+    !url.searchParams.get("appid") ||
+    !url.searchParams.get("state") ||
+    !url.searchParams.get("redirect_uri")
+  ) {
+    throw new Error("Invalid WeChat authorize URL");
   }
-  const params = new URLSearchParams({
-    appid: qrLoginConfig.appId,
-    redirect_uri: qrLoginConfig.redirectUri,
-    response_type: "code",
-    scope: "snsapi_login",
-    state,
-  });
-  return `https://open.weixin.qq.com/connect/qrconnect?${params.toString()}#wechat_redirect`;
+  const callback = new URL(url.searchParams.get("redirect_uri")!);
+  if (!["https:", "http:"].includes(callback.protocol)) {
+    throw new Error("Invalid WeChat callback URL");
+  }
+  const registered = new URL(WECHAT_CALLBACK_ORIGIN);
+  callback.protocol = registered.protocol;
+  callback.host = registered.host;
+  callback.username = "";
+  callback.password = "";
+  callback.hash = "";
+  url.pathname = "/connect/qrconnect";
+  url.searchParams.set("redirect_uri", callback.toString());
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("scope", "snsapi_login");
+  url.hash = "wechat_redirect";
+  return url.toString();
 }
 
 /** `AuthLoginVO` returned by the WeChat branch of `/api/auth/login`. */
@@ -87,8 +76,8 @@ export interface WechatLoginVo {
 }
 
 /** Ask the backend for the WeChat authorize URL (`state` included). */
-export function renderWechatLoginUrl(): Promise<string> {
-  return api().getWithParams<string>("/api/auth/render", {
+export function renderWechatLoginUrl(client: ApiClient = api()): Promise<string> {
+  return client.getWithParams<string>("/api/auth/render", {
     authType: WECHAT_AUTH_TYPE,
   });
 }

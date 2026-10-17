@@ -37,6 +37,8 @@ function isConversation(value: unknown): value is ChatConversation {
     typeof conversation.updatedAt === "number" &&
     Array.isArray(conversation.messages) &&
     conversation.messages.every(isChatMessage) &&
+    (conversation.contextFileId === undefined ||
+      (typeof conversation.contextFileId === "string" && !!conversation.contextFileId.trim())) &&
     (conversation.workbuddySession === undefined ||
       (conversation.provider === "workbuddy" && conversation.workbuddySession?.mode === "cloud" &&
         (conversation.workbuddySession.taskId === undefined ||

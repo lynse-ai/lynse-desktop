@@ -45,6 +45,8 @@
     --color-accent-brand: var(--accent-brand);
     --color-accent-brand-strong: var(--accent-brand-strong);
     --color-accent-brand-text: var(--accent-brand-text);
+    --color-avatar-brand: var(--avatar-brand);
+    --color-avatar-brand-text: var(--avatar-brand-text);
     --color-accent-foreground: var(--accent-foreground);
     --color-accent: var(--accent);
     --color-muted-foreground: var(--muted-foreground);
@@ -150,6 +152,13 @@
     --accent-brand: color-mix(in oklch, var(--brand) 10%, var(--background));
     --accent-brand-strong: color-mix(in oklch, var(--brand) 16%, var(--background));
     --accent-brand-text: color-mix(in oklch, var(--brand) 85%, var(--foreground));
+    /* User avatar identity chrome — pinned to the brand-default indigo and
+       deliberately outside the accent family (presets and accent overrides
+       never write these names), so the avatar stays Lynse blue under
+       Linear/Notion/custom accents and in dark mode (whose canonical accent
+       is gold). Tints re-derive per mode in .dark. */
+    --avatar-brand: #5f67d8;
+    --avatar-brand-text: color-mix(in oklch, var(--avatar-brand) 85%, var(--foreground));
     /* Brand-derived indigo gradient. chart-1 equals brand
        so the most important series visually anchors to the product colour;
        chart-2..5 step lighter + less saturated so a stacked bar reads
@@ -247,6 +256,10 @@
     --accent-brand: rgb(224 177 92 / 10%);
     --accent-brand-strong: rgb(224 177 92 / 16%);
     --accent-brand-text: #f3d08a;
+    /* Avatar stays brand-default indigo in dark (see :root) — the text tint
+       re-mixes against the dark foreground for readability. Derived values
+       don't re-resolve across token blocks, hence the explicit repeat. */
+    --avatar-brand-text: color-mix(in oklch, var(--avatar-brand) 85%, var(--foreground));
     --success: #30d158;
     --success-foreground: #ffffff;
     --warning: #ff9f0a;

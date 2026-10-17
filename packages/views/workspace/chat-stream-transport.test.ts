@@ -57,12 +57,25 @@ function events(onEvent: ReturnType<typeof vi.fn>): ChatStreamEvent[] {
 }
 
 describe("StreamChatTransport resilience", () => {
+  it.each([null, "https://agent.invalid"])("keeps the selected meeting explicit on the stream route (%s)", async (agentBase) => {
+    requests.getAgentBaseUrl.mockReturnValue(agentBase);
+    queueStream([{ type: "done", text: "ok" }]);
+    await new StreamChatTransport().send(options({ fileIds: ["selected-meeting"], userSpecifiedFile: true }));
+
+    expect(requests.stream.mock.calls[0]![0]).toBe(agentBase ? "/api/chat/stream" : "/api/business/ai/chat/stream");
+    expect(requests.stream.mock.calls[0]![1]).toMatchObject({
+      fileIds: ["selected-meeting"], userSpecifiedFile: true,
+    });
+  });
+
   it("backs off 503/429 by 2s then 4s, with an unchanged request body", async () => {
     queueStream([], new ApiError(503, "busy"));
     queueStream([], new ApiError(429, "busy"));
     queueStream([{ type: "content", content: "ok" }, { type: "done", text: "ok" }]);
     const onEvent = vi.fn();
-    const sending = new StreamChatTransport().send(options({ token: "jwt", onEvent }));
+    const sending = new StreamChatTransport().send(options({
+      token: "jwt", fileIds: ["selected-meeting"], userSpecifiedFile: true, onEvent,
+    }));
 
     await vi.advanceTimersByTimeAsync(1_999);
     expect(requests.stream).toHaveBeenCalledTimes(1);
@@ -73,7 +86,10 @@ describe("StreamChatTransport resilience", () => {
     await vi.advanceTimersByTimeAsync(1);
     await sending;
     expect(requests.stream).toHaveBeenCalledTimes(3);
-    expect(requests.stream.mock.calls.map((call) => call[1])).toEqual(Array(3).fill({ query: "hello", sessionId: "same-session", token: "jwt", requestId: expect.any(String) }));
+    expect(requests.stream.mock.calls.map((call) => call[1])).toEqual(Array(3).fill({
+      query: "hello", sessionId: "same-session", token: "jwt", requestId: expect.any(String),
+      fileIds: ["selected-meeting"], userSpecifiedFile: true,
+    }));
     expect(new Set(requests.stream.mock.calls.map((call) => call[1].requestId)).size).toBe(1);
     expect(events(onEvent).filter((event) => event.type === "status").map((event) => event.text)).toEqual([
       "submitting", "retrying", "submitting", "retrying", "submitting",
@@ -104,6 +120,17 @@ describe("StreamChatTransport resilience", () => {
     }]);
   });
 
+  it("shows a missing CloudBase login-binding interface once without falling back to polling", async () => {
+    queueStream([], new ApiError(412, "助手服务需要更新，请更新后重试"));
+    const onEvent = vi.fn();
+    await new StreamChatTransport().send(options({ token: "jwt", onEvent }));
+    expect(events(onEvent).filter((event) => event.type === "error")).toEqual([
+      { type: "error", message: "助手服务需要更新，请更新后重试" },
+    ]);
+    expect(requests.stream).toHaveBeenCalledOnce();
+    expect(requests.post).not.toHaveBeenCalled();
+  });
+
   it("treats explicit SSE errors as terminal even if the socket stays open", async () => {
     const attempt = queueStream([{ type: "content", content: "partial" }, { type: "error", error: "system.error.busy" }], "open");
     const onEvent = vi.fn();
@@ -129,6 +156,7 @@ describe("StreamChatTransport resilience", () => {
     }));
     expect(requests.post).toHaveBeenCalledTimes(1);
     expect(requests.post.mock.calls[0]![1]).toEqual(requests.stream.mock.calls[0]![1]);
+    expect(requests.post.mock.calls[0]![1]).toMatchObject({ fileIds: ["f1"], userSpecifiedFile: true });
     expect(requests.post.mock.calls[0]![1]).not.toHaveProperty("userId");
     expect(events(onEvent).filter((event) => event.type === "content")).toEqual([{ type: "content", delta: "partial" }]);
     expect(events(onEvent).filter((event) => event.type === "done")).toEqual([expect.objectContaining({

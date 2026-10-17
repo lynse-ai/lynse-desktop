@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";import { QRCode
 import { Input } from "@lynse/ui/components/ui/input";
 import { Button } from "@lynse/ui/components/ui/button";
 import { useAuthStore } from "@lynse/core/auth";
+import { api } from "@lynse/core/api";
 import {
   buildQrLoginPayload,
   createQrLogin,
@@ -159,8 +160,12 @@ export function LoginPage() {
   const startWechatLogin = useAuthStore((s) => s.startWechatLogin);
   const [wechatWaiting, setWechatWaiting] = useState(false);
   const wechatCancelledRef = useRef(false);
+  const wechatAttemptRef = useRef(0);
+  const wechatActiveRef = useRef(false);
+  const wechatExchangingRef = useRef(false);
   const wechatUnlistenRef = useRef<(() => void) | null>(null);
   const wechatStateRef = useRef("");
+  const wechatApiUrlRef = useRef("");
   // Bind-required login response — shows the phone + SMS form instead of
   // the sign-in views until the bind completes.
   const [wechatBindVo, setWechatBindVo] = useState<WechatLoginVo | null>(null);
@@ -213,6 +218,7 @@ export function LoginPage() {
     return () => {
       qrCancelledRef.current = true;
       wechatCancelledRef.current = true;
+      wechatAttemptRef.current += 1;
       wechatUnlistenRef.current?.();
       wechatUnlistenRef.current = null;
     };
@@ -317,71 +323,90 @@ export function LoginPage() {
   }
 
   /** Desktop auth-window redirect landed: relay URL carried code+state. */
-  async function finishWechatLogin(code: string, state: string | null) {
-    if (wechatCancelledRef.current) return;
-    if (wechatStateRef.current && state !== wechatStateRef.current) {
-      setWechatWaiting(false);
-      stopWechatListener();
-      setError(t("wechat.callback_invalid_state"));
-      return;
-    }
+  async function finishWechatLogin(code: string | null, state: string | null, attempt: number) {
+    if (wechatCancelledRef.current || attempt !== wechatAttemptRef.current || wechatExchangingRef.current) return;
+    wechatExchangingRef.current = true;
+    stopWechatListener();
     try {
+      if (!wechatStateRef.current || state !== wechatStateRef.current) {
+        setError(t("wechat.callback_invalid_state"));
+        return;
+      }
+      if (!code) {
+        setError(t("wechat.callback_denied"));
+        return;
+      }
+      if (api().getBaseUrl() !== wechatApiUrlRef.current) {
+        throw new Error(t("auth.login_failed"));
+      }
       const vo = await loginByWechat(code, state ?? undefined);
+      if (wechatCancelledRef.current || attempt !== wechatAttemptRef.current) return;
+      if (api().getBaseUrl() !== wechatApiUrlRef.current) {
+        throw new Error(t("auth.login_failed"));
+      }
       if (isWechatBindRequired(vo)) {
+        if (!vo.thirdPartyId) throw new Error(t("auth.wechat_bind_failed"));
         setWechatBindVo(vo);
         return;
       }
       completeWechatSession(vo);
     } catch (e: unknown) {
-      if (!wechatCancelledRef.current) {
+      if (!wechatCancelledRef.current && attempt === wechatAttemptRef.current) {
         setError(authErrorText(e, t, "auth.login_failed"));
       }
     } finally {
-      setWechatWaiting(false);
-      stopWechatListener();
-      void getDesktopAppApi()?.wechat?.closeAuthWindow();
+      if (attempt === wechatAttemptRef.current) {
+        wechatActiveRef.current = false;
+        setWechatWaiting(false);
+        stopWechatListener();
+        void getDesktopAppApi()?.wechat?.closeAuthWindow();
+      }
     }
   }
 
   async function handleWechatLogin() {
+    if (wechatActiveRef.current) return;
+    const attempt = ++wechatAttemptRef.current;
+    wechatActiveRef.current = true;
+    wechatExchangingRef.current = false;
+    wechatCancelledRef.current = false;
+    setWechatWaiting(true);
     setError(null);
-    let authorizeUrl: string;
-    try {
-      const started = await startWechatLogin();
-      authorizeUrl = started.authorizeUrl;
-      wechatStateRef.current = started.state;
-    } catch (e: unknown) {
-      setError(authErrorText(e, t, "auth.login_failed"));
-      return;
-    }
     const desktopApi = getDesktopAppApi();
-    if (desktopApi?.wechat) {
-      // The QR page runs in an embedded window; the Rust side intercepts the
-      // code+state redirect before it loads and emits the callback URL here.
-      wechatCancelledRef.current = false;
-      setWechatWaiting(true);
-      wechatUnlistenRef.current = await desktopApi.wechat.onAuthCallback(
-        (callbackUrl) => {
+    try {
+      const started = await startWechatLogin({ desktopQr: !!desktopApi?.wechat });
+      if (attempt !== wechatAttemptRef.current) return;
+      wechatStateRef.current = started.state;
+      wechatApiUrlRef.current = started.apiUrl;
+      if (desktopApi?.wechat) {
+        // Listen before opening: the native window intercepts the redirect.
+        const unlisten = await desktopApi.wechat.onAuthCallback((callbackUrl) => {
           const { code, state } = wechatCallbackParams(callbackUrl);
-          if (!code) return;
-          void finishWechatLogin(code, state);
-        },
-      );
-      try {
-        await desktopApi.wechat.openAuthWindow(authorizeUrl);
-      } catch (e: unknown) {
+          void finishWechatLogin(code, state, attempt);
+        });
+        if (attempt !== wechatAttemptRef.current) {
+          unlisten();
+          return;
+        }
+        wechatUnlistenRef.current = unlisten;
+        await desktopApi.wechat.openAuthWindow(started.authorizeUrl);
+      } else {
+        window.location.assign(started.authorizeUrl);
+      }
+    } catch (e: unknown) {
+      if (attempt === wechatAttemptRef.current) {
+        wechatActiveRef.current = false;
         stopWechatListener();
         setWechatWaiting(false);
         setError(authErrorText(e, t, "auth.login_failed"));
       }
-    } else {
-      // Web: leave for the WeChat page; it redirects back to /auth/wechat.
-      window.location.assign(authorizeUrl);
     }
   }
 
   function handleCancelWechatLogin() {
     wechatCancelledRef.current = true;
+    wechatAttemptRef.current += 1;
+    wechatActiveRef.current = false;
     setWechatWaiting(false);
     stopWechatListener();
     void getDesktopAppApi()?.wechat?.closeAuthWindow();
@@ -457,6 +482,20 @@ export function LoginPage() {
               onToggle={() => setAgreed(!agreed)}
               onLink={handleAgreeLink}
             />
+            <div className="text-center">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 text-xs text-muted-foreground"
+                onClick={() => {
+                  setWechatBindVo(null);
+                  setError(null);
+                  setView("phone");
+                }}
+              >
+                {t("auth.back_to_phone")}
+              </Button>
+            </div>
           </div>
         ) : effectiveView === "more" ? (
           /* ── More ways to sign in ─────────────────────── */
@@ -468,6 +507,7 @@ export function LoginPage() {
               <button
                 type="button"
                 onClick={handleWechatLogin}
+                disabled={wechatWaiting}
                 className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
               >
                 <WechatIcon className="size-4" />

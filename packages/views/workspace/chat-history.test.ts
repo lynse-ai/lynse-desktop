@@ -6,6 +6,16 @@ import { conversationTitle, loadChatHistory, saveChatHistory } from "./chat-hist
 afterEach(() => window.localStorage.clear());
 
 describe("AI chat history", () => {
+  it("persists a note's conversation scope and rejects malformed scopes", () => {
+    const conversation = { id: "a", title: "A", provider: "cloud" as const, contextFileId: "meeting-a", createdAt: 1, updatedAt: 1, messages: [] };
+    saveChatHistory("user", { activeConversationId: "a", conversations: [conversation] });
+    expect(loadChatHistory("user").conversations[0]?.contextFileId).toBe("meeting-a");
+    window.localStorage.setItem("lynse_ai_chat_history_v1:user", JSON.stringify({ conversations: [
+      conversation, { ...conversation, id: "bad", contextFileId: 42 },
+    ] }));
+    expect(loadChatHistory("user").conversations.map((c) => c.id)).toEqual(["a"]);
+  });
+
   it("keeps cloud task mappings and artifact-only replies, stripping tickets and stale approvals", () => {
     const session = { mode: "cloud" as const, taskId: "remote-task", token: "never-persist", link: "never-persist" };
     saveChatHistory("wb", { activeConversationId: "cloud-task", conversations: [{

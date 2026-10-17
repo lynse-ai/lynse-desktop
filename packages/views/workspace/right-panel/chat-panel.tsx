@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useState, useMemo } from "react";
+import { useRef, useEffect, useLayoutEffect, useState, useMemo } from "react";
 import { X, Send, FileText, Plus, Square, Clock, Image as ImageIcon, Headphones } from "../../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
@@ -8,7 +8,7 @@ import { ChatReplyBody } from "../../chat/chat-reply-body";
 import { AssistantAvatar } from "../../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
 
-import { useWorkspaceStore } from "../store";
+import { getWorkspaceState, useWorkspaceStore } from "../store";
 import { useChat } from "../hooks/use-chat";
 import { ChatModelPicker } from "../model-picker";
 import { isBetaFeaturesUnlocked } from "../../feature-flags";
@@ -43,30 +43,31 @@ export function ChatPanel() {
   // The panel is the lynclaw surface: it stays on the cloud channel even
   // while the chat page (the only switcher) is parked on WorkBuddy.
   const workbuddyDetached = useChatStore((s) => s.activeAssistant === "workbuddy");
+  const openFileChat = useChatStore((s) => s.openFileChat);
   // Zustand v5 compares selector output with Object.is on every snapshot
   // check: a selector that allocates (filter/sort) never stabilizes and React
   // re-renders forever. Subscribe to the raw slice, derive outside the hook.
   const conversations = useChatStore((s) => s.conversations);
   const cloudConversations = useMemo(
-    () => conversations.filter((c) => c.provider !== "workbuddy"),
-    [conversations],
+    () => selectedItemId
+      ? conversations.filter((c) => c.provider !== "workbuddy" && c.contextFileId === selectedItemId)
+      : [],
+    [conversations, selectedItemId],
   );
-  const latestCloudConversation = useMemo(
-    () => [...cloudConversations].sort((a, b) => b.updatedAt - a.updatedAt)[0],
-    [cloudConversations],
-  );
-  const viewMessages = useMemo(
-    () => (workbuddyDetached ? latestCloudConversation?.messages ?? [] : messages),
-    [workbuddyDetached, latestCloudConversation, messages],
-  );
-  const viewActiveId = workbuddyDetached
-    ? latestCloudConversation?.id ?? null
-    : activeConversationId;
+  const viewActiveId = cloudConversations.some((c) => c.id === activeConversationId) ? activeConversationId : null;
+  const viewMessages = useMemo(() => viewActiveId ? messages : [], [viewActiveId, messages]);
+  const viewLoading = !!viewActiveId && isLoading;
   const [historyOpen, setHistoryOpen] = useState(false);
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
   const { data: files } = useFiles({ pageSize: 200 });
+
+  useLayoutEffect(() => {
+    openFileChat(selectedItemId);
+    setInput("");
+    setHistoryOpen(false);
+  }, [selectedItemId, openFileChat]);
 
   const selectedFileName = useMemo(() => {
     if (!selectedItemId) return null;
@@ -83,7 +84,7 @@ export function ChatPanel() {
     if (el && stickToBottomRef.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [viewMessages, isLoading]);
+  }, [viewMessages, viewLoading]);
 
   const handleListScroll = () => {
     const el = scrollRef.current;
@@ -93,11 +94,13 @@ export function ChatPanel() {
   };
 
   const handleSend = () => {
-    if (!input.trim() || isLoading) return;
+    if (!selectedItemId || !input.trim() || viewLoading) return;
+    if (getWorkspaceState().selectedItemId !== selectedItemId) return;
     // A selected meeting scopes the assistant to that meeting. The send is
     // pinned to the cloud channel even while the page is on WorkBuddy.
-    sendMessage(input, selectedItemId ?? undefined, !!selectedItemId, undefined, {
+    sendMessage(input, selectedItemId, true, undefined, {
       assistant: "lynse",
+      contextFileId: selectedItemId,
     });
     setInput("");
   };
@@ -127,7 +130,7 @@ export function ChatPanel() {
             className="size-6 p-0"
             onClick={() => {
               if (workbuddyDetached) setActiveAssistant("lynse");
-              clearMessages();
+              clearMessages({ assistant: "lynse" });
             }}
             title={t("chat.new_chat")}
           >
@@ -146,6 +149,7 @@ export function ChatPanel() {
             activeConversationId={viewActiveId}
             workingConversationIds={workingConversationIds}
             onSelect={(id) => {
+              if (getWorkspaceState().selectedItemId !== selectedItemId) return;
               if (workbuddyDetached) setActiveAssistant("lynse");
               selectConversation(id);
               setHistoryOpen(false);
@@ -170,11 +174,11 @@ export function ChatPanel() {
         className="flex-1 overflow-y-auto overscroll-contain"
         style={{ padding: 12 }}
       >
-        {viewMessages.length === 0 && !isLoading && (
+        {viewMessages.length === 0 && !viewLoading && (
             <div className="flex flex-col items-center justify-center pt-10 text-center text-muted-foreground">
             <AssistantAvatar size={72} className="mb-2 opacity-90" />
             <p className="text-xs">{t("chat.empty_prompt")}</p>
-            <p className="mt-1 text-2xs opacity-60">{t("chat.empty_hint")}</p>
+            <p className="mt-1 text-2xs opacity-60">{t(selectedItemId ? "chat.empty_hint" : "workspace.select_file_hint")}</p>
           </div>
         )}
         <div className="space-y-3">
@@ -225,7 +229,7 @@ export function ChatPanel() {
                     )}
                   </>
                 ) : msg.content || msg.error ? (
-                  <ChatReplyBody message={msg} isStreaming={isLoading} />
+                  <ChatReplyBody message={msg} isStreaming={viewLoading} />
                 ) : msg.attachments?.length || msg.sources?.length || msg.humanSupportLink?.url || msg.connectionRequests?.length ? (
                   // Attachment-only reply (empty body server-side): the cards
                   // render below — don't keep "typing" forever.
@@ -264,8 +268,10 @@ export function ChatPanel() {
                   <div className="mt-2">
                     <ConfirmCard
                       confirm={msg.confirm}
-                      onSelect={(value) => answerConfirm(msg.id, value)}
-                      onDismiss={() => dismissConfirm(msg.id)}
+                      onSelect={(value) => answerConfirm(msg.id, value, getWorkspaceState().selectedItemId)}
+                      onDismiss={() => {
+                        if (getWorkspaceState().selectedItemId === selectedItemId) dismissConfirm(msg.id);
+                      }}
                     />
                   </div>
                 )}
@@ -297,12 +303,13 @@ export function ChatPanel() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
               placeholder={t("workspace.chat_placeholder")}
+              disabled={!selectedItemId}
               className="h-8 text-xs"
             />
           </div>
           {/* Beta surface: hidden in official builds (feature-flags). */}
           {isBetaFeaturesUnlocked() && <ChatModelPicker />}
-          {isLoading ? (
+          {viewLoading ? (
             <Button size="icon" variant="destructive" className="size-8 shrink-0" onClick={stopStreaming} style={{ borderRadius: 8 }} title={t("chat.stop")}>
               <Square className="size-3.5 fill-current" />
             </Button>
@@ -311,7 +318,7 @@ export function ChatPanel() {
               size="icon"
               className="size-8 shrink-0"
               onClick={handleSend}
-              disabled={!input.trim()}
+              disabled={!selectedItemId || !input.trim()}
               style={{
                 background: input.trim() ? "var(--primary)" : "var(--muted)",
                 color: input.trim() ? "var(--primary-foreground)" : "var(--muted-foreground)",

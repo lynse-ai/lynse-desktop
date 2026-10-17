@@ -348,6 +348,8 @@ export interface ChatConversation {
   title: string;
   messages: ChatMessage[];
   provider: ChatProvider;
+  /** The note sidebar's fixed file scope; absent on general chat history. */
+  contextFileId?: string;
   createdAt: number;
   updatedAt: number;
   qoderSession?: QoderChatSessionState;

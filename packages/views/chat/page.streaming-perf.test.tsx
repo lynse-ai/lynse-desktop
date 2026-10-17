@@ -40,7 +40,7 @@ const resetCounters = () => {
   counters.pageActualMs = 0;
 };
 
-// The poll transport is replaced with a scripted replay so the benchmark is
+// Both cloud transports use a scripted replay so the benchmark is
 // deterministic: DELTA_COUNT deltas at the real ~24 ms typewriter cadence.
 const TIMING = vi.hoisted(() => ({ deltaCount: 60, tickMs: 24 }));
 
@@ -67,6 +67,7 @@ vi.mock("../workspace/chat-transport", async (importOriginal) => {
   return {
     ...actual,
     PollChatTransport: FakePollTransport,
+    StreamChatTransport: FakePollTransport,
     extractConfirmFromText: () => null,
   };
 });

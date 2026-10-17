@@ -223,10 +223,10 @@ export function LynseSidebar() {
               className={
                 isWeb
                   ? "flex h-11 w-full shrink-0 items-center gap-2.5 rounded-xl px-1.5 transition-colors hover:bg-foreground/5"
-                  : "flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20 transition-colors hover:bg-primary/20"
+                  : "flex size-8 shrink-0 items-center justify-center rounded-full bg-avatar-brand/15 text-xs font-medium text-avatar-brand-text ring-1 ring-inset ring-avatar-brand/20 transition-colors hover:bg-avatar-brand/20"
               }
             >
-              <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-medium text-accent-brand-text ring-1 ring-inset ring-primary/20">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-avatar-brand/15 text-xs font-medium text-avatar-brand-text ring-1 ring-inset ring-avatar-brand/20">
                 {initials}
               </span>
               {isWeb && (

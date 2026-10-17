@@ -7,10 +7,11 @@
 //! the authorize page opens in a small embedded window and this module
 //! intercepts the redirect navigation before it loads: the callback URL is
 //! forwarded to the main window as a `wechat-auth-callback` event and the
-//! window closes itself. The redirect_uri may move server-side without
-//! notice, so the match is on the `code`/`state` query pair, never a host.
+//! window closes itself. Only the redirect_uri and state from this login
+//! attempt can complete it.
 
 use crate::CommandResult;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 pub(crate) const WINDOW_LABEL: &str = "wechat-auth";
@@ -18,14 +19,18 @@ const CALLBACK_EVENT: &str = "wechat-auth-callback";
 const WINDOW_WIDTH: f64 = 480.0;
 const WINDOW_HEIGHT: f64 = 620.0;
 
-fn is_wechat_callback(url: &tauri::Url) -> bool {
-    let has = |key: &str| url.query_pairs().any(|(k, _)| k == key);
-    has("code") && has("state")
+fn is_wechat_callback(url: &tauri::Url, callback: &tauri::Url, state: &str) -> bool {
+    url.origin() == callback.origin()
+        && url.path() == callback.path()
+        && url
+            .query_pairs()
+            .any(|(key, value)| key == "state" && value == state)
+        && url
+            .query_pairs()
+            .any(|(key, value)| (key == "code" || key == "error") && !value.is_empty())
 }
 
-/// Desktop Safari UA. WeChat's oauth2/authorize page refuses to render in a
-/// plain WKWebView ("请在微信客户端打开链接"); with a desktop-browser UA it
-/// serves the PC QR page, and the scan redirects this window with code+state.
+/// Use a desktop browser UA for the Open Platform QR page.
 const DESKTOP_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15";
 
 /// Open the WeChat authorize page in the embedded auth window. Any previous
@@ -39,44 +44,64 @@ pub(crate) fn wechat_auth_window(app: AppHandle, url: String) -> CommandResult<(
     let authorize_url: tauri::Url = url
         .parse()
         .map_err(|error| format!("invalid wechat authorize url: {error}"))?;
+    if authorize_url.origin().ascii_serialization() != "https://open.weixin.qq.com"
+        || authorize_url.path() != "/connect/qrconnect"
+    {
+        return Err("invalid wechat QR authorize endpoint".into());
+    }
+    let param = |key: &str| {
+        authorize_url
+            .query_pairs()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.into_owned())
+            .filter(|value| !value.is_empty())
+    };
+    let callback: tauri::Url = param("redirect_uri")
+        .ok_or("missing wechat redirect_uri")?
+        .parse()
+        .map_err(|error| format!("invalid wechat redirect_uri: {error}"))?;
+    if !matches!(callback.scheme(), "https" | "http") {
+        return Err("invalid wechat callback scheme".into());
+    }
+    let state = param("state").ok_or("missing wechat state")?;
+    let callback_sent = AtomicBool::new(false);
     let app_for_nav = app.clone();
-    let window = WebviewWindowBuilder::new(
-        &app,
-        WINDOW_LABEL,
-        WebviewUrl::External(authorize_url),
-    )
-    .title("WeChat")
-    .user_agent(DESKTOP_UA)
-    .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
-    .min_inner_size(360.0, 480.0)
-    // Created hidden and revealed on page-load-finished (the About window
-    // pattern): a runtime-created window shown before its webview is ready
-    // never makes it onscreen on macOS.
-    .visible(false)
-    .on_page_load(|window, payload| {
-        if payload.event() == tauri::webview::PageLoadEvent::Finished {
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
-    })
-    .on_navigation(move |nav| {
-        if !is_wechat_callback(nav) {
-            return true;
-        }
-        let _ = app_for_nav.emit(CALLBACK_EVENT, nav.to_string());
-        // Close off-thread: closing from inside the navigation policy
-        // callback deadlocks on macOS (WKWebView is still inside
-        // decidePolicyFor).
-        let app = app_for_nav.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
-                let _ = window.close();
+    let window = WebviewWindowBuilder::new(&app, WINDOW_LABEL, WebviewUrl::External(authorize_url))
+        .title("WeChat")
+        .user_agent(DESKTOP_UA)
+        .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
+        .min_inner_size(360.0, 480.0)
+        // Created hidden and revealed on page-load-finished (the About window
+        // pattern): a runtime-created window shown before its webview is ready
+        // never makes it onscreen on macOS.
+        .visible(false)
+        .on_page_load(|window, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                let _ = window.show();
+                let _ = window.set_focus();
             }
-        });
-        false
-    })
-    .build()
-    .map_err(|error| format!("failed to create wechat auth window: {error}"))?;
+        })
+        .on_navigation(move |nav| {
+            if !is_wechat_callback(nav, &callback, &state) {
+                return true;
+            }
+            if callback_sent.swap(true, Ordering::SeqCst) {
+                return false;
+            }
+            let _ = app_for_nav.emit(CALLBACK_EVENT, nav.to_string());
+            // Close off-thread: closing from inside the navigation policy
+            // callback deadlocks on macOS (WKWebView is still inside
+            // decidePolicyFor).
+            let app = app_for_nav.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
+                    let _ = window.close();
+                }
+            });
+            false
+        })
+        .build()
+        .map_err(|error| format!("failed to create wechat auth window: {error}"))?;
     let _ = window.center();
     Ok(())
 }
@@ -88,4 +113,38 @@ pub(crate) fn wechat_auth_window_close(app: AppHandle) -> CommandResult<()> {
         let _ = window.close();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn callback_is_bound_to_server_path_and_state() {
+        let callback = "https://www.lynse.cn/auth/login".parse().unwrap();
+        for url in [
+            "https://www.lynse.cn/auth/login?code=once&state=expected",
+            "https://www.lynse.cn/auth/login?error=access_denied&state=expected",
+        ] {
+            assert!(is_wechat_callback(
+                &url.parse().unwrap(),
+                &callback,
+                "expected"
+            ));
+        }
+        for url in [
+            "https://api.lynse.cn/auth/login?code=once&state=expected",
+            "https://gapp.lynse.cn/auth/login?code=once&state=expected",
+            "https://www.lynse.cn/other?code=once&state=expected",
+            "https://www.lynse.cn/auth/login?code=once&state=other",
+            "https://www.lynse.cn/auth/login?code=&state=expected",
+            "https://www.lynse.cn/auth/login?code=once",
+        ] {
+            assert!(!is_wechat_callback(
+                &url.parse().unwrap(),
+                &callback,
+                "expected"
+            ));
+        }
+    }
 }

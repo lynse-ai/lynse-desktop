@@ -34,7 +34,6 @@ import {
 import { featureFlags } from "@lynse/views/feature-flags";
 import { AuthGate, ApiConfigPage } from "@lynse/views/auth";
 import { PermissionOnboardingGate } from "@lynse/views/onboarding";
-import { configureWechatQrLogin } from "@lynse/core/auth/wechat";
 import { useMaximized } from "@lynse/views/layout";
 import { cn } from "@lynse/ui/lib/utils";
 import { DesktopNavigationProvider } from "./platform/navigation";
@@ -50,13 +49,6 @@ configureBuildChannel(
   (import.meta.env.VITE_BUILD_CHANNEL as BuildChannel | undefined) ??
     (import.meta.env.PROD ? "official" : "debug"),
 );
-// PC 扫码登录 (qrconnect) needs the 微信开放平台「网站应用」appid + a
-// redirect_uri under its configured 授权回调域. Set = the client builds the
-// authorize URL itself; unset = fall back to the backend's /api/auth/render.
-configureWechatQrLogin({
-  appId: import.meta.env.VITE_WECHAT_APP_ID ?? "",
-  redirectUri: import.meta.env.VITE_WECHAT_REDIRECT_URI ?? "",
-});
 // Problem-report channel: submitted reports are filed as CNB issues by the
 // CloudBase `cnb-report` function (the CNB token lives in the function's env
 // config, never in the client). The deployed function URL is the default;

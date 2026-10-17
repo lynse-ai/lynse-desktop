@@ -18,6 +18,8 @@ export function authErrorText(
         return t("auth.api_key_invalid");
       case "error.phone.format.invalid":
         return t("auth.sms_phone_invalid");
+      case "error.phone.already.bind":
+        return t("auth.wechat_phone_already_bound");
       case "error.sms.send.failed":
         return t("auth.sms_send_failed");
       case "error.operation.too.frequent":

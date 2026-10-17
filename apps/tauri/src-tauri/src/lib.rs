@@ -3967,19 +3967,31 @@ fn secret_delete_impl(_app: &AppHandle, account: &str) -> CommandResult<()> {
     keyring_delete(account)
 }
 
-#[tauri::command]
-fn secure_set_secret(app: AppHandle, account: String, value: String) -> CommandResult<()> {
-    secret_set(&app, &account, &value)
+/// Keychain access can wait for an OS authorization dialog. It must never
+/// block the main thread that owns the window and WebKit IPC dispatcher.
+async fn run_secret_io<T, F>(operation: F) -> CommandResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> CommandResult<T> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|_| "Secure storage task could not complete".to_owned())?
 }
 
 #[tauri::command]
-fn secure_get_secret(app: AppHandle, account: String) -> CommandResult<Option<String>> {
-    secret_get(&app, &account)
+async fn secure_set_secret(app: AppHandle, account: String, value: String) -> CommandResult<()> {
+    run_secret_io(move || secret_set(&app, &account, &value)).await
 }
 
 #[tauri::command]
-fn secure_delete_secret(app: AppHandle, account: String) -> CommandResult<()> {
-    secret_delete(&app, &account)
+async fn secure_get_secret(app: AppHandle, account: String) -> CommandResult<Option<String>> {
+    run_secret_io(move || secret_get(&app, &account)).await
+}
+
+#[tauri::command]
+async fn secure_delete_secret(app: AppHandle, account: String) -> CommandResult<()> {
+    run_secret_io(move || secret_delete(&app, &account)).await
 }
 
 /// Process-wide lock for vault read-modify-write cycles. Every webview window
@@ -3993,28 +4005,32 @@ static SECRET_VAULT_LOCK: Mutex<()> = Mutex::new(());
 /// failed vault read rejects the whole command — never persist a map built on
 /// an empty read, which would silently wipe every other secret.
 #[tauri::command]
-fn secure_update_vault_entry(
+async fn secure_update_vault_entry(
     app: AppHandle,
     account: String,
     value: Option<String>,
 ) -> CommandResult<()> {
+    run_secret_io(move || update_vault_entry(&app, &account, value)).await
+}
+
+fn update_vault_entry(app: &AppHandle, account: &str, value: Option<String>) -> CommandResult<()> {
     let _guard = SECRET_VAULT_LOCK
         .lock()
         .map_err(|_| "secret vault lock is poisoned")?;
-    let raw = secret_get(&app, SECRET_VAULT_ACCOUNT)?;
+    let raw = secret_get(app, SECRET_VAULT_ACCOUNT)?;
     let mut vault: Map<String, Value> = match raw.as_deref() {
         Some(raw) => serde_json::from_str(raw).unwrap_or_default(),
         None => Map::new(),
     };
     let changed = match &value {
         Some(value) => {
-            let changed = vault.get(&account).and_then(Value::as_str) != Some(value.as_str());
+            let changed = vault.get(account).and_then(Value::as_str) != Some(value.as_str());
             if changed {
-                vault.insert(account.clone(), Value::String(value.clone()));
+                vault.insert(account.to_owned(), Value::String(value.clone()));
             }
             changed
         }
-        None => vault.remove(&account).is_some(),
+        None => vault.remove(account).is_some(),
     };
     if !changed {
         // Skipping the write keeps launches from touching the keychain item
@@ -4022,10 +4038,10 @@ fn secure_update_vault_entry(
         return Ok(());
     }
     if vault.is_empty() {
-        return secret_delete(&app, SECRET_VAULT_ACCOUNT);
+        return secret_delete(app, SECRET_VAULT_ACCOUNT);
     }
     let raw = serde_json::to_string(&vault).map_err(|error| error.to_string())?;
-    secret_set(&app, SECRET_VAULT_ACCOUNT, &raw)
+    secret_set(app, SECRET_VAULT_ACCOUNT, &raw)
 }
 
 fn media_response_body(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
@@ -5162,6 +5178,30 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secret_io_runs_off_the_invoking_thread() {
+        let invoking_thread = std::thread::current().id();
+        let worker_thread = tauri::async_runtime::block_on(run_secret_io(|| {
+            Ok(std::thread::current().id())
+        }))
+        .expect("mock secure storage operation succeeds");
+        assert_ne!(invoking_thread, worker_thread);
+    }
+
+    #[test]
+    fn secret_io_preserves_errors_instead_of_treating_denial_as_absence() {
+        let result = tauri::async_runtime::block_on(run_secret_io(|| {
+            Err::<Option<String>, _>("mock access denied".to_owned())
+        }));
+        assert_eq!(result, Err("mock access denied".to_owned()));
+    }
+
+    #[test]
+    fn secret_io_preserves_missing_entry_result() {
+        let result = tauri::async_runtime::block_on(run_secret_io(|| Ok(None::<String>)));
+        assert_eq!(result, Ok(None));
+    }
 
     #[test]
     fn parses_partial_ranges() {

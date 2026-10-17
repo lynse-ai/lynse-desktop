@@ -512,7 +512,8 @@ describe("PollChatTransport", () => {
     ]);
   });
 
-  it("sends fileIds / confirm token / token only when relevant", async () => {
+  it.each([null, "https://agent.invalid"])("sends the selected meeting scope and credentials to the poll route (%s)", async (agentBase) => {
+    apiMocks.getAgentBaseUrl.mockReturnValue(agentBase);
     apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
     apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
 
@@ -532,6 +533,7 @@ describe("PollChatTransport", () => {
       sessionId: "session-1",
       token: "jwt",
       fileIds: ["f1", "f2"],
+      userSpecifiedFile: true,
       confirm_token: "card-token-9",
       confirmToken: "card-token-9",
     });
@@ -546,6 +548,7 @@ describe("PollChatTransport", () => {
 
     const body = apiMocks.post.mock.calls[0]![1] as Record<string, unknown>;
     expect(body.fileIds).toBeUndefined();
+    expect(body.userSpecifiedFile).toBeUndefined();
     expect(body.confirm_token).toBeUndefined();
     expect(body.confirmToken).toBeUndefined();
   });

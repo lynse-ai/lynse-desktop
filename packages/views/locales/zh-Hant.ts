@@ -44,6 +44,7 @@ const zhHant = {
     wechat_waiting_scan: "等待掃碼…",
     wechat_waiting_hint: "已在瀏覽器開啟微信登入頁，請使用微信掃碼確認登入。",
     wechat_cancel: "取消",
+    wechat_phone_already_bound: "該手機號已綁定微信，本次微信登入未能匹配原帳號。請使用手機號登入。",
     sms_login: "手機號登入",
     sms_phone_label: "手機號",
     sms_phone_placeholder: "請輸入手機號",

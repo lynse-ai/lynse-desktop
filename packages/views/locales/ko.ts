@@ -45,6 +45,7 @@ const ko = {
     wechat_waiting_hint:
       "브라우저에서 WeChat 로그인 페이지가 열렸습니다. QR 코드를 스캔하여 로그인을 확인해 주세요.",
     wechat_cancel: "취소",
+    wechat_phone_already_bound: "이 전화번호는 이미 WeChat에 연결되어 있지만 이번 로그인에서 기존 계정을 찾지 못했습니다. 전화번호로 로그인해 주세요.",
     sms_login: "전화번호 로그인",
     sms_phone_label: "전화번호",
     sms_phone_placeholder: "전화번호를 입력하세요",

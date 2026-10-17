@@ -6,9 +6,7 @@ import type { StorageAdapter } from "../types/storage";
 import type { AuthSession } from "./session";
 import { clearWorkBuddyTokenCache } from "./workbuddy";
 import {
-  buildWechatQrConnectUrl,
-  createWechatState,
-  isWechatQrLoginConfigured,
+  desktopWechatAuthorizeUrl,
   renderWechatLoginUrl,
   stateFromAuthorizeUrl,
 } from "./wechat";
@@ -30,9 +28,10 @@ interface AuthState {
    * from the backend (which bakes in its own `state`), and return it —
    * web: same-window redirect; desktop: embedded auth window.
    */
-  startWechatLogin: (opts?: { apiUrl?: string }) => Promise<{
+  startWechatLogin: (opts?: { apiUrl?: string; desktopQr?: boolean }) => Promise<{
     authorizeUrl: string;
     state: string;
+    apiUrl: string;
   }>;
   /** Persist the session returned by the WeChat exchange/poll. */
   completeLogin: (result: AuthSession, apiUrl?: string) => void;
@@ -83,9 +82,11 @@ export function createAuthStore(opts: AuthOpts) {
         applyAgentUrlForApi(opts, apiUrl);
       }
       if (!opts.cookieAuth) {
+        opts.api.setApiKey(result.apiKey ?? null);
         if (result.apiKey) {
-          opts.api.setApiKey(result.apiKey);
           opts.storage.setItem("lynse_api_key", result.apiKey);
+        } else {
+          opts.storage.removeItem("lynse_api_key");
         }
         opts.storage.setItem("lynse_token", result.accessToken);
         opts.storage.removeItem("lynse_wechat_state");
@@ -100,23 +101,9 @@ export function createAuthStore(opts: AuthOpts) {
       opts.onLogin?.();
     }
 
-    /**
-     * 首次登录绑定后端：把当前登录网关告诉聊天 agent，之后该 token 的身份
-     * 验证与 Lynse 数据调用固定在这一个地址（服务端记住绑定，聊天请求无需
-     * 再声明，也绝不验证第二个地址）。Fire-and-forget：注册失败不影响登录
-     * 态，下次启动 restoreSession 会重试。
-     */
+    /** Start bounded registration in the background; chat waits for the same promise. */
     function registerBackendHost() {
-      try {
-        const agentUrl = opts.api.getAgentBaseUrl();
-        const backendUrl = opts.api.getBaseUrl();
-        if (!agentUrl || !backendUrl) return;
-        void opts.api
-          .post("/api/session/backend", { host: backendUrl }, { baseUrl: agentUrl, tokenOnly: true })
-          .catch(() => undefined);
-      } catch {
-        // Client not fully initialized (e.g. early boot) — skip silently.
-      }
+      void opts.api.ensureAgentSession().catch(() => undefined);
     }
 
     return {
@@ -163,25 +150,20 @@ export function createAuthStore(opts: AuthOpts) {
         opts.storage.setItem("lynse_api_url", apiUrl);
         applyAgentUrlForApi(opts, apiUrl);
       }
-      // PC 扫码 (qrconnect): when the website-app appid + redirect_uri are
-      // provided at build time, the client builds the authorize URL itself —
-      // the backend's render returns the in-WeChat H5 link, which no PC
-      // browser can open.
-      if (isWechatQrLoginConfigured()) {
-        const state = createWechatState();
-        opts.storage.setItem("lynse_wechat_state", state);
-        return { authorizeUrl: buildWechatQrConnectUrl(state), state };
+      const apiBaseUrl = opts.api.getBaseUrl();
+      const renderedUrl = await renderWechatLoginUrl(opts.api);
+      if (opts.api.getBaseUrl() !== apiBaseUrl) {
+        throw new Error("Server changed during WeChat sign-in; please retry");
       }
-      // Otherwise fall back to the backend-built authorize URL (appid, scope
-      // and its own random `state` baked in server-side).
-      const authorizeUrl = await renderWechatLoginUrl();
+      const authorizeUrl = startOpts?.desktopQr
+        ? desktopWechatAuthorizeUrl(renderedUrl)
+        : renderedUrl;
       const state = stateFromAuthorizeUrl(authorizeUrl) ?? "";
+      if (!state) throw new Error("WeChat authorize URL is missing state");
       // The callback page reads this back to reject forged redirects (the
       // `state` query param must match what the authorize URL carried).
-      if (state) {
-        opts.storage.setItem("lynse_wechat_state", state);
-      }
-      return { authorizeUrl, state };
+      opts.storage.setItem("lynse_wechat_state", state);
+      return { authorizeUrl, state, apiUrl: apiBaseUrl };
     },
 
     completeLogin: (result: AuthSession, apiUrl?: string) =>

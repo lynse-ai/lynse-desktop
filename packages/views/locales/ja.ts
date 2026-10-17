@@ -45,6 +45,7 @@ const ja = {
     wechat_waiting_hint:
       "ブラウザーで WeChat ログインページを開きました。QRコードをスキャンして確認してください。",
     wechat_cancel: "キャンセル",
+    wechat_phone_already_bound: "この電話番号はすでに WeChat に連携されていますが、今回のログインでは既存のアカウントが見つかりませんでした。電話番号でログインしてください。",
     sms_login: "電話番号でログイン",
     sms_phone_label: "電話番号",
     sms_phone_placeholder: "電話番号を入力",

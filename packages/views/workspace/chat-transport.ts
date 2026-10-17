@@ -159,7 +159,10 @@ function chatTurnBody(opts: SendChatOptions): Record<string, unknown> {
   if (opts.requestId) body.requestId = opts.requestId;
   if (sessionId) body.sessionId = sessionId;
   if (token) body.token = token;
-  if (fileIds.length && userSpecifiedFile) body.fileIds = fileIds;
+  if (fileIds.length && userSpecifiedFile) {
+    body.fileIds = fileIds;
+    body.userSpecifiedFile = true;
+  }
   if (modelOverride) body.modelOverride = modelOverride;
   if (confirmToken) {
     body.confirm_token = confirmToken;
@@ -551,6 +554,7 @@ export class PollChatTransport implements ChatTransport {
   readonly provider = "cloud" as const;
   private cancelled = false;
   private requestController: AbortController | null = null;
+  private sessionToken: string | undefined;
 
   async send(opts: SendChatOptions): Promise<void> {
     await this.run(opts, () => this.sendTurn(opts));
@@ -563,6 +567,7 @@ export class PollChatTransport implements ChatTransport {
 
   private async run(opts: SendChatOptions, work: () => Promise<void>): Promise<void> {
     this.cancelled = false;
+    this.sessionToken = opts.token ?? undefined;
     this.requestController = new AbortController();
     const abort = () => this.cancel();
     opts.signal?.addEventListener("abort", abort, { once: true });
@@ -626,11 +631,12 @@ export class PollChatTransport implements ChatTransport {
     return api().post<ChatPollSubmitResponse>(chatPollPath(), body, {
       baseUrl: chatAgentBaseUrl(),
       signal: this.requestController?.signal,
+      sessionToken: this.sessionToken,
     });
   }
 
   private getTask(path: string): Promise<ChatPollTaskResponse> {
-    return api().get<ChatPollTaskResponse>(path, { baseUrl: chatAgentBaseUrl(), signal: this.requestController?.signal });
+    return api().get<ChatPollTaskResponse>(path, { baseUrl: chatAgentBaseUrl(), signal: this.requestController?.signal, sessionToken: this.sessionToken });
   }
 
   /** POST the turn; on busy (503/429 or the gateway busy key) retry with backoff. */
@@ -1144,7 +1150,7 @@ export class StreamChatTransport implements ChatTransport {
           },
           (error) => finish(error),
           () => finish(),
-          { baseUrl: chatAgentBaseUrl() },
+          { baseUrl: chatAgentBaseUrl(), sessionToken: typeof body.token === "string" ? body.token : undefined },
         );
         // Mocks and adapters can complete synchronously before returning a controller.
         if (settled || signal.aborted) controller.abort();

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Input } from "@lynse/ui/components/ui/input";
 import { Button } from "@lynse/ui/components/ui/button";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { api, ApiError } from "@lynse/core/api";
 import {
   SMS_CODE_LENGTH,
   SMS_RESEND_DEFAULT_SECONDS,
@@ -98,11 +99,23 @@ export function WechatBindForm({
         captchaCode,
       });
       if (!vo.token || isWechatBindRequired(vo)) {
+        console.warn("[wechat-bind] missing session", {
+          server: api().getBaseUrl(),
+          hasToken: !!vo.token,
+          needsBind: isWechatBindRequired(vo),
+        });
         setError(t("auth.wechat_bind_failed"));
         return;
       }
       onBound(vo);
     } catch (e: unknown) {
+      // Log only public server/error metadata, never the phone, SMS code or identity.
+      console.warn("[wechat-bind] request failed", {
+        server: api().getBaseUrl(),
+        status: e instanceof ApiError ? e.status : null,
+        code: e instanceof Error && /^[a-z0-9_-]+(?:\.[a-z0-9_-]+)+$/.test(e.message)
+          ? e.message : "unavailable",
+      });
       setError(authErrorText(e, t, "auth.wechat_bind_failed"));
     } finally {
       setSubmitting(false);

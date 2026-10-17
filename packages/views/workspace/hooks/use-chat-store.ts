@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import i18next from "i18next";
 import { api } from "@lynse/core/api";
+import { getActiveQueryClient } from "@lynse/core/query-client";
 import { clearWorkBuddyTokenCache } from "@lynse/core/auth/workbuddy";
 import { hasWorkBuddyAcpBridge } from "@lynse/core/workbuddy";
 import { WorkBuddyCloudChatTransport } from "../workbuddy-cloud-chat-transport";
@@ -285,12 +286,13 @@ interface ChatStoreState {
     fileIds?: string | string[],
     userSpecifiedFile?: boolean,
     attachments?: ChatAttachment[],
-    opts?: { assistant?: ChatAssistant },
+    opts?: { assistant?: ChatAssistant; contextFileId?: string },
   ) => void;
-  answerConfirm: (messageId: string, value: string) => void;
+  answerConfirm: (messageId: string, value: string, expectedFileId?: string | null) => void;
   dismissConfirm: (messageId: string) => void;
   stopStreaming: () => void;
-  clearMessages: () => void;
+  clearMessages: (opts?: { assistant?: ChatAssistant }) => void;
+  openFileChat: (fileId: string | null) => void;
   selectConversation: (conversationId: string) => void;
   /** Jump to the conversation the badge points at: latest unread, else latest. */
   openLatestUnread: (preferredConversationId?: string) => void;
@@ -598,17 +600,23 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     userSpecifiedFile = false,
     attachments?: ChatAttachment[],
     confirmToken?: string | null,
-    opts?: { assistant?: ChatAssistant },
+    opts?: { assistant?: ChatAssistant; contextFileId?: string },
   ) => {
     if (!content.trim()) return;
     const userId = get().userId;
     const assistant = opts?.assistant ?? get().activeAssistant;
+    const contextFileId = opts?.contextFileId;
     const fileIds = Array.isArray(fileIdsInput) ? fileIdsInput : fileIdsInput ? [fileIdsInput] : [];
+    if (contextFileId !== undefined && (
+      !contextFileId.trim() || assistant !== "lynse" || fileIds.length !== 1 || fileIds[0] !== contextFileId
+    )) return;
     // Mentioned notes/groups scope retrieval just like a selected file does.
     const hasContextFiles = userSpecifiedFile || fileIds.length > 0;
 
     // One in-flight turn per conversation…
-    if (get().activeConversationId && runs.has(get().activeConversationId!)) return;
+    const currentConv = get().conversations.find((c) => c.id === get().activeConversationId);
+    const contextMatches = contextFileId === undefined || currentConv?.contextFileId === contextFileId;
+    if (contextMatches && get().activeConversationId && runs.has(get().activeConversationId!)) return;
     // …and at most MAX_CONCURRENT_CHATS conversations streaming at once. Check
     // before creating a new conversation so a rejected send leaves no empty
     // conversation behind.
@@ -620,15 +628,14 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     // Desktop WorkBuddy owns independent cloud tasks. Legacy local history
     // stays readable and is never silently repurposed as a cloud session.
     let conversationId = get().activeConversationId;
-    const currentConv = get().conversations.find((c) => c.id === conversationId);
     if (assistant === "workbuddy" && hasWorkBuddyAcpBridge() && currentConv?.provider === "workbuddy" && !currentConv.workbuddySession) {
       toast.error(i18next.t("workbuddy.cloud_legacy_history"));
       return;
     }
-    const currentMatches =
+    const currentMatches = contextMatches && (
       assistant === "workbuddy"
         ? currentConv?.provider === "workbuddy"
-        : currentConv != null && currentConv.provider !== "workbuddy";
+        : currentConv != null && currentConv.provider !== "workbuddy");
     if (conversationId && currentMatches) {
       // keep the current conversation
     } else {
@@ -636,7 +643,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       // A non-null id whose provider belongs to the OTHER assistant (the
       // right-panel stays pinned to the cloud channel) resolves that side's
       // thread instead.
-      const existing = conversationId
+      const existing = conversationId && contextFileId === undefined
         ? assistant === "workbuddy"
           ? latestWorkBuddyConversation(get().conversations)
           : (get().lastCloudConversationId != null
@@ -656,12 +663,15 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           title: conversationTitle(content),
           messages: [],
           provider: assistant === "workbuddy" ? "workbuddy" : "cloud",
+          contextFileId: assistant === "lynse" ? contextFileId : undefined,
           workbuddySession: assistant === "workbuddy" && hasWorkBuddyAcpBridge() ? { mode: "cloud" } : undefined,
           createdAt: now,
           updatedAt: now,
         };
         set((s) => ({
           activeConversationId: conversationId,
+          messages: [],
+          pendingConfirm: null,
           conversations: [conversation, ...s.conversations],
         }));
       }
@@ -751,8 +761,17 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
             timing.firstContentAt = performance.now();
           }
           if (evt.type === "done") {
+            const firstCompletion = !timing.completed;
             timing.completed = true;
             recordPerf(true);
+            if (firstCompletion && assistant === "lynse") {
+              // Agent writes happen outside React Query mutations. Refetch
+              // the turn's meetings so mounted transcripts show saved names.
+              const queryClient = getActiveQueryClient();
+              for (const fileId of new Set(fileIds)) {
+                void queryClient?.invalidateQueries({ queryKey: ["file-transcription", fileId], exact: true });
+              }
+            }
           }
           handleEvent(evt, conversationId, assistantId);
         },
@@ -1041,8 +1060,11 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       runSend(content, fileIds, userSpecifiedFile, attachments, undefined, opts);
     },
 
-    answerConfirm: (messageId, value) => {
+    answerConfirm: (messageId, value, expectedFileId) => {
       const message = get().messages.find((entry) => entry.id === messageId);
+      if (!message?.confirm || message.confirm.resolvedChoice !== undefined) return;
+      const conversation = get().conversations.find((c) => c.id === get().activeConversationId);
+      if (expectedFileId !== undefined && conversation?.contextFileId !== (expectedFileId ?? undefined)) return;
       if (message?.confirm?.workbuddy) {
         const run = get().activeConversationId ? runs.get(get().activeConversationId!) : undefined;
         if (run?.assistantId !== messageId || !run.transport.answerConfirmation) return;
@@ -1058,12 +1080,21 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       // backend treats the tap as a fresh question instead of a card answer.
       const confirmToken =
         get().messages.find((m) => m.id === messageId)?.confirm?.confirmToken ?? null;
+      const sourceIndex = get().messages.findIndex((m) => m.id === messageId);
+      const sourceRequest = sourceIndex >= 0
+        ? get().messages.slice(0, sourceIndex).findLast((m) => m.role === "user")
+        : undefined;
+      const fileIds = sourceRequest?.fileIds;
+      if (expectedFileId && (fileIds?.length !== 1 || fileIds[0] !== expectedFileId)) return;
       // Keep the card collapsed in the transcript with the choice marked;
       // the answer itself goes out as the next user turn.
       setMessages((prev) => prev.map((m) => m.id === messageId && m.confirm
         ? { ...m, confirm: { ...m.confirm, resolvedChoice: value } } : m));
       set({ pendingConfirm: null });
-      runSend(value, undefined, false, undefined, confirmToken);
+      runSend(value, fileIds, !!fileIds?.length, undefined, confirmToken, {
+        assistant: conversation?.provider === "workbuddy" ? "workbuddy" : "lynse",
+        contextFileId: conversation?.contextFileId,
+      });
     },
 
     dismissConfirm: (messageId) => {
@@ -1104,12 +1135,18 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
       set({ pendingConfirm: null });
     },
 
-    clearMessages: () => {
+    openFileChat: (fileId) => {
+      const current = get().conversations.find((c) => c.id === get().activeConversationId);
+      if (fileId && current && current.provider !== "workbuddy" && current.contextFileId === fileId) return;
+      get().clearMessages({ assistant: "lynse" });
+    },
+
+    clearMessages: (opts) => {
       // Start a new chat. Any running turn keeps streaming in the background
       // and writes into its own conversation — the user can stop it from the
       // composer after switching back to that conversation. WorkBuddy has a
       // single continuous server thread, so "new chat" does not apply there.
-      if (get().activeAssistant === "workbuddy" && !hasWorkBuddyAcpBridge()) return;
+      if ((opts?.assistant ?? get().activeAssistant) === "workbuddy" && !hasWorkBuddyAcpBridge()) return;
       set({
         activeConversationId: null,
         messages: [],

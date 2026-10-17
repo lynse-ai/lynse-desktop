@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 
 // The store is tested against a fake transport so its event contract
 // (status/content/thinking/tool/done/confirm/error) can be driven directly;
@@ -46,6 +47,7 @@ import type { useChatStore as ChatStore } from "./use-chat-store";
 import type { ChatStreamEvent } from "../types";
 
 let store: typeof ChatStore;
+let queryClient: QueryClient;
 
 type FakeRun = InstanceType<typeof fake.FakeTransport>;
 
@@ -54,7 +56,13 @@ beforeEach(async () => {
   vi.clearAllMocks();
   window.localStorage.clear();
   fake.runs.length = 0;
+  queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false, gcTime: Infinity } } });
+  (await import("@lynse/core/query-client")).setActiveQueryClient(queryClient);
   store = (await import("./use-chat-store")).useChatStore;
+});
+
+afterEach(() => {
+  queryClient.clear();
 });
 
 function emit(run: FakeRun, event: ChatStreamEvent): void {
@@ -365,6 +373,63 @@ describe("stopping a pending poll turn", () => {
 });
 
 describe("confirmation cards", () => {
+  it("blocks a confirmation from another file, a missing card, and an already answered card", async () => {
+    store.getState().openFileChat("meeting-a");
+    store.getState().sendMessage("Rename speaker", "meeting-a", true, undefined, { contextFileId: "meeting-a" });
+    const prepare = fake.runs[0]!;
+    emit(prepare, { type: "done", text: "Confirm meeting A" });
+    emit(prepare, { type: "confirm", confirm: {
+      question: "Rename A", options: [{ label: "Confirm", value: "confirm" }], confirmToken: "card-a",
+    } });
+    prepare.cancel();
+    await vi.waitFor(() => expect(store.getState().workingConversationIds).toHaveLength(0));
+    const card = store.getState().pendingConfirm!.messageId;
+    store.getState().answerConfirm(card, "confirm", "meeting-b");
+    store.getState().answerConfirm("missing-card", "confirm", "meeting-a");
+    expect(fake.runs).toHaveLength(1);
+    store.getState().answerConfirm(card, "confirm", "meeting-a");
+    expect(fake.runs).toHaveLength(2);
+    fake.runs[1]!.cancel();
+    await vi.waitFor(() => expect(store.getState().workingConversationIds).toHaveLength(0));
+    store.getState().answerConfirm(card, "confirm", "meeting-a");
+    expect(fake.runs).toHaveLength(2);
+  });
+
+  it("keeps the original meeting on the confirmation turn", async () => {
+    store.getState().sendMessage("Rename speaker 2", "meeting-1", true);
+    const prepare = fake.runs[0]!;
+    emit(prepare, { type: "done", text: "Please confirm" });
+    emit(prepare, { type: "confirm", confirm: {
+      question: "Rename speaker 2", options: [{ label: "Confirm", value: "confirm" }],
+      kind: "speaker_patch_confirm", confirmToken: "rename-card",
+    } });
+    prepare.cancel();
+    await vi.waitFor(() => expect(store.getState().workingConversationIds).toHaveLength(0));
+
+    store.getState().answerConfirm(store.getState().pendingConfirm!.messageId, "confirm");
+    expect(fake.runs[1]!.opts).toMatchObject({
+      query: "confirm", fileIds: ["meeting-1"], userSpecifiedFile: true, confirmToken: "rename-card",
+    });
+  });
+
+  it("does not borrow an earlier meeting for an unscoped confirmation", async () => {
+    store.getState().sendMessage("Read meeting 1", "meeting-1", true);
+    emit(fake.runs[0]!, { type: "done", text: "Read" });
+    fake.runs[0]!.cancel();
+    await vi.waitFor(() => expect(store.getState().workingConversationIds).toHaveLength(0));
+    store.getState().sendMessage("Clear completed todos");
+    const prepare = fake.runs[1]!;
+    emit(prepare, { type: "done", text: "Please confirm" });
+    emit(prepare, { type: "confirm", confirm: {
+      question: "Clear todos", options: [{ label: "Confirm", value: "confirm" }], confirmToken: "todo-card",
+    } });
+    prepare.cancel();
+    await vi.waitFor(() => expect(store.getState().workingConversationIds).toHaveLength(0));
+
+    store.getState().answerConfirm(store.getState().pendingConfirm!.messageId, "confirm");
+    expect(fake.runs[2]!.opts).toMatchObject({ fileIds: [], userSpecifiedFile: false, confirmToken: "todo-card" });
+  });
+
   it("pops the card from the confirm event and answers with its confirmToken", async () => {
     const { sendMessage, answerConfirm } = store.getState();
     sendMessage("清理待办");
@@ -432,6 +497,115 @@ describe("confirmation cards", () => {
     selectConversation(conversationId);
     expect(store.getState().pendingConfirm).toBeNull();
     expect(store.getState().messages.find((m) => m.id === messageId)?.confirm).toMatchObject({ resolvedChoice: null });
+  });
+});
+
+describe("note sidebar conversations", () => {
+  it("rejects a send whose file scope disagrees with the sidebar context", () => {
+    store.getState().sendMessage("Rename speaker", "meeting-a", true, undefined, { contextFileId: "meeting-b" });
+    expect(fake.runs).toHaveLength(0);
+    expect(store.getState().conversations).toEqual([]);
+  });
+
+  it("starts a new server session after changing files and keeps the old history separate", async () => {
+    store.getState().openFileChat("meeting-a");
+    store.getState().sendMessage("Read A", "meeting-a", true, undefined, { contextFileId: "meeting-a" });
+    const first = fake.runs[0]!;
+    const firstId = first.opts!.sessionId;
+    emit(first, { type: "done", text: "Answer A" });
+    first.cancel();
+    await vi.waitFor(() => expect(store.getState().workingConversationIds).toHaveLength(0));
+    store.getState().openFileChat("meeting-a");
+    expect(store.getState().activeConversationId).toBe(firstId);
+
+    store.getState().openFileChat("meeting-b");
+    expect(store.getState().messages).toEqual([]);
+    expect(store.getState().pendingConfirm).toBeNull();
+    store.getState().sendMessage("Read B", "meeting-b", true, undefined, { contextFileId: "meeting-b" });
+    expect(fake.runs[1]!.opts!.sessionId).not.toBe(firstId);
+    expect(fake.runs[1]!.opts).toMatchObject({ fileIds: ["meeting-b"], userSpecifiedFile: true });
+    expect(store.getState().conversations.find((c) => c.id === firstId)).toMatchObject({ contextFileId: "meeting-a" });
+    expect(store.getState().conversations.find((c) => c.id === fake.runs[1]!.opts!.sessionId)).toMatchObject({ contextFileId: "meeting-b" });
+  });
+
+  it("does not reuse the old file's active run or late confirmation", () => {
+    store.getState().sendMessage("Read A", "meeting-a", true, undefined, { contextFileId: "meeting-a" });
+    const old = fake.runs[0]!;
+    store.getState().openFileChat("meeting-b");
+    emit(old, { type: "confirm", confirm: {
+      question: "Rename A", options: [{ label: "Confirm", value: "confirm" }], confirmToken: "card-a",
+    } });
+    expect(store.getState().messages).toEqual([]);
+    expect(store.getState().pendingConfirm).toBeNull();
+    store.getState().sendMessage("Read B", "meeting-b", true, undefined, { contextFileId: "meeting-b" });
+    expect(fake.runs).toHaveLength(2);
+    expect(fake.runs[1]!.opts!.sessionId).not.toBe(old.opts!.sessionId);
+    expect(store.getState().messages.some((m) => m.confirm?.confirmToken === "card-a")).toBe(false);
+  });
+
+  it("enforces the requested file scope even if the caller missed the reset", async () => {
+    store.getState().sendMessage("Read A", "meeting-a", true, undefined, { contextFileId: "meeting-a" });
+    const first = fake.runs[0]!;
+    emit(first, { type: "done", text: "A" });
+    first.cancel();
+    await vi.waitFor(() => expect(store.getState().workingConversationIds).toHaveLength(0));
+    store.getState().sendMessage("Read B", "meeting-b", true, undefined, { contextFileId: "meeting-b" });
+    expect(fake.runs[1]!.opts!.sessionId).not.toBe(first.opts!.sessionId);
+    expect(store.getState().messages.map((m) => m.content)).not.toContain("Read A");
+  });
+});
+
+describe("meeting transcription refresh", () => {
+  it("refetches the displayed transcription once after completion and shows the saved speaker name", async () => {
+    let savedName = "Speaker 2";
+    const load = vi.fn(async () => [{ speakerName: savedName }]);
+    const observer = new QueryObserver(queryClient, {
+      queryKey: ["file-transcription", "meeting-1"], queryFn: load,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    try {
+      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual([{ speakerName: "Speaker 2" }]));
+      store.getState().sendMessage("Rename speaker 2", "meeting-1", true);
+      const run = fake.runs[0]!;
+      emit(run, { type: "content", delta: "Working" });
+      expect(load).toHaveBeenCalledTimes(1);
+
+      savedName = "Updated speaker";
+      emit(run, { type: "done", text: "Done" });
+      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual([{ speakerName: "Updated speaker" }]));
+      expect(load).toHaveBeenCalledTimes(2);
+      emit(run, { type: "done", text: "Done" });
+      await Promise.resolve();
+      expect(load).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("marks the original meeting stale when its conversation finishes in the background", () => {
+    queryClient.setQueryData(["file-transcription", "meeting-1"], [{ speakerName: "Old" }]);
+    queryClient.setQueryData(["file-transcription", "meeting-2"], [{ speakerName: "Other" }]);
+    store.getState().sendMessage("Update meeting 1", "meeting-1", true);
+    const original = fake.runs[0]!;
+    store.getState().clearMessages();
+    store.getState().sendMessage("Read meeting 2", "meeting-2", true);
+
+    emit(original, { type: "done", text: "Done" });
+    expect(queryClient.getQueryState(["file-transcription", "meeting-1"])?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(["file-transcription", "meeting-2"])?.isInvalidated).toBe(false);
+  });
+
+  it.each(["error", "account-switch"])("does not refresh a stale or failed turn (%s)", (outcome) => {
+    queryClient.setQueryData(["file-transcription", "meeting-1"], [{ speakerName: "Current" }]);
+    store.getState().sendMessage("Update meeting 1", "meeting-1", true);
+    const run = fake.runs[0]!;
+    if (outcome === "account-switch") {
+      store.getState().switchUser("other-user");
+      emit(run, { type: "done", text: "Late completion" });
+    } else {
+      emit(run, { type: "error", message: "Failed" });
+    }
+    expect(queryClient.getQueryState(["file-transcription", "meeting-1"])?.isInvalidated).toBe(false);
   });
 });
 

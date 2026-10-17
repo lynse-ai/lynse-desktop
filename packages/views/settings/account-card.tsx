@@ -226,7 +226,7 @@ export function AccountCard() {
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex items-center gap-3">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary/25 via-primary/15 to-primary/5 text-sm font-semibold text-accent-brand-text ring-1 ring-inset ring-primary/25">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-avatar-brand/25 via-avatar-brand/15 to-avatar-brand/5 text-sm font-semibold text-avatar-brand-text ring-1 ring-inset ring-avatar-brand/25">
             {nickname.slice(0, 2).toUpperCase()}
           </div>
           <div className="min-w-0">

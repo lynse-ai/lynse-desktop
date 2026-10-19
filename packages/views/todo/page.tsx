@@ -13,6 +13,9 @@ import { useInspirationCaptureStore } from "../inspiration/capture-store";
 import { type TodoItem, addTodoToSystemCalendar, isCalendarAvailable, saveTodo } from "./todo-api";
 import { useTodos } from "./use-todos";
 import { TodoExportBar, TodoExportDialog, useTodoExportSelection } from "./export-action-items";
+import { useWorkbench } from "../workbench";
+import { useNavigation } from "../navigation";
+import { getWorkspaceState } from "../workspace/store";
 import { TitleBarSlot } from "../layout/app-title-bar";
 
 // ── Helpers ────────────────────────────────────────────────
@@ -288,6 +291,7 @@ export function TodoEditSheet({
   /** Called with the saved item after the sheet persists edits on close. */
   onSaved: (todo: TodoItem) => void;
 }) {
+  const sourceNavigation = useNavigation();
   const { t } = useTranslation();
   const [view, setView] = useState<"edit" | "calendar">("edit");
   const [title, setTitle] = useState(todo.title);
@@ -473,7 +477,14 @@ export function TodoEditSheet({
 
             {/* Source / owner */}
             {todo.sourceTitle && (
-              <p className="text-xs text-muted-foreground">
+              <button type="button" className="text-left text-xs text-muted-foreground underline-offset-4 hover:underline" onClick={() => {
+                if (todo.sourceRef) useWorkbench.getState().showSource(todo.sourceRef);
+                else if (todo.sourceFileId) {
+                  getWorkspaceState().selectItem(todo.sourceFileId, "meeting", todo.sourceTitle);
+                  sourceNavigation.push("/notes");
+                  handleClose();
+                }
+              }}>
                 {t("todo.source_from")}{todo.sourceTitle}
                 {todo.sourceMeetingTime && (
                   <span className="ml-2 tabular-nums text-muted-foreground/70">
@@ -481,7 +492,7 @@ export function TodoEditSheet({
                     {formatSourceTime(Number(todo.sourceMeetingTime))}
                   </span>
                 )}
-              </p>
+              </button>
             )}
             {todo.owner && <p className="text-xs text-muted-foreground">负责人：{todo.owner}</p>}
 

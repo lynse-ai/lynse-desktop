@@ -36,6 +36,7 @@ import {
   useVaultConfig,
 } from "../workspace/note-vault";
 import { isNoteUnread, markNoteSeen, useSeenMap } from "./seen";
+import { WorkbenchButton } from "../workbench";
 import { useEmitTranscriptionCompleted } from "../plugins/transcription-events";
 import { useAudioEditorStore } from "../audio-editor/store";
 import { useNavigation } from "../navigation";
@@ -777,6 +778,7 @@ export function NotesPage() {
             </span>
           </div>
           <div className="flex flex-col items-end gap-2" data-tauri-drag-region={false}>
+            <WorkbenchButton query={selectedFolderId?.startsWith("__") ? "" : currentFolderName} />
             {multiMode ? (
               <div className="flex items-center gap-2">
                 <input

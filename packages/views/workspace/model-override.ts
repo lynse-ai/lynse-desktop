@@ -87,6 +87,7 @@ export function saveChatModelSetting(setting: ChatModelSetting): void {
   try {
     if (setting.mode === "default") localStorage.removeItem(MODEL_OVERRIDE_STORAGE_KEY);
     else localStorage.setItem(MODEL_OVERRIDE_STORAGE_KEY, JSON.stringify(setting));
+    if (typeof window !== "undefined") window.dispatchEvent(new Event("lynse-chat-model-setting"));
   } catch {
     // Storage unavailable (quota/private mode): the setting just won't persist.
   }

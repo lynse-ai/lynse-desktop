@@ -56,6 +56,12 @@ pub async fn live_translation_pause() -> CommandResult<Value> {
 }
 
 #[tauri::command]
+pub fn live_translation_marker(kind: String, note: Option<String>, id: Option<String>, remove: Option<bool>) -> CommandResult<Value> {
+    let _ = (kind, note, id, remove);
+    unsupported()
+}
+
+#[tauri::command]
 pub async fn live_translation_resume(request: Value) -> CommandResult<Value> {
     let _ = request;
     unsupported()

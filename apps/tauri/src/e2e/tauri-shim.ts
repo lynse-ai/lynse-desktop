@@ -99,6 +99,7 @@ function defaultInvoke(cmd: string, args: Record<string, unknown>): unknown {
     }
     return null;
   }
+  if (cmd === "workbench_bind" || cmd === "workbench_status") return {scope:"synthetic-account",userId:"user-e2e",enabled:false,allowAi:false,initialComplete:false,phase:"disabled",updatedAt:"",error:"",discovered:0,synced:0,awaitingTranscription:0,failed:0,conflicts:0,entries:[],memories:[]};
   if (cmd === "get_app_info") return { version: "0.0.0-e2e", build: "1", platform: "macos" };
   if (cmd === "window_effects_mode") return "none";
   if (cmd === "live_translation_state") return IDLE_LIVE_SNAPSHOT;

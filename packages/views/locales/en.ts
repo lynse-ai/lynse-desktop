@@ -602,6 +602,7 @@ const en = {
     report_retake: "Retake",
     report_remove: "Remove",
     report_capture_failed: "Capture failed — please try again",
+    report_preview_failed: "Screenshot preview failed to load — click to retake",
     report_capture_missing: "No screenshot yet — click to capture one",
     report_footer_hint: "Your screenshot and recent app logs are attached automatically.",
     report_cancel: "Cancel",

@@ -505,7 +505,7 @@ mod tests {
             .json()
             .await
             .unwrap();
-        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 10);
+        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 13);
         assert!(tools["result"]["tools"]
             .as_array()
             .unwrap()

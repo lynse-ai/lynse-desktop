@@ -25,7 +25,12 @@ import {
 import { isLocalFileId } from "../workspace/local-transcription";
 import type { WorkspaceItem } from "../workspace/types";
 
+import type { SourceRef } from "../workbench/types";
+import { useWorkbench } from "../workbench/api";
+
 export interface TodoItem {
+  sourceRef?: SourceRef;
+  workbenchScope?: string;
   id: string;
   title: string;
   completed: boolean;
@@ -215,6 +220,8 @@ export function normalizeStored(raw: unknown): TodoItem {
     completed: t.completed === true || t.completed === 1,
     notes: t.notes ? String(t.notes) : undefined,
     dueDate: t.dueDate ? String(t.dueDate) : undefined,
+    sourceRef: t.sourceRef && typeof t.sourceRef === "object" ? t.sourceRef as SourceRef : undefined,
+    workbenchScope: typeof t.workbenchScope === "string" ? t.workbenchScope : undefined,
     sourceTitle: t.sourceTitle ? String(t.sourceTitle) : undefined,
     sourceFileId: t.sourceFileId ? String(t.sourceFileId) : undefined,
     sourceMeetingTime: t.sourceMeetingTime ? String(t.sourceMeetingTime) : undefined,
@@ -260,7 +267,8 @@ export async function fetchTodos(): Promise<{ items: TodoItem[]; cloudFailed: bo
   // (added when the user puts them on the system calendar) lives in
   // localStorage overrides and is merged back in here.
   const overrides = getOverrides();
-  const items = [...cloud, ...local].map((item) => {
+  const scope = useWorkbench.getState().status?.scope;
+  const items = [...cloud, ...local.filter((item) => !item.workbenchScope || item.workbenchScope === scope)].map((item) => {
     const override = overrides[item.id];
     return override ? { ...item, ...override } : item;
   });

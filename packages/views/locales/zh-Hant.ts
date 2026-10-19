@@ -600,6 +600,7 @@ const zhHant = {
     report_retake: "重拍",
     report_remove: "移除",
     report_capture_failed: "截圖失敗，請重試",
+    report_preview_failed: "截圖預覽載入失敗，點擊重新擷取",
     report_capture_missing: "暫無截圖，點擊重新擷取",
     report_footer_hint: "提交後會自動附上目前截圖與最近的應用日誌。",
     report_cancel: "取消",

@@ -9,7 +9,6 @@ import {
 import { Button } from "@lynse/ui/components/ui/button";
 import { Textarea } from "@lynse/ui/components/ui/textarea";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { toast } from "sonner";
 import { Camera, Check, Loader2, RefreshCw, X } from "./icons";
 import { initI18n } from "@lynse/core/i18n";
 import { getAppInfoSync } from "./app-update";
@@ -17,6 +16,7 @@ import {
   buildIssueUrl,
   getDesktopDiagnosticsApi,
   getReportChannel,
+  showScreenshotCaptureError,
   takePendingScreenshot,
   useReportProblemDialog,
   type LogTail,
@@ -88,6 +88,7 @@ function ReportProblemForm({
     variant === "window" ? null : takePendingScreenshot(),
   );
   const [capturing, setCapturing] = useState(false);
+  const [previewFailed, setPreviewFailed] = useState(false);
   const [logTail, setLogTail] = useState<LogTail | null>(null);
   const [phase, setPhase] = useState<Phase>("compose");
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -115,7 +116,9 @@ function ReportProblemForm({
       .then((shot) => {
         if (!cancelled) setScreenshot(shot);
       })
-      .catch(() => {});
+      .catch((error: unknown) => {
+        if (!cancelled) showScreenshotCaptureError(error);
+      });
     return () => {
       cancelled = true;
     };
@@ -146,14 +149,15 @@ function ReportProblemForm({
       // runs — give the compositor a beat to drop it.
       await new Promise((resolve) => setTimeout(resolve, variant === "dialog" ? 200 : 0));
       const shot = await api.captureScreenshot();
+      setPreviewFailed(false);
       setScreenshot(shot);
-    } catch {
-      toast.error(t("settings.report_capture_failed"));
+    } catch (error) {
+      showScreenshotCaptureError(error);
     } finally {
       setCapturing(false);
       onCapturingChange?.(false);
     }
-  }, [capturing, onCapturingChange, t, variant]);
+  }, [capturing, onCapturingChange, variant]);
 
   async function handleSubmit() {
     if (!description.trim() || phase === "submitting") return;
@@ -250,7 +254,10 @@ function ReportProblemForm({
                   size="sm"
                   variant="outline"
                   className="h-7 text-xs"
-                  onClick={() => setScreenshot(null)}
+                  onClick={() => {
+                    setScreenshot(null);
+                    setPreviewFailed(false);
+                  }}
                 >
                   <X className="size-3.5" />
                   {t("settings.report_remove")}
@@ -258,12 +265,13 @@ function ReportProblemForm({
               )}
             </div>
           </div>
-          {screenshot ? (
+          {screenshot && !previewFailed ? (
             <div className="overflow-hidden rounded-lg border bg-muted/30">
               <img
                 src={screenshot.url}
                 alt={t("settings.report_screenshot_label")}
                 decoding="async"
+                onError={() => setPreviewFailed(true)}
                 className="max-h-72 w-full object-contain"
               />
             </div>
@@ -275,7 +283,9 @@ function ReportProblemForm({
               className="flex aspect-video max-h-72 w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed text-muted-foreground transition-colors hover:bg-muted/30 disabled:opacity-60"
             >
               <Camera className="size-5" />
-              <span className="text-xs">{t("settings.report_capture_missing")}</span>
+              <span className="text-xs">
+                {previewFailed ? t("settings.report_preview_failed") : t("settings.report_capture_missing")}
+              </span>
             </button>
           )}
         </div>

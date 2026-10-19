@@ -11,6 +11,7 @@ public final class WavWriter {
     private let sampleRate: UInt32
     private let channels: UInt16
     private var closed = false
+    private var checkpointFrames: UInt64 = 0
     private let lock = NSLock()
 
     public init(path: String, sampleRate: UInt32, channels: UInt16) throws {
@@ -35,6 +36,7 @@ public final class WavWriter {
             }
             try? handle.write(contentsOf: samples.withUnsafeBytesData())
             sampleFrames += UInt64(samples.count / Int(channels))
+            checkpointIfNeeded()
         }
     }
 
@@ -46,30 +48,44 @@ public final class WavWriter {
             guard !closed, !samples.isEmpty else { return }
             try? handle.write(contentsOf: samples.withUnsafeBytesData())
             sampleFrames += UInt64(samples.count / Int(channels))
+            checkpointIfNeeded()
         }
+    }
+
+    /// Keep a valid, flushed header within two seconds of the audio payload.
+    private func checkpointIfNeeded() {
+        guard sampleFrames - checkpointFrames >= UInt64(sampleRate) * 2 else { return }
+        patchHeader()
+        try? handle.seekToEnd()
+        try? handle.synchronize()
+        checkpointFrames = sampleFrames
+    }
+
+    private func patchHeader() {
+        let dataBytes = UInt32(min(sampleFrames * UInt64(channels) * 2, UInt64(UInt32.max - 36)))
+        let byteRate = sampleRate * UInt32(channels) * 2
+        var header = Data()
+        header.append(Data("RIFF".utf8))
+        appendLittleEndian(UInt32(36) + dataBytes, to: &header)
+        header.append(Data("WAVEfmt ".utf8))
+        appendLittleEndian(UInt32(16), to: &header)
+        appendLittleEndian(UInt16(1), to: &header)  // PCM
+        appendLittleEndian(channels, to: &header)
+        appendLittleEndian(sampleRate, to: &header)
+        appendLittleEndian(byteRate, to: &header)
+        appendLittleEndian(UInt16(channels * 2), to: &header)  // block align
+        appendLittleEndian(UInt16(16), to: &header)
+        header.append(Data("data".utf8))
+        appendLittleEndian(dataBytes, to: &header)
+        try? handle.seek(toOffset: 0)
+        try? handle.write(contentsOf: header)
     }
 
     public func close() {
         lock.withLock {
             guard !closed else { return }
             closed = true
-            let dataBytes = UInt32(min(sampleFrames * UInt64(channels) * 2, UInt64(UInt32.max)))
-            let byteRate = sampleRate * UInt32(channels) * 2
-            var header = Data()
-            header.append(Data("RIFF".utf8))
-            appendLittleEndian(UInt32(36) + dataBytes, to: &header)
-            header.append(Data("WAVEfmt ".utf8))
-            appendLittleEndian(UInt32(16), to: &header)
-            appendLittleEndian(UInt16(1), to: &header)  // PCM
-            appendLittleEndian(channels, to: &header)
-            appendLittleEndian(sampleRate, to: &header)
-            appendLittleEndian(byteRate, to: &header)
-            appendLittleEndian(UInt16(channels * 2), to: &header)  // block align
-            appendLittleEndian(UInt16(16), to: &header)
-            header.append(Data("data".utf8))
-            appendLittleEndian(dataBytes, to: &header)
-            try? handle.seek(toOffset: 0)
-            try? handle.write(contentsOf: header)
+            patchHeader()
             try? handle.synchronize()
             try? handle.close()
         }

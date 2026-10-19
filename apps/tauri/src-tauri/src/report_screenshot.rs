@@ -2,7 +2,7 @@
 //!
 //! The report window is a separate webview, so the renderer cannot photograph
 //! the app itself — the capture runs here, on the window the user was just
-//! looking at. The PNG is staged through the same inspiration staging
+//! looking at. The JPEG is staged through the same inspiration staging
 //! pipeline as pasted screenshots, so previews (`local-media://`) and issue
 //! attachment both flow through one uniform path.
 
@@ -11,11 +11,10 @@ use serde_json::Value;
 use std::time::Duration;
 use tauri::AppHandle;
 
-/// Snapshot round-trip budget: one second to initiate plus up to six seconds
-/// for the webview to rasterize before we give up and surface the error.
+/// Snapshot budget, including the blocking Windows capture operation.
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(6);
 
-/// Capture the main window's content as a PNG and stage it, returning
+/// Capture the main window's content as a JPEG and stage it, returning
 /// `{path, url}` where `url` is a `local-media://` preview link. Always
 /// targets the `main` window — safe to call from the report window while it
 /// sits in front.
@@ -38,8 +37,13 @@ pub async fn report_capture_main_screenshot(app: AppHandle) -> CommandResult<Val
     }
     #[cfg(target_os = "windows")]
     {
-        let capture = capture_main_window_png(&app);
-        let _ = tx.send(capture);
+        let handle = app.clone();
+        // PrintWindow can block. Start the receiver's timeout independently
+        // so a stalled capture does not leave the report flow waiting forever.
+        tauri::async_runtime::spawn_blocking(move || {
+            let capture = capture_main_window_jpeg(&handle);
+            let _ = tx.send(capture);
+        });
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -93,7 +97,7 @@ fn jpeg_bytes_from_image(image: &objc2_app_kit::NSImage) -> CommandResult<Vec<u8
     Ok(jpeg.to_vec())
 }
 
-/// Kick off a `WKWebView.takeSnapshot` for the main window, delivering PNG
+/// Kick off a `WKWebView.takeSnapshot` for the main window, delivering JPEG
 /// bytes (or the error) through `tx` once the completion handler runs on the
 /// main runloop. Returns before the snapshot exists.
 #[cfg(target_os = "macos")]
@@ -162,11 +166,10 @@ fn find_wk_webview(view: &objc2_app_kit::NSView) -> Option<*mut objc2::runtime::
     None
 }
 
-/// Windows capture: `PrintWindow` with `PW_RENDERFULLCONTENT` asks WebView2 to
-/// composite its content into our memory DC — no ScreenCapture TCC involvement,
-/// and it works while the window is occluded. GDI hands us BGRA; PNG wants RGBA.
+/// Windows capture: `PrintWindow` with `PW_RENDERFULLCONTENT` renders the
+/// client area into a memory DC. GDI hands us BGRA pixels to encode as JPEG.
 #[cfg(target_os = "windows")]
-fn capture_main_window_png(app: &AppHandle) -> CommandResult<Vec<u8>> {
+fn capture_main_window_jpeg(app: &AppHandle) -> CommandResult<Vec<u8>> {
     use std::io::Cursor;
 
     use tauri::Manager;
@@ -205,7 +208,7 @@ fn capture_main_window_png(app: &AppHandle) -> CommandResult<Vec<u8>> {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
                 biWidth: width,
-                // Negative height = top-down rows, matching the PNG scanline order.
+                // Negative height = top-down rows, matching the encoder's row order.
                 biHeight: -height,
                 biPlanes: 1,
                 biBitCount: 32,
@@ -262,6 +265,6 @@ fn capture_main_window_png(app: &AppHandle) -> CommandResult<Vec<u8>> {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn capture_main_window_png(_app: &AppHandle) -> CommandResult<Vec<u8>> {
+fn capture_main_window_jpeg(_app: &AppHandle) -> CommandResult<Vec<u8>> {
     Err("screenshot capture is not supported on this platform".into())
 }

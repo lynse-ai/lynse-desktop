@@ -39,7 +39,8 @@
     "./connections": "./connections/index.ts",
     "./plugins": "./plugins/index.ts",
     "./i18n": "./i18n/index.ts",
-    "./locales": "./locales/index.ts"
+    "./locales": "./locales/index.ts",
+    "./workbench": "./workbench/index.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

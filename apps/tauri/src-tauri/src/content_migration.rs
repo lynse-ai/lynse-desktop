@@ -23,6 +23,8 @@ const CONTENT_KINDS: &[ContentKind] = &[
     ContentKind::Recordings,
     ContentKind::EditExports,
     ContentKind::Inspirations,
+    ContentKind::KnowledgeMeetings,
+    ContentKind::KnowledgeMemory,
 ];
 
 /// Directory children excluded when relocating a kind: `staging` is
@@ -30,7 +32,7 @@ const CONTENT_KINDS: &[ContentKind] = &[
 fn relocate_skip(kind: ContentKind) -> &'static [&'static str] {
     match kind {
         ContentKind::Inspirations => &["staging"],
-        ContentKind::Recordings | ContentKind::EditExports => &[],
+        ContentKind::Recordings | ContentKind::EditExports | ContentKind::KnowledgeMeetings | ContentKind::KnowledgeMemory => &[],
     }
 }
 
@@ -45,11 +47,24 @@ fn label(kind: ContentKind) -> &'static str {
         ContentKind::Inspirations => "inspirations",
         ContentKind::Recordings => "recordings",
         ContentKind::EditExports => "audio-editor exports",
+        ContentKind::KnowledgeMeetings => "knowledge-base meetings",
+        ContentKind::KnowledgeMemory => "knowledge-base memory",
     }
 }
 
 fn join_segments(base: &Path, segments: &[&str]) -> PathBuf {
     segments.iter().fold(base.to_path_buf(), |path, segment| path.join(segment))
+}
+
+fn content_dirs(kind:ContentKind,old_base:&Path,new_base:&Path,from:&VaultConfig,to:&VaultConfig)->CommandResult<(PathBuf,PathBuf)> {
+    if matches!(kind,ContentKind::KnowledgeMeetings|ContentKind::KnowledgeMemory) {
+        // Meeting text and derived memory stay in the chosen knowledge base,
+        // including when its switch is off. Only explicit folder changes move them.
+        let old=vault::vault_root(from).map(|root|join_segments(&root,kind.segments(true))).unwrap_or_else(|_|join_segments(old_base,kind.segments(false)));
+        let new=vault::vault_root(to).map(|root|join_segments(&root,kind.segments(true))).unwrap_or_else(|_|old.clone());
+        return Ok((old,new));
+    }
+    Ok((join_segments(old_base,kind.segments(from.enabled)),join_segments(new_base,kind.segments(to.enabled))))
 }
 
 /// Move every child of `from` into `to` (created on demand), merging with any
@@ -182,7 +197,7 @@ pub(crate) fn relocate_user_content(
 ) -> CommandResult<()> {
     let old_base = vault::content_base(app, from)?;
     let new_base = vault::content_base(app, to)?;
-    if old_base == new_base {
+    if old_base == new_base && from.path==to.path {
         return Ok(());
     }
     if app
@@ -195,8 +210,7 @@ pub(crate) fn relocate_user_content(
     let mut pairs: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     for kind in CONTENT_KINDS {
-        let from_dir = join_segments(&old_base, kind.segments(from.enabled));
-        let to_dir = join_segments(&new_base, kind.segments(to.enabled));
+        let (from_dir,to_dir)=content_dirs(*kind,&old_base,&new_base,from,to)?;
         if from_dir == to_dir {
             continue;
         }
@@ -341,4 +355,10 @@ mod tests {
         assert!(busy.exists());
         fs::remove_dir_all(&root).unwrap();
     }
+    #[test]
+    fn switching_off_the_vault_keeps_knowledge_text_in_its_selected_folder() {
+        let from=VaultConfig{enabled:true,path:Some("/chosen-vault".into())};let to=VaultConfig{enabled:false,..from.clone()};
+        for kind in [ContentKind::KnowledgeMeetings,ContentKind::KnowledgeMemory]{let(old,new)=content_dirs(kind,Path::new("/chosen-vault"),Path::new("/app-data"),&from,&to).unwrap();assert_eq!(old,new);assert!(new.starts_with("/chosen-vault"));let moved=VaultConfig{path:Some("/new-vault".into()),..to.clone()};let(_,destination)=content_dirs(kind,Path::new("/app-data"),Path::new("/app-data"),&to,&moved).unwrap();assert!(destination.starts_with("/new-vault"));}
+    }
+
 }

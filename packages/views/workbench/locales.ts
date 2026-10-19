@@ -1,0 +1,31 @@
+const en = {
+  keep_local: "Keep local version", use_cloud: "Use cloud version",
+  title: "Meeting memory", enable: "Build memory from my knowledge base", hint: "First download all meeting text to your local knowledge base. Audio downloads only when needed. New and updated meetings sync automatically.",
+  allow_ai: "Allow AI processing of eligible text", ai_hint: "Approved text is sent to your configured AI service. Generated memory stays on this device. Per-item exclusions still apply.",
+  sign_in: "Sign in to access your meeting memory.", open: "Open knowledge base & memory", sync: "Sync all meetings", clear: "Clear generated memory", clear_confirm: "Clear generated memory and turn off this feature? Your knowledge-base meeting documents will be kept.",
+  progress: "{{synced}} / {{total}} synced · {{waiting}} awaiting transcription · {{failed}} failed · {{conflicts}} conflicts",
+  disabled: "Off", pending: "Preparing", discovering: "Finding all meetings", syncing: "Downloading meeting text", ready: "Knowledge base ready", failed: "Sync needs attention", incomplete: "Sync incomplete",
+  search: "Search a project, topic or meeting", review: "Prepare meeting brief", reviewing: "Preparing your brief…", sync_first: "Finish the first full sync before generating a brief.", empty: "Your meetings will appear here after you enable meeting memory.",
+  no_results: "No matching local sources.", memories: "Recent conclusions", source: "View source", exclude: "Exclude from AI", include: "Include in AI", conflict: "This document was edited locally. The incoming cloud version was saved separately. Resolve the document before AI processing.",
+  summary: "Meeting summary", transcript: "Transcript", waiting: "Awaiting transcription", transcribe: "Transcribe locally", missing_model: "Install a local transcription model in Settings to continue. Audio will stay on this device.",
+  suggestions: "Suggested tasks", accept: "Add task", accept_all: "Add all tasks", accepted: "Added", no_suggestions: "No suggested tasks.", no_audio: "Audio has not been downloaded. Connect to play the cloud recording.",
+  observation: "Fact", proposal: "Proposal", decision: "Decision", unresolved: "Needs confirmation", edit: "Edit", save: "Save", pin: "Pin", unpin: "Unpin", forget: "Exclude", cancel: "Cancel", insufficient: "There is not enough source evidence for this topic.",
+  marker: "Recording markers", highlight: "Highlight", todo: "Task", marker_note: "Optional note", add_marker: "Add marker", remove: "Remove", after_meeting: "Review this meeting", enable_first: "Enable meeting memory in Settings → Sync to prepare this meeting.",
+  knowledge: "Local meeting documents", processing: "AI processing", retry: "Retry", memory_count: "{{count}} sourced conclusions", brief_hint: "Uses the local sources matching this topic. Conflicting statements remain unresolved.",
+};
+const zh: typeof en = {
+  keep_local: "保留本地版本", use_cloud: "采用云端版本",
+  title: "会议记忆", enable: "基于本地知识库建立记忆", hint: "开启后先将全部会议文本同步到本地知识库，音频按需下载。之后自动同步新增与修改的会议。",
+  allow_ai: "允许 AI 处理已授权文本", ai_hint: "允许参与的文本会发送到已配置的 AI 服务，生成的记忆保存在本机。单条资料的 AI 排除设置始终有效。",
+  sign_in: "登录后可使用当前账号的会议记忆。", open: "打开知识库与记忆", sync: "同步全部会议", clear: "清空生成的记忆", clear_confirm: "清空生成的记忆并关闭功能？本地知识库中的会议原文会保留。",
+  progress: "已同步 {{synced}} / {{total}} · 待转写 {{waiting}} · 失败 {{failed}} · 冲突 {{conflicts}}",
+  disabled: "未开启", pending: "准备中", discovering: "正在查找全部会议", syncing: "正在下载会议文本", ready: "知识库已就绪", failed: "同步需要处理", incomplete: "同步未完成",
+  search: "搜索项目、主题或会议", review: "准备会前回顾", reviewing: "正在整理会前回顾…", sync_first: "首次全量同步完成后才能生成会前回顾。", empty: "开启会议记忆后，全部会议会同步到这里。",
+  no_results: "没有找到相关的本地资料。", memories: "近期结论", source: "查看来源", exclude: "排除 AI 使用", include: "允许 AI 使用", conflict: "此文档在本地修改过，云端新版本已单独保存。处理文档冲突后才能参与 AI 归纳。",
+  summary: "会议纪要", transcript: "转写原文", waiting: "待转写", transcribe: "本地转写", missing_model: "请先在设置中安装本地转写模型。音频会保留在本机。",
+  suggestions: "建议待办", accept: "加入待办", accept_all: "全部加入待办", accepted: "已加入", no_suggestions: "暂无建议待办。", no_audio: "音频尚未下载，联网后可播放云端录音。",
+  observation: "事实", proposal: "提议", decision: "决定", unresolved: "待确认", edit: "纠正", save: "保存", pin: "固定", unpin: "取消固定", forget: "排除", cancel: "取消", insufficient: "当前主题的来源证据不足。",
+  marker: "录音标记", highlight: "重点", todo: "待办", marker_note: "可选备注", add_marker: "添加标记", remove: "删除", after_meeting: "整理这场会议", enable_first: "在设置 → 同步中开启会议记忆后，可整理这场会议。",
+  knowledge: "本地会议资料", processing: "AI 正在处理", retry: "重试", memory_count: "{{count}} 条有来源的结论", brief_hint: "基于本地相关资料整理，矛盾信息保留为待确认事项。",
+};
+export const workbenchLocales = { en, "zh-Hans": zh, "zh-Hant": zh, ja: en, ko: en };

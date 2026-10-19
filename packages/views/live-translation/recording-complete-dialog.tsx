@@ -1,5 +1,8 @@
 "use client";
 
+import { getDesktopLiveTranslationApi } from "./desktop-api";
+import { toast } from "sonner";
+
 import { useRef, useEffect, useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
@@ -34,6 +37,7 @@ interface RecordingCompleteDialogProps {
   /** Called when the dialog should close (user dismisses or acts). */
   readonly onOpenChange: (open: boolean) => void;
   /** Called when the user confirms "保存到云" (checkbox checked + 保存). */
+  readonly onSavedLocal?: (session: CompletedLiveSession) => void;
   readonly onSave?: (session: CompletedLiveSession) => void;
   /** Called when the user taps "取消" — cancel the save and delete the
    *  cached recording. */
@@ -114,6 +118,7 @@ export function RecordingCompleteDialog({
   completedSession,
   open,
   onOpenChange,
+  onSavedLocal,
   onSave,
   onDiscard,
   onRememberChoiceChange,
@@ -140,8 +145,19 @@ export function RecordingCompleteDialog({
 
   function handlePrimary() {
     if (remember) saveRememberPref({ remember: true, saveToCloud });
-    if (saveToCloud) onSave?.(session);
-    onOpenChange(false);
+    const desktopApi = getDesktopLiveTranslationApi();
+    if (!desktopApi) {
+      onSavedLocal?.(session);
+      if (saveToCloud) onSave?.(session);
+      onOpenChange(false);
+      return;
+    }
+    void desktopApi.finalizeLocal(session.sessionId, false).then(() => {
+      onSavedLocal?.(session);
+      if (saveToCloud) onSave?.(session);
+      onOpenChange(false);
+    }).catch((error: unknown) => toast.error(String(error)));
+    return;
   }
 
   // 取消 = cancel the save: hand the session to onDiscard, which deletes

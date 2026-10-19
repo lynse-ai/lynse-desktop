@@ -31,6 +31,7 @@ import {
   localRecordToTranscription,
   mergeCloudAndLocalFiles,
 } from "../local-transcription";
+import { getWorkbenchApi } from "../../workbench/api";
 import { removeNotesFromVault } from "../note-vault";
 import { transcribeWithCreditsToast } from "../transcription-credits";
 
@@ -711,6 +712,8 @@ export function useDeleteWorkspaceFiles() {
         // side no-ops while the vault is disabled.
         void removeNotesFromVault(cloudIds);
       }
+      const workbench = getWorkbenchApi();
+      if (workbench) await Promise.all(fileIds.map((id) => workbench.removeSource(id)));
       return { deleted: fileIds.length };
     },
     onSuccess: () => {

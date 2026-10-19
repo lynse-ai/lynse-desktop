@@ -1,3 +1,4 @@
+import { WorkbenchSupervisor, WorkbenchDialog } from "@lynse/views/workbench";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CoreProvider } from "@lynse/core/platform";
 import { ThemeProvider } from "@lynse/ui/components/common/theme-provider";
@@ -225,6 +226,8 @@ function AppContent() {
           and this supervisor is what stops the bots and aborts in-flight
           answers. */}
       <BotAuthSupervisor />
+      <WorkbenchSupervisor />
+      <WorkbenchDialog />
       <ContextInboxNotifier />
       <AppShell />
     </DesktopNavigationProvider>

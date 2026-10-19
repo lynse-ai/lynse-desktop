@@ -27,6 +27,9 @@ import { useRecordingCloudSync } from "./use-recording-cloud-sync";
 import { useRecordingCompleteStore } from "./recording-complete-store";
 import { RecordingWaveform } from "./recording-waveform";
 import { SmoothTimer } from "./smooth-timer";
+import { RecordingMarkers } from "../workbench/recording-markers";
+import { WorkbenchButton } from "../workbench";
+import { getWorkbenchApi } from "../workbench/api";
 import { RecordingDock } from "./recording-dock";
 import { RecordingCompleteDialog } from "./recording-complete-dialog";
 import { getDesktopLiveTranslationApi } from "./desktop-api";
@@ -111,6 +114,7 @@ export function TranscriptDetailPage() {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const session = useRecordingSession();
+  const [savedMeetingId, setSavedMeetingId] = useState<string | null>(null);
   const { syncCompletedSession } = useRecordingCloudSync();
   const reduceMotion = useReducedMotion();
   // Sessions stopped outside this page (float dock / tray / island) hand
@@ -211,7 +215,7 @@ export function TranscriptDetailPage() {
           className="flex h-12 shrink-0 items-center justify-between gap-3 border-b border-border px-5 select-none"
           data-tauri-drag-region
         >
-          <div className="min-w-0" />
+          <div className="min-w-0">{!recording && savedMeetingId && <WorkbenchButton id={savedMeetingId} />}</div>
 
           <div className="flex shrink-0 items-center gap-2">
             {/* live mode controls — captions-exit toggle + translation switch
@@ -349,7 +353,7 @@ export function TranscriptDetailPage() {
                     onStart={() => void session.toggleRecording()}
                     onTogglePause={() => void session.togglePause()}
                     onStop={() => void session.toggleRecording()}
-                    onToggleBookmark={() => session.setBookmarked(!session.bookmarked)}
+                    onToggleBookmark={() => void getDesktopLiveTranslationApi()?.marker?.("highlight").catch((error: unknown) => toast.error(String(error)))}
                     onHide={() => void getDesktopLiveTranslationApi()?.hideMainWindow()}
                   />
                 </div>
@@ -371,6 +375,7 @@ export function TranscriptDetailPage() {
                   busy={busy}
                   stopping={stopping}
                   elapsedMs={session.elapsedMs}
+                  markers={session.markers.map((marker) => marker.startMs / 1000)}
                   micLevel={session.micLevel}
                   statusLabel={stageStatus}
                   onStart={() => void session.toggleRecording()}
@@ -387,9 +392,15 @@ export function TranscriptDetailPage() {
           </AnimatePresence>
         </main>
 
+        {recording && <RecordingMarkers markers={session.markers} />}
         {/* ═══ Completion dialog ═══ */}
         <RecordingCompleteDialog
           completedSession={pendingComplete}
+          onSavedLocal={(completed) => {
+            setSavedMeetingId(completed.recordId);
+            void getWorkbenchApi()?.sync(false).catch(() => undefined);
+
+          }}
           open={!recording && !!pendingComplete}
           onOpenChange={(open) => {
             if (!open) clearPendingComplete();
@@ -528,6 +539,7 @@ function RecordingStage({
   busy,
   stopping,
   elapsedMs,
+  markers,
   micLevel,
   statusLabel,
   onStart,
@@ -544,6 +556,7 @@ function RecordingStage({
   busy: boolean;
   stopping: boolean;
   elapsedMs: number;
+  markers: number[];
   micLevel: number;
   statusLabel: string;
   onStart: () => void;
@@ -558,16 +571,10 @@ function RecordingStage({
   onToggleEnhance: () => void;
   t: (key: string) => string;
 }) {
-  const [markers, setMarkers] = useState<number[]>([]);
   const reduceMotion = useReducedMotion();
 
-  // Markers belong to the running session; clear them once it stops.
-  useEffect(() => {
-    if (!recording) setMarkers([]);
-  }, [recording]);
-
   const addMarker = () => {
-    setMarkers((prev) => [...prev, Math.max(0, elapsedMs) / 1000]);
+    void getDesktopLiveTranslationApi()?.marker?.("highlight").catch((error: unknown) => toast.error(String(error)));
   };
 
   // Landing choreography: the stage settles in as three staggered layers —

@@ -21,6 +21,7 @@ import { getDesktopLocalTranscriptionApi } from "../workspace/local-transcriptio
 import { UploadDialog } from "../workspace/upload-dialog";
 import { useUserCredits } from "../layout/use-user-credits";
 import { useTodos } from "../todo/use-todos";
+import { WorkbenchHomeCard } from "../workbench";
 import { useQuickRecording } from "../live-translation/quick-recording";
 import type { TodoItem } from "../todo/todo-api";
 import type { WorkspaceItem } from "../workspace/types";
@@ -412,6 +413,7 @@ export function HomePage() {
         )}
       </section>
 
+      <WorkbenchHomeCard />
       {/* ── Footer: view-all link ──────────────────────── */}
       <footer className="mt-auto flex justify-center pb-20 pt-6">
         <button

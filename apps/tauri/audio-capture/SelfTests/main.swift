@@ -8,6 +8,25 @@ private func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
     }
 }
 
+private func testWavCheckpointBeforeClose() {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
+    defer { try? FileManager.default.removeItem(at: path) }
+    do {
+        let writer = try WavWriter(path: path.path, sampleRate: 16_000, channels: 1)
+        writer.write(samples: [Int16](repeating: 7, count: 32_000), firstFrameElapsedMs: 0)
+        let bytes = try Data(contentsOf: path)
+        expect(String(data: bytes.prefix(4), encoding: .utf8) == "RIFF", "a running recording has a recoverable WAV header")
+        let dataBytes = bytes.subdata(in: 40..<44).enumerated().reduce(UInt32(0)) { $0 | UInt32($1.element) << ($1.offset * 8) }
+        expect(dataBytes == 64_000, "two-second checkpoint includes the audio payload")
+        writer.writeContiguous(samples: [Int16](repeating: 9, count: 320))
+        writer.close()
+        let finalBytes = try Data(contentsOf: path)
+        expect(finalBytes.count == 44 + 64_000 + 640, "checkpoint preserves the append position")
+    } catch {
+        expect(false, "WAV checkpoint failed: \(error)")
+    }
+}
+
 /// The flush tail must be appended contiguously. Callers used to pass
 /// `UInt64.max` as a "keep going" timestamp, and the gap arithmetic trapped
 /// converting it to `Int` — which killed every single-microphone session at
@@ -418,6 +437,7 @@ private func testRestartHandsOverTheTimelineBase() {
 
 runDelayProbe()
 testContiguousTailNeverTraps()
+testWavCheckpointBeforeClose()
 testTimelineNeverRunsBehindItsPinnedAnchor()
 testArbitraryBuffersBecomeExactFrames()
 testCaptureGapIsSilent()

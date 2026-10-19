@@ -157,6 +157,8 @@ mod protocols;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartRequest {
+    #[serde(default)]
+    automatic: bool,
     session_id: String,
     title: String,
     source_language: String,
@@ -272,6 +274,7 @@ pub struct LiveSegment {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LiveSnapshot {
+    markers: Vec<RecordingMarker>,
     state: String,
     session_id: Option<String>,
     epoch: u32,
@@ -284,9 +287,62 @@ pub struct LiveSnapshot {
     segments: Vec<LiveSegment>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingMarker {
+    id: String,
+    kind: String,
+    note: String,
+    start_ms: u64,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    source_ref: Option<crate::workbench::SourceRef>,
+}
+
+#[tauri::command]
+pub fn live_translation_marker(
+    app: AppHandle,
+    state: State<LiveTranslationManager>,
+    kind: String,
+    note: Option<String>,
+    id: Option<String>,
+    remove: Option<bool>,
+) -> CommandResult<LiveSnapshot> {
+    if !matches!(kind.as_str(), "highlight" | "decision" | "todo") {
+        return Err("Unknown marker type".into());
+    }
+    let note = note.unwrap_or_default();
+    if note.chars().count() > 2000 { return Err("Marker note is too long".into()); }
+    let session = state.session.lock().map_err(|_| "Session unavailable")?
+        .clone().ok_or("No active recording")?;
+    {
+        let mut markers = session.markers.lock().map_err(|_| "Markers unavailable")?;
+        let mut next = markers.clone();
+        if remove.unwrap_or(false) {
+            let id = id.ok_or("Marker ID is required")?;
+            next.retain(|marker| marker.id != id);
+        } else if let Some(id) = id {
+            let marker = next.iter_mut().find(|marker| marker.id == id).ok_or("Marker not found")?;
+            marker.kind = kind; marker.note = note.clone();
+            if let Some(source)=&mut marker.source_ref{source.quote=note;}
+        } else {
+            let start_ms=session.last_elapsed_ms.load(Ordering::Relaxed);
+            next.push(RecordingMarker { id: uuid::Uuid::new_v4().to_string(), kind, note:note.clone(),
+                start_ms,
+                source_ref:Some(crate::workbench::SourceRef{kind:"meeting".into(),id:format!("local:live:{}",session.session_id),revision:format!("recording:{}",session.session_id),start_ms:Some(start_ms),quote:note,..Default::default()}) });
+        }
+        crate::atomic_write(&session.directory.join("markers.json"),
+            &serde_json::to_vec_pretty(&next).map_err(|error| error.to_string())?)?;
+        *markers = next;
+    }
+    let snapshot = session.snapshot();
+    let _ = app.emit(LIVE_EVENT, json!({ "type": "state", "snapshot": snapshot }));
+    Ok(snapshot)
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompletedSession {
+    markers: Vec<RecordingMarker>,
     session_id: String,
     record_id: String,
     /// RFC3339 recording start time; the cloud-sync upload sends it along
@@ -311,6 +367,8 @@ pub struct CompletedSession {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RecoveryManifest {
+    #[serde(default)]
+    automatic: bool,
     session_id: String,
     title: String,
     source_language: String,
@@ -361,6 +419,8 @@ impl LiveTranslationManager {
 }
 
 struct LiveSession {
+    markers: Mutex<Vec<RecordingMarker>>,
+    automatic: bool,
     session_id: String,
     title: String,
     /// Mutable so a running session can switch between pure recording and
@@ -424,6 +484,7 @@ impl LiveSession {
 
     fn snapshot(&self) -> LiveSnapshot {
         LiveSnapshot {
+            markers: self.markers.lock().expect("recording markers lock").clone(),
             state: self.state.lock().expect("live state lock").clone(),
             session_id: Some(self.session_id.clone()),
             epoch: self.epoch.load(Ordering::Relaxed),
@@ -440,6 +501,7 @@ impl LiveSession {
 
 fn idle_snapshot() -> LiveSnapshot {
     LiveSnapshot {
+        markers: Vec::new(),
         state: "idle".to_owned(),
         session_id: None,
         epoch: 0,
@@ -850,6 +912,8 @@ pub async fn live_translation_start(
     };
 
     let session = Arc::new(LiveSession {
+        markers: Mutex::new(Vec::new()),
+        automatic: request.automatic,
         session_id: request.session_id.clone(),
         title: request.title.trim().to_owned(),
         source_language: RwLock::new(request.source_language.clone()),
@@ -889,6 +953,7 @@ pub async fn live_translation_start(
         },
     });
     let manifest = RecoveryManifest {
+        automatic: request.automatic,
         session_id: session.session_id.clone(),
         title: session.title.clone(),
         source_language: session.source_language.read().expect("live source language").clone(),
@@ -2253,7 +2318,7 @@ fn silence_expired(state: &str, silent_for: Duration) -> bool {
 }
 
 fn spawn_silence_watchdog(app: AppHandle, session: Arc<LiveSession>) {
-    if !session.wants_mic {
+    if !session.wants_mic || !session.automatic {
         return;
     }
     tauri::async_runtime::spawn(async move {
@@ -2704,12 +2769,16 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
             "targetLanguage": target_language,
             "liveSessionId": session.session_id,
             "syncStatus": "pending",
+            "saved": false,
             "segments": local_segments,
+            "markers": session.markers.lock().expect("recording markers lock").clone(),
+            "workbenchScope": crate::workbench::current_scope(app),
             "trackManifest": tracks_value.clone().unwrap_or(Value::Null),
         }),
     )?;
 
     Ok(CompletedSession {
+        markers: session.markers.lock().expect("recording markers lock").clone(),
         session_id: session.session_id.clone(),
         record_id: record_id.clone(),
         started_at: session.started_at.clone(),
@@ -3004,6 +3073,7 @@ pub fn live_translation_finalize_local(
         json!(if synced { "synced" } else { "pending" }),
     );
     patch.insert("updatedAt".to_owned(), json!(now()));
+    patch.insert("saved".to_owned(), json!(true));
     update_store_value(&app, "local-transcriptions", &record_id, patch)?
         .ok_or("live translation record not found")?;
     if synced {
@@ -3346,7 +3416,14 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
     // track files the sidecar managed to write.
     let dual_channel = directory.join("mic_processed.wav").exists()
         || directory.join("mic_raw.wav").exists();
+    let markers = match fs::read(directory.join("markers.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| "Recovery markers are unreadable; files preserved")?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => return Err(error.to_string()),
+    };
     let session = LiveSession {
+        markers: Mutex::new(markers),
+        automatic: manifest.automatic,
         session_id: manifest.session_id,
         title: manifest.title,
         source_language: RwLock::new(manifest.source_language),
@@ -4107,6 +4184,8 @@ mod tests {
 
     fn live_session() -> LiveSession {
         LiveSession {
+            markers: Mutex::new(Vec::new()),
+            automatic: false,
             session_id: "session".to_owned(),
             title: "test".to_owned(),
             source_language: RwLock::new("zh".to_owned()),

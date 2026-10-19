@@ -94,7 +94,7 @@ pub fn load_vault_config(app: &AppHandle) -> CommandResult<VaultConfig> {
 
 /// The user-facing vault folder. `~` is expanded so a hand-edited config still
 /// resolves.
-fn vault_root(config: &VaultConfig) -> CommandResult<PathBuf> {
+pub(crate) fn vault_root(config: &VaultConfig) -> CommandResult<PathBuf> {
     let raw = config
         .path
         .as_deref()
@@ -143,6 +143,8 @@ pub(crate) enum ContentKind {
     Recordings,
     /// Audio-editor exports, registered as local transcription records.
     EditExports,
+    KnowledgeMeetings,
+    KnowledgeMemory,
 }
 
 impl ContentKind {
@@ -157,6 +159,10 @@ impl ContentKind {
             (Self::Recordings, true) => &["Recordings"],
             (Self::EditExports, false) => &["audio-edits"],
             (Self::EditExports, true) => &["Transcriptions"],
+            (Self::KnowledgeMeetings, false) => &["knowledge-base", "Meetings"],
+            (Self::KnowledgeMeetings, true) => &["Meetings"],
+            (Self::KnowledgeMemory, false) => &["knowledge-base", "Memory"],
+            (Self::KnowledgeMemory, true) => &["Memory"],
         }
     }
 }
@@ -307,6 +313,15 @@ fn resolve_file_name(root: &Path, note: &VaultNote, index: &VaultIndex) -> Strin
 }
 
 fn write_note_with_index(root: &Path, note: &VaultNote, index: &mut VaultIndex) -> CommandResult<()> {
+    if let Some(name)=index.file_name_for(&note.file_id) {
+        let existing=root.join(name);
+        if existing.exists(){let bytes=fs::read(&existing).map_err(|error|error.to_string())?;
+            if index.stored_hash_for(&note.file_id).is_some_and(|hash|hash!=format!("{:x}",Sha256::digest(&bytes))) && bytes!=note.markdown.as_bytes(){
+                crate::atomic_write(&existing.with_extension("incoming.md"),note.markdown.as_bytes())?;
+                return Err("Local document was edited; preserved it and saved the incoming update separately".into());
+            }
+        }
+    }
     let file_name = resolve_file_name(root, note, index);
     let target = root.join(&file_name);
     let temporary = target.with_extension("md.tmp");
@@ -315,6 +330,19 @@ fn write_note_with_index(root: &Path, note: &VaultNote, index: &mut VaultIndex) 
     let hash = format!("{:x}", Sha256::digest(note.markdown.as_bytes()));
     index.upsert(&note.file_id, &file_name, &note.title, &hash, &root.to_string_lossy());
     Ok(())
+}
+
+/// Adopt only modified legacy exports; unchanged exports are regenerated
+/// from the complete source and all existing files remain in place.
+pub(crate) fn modified_legacy_note(app:&AppHandle,id:&str)->CommandResult<Option<String>> {
+    let Some(root)=vault_user_dir(app)? else{return Ok(None);};
+    let index=VaultIndex::load(app)?;
+    let Some(name)=index.file_name_for(id)else{return Ok(None);};
+    if Path::new(name).file_name().and_then(|name|name.to_str())!=Some(name){return Err("Invalid legacy vault filename".into());}
+    match fs::read(root.join(name)) {
+        Ok(bytes)=>if index.stored_hash_for(id).is_some_and(|hash|hash!=format!("{:x}",Sha256::digest(&bytes))){String::from_utf8(bytes).map(Some).map_err(|_|"Legacy document is not UTF-8".into())}else{Ok(None)},
+        Err(error) if error.kind()==std::io::ErrorKind::NotFound=>Ok(None),Err(error)=>Err(error.to_string()),
+    }
 }
 
 fn write_note_impl(app: &AppHandle, note: &VaultNote) -> CommandResult<()> {
@@ -873,4 +901,14 @@ mod tests {
         let todo = json!({ "id": "todo:xyz-1", "title": "   " });
         assert!(build_task_entry(&todo).is_none());
     }
+    #[test]
+    fn legacy_export_preserves_hand_edits_even_when_the_meeting_is_renamed() {
+        let root=std::env::temp_dir().join(format!("lynse-legacy-edit-{}",uuid::Uuid::new_v4()));fs::create_dir_all(&root).unwrap();
+        let mut index=VaultIndex{entries:vec![],positions:HashMap::new()};
+        let mut note=VaultNote{file_id:"one".into(),title:"Original".into(),markdown:"Original text".into()};
+        write_note_with_index(&root,&note,&mut index).unwrap();let path=root.join(index.file_name_for("one").unwrap());
+        fs::write(&path,"Hand-edited text").unwrap();note.title="Renamed".into();note.markdown="Cloud update".into();
+        assert!(write_note_with_index(&root,&note,&mut index).is_err());assert_eq!(fs::read_to_string(&path).unwrap(),"Hand-edited text");assert_eq!(fs::read_to_string(path.with_extension("incoming.md")).unwrap(),"Cloud update");fs::remove_dir_all(root).unwrap();
+    }
+
 }

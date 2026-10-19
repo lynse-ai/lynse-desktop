@@ -40,6 +40,7 @@ import { SttSettingsSection } from "./stt-settings-section";
 import { LiveTranslationConfigCard } from "./live-translation-config-card";
 import { RecordingDevicesCard } from "./recording-devices-card";
 import { AutoRecordConfigCard } from "./auto-record-config-card";
+import { WorkbenchSettingsCard } from "../workbench";
 import { VaultConfigCard } from "./vault-config-card";
 import { WebdavSyncConfigCard } from "./webdav-sync-config-card";
 import { AgentServerCard } from "./agent-server-card";
@@ -186,6 +187,7 @@ export function SettingsDialog({
       content: (
         <>
           <VaultConfigCard />
+          <WorkbenchSettingsCard />
           <WebdavSyncConfigCard />
         </>
       ),

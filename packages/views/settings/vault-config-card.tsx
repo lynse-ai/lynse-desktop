@@ -10,6 +10,7 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
 import { FolderOpen, Loader2 } from "../icons";
 import { useNotes } from "../workspace/hooks/use-files";
+import { getWorkbenchApi, useWorkbench, refreshWorkbench } from "../workbench/api";
 import {
   getDesktopVaultApi,
   getVaultLastSync,
@@ -54,12 +55,22 @@ export function VaultConfigCard() {
 
   async function persist(next: VaultConfig) {
     if (!vaultApi) return;
+    const workbench = getWorkbenchApi();
+    const memory = useWorkbench.getState().status;
     setSaving(true);
     try {
+      if (memory?.enabled) await workbench?.configure(false, memory.allowAi);
       const saved = await vaultApi.saveConfig(next);
       qc.setQueryData(VAULT_CONFIG_QUERY_KEY, saved);
       setPath(saved.path ?? null);
+      if (memory?.enabled && saved.enabled) {
+        await workbench?.configure(true, memory.allowAi);
+        await refreshWorkbench();
+      }
     } catch (error) {
+      if (memory?.enabled && config?.enabled) {
+        await workbench?.configure(true, memory.allowAi).then(refreshWorkbench).catch(() => undefined);
+      }
       toast.error(
         t("vault.config_save_failed", { error: error instanceof Error ? error.message : "" }),
       );

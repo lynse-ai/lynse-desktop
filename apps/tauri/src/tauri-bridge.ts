@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+import type { DesktopWorkbenchApi } from "@lynse/views/workbench";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl, openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -110,6 +111,8 @@ type DesktopApi = {
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
   cloudSync: DesktopCloudSyncApi;
   liveTranslation: DesktopLiveTranslationApi;
+  workbench: DesktopWorkbenchApi;
+  memory: DesktopWorkbenchApi;
   meetingDetector: DesktopMeetingDetectorApi;
   vault: DesktopVaultApi;
   todo: Record<string, (...args: any[]) => Promise<unknown>>;
@@ -137,8 +140,7 @@ type DesktopApi = {
     // Opens (or focuses) the standalone problem-report window (macOS; other
     // platforms use the in-app dialog).
     openReportWindow: (title?: string) => Promise<void>;
-    // Capture the main window's content as PNG, staged like pasted images:
-    // `{path, url}` where url is a local-media:// preview link.
+    // Capture the main window as JPEG, with a platform-compatible preview URL.
     captureScreenshot: () => Promise<{ path: string; url: string }>;
     // File the report through the CloudBase cnb-report function (which owns
     // the CNB token server-side); returns the created issue number.
@@ -333,7 +335,29 @@ export async function installTauriBridge(): Promise<void> {
     },
   );
 
+  const workbenchApi: DesktopWorkbenchApi = {
+    bind: (request) => command("workbench_bind", { request }),
+    unbind: () => command("workbench_unbind"),
+    status: () => command("workbench_status"),
+    configure: (enabled, allowAi) => command("workbench_configure", { enabled, allowAi }),
+    sync: (retryFailed) => command("workbench_sync", { retryFailed }),
+    search: (query, aiOnly) => command("workbench_search", { query, aiOnly }),
+    read: (id) => command("workbench_read", { id }),
+    review: (query) => command("workbench_review", { query }),
+    exclude: (id, excluded) => command("workbench_exclude", { id, excluded }),
+    editMemory: (id, text, pinned, excluded) => command("workbench_memory_edit", { id, text, pinned, excluded }),
+    clear: () => command("workbench_clear"),
+    confirmTodos: (id, suggestions) => command("workbench_confirm_todos", { id, suggestions }),
+    context: (query) => command("workbench_context", { query }),
+    saveSummary: (id, summaryId, markdown) => command("workbench_summary_save", { id, summaryId, markdown }),
+    regenerate: (id) => command("workbench_regenerate", { id }),
+    removeSource: (id) => command("workbench_remove_source", { id }),
+    resolveConflict: (id, keepLocal) => command("workbench_resolve_conflict", { id, keepLocal }),
+    onUpdate: async (callback) => getCurrentWebview().listen("workbench-updated", (event) => callback(event.payload as Parameters<typeof callback>[0])),
+  };
   const desktopAPI: DesktopApi = {
+    workbench: workbenchApi,
+    memory: workbenchApi,
     mcp: desktopMcpApi,
     openExternal: async (url) => {
       await openUrl(url);
@@ -424,6 +448,7 @@ export async function installTauriBridge(): Promise<void> {
       pause: () => command<LiveTranslationSnapshot>("live_translation_pause"),
       resume: (request: LiveResumeRequest) => command<LiveTranslationSnapshot>("live_translation_resume", { request }),
       setMode: (request: LiveSetModeRequest) => command<LiveTranslationSnapshot>("live_translation_set_mode", { request }),
+      marker: (kind, note, id, remove) => command<LiveTranslationSnapshot>("live_translation_marker", { kind, note, id, remove }),
       stop: () => command<void>("live_translation_stop"),
       getState: () => command<LiveTranslationSnapshot>("live_translation_state"),
       finalizeLocal: (sessionId, synced) => command<void>("live_translation_finalize_local", { sessionId, synced }),
@@ -491,8 +516,18 @@ export async function installTauriBridge(): Promise<void> {
         command<void>("open_feedback_window", { title: title ?? null }),
       openReportWindow: (title?: string) =>
         command<void>("open_report_window", { title: title ?? null }),
-      captureScreenshot: () =>
-        command<{ path: string; url: string }>("report_capture_main_screenshot"),
+      captureScreenshot: async () => {
+        const screenshot = await command<{ path: string; url: string }>("report_capture_main_screenshot");
+        const prefix = "local-media://localhost/";
+        // WebView2 serves custom protocols through http(s)://<scheme>.localhost.
+        // Convert the decoded asset ID, not the on-disk path or an encoded URL.
+        return {
+          ...screenshot,
+          url: screenshot.url.startsWith(prefix)
+            ? convertFileSrc(decodeURIComponent(screenshot.url.slice(prefix.length)), "local-media")
+            : screenshot.url,
+        };
+      },
       submitCnbIssue: (req: {
         endpoint: string;
         title: string;

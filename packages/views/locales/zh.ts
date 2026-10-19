@@ -600,6 +600,7 @@ const zh = {
     report_retake: "重拍",
     report_remove: "移除",
     report_capture_failed: "截图失败，请重试",
+    report_preview_failed: "截图预览加载失败，点击重新截取",
     report_capture_missing: "暂无截图，点击重新截取",
     report_footer_hint: "提交后会自动附上当前截图与最近的应用日志。",
     report_cancel: "取消",

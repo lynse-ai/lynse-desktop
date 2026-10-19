@@ -605,6 +605,7 @@ const ja = {
     report_retake: "撮り直す",
     report_remove: "削除",
     report_capture_failed: "キャプチャに失敗しました。もう一度お試しください",
+    report_preview_failed: "スクリーンショットの読み込みに失敗しました — クリックして撮り直す",
     report_capture_missing: "スクリーンショットがありません — クリックして撮影",
     report_footer_hint: "送信すると、現在のスクリーンショットと最近のアプリログが自動的に添付されます。",
     report_cancel: "キャンセル",

@@ -65,6 +65,7 @@ mod tencent_asr;
 mod webdav;
 mod workbuddy;
 mod storage;
+mod workbench;
 mod content_migration;
 mod window_effects;
 // Client-direct OSS upload for the recording cloud-sync chain.
@@ -269,16 +270,25 @@ pub(crate) fn get_store_value(app: &AppHandle, directory: &str, id: &str) -> Com
     Ok(list_store(app, directory)?.into_iter().find(|value| value.get("id").and_then(Value::as_str) == Some(id)))
 }
 
-fn save_store_value(app: &AppHandle, directory: &str, value: Value) -> CommandResult<Value> {
+fn save_store_value(app: &AppHandle, directory: &str, mut value: Value) -> CommandResult<Value> {
     let id = value.get("id").and_then(Value::as_str).ok_or("Record id is required")?.to_owned();
     let path = local_store_path(app, directory)?;
     let mut values = read_array(&path)?;
+    if matches!(directory, "local-transcriptions" | "local-inspirations" | "local-todos") {
+        let existing = values.iter().find(|item| item["id"].as_str() == Some(id.as_str()));
+        if let Some(owner) = existing.and_then(|item| item.get("workbenchScope")).filter(|owner| !owner.is_null()) {
+            value["workbenchScope"] = owner.clone();
+        } else if existing.is_none() {
+            if let Some(scope) = workbench::current_scope(app) { value["workbenchScope"] = json!(scope); }
+        }
+    }
     if let Some(index) = values.iter().position(|item| item.get("id").and_then(Value::as_str) == Some(id.as_str())) {
         values[index] = value.clone();
     } else {
         values.push(value.clone());
     }
     write_array(&path, &values)?;
+    if matches!(directory, "local-transcriptions" | "local-inspirations" | "local-todos") { workbench::refresh_local_policy(app); }
     Ok(value)
 }
 
@@ -289,7 +299,9 @@ pub(crate) fn remove_store_value(app: &AppHandle, directory: &str, id: &str) -> 
         .into_iter()
         .filter(|value| value.get("id").and_then(Value::as_str) != Some(id))
         .collect();
-    write_array(&path, &next)
+    write_array(&path, &next)?;
+    if matches!(directory, "local-transcriptions" | "local-inspirations" | "local-todos") { workbench::refresh_local_policy(app); }
+    Ok(())
 }
 
 fn update_store_value(app: &AppHandle, directory: &str, id: &str, patch: Map<String, Value>) -> CommandResult<Option<Value>> {
@@ -3469,6 +3481,13 @@ async fn local_transcription_retry(
         .filter(|track| track == "mic" || track == "system");
     let Some(track) = track else {
         let mut record = get_store_value(&app, "local-transcriptions", &id)?.ok_or("Local transcription not found")?;
+        if record.get("providerConfig").filter(|value| !value.is_null()).is_none() {
+            let provider = resolve_provider(&app, record.get("language").and_then(Value::as_str), None, None);
+            ensure_model_installed(&app, provider.engine(), provider.model_id())?;
+            record["providerConfig"] = serde_json::to_value(&provider).map_err(|error| error.to_string())?;
+            record["engine"] = json!(provider.engine());
+            record["modelId"] = json!(provider.model_id());
+        }
         let object = record.as_object_mut().ok_or("Stored record must be an object")?;
         object.insert("transcriptText".to_owned(), json!(""));
         object.insert("segments".to_owned(), json!([]));
@@ -4889,6 +4908,7 @@ pub fn run() {
         .manage(feishu::FeishuHandle::default())
         .manage(workbuddy::WorkBuddyAcpState::default())
         .manage(desktop_mcp::DesktopMcpState::default())
+        .manage(workbench::WorkbenchState::default())
         .register_asynchronous_uri_scheme_protocol("local-media", |context, request, responder| {
             // WKURLSchemeHandler fires this on the MAIN thread; a long
             // meeting's WAV is 100+ MB, so the file read must leave the main
@@ -5017,6 +5037,23 @@ pub fn run() {
             // rail-embedded lights.
         })
         .invoke_handler(tauri::generate_handler![
+            workbench::workbench_bind,
+            workbench::workbench_unbind,
+            workbench::workbench_status,
+            workbench::workbench_configure,
+            workbench::workbench_sync,
+            workbench::workbench_search,
+            workbench::workbench_read,
+            workbench::workbench_review,
+            workbench::workbench_exclude,
+            workbench::workbench_memory_edit,
+            workbench::workbench_clear,
+            workbench::workbench_confirm_todos,
+            workbench::workbench_context,
+            workbench::workbench_summary_save,
+            workbench::workbench_regenerate,
+            workbench::workbench_remove_source,
+            workbench::workbench_resolve_conflict,
             desktop_mcp::desktop_mcp_get, desktop_mcp::desktop_mcp_configure, desktop_mcp::desktop_mcp_complete,
             local_transcription_list, local_transcription_get, local_transcription_delete, local_transcription_audio_url,
             local_transcription_track_audio_url,
@@ -5096,6 +5133,7 @@ pub fn run() {
             live_translation::live_translation_expand_island,
             live_translation::live_translation_update_tray,
             live_translation::live_translation_set_mode,
+            live_translation::live_translation_marker,
             meeting_detector::meeting_detector_set_config,
             meeting_detector::meeting_detector_get_state,
             window_effects::window_effects_mode,

@@ -96,7 +96,16 @@ export interface LiveTranslationSegment {
   speaker?: number;
 }
 
+export interface RecordingMarker {
+  sourceRef?: import("../workbench/types").SourceRef;
+  id: string;
+  kind: "highlight" | "decision" | "todo";
+  note: string;
+  startMs: number;
+}
+
 export interface LiveTranslationSnapshot {
+  markers?: RecordingMarker[];
   state: LiveTranslationState;
   sessionId?: string;
   epoch: number;
@@ -135,6 +144,8 @@ export interface LiveConnectionDescriptor {
 }
 
 export interface LiveStartRequest {
+  /** Only detector-started sessions retain the silence auto-stop policy. */
+  automatic?: boolean;
   sessionId: string;
   title: string;
   sourceLanguage: string;
@@ -188,6 +199,7 @@ export interface LiveSetModeRequest {
 }
 
 export interface CompletedLiveSession {
+  markers?: RecordingMarker[];
   sessionId: string;
   recordId: string;
   /** RFC3339 recording start time; the cloud sync sends it as
@@ -240,6 +252,7 @@ export interface DesktopLiveTranslationApi {
   /** Acks as soon as the stop is registered; the finished session arrives
    *  later via the `completed` event once the sidecar drain and local
    *  persistence finish. */
+  marker?: (kind: RecordingMarker["kind"], note?: string, id?: string, remove?: boolean) => Promise<LiveTranslationSnapshot>;
   stop: () => Promise<void>;
   getState: () => Promise<LiveTranslationSnapshot>;
   finalizeLocal: (sessionId: string, synced: boolean) => Promise<void>;

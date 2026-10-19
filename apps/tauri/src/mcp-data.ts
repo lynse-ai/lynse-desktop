@@ -1,3 +1,4 @@
+import { getWorkbenchApi, useWorkbench, type DesktopWorkbenchApi } from "@lynse/views/workbench";
 import { api } from "@lynse/core/api";
 import { getAuthStore } from "@lynse/core/auth";
 import { getDesktopLocalTranscriptionApi, getDesktopVaultApi } from "@lynse/views/workspace";
@@ -6,6 +7,7 @@ import { getDesktopInspirationApi } from "@lynse/views/inspiration";
 type Row = Record<string, unknown>;
 type Args = Record<string, unknown>;
 export interface McpDataDependencies {
+  memory?: DesktopWorkbenchApi | null;
   meetings: () => Promise<Row[]>;
   notes: () => Promise<Row[]>;
   todos: () => Promise<Row[]>;
@@ -63,6 +65,35 @@ function list(rows: Row[], args: Args, keys: string[]): Row {
 export async function readDesktopMcpTool(name: string, args: Args, deps: McpDataDependencies): Promise<unknown> {
   if (!args || typeof args !== "object" || Array.isArray(args)) throw new McpInputError("Invalid arguments");
   const meetingKeys = ["id", "title", "createdAt", "updatedAt", "status", "durationMs"];
+  if (["search_local_memory", "get_local_memory", "get_local_memory_source"].includes(name)) {
+    const bridge = deps.memory;
+    if (!bridge) throw new McpInputError("Local meeting memory is unavailable");
+    const status = await bridge.status();
+    if (!status.enabled || !status.allowAi || !status.initialComplete) throw new McpInputError("Enable meeting memory and finish the initial knowledge-base sync first");
+    let result: unknown;
+    if (name === "search_local_memory") {
+      const keyword = stringArg(args, "keyword");
+      const limit = numberArg(args, "limit", 20, 100);
+      const sources = await bridge.search(keyword, true);
+      result = { sources: sources.items.slice(0, limit), memories: status.memories.filter((item) => !item.excluded && !item.stale
+        && (!keyword || item.text.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()))).slice(0, limit) };
+    } else if (name === "get_local_memory") {
+      const id = stringArg(args, "id", true);
+      const item = status.memories.find((item) => item.id === id && !item.excluded && !item.stale);
+      if (!item) throw new McpInputError("Memory not found or excluded");
+      result = item;
+    } else {
+      const id = stringArg(args, "id", true);
+      const source = status.entries.find((entry) => entry.id === id && !entry.excluded && entry.status === "synced");
+      if (!source) throw new McpInputError("Source unavailable or excluded from AI");
+      const record = await bridge.read(id);
+      if (record.document.aiContextEnabled === false) throw new McpInputError("Source excluded from AI");
+      result = { document: record.document, markdown: record.markdown };
+    }
+    const current = await bridge.status();
+    if (!current.enabled || !current.allowAi || current.scope !== status.scope || current.updatedAt !== status.updatedAt) throw new McpInputError("Account or sources changed; retry");
+    return result;
+  }
   switch (name) {
     case "list_local_meetings": return list(await deps.meetings(), args, meetingKeys);
     case "get_local_meeting": {
@@ -123,11 +154,22 @@ export async function readDesktopMcpTool(name: string, args: Args, deps: McpData
 
 export function currentMcpDependencies(): McpDataDependencies {
   return {
-    meetings: async () => await getDesktopLocalTranscriptionApi()?.list() as unknown as Row[] ?? [],
-    notes: async () => await getDesktopInspirationApi()?.list() as unknown as Row[] ?? [],
+    memory: getWorkbenchApi(),
+    meetings: async () => {
+      const rows = await getDesktopLocalTranscriptionApi()?.list() as unknown as Row[] ?? [];
+      const scope = useWorkbench.getState().status?.scope;
+      return rows.filter((row) => shareable(row) && (!row.workbenchScope || row.workbenchScope === scope));
+    },
+    notes: async () => {
+      const rows = await getDesktopInspirationApi()?.list() as unknown as Row[] ?? [];
+      const scope = useWorkbench.getState().status?.scope;
+      return rows.filter((row) => !row.workbenchScope || row.workbenchScope === scope);
+    },
     todos: async () => {
       const bridge = (window as Window & { desktopAPI?: { todo?: { list: () => Promise<Row[]> } } }).desktopAPI;
-      return await bridge?.todo?.list() ?? [];
+      const rows = await bridge?.todo?.list() ?? [];
+      const scope = useWorkbench.getState().status?.scope;
+      return rows.filter((row) => !row.workbenchScope || row.workbenchScope === scope);
     },
     readMeetingNote: async (id) => await getDesktopVaultApi()?.readNote(id) ?? null,
     cloud: {

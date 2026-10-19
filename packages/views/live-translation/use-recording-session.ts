@@ -46,6 +46,7 @@ export interface UseRecordingSessionReturn {
   mode: RecordMode;
   busy: boolean;
   blocked: string | null;
+  markers: import("./types").RecordingMarker[];
   bookmarked: boolean;
   /** Whether live translation (target-language output) is enabled inside live mode. */
   translationEnabled: boolean;
@@ -425,7 +426,8 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     mode,
     busy,
     blocked,
-    bookmarked,
+    markers: view.markers ?? [],
+    bookmarked: bookmarked || !!view.markers?.length,
     translationEnabled,
     voiceEnhancement,
     sessionId: view.sessionId,

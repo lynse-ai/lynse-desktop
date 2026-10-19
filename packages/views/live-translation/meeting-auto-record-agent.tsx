@@ -95,6 +95,7 @@ export function MeetingAutoRecordAgent() {
       const appName = resolveEventAppName(event, config, (key) => t(key));
       const sessionId = crypto.randomUUID();
       await api.start({
+        automatic: true,
         sessionId,
         title: `${t("auto_record.session_title", { app: appName })} · ${new Date(event.detectedAt).toLocaleString()}`,
         sourceLanguage: cfg?.sourceLanguage || "zh",

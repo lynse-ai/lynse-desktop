@@ -31,6 +31,7 @@ interface AudioPlayerProps {
 export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
   function AudioPlayer({ src, highlightTimeMs, onEdit }, ref) {
     const audioRef = useRef<HTMLAudioElement>(null);
+    const pendingSeek = useRef<number | null>(null);
     const [playing, setPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
@@ -45,12 +46,12 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
     // Expose seekTo to parent
     useImperativeHandle(ref, () => ({
       seekTo(seconds: number) {
-        if (audioRef.current) {
-          audioRef.current.currentTime = seconds;
-          if (!playing) {
-            audioRef.current.play().catch(() => {});
-            setPlaying(true);
-          }
+        if (!Number.isFinite(seconds)) return;
+        pendingSeek.current = Math.max(0, seconds);
+        if (audioRef.current && audioRef.current.readyState >= 1) {
+          audioRef.current.currentTime = pendingSeek.current;
+          pendingSeek.current = null;
+          void audioRef.current.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
         }
       },
     }));
@@ -115,6 +116,11 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
       if (audioRef.current) {
         setDuration(audioRef.current.duration);
         setLoading(false);
+        if (pendingSeek.current != null) {
+          audioRef.current.currentTime = pendingSeek.current;
+          pendingSeek.current = null;
+          void audioRef.current.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+        }
       }
     }, []);
 

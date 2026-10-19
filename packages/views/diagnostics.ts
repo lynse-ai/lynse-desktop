@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import i18next from "i18next";
+import { toast } from "sonner";
 import { getAppInfoSync, openExternalUrl } from "./app-update";
 import { isMacDesktop } from "./layout/use-maximized";
 
@@ -101,13 +102,21 @@ export function takePendingScreenshot(): StagedScreenshot | null {
   return screenshot;
 }
 
+export function showScreenshotCaptureError(error: unknown): void {
+  console.warn("[report-screenshot] capture failed:", error);
+  toast.error(i18next.isInitialized ? i18next.t("settings.report_capture_failed") : "Capture failed — please try again");
+}
+
 async function openReportDialog(): Promise<void> {
   // Capture while the main window still shows what the user was looking at —
   // the in-app dialog would otherwise cover it. In the standalone window the
   // retake button re-captures the main window directly.
   const api = getDesktopDiagnosticsApi();
   pendingScreenshot = api?.captureScreenshot
-    ? await api.captureScreenshot().catch(() => null)
+    ? await api.captureScreenshot().catch((error: unknown) => {
+        showScreenshotCaptureError(error);
+        return null;
+      })
     : null;
   setReportDialogOpen(true);
 }

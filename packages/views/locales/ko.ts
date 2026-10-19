@@ -604,6 +604,7 @@ const ko = {
     report_retake: "다시 캡처",
     report_remove: "제거",
     report_capture_failed: "캡처에 실패했습니다. 다시 시도해 주세요",
+    report_preview_failed: "스크린샷 미리보기를 불러오지 못했습니다 — 클릭해서 다시 캡처",
     report_capture_missing: "스크린샷이 없습니다 — 클릭해서 캡처",
     report_footer_hint: "제출하면 현재 화면의 스크린샷과 최근 앱 로그가 자동으로 첨부됩니다.",
     report_cancel: "취소",

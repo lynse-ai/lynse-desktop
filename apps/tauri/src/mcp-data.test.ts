@@ -76,3 +76,32 @@ describe("Desktop MCP data access", () => {
     expect(await readDesktopMcpTool("get_cloud_user", {}, deps)).toEqual({id:1, nickname:"Lynse"});
   });
 });
+
+describe("Local memory MCP consent and stale-result guards", () => {
+  function memory() {
+    const status = {scope:"account-a",enabled:true,allowAi:true,initialComplete:true,updatedAt:"r1",memories:[{id:"m1",text:"Friday is a proposal",excluded:false,stale:false},{id:"private",text:"Private",excluded:true},{id:"stale",text:"Old",stale:true}],entries:[{id:"s1",status:"synced",excluded:false}]};
+    const bridge = {status:vi.fn().mockImplementation(async()=>status),search:vi.fn().mockResolvedValue({items:[{id:"s1"}],initialComplete:true}),read:vi.fn().mockResolvedValue({document:{id:"s1",aiContextEnabled:true,transcript:"Original"},markdown:"Original"})};
+    deps.memory = bridge as unknown as NonNullable<McpDataDependencies["memory"]>;
+    return {status,bridge};
+  }
+  it("uses the AI-filtered local index and omits withdrawn or stale memories", async()=>{
+    const {bridge}=memory();
+    expect(await readDesktopMcpTool("search_local_memory",{},deps)).toEqual({sources:[{id:"s1"}],memories:[{id:"m1",text:"Friday is a proposal",excluded:false,stale:false}]});
+    expect(bridge.search).toHaveBeenCalledWith("",true);
+    for(const id of ["private","stale"])await expect(readDesktopMcpTool("get_local_memory",{id},deps)).rejects.toThrow("excluded");
+  });
+  it.each(["enabled","allowAi","initialComplete"] as const)("requires %s before reading memory",async(flag)=>{
+    const {status,bridge}=memory();status[flag]=false;
+    await expect(readDesktopMcpTool("search_local_memory",{},deps)).rejects.toThrow("finish");expect(bridge.search).not.toHaveBeenCalled();
+  });
+  it("rejects an account switch while the local search is running",async()=>{
+    const {status,bridge}=memory();bridge.search.mockImplementation(async()=>{status.scope="account-b";return {items:[],initialComplete:true};});
+    // Return a snapshot just as the real IPC serialization does.
+    bridge.status.mockImplementation(async()=>structuredClone(status));
+    await expect(readDesktopMcpTool("search_local_memory",{},deps)).rejects.toThrow("Account or sources changed");
+  });
+  it("rejects a source with a per-item AI exclusion",async()=>{
+    const {bridge}=memory();bridge.read.mockResolvedValue({document:{id:"s1",aiContextEnabled:false,transcript:"Original"},markdown:"Original"});
+    await expect(readDesktopMcpTool("get_local_memory_source",{id:"s1"},deps)).rejects.toThrow("excluded from AI");
+  });
+});

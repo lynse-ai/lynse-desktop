@@ -1,3 +1,5 @@
+import { getWorkbenchApi, useWorkbench } from "../workbench/api";
+import type { DesktopContext } from "../workbench/types";
 import type {
   ChatProvider,
   ChatStreamEvent,
@@ -12,6 +14,7 @@ import type { RequestModelOverride } from "./model-override";
 
 export interface SendChatOptions {
   query: string;
+  desktopContext?: DesktopContext | null;
   sessionId: string;
   userId: string;
   fileIds: string[];
@@ -153,6 +156,18 @@ interface ChatPollTaskResponse {
 }
 
 /** Keep stream, busy retries and poll recovery on the same authenticated turn. */
+function hydrateDesktopContext(opts: SendChatOptions): Promise<void> | undefined {
+  const bridge = getWorkbenchApi();
+  opts.desktopContext = null;
+  const consent = useWorkbench.getState().status;
+  if (!bridge || opts.signal?.aborted || !consent?.enabled || !consent.allowAi || !consent.initialComplete) return;
+  const scope = consent.scope;
+  return bridge.context(opts.query).then((evidence) => {
+    const state = useWorkbench.getState().status;
+    if (!opts.signal?.aborted && state?.enabled && state.allowAi && state.scope === scope) opts.desktopContext = evidence;
+  }).catch(() => { /* Optional recall failure does not prevent assistant use. */ });
+}
+
 function chatTurnBody(opts: SendChatOptions): Record<string, unknown> {
   const { query, sessionId, fileIds, userSpecifiedFile, token, confirmToken, modelOverride } = opts;
   const body: Record<string, unknown> = { query };
@@ -164,6 +179,7 @@ function chatTurnBody(opts: SendChatOptions): Record<string, unknown> {
     body.userSpecifiedFile = true;
   }
   if (modelOverride) body.modelOverride = modelOverride;
+  if (opts.desktopContext?.sources.length) body.desktopContext = opts.desktopContext;
   if (confirmToken) {
     body.confirm_token = confirmToken;
     body.confirmToken = confirmToken;
@@ -599,6 +615,8 @@ export class PollChatTransport implements ChatTransport {
   private async sendTurn(opts: SendChatOptions): Promise<void> {
 
     const { onEvent } = opts;
+    const recall = hydrateDesktopContext(opts);
+    if (recall) await recall;
     const body = chatTurnBody(opts);
 
     const startedAt = Date.now();
@@ -1035,6 +1053,9 @@ export class StreamChatTransport implements ChatTransport {
     }, chatPollTiming.deadlineMs);
 
     try {
+      if (turn.signal.aborted) return;
+      const recall = hydrateDesktopContext(opts);
+    if (recall) await recall;
       if (turn.signal.aborted) return;
       const body = chatTurnBody(opts);
       emit({ type: "status", text: "submitting" });

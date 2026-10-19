@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/ui/card";
 import { Button } from "@lynse/ui/components/ui/button";
@@ -9,22 +9,14 @@ import { Switch } from "@lynse/ui/components/ui/switch";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
 import { FolderOpen, Loader2 } from "../icons";
-import { useNotes } from "../workspace/hooks/use-files";
-import { getWorkbenchApi, useWorkbench, refreshWorkbench } from "../workbench/api";
+import { getWorkbenchApi, refreshWorkbench, useWorkbench } from "../workbench/api";
+import { WorkbenchSettingsContent } from "../workbench/components";
 import {
   getDesktopVaultApi,
-  getVaultLastSync,
-  markVaultLastSync,
-  syncAllNotesToVault,
   useVaultConfig,
   VAULT_CONFIG_QUERY_KEY,
   type VaultConfig,
 } from "../workspace/note-vault";
-
-function toApiDateTime(d: Date): string {
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
 
 /** Settings card for the local markdown vault (desktop only). Renders nothing
  *  when the vault bridge is unavailable (web). */
@@ -36,41 +28,26 @@ export function VaultConfigCard() {
   const [path, setPath] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
-  const [lastSync, setLastSync] = useState<string | null>(null);
-
-  // "All my meetings" — same wide range the notes page uses, so the sync
-  // covers exactly the notes the user sees there.
-  const endTime = useMemo(() => toApiDateTime(new Date()), []);
-  const { data: notes } = useNotes({
-    startTime: "2020-01-01T00:00:00",
-    endTime,
-  });
+  const workbench = useWorkbench((state) => state.status);
+  const lastSync = workbench?.initialComplete ? workbench.updatedAt : null;
 
   useEffect(() => {
     setPath(config?.path ?? null);
-    setLastSync(getVaultLastSync());
   }, [config?.path]);
 
   if (!vaultApi) return null;
 
   async function persist(next: VaultConfig) {
     if (!vaultApi) return;
-    const workbench = getWorkbenchApi();
-    const memory = useWorkbench.getState().status;
     setSaving(true);
     try {
-      if (memory?.enabled) await workbench?.configure(false, memory.allowAi);
       const saved = await vaultApi.saveConfig(next);
       qc.setQueryData(VAULT_CONFIG_QUERY_KEY, saved);
       setPath(saved.path ?? null);
-      if (memory?.enabled && saved.enabled) {
-        await workbench?.configure(true, memory.allowAi);
-        await refreshWorkbench();
-      }
+      await refreshWorkbench().catch(() => undefined);
     } catch (error) {
-      if (memory?.enabled && config?.enabled) {
-        await workbench?.configure(true, memory.allowAi).then(refreshWorkbench).catch(() => undefined);
-      }
+      await qc.invalidateQueries({ queryKey: VAULT_CONFIG_QUERY_KEY });
+      await refreshWorkbench().catch(() => undefined);
       toast.error(
         t("vault.config_save_failed", { error: error instanceof Error ? error.message : "" }),
       );
@@ -110,20 +87,11 @@ export function VaultConfigCard() {
     setSyncing(true);
     const loadingToastId = toast.loading(t("vault.sync_started"));
     try {
-      const summary = await syncAllNotesToVault(notes ?? [], {
-        outline: t("vault.section_outline"),
-        summary: t("vault.section_summary"),
-      });
-      markVaultLastSync();
-      setLastSync(getVaultLastSync());
-      if (summary.failed > 0) {
-        toast.error(
-          t("vault.sync_partial", { written: summary.written, failed: summary.failed }),
-          { id: loadingToastId },
-        );
-      } else {
-        toast.success(t("vault.sync_done", { count: summary.written }), { id: loadingToastId });
-      }
+      const bridge = getWorkbenchApi();
+      if (!bridge) throw new Error(t("workbench.sign_in"));
+      await bridge.sync();
+      await refreshWorkbench();
+      toast.dismiss(loadingToastId);
     } catch (error) {
       toast.error(t("vault.sync_failed", { error: error instanceof Error ? error.message : "" }), {
         id: loadingToastId,
@@ -203,6 +171,7 @@ export function VaultConfigCard() {
             </div>
           </>
         )}
+        <WorkbenchSettingsContent disabled={saving} />
       </CardContent>
     </Card>
   );

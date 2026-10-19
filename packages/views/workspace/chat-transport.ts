@@ -164,7 +164,7 @@ function hydrateDesktopContext(opts: SendChatOptions): Promise<void> | undefined
   const scope = consent.scope;
   return bridge.context(opts.query).then((evidence) => {
     const state = useWorkbench.getState().status;
-    if (!opts.signal?.aborted && state?.enabled && state.allowAi && state.scope === scope) opts.desktopContext = evidence;
+    if (!opts.signal?.aborted && state?.enabled && state.allowAi && state.initialComplete && state.updatedAt === consent.updatedAt && state.scope === scope) opts.desktopContext = evidence;
   }).catch(() => { /* Optional recall failure does not prevent assistant use. */ });
 }
 

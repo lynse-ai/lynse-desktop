@@ -13,7 +13,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Markdown } from "@lynse/ui/markdown";
 import { BookOpen, Loader2, RefreshCw, Search } from "../icons";
 import { toast } from "sonner";
-import { loadChatModelSetting, MODEL_OVERRIDE_STORAGE_KEY, toRequestOverride } from "../workspace/model-override";
 import { getDesktopLocalTranscriptionApi } from "../workspace/local-transcription";
 import { AudioPlayer, type AudioPlayerHandle } from "../workspace/audio-player";
 import { useTodoStore } from "../todo/use-todos";
@@ -21,19 +20,12 @@ import { useFileAudioUrl } from "../workspace/hooks/use-files";
 import { DeleteConfirmDialog } from "../workspace/delete-confirm-dialog";
 import { getWorkbenchApi, refreshWorkbench, useWorkbench } from "./api";
 import type { MemoryItem, SourceRef, SynthesisResult, TodoSuggestion, WorkbenchReadResult } from "./types";
+import { WikiModels, WikiTopics, WikiStatus } from "./wiki";
 
 /** Account lifecycle stays outside AuthGate so logout also cancels native work. */
 export function WorkbenchSupervisor() {
   const authenticated = useAuthStore((s) => s.isAuthenticated);
   const user = useAuthStore((s) => s.user);
-  const [configurationVersion, setConfigurationVersion] = useState(0);
-  useEffect(() => {
-    const changed = () => setConfigurationVersion((value) => value + 1);
-    const storageChanged = (event: StorageEvent) => { if (event.key === MODEL_OVERRIDE_STORAGE_KEY) changed(); };
-    window.addEventListener("lynse-chat-model-setting", changed);
-    window.addEventListener("storage", storageChanged);
-    return () => { window.removeEventListener("lynse-chat-model-setting", changed); window.removeEventListener("storage", storageChanged); };
-  }, []);
   const { i18n } = useTranslation();
   useEffect(() => {
     const bridge = getWorkbenchApi();
@@ -45,7 +37,7 @@ export function WorkbenchSupervisor() {
     const token = api().getToken();
     if (!authenticated || !token) { void bridge.unbind(); return; }
     void bridge.bind({ baseUrl: api().getBaseUrl(), agentUrl: api().getAgentBaseUrl() ?? undefined,
-      token, locale: i18n.language, modelOverride: toRequestOverride(loadChatModelSetting()) })
+      token, locale: i18n.language })
       .then((status) => { if (!disposed) { boundScope = status?.scope; useWorkbench.getState().setStatus(status); } })
       .catch((error: unknown) => { if (!disposed) useWorkbench.getState().setError(String(error)); });
     void bridge.onUpdate((status) => {
@@ -64,7 +56,7 @@ export function WorkbenchSupervisor() {
       document.removeEventListener("visibilitychange", resume);
       void bridge.unbind();
     };
-  }, [authenticated, user, i18n.language, configurationVersion]);
+  }, [authenticated, user, i18n.language]);
   return null;
 }
 
@@ -81,7 +73,7 @@ function Progress() {
   </div>;
 }
 
-export function WorkbenchSettingsCard() {
+export function WorkbenchSettingsContent({ disabled = false }: { disabled?: boolean }) {
   const bridge = getWorkbenchApi();
   const status = useWorkbench((s) => s.status);
   const authenticated = useAuthStore((s) => s.isAuthenticated);
@@ -94,15 +86,13 @@ export function WorkbenchSettingsCard() {
     if (!bridge) return;
     setBusy(true);
     try { useWorkbench.getState().setStatus(await bridge.configure(enabled, allowAi)); await qc.invalidateQueries({ queryKey: ["vault-config"] }); }
-    catch (error) { useWorkbench.getState().setError(String(error)); }
+    catch (error) { await refreshWorkbench().catch(() => undefined); await qc.invalidateQueries({ queryKey: ["vault-config"] }); useWorkbench.getState().setError(String(error)); }
     finally { setBusy(false); }
   }
-  return <Card>
-    <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2 text-xs"><BookOpen className="size-4" />{t("workbench.title")}</CardTitle></CardHeader>
-    <CardContent className="space-y-4">
+  return <div className="space-y-3 border-t border-border pt-3">
       <div className="flex items-center justify-between gap-4">
         <label htmlFor="meeting-memory-enable" className="text-xs">{t("workbench.enable")}</label>
-        <Switch id="meeting-memory-enable" checked={status?.enabled ?? false} disabled={busy || !authenticated || !status}
+        <Switch id="meeting-memory-enable" checked={status?.enabled ?? false} disabled={disabled || busy || !authenticated || !status}
           onCheckedChange={(checked) => void configure(checked, status?.allowAi ?? false)} />
       </div>
       <p className="text-xs leading-relaxed text-muted-foreground">{t("workbench.hint")}</p>
@@ -110,11 +100,12 @@ export function WorkbenchSettingsCard() {
       {status?.enabled && <>
         <div className="flex items-center justify-between gap-4">
           <label htmlFor="meeting-memory-ai" className="text-xs">{t("workbench.allow_ai")}</label>
-          <Switch id="meeting-memory-ai" checked={status.allowAi} disabled={busy} onCheckedChange={(checked) => void configure(true, checked)} />
+          <Switch id="meeting-memory-ai" checked={status.allowAi} disabled={disabled || busy} onCheckedChange={(checked) => void configure(true, checked)} />
         </div>
         <p className="text-xs leading-relaxed text-muted-foreground">{t("workbench.ai_hint")}</p>
       </>}
       <Progress />
+      {status?.enabled && <><WikiStatus /><WikiModels /></>}
       <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="outline" onClick={() => useWorkbench.getState().show()}>{t("workbench.open")}</Button>
         {status?.enabled && <Button size="sm" variant="outline" disabled={busy} onClick={() => void bridge.sync().then(refreshWorkbench).catch((error: unknown) => toast.error(String(error)))}>
@@ -124,8 +115,7 @@ export function WorkbenchSettingsCard() {
       </div>
       <DeleteConfirmDialog open={clearing} onOpenChange={setClearing} description={t("workbench.clear_confirm")} pending={busy} confirmLabel={t("workbench.clear")}
         onConfirm={() => { setBusy(true); void bridge.clear().then(refreshWorkbench).then(() => setClearing(false)).catch((error: unknown) => toast.error(String(error))).finally(() => setBusy(false)); }} />
-    </CardContent>
-  </Card>;
+  </div>;
 }
 
 export function WorkbenchButton({ query = "", id }: { query?: string; id?: string }) {
@@ -265,6 +255,7 @@ function MeetingReader({ id }: { id: string }) {
   const result = query.data;
   if (!result) return null;
   const document = result.document;
+  if (document.kind === "wiki") return <section className="space-y-4"><h2 className="text-lg font-semibold">{document.title}</h2><Markdown mode="full">{result.markdown}</Markdown><SourceButtons sources={document.citations ?? []} /></section>;
   const latest = result.artifacts?.summaries.at(-1);
   return <div className="space-y-6">
     <div className="flex items-start justify-between gap-3"><h2 className="text-lg font-semibold">{document.title}</h2>
@@ -346,6 +337,7 @@ export function WorkbenchDialog() {
             {brief.memoryItems.map((item, index) => <div key={item.id || index} className="space-y-1 rounded-md border border-border p-3"><p className="text-xs text-muted-foreground">{t(`workbench.${item.kind}`)}</p><p className="text-sm">{item.text}</p><SourceButtons sources={item.citations} /></div>)}
             <SourceButtons sources={brief.citations} />
           </section> : panel.selectedId ? <MeetingReader key={`${panel.status?.scope}:${panel.selectedId}`} id={panel.selectedId} /> : <section className="space-y-3">
+            <WikiTopics />
             <h2 className="text-sm font-medium">{t("workbench.memories")}</h2>
             {!panel.status?.initialComplete && <p className="text-sm text-muted-foreground">{t("workbench.sync_first")}</p>}
             {panel.status?.memories.filter((item) => !item.excluded).slice().reverse().map((item) => <MemoryCard key={item.id} item={item} />)}

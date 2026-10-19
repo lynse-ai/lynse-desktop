@@ -80,15 +80,15 @@ describe("Desktop MCP data access", () => {
 describe("Local memory MCP consent and stale-result guards", () => {
   function memory() {
     const status = {scope:"account-a",enabled:true,allowAi:true,initialComplete:true,updatedAt:"r1",memories:[{id:"m1",text:"Friday is a proposal",excluded:false,stale:false},{id:"private",text:"Private",excluded:true},{id:"stale",text:"Old",stale:true}],entries:[{id:"s1",status:"synced",excluded:false}]};
-    const bridge = {status:vi.fn().mockImplementation(async()=>status),search:vi.fn().mockResolvedValue({items:[{id:"s1"}],initialComplete:true}),read:vi.fn().mockResolvedValue({document:{id:"s1",aiContextEnabled:true,transcript:"Original"},markdown:"Original"})};
+    const bridge = {wiki:vi.fn().mockResolvedValue({topics:[{id:"topic-1",title:"Launch",published:{markdown:"Friday is a proposal",review:"approved",citations:[]}},{id:"private",excluded:true,published:{review:"approved"}},{id:"stale",stale:true,published:{review:"approved"}},{id:"candidate",published:null,candidate:{markdown:"Unreviewed"}}]}),status:vi.fn().mockImplementation(async()=>status),search:vi.fn().mockResolvedValue({items:[{id:"s1"}],initialComplete:true}),read:vi.fn().mockResolvedValue({document:{id:"s1",aiContextEnabled:true,transcript:"Original"},markdown:"Original"})};
     deps.memory = bridge as unknown as NonNullable<McpDataDependencies["memory"]>;
     return {status,bridge};
   }
   it("uses the AI-filtered local index and omits withdrawn or stale memories", async()=>{
     const {bridge}=memory();
-    expect(await readDesktopMcpTool("search_local_memory",{},deps)).toEqual({sources:[{id:"s1"}],memories:[{id:"m1",text:"Friday is a proposal",excluded:false,stale:false}]});
+    expect(await readDesktopMcpTool("search_local_memory",{},deps)).toEqual({sources:[{id:"s1"}],memories:[{id:"wiki:topic-1",text:"Friday is a proposal",citations:[]}]});
     expect(bridge.search).toHaveBeenCalledWith("",true);
-    for(const id of ["private","stale"])await expect(readDesktopMcpTool("get_local_memory",{id},deps)).rejects.toThrow("excluded");
+    for(const id of ["private","stale","candidate","m1"])await expect(readDesktopMcpTool("get_local_memory",{id},deps)).rejects.toThrow("excluded");
   });
   it.each(["enabled","allowAi","initialComplete"] as const)("requires %s before reading memory",async(flag)=>{
     const {status,bridge}=memory();status[flag]=false;

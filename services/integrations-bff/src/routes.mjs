@@ -25,6 +25,7 @@ import { beginAuthorization, pollAuthorizationResult } from "./oauth.mjs";
 import { lookupOperation, validateArguments, executeRead } from "./read.mjs";
 
 const SERVICES = {
+  gmail: "gmail",
   "google-calendar": "googlecalendar",
   "outlook-calendar": "outlook_calendar",
   notion: "notion",

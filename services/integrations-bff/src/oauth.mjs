@@ -47,10 +47,11 @@ export async function beginAuthorization(store, { principal, provider, service, 
   store.supersedePendingRequests(principal, provider, targetAccountId, request.id);
 
   const body = { service, connectionName: request.connection_name };
+  if (provider === "gmail") body.requestedScopes = ["https://www.googleapis.com/auth/gmail.readonly"];
   if (customOAuth?.client_id && customOAuth?.client_secret) {
     body.clientId = String(customOAuth.client_id);
     body.clientSecret = String(customOAuth.client_secret);
-    if (Array.isArray(customOAuth.scopes)) body.requestedScopes = customOAuth.scopes;
+    if (provider !== "gmail" && Array.isArray(customOAuth.scopes)) body.requestedScopes = customOAuth.scopes;
   }
   const auth = await gw("/api/oauth/authorizations", { method: "POST", body });
   if (!auth.ok) {

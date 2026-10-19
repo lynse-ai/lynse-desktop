@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 process.env.CONNECTORS_MULTIUSER = "1";
-process.env.CONNECTORS_PROVIDERS = "google_calendar,google_tasks,notion";
+process.env.CONNECTORS_PROVIDERS = "google_calendar,google_tasks,notion,gmail";
 process.env.ADMIN_TOKEN = "test-admin-token";
 
 const { fakeGateway, fakeIdentity, listen, closeServer } = await import("./helpers.mjs");
@@ -164,6 +164,21 @@ test("one user can connect two accounts and reads pin the chosen one", async () 
     ["googlecalendar.list_events_all_calendars"],
     "read tokens are pinned to the single whitelisted action",
   );
+});
+
+test("Gmail requests only readonly scope and pins paginated reads to its owner", async () => {
+  const begin=await call("/api/v2/integrations/gmail/oauth-state",{token:"tok-A"});
+  const auth=gateway.seen.authorizations.at(-1);
+  assert.deepEqual(auth.requestedScopes,["https://www.googleapis.com/auth/gmail.readonly"]);
+  completeOnGateway(auth,"gmail-A");
+  const done=await call(`/api/v2/integrations/gmail/oauth-result?state=${begin.json.state}`,{token:"tok-A"});
+  const account=done.json.account_id;
+  const read=await call("/api/v2/integrations/gmail/read",{method:"POST",token:"tok-A",body:{operation:"list_threads",account_id:account,arguments:{query:"newer_than:90d",max_results:100,page_token:"page-2"}}});
+  assert.equal(read.json.status,"ok");
+  const action=gateway.seen.actions.at(-1);assert.equal(action.actionId,"gmail.list_threads");assert.equal(action.body.input.pageToken,"page-2");
+  const mint=gateway.seen.tokenMints.find(m=>m.policy.allowedConnections.includes("gmail-A"));assert.deepEqual(mint.policy.allowedActions,["gmail.list_threads"]);
+  const write=await call("/api/v2/integrations/gmail/read",{method:"POST",token:"tok-A",body:{operation:"send_message",account_id:account,arguments:{}}});assert.equal(write.status,400);
+  const foreign=await call("/api/v2/integrations/gmail/read",{method:"POST",token:"tok-B",body:{operation:"read_thread",account_id:account,arguments:{thread_id:"thread"}}});assert.equal(foreign.status,404);
 });
 
 test("reads and disconnects cannot touch another user's account", async () => {

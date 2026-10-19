@@ -226,6 +226,12 @@ pub struct Manifest {
     pub enabled: bool,
     pub allow_ai: bool,
     pub initial_complete: bool,
+    #[serde(default)]
+    pub sync_root: String,
+    #[serde(default)]
+    pub sync_round: String,
+    #[serde(default)]
+    pub completed_round: String,
     pub phase: String,
     pub updated_at: String,
     #[serde(default)]
@@ -247,6 +253,9 @@ impl Default for Manifest {
             enabled: false,
             allow_ai: false,
             initial_complete: false,
+            sync_root: String::new(),
+            sync_round: String::new(),
+            completed_round: String::new(),
             phase: "disabled".into(),
             updated_at: String::new(),
             error: String::new(),
@@ -256,6 +265,15 @@ impl Default for Manifest {
             excluded_sources: vec![],
             aliases: BTreeMap::new(),
         }
+    }
+}
+
+impl Manifest {
+    pub(super) fn bootstrap_valid(&self, root: &str) -> bool {
+        self.initial_complete
+            && !self.sync_round.is_empty()
+            && self.sync_round == self.completed_round
+            && self.sync_root == root
     }
 }
 
@@ -364,7 +382,17 @@ pub fn read_document(root: &Path, entry: &Entry) -> CommandResult<Document> {
             "Local document was edited; resolve its sync conflict before AI processing".into(),
         );
     }
-    serde_json::from_slice(&fs::read(source).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
+    let document: Document = serde_json::from_slice(&fs::read(source).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let mut check = document.clone();
+    check.refresh_revision();
+    if document.id != entry.id
+        || document.revision != entry.revision
+        || check.revision != entry.revision
+    {
+        return Err("Structured source changed; resync or resolve its conflict".into());
+    }
+    Ok(document)
 }
 pub fn eligible(entry: &Entry) -> bool {
     !entry.excluded && matches!(entry.status.as_str(), "synced" | "awaiting_transcription")
@@ -461,7 +489,7 @@ pub fn search(root: &Path, state: &Manifest, query: &str, limit: usize) -> Vec<V
 pub fn browse(root: &Path, state: &Manifest, query: &str, limit: usize) -> Vec<Value> {
     search_impl(root, state, query, limit, false)
 }
-fn query_terms(query: &str) -> Vec<String> {
+pub(super) fn query_terms(query: &str) -> Vec<String> {
     let mut terms = Vec::new();
     for part in query.split(|ch: char| ch.is_whitespace() || ch.is_ascii_punctuation()) {
         if part.is_empty() {

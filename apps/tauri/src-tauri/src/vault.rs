@@ -397,13 +397,35 @@ pub fn vault_config_get(app: AppHandle) -> CommandResult<VaultConfig> {
 }
 
 #[tauri::command]
-pub fn vault_config_save(app: AppHandle, config: VaultConfig) -> CommandResult<VaultConfig> {
+pub async fn vault_config_save(app: AppHandle, config: VaultConfig) -> CommandResult<VaultConfig> {
+    crate::workbench::save_vault_config(&app, config).await
+}
+
+fn validate_vault_directory(root: &Path) -> CommandResult<()> {
+    fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    let probe = root.join(format!(".lynse-write-check-{}", uuid::Uuid::new_v4()));
+    let result = (|| {
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+            .map_err(|e| e.to_string())?;
+        file.write_all(b"lynse").map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())
+    })();
+    let cleanup = fs::remove_file(&probe);
+    result?;
+    cleanup.map_err(|e| e.to_string())
+}
+
+pub(crate) fn save_config_inner(app: &AppHandle, config: VaultConfig) -> CommandResult<VaultConfig> {
     let previous = load_vault_config(&app)?;
     if config.enabled {
         // Create/validate the folder up front so a bad path fails at save
         // time instead of on the first sync.
         let root = vault_root(&config)?;
-        fs::create_dir_all(root).map_err(|error| error.to_string())?;
+        validate_vault_directory(&root)?;
     }
     // User content follows the vault folder: relocate it (and rewrite index
     // paths) BEFORE the new config goes live, so the renderer never resolves
@@ -412,7 +434,7 @@ pub fn vault_config_save(app: AppHandle, config: VaultConfig) -> CommandResult<V
     crate::content_migration::relocate_user_content(&app, &previous, &config)?;
     let path = vault_config_path(&app)?;
     let content = serde_json::to_string_pretty(&config).map_err(|error| error.to_string())?;
-    fs::write(&path, content).map_err(|error| error.to_string())?;
+    crate::atomic_write(&path, content.as_bytes())?;
     Ok(config)
 }
 

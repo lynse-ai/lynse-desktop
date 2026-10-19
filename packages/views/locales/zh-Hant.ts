@@ -928,8 +928,8 @@ const zhHant = {
   },
   vault: {
     title: "本機知識庫",
-    enable: "啟用本機 MD 知識庫",
-    hint: "看過或編輯過的筆記會自動以 Markdown 檔案同步到本機資料夾，可用 Obsidian 等編輯器直接開啟，形成你的個人知識庫。",
+    enable: "開啟本地知識庫同步",
+    hint: "將全部會議文字同步到所選目錄，保留逐字稿、時間軸、大綱、既有紀要和待辦；音訊按需存取。",
     no_path: "未選擇資料夾",
     change_folder: "變更…",
     open_folder: "開啟資料夾",

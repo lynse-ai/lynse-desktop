@@ -930,8 +930,8 @@ const en = {
   },
   vault: {
     title: "Local knowledge base",
-    enable: "Enable local Markdown vault",
-    hint: "Notes you view or edit are mirrored as Markdown files into a local folder you choose — open it with Obsidian or any editor to build your personal knowledge base.",
+    enable: "Enable local knowledge-base sync",
+    hint: "Download all meeting text to your chosen folder. Transcripts, timelines, outlines, summaries and tasks stay readable locally. Audio is accessed when needed.",
     no_path: "No folder selected",
     change_folder: "Change…",
     open_folder: "Open folder",

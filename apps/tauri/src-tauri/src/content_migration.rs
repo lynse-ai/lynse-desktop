@@ -67,6 +67,18 @@ fn content_dirs(kind:ContentKind,old_base:&Path,new_base:&Path,from:&VaultConfig
     Ok((join_segments(old_base,kind.segments(from.enabled)),join_segments(new_base,kind.segments(to.enabled))))
 }
 
+fn validate_merge(from: &Path, to: &Path, skip: &[&str]) -> CommandResult<()> {
+    if !from.exists() || !to.exists() { return Ok(()); }
+    if from.is_dir() && to.is_dir() {
+        for entry in fs::read_dir(from).map_err(|e|e.to_string())? {
+            let entry=entry.map_err(|e|e.to_string())?;
+            if !skip.contains(&entry.file_name().to_string_lossy().as_ref()) {validate_merge(&entry.path(),&to.join(entry.file_name()),&[])?;}
+        }
+        Ok(())
+    } else if from.is_file() && to.is_file() && fs::read(from).map_err(|e|e.to_string())?==fs::read(to).map_err(|e|e.to_string())? {Ok(())}
+    else {Err(format!("Destination contains different content; both copies were preserved: {}",to.display()))}
+}
+
 /// Move every child of `from` into `to` (created on demand), merging with any
 /// existing content so a partially completed previous pass resumes cleanly.
 /// Returns whether anything was moved.
@@ -76,6 +88,7 @@ fn move_dir_contents(
     skip: &[&str],
     delete_skipped: bool,
 ) -> CommandResult<bool> {
+    validate_merge(from,to,skip)?;
     let entries = match fs::read_dir(from) {
         Ok(entries) => entries,
         // No content for this kind at the source — nothing to do.
@@ -210,6 +223,10 @@ pub(crate) fn relocate_user_content(
     let mut pairs: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     for kind in CONTENT_KINDS {
+        let (source,destination)=content_dirs(*kind,&old_base,&new_base,from,to)?;
+        if source!=destination {validate_merge(&source,&destination,relocate_skip(*kind))?;}
+    }
+    for kind in CONTENT_KINDS {
         let (from_dir,to_dir)=content_dirs(*kind,&old_base,&new_base,from,to)?;
         if from_dir == to_dir {
             continue;
@@ -251,6 +268,12 @@ mod tests {
         std::env::temp_dir().join(format!("lynse-content-mig-{}", uuid::Uuid::new_v4()))
     }
 
+    #[test]
+    fn conflicting_wiki_files_are_never_overwritten() {
+        let root=unique_tmp();let from=root.join("old");let to=root.join("new");fs::create_dir_all(&from).unwrap();fs::create_dir_all(&to).unwrap();
+        fs::write(from.join("published.md"),"my manual correction").unwrap();fs::write(to.join("published.md"),"another page").unwrap();
+        assert!(move_dir_contents(&from,&to,&[],false).is_err());assert_eq!(fs::read_to_string(from.join("published.md")).unwrap(),"my manual correction");assert_eq!(fs::read_to_string(to.join("published.md")).unwrap(),"another page");fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn move_dir_contents_merges_and_deletes_skipped_staging() {
         let root = unique_tmp();

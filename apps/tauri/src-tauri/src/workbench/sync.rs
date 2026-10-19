@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 use store::{eligible, read_document, write_document, Entry};
 
@@ -96,10 +96,8 @@ pub(super) async fn verify_identity(base: &str, token: &str) -> CommandResult<St
         token: token.into(),
         scope: String::new(),
         user_id: String::new(),
-        agent_url: String::new(),
         locale: String::new(),
         generation: 0,
-        model_override: None,
     };
     let identity = request(&session, "/api/business/customer/current", false, json!({})).await?;
     identity
@@ -333,7 +331,7 @@ pub(super) fn forget_source(state: &mut Manifest, id: &str) {
     state.artifacts.remove(id);
 }
 
-async fn commit_document(
+pub(super) async fn commit_document(
     app: &AppHandle,
     state: &WorkbenchState,
     session: &Session,
@@ -399,9 +397,13 @@ pub(super) async fn run(
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
         let mut manifest = load_state(app, session)?;
-        if !manifest.enabled {
+        if !crate::vault::load_vault_config(app)?.enabled {
             return Ok(());
         }
+        manifest.initial_complete = false;
+        manifest.sync_root = roots(app, session)?.0.to_string_lossy().into_owned();
+        manifest.sync_round = uuid::Uuid::new_v4().to_string();
+        manifest.completed_round.clear();
         manifest.phase = "discovering".into();
         manifest.error.clear();
         persist(app, session, &manifest)?;
@@ -466,7 +468,7 @@ pub(super) async fn run(
         }
         persist(app, session, &manifest)?;
     }
-    for mut row in local {
+    for row in local {
         if let Some(owner) = row.get("workbenchScope").and_then(Value::as_str) {
             if owner != session.scope {
                 continue;
@@ -521,21 +523,6 @@ pub(super) async fn run(
         }
         if row.get("saved").and_then(Value::as_bool) == Some(false) {
             continue;
-        }
-        if string(&row, &["status"]) == "recorded" {
-            let provider = crate::resolve_provider(
-                app,
-                row.get("language").and_then(Value::as_str),
-                None,
-                Some(&session.locale),
-            );
-            if crate::model_is_installed(app, provider.engine(), provider.model_id()) {
-                let id = string(&row, &["id"]);
-                if let Ok(updated) = crate::local_transcription_retry(app.clone(), id, None).await {
-                    row = updated;
-                }
-                require_current(state, session)?;
-            }
         }
         let mut document = local_document(&row);
         if document.id.is_empty() {
@@ -718,15 +705,33 @@ pub(super) async fn run(
     if let Some(error) = discovery_error {
         return Err(error);
     }
+    // Reconcile a second enumeration before publishing this round's completion.
+    // New/deleted/changed meetings during download require another complete pass.
+    let verification = enumerate(session).await?;
+    let signature = |values: &[Value]| -> BTreeMap<String, String> {
+        values
+            .iter()
+            .map(|v| {
+                let mut row = v.clone();
+                if let Some(map) = row.as_object_mut() {
+                    map.remove("folderName");
+                }
+                (string(v, &["id", "fileId"]), store::digest(row.to_string()))
+            })
+            .collect()
+    };
+    if signature(&cloud) != signature(&verification) {
+        return Err("Meeting list changed during sync; retry to finish the complete round".into());
+    }
     {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
         let mut manifest = load_state(app, session)?;
         let deleted: Vec<String> = manifest
             .entries
-            .keys()
-            .filter(|id| !active.contains(*id))
-            .cloned()
+            .values()
+            .filter(|entry| entry.kind != "gmail" && !active.contains(&entry.id))
+            .map(|entry| entry.id.clone())
             .collect();
         let (root, _) = roots(app, session)?;
         for id in deleted {
@@ -737,31 +742,30 @@ pub(super) async fn run(
             let _ = fs::remove_file(source);
         }
         store::rebuild_index(&root, &manifest)?;
-        let failed = manifest
-            .entries
-            .values()
-            .any(|entry| matches!(entry.status.as_str(), "failed" | "pending" | "conflict"));
+        let failed = manifest.entries.values().any(|entry| {
+            entry.kind != "gmail"
+                && (matches!(entry.status.as_str(), "failed" | "pending" | "conflict")
+                    || read_document(&root, entry).is_err())
+        });
         manifest.initial_complete = !failed;
+        if !failed {
+            manifest.completed_round = manifest.sync_round.clone();
+        }
         manifest.phase = if failed { "incomplete" } else { "ready" }.into();
         persist(app, session, &manifest)?;
         if failed {
             return Ok(());
         }
     }
-    {
-        let _guard = state.serial.lock().await;
-        require_current(state, session)?;
-        let mut manifest = load_state(app, session)?;
-        if manifest.allow_ai {
-            manifest.phase = "processing".into();
-            persist(app, session, &manifest)?;
-        }
+    // Optional backfill cannot delay the first Wiki pass over complete meetings.
+    super::wiki::run(app, state, session).await?;
+    if super::sources::sync_optional(app, state, session).await? {
+        super::wiki::run(app, state, session).await?;
     }
-    synthesize_pending(app, state, session).await?;
-    write_snapshot(app, state, session).await
+    Ok(())
 }
 
-fn split_text(text: &str, max: usize) -> Vec<String> {
+pub(super) fn split_text(text: &str, max: usize) -> Vec<String> {
     let mut parts = Vec::new();
     let mut buffer = String::new();
     let mut count = 0;
@@ -779,72 +783,6 @@ fn split_text(text: &str, max: usize) -> Vec<String> {
         parts.push(buffer);
     }
     parts
-}
-
-pub(super) async fn synthesize(
-    session: &Session,
-    task: &str,
-    documents: &[Document],
-    query: Option<&str>,
-) -> CommandResult<Value> {
-    let mut budget = 60_000usize;
-    let sources:Vec<Value>=documents.iter().filter_map(|doc|{
-        if budget==0{return None;}
-        let text=doc.text().chars().take(budget.min(12_000)).collect::<String>();budget=budget.saturating_sub(text.chars().count());
-        if text.trim().is_empty(){return None;}
-        Some(json!({"id":doc.id,"kind":doc.kind,"revision":doc.revision,"title":doc.title,"text":text,"segments":doc.segments,"todos":doc.todos}))
-    }).collect();
-    if session.agent_url != session.base_url {
-        let registered = client()?
-            .post(format!("{}/api/session/backend", session.agent_url))
-            .header("Authorization", &session.token)
-            .json(&json!({"host":session.base_url}))
-            .send()
-            .await
-            .map_err(|_| "AI service could not verify this server")?;
-        if !registered.status().is_success() {
-            return Err("AI service could not verify this server".into());
-        }
-        let binding: Value = registered
-            .json()
-            .await
-            .map_err(|_| "AI service returned an invalid server binding")?;
-        if binding["host"]
-            .as_str()
-            .map(|host| host.trim_end_matches('/'))
-            != Some(session.base_url.as_str())
-            || binding["user_id"]
-                .as_str()
-                .is_none_or(|id| id.trim().is_empty())
-        {
-            return Err("AI service did not confirm this server identity".into());
-        }
-    }
-    let body = json!({"task":task,"language":if session.locale.is_empty(){"en"}else{&session.locale},"sources":sources,"query":query,"modelOverride":session.model_override});
-    let path = if session.agent_url == session.base_url {
-        "/api/business/ai/desktop/synthesize"
-    } else {
-        "/api/desktop/synthesize"
-    };
-    let response = client()?
-        .post(format!("{}{}", session.agent_url, path))
-        .header("Authorization", &session.token)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|_| "AI service is unavailable")?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "AI synthesis failed (HTTP {})",
-            response.status().as_u16()
-        ));
-    }
-    unpack(
-        response
-            .json()
-            .await
-            .map_err(|_| "AI service returned invalid JSON")?,
-    )
 }
 
 pub(super) fn validate_result(
@@ -913,199 +851,6 @@ pub(super) fn validate_result(
     Ok(())
 }
 
-fn synthesis_key(session: &Session, revision: &str) -> String {
-    store::digest(format!(
-        "{}\n{}\ndesktop-evidence-v1\n{}\n{}",
-        revision,
-        session.agent_url,
-        session.locale,
-        session.model_override.as_ref().unwrap_or(&Value::Null)
-    ))
-}
-
-async fn synthesize_pending(
-    app: &AppHandle,
-    state: &WorkbenchState,
-    session: &Session,
-) -> CommandResult<()> {
-    let pending = {
-        let _guard = state.serial.lock().await;
-        let manifest = load_state(app, session)?;
-        if !manifest.enabled || !manifest.allow_ai || !manifest.initial_complete {
-            return Ok(());
-        }
-        let (root, _) = roots(app, session)?;
-        manifest
-            .entries
-            .values()
-            .filter(|e| {
-                eligible(e)
-                    && e.synthesis_revision != synthesis_key(session, &e.revision)
-                    && e.failed_synthesis_revision != synthesis_key(session, &e.revision)
-            })
-            .filter_map(|e| read_document(&root, e).ok())
-            .filter(|d| d.ai_context_enabled && !d.text().trim().is_empty())
-            .collect::<Vec<_>>()
-    };
-    for document in pending {
-        require_current(state, session)?;
-        let chunks = split_text(&document.text(), 12_000);
-        let mut results = Vec::new();
-        let mut failed = None;
-        for chunk in chunks {
-            let mut part = document.clone();
-            part.transcript = chunk;
-            part.outline.clear();
-            part.conclusions.clear();
-            part.todos.clear();
-            part.segments.retain(|s| {
-                part.transcript
-                    .contains(&string(s, &["text", "recognizedText"]))
-            });
-            let mut result = None;
-            for attempt in 0..3 {
-                require_current(state, session)?;
-                match synthesize(
-                    session,
-                    if document.kind == "meeting" {
-                        "meeting_summary"
-                    } else {
-                        "memory_extract"
-                    },
-                    &[part.clone()],
-                    None,
-                )
-                .await
-                {
-                    Ok(value) => {
-                        result = Some(value);
-                        break;
-                    }
-                    Err(error) => {
-                        failed = Some(error);
-                        if attempt < 2 {
-                            tokio::time::sleep(Duration::from_secs(5 * (attempt + 1))).await;
-                        }
-                    }
-                }
-            }
-            if let Some(value) = result {
-                results.push(value);
-            } else {
-                break;
-            }
-        }
-        let _guard = state.serial.lock().await;
-        require_current(state, session)?;
-        let mut manifest = load_state(app, session)?;
-        let (root, _) = roots(app, session)?;
-        if !store::is_current_document(&root, &manifest, &document) {
-            continue;
-        }
-        if results.is_empty() || results.len() != split_text(&document.text(), 12_000).len() {
-            if let Some(entry) = manifest.entries.get_mut(&document.id) {
-                entry.error = failed.unwrap_or_else(|| "AI processing failed".into());
-                entry.failed_synthesis_revision = synthesis_key(session, &document.revision);
-            }
-            persist(app, session, &manifest)?;
-            continue;
-        }
-        if let Some(error) = results
-            .iter()
-            .find_map(|result| validate_result(&[document.clone()], &manifest, result).err())
-        {
-            if let Some(entry) = manifest.entries.get_mut(&document.id) {
-                entry.error = error;
-                entry.failed_synthesis_revision = synthesis_key(session, &document.revision);
-            }
-            persist(app, session, &manifest)?;
-            continue;
-        }
-        let artifact = manifest
-            .artifacts
-            .entry(document.id.clone())
-            .or_insert_with(|| json!({"summaries":[],"todoSuggestions":[]}));
-        let summaries = artifact["summaries"]
-            .as_array_mut()
-            .ok_or("Invalid local summaries")?;
-        summaries.push(json!({"id":uuid::Uuid::new_v4().to_string(),"markdown":results.iter().filter_map(|r|r["summary"].as_str()).collect::<Vec<_>>().join("\n\n"),"createdAt":crate::now(),"sourceRevision":document.revision}));
-        let mut proposals = artifact["todoSuggestions"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        for result in &results {
-            for proposal in result["todoSuggestions"].as_array().into_iter().flatten() {
-                let mut item = proposal.clone();
-                item["id"] = json!(store::digest(format!(
-                    "{}\n{}\n{}",
-                    document.id, item["title"], item["citations"]
-                )));
-                if !proposals
-                    .iter()
-                    .any(|existing| existing["id"] == item["id"])
-                {
-                    proposals.push(item);
-                }
-            }
-        }
-        artifact["todoSuggestions"] = json!(proposals);
-        let pinned: Vec<Value> = manifest
-            .memories
-            .iter()
-            .filter(|m| m["pinned"] == true && m["sourceId"] == document.id)
-            .cloned()
-            .collect();
-        manifest.memories.retain(|m| {
-            m["sourceId"] != document.id || m["pinned"] == true || m["userEdited"] == true
-        });
-        for result in &results {
-            for item in result["memoryItems"].as_array().into_iter().flatten() {
-                let mut memory = item.clone();
-                memory["id"] = json!(store::digest(format!(
-                    "{}\n{}\n{}",
-                    document.id, item["kind"], item["text"]
-                )));
-                memory["sourceId"] = json!(document.id);
-                memory["updatedAt"] = json!(crate::now());
-                memory["sourceTitle"] = json!(document.title);
-                if !pinned.iter().any(|p| p["text"] == memory["text"])
-                    && !manifest.memories.iter().any(|m| m["id"] == memory["id"])
-                {
-                    manifest.memories.push(memory);
-                }
-            }
-        }
-        if let Some(entry) = manifest.entries.get_mut(&document.id) {
-            entry.synthesis_revision = synthesis_key(session, &document.revision);
-            entry.error.clear();
-        }
-        persist(app, session, &manifest)?;
-    }
-    Ok(())
-}
-async fn write_snapshot(
-    app: &AppHandle,
-    state: &WorkbenchState,
-    session: &Session,
-) -> CommandResult<()> {
-    let _guard = state.serial.lock().await;
-    require_current(state, session)?;
-    let mut manifest = load_state(app, session)?;
-    let (_, memory) = roots(app, session)?;
-    store::write_memory_views(&memory, &manifest)?;
-    let failed = manifest
-        .entries
-        .values()
-        .filter(|entry| !entry.failed_synthesis_revision.is_empty())
-        .count();
-    manifest.phase = if failed > 0 { "incomplete" } else { "ready" }.into();
-    if failed > 0 {
-        manifest.error = format!("AI processing failed for {failed} sources; retry manually");
-    }
-    manifest.updated_at = crate::now();
-    persist(app, session, &manifest)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1115,10 +860,8 @@ mod tests {
             token: "synthetic-token".into(),
             scope: "account-a".into(),
             user_id: "verified-a".into(),
-            agent_url: String::new(),
             locale: "en".into(),
             generation: 1,
-            model_override: None,
         }
     }
     fn mock_pages(responses: Vec<Value>) -> (Session, std::thread::JoinHandle<Vec<String>>) {
@@ -1200,11 +943,11 @@ mod tests {
         assert_eq!(segments[0]["speakerName"], "Sam");
     }
     #[test]
-    fn dedupe_key_includes_prompt_model_and_language() {
-        let mut session = test_session("http://localhost".into());
-        let key = synthesis_key(&session, "r1");
-        session.model_override = Some(json!({"model":"another-model"}));
-        assert_ne!(key, synthesis_key(&session, "r1"));
+    fn chunks_preserve_every_character_and_newline() {
+        let text = "跨年会议\nNext action: confirm\n".repeat(500);
+        let chunks = split_text(&text, 1200);
+        assert!(chunks.iter().all(|c| c.chars().count() <= 1200));
+        assert_eq!(chunks.concat(), text);
     }
 
     #[test]

@@ -5037,6 +5037,7 @@ pub fn run() {
             // rail-embedded lights.
         })
         .invoke_handler(tauri::generate_handler![
+            workbench::wiki::workbench_wiki,
             workbench::workbench_bind,
             workbench::workbench_unbind,
             workbench::workbench_status,

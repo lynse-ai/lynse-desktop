@@ -75,13 +75,15 @@ export async function readDesktopMcpTool(name: string, args: Args, deps: McpData
       const keyword = stringArg(args, "keyword");
       const limit = numberArg(args, "limit", 20, 100);
       const sources = await bridge.search(keyword, true);
-      result = { sources: sources.items.slice(0, limit), memories: status.memories.filter((item) => !item.excluded && !item.stale
-        && (!keyword || item.text.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()))).slice(0, limit) };
+      const wiki = await bridge.wiki({ action: "state" });
+      result = { sources: sources.items.slice(0, limit), memories: wiki.topics.filter((topic) => !topic.excluded && !topic.stale && topic.published?.review === "approved"
+        && (!keyword || `${topic.title} ${topic.published.markdown}`.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()))).slice(0, limit).map((topic) => ({ id: `wiki:${topic.id}`, text: topic.published!.markdown.slice(0, 12000), citations: topic.published!.citations })) };
     } else if (name === "get_local_memory") {
       const id = stringArg(args, "id", true);
-      const item = status.memories.find((item) => item.id === id && !item.excluded && !item.stale);
-      if (!item) throw new McpInputError("Memory not found or excluded");
-      result = item;
+      const wiki = await bridge.wiki({ action: "state" });
+      const item = wiki.topics.find((topic) => `wiki:${topic.id}` === id && !topic.excluded && !topic.stale && topic.published?.review === "approved");
+      if (!item) throw new McpInputError("Wiki page not published, excluded or stale");
+      result = { id, text: item.published!.markdown, citations: item.published!.citations };
     } else {
       const id = stringArg(args, "id", true);
       const source = status.entries.find((entry) => entry.id === id && !entry.excluded && entry.status === "synced");
@@ -91,7 +93,7 @@ export async function readDesktopMcpTool(name: string, args: Args, deps: McpData
       result = { document: record.document, markdown: record.markdown };
     }
     const current = await bridge.status();
-    if (!current.enabled || !current.allowAi || current.scope !== status.scope || current.updatedAt !== status.updatedAt) throw new McpInputError("Account or sources changed; retry");
+    if (!current.enabled || !current.allowAi || !current.initialComplete || current.scope !== status.scope || current.updatedAt !== status.updatedAt) throw new McpInputError("Account or sources changed; retry");
     return result;
   }
   switch (name) {

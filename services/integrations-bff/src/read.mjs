@@ -23,6 +23,13 @@ function op(name, { summary, required = [], optional = [], ints = [], bools = []
 }
 
 export const READ_REGISTRY = {
+  gmail: {
+    service: "gmail",
+    operations: {
+      list_threads: op("list_threads", { summary: "只读查询邮件会话", optional: ["query", "page_token", "max_results"], ints: ["max_results"], caps: { max_results: 100 } }),
+      read_thread: op("read_thread", { summary: "只读获取邮件正文", required: ["thread_id"] }),
+    },
+  },
   "google-calendar": {
     service: "googlecalendar",
     operations: {
@@ -113,6 +120,10 @@ export function validateArguments(operation, args) {
 // -- gateway input mapping ---------------------------------------------------
 
 function mapInput(provider, operation, a) {
+  if (provider === "gmail") {
+    if (operation.name === "read_thread") return { action: "gmail.fetch_message_by_thread_id", input: { threadId: a.thread_id } };
+    return { action: "gmail.list_threads", input: { query: a.query ?? "newer_than:90d", maxResults: a.max_results ?? 100, ...(a.page_token ? { pageToken: a.page_token } : {}) } };
+  }
   if (provider === "google-calendar") {
     if (operation.name === "list_calendars") return { action: "googlecalendar.list_calendars", input: {} };
     if (a.calendar_id) {
@@ -168,6 +179,10 @@ function rows(out, ...keys) {
 }
 
 function normalizeOutput(provider, operation, out) {
+  if (provider === "gmail") {
+    if (operation.name === "list_threads") return { threads: rows(out, "threads", "items"), next_page_token: out?.nextPageToken ?? null };
+    return { messages: rows(out, "messages", "items").map((m) => ({ messageId: m.messageId ?? m.id, threadId: m.threadId, subject: m.subject, sender: m.sender, messageText: m.messageText ?? "", messageTimestamp: m.messageTimestamp, internalDate: m.internalDate, historyId: m.historyId })) };
+  }
   if (provider === "google-calendar" && operation.name === "list_calendars") {
     return {
       calendars: rows(out, "calendars", "items", "data").map((c) => ({

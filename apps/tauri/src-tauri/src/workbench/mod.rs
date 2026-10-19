@@ -1,5 +1,7 @@
+mod sources;
 mod store;
 mod sync;
+pub mod wiki;
 pub(crate) use store::SourceRef;
 
 use crate::CommandResult;
@@ -21,11 +23,9 @@ pub(super) struct Session {
     pub scope: String,
     pub user_id: String,
     pub base_url: String,
-    pub agent_url: String,
     pub token: String,
     pub generation: u64,
     pub locale: String,
-    pub model_override: Option<Value>,
 }
 
 #[derive(Default)]
@@ -44,7 +44,8 @@ pub struct BindRequest {
     token: String,
     #[serde(default)]
     locale: String,
-    model_override: Option<Value>,
+    #[serde(rename = "modelOverride")]
+    _model_override: Option<Value>,
 }
 
 pub(super) fn state_path(app: &AppHandle, session: &Session) -> CommandResult<PathBuf> {
@@ -63,7 +64,15 @@ pub(super) fn roots(app: &AppHandle, session: &Session) -> CommandResult<(PathBu
 }
 pub(super) fn load_state(app: &AppHandle, session: &Session) -> CommandResult<Manifest> {
     let mut state = store::load(&state_path(app, session)?)?;
-    if !crate::vault::load_vault_config(app)?.enabled {
+    let vault = crate::vault::load_vault_config(app)?;
+    let expected_root = roots(app, session)
+        .ok()
+        .map(|(root, _)| root.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if !state.bootstrap_valid(&expected_root) {
+        state.initial_complete = false;
+    }
+    if !vault.enabled {
         state.enabled = false;
         state.phase = "disabled".into();
     }
@@ -206,6 +215,92 @@ fn public_status(session: &Session, state: &Manifest) -> Value {
         "entries":entries,"memories":if state.enabled {state.memories.clone()}else{vec![]}})
 }
 
+pub(super) fn invalidate_runtime(state: &WorkbenchState) -> CommandResult<Session> {
+    let generation = state.epoch.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Some(worker) = state
+        .worker
+        .lock()
+        .map_err(|_| "Worker unavailable")?
+        .take()
+    {
+        worker.abort();
+    }
+    let mut bound = state.session.lock().map_err(|_| "Session unavailable")?;
+    let session = bound.as_mut().ok_or("Sign in first")?;
+    session.generation = generation;
+    Ok(session.clone())
+}
+
+pub(crate) async fn save_vault_config(
+    app: &AppHandle,
+    config: crate::vault::VaultConfig,
+) -> CommandResult<crate::vault::VaultConfig> {
+    let state = app.state::<WorkbenchState>();
+    // Cancel requests before waiting for disk operations. Their generation can no longer commit.
+    let cancelled = invalidate_runtime(&state).ok();
+    let _guard = state.serial.lock().await;
+    if let Some(ref session) = cancelled {
+        require_current(&state, session)?;
+    }
+    let session = current(&state).ok();
+    if let Some(ref session) = session {
+        let mut manifest = load_state(app, session)?;
+        manifest.initial_complete = false;
+        manifest.completed_round.clear();
+        manifest.phase = "pending".into();
+        persist(app, session, &manifest)?;
+    }
+    // A disabled vault permanently turns off Wiki for every account, even offline ones.
+    let registry = crate::app_data_dir(app)?.join("workbench");
+    let previous = crate::vault::load_vault_config(app)?;
+    if !config.enabled || !previous.enabled {
+        for entry in if registry.exists() {
+            Some(fs::read_dir(registry).map_err(|e| e.to_string())?)
+        } else {
+            None
+        }
+        .into_iter()
+        .flatten()
+        {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path().join("state.json");
+            if path.is_file() {
+                let mut manifest = store::load(&path)?;
+                manifest.enabled = false;
+                manifest.initial_complete = false;
+                manifest.completed_round.clear();
+                manifest.phase = "disabled".into();
+                store::save(&path, &manifest)?;
+            }
+        }
+    }
+    let result = crate::vault::save_config_inner(app, config.clone());
+    if let Some(session) = session {
+        let mut manifest = load_state(app, &session)?;
+        manifest.initial_complete = false;
+        manifest.completed_round.clear();
+        if result.is_err() {
+            manifest.phase = "failed".into();
+            manifest.error =
+                "Folder configuration failed; processing is paused. Retry the folder change."
+                    .into();
+        } else {
+            manifest.phase = if manifest.enabled {
+                "pending"
+            } else {
+                "disabled"
+            }
+            .into();
+            manifest.error.clear();
+        }
+        persist(app, &session, &manifest)?;
+        if result.is_ok() && config.enabled {
+            start_worker(app, &state);
+        }
+    }
+    result
+}
+
 fn normalize_url(raw: &str) -> CommandResult<String> {
     let url = url::Url::parse(raw.trim()).map_err(|_| "Invalid server URL")?;
     if !matches!(url.scheme(), "http" | "https")
@@ -227,7 +322,9 @@ pub async fn workbench_bind(
     request: BindRequest,
 ) -> CommandResult<Value> {
     let base = normalize_url(&request.base_url)?;
-    let agent = normalize_url(request.agent_url.as_deref().unwrap_or(&base))?;
+    if let Some(agent) = request.agent_url.as_deref() {
+        normalize_url(agent)?;
+    }
     if request.token.trim().is_empty() {
         return Err("Sign in first".into());
     }
@@ -281,16 +378,20 @@ pub async fn workbench_bind(
         scope: store::digest(format!("{base}\n{user_id}")),
         user_id,
         base_url: base,
-        agent_url: agent,
         token: request.token,
         generation,
         locale: request.locale,
-        model_override: request.model_override,
     };
-    let manifest = load_state(&app, &session)?;
+    let mut manifest = load_state(&app, &session)?;
+    manifest.initial_complete = false;
+    manifest.completed_round.clear();
+    for entry in manifest.entries.values_mut() {
+        entry.failed_download_revision.clear();
+    }
     *state.session.lock().map_err(|_| "Session unavailable")? = Some(session.clone());
+    persist(&app, &session, &manifest)?;
     let status = public_status(&session, &manifest);
-    if manifest.enabled {
+    if crate::vault::load_vault_config(&app)?.enabled {
         start_worker(&app, &state);
     }
     Ok(status)
@@ -351,8 +452,8 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
             if !is_current(&state, &session) {
                 return;
             }
-            if !load_state(&app, &session)
-                .map(|m| m.enabled)
+            if !crate::vault::load_vault_config(&app)
+                .map(|c| c.enabled)
                 .unwrap_or(false)
             {
                 return;
@@ -388,16 +489,21 @@ pub async fn workbench_configure(
                 config.path = Some(crate::vault::vault_default_path(app.clone())?);
             }
             config.enabled = true;
-            crate::vault::vault_config_save(app.clone(), config)?;
+            crate::vault::save_config_inner(&app, config)?;
         }
     }
     let mut manifest = load_state(&app, &session)?;
     manifest.enabled = enabled;
+    manifest.initial_complete = false;
+    manifest.completed_round.clear();
     manifest.allow_ai = allow_ai;
     manifest.phase = if enabled { "pending" } else { "disabled" }.into();
     manifest.error.clear();
     persist(&app, &session, &manifest)?;
     if enabled {
+        wiki::backup_legacy(&app, &session)?;
+    }
+    if crate::vault::load_vault_config(&app)?.enabled {
         start_worker(&app, &state);
     }
     Ok(public_status(&session, &manifest))
@@ -410,11 +516,13 @@ pub async fn workbench_sync(
     retry_failed: Option<bool>,
 ) -> CommandResult<()> {
     let _guard = state.serial.lock().await;
-    let session = current(&state)?;
+    let session = invalidate_runtime(&state)?;
     let mut manifest = load_state(&app, &session)?;
-    if !manifest.enabled {
-        return Err("Cross-meeting memory is disabled".into());
+    if !crate::vault::load_vault_config(&app)?.enabled {
+        return Err("Local knowledge-base sync is disabled".into());
     }
+    manifest.initial_complete = false;
+    manifest.completed_round.clear();
     if retry_failed.unwrap_or(true) {
         for entry in manifest.entries.values_mut() {
             entry.failed_synthesis_revision.clear();
@@ -441,16 +549,36 @@ pub async fn workbench_search(
     query: String,
     ai_only: Option<bool>,
 ) -> CommandResult<Value> {
-    let _guard = state.serial.lock().await;
     let session = current(&state)?;
-    let manifest = load_state(&app, &session)?;
-    if ai_only.unwrap_or(false) && !manifest.enabled {
-        return Ok(json!({"items":[],"initialComplete":false}));
+    let (mut items, complete, semantic) = {
+        let _guard = state.serial.lock().await;
+        require_current(&state, &session)?;
+        let manifest = load_state(&app, &session)?;
+        if ai_only.unwrap_or(false) && wiki::ready(&manifest).is_err() {
+            return Ok(json!({"items":[],"initialComplete":false}));
+        }
+        let (root, _) = roots(&app, &session)?;
+        (
+            if ai_only.unwrap_or(false) {
+                store::search(&root, &manifest, &query, 30)
+            } else {
+                store::browse(&root, &manifest, &query, 100)
+            },
+            manifest.initial_complete,
+            wiki::ready(&manifest).is_ok(),
+        )
+    };
+    if semantic {
+        if let Ok(matches) = wiki::semantic_search(&app, &state, &session, &query).await {
+            for row in matches {
+                if !items.iter().any(|r| r["id"] == row["id"]) {
+                    items.push(row);
+                }
+            }
+        }
     }
-    let (root, _) = roots(&app, &session)?;
-    Ok(
-        json!({"items":if ai_only.unwrap_or(false){store::search(&root,&manifest,&query,30)}else{store::browse(&root,&manifest,&query,100)},"initialComplete":manifest.initial_complete}),
-    )
+    require_current(&state, &session)?;
+    Ok(json!({"items":items,"initialComplete":complete}))
 }
 
 #[tauri::command]
@@ -461,6 +589,10 @@ pub async fn workbench_read(
 ) -> CommandResult<Value> {
     let _guard = state.serial.lock().await;
     let session = current(&state)?;
+    if id.starts_with("wiki:") {
+        return wiki::read_page(&app, &session, &id);
+    }
+
     let manifest = load_state(&app, &session)?;
     let actual = manifest.aliases.get(&id).unwrap_or(&id);
     let entry = manifest
@@ -500,7 +632,7 @@ pub async fn workbench_review(
             .filter_map(|row| manifest.entries.get(row["id"].as_str()?))
             .filter_map(|entry| store::read_document(&root, entry).ok())
             .collect::<Vec<_>>();
-        documents.extend(store::matching_memories(&root, &manifest, &query, 2));
+        // Only reviewed Wiki pages join automatic context; legacy memory remains editable.
         for document in &mut documents {
             document.transcript = store::evidence_excerpt(&document.text(), &query, 12_000);
             document.outline.clear();
@@ -519,7 +651,8 @@ pub async fn workbench_review(
             json!({"summary":"","memoryItems":[],"todoSuggestions":[],"citations":[],"insufficientEvidence":true}),
         );
     }
-    let result = sync::synthesize(&session, "project_review", &documents, Some(&query)).await?;
+    let result =
+        wiki::synthesize(&app, &session, "project_review", &documents, Some(&query)).await?;
     let _guard = state.serial.lock().await;
     require_current(&state, &session)?;
     let manifest = load_state(&app, &session)?;
@@ -621,26 +754,34 @@ pub async fn workbench_regenerate(
     state: State<'_, WorkbenchState>,
     id: String,
 ) -> CommandResult<()> {
-    let _guard = state.serial.lock().await;
     let session = current(&state)?;
+    let document = {
+        let _guard = state.serial.lock().await;
+        let manifest = load_state(&app, &session)?;
+        wiki::ready(&manifest)?;
+        let entry = manifest
+            .entries
+            .get(&id)
+            .filter(|e| store::eligible(e))
+            .ok_or("Meeting is excluded or unavailable")?;
+        store::read_document(&roots(&app, &session)?.0, entry)?
+    };
+    let result =
+        wiki::synthesize(&app, &session, "meeting_summary", &[document.clone()], None).await?;
+    let _guard = state.serial.lock().await;
+    require_current(&state, &session)?;
     let mut manifest = load_state(&app, &session)?;
-    if !manifest.enabled || !manifest.allow_ai {
-        return Err("Enable AI processing first".into());
+    wiki::ready(&manifest)?;
+    if !store::is_current_document(&roots(&app, &session)?.0, &manifest, &document) {
+        return Err("Source changed; retry the summary".into());
     }
-    let entry = manifest.entries.get_mut(&id).ok_or("Meeting not found")?;
-    entry.synthesis_revision.clear();
-    entry.failed_synthesis_revision.clear();
-    persist(&app, &session, &manifest)?;
-    if let Some(worker) = state
-        .worker
-        .lock()
-        .map_err(|_| "Worker unavailable")?
-        .take()
-    {
-        worker.abort();
-    }
-    start_worker(&app, &state);
-    Ok(())
+    sync::validate_result(&[document.clone()], &manifest, &result)?;
+    let artifact = manifest
+        .artifacts
+        .entry(document.id)
+        .or_insert_with(|| json!({"summaries":[],"todoSuggestions":[]}));
+    artifact["summaries"].as_array_mut().ok_or("Invalid summaries")?.push(json!({"id":uuid::Uuid::new_v4().to_string(),"markdown":result["summary"],"createdAt":crate::now(),"sourceRevision":document.revision}));
+    persist(&app, &session, &manifest)
 }
 
 #[tauri::command]
@@ -869,8 +1010,48 @@ pub async fn workbench_context(
     }
     let (root, _) = roots(&app, &session)?;
     let mut sources = store::search(&root, &manifest, &query, 3);
-    for document in store::matching_memories(&root, &manifest, &query, 2) {
-        sources.push(json!({"id":document.id,"title":document.title,"kind":document.kind,"excerpt":document.transcript.chars().take(1800).collect::<String>(),"source":document.reference()}));
-    }
+    sources.extend(wiki::context(&app, &session, &manifest, &query)?);
     Ok(json!({"version":1,"sources":sources,"scope":session.scope}))
+}
+
+#[cfg(test)]
+mod wiki_lifecycle_tests {
+    use super::*;
+    fn session(scope: &str, generation: u64) -> Session {
+        Session {
+            scope: scope.into(),
+            generation,
+            user_id: "verified-user".into(),
+            base_url: "https://example.test".into(),
+            token: "synthetic-token".into(),
+            locale: "en".into(),
+        }
+    }
+    #[test]
+    fn late_results_are_rejected_after_configuration_and_account_changes() {
+        let state = WorkbenchState::default();
+        let old = session("account-a", 0);
+        *state.session.lock().unwrap() = Some(old.clone());
+        let updated = invalidate_runtime(&state).unwrap();
+        assert!(require_current(&state, &old).is_err());
+        assert!(require_current(&state, &updated).is_ok());
+        let another = session("account-b", updated.generation);
+        *state.session.lock().unwrap() = Some(another);
+        assert!(require_current(&state, &updated).is_err());
+    }
+    #[test]
+    fn completion_is_bound_to_directory_and_sync_round() {
+        let mut m = Manifest::default();
+        m.initial_complete = true;
+        m.sync_root = "/old/Meetings/account-a".into();
+        m.sync_round = "one".into();
+        m.completed_round = "one".into();
+        assert!(m.bootstrap_valid("/old/Meetings/account-a"));
+        assert!(!m.bootstrap_valid("/new/Meetings/account-a"));
+        assert!(!m.bootstrap_valid("/old/Meetings/account-b"));
+        m.sync_round = "two".into();
+        assert!(!m.bootstrap_valid("/old/Meetings/account-a"));
+        m.completed_round = "two".into();
+        assert!(m.bootstrap_valid("/old/Meetings/account-a"));
+    }
 }

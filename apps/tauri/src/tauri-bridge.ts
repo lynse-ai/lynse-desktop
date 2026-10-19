@@ -339,6 +339,7 @@ export async function installTauriBridge(): Promise<void> {
     bind: (request) => command("workbench_bind", { request }),
     unbind: () => command("workbench_unbind"),
     status: () => command("workbench_status"),
+    wiki: (request) => command("workbench_wiki", { request }),
     configure: (enabled, allowAi) => command("workbench_configure", { enabled, allowAi }),
     sync: (retryFailed) => command("workbench_sync", { retryFailed }),
     search: (query, aiOnly) => command("workbench_search", { query, aiOnly }),

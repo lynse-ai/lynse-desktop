@@ -928,8 +928,8 @@ const zh = {
   },
   vault: {
     title: "本地知识库",
-    enable: "启用本地 MD 知识库",
-    hint: "看过或编辑过的笔记会自动以 Markdown 文件同步到本地文件夹，可用 Obsidian 等编辑器直接打开，形成你的个人知识库。",
+    enable: "开启本地知识库同步",
+    hint: "将全部会议文本同步到所选目录，保留转写、时间轴、大纲、已有纪要和待办；音频按需访问。",
     no_path: "未选择文件夹",
     change_folder: "更改…",
     open_folder: "打开文件夹",

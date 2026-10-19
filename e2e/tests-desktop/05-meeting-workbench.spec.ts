@@ -10,10 +10,20 @@ async function installWorkbench(page: import("@playwright/test").Page) {
       entries:[{id:"meeting-1995",kind:"meeting",title:"Project Alpha · 1995",revision:"r1",status:"synced",excluded:false,error:""},{id:"meeting-2026",kind:"meeting",title:"Project Alpha · 2026",revision:"r2",status:"failed",excluded:false,error:"Network unavailable"}],
       memories:[{id:"memory-1",sourceId:"meeting-1995",sourceTitle:"Project Alpha",kind:"proposal",text:"Friday remains a proposal",citations:[reference]}]};
     const record = {document:{id:"meeting-1995",kind:"meeting",title:"Project Alpha · 1995",revision:"r1",transcript:reference.quote,outline:"Review the deadline",segments:[{id:"s1",text:reference.quote,startMs:12000,speakerName:"Sam"}],conclusions:[{id:"v1",templateName:"Original summary",conclusionText:"No final date was agreed."},{id:"v2",templateName:"Updated summary",conclusionText:"The team still needs to confirm."}],todos:[],aiContextEnabled:true},markdown:"# Project Alpha",artifacts:{summaries:[],todoSuggestions:[{id:"suggestion-1",title:"Confirm the launch date",citations:[reference],accepted:false}]}};
+    const vault={enabled:false,path:"/tmp/lynse-e2e-vault"};
+    const wiki={topics:[] as {id:string;title:string;purpose:string;notes:string;pinned:boolean;excluded:boolean;stale:boolean;error:string;candidate:{id:string;markdown:string;citations:typeof reference[]}|null;published:{id:string;markdown:string;citations:typeof reference[]}|null}[],models:{text:{baseUrl:"",model:""},embedding:{baseUrl:"",model:""},revision:""},sources:{gmailEnabled:false,gmailAccountId:"",integrationsUrl:""}};
+    hook.setCommand("vault_config_get",()=>structuredClone(vault));
+    hook.setCommand("vault_default_path",()=>"/tmp/lynse-e2e-vault");
+    hook.setCommand("vault_config_save",(args)=>{Object.assign(vault,args.config);if(!vault.enabled){status.enabled=false;status.initialComplete=false;status.phase="disabled";publish();}return structuredClone(vault);});
+    hook.setCommand("workbench_wiki",(args)=>{const request=args.request as Record<string,unknown>;
+      if(request.action==="topic"){const item=wiki.topics.find(t=>t.id===request.id);if(item)Object.assign(item,request);else wiki.topics.push({id:"topic-1",title:String(request.title),purpose:String(request.purpose),notes:"",pinned:false,excluded:false,stale:false,error:"",published:null,candidate:status.initialComplete?{id:"candidate-1",markdown:"## Candidate\n\nFriday remains a proposal.",citations:[reference]}:null});}
+      if(request.action==="review"){if(!status.initialComplete||!status.allowAi)throw new Error("Sync incomplete");const topic=wiki.topics[0]!;if(request.approve)topic.published={...topic.candidate!,markdown:String(request.markdown??topic.candidate?.markdown)};topic.candidate=null;}
+      return structuredClone(wiki);
+    });
     let serial=1;
-    const publish=()=>{status.updatedAt=String(++serial);hook.emit("workbench-updated",status);};
-    hook.setCommand("workbench_status",()=>status);
-    hook.setCommand("workbench_configure",(args)=>{status.enabled=!!args.enabled;status.allowAi=!!args.allowAi;status.phase=status.enabled?"incomplete":"disabled";publish();return status;});
+    const publish=()=>{status.updatedAt=String(++serial);hook.emit("workbench-updated",structuredClone(status));};
+    hook.setCommand("workbench_status",()=>structuredClone(status));
+    hook.setCommand("workbench_configure",(args)=>{status.enabled=!!args.enabled;if(status.enabled)vault.enabled=true;status.allowAi=!!args.allowAi;status.phase=status.enabled?"incomplete":"disabled";publish();return structuredClone(status);});
     hook.setCommand("workbench_search",()=>({items:[{id:"meeting-1995",title:"Project Alpha · 1995",kind:"meeting",excerpt:reference.quote,source:reference}],initialComplete:status.initialComplete}));
     hook.setCommand("workbench_read",()=>record);
     hook.setCommand("workbench_confirm_todos",()=>{record.artifacts.todoSuggestions[0]!.accepted=true;publish();return [{id:"stable-confirmed-task"}];});
@@ -37,12 +47,12 @@ test("consent, incomplete-sync gate, offline source reading and confirmed sugges
   await openWorkspace(page,mockServer.url);
   await installWorkbench(page);
   const config=await settings(page);
-  const enable=config.getByRole("switch",{name:"Build memory from my knowledge base",exact:true});
+  const enable=config.getByRole("switch",{name:"Enable Wiki",exact:true});
   await expect(enable).not.toBeChecked();await enable.click();
   await expect(config.getByRole("switch",{name:"Allow AI processing of eligible text",exact:true})).not.toBeChecked();
   await config.getByRole("switch",{name:"Allow AI processing of eligible text",exact:true}).click();
-  await config.getByRole("button",{name:"Open knowledge base & memory",exact:true}).click();
-  const reader=page.getByRole("dialog").filter({has:page.getByRole("heading",{name:"Meeting memory",exact:true})});
+  await config.getByRole("button",{name:"Open knowledge base & Wiki",exact:true}).click();
+  const reader=page.getByRole("dialog").filter({has:page.getByRole("heading",{name:"Meeting Wiki",exact:true})});
   await reader.getByRole("textbox",{name:"Search a project, topic or meeting"}).fill("Alpha");
   await expect(reader.getByRole("button",{name:"Prepare meeting brief",exact:true})).toBeDisabled();
   await reader.getByRole("button",{name:"Project Alpha · 1995",exact:true}).click();
@@ -55,10 +65,48 @@ test("consent, incomplete-sync gate, offline source reading and confirmed sugges
   await page.screenshot({path:test.info().outputPath("workbench-offline.png"),animations:"disabled"});
   await page.keyboard.press("Escape");
   await config.getByRole("button",{name:"Sync all meetings",exact:true}).click();
-  await config.getByRole("button",{name:"Open knowledge base & memory",exact:true}).click();
+  await config.getByRole("button",{name:"Open knowledge base & Wiki",exact:true}).click();
   await reader.getByRole("textbox",{name:"Search a project, topic or meeting"}).fill("Alpha");
   await reader.getByRole("button",{name:"Prepare meeting brief",exact:true}).click();
   await expect(reader.getByRole("heading",{name:"Questions",exact:true})).toBeVisible();
   await expect(reader.getByText("Friday remains a proposal",{exact:true})).toBeVisible();
   await page.screenshot({path:test.info().outputPath("workbench-brief.png"),animations:"disabled"});
+});
+
+
+test("Wiki and local sync switches follow native returned state",async({page,mockServer})=>{
+  await openWorkspace(page,mockServer.url);await installWorkbench(page);const config=await settings(page);
+  const wiki=config.getByRole("switch",{name:"Enable Wiki",exact:true});
+  const sync=config.getByRole("switch").first();
+  await expect(sync).not.toBeChecked();await wiki.click();await expect(sync).toBeChecked();await expect(wiki).toBeChecked();
+  await wiki.click();await expect(wiki).not.toBeChecked();await expect(sync).toBeChecked();
+  await wiki.click();await sync.click();await expect(wiki).not.toBeChecked();await expect(sync).not.toBeChecked();
+  await sync.click();await expect(sync).toBeChecked();await expect(wiki).not.toBeChecked();
+  await page.screenshot({path:test.info().outputPath("wiki-vault-settings.png"),animations:"disabled"});
+});
+
+test("topics produce a reviewable candidate and publish only after full sync",async({page,mockServer})=>{
+  await openWorkspace(page,mockServer.url);await installWorkbench(page);const config=await settings(page);
+  await config.getByRole("switch",{name:"Enable Wiki",exact:true}).click();
+  await config.getByRole("switch",{name:"Allow AI processing of eligible text",exact:true}).click();
+  await config.getByRole("button",{name:"Sync all meetings",exact:true}).click();
+  await config.getByRole("button",{name:"Open knowledge base & Wiki",exact:true}).click();
+  const reader=page.getByRole("dialog").filter({has:page.getByRole("heading",{name:"Meeting Wiki",exact:true})});
+  await reader.getByRole("textbox",{name:"Project or topic name",exact:true}).fill("Project Alpha");
+  await reader.getByRole("textbox",{name:"Purpose and key questions",exact:true}).fill("Which launch decisions remain open?");
+  await reader.getByRole("button",{name:"Create topic",exact:true}).click();
+  await expect(reader.getByText("Candidate · awaiting review",{exact:true})).toBeVisible();
+  await reader.getByRole("textbox",{name:"Page content",exact:true}).fill("## Reviewed decision\n\nNo launch date was agreed.");
+  await reader.getByRole("button",{name:"Approve and publish",exact:true}).click();
+  await expect(reader.getByText("Published",{exact:true})).toBeVisible();
+  await expect(reader.getByRole("heading",{name:"Reviewed decision",exact:true})).toBeVisible();
+  await page.screenshot({path:test.info().outputPath("wiki-reviewed-page.png"),animations:"disabled"});
+});
+
+test("folder configuration failure does not show Wiki enabled",async({page,mockServer})=>{
+  await openWorkspace(page,mockServer.url);await installWorkbench(page);
+  await page.evaluate(()=>{(window as unknown as {__LYNSE_E2E__:{setCommand:(name:string,handler:()=>unknown)=>void}}).__LYNSE_E2E__.setCommand("workbench_configure",()=>{throw new Error("Folder is not writable");});});
+  const config=await settings(page);await config.getByRole("switch",{name:"Enable Wiki",exact:true}).click();
+  await expect(config.getByRole("switch",{name:"Enable Wiki",exact:true})).not.toBeChecked();await expect(config.locator("#vault-enable")).not.toBeChecked();
+  await expect(config.getByRole("alert")).toContainText("Folder is not writable");
 });

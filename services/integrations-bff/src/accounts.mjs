@@ -16,7 +16,6 @@ import { accountView } from "./views.mjs";
  *   | {ok:false, error:"unknown_account"}}
  */
 export function resolveAccount(owned, accountId) {
-  if (!owned.length) return { ok: false, error: "connection_required" };
   if (accountId) {
     const account = owned.find((a) => a.id === accountId);
     if (!account) {
@@ -25,6 +24,7 @@ export function resolveAccount(owned, accountId) {
     }
     return { ok: true, account };
   }
+  if (!owned.length) return { ok: false, error: "connection_required" };
   if (owned.length > 1) {
     return { ok: false, error: "account_selection_required", accounts: owned.map(accountView) };
   }

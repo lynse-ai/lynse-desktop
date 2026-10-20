@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+import { completeOAuth } from "../fixtures/integrations-mock";
 import { test, expect, openWorkspace } from "../fixtures/desktop-fixture";
 
 // Native durability and pagination are exercised by Rust tests. This fixture
@@ -11,13 +13,16 @@ async function installWorkbench(page: import("@playwright/test").Page) {
       memories:[{id:"memory-1",sourceId:"meeting-1995",sourceTitle:"Project Alpha",kind:"proposal",text:"Friday remains a proposal",citations:[reference]}]};
     const record = {document:{id:"meeting-1995",kind:"meeting",title:"Project Alpha · 1995",revision:"r1",transcript:reference.quote,outline:"Review the deadline",segments:[{id:"s1",text:reference.quote,startMs:12000,speakerName:"Sam"}],conclusions:[{id:"v1",templateName:"Original summary",conclusionText:"No final date was agreed."},{id:"v2",templateName:"Updated summary",conclusionText:"The team still needs to confirm."}],todos:[],aiContextEnabled:true},markdown:"# Project Alpha",artifacts:{summaries:[],todoSuggestions:[{id:"suggestion-1",title:"Confirm the launch date",citations:[reference],accepted:false}]}};
     const vault={enabled:false,path:"/tmp/lynse-e2e-vault"};
-    const wiki={topics:[] as {id:string;title:string;purpose:string;notes:string;pinned:boolean;excluded:boolean;stale:boolean;error:string;candidate:{id:string;markdown:string;citations:typeof reference[]}|null;published:{id:string;markdown:string;citations:typeof reference[]}|null}[],models:{text:{baseUrl:"",model:""},embedding:{baseUrl:"",model:""},revision:""},sources:{gmailEnabled:false,gmailAccountId:"",integrationsUrl:""}};
+    const wiki={topics:[] as {id:string;title:string;purpose:string;notes:string;pinned:boolean;excluded:boolean;stale:boolean;error:string;candidate:{id:string;markdown:string;citations:typeof reference[]}|null;published:{id:string;markdown:string;citations:typeof reference[]}|null}[],models:{embedding:{baseUrl:"",model:""},revision:""},sources:{gmailEnabled:false,gmailAccountId:"",integrationsUrl:""}};
     hook.setCommand("vault_config_get",()=>structuredClone(vault));
     hook.setCommand("vault_default_path",()=>"/tmp/lynse-e2e-vault");
     hook.setCommand("vault_config_save",(args)=>{Object.assign(vault,args.config);if(!vault.enabled){status.enabled=false;status.initialComplete=false;status.phase="disabled";publish();}return structuredClone(vault);});
     hook.setCommand("workbench_wiki",(args)=>{const request=args.request as Record<string,unknown>;
+      if(request.action==="sources")Object.assign(wiki.sources, request.sources);
+      if(request.action==="models")Object.assign(wiki.models, request.models);
       if(request.action==="topic"){const item=wiki.topics.find(t=>t.id===request.id);if(item)Object.assign(item,request);else wiki.topics.push({id:"topic-1",title:String(request.title),purpose:String(request.purpose),notes:"",pinned:false,excluded:false,stale:false,error:"",published:null,candidate:status.initialComplete?{id:"candidate-1",markdown:"## Candidate\n\nFriday remains a proposal.",citations:[reference]}:null});}
       if(request.action==="review"){if(!status.initialComplete||!status.allowAi)throw new Error("Sync incomplete");const topic=wiki.topics[0]!;if(request.approve)topic.published={...topic.candidate!,markdown:String(request.markdown??topic.candidate?.markdown)};topic.candidate=null;}
+      if(request.action!=="state")publish();
       return structuredClone(wiki);
     });
     let serial=1;
@@ -109,4 +114,56 @@ test("folder configuration failure does not show Wiki enabled",async({page,mockS
   const config=await settings(page);await config.getByRole("switch",{name:"Enable Wiki",exact:true}).click();
   await expect(config.getByRole("switch",{name:"Enable Wiki",exact:true})).not.toBeChecked();await expect(config.locator("#vault-enable")).not.toBeChecked();
   await expect(config.getByRole("alert")).toContainText("Folder is not writable");
+});
+
+
+test("Wiki hides outside test mode and rebinds when the mode changes", async ({page,mockServer}) => {
+  await openWorkspace(page,mockServer.url);
+  await installWorkbench(page);
+  await page.evaluate(async (url) => {
+    const flags = await import(url);
+    flags.configureBuildChannel("official");
+    flags.setTestMode(false);
+  }, `/@fs${resolve(__dirname, "../../packages/views/feature-flags.ts")}`);
+  const config = await settings(page);
+  await expect(config.getByRole("switch", {name:"Enable Wiki",exact:true})).toHaveCount(0);
+  await expect(config.getByRole("button", {name:"Open knowledge base & Wiki",exact:true})).toHaveCount(0);
+  await expect(config.locator("#vault-enable")).toBeVisible();
+  await page.evaluate(async (url) => { (await import(url)).setTestMode(true); }, `/@fs${resolve(__dirname, "../../packages/views/feature-flags.ts")}`);
+  await expect(config.getByRole("switch", {name:"Enable Wiki",exact:true})).toBeVisible();
+});
+
+test("Gmail connects as a plugin in Connections; Wiki only selects its source and embedding model", async ({page,mockServer}) => {
+  await page.addInitScript(() => localStorage.setItem("lynse_plugins_state", JSON.stringify({"lynse.gmail":{installedAt:1,enabled:true}})));
+  await openWorkspace(page,mockServer.url);
+  await installWorkbench(page);
+  const config = await settings(page);
+  await config.getByRole("switch", {name:"Enable Wiki",exact:true}).click();
+  await config.getByText("Wiki models",{exact:true}).click();
+  await expect(config.getByText(/Lynclaw/).first()).toBeVisible();
+  await expect(config.getByRole("group",{name:"Embedding model (optional)",exact:true})).toBeVisible();
+  await expect(config.getByRole("group",{name:"Text model",exact:true})).toHaveCount(0);
+  await expect(config.getByRole("button",{name:/Connect Gmail|Check authorization/})).toHaveCount(0);
+  await config.getByRole("button",{name:/^Connections/}).click();
+  const gmail = config.getByRole("region",{name:"Gmail",exact:true});
+  await gmail.getByRole("button",{name:"Connect",exact:true}).click();
+  await expect.poll(() => mockServer.integrations.pendingOAuth.size).toBeGreaterThan(0);
+  const [state] = [...mockServer.integrations.pendingOAuth.keys()];
+  completeOAuth(mockServer.integrations,state!);
+  await expect(gmail.getByText("Connected",{exact:true})).toBeVisible({timeout:20000});
+  await expect(gmail.getByText("Sync",{exact:true})).toHaveCount(0);
+  await config.getByRole("button",{name:"Notes Sync",exact:true}).click();
+  const source = config.getByRole("switch",{name:"Use connected Gmail in Wiki",exact:true});
+  await expect(source).toBeEnabled();
+  await source.click();
+  await expect(source).toBeChecked();
+  await config.getByText("Wiki models",{exact:true}).click();
+  await page.screenshot({path:test.info().outputPath("wiki-model-and-source.png"),animations:"disabled"});
+  await config.getByRole("button",{name:/^Connections/}).click();
+  await gmail.getByRole("button",{name:"Disconnect",exact:true}).click();
+  await page.getByRole("dialog").last().getByRole("button",{name:"Disconnect",exact:true}).click();
+  await expect(gmail.getByRole("button",{name:"Connect",exact:true})).toBeVisible();
+  await config.getByRole("button",{name:"Notes Sync",exact:true}).click();
+  await expect(source).not.toBeChecked();
+  await expect(source).toBeDisabled();
 });

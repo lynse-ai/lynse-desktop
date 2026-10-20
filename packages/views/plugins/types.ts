@@ -1,4 +1,5 @@
 import type { ComponentType } from "react";
+import type { IntegrationsProvider } from "@lynse/core/integrations";
 import type { LucideIcon } from "../icons";
 
 /** What a plugin packages. `app` ships UI contributions; `model` is a pure
@@ -47,6 +48,7 @@ export interface PluginSidebarItemContribution {
 }
 
 export interface PluginContributions {
+  connectionProvider?: { provider: IntegrationsProvider; kind: "source" };
   settingsSection?: PluginSettingsSectionContribution;
   sidebarItem?: PluginSidebarItemContribution;
   /** Domain events the plugin listens to (see events.ts). */

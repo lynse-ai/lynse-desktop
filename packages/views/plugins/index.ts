@@ -28,6 +28,7 @@ export {
   isPluginAvailable,
   detectPluginPlatform,
   getSettingsSections,
+  getConnectionProviders,
 } from "./registry";
 export { usePluginStore, initPluginMigrations } from "./state";
 export { emitPluginEvent, subscribePluginEvent } from "./events";

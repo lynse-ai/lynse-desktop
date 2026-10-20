@@ -1513,6 +1513,7 @@ const zh = {
     continue_editing: "继续编辑",
   },
   connections: {
+    group_sources: "知识来源",
     "title": "连接",
     "subtitle": "管理你的第三方集成",
     "group_calendar": "日历",
@@ -1552,6 +1553,7 @@ const zh = {
     "not_configured": "该集成尚未开通",
     "pick_a_destination_first": "请先选择默认导出位置",
     "provider": {
+      "gmail": "Gmail",
       "google-calendar": "Google 日历",
       "outlook-calendar": "Outlook 日历",
       "notion": "Notion",
@@ -1564,6 +1566,7 @@ const zh = {
       "feishu": "飞书"
     },
     "hint": {
+      "gmail": "只读连接 Gmail，可按需将近期邮件用于 Wiki",
       "google-calendar": "导入会议日程，并在会前提醒",
       "outlook-calendar": "与 Google 日历相同，用于 Microsoft 账号",
       "notion": "把会议总结写入数据库",

@@ -3,24 +3,28 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@lynse/core/api";
+import { useAuthStore } from "@lynse/core/auth";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@lynse/ui/components/ui/select";
+import { useIntegrationStatus } from "../connections/use-connect-flow";
+import { featureFlags, isWikiEnabled } from "../feature-flags";
+import { usePluginStore } from "../plugins/state";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
 import { Switch } from "@lynse/ui/components/ui/switch";
 import { Markdown } from "@lynse/ui/markdown";
 import { toast } from "sonner";
-import { openExternalUrl } from "../app-update";
 import { getWorkbenchApi, useWorkbench } from "./api";
 import type { WikiModelsConfig, WikiRequest, WikiTopic } from "./types";
 
-const emptyModels: WikiModelsConfig = { text: { baseUrl: "", model: "" }, embedding: { baseUrl: "", model: "" } };
+const emptyModels: WikiModelsConfig = { embedding: { baseUrl: "", model: "" } };
 function useWiki() {
   const status = useWorkbench((s) => s.status);
   const qc = useQueryClient();
   const bridge = getWorkbenchApi();
   const [busy, setBusy] = useState(false);
   const queryKey = ["workbench-wiki", status?.scope];
-  const query = useQuery({ queryKey: [...queryKey, status?.updatedAt], queryFn: () => bridge!.wiki({ action: "state" }), enabled: !!bridge?.wiki && !!status, networkMode: "always" });
+  const query = useQuery({ queryKey: [...queryKey, status?.updatedAt], queryFn: () => bridge!.wiki({ action: "state" }), enabled: isWikiEnabled() && !!bridge?.wiki && !!status, networkMode: "always" });
   async function mutate(request: WikiRequest) {
     if (!bridge || busy) return;
     setBusy(true);
@@ -42,49 +46,47 @@ export function WikiModels() {
   const { t } = useTranslation();
   const wiki = useWiki();
   const [models, setModels] = useState(emptyModels);
-  const [textKey, setTextKey] = useState("");
   const [embeddingKey, setEmbeddingKey] = useState("");
-  const [oauthState, setOauthState] = useState("");
-  const [accountId, setAccountId] = useState("");
   const savedModels = wiki.data?.models;
-  const savedAccount = wiki.data?.sources?.gmailAccountId ?? "";
   useEffect(() => { if (savedModels) setModels(savedModels); }, [savedModels, wiki.status?.scope]);
-  useEffect(() => setAccountId(savedAccount), [savedAccount, wiki.status?.scope]);
-  async function connect(check: boolean) {
-    try {
-      const options = { baseUrl: api().getIntegrationsBaseUrl() ?? undefined, authScope: "integration" as const };
-      if (check && oauthState) {
-        const result = await api().getWithParams<{ status: string; account_id?: string }>("/api/v2/integrations/gmail/oauth-result", { state: oauthState }, options);
-        if (result.status !== "done") { toast.message(t("workbench.gmail_wait")); return; }
-        setAccountId(result.account_id ?? ""); toast.success(t("workbench.gmail_connected"));
-        await wiki.mutate({ action: "sources", sources: { gmailEnabled: true, gmailAccountId: result.account_id ?? "", integrationsUrl: api().getIntegrationsBaseUrl() ?? api().getBaseUrl() } });
-      } else {
-        const result = await api().getWithParams<{ state: string; authorization_url: string }>("/api/v2/integrations/gmail/oauth-state", { platform: "desktop" }, options);
-        setOauthState(result.state); openExternalUrl(result.authorization_url); toast.message(t("workbench.gmail_wait"));
-      }
-    } catch (error) { toast.error(String(error)); }
-  }
   return <details className="rounded-md border border-border p-3">
     <summary className="cursor-pointer text-xs font-medium">{t("workbench.wiki_models")}</summary>
     <div className="mt-3 space-y-3">
       <p className="text-xs text-muted-foreground">{t("workbench.wiki_models_hint")}</p>
-      {(["text", "embedding"] as const).map((kind) => <fieldset key={kind} className="space-y-2">
-        <legend className="mb-1 text-xs font-medium">{t(`workbench.${kind}_model`)}</legend>
-        <label className="block space-y-1 text-xs"><span>{t("workbench.api_url")}</span><Input value={models[kind].baseUrl} placeholder="https://api.example.com/v1" onChange={(e) => setModels({ ...models, [kind]: { ...models[kind], baseUrl: e.target.value } })} /></label>
-        <label className="block space-y-1 text-xs"><span>{t("workbench.model_name")}</span><Input value={models[kind].model} onChange={(e) => setModels({ ...models, [kind]: { ...models[kind], model: e.target.value } })} /></label>
-        <label className="block space-y-1 text-xs"><span>{t("workbench.api_key")}</span><Input type="password" autoComplete="new-password" value={kind === "text" ? textKey : embeddingKey} onChange={(e) => kind === "text" ? setTextKey(e.target.value) : setEmbeddingKey(e.target.value)} /></label>
-      </fieldset>)}
-      <Button size="sm" variant="outline" disabled={wiki.busy} onClick={() => void wiki.mutate({ action: "models", models, ...(textKey ? { textKey } : {}), ...(embeddingKey ? { embeddingKey } : {}) }).then(() => { setTextKey(""); setEmbeddingKey(""); toast.success(t("workbench.model_saved")); }).catch(() => undefined)}>{t("workbench.save")}</Button>
-      <div className="space-y-2 border-t border-border pt-3">
-        <p className="text-xs text-muted-foreground">{t("workbench.gmail_hint")}</p>
-        <div className="flex items-center justify-between gap-3"><label htmlFor="wiki-gmail" className="text-xs">{t("workbench.gmail_enable")}</label><Switch id="wiki-gmail" checked={wiki.data?.sources?.gmailEnabled ?? false} disabled={wiki.busy} onCheckedChange={(gmailEnabled) => void wiki.mutate({ action: "sources", sources: { gmailEnabled, gmailAccountId: accountId, integrationsUrl: api().getIntegrationsBaseUrl() ?? api().getBaseUrl() } }).catch(() => undefined)} /></div>
-        <Input aria-label={t("workbench.gmail_account")} placeholder={t("workbench.gmail_account")} value={accountId} onChange={(e) => setAccountId(e.target.value)} />
-        <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={wiki.busy} onClick={() => void wiki.mutate({ action: "sources", sources: { gmailEnabled: wiki.data?.sources?.gmailEnabled ?? false, gmailAccountId: accountId, integrationsUrl: api().getIntegrationsBaseUrl() ?? api().getBaseUrl() } }).catch(() => undefined)}>{t("workbench.save")}</Button><Button size="sm" variant="outline" onClick={() => void connect(false)}>{t("workbench.gmail_connect")}</Button>{oauthState && <Button size="sm" variant="outline" onClick={() => void connect(true)}>{t("workbench.gmail_check")}</Button>}</div>
-        {wiki.data?.sources?.error && <p role="alert" className="text-xs text-destructive">{wiki.data.sources.error}</p>}
-      </div>
+      <fieldset className="space-y-2">
+        <legend className="mb-1 text-xs font-medium">{t("workbench.embedding_model")}</legend>
+        <label className="block space-y-1 text-xs"><span>{t("workbench.api_url")}</span><Input value={models.embedding.baseUrl} placeholder="https://api.example.com/v1" onChange={(e) => setModels({ ...models, embedding: { ...models.embedding, baseUrl: e.target.value } })} /></label>
+        <label className="block space-y-1 text-xs"><span>{t("workbench.model_name")}</span><Input value={models.embedding.model} onChange={(e) => setModels({ ...models, embedding: { ...models.embedding, model: e.target.value } })} /></label>
+        <label className="block space-y-1 text-xs"><span>{t("workbench.api_key")}</span><Input type="password" autoComplete="new-password" value={embeddingKey} onChange={(e) => setEmbeddingKey(e.target.value)} /></label>
+      </fieldset>
+      <Button size="sm" variant="outline" disabled={wiki.busy} onClick={() => void wiki.mutate({ action: "models", models, ...(embeddingKey ? { embeddingKey } : {}) }).then(() => { setEmbeddingKey(""); toast.success(t("workbench.model_saved")); }).catch(() => undefined)}>{t("workbench.save")}</Button>
     </div>
   </details>;
 }
+export function WikiSources() {
+  const { t } = useTranslation();
+  const wiki = useWiki();
+  const authenticated = useAuthStore((state) => state.isAuthenticated);
+  const installed = usePluginStore((state) => state.entries["lynse.gmail"]?.enabled);
+  const available = !featureFlags.pluginMarketplace || !!installed;
+  const connection = useIntegrationStatus("gmail", authenticated && available && isWikiEnabled());
+  const accounts = connection.data?.accounts ?? [];
+  const storedId = wiki.data?.sources?.gmailAccountId ?? "";
+  const selectedId = accounts.some((account) => account.id === storedId) ? storedId : accounts.length === 1 ? accounts[0]!.id : "";
+  const connected = !!connection.data?.connected && !connection.isError;
+  const selected = connected && !!selectedId;
+  function save(gmailEnabled: boolean, gmailAccountId: string) {
+    void wiki.mutate({ action: "sources", sources: { gmailEnabled, gmailAccountId, integrationsUrl: api().getIntegrationsBaseUrl() ?? api().getBaseUrl() } }).catch(() => undefined);
+  }
+  return <section className="space-y-2 rounded-md border border-border p-3">
+    <h3 className="text-xs font-medium">{t("workbench.wiki_sources")}</h3>
+    <p className="text-xs text-muted-foreground">{t("workbench.gmail_hint")}</p>
+    <div className="flex items-center justify-between gap-3"><label htmlFor="wiki-gmail" className="text-xs">{t("workbench.gmail_enable")}</label><Switch id="wiki-gmail" checked={wiki.data?.sources?.gmailEnabled ?? false} disabled={wiki.busy || (!selected && !wiki.data?.sources?.gmailEnabled)} onCheckedChange={(enabled) => save(enabled, selectedId || storedId)} /></div>
+    {!available || !connected ? <p className="text-xs text-muted-foreground">{t("workbench.gmail_connections_hint")}</p> : <label className="block space-y-1 text-xs"><span>{t("workbench.gmail_account")}</span><Select value={selectedId} disabled={wiki.busy} onValueChange={(value) => { if (value) save(wiki.data?.sources?.gmailEnabled ?? false, value); }}><SelectTrigger className="w-full" aria-label={t("workbench.gmail_account")}><SelectValue placeholder={t("workbench.gmail_choose_account")} /></SelectTrigger><SelectContent>{accounts.map((account) => <SelectItem key={account.id} value={account.id}>{account.email || account.display_name}</SelectItem>)}</SelectContent></Select></label>}
+    {wiki.data?.sources?.error && <p role="alert" className="text-xs text-destructive">{wiki.data.sources.error}</p>}
+  </section>;
+}
+
 function Topic({ topic, mutate, busy, canPublish }: { topic: WikiTopic; mutate: (request: WikiRequest) => Promise<void>; busy: boolean; canPublish: boolean }) {
   const { t } = useTranslation();
   const [notes, setNotes] = useState(topic.notes);

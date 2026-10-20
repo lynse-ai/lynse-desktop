@@ -46,7 +46,7 @@ import { useConnectFlow } from "./use-connect-flow";
  * accounts per provider (PRD FR-1).
  */
 
-export type ProviderKind = "calendar" | "destination";
+export type ProviderKind = "calendar" | "destination" | "source";
 
 export interface ProviderRowProps {
   provider: IntegrationsProvider;
@@ -102,7 +102,7 @@ export function ProviderRow({
   };
 
   return (
-    <div className="space-y-2 rounded-lg border border-border/60 bg-card/40 p-3">
+    <div className="space-y-2 rounded-lg border border-border/60 bg-card/40 p-3" role="region" aria-label={t(`connections.provider.${provider}`)}>
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1">
           <p className="truncate text-13 font-medium">{t(`connections.provider.${provider}`)}</p>

@@ -67,3 +67,8 @@ export function getSettingsSections(
   }
   return bindings.sort((a, b) => (a.section.order ?? 500) - (b.section.order ?? 500));
 }
+
+/** Connection plugins use the shared Connections host rather than a separate settings section. */
+export function getConnectionProviders(entries: Record<string, PluginStateEntry>, options: { respectInstallState: boolean }) {
+  return getAllPlugins().filter((manifest) => manifest.kind === "app" && !!manifest.contributions?.connectionProvider && isPluginAvailable(manifest) && (!options.respectInstallState || entries[manifest.id]?.enabled)).map((manifest) => ({ manifest, connection: manifest.contributions!.connectionProvider! }));
+}

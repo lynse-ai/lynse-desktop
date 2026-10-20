@@ -1513,6 +1513,7 @@ const zhHant = {
     continue_editing: "繼續編輯",
   },
   connections: {
+    group_sources: "知識來源",
     "title": "連接",
     "subtitle": "管理你的第三方整合",
     "group_calendar": "日曆",
@@ -1552,6 +1553,7 @@ const zhHant = {
     "not_configured": "該整合尚未啟用",
     "pick_a_destination_first": "請先選擇預設匯出位置",
     "provider": {
+      "gmail": "Gmail",
       "google-calendar": "Google 日曆",
       "outlook-calendar": "Outlook 日曆",
       "notion": "Notion",
@@ -1564,6 +1566,7 @@ const zhHant = {
       "feishu": "飛書"
     },
     "hint": {
+      "gmail": "唯讀連接 Gmail，可按需將近期郵件用於 Wiki",
       "google-calendar": "匯入會議日程，並在會前提醒",
       "outlook-calendar": "與 Google 日曆相同，用於 Microsoft 帳號",
       "notion": "把會議總結寫入資料庫",

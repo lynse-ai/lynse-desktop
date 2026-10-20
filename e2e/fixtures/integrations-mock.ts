@@ -72,6 +72,7 @@ export interface MockExportCall {
 
 /** Providers the mock knows how to connect. */
 const KNOWN_PROVIDERS = new Set([
+  "gmail",
   "google-calendar",
   "outlook-calendar",
   "notion",
@@ -80,7 +81,7 @@ const KNOWN_PROVIDERS = new Set([
 ]);
 
 /** Free-tier providers; anything else is paywalled (PRD §6.4). */
-const FREE_PROVIDERS = new Set(["google-calendar", "todoist", "google-tasks"]);
+const FREE_PROVIDERS = new Set(["gmail", "google-calendar", "todoist", "google-tasks"]);
 
 /** Providers whose backend is "not deployed yet" — drives the 503 copy. */
 const NOT_CONFIGURED_PROVIDERS = new Set(["outlook-calendar"]);

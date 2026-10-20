@@ -53,6 +53,11 @@ export function isConnectionsEnabled(): boolean {
   return featureFlags.connections && isBetaFeaturesUnlocked();
 }
 
+/** Local Wiki remains a Beta feature, including its background processing. */
+export function isWikiEnabled(): boolean {
+  return isBetaFeaturesUnlocked();
+}
+
 /**
  * Build channel, selected at packaging time via an env var:
  *
@@ -141,5 +146,6 @@ export function setTestMode(enabled: boolean): void {
   } catch {
     // Storage unavailable (SSR / private mode) — keep it session-only.
   }
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("lynse-test-mode-changed"));
 }
 

@@ -15,6 +15,22 @@ pub(super) struct Sources {
     pub error: String,
     pub updated_at: String,
 }
+impl Sources {
+    pub(super) fn allows(&self, id: &str, plugin_enabled: bool) -> bool {
+        plugin_enabled
+            && self.gmail_enabled
+            && !self.gmail_account_id.is_empty()
+            && id.starts_with(&format!("gmail:{}:", self.gmail_account_id))
+            && !matches!(
+                self.error.as_str(),
+                "Gmail: not_connected"
+                    | "Gmail: reauth_required"
+                    | "Gmail: account_not_found"
+                    | "Gmail read failed (HTTP 401)"
+                    | "Gmail read failed (HTTP 403)"
+            )
+    }
+}
 fn path(app: &AppHandle, session: &Session) -> CommandResult<std::path::PathBuf> {
     Ok(super::state_path(app, session)?.with_file_name("wiki-sources.json"))
 }
@@ -38,6 +54,9 @@ pub(super) fn configure(app: &AppHandle, session: &Session, value: &Value) -> Co
     let mut next: Sources =
         serde_json::from_value(value.clone()).map_err(|_| "Invalid source settings")?;
     if next.gmail_enabled {
+        if next.gmail_account_id.is_empty() {
+            return Err("Choose a connected Gmail account".into());
+        }
         next.integrations_url = super::normalize_url(&next.integrations_url)?;
         let url =
             url::Url::parse(&next.integrations_url).map_err(|_| "Invalid integrations URL")?;
@@ -49,10 +68,7 @@ pub(super) fn configure(app: &AppHandle, session: &Session, value: &Value) -> Co
     }
     next.error.clear();
     save(app, session, &next)?;
-    let mut manifest = load_state(app, session)?;
-    for entry in manifest.entries.values_mut().filter(|e| e.kind == "gmail") {
-        entry.excluded = !next.gmail_enabled || manifest.excluded_sources.contains(&entry.id);
-    }
+    let manifest = load_state(app, session)?;
     persist(app, session, &manifest)
 }
 // Slack and Feishu can implement this same read-only, paginated document boundary.
@@ -197,7 +213,13 @@ pub(super) async fn sync_optional(
 ) -> CommandResult<bool> {
     let mut source = config(app, session)?;
     let manifest = load_state(app, session)?;
-    if !source.gmail_enabled || !manifest.enabled || !manifest.initial_complete {
+    if !source.gmail_enabled
+        || !manifest.enabled
+        || !manifest.initial_complete
+        || !state
+            .gmail_plugin_enabled
+            .load(std::sync::atomic::Ordering::SeqCst)
+    {
         return Ok(false);
     }
     let before: Vec<_> = manifest
@@ -226,6 +248,23 @@ pub(super) async fn sync_optional(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cached_gmail_requires_plugin_and_selected_connected_account() {
+        let mut source = Sources {
+            gmail_enabled: true,
+            gmail_account_id: "a".into(),
+            ..Default::default()
+        };
+        assert!(source.allows("gmail:a:m1", true));
+        assert!(!source.allows("gmail:a:m1", false));
+        assert!(!source.allows("gmail:b:m1", true));
+        source.error = "Gmail: not_connected".into();
+        assert!(!source.allows("gmail:a:m1", true));
+        source.error = "Gmail source service is unavailable".into();
+        assert!(source.allows("gmail:a:m1", true));
+        source.gmail_enabled = false;
+        assert!(!source.allows("gmail:a:m1", true));
+    }
     #[test]
     fn gmail_source_ids_and_revisions_are_account_bound() {
         let row = json!({"messageId":"m1","subject":"Decision","messageText":"Ship next week","internalDate":"1000"});

@@ -93,7 +93,7 @@ export interface DesktopContext {
   sources: SearchResult["items"];
 }
 export interface DesktopWorkbenchApi {
-  bind(request: { baseUrl: string; agentUrl?: string; token: string; locale: string; modelOverride?: RequestModelOverride | null }): Promise<WorkbenchStatus>;
+  bind(request: { baseUrl: string; agentUrl?: string; token: string; locale: string; betaEnabled?: boolean; gmailPluginEnabled?: boolean; modelOverride?: RequestModelOverride | null }): Promise<WorkbenchStatus>;
   unbind(): Promise<void>;
   status(): Promise<WorkbenchStatus>;
   wiki(request: WikiRequest): Promise<WikiState>;
@@ -115,9 +115,9 @@ export interface DesktopWorkbenchApi {
 }
 
 export interface WikiModel { baseUrl: string; model: string }
-export interface WikiModelsConfig { text: WikiModel; embedding: WikiModel; revision?: string }
+export interface WikiModelsConfig { embedding: WikiModel; revision?: string; textRevision?: string }
 export interface WikiRevision { id: string; markdown: string; citations: SourceRef[]; fingerprint: string; createdAt: string; reviewedAt: string; review: string }
 export interface WikiTopic { id: string; title: string; purpose: string; notes: string; pinned: boolean; excluded: boolean; stale: boolean; candidate: WikiRevision | null; published: WikiRevision | null; error: string }
 export interface WikiSources { gmailEnabled: boolean; gmailAccountId: string; integrationsUrl: string; error?: string; updatedAt?: string }
 export interface WikiState { topics: WikiTopic[]; models: WikiModelsConfig; sources?: WikiSources }
-export type WikiRequest = { action: "state" } | { action: "models"; models: WikiModelsConfig; textKey?: string; embeddingKey?: string } | { action: "topic"; id?: string; title: string; purpose: string; notes?: string; pinned?: boolean; excluded?: boolean } | { action: "review"; id: string; candidateId: string; approve: boolean; markdown?: string } | { action: "retry"; id?: string } | { action: "sources"; sources: WikiSources };
+export type WikiRequest = { action: "state" } | { action: "models"; models: WikiModelsConfig; embeddingKey?: string } | { action: "topic"; id?: string; title: string; purpose: string; notes?: string; pinned?: boolean; excluded?: boolean } | { action: "review"; id: string; candidateId: string; approve: boolean; markdown?: string } | { action: "retry"; id?: string } | { action: "sources"; sources: WikiSources };

@@ -1515,6 +1515,7 @@ const en = {
     continue_editing: "Keep editing",
   },
   connections: {
+    group_sources: "Knowledge sources",
     "title": "Connections",
     "subtitle": "Manage your integrations",
     "group_calendar": "Calendar",
@@ -1554,6 +1555,7 @@ const en = {
     "not_configured": "This integration is not configured yet",
     "pick_a_destination_first": "Choose a default destination first",
     "provider": {
+      "gmail": "Gmail",
       "google-calendar": "Google Calendar",
       "outlook-calendar": "Outlook Calendar",
       "notion": "Notion",
@@ -1566,6 +1568,7 @@ const en = {
       "feishu": "Feishu"
     },
     "hint": {
+      "gmail": "Read-only Gmail connection; optionally use recent mail in your Wiki",
       "google-calendar": "Pull meetings in and get a reminder before they start",
       "outlook-calendar": "Same as Google Calendar, for Microsoft accounts",
       "notion": "Write meeting summaries into a database",

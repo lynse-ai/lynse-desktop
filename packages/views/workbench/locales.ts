@@ -1,11 +1,12 @@
 const en = {
   wiki_counts: "Wiki · {{published}} published · {{candidates}} awaiting review · {{failed}} need attention", wiki_wait_sync: "Wiki will start after full meeting sync.", wiki_wait_consent: "Wiki is waiting for AI processing permission.",
   waiting_configuration: "Meetings synced · waiting for Wiki text model configuration",
-  wiki_models: "Wiki models", wiki_models_hint: "Dedicated OpenAI-compatible APIs. Include /v1 in the base URL when required. Leave API keys blank to keep saved keys. Keyword search works without an embedding model.",
+  wiki_models: "Wiki models", wiki_models_hint: "Text generation uses the model configured for Lynclaw in AI Assistant settings. Only the optional embedding API is configured here. Leave its key blank to keep the saved value; keyword search works without it.",
   text_model: "Text model", embedding_model: "Embedding model (optional)", api_url: "API base URL", model_name: "Model name", api_key: "API key", model_saved: "Wiki model configuration saved",
   topics: "Projects & topics", topic_title: "Project or topic name", topic_purpose: "Purpose and key questions", topic_create: "Create topic", topic_notes: "Your notes and corrections", topic_hint: "AI finds related meetings after full sync. Review each candidate before it is published or used in chat.",
   candidate: "Candidate · awaiting review", published: "Published", stale: "Sources changed · update needed", publish: "Approve and publish", reject: "Reject candidate", page_content: "Page content", no_page: "Waiting for related sources and model processing.",
-  gmail_hint: "Optional Gmail supplement: read-only backfill of the last 90 days. Meeting sync completes independently. Slack and Feishu adapters are reserved.", gmail_enable: "Include Gmail", gmail_account: "Gmail account ID (optional for one account)", gmail_connect: "Connect Gmail", gmail_connected: "Gmail connected", gmail_wait: "Complete authorization in your browser, then check connection.", gmail_check: "Check connection",
+  wiki_sources: "Wiki sources", gmail_connections_hint: "Install the Gmail plugin in Plugins, then authorize and manage accounts in Connections. Choose an existing account here.", gmail_choose_account: "Choose a connected account",
+  gmail_hint: "Optional Gmail supplement: read-only backfill of the last 90 days. Meeting sync completes independently.", gmail_enable: "Use connected Gmail in Wiki", gmail_account: "Connected Gmail account", gmail_connect: "Connect Gmail", gmail_connected: "Gmail connected", gmail_wait: "Complete authorization in your browser, then check connection.", gmail_check: "Check connection",
 
   keep_local: "Keep local version", use_cloud: "Use cloud version",
   title: "Meeting Wiki", enable: "Enable Wiki", hint: "Enabling Wiki also enables local sync. All meeting text downloads before AI processing begins. Turning Wiki off keeps local sync and existing pages.",
@@ -24,11 +25,12 @@ const en = {
 const zh: typeof en = {
   wiki_counts: "Wiki · 已发布 {{published}} · 待审阅 {{candidates}} · 需处理 {{failed}}", wiki_wait_sync: "Wiki 将在全部会议同步完成后开始整理。", wiki_wait_consent: "Wiki 正在等待 AI 处理授权。",
   waiting_configuration: "会议已同步 · 等待配置 Wiki 文本模型",
-  wiki_models: "Wiki 模型", wiki_models_hint: "独立的 OpenAI 兼容 API；如服务要求，请在地址中包含 /v1。密钥留空保留已保存值。不配置向量模型仍可关键词检索。",
+  wiki_models: "Wiki 模型", wiki_models_hint: "文本生成复用 AI 助手中 Lynclaw 的模型设置；这里只需按需填写向量模型 API。密钥留空保留已保存值，不配置向量模型仍可关键词检索。",
   text_model: "文本模型", embedding_model: "向量模型（可选）", api_url: "API 地址", model_name: "模型名称", api_key: "API 密钥", model_saved: "Wiki 模型配置已保存",
   topics: "项目与专题", topic_title: "项目或专题名称", topic_purpose: "目的与关键问题", topic_create: "创建专题", topic_notes: "人工备注与纠正", topic_hint: "全量同步完成后，AI 自动寻找相关会议。候选页面经审阅发布后，才会用于聊天引用。",
   candidate: "候选页面 · 待审阅", published: "已发布", stale: "来源已变化 · 待更新", publish: "审阅通过并发布", reject: "拒绝候选", page_content: "页面内容", no_page: "等待相关资料与模型整理。",
-  gmail_hint: "Gmail 为可选补充来源，只读回填最近 90 天，不影响会议同步完成判定。Slack、飞书预留适配接口。", gmail_enable: "接入 Gmail", gmail_account: "Gmail 账号 ID（仅一个账号时可留空）", gmail_connect: "连接 Gmail", gmail_connected: "Gmail 已连接", gmail_wait: "请在浏览器完成授权，然后检查连接。", gmail_check: "检查连接",
+  wiki_sources: "Wiki 来源", gmail_connections_hint: "请在插件中启用 Gmail，然后到「连接」统一授权和管理账号；这里仅选择已连接的来源。", gmail_choose_account: "选择已连接的账号",
+  gmail_hint: "Gmail 为可选补充来源，只读回填最近 90 天，不影响会议同步完成判定。", gmail_enable: "将已连接的 Gmail 用于 Wiki", gmail_account: "已连接的 Gmail 账号", gmail_connect: "连接 Gmail", gmail_connected: "Gmail 已连接", gmail_wait: "请在浏览器完成授权，然后检查连接。", gmail_check: "检查连接",
 
   keep_local: "保留本地版本", use_cloud: "采用云端版本",
   title: "会议 Wiki", enable: "开启 Wiki", hint: "开启 Wiki 会同时开启本地同步。全部会议文本下载完成后才开始 AI 整理；关闭 Wiki 会保留本地同步和已有页面。",

@@ -93,6 +93,8 @@ fn unpack_page(value: Value) -> CommandResult<Value> {
 pub(super) async fn verify_identity(base: &str, token: &str) -> CommandResult<String> {
     let session = Session {
         base_url: base.into(),
+        agent_url: base.into(),
+        model_override: None,
         token: token.into(),
         scope: String::new(),
         user_id: String::new(),
@@ -856,6 +858,8 @@ mod tests {
     use super::*;
     fn test_session(base: String) -> Session {
         Session {
+            agent_url: base.clone(),
+            model_override: None,
             base_url: base,
             token: "synthetic-token".into(),
             scope: "account-a".into(),

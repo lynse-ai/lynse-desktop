@@ -20,12 +20,26 @@ import { useFileAudioUrl } from "../workspace/hooks/use-files";
 import { DeleteConfirmDialog } from "../workspace/delete-confirm-dialog";
 import { getWorkbenchApi, refreshWorkbench, useWorkbench } from "./api";
 import type { MemoryItem, SourceRef, SynthesisResult, TodoSuggestion, WorkbenchReadResult } from "./types";
-import { WikiModels, WikiTopics, WikiStatus } from "./wiki";
+import { isWikiEnabled, featureFlags } from "../feature-flags";
+import { BetaBadge } from "../beta-badge";
+import { usePluginStore } from "../plugins/state";
+import { loadChatModelSetting, MODEL_OVERRIDE_STORAGE_KEY, toRequestOverride } from "../workspace/model-override";
+import { WikiModels, WikiTopics, WikiStatus, WikiSources } from "./wiki";
 
 /** Account lifecycle stays outside AuthGate so logout also cancels native work. */
 export function WorkbenchSupervisor() {
   const authenticated = useAuthStore((s) => s.isAuthenticated);
   const user = useAuthStore((s) => s.user);
+  const gmailPluginEnabled = usePluginStore((state) => !featureFlags.pluginMarketplace || !!state.entries["lynse.gmail"]?.enabled);
+  const [configurationVersion, setConfigurationVersion] = useState(0);
+  useEffect(() => {
+    const changed = () => setConfigurationVersion((value) => value + 1);
+    const storageChanged = (event: StorageEvent) => { if (event.key === MODEL_OVERRIDE_STORAGE_KEY) changed(); };
+    window.addEventListener("lynse-chat-model-setting", changed);
+    window.addEventListener("lynse-test-mode-changed", changed);
+    window.addEventListener("storage", storageChanged);
+    return () => { window.removeEventListener("lynse-chat-model-setting", changed); window.removeEventListener("lynse-test-mode-changed", changed); window.removeEventListener("storage", storageChanged); };
+  }, []);
   const { i18n } = useTranslation();
   useEffect(() => {
     const bridge = getWorkbenchApi();
@@ -37,7 +51,7 @@ export function WorkbenchSupervisor() {
     const token = api().getToken();
     if (!authenticated || !token) { void bridge.unbind(); return; }
     void bridge.bind({ baseUrl: api().getBaseUrl(), agentUrl: api().getAgentBaseUrl() ?? undefined,
-      token, locale: i18n.language })
+      token, locale: i18n.language, betaEnabled: isWikiEnabled(), gmailPluginEnabled, modelOverride: toRequestOverride(loadChatModelSetting()) })
       .then((status) => { if (!disposed) { boundScope = status?.scope; useWorkbench.getState().setStatus(status); } })
       .catch((error: unknown) => { if (!disposed) useWorkbench.getState().setError(String(error)); });
     void bridge.onUpdate((status) => {
@@ -56,7 +70,7 @@ export function WorkbenchSupervisor() {
       document.removeEventListener("visibilitychange", resume);
       void bridge.unbind();
     };
-  }, [authenticated, user, i18n.language]);
+  }, [authenticated, user, i18n.language, configurationVersion, gmailPluginEnabled]);
   return null;
 }
 
@@ -81,7 +95,7 @@ export function WorkbenchSettingsContent({ disabled = false }: { disabled?: bool
   const [busy, setBusy] = useState(false);
   const [clearing, setClearing] = useState(false);
   const qc = useQueryClient();
-  if (!bridge) return null;
+  if (!bridge || !isWikiEnabled()) return null;
   async function configure(enabled: boolean, allowAi: boolean) {
     if (!bridge) return;
     setBusy(true);
@@ -91,7 +105,7 @@ export function WorkbenchSettingsContent({ disabled = false }: { disabled?: bool
   }
   return <div className="space-y-3 border-t border-border pt-3">
       <div className="flex items-center justify-between gap-4">
-        <label htmlFor="meeting-memory-enable" className="text-xs">{t("workbench.enable")}</label>
+        <div className="flex items-center gap-2"><label htmlFor="meeting-memory-enable" className="text-xs">{t("workbench.enable")}</label><BetaBadge /></div>
         <Switch id="meeting-memory-enable" checked={status?.enabled ?? false} disabled={disabled || busy || !authenticated || !status}
           onCheckedChange={(checked) => void configure(checked, status?.allowAi ?? false)} />
       </div>
@@ -105,7 +119,7 @@ export function WorkbenchSettingsContent({ disabled = false }: { disabled?: bool
         <p className="text-xs leading-relaxed text-muted-foreground">{t("workbench.ai_hint")}</p>
       </>}
       <Progress />
-      {status?.enabled && <><WikiStatus /><WikiModels /></>}
+      {status?.enabled && <><WikiStatus /><WikiModels /><WikiSources /></>}
       <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="outline" onClick={() => useWorkbench.getState().show()}>{t("workbench.open")}</Button>
         {status?.enabled && <Button size="sm" variant="outline" disabled={busy} onClick={() => void bridge.sync().then(refreshWorkbench).catch((error: unknown) => toast.error(String(error)))}>
@@ -120,14 +134,14 @@ export function WorkbenchSettingsContent({ disabled = false }: { disabled?: bool
 
 export function WorkbenchButton({ query = "", id }: { query?: string; id?: string }) {
   const { t } = useTranslation();
-  if (!getWorkbenchApi()) return null;
+  if (!getWorkbenchApi() || !isWikiEnabled()) return null;
   return <Button variant="ghost" size="sm" onClick={() => useWorkbench.getState().show(query, id)}><BookOpen className="size-3.5" />{t("workbench.review")}</Button>;
 }
 
 export function WorkbenchHomeCard() {
   const status = useWorkbench((s) => s.status);
   const { t } = useTranslation();
-  if (!status?.enabled) return null;
+  if (!status?.enabled || !isWikiEnabled()) return null;
   const memories = status.memories.filter((item) => !item.excluded).slice(-3).reverse();
   return <Card className="mb-5">
     <CardHeader className="flex-row items-center justify-between pb-2"><CardTitle className="text-sm">{t("workbench.title")}</CardTitle><WorkbenchButton /></CardHeader>
@@ -312,7 +326,7 @@ export function WorkbenchDialog() {
     catch (failure) { if (requestScope.current === scope) setError(String(failure)); }
     finally { if (requestScope.current === scope) setReviewing(false); }
   }
-  if (!bridge) return null;
+  if (!bridge || !isWikiEnabled()) return null;
   return <Dialog open={panel.open} onOpenChange={(open) => { if (!open) panel.close(); }}>
     <DialogContent className="flex h-[min(88vh,850px)] max-w-5xl flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
       <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12"><DialogTitle>{t("workbench.title")}</DialogTitle><DialogDescription>{t("workbench.brief_hint")}</DialogDescription></DialogHeader>

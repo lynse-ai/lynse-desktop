@@ -167,7 +167,7 @@ export async function startMockServer(script?: ChatScript): Promise<MockServer> 
       res.setHeader("Access-Control-Allow-Origin", req.headers.origin ?? "*");
       res.setHeader("Access-Control-Allow-Credentials", "true");
       res.setHeader("Access-Control-Allow-Headers", "content-type, authorization, x-lynse-api-url, x-api-key, x-client-platform");
-      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
       if (ctx.method === "OPTIONS") {
         res.writeHead(204);
         res.end();

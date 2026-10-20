@@ -11,6 +11,7 @@
  */
 
 export type IntegrationsProvider =
+  | "gmail"
   | "google-calendar"
   | "outlook-calendar"
   | "notion"

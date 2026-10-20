@@ -1517,6 +1517,7 @@ const ko = {
     continue_editing: "계속 편집",
   },
   connections: {
+    group_sources: "지식 소스",
     "title": "연동",
     "subtitle": "외부 서비스 연동 관리",
     "group_calendar": "캘린더",
@@ -1556,6 +1557,7 @@ const ko = {
     "not_configured": "아직 설정된 연동이 없습니다",
     "pick_a_destination_first": "먼저 기본 대상을 선택하세요",
     "provider": {
+      "gmail": "Gmail",
       "google-calendar": "Google 캘린더",
       "outlook-calendar": "Outlook 캘린더",
       "notion": "Notion",
@@ -1568,6 +1570,7 @@ const ko = {
       "feishu": "Feishu"
     },
     "hint": {
+      "gmail": "Gmail을 읽기 전용으로 연결하고 최근 메일을 Wiki에 사용할 수 있습니다",
       "google-calendar": "일정을 가져오고 시작 전에 알림을 받습니다",
       "outlook-calendar": "Google 캘린더와 동일, Microsoft 계정용",
       "notion": "회의 요약을 데이터베이스에 기록합니다",

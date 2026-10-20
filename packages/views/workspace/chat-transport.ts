@@ -1,3 +1,4 @@
+import { isWikiEnabled } from "../feature-flags";
 import { getWorkbenchApi, useWorkbench } from "../workbench/api";
 import type { DesktopContext } from "../workbench/types";
 import type {
@@ -160,11 +161,11 @@ function hydrateDesktopContext(opts: SendChatOptions): Promise<void> | undefined
   const bridge = getWorkbenchApi();
   opts.desktopContext = null;
   const consent = useWorkbench.getState().status;
-  if (!bridge || opts.signal?.aborted || !consent?.enabled || !consent.allowAi || !consent.initialComplete) return;
+  if (!isWikiEnabled() || !bridge || opts.signal?.aborted || !consent?.enabled || !consent.allowAi || !consent.initialComplete) return;
   const scope = consent.scope;
   return bridge.context(opts.query).then((evidence) => {
     const state = useWorkbench.getState().status;
-    if (!opts.signal?.aborted && state?.enabled && state.allowAi && state.initialComplete && state.updatedAt === consent.updatedAt && state.scope === scope) opts.desktopContext = evidence;
+    if (isWikiEnabled() && !opts.signal?.aborted && state?.enabled && state.allowAi && state.initialComplete && state.updatedAt === consent.updatedAt && state.scope === scope) opts.desktopContext = evidence;
   }).catch(() => { /* Optional recall failure does not prevent assistant use. */ });
 }
 
@@ -179,7 +180,7 @@ function chatTurnBody(opts: SendChatOptions): Record<string, unknown> {
     body.userSpecifiedFile = true;
   }
   if (modelOverride) body.modelOverride = modelOverride;
-  if (opts.desktopContext?.sources.length) body.desktopContext = opts.desktopContext;
+  if (isWikiEnabled() && opts.desktopContext?.sources.length) body.desktopContext = opts.desktopContext;
   if (confirmToken) {
     body.confirm_token = confirmToken;
     body.confirmToken = confirmToken;

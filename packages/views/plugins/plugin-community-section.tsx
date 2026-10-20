@@ -109,6 +109,7 @@ function PluginRow({
   const installed = !!entry;
   const enabled = !!entry?.enabled;
   const section = manifest.contributions?.settingsSection;
+  const sectionId = section?.id ?? (manifest.contributions?.connectionProvider ? "connections" : undefined);
   // Remote-catalog copy overrides the built-in i18n strings (PRD §7).
   const name = override?.name ?? t(manifest.nameKey);
   const description = override?.description ?? t(manifest.descriptionKey);
@@ -168,12 +169,12 @@ function PluginRow({
           )}
           {installed && enabled && (
             <>
-              {section && onOpenSection && (
+              {sectionId && onOpenSection && (
                 <Button
                   size="sm"
                   variant="outline"
                   className="h-7 text-xs"
-                  onClick={() => onOpenSection(section.id)}
+                  onClick={() => onOpenSection(sectionId)}
                 >
                   {t("plugins.action.settings")}
                 </Button>

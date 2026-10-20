@@ -64,6 +64,19 @@ describe("plugin registry", () => {
     expect(visible).toEqual(["everywhere"]);
   });
 
+  it("mounts connection plugins only when available, installed and enabled", async () => {
+    const { registry } = await loadPluginModules(new Map());
+    let beta = true;
+    registry.registerPlugin(testManifest({ id: "gmail", availability: () => beta, contributions: { connectionProvider: { provider: "gmail", kind: "source" } } }));
+    const installed = { gmail: { installedAt: 1, enabled: true } };
+    const options = { respectInstallState: true };
+    expect(registry.getConnectionProviders({}, options)).toEqual([]);
+    expect(registry.getConnectionProviders({ gmail: { installedAt: 1, enabled: false } }, options)).toEqual([]);
+    expect(registry.getConnectionProviders(installed, options).map((p) => p.connection.provider)).toEqual(["gmail"]);
+    beta = false;
+    expect(registry.getConnectionProviders(installed, options)).toEqual([]);
+  });
+
   it("collects settings sections in contribution order and respects install state", async () => {
     const { registry } = await loadPluginModules(new Map());
     registry.registerPlugin(

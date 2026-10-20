@@ -3,6 +3,7 @@ import { api } from "@lynse/core/api";
 import { getAuthStore } from "@lynse/core/auth";
 import { getDesktopLocalTranscriptionApi, getDesktopVaultApi } from "@lynse/views/workspace";
 import { getDesktopInspirationApi } from "@lynse/views/inspiration";
+import { isWikiEnabled } from "@lynse/views/feature-flags";
 
 type Row = Record<string, unknown>;
 type Args = Record<string, unknown>;
@@ -66,6 +67,7 @@ export async function readDesktopMcpTool(name: string, args: Args, deps: McpData
   if (!args || typeof args !== "object" || Array.isArray(args)) throw new McpInputError("Invalid arguments");
   const meetingKeys = ["id", "title", "createdAt", "updatedAt", "status", "durationMs"];
   if (["search_local_memory", "get_local_memory", "get_local_memory_source"].includes(name)) {
+    if (!isWikiEnabled()) throw new McpInputError("Wiki is only available in test mode");
     const bridge = deps.memory;
     if (!bridge) throw new McpInputError("Local meeting memory is unavailable");
     const status = await bridge.status();
@@ -93,7 +95,7 @@ export async function readDesktopMcpTool(name: string, args: Args, deps: McpData
       result = { document: record.document, markdown: record.markdown };
     }
     const current = await bridge.status();
-    if (!current.enabled || !current.allowAi || !current.initialComplete || current.scope !== status.scope || current.updatedAt !== status.updatedAt) throw new McpInputError("Account or sources changed; retry");
+    if (!isWikiEnabled() || !current.enabled || !current.allowAi || !current.initialComplete || current.scope !== status.scope || current.updatedAt !== status.updatedAt) throw new McpInputError("Account or sources changed; retry");
     return result;
   }
   switch (name) {

@@ -11,7 +11,7 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Mutex,
     },
 };
@@ -23,6 +23,8 @@ pub(super) struct Session {
     pub scope: String,
     pub user_id: String,
     pub base_url: String,
+    pub agent_url: String,
+    pub model_override: Option<Value>,
     pub token: String,
     pub generation: u64,
     pub locale: String,
@@ -34,6 +36,8 @@ pub struct WorkbenchState {
     pub(super) worker: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pub(super) serial: tokio::sync::Mutex<()>,
     epoch: AtomicU64,
+    beta_enabled: AtomicBool,
+    gmail_plugin_enabled: AtomicBool,
 }
 
 #[derive(Deserialize)]
@@ -44,8 +48,11 @@ pub struct BindRequest {
     token: String,
     #[serde(default)]
     locale: String,
-    #[serde(rename = "modelOverride")]
-    _model_override: Option<Value>,
+    model_override: Option<Value>,
+    #[serde(default)]
+    beta_enabled: bool,
+    #[serde(default)]
+    gmail_plugin_enabled: bool,
 }
 
 pub(super) fn state_path(app: &AppHandle, session: &Session) -> CommandResult<PathBuf> {
@@ -72,7 +79,12 @@ pub(super) fn load_state(app: &AppHandle, session: &Session) -> CommandResult<Ma
     if !state.bootstrap_valid(&expected_root) {
         state.initial_complete = false;
     }
-    if !vault.enabled {
+    if !vault.enabled
+        || !app
+            .state::<WorkbenchState>()
+            .beta_enabled
+            .load(Ordering::SeqCst)
+    {
         state.enabled = false;
         state.phase = "disabled".into();
     }
@@ -86,6 +98,19 @@ pub(super) fn load_state(app: &AppHandle, session: &Session) -> CommandResult<Ma
             state.artifacts =
                 serde_json::from_value(value["artifacts"].clone()).map_err(|e| e.to_string())?;
         }
+    }
+    let gmail = sources::config(app, session)?;
+    let plugin = app
+        .state::<WorkbenchState>()
+        .gmail_plugin_enabled
+        .load(Ordering::SeqCst);
+    for entry in state
+        .entries
+        .values_mut()
+        .filter(|entry| entry.kind == "gmail")
+    {
+        entry.excluded =
+            !gmail.allows(&entry.id, plugin) || state.excluded_sources.contains(&entry.id);
     }
     // Check the current local consent at read time, including while a native
     // background request is in flight. Stored knowledge-base text is retained.
@@ -130,6 +155,10 @@ pub(super) fn load_state(app: &AppHandle, session: &Session) -> CommandResult<Ma
         }
     }
     Ok(state)
+}
+pub(crate) fn is_beta_active(app: &AppHandle) -> bool {
+    app.try_state::<WorkbenchState>()
+        .is_some_and(|state| state.beta_enabled.load(Ordering::SeqCst))
 }
 pub(crate) fn refresh_local_policy(app: &AppHandle) {
     if app.try_state::<WorkbenchState>().is_none() {
@@ -215,6 +244,13 @@ fn public_status(session: &Session, state: &Manifest) -> Value {
         "entries":entries,"memories":if state.enabled {state.memories.clone()}else{vec![]}})
 }
 
+pub(super) fn require_beta(state: &WorkbenchState) -> CommandResult<()> {
+    if state.beta_enabled.load(Ordering::SeqCst) {
+        Ok(())
+    } else {
+        Err("Wiki is available only in test mode".into())
+    }
+}
 pub(super) fn invalidate_runtime(state: &WorkbenchState) -> CommandResult<Session> {
     let generation = state.epoch.fetch_add(1, Ordering::SeqCst) + 1;
     if let Some(worker) = state
@@ -322,9 +358,7 @@ pub async fn workbench_bind(
     request: BindRequest,
 ) -> CommandResult<Value> {
     let base = normalize_url(&request.base_url)?;
-    if let Some(agent) = request.agent_url.as_deref() {
-        normalize_url(agent)?;
-    }
+    let agent = normalize_url(request.agent_url.as_deref().unwrap_or(&base))?;
     if request.token.trim().is_empty() {
         return Err("Sign in first".into());
     }
@@ -339,6 +373,12 @@ pub async fn workbench_bind(
         worker.abort();
     }
     *state.session.lock().map_err(|_| "Session unavailable")? = None;
+    state
+        .beta_enabled
+        .store(request.beta_enabled, Ordering::SeqCst);
+    state
+        .gmail_plugin_enabled
+        .store(request.gmail_plugin_enabled, Ordering::SeqCst);
     let identity_key = store::digest(format!("{}\n{}", base, request.token));
     let identity_path = crate::app_data_dir(&app)?
         .join("workbench")
@@ -378,6 +418,8 @@ pub async fn workbench_bind(
         scope: store::digest(format!("{base}\n{user_id}")),
         user_id,
         base_url: base,
+        agent_url: agent,
+        model_override: request.model_override,
         token: request.token,
         generation,
         locale: request.locale,
@@ -399,6 +441,8 @@ pub async fn workbench_bind(
 
 #[tauri::command]
 pub async fn workbench_unbind(state: State<'_, WorkbenchState>) -> CommandResult<()> {
+    state.beta_enabled.store(false, Ordering::SeqCst);
+    state.gmail_plugin_enabled.store(false, Ordering::SeqCst);
     state.epoch.fetch_add(1, Ordering::SeqCst);
     if let Some(worker) = state
         .worker
@@ -469,6 +513,9 @@ pub async fn workbench_configure(
     enabled: bool,
     allow_ai: bool,
 ) -> CommandResult<Value> {
+    if enabled {
+        require_beta(&state)?;
+    }
     let _guard = state.serial.lock().await;
     let mut session = current(&state)?;
     state.epoch.fetch_add(1, Ordering::SeqCst);
@@ -1023,9 +1070,20 @@ mod wiki_lifecycle_tests {
             generation,
             user_id: "verified-user".into(),
             base_url: "https://example.test".into(),
+            agent_url: "https://agent.test".into(),
+            model_override: None,
             token: "synthetic-token".into(),
             locale: "en".into(),
         }
+    }
+    #[test]
+    fn wiki_requires_explicit_runtime_beta_access() {
+        let state = WorkbenchState::default();
+        assert!(require_beta(&state).is_err());
+        state.beta_enabled.store(true, Ordering::SeqCst);
+        assert!(require_beta(&state).is_ok());
+        state.beta_enabled.store(false, Ordering::SeqCst);
+        assert!(require_beta(&state).is_err());
     }
     #[test]
     fn late_results_are_rejected_after_configuration_and_account_changes() {

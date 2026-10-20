@@ -4,6 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/u
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useAuthStore } from "@lynse/core/auth";
 import { LYNSE_EDITION, DEV_BUILD, type LynseEdition } from "@lynse/core/config";
+import { featureFlags } from "../feature-flags";
+import { getConnectionProviders } from "../plugins/registry";
+import { usePluginStore } from "../plugins/state";
 import { ProviderRow } from "./provider-row";
 import { FeishuRow } from "./feishu-row";
 import { ReminderSettingsCard } from "./reminder-settings-card";
@@ -35,6 +38,8 @@ function visibleEdition(): LynseEdition | "all" {
 export function ConnectionsCard() {
   const { t } = useTranslation();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const entries = usePluginStore((state) => state.entries);
+  const connectionPlugins = getConnectionProviders(entries, { respectInstallState: featureFlags.pluginMarketplace });
   const edition = visibleEdition();
   const showIntl = edition !== "cn";
   const showCn = edition !== "intl";
@@ -47,6 +52,7 @@ export function ConnectionsCard() {
       </CardHeader>
       <CardContent className="space-y-5 px-4 pb-4">
         <ReminderSettingsCard />
+        {connectionPlugins.length > 0 && <section className="space-y-2"><h4 className="text-2xs font-medium uppercase tracking-wide text-muted-foreground">{t("connections.group_sources")}</h4>{connectionPlugins.map(({ manifest, connection }) => <ProviderRow key={manifest.id} provider={connection.provider} kind={connection.kind} isAuthenticated={isAuthenticated} />)}</section>}
         {showIntl && (
           <>
             <Group titleKey="connections.group_calendar" providers={CALENDAR_PROVIDERS} kind="calendar" isAuthenticated={isAuthenticated} />

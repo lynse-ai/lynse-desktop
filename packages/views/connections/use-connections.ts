@@ -16,6 +16,8 @@ import {
 } from "@lynse/core/integrations";
 import { LIST_STALE_TIME_MS } from "../workspace/hooks/use-files";
 import { integrationStatusKey } from "./use-connect-flow";
+import { getWorkbenchApi } from "../workbench/api";
+import { isWikiEnabled } from "../feature-flags";
 
 /**
  * Query/mutation layer for Connections.
@@ -70,7 +72,16 @@ export function useCalendarEvents(range: { from: string; to: string }, enabled =
 export function useDisconnect(provider: IntegrationsProvider) {
   const invalidate = useInvalidateProvider(provider);
   return useMutation({
-    mutationFn: (accountId: string) => disconnectAccount(provider, accountId),
+    mutationFn: async (accountId: string) => {
+      const bridge = getWorkbenchApi();
+      if (provider === "gmail" && bridge && isWikiEnabled()) {
+        const wiki = await bridge.wiki({ action: "state" });
+        if (wiki.sources?.gmailEnabled && wiki.sources.gmailAccountId === accountId) {
+          await bridge.wiki({ action: "sources", sources: { ...wiki.sources, gmailEnabled: false } });
+        }
+      }
+      return disconnectAccount(provider, accountId);
+    },
     onSuccess: invalidate,
   });
 }

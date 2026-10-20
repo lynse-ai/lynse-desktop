@@ -1518,6 +1518,7 @@ const ja = {
     continue_editing: "編集を続ける",
   },
   connections: {
+    group_sources: "ナレッジソース",
     "title": "連携",
     "subtitle": "外部サービスとの連携を管理",
     "group_calendar": "カレンダー",
@@ -1557,6 +1558,7 @@ const ja = {
     "not_configured": "この連携はまだ設定されていません",
     "pick_a_destination_first": "先に既定の保存先を選択してください",
     "provider": {
+      "gmail": "Gmail",
       "google-calendar": "Google カレンダー",
       "outlook-calendar": "Outlook カレンダー",
       "notion": "Notion",
@@ -1569,6 +1571,7 @@ const ja = {
       "feishu": "Feishu"
     },
     "hint": {
+      "gmail": "Gmail を読み取り専用で接続し、最近のメールを Wiki に利用できます",
       "google-calendar": "会議を取り込み、開始前に通知します",
       "outlook-calendar": "Google カレンダーと同じく Microsoft アカウント用",
       "notion": "会議の要約をデータベースに書き込みます",

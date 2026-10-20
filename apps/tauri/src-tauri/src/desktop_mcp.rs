@@ -142,7 +142,7 @@ impl DesktopMcpState {
                             connections.spawn(async move {
                                 let service = service_fn(move |request| {
                                     let app = app.clone();
-                                    dispatch(state.clone(), request, move |payload| {
+                                    dispatch(state.clone(), request, crate::workbench::is_beta_active(&app), move |payload| {
                                         app.emit_to("main", "lynse-mcp-request", payload).map_err(|e| e.to_string())
                                     })
                                 });
@@ -188,9 +188,23 @@ fn tool_error(message: &str) -> Value {
     json!({"content":[{"type":"text","text":message}],"isError":true})
 }
 
+fn tool_definitions(wiki_enabled: bool) -> Value {
+    let mut definitions: Value = serde_json::from_str(include_str!("mcp-tools.json")).unwrap();
+    if !wiki_enabled {
+        definitions["tools"].as_array_mut().unwrap().retain(|tool| {
+            !matches!(
+                tool["name"].as_str(),
+                Some("search_local_memory" | "get_local_memory" | "get_local_memory_source")
+            )
+        });
+    }
+    definitions
+}
+
 async fn dispatch<F>(
     state: DesktopMcpState,
     request: Request<Incoming>,
+    wiki_enabled: bool,
     emit: F,
 ) -> Result<HttpResponse, Infallible>
 where
@@ -268,10 +282,10 @@ where
             json!({"protocolVersion":PROTOCOL,"capabilities":{"tools":{}},"serverInfo":{"name":"lynse-desktop","version":env!("CARGO_PKG_VERSION")},"instructions":"Read local and signed-in cloud Lynse data. Tools are read-only. The desktop app must remain running. Local notes excluded from AI context are not shared."})
         }
         "ping" => json!({}),
-        "tools/list" => serde_json::from_str(include_str!("mcp-tools.json")).unwrap(),
+        "tools/list" => tool_definitions(wiki_enabled),
         "tools/call" => {
             let name = value["params"]["name"].as_str().unwrap_or("");
-            let definitions: Value = serde_json::from_str(include_str!("mcp-tools.json")).unwrap();
+            let definitions = tool_definitions(wiki_enabled);
             if !definitions["tools"]
                 .as_array()
                 .unwrap()
@@ -432,6 +446,23 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn wiki_tools_are_test_only() {
+        assert_eq!(
+            tool_definitions(false)["tools"].as_array().unwrap().len(),
+            10
+        );
+        assert_eq!(
+            tool_definitions(true)["tools"].as_array().unwrap().len(),
+            13
+        );
+        assert!(tool_definitions(false)["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| !t["name"].as_str().unwrap().contains("memory")));
+    }
+
     #[tokio::test]
     async fn http_transport_supports_mcp_handshake_calls_and_revocation() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
@@ -450,7 +481,7 @@ mod tests {
                 tokio::spawn(async move {
                     let service = service_fn(move |request| {
                         let emitter_state = state.clone();
-                        dispatch(state.clone(), request, move |payload| {
+                        dispatch(state.clone(), request, false, move |payload| {
                             let mut inner = emitter_state.inner.lock().unwrap();
                             if payload["arguments"]["revoke"] == true {
                                 inner.config.token = new_token();
@@ -505,7 +536,7 @@ mod tests {
             .json()
             .await
             .unwrap();
-        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 13);
+        assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 10);
         assert!(tools["result"]["tools"]
             .as_array()
             .unwrap()

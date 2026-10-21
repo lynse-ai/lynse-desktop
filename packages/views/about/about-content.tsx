@@ -13,7 +13,7 @@ import {
 } from "../app-update";
 import { openLogsFolder, openReportProblem } from "../diagnostics";
 import { LYNSE_APP_ICON_SRC } from "./app-icon";
-import { PRIVACY_URL, TERMS_URL, WEBSITE_URL } from "./links";
+import { WEBSITE_URL, privacyUrl, termsUrl } from "./links";
 
 /** Open a URL in the system browser, falling back to a new tab on web. */
 function openInBrowser(url: string): void {
@@ -34,7 +34,7 @@ function openInBrowser(url: string): void {
  * dialog (`AboutDialog`); the parent supplies the height.
  */
 export function AboutContent() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   // Subscribing also keeps the update entry in sync with the shared 30-min
   // background check, so "update available" shows without a manual check.
   const { update, checking } = useAppUpdate();
@@ -66,8 +66,8 @@ export function AboutContent() {
 
   const links = [
     { label: t("about.website"), url: WEBSITE_URL },
-    { label: t("about.terms"), url: TERMS_URL },
-    { label: t("about.privacy"), url: PRIVACY_URL },
+    { label: t("about.terms"), url: termsUrl(i18n.language) },
+    { label: t("about.privacy"), url: privacyUrl(i18n.language) },
   ];
 
   return (

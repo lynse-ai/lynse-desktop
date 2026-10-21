@@ -37,7 +37,7 @@ import {
   isTestMode,
   setTestMode,
 } from "../feature-flags";
-import { PRIVACY_URL, TERMS_URL } from "../about/links";
+import { privacyUrl, termsUrl } from "../about/links";
 import { WindowControls } from "../layout/app-title-bar";
 import { WechatIcon } from "./wechat-icon";
 import { WechatBindForm } from "./wechat-bind-form";
@@ -64,7 +64,7 @@ function AgreementCheckbox({
   onToggle: () => void;
   onLink: (url: string) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   return (
     <div className="mt-4 flex items-start gap-2">
       <button
@@ -84,7 +84,7 @@ function AgreementCheckbox({
         {t("auth.agree_prefix")}
         <button
           type="button"
-          onClick={() => onLink(TERMS_URL)}
+          onClick={() => onLink(termsUrl(i18n.language))}
           className="underline decoration-from-font underline-offset-2 transition-colors hover:text-foreground"
         >
           {t("auth.agree_terms")}
@@ -92,7 +92,7 @@ function AgreementCheckbox({
         {t("auth.agree_join")}
         <button
           type="button"
-          onClick={() => onLink(PRIVACY_URL)}
+          onClick={() => onLink(privacyUrl(i18n.language))}
           className="underline decoration-from-font underline-offset-2 transition-colors hover:text-foreground"
         >
           {t("auth.agree_privacy")}

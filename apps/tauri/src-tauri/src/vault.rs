@@ -345,6 +345,25 @@ pub(crate) fn modified_legacy_note(app:&AppHandle,id:&str)->CommandResult<Option
     }
 }
 
+/// Read existing note exports once per batch, restricted to IDs from the verified account list.
+pub(crate) fn legacy_notes(app: &AppHandle, ids: &std::collections::BTreeSet<String>) -> CommandResult<std::collections::BTreeMap<String, String>> {
+    let mut notes = std::collections::BTreeMap::new();
+    let Some(root) = vault_user_dir(app)? else { return Ok(notes); };
+    let index = VaultIndex::load(app)?;
+    for id in ids {
+        let Some(name) = index.file_name_for(id) else { continue; };
+        if Path::new(name).file_name().and_then(|name| name.to_str()) != Some(name) {
+            return Err("Invalid legacy vault filename".into());
+        }
+        match fs::read_to_string(root.join(name)) {
+            Ok(text) => { notes.insert(id.clone(), text); }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(notes)
+}
+
 fn write_note_impl(app: &AppHandle, note: &VaultNote) -> CommandResult<()> {
     let config = load_vault_config(app)?;
     if !config.enabled {
@@ -445,6 +464,19 @@ pub fn vault_default_path(app: AppHandle) -> CommandResult<String> {
     Ok(documents.join("Lynse知识库").to_string_lossy().into_owned())
 }
 
+/// Open only the saved vault directory, without accepting arbitrary renderer paths.
+#[tauri::command(async)]
+pub fn vault_open_folder(app: AppHandle) -> CommandResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let root = vault_root(&load_vault_config(&app)?)?;
+    if !root.is_dir() {
+        return Err("The configured knowledge-base folder does not exist".into());
+    }
+    app.opener()
+        .open_path(root.to_string_lossy(), None::<&str>)
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub fn vault_write_note(app: AppHandle, note: VaultNote) -> CommandResult<()> {
     write_note_impl(&app, &note)
@@ -472,9 +504,13 @@ pub fn vault_read_note(app: AppHandle, file_id: String) -> CommandResult<Option<
     let Some(file_name) = index.file_name_for(&file_id) else {
         return Ok(None);
     };
+    if Path::new(file_name).file_name().and_then(|name| name.to_str()) != Some(file_name) {
+        return Err("Invalid vault filename".into());
+    }
     match fs::read_to_string(root.join(file_name)) {
         Ok(content) => Ok(Some(content)),
-        Err(_) => Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
     }
 }
 

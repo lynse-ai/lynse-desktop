@@ -12,6 +12,50 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.1.16 (2026-10-21)
+
+### New Features
+
+- Read, create and edit Markdown memory shared with Lynclaw chat, including a memory overview, long-term notes and existing chat memories.
+- Keep offline edits on this device, sync them after reconnecting and retain drafts when cloud changes conflict.
+- Manage meeting memory, Wiki pages and source settings from the Memory page, with Beta labels and access controls.
+- Explore a knowledge graph of projects, topics, goals, Wiki pages and meeting sources; automatically discover and track changes with source citations.
+- Read Wiki pages and meeting notes beside the linked graph, with a shared note sidebar and adjustable reading width.
+- Review generated Wiki candidates before publishing and query authorized local meeting knowledge with the assistant.
+
+### Fixed
+
+- Process only new or changed sources, reuse completed Wiki batches and avoid repeating unchanged project status sections.
+- Hide completed Wiki progress cards and keep failed topics visible with a specific reason, a direct link and a targeted retry.
+- Keep existing graph nodes visible during background progress updates and show loading or failure states when graph data is unavailable.
+- Open the configured local knowledge folder through the native desktop command and let ready meetings proceed while unavailable recordings are skipped.
+- Preserve source citations across Wiki batches and exclude generated markup from discovery input.
+- Reuse same-name topics and repair existing duplicates automatically, preserving published content, candidates, review history and old links.
+- Reuse existing local meeting files before downloading missing content, with a separate action to check cloud updates.
+- Preserve existing vectors when saving unchanged embedding settings, and only index missing or changed sources.
+- Restore screenshot previews and recovery guidance on Windows.
+
+### 新功能
+
+- 在程序中查看、新建和修改与 Lynclaw 聊天共用的 Markdown 记忆，包括记忆概览、长期笔记和已有聊天记忆。
+- 离线修改先保存在本机，恢复连接后同步；云端冲突时保留草稿，旧版本地会议记忆单独保留。
+- 「记忆」页面集中管理会议记忆、Wiki 和来源设置，统一标注 Beta 并控制功能入口。
+- 新增知识图谱，查看项目、专题、目标、Wiki 页面与会议来源的关系，自动发现并跟踪变化，保留来源依据。
+- Wiki 与知识图谱合并展示，使用同一笔记侧边栏，左侧阅读对应内容、右侧查看关联，支持调整阅读宽度。
+- Wiki 生成候选内容后经审阅发布，小灵助手可查询已授权的本地会议知识。
+
+### 修复
+
+- 仅处理新增或变更资料，复用已完成的 Wiki 批次，避免重复生成相同项目状态。
+- 整理完成后隐藏进度卡片；失败专题显示具体原因、直达入口和单独重试按钮。
+- 后台进度刷新时保留已有图谱节点，数据尚未就绪或读取失败时显示明确状态。
+- 修复本地知识库「打开文件夹」失败；待转写、同步失败的记录不再阻塞已就绪资料的整理。
+- 保留跨批次整理的来源引用，自动发现时过滤生成页面中的标记内容。
+- 同名专题自动复用并修复已有重复，保留发布内容、候选稿、审阅历史和旧链接。
+- 优先复用已有本地会议文件，仅下载缺失正文，单独提供「检查云端更新」操作。
+- 保存相同向量模型配置时复用已有索引，仅为缺失或变更的资料计算向量。
+- 修复 Windows 截图预览，补充加载失败和重拍恢复提示。
+
 ## 1.1.15 (2026-10-17)
 
 ### New Features

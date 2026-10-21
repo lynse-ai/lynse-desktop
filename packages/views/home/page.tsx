@@ -348,6 +348,8 @@ export function HomePage() {
         </div>
       </div>
 
+      <WorkbenchHomeCard />
+
       {/* ── Recent records ─────────────────────────────── */}
       <section className="mt-7">
         <div className="flex items-center justify-between border-b border-border/60">
@@ -413,7 +415,6 @@ export function HomePage() {
         )}
       </section>
 
-      <WorkbenchHomeCard />
       {/* ── Footer: view-all link ──────────────────────── */}
       <footer className="mt-auto flex justify-center pb-20 pt-6">
         <button

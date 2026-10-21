@@ -1,4 +1,4 @@
-import { WorkbenchSupervisor, WorkbenchDialog } from "@lynse/views/workbench";
+import { WorkbenchSupervisor, WorkbenchDialog, MemoryPage } from "@lynse/views/workbench";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { CoreProvider } from "@lynse/core/platform";
 import { ThemeProvider } from "@lynse/ui/components/common/theme-provider";
@@ -97,6 +97,9 @@ function PageRouter() {
   } else if (pathname.startsWith("/notes")) {
     page = <NotesPage />;
     route = "notes";
+  } else if (pathname.startsWith("/memory")) {
+    page = <MemoryPage />;
+    route = "memory";
   }
   // Flag-gated WIP features fall through to the workspace above, so a stale
   // link can't reach the unfinished page.

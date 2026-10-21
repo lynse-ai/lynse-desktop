@@ -203,7 +203,6 @@ function command<T>(name: string, payload?: Record<string, unknown>): Promise<T>
  * without touching this file.
  */
 const LIVE_TRANSLATION_SETTINGS_V2_KEY = "lynse_live_translation_settings_v2";
-type AudioSourceMode = "both" | "mic" | "system";
 
 // Register the providers' vault key paths before any read/write so a plugin
 // secret is never silently downgraded to localStorage by secure-storage.
@@ -341,12 +340,17 @@ export async function installTauriBridge(): Promise<void> {
     status: () => command("workbench_status"),
     wiki: (request) => command("workbench_wiki", { request }),
     configure: (enabled, allowAi) => command("workbench_configure", { enabled, allowAi }),
-    sync: (retryFailed) => command("workbench_sync", { retryFailed }),
+    sync: (retryFailed, refreshExisting) => command("workbench_sync", { retryFailed, refreshExisting }),
     search: (query, aiOnly) => command("workbench_search", { query, aiOnly }),
     read: (id) => command("workbench_read", { id }),
     review: (query) => command("workbench_review", { query }),
     exclude: (id, excluded) => command("workbench_exclude", { id, excluded }),
     editMemory: (id, text, pinned, excluded) => command("workbench_memory_edit", { id, text, pinned, excluded }),
+    memoryFiles: (scope) => command("workbench_memory_files", { scope, request: { action: "list" } }),
+    readMemoryFile: (scope, path) => command("workbench_memory_files", { scope, request: { action: "read", path } }),
+    reloadMemoryFile: (scope, path) => command("workbench_memory_files", { scope, request: { action: "reload", path } }),
+    saveMemoryFile: (scope, path, markdown, revision) => command("workbench_memory_files", { scope, request: { action: "save", path, markdown, revision } }),
+    createMemoryFile: (scope, title) => command("workbench_memory_files", { scope, request: { action: "create", title } }),
     clear: () => command("workbench_clear"),
     confirmTodos: (id, suggestions) => command("workbench_confirm_todos", { id, suggestions }),
     context: (query) => command("workbench_context", { query }),
@@ -658,9 +662,7 @@ export async function installTauriBridge(): Promise<void> {
       writeNotes: (notes) => command("vault_write_notes", { notes }),
       readNote: (fileId) => command("vault_read_note", { fileId }),
       removeNote: (fileId) => command("vault_remove_note", { fileId }),
-      openVaultFolder: async (path) => {
-        await openPath(path);
-      },
+      openVaultFolder: () => command("vault_open_folder"),
       onSyncProgress: (callback) =>
         getCurrentWebview().listen<VaultSyncProgress>("vault-sync-progress", (event) =>
           callback(event.payload),

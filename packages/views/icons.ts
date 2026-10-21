@@ -21,6 +21,7 @@ export {
   Camera,           // iPhone photo capture (Continuity Camera)
   CalendarDays,     // Meetings
   BookOpen,         // Knowledge Base
+  Network,          // Knowledge graph
   FolderOpen,       // Files / Folders
   Lightbulb,        // Inspiration
   MessageSquare,    // Generic message placeholder (transcription prompt)
@@ -57,6 +58,7 @@ export {
   Check,            // Confirm / Copied
   Pencil,           // Rename / Edit inline
   MoreHorizontal,   // Context menu trigger
+  Pin,              // Pin optional sidebar destinations
   GripVertical,     // Drag handle
   ZoomIn,           // Image viewer zoom in
   ZoomOut,          // Image viewer zoom out

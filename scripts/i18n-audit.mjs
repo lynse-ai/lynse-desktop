@@ -10,6 +10,7 @@
  * Exits non-zero when class A or C has findings.
  */
 import { readFileSync, readdirSync } from "node:fs";
+import ts from "typescript";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative, sep } from "node:path";
 
@@ -43,8 +44,18 @@ function flatten(obj, prefix = "", out = new Map()) {
   return out;
 }
 
+// Match the runtime resource merge in packages/views/locales/index.ts.
+const workbenchSource = readFileSync(join(ROOT, "workbench", "locales.ts"), "utf8")
+  .replace("export const workbenchLocales", "const workbenchLocales");
+// eslint-disable-next-line no-eval
+const workbench = eval(`${ts.transpileModule(workbenchSource, {
+  compilerOptions: { target: ts.ScriptTarget.ESNext },
+}).outputText}; workbenchLocales`);
 const flat = Object.fromEntries(
-  LOCALES.map((l) => [l, flatten(loadLocale(l))])
+  LOCALES.map((l) => [l, flatten({
+    ...loadLocale(l),
+    workbench: workbench[l === "zh" ? "zh-Hans" : l],
+  })])
 );
 
 // ---- Collect call sites -----------------------------------------------------

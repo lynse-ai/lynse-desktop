@@ -93,6 +93,11 @@ const ja = {
     callback_back: "Lynse に戻る",
   },
   nav: {
+    more: "その他",
+    wiki: "Wiki",
+    pinned: "固定した機能",
+    pin_to_sidebar: "{{name}} をサイドバーに固定",
+    unpin_from_sidebar: "{{name}} の固定を解除",
     home: "ホーム",
     recordings: "録音",
     meetings: "会議",

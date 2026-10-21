@@ -1,11 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildNoteMarkdown,
   isHtmlContent,
+  syncAllNotesToVault,
   VAULT_DEFAULT_SECTION_LABELS,
 } from "./note-vault";
+
+const request = vi.hoisted(() => vi.fn());
+vi.mock("@lynse/core/api/client", () => ({ api: () => ({ getWithParams: request }) }));
 
 const baseInput = {
   fileId: "file-1",
@@ -98,5 +102,39 @@ describe("buildNoteMarkdown", () => {
     expect(payload!.markdown).toContain("## 大纲\n\n大纲正文");
     expect(payload!.markdown).toContain("## 总结 1\n\n总结正文");
     expect(VAULT_DEFAULT_SECTION_LABELS.outline).toBe("Outline");
+  });
+});
+
+
+describe("local-first vault sync", () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+  function bridge(readNote: ReturnType<typeof vi.fn>) {
+    const writeNotes = vi.fn(async (notes: unknown[]) => ({ written: notes.length, failed: 0, errors: [] }));
+    Object.defineProperty(window, "desktopAPI", { configurable: true, value: { vault: { readNote, writeNotes } } });
+    return writeNotes;
+  }
+  it("reuses existing files and fetches only the missing note", async () => {
+    const read = vi.fn(async (id: string) => id === "existing" ? "# Original local note\nManual correction" : null);
+    const write = bridge(read);
+    request.mockImplementation(async (path: string) => path.endsWith("/outline/get") ? { content: "New outline" } : []);
+    const progress = vi.fn();
+    const result = await syncAllNotesToVault([{ id: "existing", title: "Saved" }, { id: "missing", title: "New" }], undefined, progress);
+    expect(result).toEqual({ written: 1, reused: 1, failed: 0, errors: [] });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.every((call) => call[1].fileId === "missing")).toBe(true);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write.mock.calls[0]![0]).toEqual([expect.objectContaining({ fileId: "missing" })]);
+    expect(progress).toHaveBeenLastCalledWith({ done: 2, total: 2 });
+  });
+  it("makes no network requests or writes when every note already exists", async () => {
+    const write = bridge(vi.fn(async () => "# Existing local file"));
+    expect(await syncAllNotesToVault([{ id: "one", title: "One" }, { id: "two", title: "Two" }])).toEqual({ written: 0, reused: 2, failed: 0, errors: [] });
+    expect(request).not.toHaveBeenCalled();expect(write).not.toHaveBeenCalled();
+  });
+  it("preserves unreadable local files without downloading replacement content", async () => {
+    const write = bridge(vi.fn(async () => { throw new Error("Local file unreadable"); }));
+    const result = await syncAllNotesToVault([{ id: "edited", title: "Edited note" }]);
+    expect(result.failed).toBe(1);expect(result.errors[0]).toContain("Local file unreadable");
+    expect(request).not.toHaveBeenCalled();expect(write).not.toHaveBeenCalled();
   });
 });

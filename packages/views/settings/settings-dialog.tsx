@@ -9,6 +9,7 @@ import {
 } from "@lynse/ui/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/ui/card";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { useNavigation } from "../navigation";
 import {
   Sun,
   UserCircle,
@@ -97,6 +98,7 @@ export function SettingsDialog({
   initialSectionId?: SettingsSectionId;
 }) {
   const { t } = useTranslation();
+  const navigation = useNavigation();
 
   const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>(initialSectionId);
   const pluginEntries = usePluginStore((s) => s.entries);
@@ -185,7 +187,7 @@ export function SettingsDialog({
       icon: Cloud,
       content: (
         <>
-          <VaultConfigCard />
+          <VaultConfigCard onManageMemory={() => { onOpenChange(false); navigation.push("/memory?tab=settings"); }} />
           <WebdavSyncConfigCard />
         </>
       ),

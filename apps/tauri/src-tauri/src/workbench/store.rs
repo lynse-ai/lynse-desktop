@@ -67,6 +67,15 @@ fn yes() -> bool {
 }
 
 impl Document {
+    pub fn has_meeting_text(&self) -> bool {
+        !self.transcript.trim().is_empty()
+            || !self.outline.trim().is_empty()
+            || self.conclusions.iter().any(|item| {
+                item.get("conclusionText")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.trim().is_empty())
+            })
+    }
     pub fn text(&self) -> String {
         let mut parts = vec![self.transcript.clone(), self.outline.clone()];
         for item in &self.conclusions {
@@ -220,6 +229,17 @@ pub struct Entry {
     pub accepted_revision: String,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WikiProgress {
+    pub stage: String,
+    pub completed: usize,
+    pub total: usize,
+    pub current_title: String,
+    pub topic_title: String,
+    pub failed: usize,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
@@ -236,6 +256,10 @@ pub struct Manifest {
     pub updated_at: String,
     #[serde(default)]
     pub error: String,
+    #[serde(default)]
+    pub wiki_progress: Option<WikiProgress>,
+    #[serde(default)]
+    pub wiki_attempted_fingerprint: String,
     #[serde(default)]
     pub entries: BTreeMap<String, Entry>,
     #[serde(default)]
@@ -259,6 +283,8 @@ impl Default for Manifest {
             phase: "disabled".into(),
             updated_at: String::new(),
             error: String::new(),
+            wiki_progress: None,
+            wiki_attempted_fingerprint: String::new(),
             entries: BTreeMap::new(),
             memories: vec![],
             artifacts: BTreeMap::new(),
@@ -333,7 +359,7 @@ pub fn write_document(
         kind: document.kind.clone(),
         title: document.title.clone(),
         revision: document.revision.clone(),
-        status: if document.kind == "meeting" && document.transcript.trim().is_empty() {
+        status: if document.kind == "meeting" && !document.has_meeting_text() {
             "awaiting_transcription"
         } else {
             "synced"
@@ -395,7 +421,7 @@ pub fn read_document(root: &Path, entry: &Entry) -> CommandResult<Document> {
     Ok(document)
 }
 pub fn eligible(entry: &Entry) -> bool {
-    !entry.excluded && matches!(entry.status.as_str(), "synced" | "awaiting_transcription")
+    !entry.excluded && entry.status == "synced"
 }
 
 pub fn write_memory_views(root: &Path, state: &Manifest) -> CommandResult<()> {

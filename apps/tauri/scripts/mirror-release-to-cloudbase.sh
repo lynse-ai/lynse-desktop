@@ -4,6 +4,7 @@
 #
 #   bash apps/tauri/scripts/mirror-release-to-cloudbase.sh v1.1.6
 #   bash apps/tauri/scripts/mirror-release-to-cloudbase.sh v1.1.6 --dry-run
+#   bash apps/tauri/scripts/mirror-release-to-cloudbase.sh v1.1.16-beta.1 --prerelease
 #   GH_REPO=lynse-ai/lynse-desktop DIST=/tmp/x bash ... <tag>   # override
 #
 # Counterpart of publish-cloudbase.sh:
@@ -42,10 +43,12 @@ GH_REPO="${GH_REPO:-${GITHUB_REPOSITORY:-lynse-ai/lynse-desktop}}"
 REQUIRED_PLATFORMS=("darwin-aarch64" "windows-x86_64")
 
 DRY_RUN=false
+PRERELEASE=false
 TAG=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=true ;;
+    --prerelease) PRERELEASE=true ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) printf 'Unknown option: %s\n' "$1" >&2; exit 1 ;;
     *) TAG="$1" ;;
@@ -71,6 +74,11 @@ manifest_query() {
 # Tags carry build counters with parentheses in this repo's history (v1.1.4(2)),
 # so only the vN.N.N prefix is validated; the object key is percent-encoded below.
 [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+ ]] || die "Tag must start with vN.N.N, got: $TAG"
+if [[ "$TAG" == *-* ]]; then
+  [[ "$PRERELEASE" == true ]] || die "Prerelease tags require --prerelease; stable updates must stay unchanged."
+elif [[ "$PRERELEASE" == true ]]; then
+  die "--prerelease requires a prerelease tag."
+fi
 
 for tool in gh curl node; do
   command -v "$tool" >/dev/null || die "$tool not found on PATH"
@@ -165,6 +173,11 @@ done < <(MANIFEST_FILE="$MANIFEST" node -e '
     process.stdout.write(`${v.url}\n`);
   }
 ')
+
+if [[ "$PRERELEASE" == true ]]; then
+  log "Prerelease available at $BASE — stable manifest and download aliases unchanged"
+  exit 0
+fi
 
 log "Flipping stable updates/latest.json"
 tcb hosting deploy "$MANIFEST" "updates/latest.json" -e "$CLOUDBASE_ENV_ID" --yes

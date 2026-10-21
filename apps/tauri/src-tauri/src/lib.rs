@@ -1194,7 +1194,7 @@ fn model_is_installed(app: &AppHandle, provider: &str, model_id: &str) -> bool {
     // (imageio-ffmpeg), and sherpa-onnx is a single ONNX file on its own
     // lightweight venv, so those stay exempt.
     if provider != "mlx" && provider != "qwen3" && provider != "moss" && provider != SHERPA_PROVIDER {
-        let version = format!("v{}", app.package_info().version);
+        let version = stt::runtime_version(app);
         let runtime = stt::runtime_dir(app, &version);
         if !stt::runtime_is_complete(&runtime) {
             return false;
@@ -1782,7 +1782,7 @@ fn expected_runtime_sha() -> Option<&'static str> {
 /// Ensure the shared runtime is present; download + verify + install it if
 /// missing. A complete runtime is a no-op, so callers may invoke freely.
 pub(crate) fn ensure_runtime_available(app: &AppHandle, provider: &str, model_id: &str) -> CommandResult<()> {
-    let version = format!("v{}", app.package_info().version);
+    let version = stt::runtime_version(app);
     let final_dir = stt::runtime_dir(app, &version);
     if stt::runtime_is_complete(&final_dir) {
         return Ok(());
@@ -5048,6 +5048,7 @@ pub fn run() {
             workbench::workbench_review,
             workbench::workbench_exclude,
             workbench::workbench_memory_edit,
+            workbench::workbench_memory_files,
             workbench::workbench_clear,
             workbench::workbench_confirm_todos,
             workbench::workbench_context,
@@ -5075,7 +5076,7 @@ pub fn run() {
             local_voiceprint_backend_status,
             local_stt_config_get, local_stt_config_save,
             local_stt_set_locale, local_stt_default_provider,
-            vault::vault_config_get, vault::vault_config_save, vault::vault_default_path,
+            vault::vault_config_get, vault::vault_config_save, vault::vault_default_path, vault::vault_open_folder,
             vault::vault_write_note, vault::vault_write_notes, vault::vault_read_note,
             vault::vault_remove_note,
             storage::storage_usage, storage::storage_reveal, storage::storage_clear,
@@ -5550,6 +5551,13 @@ mod tests {
             format!("https://mirror.ghproxy.com/https://github.com/{RUNTIME_REPO}/releases/download/v0.1.15/{archive}"),
         ];
         assert_eq!(candidates, expected);
+    }
+
+    #[test]
+    fn prerelease_runtime_candidates_keep_the_exact_tag() {
+        for url in runtime_download_candidates("v1.1.16-beta.1") {
+            assert!(url.contains("/v1.1.16-beta.1/"), "{url}");
+        }
     }
 
     /// First-run simulation: fetch the runtime archive a brand-new install would

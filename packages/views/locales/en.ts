@@ -91,6 +91,11 @@ const en = {
     callback_back: "Back to Lynse",
   },
   nav: {
+    more: "More",
+    wiki: "Wiki",
+    pinned: "Pinned features",
+    pin_to_sidebar: "Pin {{name}} to sidebar",
+    unpin_from_sidebar: "Unpin {{name}} from sidebar",
     home: "Home",
     recordings: "Recordings",
     meetings: "Meetings",

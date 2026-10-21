@@ -9,8 +9,9 @@ import { Switch } from "@lynse/ui/components/ui/switch";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
 import { FolderOpen, Loader2 } from "../icons";
-import { getWorkbenchApi, refreshWorkbench, useWorkbench } from "../workbench/api";
+import { getWorkbenchApi, refreshWorkbench, useWorkbench, useWikiEnabled } from "../workbench/api";
 import { WorkbenchSettingsContent } from "../workbench/components";
+import { BetaBadge } from "../beta-badge";
 import {
   getDesktopVaultApi,
   useVaultConfig,
@@ -20,7 +21,7 @@ import {
 
 /** Settings card for the local markdown vault (desktop only). Renders nothing
  *  when the vault bridge is unavailable (web). */
-export function VaultConfigCard() {
+export function VaultConfigCard({ onManageMemory }: { onManageMemory?: () => void } = {}) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const vaultApi = getDesktopVaultApi();
@@ -28,6 +29,8 @@ export function VaultConfigCard() {
   const [path, setPath] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const wikiEnabled = useWikiEnabled();
   const workbench = useWorkbench((state) => state.status);
   const lastSync = workbench?.initialComplete ? workbench.updatedAt : null;
 
@@ -74,11 +77,14 @@ export function VaultConfigCard() {
   }
 
   async function handleOpenFolder() {
-    if (!vaultApi || !path) return;
+    if (!vaultApi || !path || opening) return;
+    setOpening(true);
     try {
       await vaultApi.openVaultFolder(path);
     } catch {
       toast.error(t("vault.open_folder_failed"));
+    } finally {
+      setOpening(false);
     }
   }
 
@@ -154,8 +160,9 @@ export function VaultConfigCard() {
                   variant="outline"
                   className="h-7 text-xs"
                   onClick={handleOpenFolder}
-                  disabled={!path}
+                  disabled={!path || opening}
                 >
+                  {opening && <Loader2 className="size-3.5 animate-spin" />}
                   {t("vault.open_folder")}
                 </Button>
                 <Button
@@ -171,7 +178,7 @@ export function VaultConfigCard() {
             </div>
           </>
         )}
-        <WorkbenchSettingsContent disabled={saving} />
+        {onManageMemory ? wikiEnabled && <div className="space-y-2 border-t border-border pt-3"><p className="text-xs text-muted-foreground">{t("workbench.memory_settings_moved")}</p><Button size="sm" variant="outline" onClick={onManageMemory}>{t("workbench.memory_manage")}<span aria-hidden="true"><BetaBadge /></span></Button></div> : <WorkbenchSettingsContent disabled={saving} />}
       </CardContent>
     </Card>
   );

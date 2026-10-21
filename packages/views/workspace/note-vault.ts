@@ -37,6 +37,7 @@ export interface VaultNotePayload {
 
 export interface VaultBatchSummary {
   written: number;
+  reused?: number;
   failed: number;
   errors: string[];
 }
@@ -300,8 +301,7 @@ export async function collectNotePayloads(
 }
 
 /**
- * Fetch outline + conclusions for every cloud note and mirror them into the
- * local vault. One-way cloud→local; the disk writes additionally stream
+ * Reuse existing vault files and fetch only missing notes. The disk writes additionally stream
  * `vault-sync-progress` events from the Rust side.
  */
 export async function syncAllNotesToVault(
@@ -312,18 +312,31 @@ export async function syncAllNotesToVault(
   const vaultApi = getDesktopVaultApi();
   if (!vaultApi) throw new Error("Local vault bridge unavailable");
 
-  const payloads = await collectNotePayloads(notes, labels, onProgress);
-
+  const cloudNotes = notes.filter((note) => !isLocalFileId(note.id));
+  const missing: VaultSyncNoteRef[] = [];
+  let reused = 0;
   let written = 0;
   let failed = 0;
   const errors: string[] = [];
+  for (const note of cloudNotes) {
+    try {
+      const existing = await vaultApi.readNote(note.id);
+      if (existing?.trim()) reused++;
+      else missing.push(note);
+    } catch (error) {
+      failed++;
+      errors.push(`${note.title}: ${String(error)}`);
+    }
+  }
+  onProgress?.({ done: reused + failed, total: cloudNotes.length });
+  const payloads = await collectNotePayloads(missing, labels, (progress) => onProgress?.({ done: reused + failed + progress.done, total: cloudNotes.length }));
   for (let start = 0; start < payloads.length; start += VAULT_SYNC_CHUNK_SIZE) {
     const summary = await vaultApi.writeNotes(payloads.slice(start, start + VAULT_SYNC_CHUNK_SIZE));
     written += summary.written;
     failed += summary.failed;
     errors.push(...summary.errors);
   }
-  return { written, failed, errors };
+  return { written, reused, failed, errors };
 }
 
 /** Fire-and-forget vault cleanup after a cloud-side note deletion. The Rust

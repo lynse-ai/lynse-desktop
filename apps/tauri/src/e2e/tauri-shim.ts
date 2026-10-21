@@ -16,6 +16,8 @@
  *   - `setCommand(name, handler)` — override a command's mock response
  */
 
+import { DEFAULT_EMBEDDING_MODEL } from "../../../../packages/views/workbench/embedding-model";
+
 type InvokeHandler = (args: Record<string, unknown>) => unknown;
 
 interface LynseE2EHooks {
@@ -57,6 +59,7 @@ function defaultInvoke(cmd: string, args: Record<string, unknown>): unknown {
     "meeting_detector_get_state",
     "vault_config_get",
     "vault_default_path",
+    "vault_open_folder",
     "webdav_config_get",
     "bot_config_get",
     "bot_state",
@@ -99,7 +102,7 @@ function defaultInvoke(cmd: string, args: Record<string, unknown>): unknown {
     }
     return null;
   }
-  if (cmd === "workbench_wiki") return {topics:[],models:{text:{baseUrl:"",model:""},embedding:{baseUrl:"",model:""},revision:""},sources:{gmailEnabled:false,gmailAccountId:"",integrationsUrl:""}};
+  if (cmd === "workbench_wiki") return {topics:[],models:{embedding:{...DEFAULT_EMBEDDING_MODEL},revision:""},sources:{gmailEnabled:false,gmailAccountId:"",integrationsUrl:""}};
   if (cmd === "workbench_bind" || cmd === "workbench_status") return {scope:"synthetic-account",userId:"user-e2e",enabled:false,allowAi:false,initialComplete:false,phase:"disabled",updatedAt:"",error:"",discovered:0,synced:0,awaitingTranscription:0,failed:0,conflicts:0,entries:[],memories:[]};
   if (cmd === "get_app_info") return { version: "0.0.0-e2e", build: "1", platform: "macos" };
   if (cmd === "window_effects_mode") return "none";

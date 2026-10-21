@@ -1,5 +1,7 @@
 # 本地知识库与 Wiki
 
+> 记忆库的云端共用、Markdown 编辑和缓存行为见 [markdown-memory.md](markdown-memory.md)。Wiki 页面与发布审阅仍按下文运行。
+
 此实现使用现有 Rust/Tauri 运行时、文件存储和新增的 SQLite 索引；不引入 gbrain、Node/Bun 运行时、LanceDB 或模型权重。参考 `nashsu/llm_wiki` 的来源分析、主题编译与持久任务思路，代码由本项目原生实现。
 
 ## 设置与开关联动

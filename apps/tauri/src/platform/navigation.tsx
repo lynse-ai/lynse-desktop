@@ -24,7 +24,9 @@ export function DesktopNavigationProvider({
     entries: [HOME_PATH],
     index: 0,
   }));
-  const pathname = history.entries[history.index] ?? HOME_PATH;
+  const currentPath = history.entries[history.index] ?? HOME_PATH;
+  const location = useMemo(() => new URL(currentPath, "https://desktop.lynse.invalid"), [currentPath]);
+  const pathname = location.pathname;
 
   const push = useCallback((path: string) => {
     setHistory((h) => {
@@ -97,10 +99,10 @@ export function DesktopNavigationProvider({
       canGoBack: history.index > 0,
       canGoForward: history.index < history.entries.length - 1,
       pathname,
-      searchParams: new URLSearchParams(),
+      searchParams: new URLSearchParams(location.search),
       getShareableUrl: (path: string) => path,
     }),
-    [push, replace, back, forward, history, pathname],
+    [push, replace, back, forward, history, pathname, location],
   );
 
   return (

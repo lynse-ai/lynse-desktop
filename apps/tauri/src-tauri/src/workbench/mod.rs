@@ -1,3 +1,6 @@
+mod markdown;
+mod memory;
+mod memory_cloud;
 mod sources;
 mod store;
 mod sync;
@@ -35,6 +38,9 @@ pub struct WorkbenchState {
     pub(super) session: Mutex<Option<Session>>,
     pub(super) worker: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pub(super) serial: tokio::sync::Mutex<()>,
+    sync_requested: tokio::sync::Notify,
+    refresh_existing: AtomicBool,
+    discovery_requested: tokio::sync::Notify,
     epoch: AtomicU64,
     beta_enabled: AtomicBool,
     gmail_plugin_enabled: AtomicBool,
@@ -237,7 +243,7 @@ fn public_status(session: &Session, state: &Manifest) -> Value {
         .filter(|entry| entry.kind == "meeting")
         .collect();
     json!({"scope":session.scope,"userId":session.user_id,"enabled":state.enabled,"allowAi":state.allow_ai,
-        "initialComplete":state.initial_complete,"phase":state.phase,"updatedAt":state.updated_at,"error":state.error,
+        "initialComplete":state.initial_complete,"phase":state.phase,"updatedAt":state.updated_at,"error":state.error,"wikiProgress":state.wiki_progress,
         "discovered":meetings.len(),"synced":meetings.iter().filter(|e|e.status=="synced").count(),
         "awaitingTranscription":meetings.iter().filter(|e|e.status=="awaiting_transcription").count(),
         "failed":meetings.iter().filter(|e|e.status=="failed").count(),"conflicts":meetings.iter().filter(|e|e.status=="conflict").count(),
@@ -252,6 +258,7 @@ pub(super) fn require_beta(state: &WorkbenchState) -> CommandResult<()> {
     }
 }
 pub(super) fn invalidate_runtime(state: &WorkbenchState) -> CommandResult<Session> {
+    state.refresh_existing.store(false, Ordering::SeqCst);
     let generation = state.epoch.fetch_add(1, Ordering::SeqCst) + 1;
     if let Some(worker) = state
         .worker
@@ -425,8 +432,6 @@ pub async fn workbench_bind(
         locale: request.locale,
     };
     let mut manifest = load_state(&app, &session)?;
-    manifest.initial_complete = false;
-    manifest.completed_round.clear();
     for entry in manifest.entries.values_mut() {
         entry.failed_download_revision.clear();
     }
@@ -441,6 +446,7 @@ pub async fn workbench_bind(
 
 #[tauri::command]
 pub async fn workbench_unbind(state: State<'_, WorkbenchState>) -> CommandResult<()> {
+    state.refresh_existing.store(false, Ordering::SeqCst);
     state.beta_enabled.store(false, Ordering::SeqCst);
     state.gmail_plugin_enabled.store(false, Ordering::SeqCst);
     state.epoch.fetch_add(1, Ordering::SeqCst);
@@ -476,32 +482,74 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
     }
     let app = app.clone();
     *worker = Some(tauri::async_runtime::spawn(async move {
-        loop {
-            let state = app.state::<WorkbenchState>();
-            let Ok(session) = current(&state) else {
-                return;
-            };
-            if let Err(error) = sync::run(&app, &state, &session).await {
-                let _guard = state.serial.lock().await;
-                if is_current(&state, &session) {
-                    if let Ok(mut manifest) = load_state(&app, &session) {
-                        manifest.phase = "failed".into();
-                        manifest.error = error;
-                        let _ = persist(&app, &session, &manifest);
-                        let _ = app.emit("workbench-updated", public_status(&session, &manifest));
+        let sync_loop = async {
+            loop {
+                let state = app.state::<WorkbenchState>();
+                let Ok(session) = current(&state) else {
+                    return;
+                };
+                if let Err(error) = sync::run(&app, &state, &session).await {
+                    let _guard = state.serial.lock().await;
+                    if is_current(&state, &session) {
+                        if let Ok(mut manifest) = load_state(&app, &session) {
+                            manifest.phase = "failed".into();
+                            manifest.error = error;
+                            let _ = persist(&app, &session, &manifest);
+                            let _ =
+                                app.emit("workbench-updated", public_status(&session, &manifest));
+                        }
                     }
                 }
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {}
+                    _ = state.sync_requested.notified() => {}
+                }
+                if !is_current(&state, &session) {
+                    return;
+                }
+                if !crate::vault::load_vault_config(&app)
+                    .map(|c| c.enabled)
+                    .unwrap_or(false)
+                {
+                    return;
+                }
             }
-            tokio::time::sleep(std::time::Duration::from_secs(120)).await;
-            if !is_current(&state, &session) {
-                return;
+        };
+        // Discovery runs alongside Wiki compilation without blocking the source worker.
+        // Both futures belong to this worker and are cancelled together on scope changes.
+        let discovery_loop = async {
+            loop {
+                let state = app.state::<WorkbenchState>();
+                let Ok(session) = current(&state) else {
+                    return;
+                };
+                let more = match wiki::discover(&app, &state, &session).await {
+                    Ok(more) => more,
+                    Err(error) => {
+                        log::warn!("Wiki discovery paused: {error}");
+                        false
+                    }
+                };
+                if more {
+                    tokio::task::yield_now().await;
+                } else {
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {}
+                        _ = state.discovery_requested.notified() => {}
+                    }
+                }
+                if !is_current(&state, &session)
+                    || !crate::vault::load_vault_config(&app)
+                        .map(|c| c.enabled)
+                        .unwrap_or(false)
+                {
+                    return;
+                }
             }
-            if !crate::vault::load_vault_config(&app)
-                .map(|c| c.enabled)
-                .unwrap_or(false)
-            {
-                return;
-            }
+        };
+        tokio::select! {
+            _ = sync_loop => {}
+            _ = discovery_loop => {}
         }
     }));
 }
@@ -544,6 +592,7 @@ pub async fn workbench_configure(
     manifest.initial_complete = false;
     manifest.completed_round.clear();
     manifest.allow_ai = allow_ai;
+    manifest.wiki_progress = None;
     manifest.phase = if enabled { "pending" } else { "disabled" }.into();
     manifest.error.clear();
     persist(&app, &session, &manifest)?;
@@ -561,15 +610,26 @@ pub async fn workbench_sync(
     app: AppHandle,
     state: State<'_, WorkbenchState>,
     retry_failed: Option<bool>,
+    refresh_existing: Option<bool>,
 ) -> CommandResult<()> {
     let _guard = state.serial.lock().await;
+    if retry_failed == Some(false) {
+        current(&state)?;
+        if !crate::vault::load_vault_config(&app)?.enabled {
+            return Err("Local knowledge-base sync is disabled".into());
+        }
+        start_worker(&app, &state);
+        state.sync_requested.notify_one();
+        return Ok(());
+    }
     let session = invalidate_runtime(&state)?;
     let mut manifest = load_state(&app, &session)?;
     if !crate::vault::load_vault_config(&app)?.enabled {
         return Err("Local knowledge-base sync is disabled".into());
     }
-    manifest.initial_complete = false;
-    manifest.completed_round.clear();
+    state
+        .refresh_existing
+        .store(refresh_existing.unwrap_or(false), Ordering::SeqCst);
     if retry_failed.unwrap_or(true) {
         for entry in manifest.entries.values_mut() {
             entry.failed_synthesis_revision.clear();
@@ -637,6 +697,7 @@ pub async fn workbench_read(
     let _guard = state.serial.lock().await;
     let session = current(&state)?;
     if id.starts_with("wiki:") {
+        require_beta(&state)?;
         return wiki::read_page(&app, &session, &id);
     }
 
@@ -764,7 +825,21 @@ pub async fn workbench_memory_edit(
     item["pinned"] = json!(pinned);
     item["excluded"] = json!(excluded);
     item["userEdited"] = json!(true);
+    item["updatedAt"] = json!(crate::now());
     persist(&app, &session, &manifest)
+}
+
+#[tauri::command]
+pub async fn workbench_memory_files(
+    app: AppHandle,
+    state: State<'_, WorkbenchState>,
+    request: memory::MemoryRequest,
+    scope: String,
+) -> CommandResult<Value> {
+    require_beta(&state)?;
+    let session = current(&state)?;
+    if session.scope != scope { return Err("Account changed; reopen memory files".into()); }
+    memory_cloud::handle(&app, &session, request).await
 }
 
 #[tauri::command]
@@ -1064,6 +1139,39 @@ pub async fn workbench_context(
 #[cfg(test)]
 mod wiki_lifecycle_tests {
     use super::*;
+    #[test]
+    fn status_exposes_processing_progress_with_skipped_meeting_counts() {
+        let mut manifest = Manifest::default();
+        manifest.wiki_progress = Some(store::WikiProgress {
+            stage: "analyzing".into(),
+            completed: 12,
+            total: 30,
+            current_title: "Meeting Alpha".into(),
+            topic_title: "Launch".into(),
+            failed: 0,
+        });
+        for (id, status) in [
+            ("ready", "synced"),
+            ("waiting", "awaiting_transcription"),
+            ("failed", "failed"),
+        ] {
+            manifest.entries.insert(
+                id.into(),
+                store::Entry {
+                    id: id.into(),
+                    kind: "meeting".into(),
+                    status: status.into(),
+                    ..Default::default()
+                },
+            );
+        }
+        let status = public_status(&session("account", 1), &manifest);
+        assert_eq!(status["wikiProgress"]["completed"], 12);
+        assert_eq!(status["wikiProgress"]["currentTitle"], "Meeting Alpha");
+        assert_eq!(status["synced"], 1);
+        assert_eq!(status["awaitingTranscription"], 1);
+        assert_eq!(status["failed"], 1);
+    }
     fn session(scope: &str, generation: u64) -> Session {
         Session {
             scope: scope.into(),

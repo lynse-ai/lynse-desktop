@@ -31,6 +31,21 @@ export interface MemoryItem {
   userEdited?: boolean;
   updatedAt?: string;
 }
+export interface MemoryFile {
+  path: string;
+  title: string;
+  kind: "note" | "entry" | "snapshot";
+  editable: boolean;
+  syncState?: "synced" | "pending" | "conflict" | "offline" | "template";
+  memoryStatus?: string;
+  memoryType?: string;
+  syncError?: string;
+}
+export interface MemoryDocument extends MemoryFile {
+  markdown: string;
+  revision: string;
+  citations: SourceRef[];
+}
 export interface TodoSuggestion {
   id: string;
   title: string;
@@ -54,6 +69,7 @@ export interface WorkbenchStatus {
   phase: "disabled" | "pending" | "discovering" | "syncing" | "ready" | "failed" | "incomplete" | "processing" | "waiting_configuration";
   updatedAt: string;
   error: string;
+  wikiProgress?: WikiProgress | null;
   discovered: number;
   synced: number;
   awaitingTranscription: number;
@@ -61,6 +77,14 @@ export interface WorkbenchStatus {
   conflicts: number;
   entries: WorkbenchEntry[];
   memories: MemoryItem[];
+}
+export interface WikiProgress {
+  stage: "preparing" | "analyzing" | "compiling" | "embedding" | "complete";
+  completed: number;
+  total: number;
+  currentTitle: string;
+  topicTitle: string;
+  failed: number;
 }
 export interface KnowledgeDocument {
   citations?: SourceRef[];
@@ -98,12 +122,17 @@ export interface DesktopWorkbenchApi {
   status(): Promise<WorkbenchStatus>;
   wiki(request: WikiRequest): Promise<WikiState>;
   configure(enabled: boolean, allowAi: boolean): Promise<WorkbenchStatus>;
-  sync(retryFailed?: boolean): Promise<void>;
+  sync(retryFailed?: boolean, refreshExisting?: boolean): Promise<void>;
   search(query: string, aiOnly?: boolean): Promise<SearchResult>;
   read(id: string): Promise<WorkbenchReadResult>;
   review(query: string): Promise<SynthesisResult>;
   exclude(id: string, excluded: boolean): Promise<void>;
   editMemory(id: string, text: string, pinned: boolean, excluded: boolean): Promise<void>;
+  memoryFiles(scope: string): Promise<MemoryFile[]>;
+  readMemoryFile(scope: string, path: string): Promise<MemoryDocument>;
+  reloadMemoryFile(scope: string, path: string): Promise<MemoryDocument>;
+  saveMemoryFile(scope: string, path: string, markdown: string, revision: string): Promise<MemoryDocument>;
+  createMemoryFile(scope: string, title: string): Promise<MemoryDocument>;
   clear(): Promise<void>;
   confirmTodos(id: string, suggestions: Pick<TodoSuggestion, "id" | "title" | "dueDate">[]): Promise<unknown[]>;
   saveSummary(id: string, summaryId: string, markdown: string): Promise<void>;
@@ -117,7 +146,12 @@ export interface DesktopWorkbenchApi {
 export interface WikiModel { baseUrl: string; model: string }
 export interface WikiModelsConfig { embedding: WikiModel; revision?: string; textRevision?: string }
 export interface WikiRevision { id: string; markdown: string; citations: SourceRef[]; fingerprint: string; createdAt: string; reviewedAt: string; review: string }
-export interface WikiTopic { id: string; title: string; purpose: string; notes: string; pinned: boolean; excluded: boolean; stale: boolean; candidate: WikiRevision | null; published: WikiRevision | null; error: string }
+export interface WikiTopic { id: string; mergedIds?: string[]; title: string; purpose: string; notes: string; pinned: boolean; excluded: boolean; stale: boolean; candidate: WikiRevision | null; published: WikiRevision | null; error: string }
 export interface WikiSources { gmailEnabled: boolean; gmailAccountId: string; integrationsUrl: string; error?: string; updatedAt?: string }
-export interface WikiState { topics: WikiTopic[]; models: WikiModelsConfig; sources?: WikiSources }
-export type WikiRequest = { action: "state" } | { action: "models"; models: WikiModelsConfig; embeddingKey?: string } | { action: "topic"; id?: string; title: string; purpose: string; notes?: string; pinned?: boolean; excluded?: boolean } | { action: "review"; id: string; candidateId: string; approve: boolean; markdown?: string } | { action: "retry"; id?: string } | { action: "sources"; sources: WikiSources };
+export type GraphKind = "project" | "topic" | "goal" | "wiki" | "source";
+export type GraphStatus = "unknown" | "proposed" | "active" | "blocked" | "completed" | "unresolved" | "candidate" | "published" | "stale" | "source";
+export interface GraphUpdate { description: string; status: GraphStatus; observedAt: string; citations: SourceRef[] }
+export interface GraphNode { id: string; kind: GraphKind; title: string; description: string; status: GraphStatus; wikiId?: string | null; source?: SourceRef | null; citations: SourceRef[]; updates: GraphUpdate[] }
+export interface KnowledgeGraph { nodes: GraphNode[]; edges: { id: string; source: string; target: string; kind: string }[]; automaticTracking: boolean; tracking: { processing: boolean; paused?: boolean; completed: number; total: number; failed: number; error: string } }
+export interface WikiState { topics: WikiTopic[]; models: WikiModelsConfig; sources?: WikiSources; graph?: KnowledgeGraph }
+export type WikiRequest = { action: "state" } | { action: "models"; models: WikiModelsConfig; embeddingKey?: string } | { action: "topic"; id?: string; title: string; purpose: string; notes?: string; pinned?: boolean; excluded?: boolean } | { action: "review"; id: string; candidateId: string; approve: boolean; markdown?: string } | { action: "retry"; id?: string } | { action: "sources"; sources: WikiSources } | { action: "tracking"; enabled: boolean } | { action: "tracking_retry" } | { action: "tracking_dismiss" | "tracking_restore"; id: string };

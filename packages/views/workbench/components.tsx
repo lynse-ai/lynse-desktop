@@ -18,18 +18,29 @@ import { AudioPlayer, type AudioPlayerHandle } from "../workspace/audio-player";
 import { useTodoStore } from "../todo/use-todos";
 import { useFileAudioUrl } from "../workspace/hooks/use-files";
 import { DeleteConfirmDialog } from "../workspace/delete-confirm-dialog";
-import { getWorkbenchApi, refreshWorkbench, useWorkbench } from "./api";
+import { getWorkbenchApi, refreshWorkbench, useWorkbench, useWikiEnabled } from "./api";
 import type { MemoryItem, SourceRef, SynthesisResult, TodoSuggestion, WorkbenchReadResult } from "./types";
 import { isWikiEnabled, featureFlags } from "../feature-flags";
 import { BetaBadge } from "../beta-badge";
 import { usePluginStore } from "../plugins/state";
 import { loadChatModelSetting, MODEL_OVERRIDE_STORAGE_KEY, toRequestOverride } from "../workspace/model-override";
-import { WikiModels, WikiTopics, WikiStatus, WikiSources } from "./wiki";
+import { WikiAttention, WikiModels, WikiTopics, WikiStatus, WikiSources } from "./wiki";
+import { isWikiProcessingComplete, WorkbenchProgress } from "./progress";
+import { useNavigation } from "../navigation";
+import { useMemoryDrafts } from "./memory-drafts";
 
 /** Account lifecycle stays outside AuthGate so logout also cancels native work. */
 export function WorkbenchSupervisor() {
   const authenticated = useAuthStore((s) => s.isAuthenticated);
   const user = useAuthStore((s) => s.user);
+  const hasMemoryDrafts = useMemoryDrafts((state) => Object.values(state.drafts).some((draft) => draft.markdown !== draft.original));
+  useEffect(() => {
+    if (!hasMemoryDrafts) return;
+    const leave = (event: BeforeUnloadEvent) => { event.preventDefault(); };
+    window.addEventListener("beforeunload", leave);
+    return () => window.removeEventListener("beforeunload", leave);
+  }, [hasMemoryDrafts]);
+  useEffect(() => { useMemoryDrafts.getState().clear(); }, [user?.id, authenticated]);
   const gmailPluginEnabled = usePluginStore((state) => !featureFlags.pluginMarketplace || !!state.entries["lynse.gmail"]?.enabled);
   const [configurationVersion, setConfigurationVersion] = useState(0);
   useEffect(() => {
@@ -75,16 +86,9 @@ export function WorkbenchSupervisor() {
 }
 
 function Progress() {
-  const { t } = useTranslation();
   const status = useWorkbench((s) => s.status);
   const error = useWorkbench((s) => s.error);
-  return <div className="space-y-1 text-xs text-muted-foreground" aria-live="polite">
-    {status && <>
-      <p>{t(`workbench.${status.phase}`)}</p>
-      <p>{t("workbench.progress", { synced: status.synced, total: status.discovered, waiting: status.awaitingTranscription, failed: status.failed, conflicts: status.conflicts })}</p>
-    </>}
-    {(error || status?.error) && <p role="alert" className="text-destructive">{error || status?.error}</p>}
-  </div>;
+  return <WorkbenchProgress status={status} error={error} />;
 }
 
 export function WorkbenchSettingsContent({ disabled = false }: { disabled?: boolean }) {
@@ -95,7 +99,8 @@ export function WorkbenchSettingsContent({ disabled = false }: { disabled?: bool
   const [busy, setBusy] = useState(false);
   const [clearing, setClearing] = useState(false);
   const qc = useQueryClient();
-  if (!bridge || !isWikiEnabled()) return null;
+  const wikiEnabled = useWikiEnabled();
+  if (!bridge || !wikiEnabled) return null;
   async function configure(enabled: boolean, allowAi: boolean) {
     if (!bridge) return;
     setBusy(true);
@@ -110,6 +115,7 @@ export function WorkbenchSettingsContent({ disabled = false }: { disabled?: bool
           onCheckedChange={(checked) => void configure(checked, status?.allowAi ?? false)} />
       </div>
       <p className="text-xs leading-relaxed text-muted-foreground">{t("workbench.hint")}</p>
+      <p className="text-xs leading-relaxed text-muted-foreground">{t("workbench.local_first_hint")}</p>
       {!authenticated && <p className="text-xs text-muted-foreground">{t("workbench.sign_in")}</p>}
       {status?.enabled && <>
         <div className="flex items-center justify-between gap-4">
@@ -125,6 +131,7 @@ export function WorkbenchSettingsContent({ disabled = false }: { disabled?: bool
         {status?.enabled && <Button size="sm" variant="outline" disabled={busy} onClick={() => void bridge.sync().then(refreshWorkbench).catch((error: unknown) => toast.error(String(error)))}>
           <RefreshCw className="size-3.5" />{t("workbench.sync")}
         </Button>}
+        {status?.enabled && <Button size="sm" variant="outline" disabled={busy} onClick={() => { setBusy(true); void bridge.sync(true, true).then(refreshWorkbench).catch((error: unknown) => toast.error(String(error))).finally(() => setBusy(false)); }}>{t("workbench.refresh_cloud")}</Button>}
         {status && <Button size="sm" variant="ghost" onClick={() => setClearing(true)}>{t("workbench.clear")}</Button>}
       </div>
       <DeleteConfirmDialog open={clearing} onOpenChange={setClearing} description={t("workbench.clear_confirm")} pending={busy} confirmLabel={t("workbench.clear")}
@@ -134,28 +141,29 @@ export function WorkbenchSettingsContent({ disabled = false }: { disabled?: bool
 
 export function WorkbenchButton({ query = "", id }: { query?: string; id?: string }) {
   const { t } = useTranslation();
-  if (!getWorkbenchApi() || !isWikiEnabled()) return null;
+  const wikiEnabled = useWikiEnabled();
+  if (!getWorkbenchApi() || !wikiEnabled) return null;
   return <Button variant="ghost" size="sm" onClick={() => useWorkbench.getState().show(query, id)}><BookOpen className="size-3.5" />{t("workbench.review")}</Button>;
 }
 
 export function WorkbenchHomeCard() {
   const status = useWorkbench((s) => s.status);
+  const error = useWorkbench((s) => s.error);
   const { t } = useTranslation();
-  if (!status?.enabled || !isWikiEnabled()) return null;
-  const memories = status.memories.filter((item) => !item.excluded).slice(-3).reverse();
-  return <Card className="mb-5">
-    <CardHeader className="flex-row items-center justify-between pb-2"><CardTitle className="text-sm">{t("workbench.title")}</CardTitle><WorkbenchButton /></CardHeader>
+  const navigation = useNavigation();
+  const wikiEnabled = useWikiEnabled();
+  if (!status?.enabled || !wikiEnabled) return null;
+  if (isWikiProcessingComplete(status, error)) return null;
+  return <Card role="region" aria-label={t("workbench.title")} className="mt-5 shrink-0">
+    <CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="flex items-center gap-2 text-sm"><BookOpen aria-hidden="true" className="size-4" />{t("workbench.title")}<span aria-hidden="true"><BetaBadge /></span></CardTitle><Button variant="ghost" size="sm" onClick={() => navigation.push("/memory")}>{t("workbench.home_view")}</Button></CardHeader>
     <CardContent className="space-y-3">
       <Progress />
-      {memories.map((item) => <button type="button" key={item.id} className="block w-full rounded-md p-2 text-left text-sm hover:bg-accent" onClick={() => item.citations[0] ? useWorkbench.getState().showSource(item.citations[0]) : useWorkbench.getState().show("", item.sourceId)}>
-        <span className="mr-2 text-xs text-muted-foreground">{t(`workbench.${item.stale ? "unresolved" : item.kind}`)}</span>{item.text}
-      </button>)}
     </CardContent>
   </Card>;
 }
 
-function MemoryCard({ item }: { item: MemoryItem }) {
-  const { t } = useTranslation();
+export function MemoryCard({ item }: { item: MemoryItem }) {
+  const { t, i18n } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.text);
   const [busy, setBusy] = useState(false);
@@ -167,12 +175,14 @@ function MemoryCard({ item }: { item: MemoryItem }) {
   }
   return <article className="space-y-2 rounded-lg border border-border p-3">
     <p className="text-xs text-muted-foreground">{t(`workbench.${item.stale ? "unresolved" : item.kind}`)}{item.pinned ? ` · ${t("workbench.pin")}` : ""}</p>
+    <p className="break-words text-xs text-muted-foreground">{item.sourceTitle}{item.updatedAt && !Number.isNaN(Date.parse(item.updatedAt)) ? ` · ${new Date(item.updatedAt).toLocaleDateString(i18n.language)}` : ""}</p>
     {editing ? <textarea aria-label={t("workbench.edit")} value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={4000} className="min-h-20 w-full rounded border border-input bg-background p-2 text-sm" /> : <p className="text-sm leading-relaxed">{item.text}</p>}
     <div className="flex flex-wrap gap-1">
       <SourceButtons sources={item.citations} />
-      <Button size="sm" variant="ghost" disabled={busy} onClick={() => editing ? void save(draft, !!item.pinned, false) : setEditing(true)}>{t(editing ? "workbench.save" : "workbench.edit")}</Button>
-      <Button size="sm" variant="ghost" disabled={busy} onClick={() => void save(item.text, !item.pinned, false)}>{t(item.pinned ? "workbench.unpin" : "workbench.pin")}</Button>
-      <Button size="sm" variant="ghost" disabled={busy} onClick={() => void save(item.text, !!item.pinned, true)}>{t("workbench.forget")}</Button>
+      <Button size="sm" variant="ghost" disabled={busy} onClick={() => { if (editing) void save(draft, !!item.pinned, !!item.excluded); else { setDraft(item.text); setEditing(true); } }}>{t(editing ? "workbench.save" : "workbench.edit")}</Button>
+      {editing && <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(false)}>{t("workbench.cancel")}</Button>}
+      <Button size="sm" variant="ghost" disabled={busy} onClick={() => void save(item.text, !item.pinned, !!item.excluded)}>{t(item.pinned ? "workbench.unpin" : "workbench.pin")}</Button>
+      <Button size="sm" variant="ghost" disabled={busy} onClick={() => void save(item.text, !!item.pinned, !item.excluded)}>{t(item.excluded ? "workbench.include" : "workbench.forget")}</Button>
     </div>
   </article>;
 }
@@ -307,6 +317,7 @@ function MeetingReader({ id }: { id: string }) {
 
 export function WorkbenchDialog() {
   const panel = useWorkbench();
+  const wikiEnabled = useWikiEnabled();
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [brief, setBrief] = useState<SynthesisResult | null>(null);
@@ -314,7 +325,7 @@ export function WorkbenchDialog() {
   const [error, setError] = useState<string | null>(null);
   const bridge = getWorkbenchApi();
   useEffect(() => { if (panel.open) { setQuery(panel.query); setBrief(null); setError(null); } }, [panel.open, panel.query]);
-  const results = useQuery({ queryKey: ["workbench-search", panel.status?.scope, query, panel.status?.updatedAt], queryFn: () => bridge!.search(query), networkMode: "always", enabled: !!bridge && panel.open && !!query.trim() });
+  const results = useQuery({ queryKey: ["workbench-search", panel.status?.scope, query, panel.status?.updatedAt], queryFn: () => bridge!.search(query), networkMode: "always", enabled: wikiEnabled && !!bridge && panel.open && !!query.trim() });
   const items = query.trim() ? results.data?.items ?? [] : panel.status?.entries ?? [];
   const requestScope = useRef(panel.status?.scope);
   requestScope.current = panel.status?.scope;
@@ -326,10 +337,10 @@ export function WorkbenchDialog() {
     catch (failure) { if (requestScope.current === scope) setError(String(failure)); }
     finally { if (requestScope.current === scope) setReviewing(false); }
   }
-  if (!bridge || !isWikiEnabled()) return null;
+  if (!bridge || !wikiEnabled) return null;
   return <Dialog open={panel.open} onOpenChange={(open) => { if (!open) panel.close(); }}>
     <DialogContent className="flex h-[min(88vh,850px)] max-w-5xl flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
-      <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12"><DialogTitle>{t("workbench.title")}</DialogTitle><DialogDescription>{t("workbench.brief_hint")}</DialogDescription></DialogHeader>
+      <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12"><DialogTitle className="flex items-center gap-2">{t("workbench.title")}<span aria-hidden="true"><BetaBadge /></span></DialogTitle><DialogDescription>{t("workbench.brief_hint")}</DialogDescription></DialogHeader>
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border p-3">
         <Search className="size-4 text-muted-foreground" /><Input aria-label={t("workbench.search")} placeholder={t("workbench.search")} value={query} onChange={(event) => { setQuery(event.target.value); setBrief(null); }} className="min-w-40 flex-1" />
         <Button size="sm" disabled={reviewing || !panel.status?.initialComplete || !panel.status.allowAi || !query.trim()} onClick={() => void review()}>{reviewing && <Loader2 className="size-3.5 animate-spin" />}{t("workbench.review")}</Button>
@@ -351,6 +362,7 @@ export function WorkbenchDialog() {
             {brief.memoryItems.map((item, index) => <div key={item.id || index} className="space-y-1 rounded-md border border-border p-3"><p className="text-xs text-muted-foreground">{t(`workbench.${item.kind}`)}</p><p className="text-sm">{item.text}</p><SourceButtons sources={item.citations} /></div>)}
             <SourceButtons sources={brief.citations} />
           </section> : panel.selectedId ? <MeetingReader key={`${panel.status?.scope}:${panel.selectedId}`} id={panel.selectedId} /> : <section className="space-y-3">
+            <WikiAttention />
             <WikiTopics />
             <h2 className="text-sm font-medium">{t("workbench.memories")}</h2>
             {!panel.status?.initialComplete && <p className="text-sm text-muted-foreground">{t("workbench.sync_first")}</p>}
@@ -368,7 +380,7 @@ function QuotedText({ text, quote }: { text: string; quote?: string }) {
   return <>{text.slice(0, index)}<mark data-source-match="true" className="rounded bg-accent text-accent-foreground">{quote}</mark>{text.slice(index + quote.length)}</>;
 }
 
-function SourceButtons({ sources }: { sources: SourceRef[] }) {
+export function SourceButtons({ sources }: { sources: SourceRef[] }) {
   const { t } = useTranslation();
   return <div className="flex flex-wrap gap-1">{sources.map((source, index) => <Button key={`${source.id}:${index}`} size="sm" variant="ghost" title={source.quote} onClick={() => useWorkbench.getState().showSource(source)}>{t("workbench.source")}{source.startMs != null ? ` · ${Math.floor(source.startMs / 1000)}s` : ""}</Button>)}</div>;
 }

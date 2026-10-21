@@ -92,6 +92,11 @@ const ko = {
     callback_back: "Lynse로 돌아가기",
   },
   nav: {
+    more: "더보기",
+    wiki: "Wiki",
+    pinned: "고정된 기능",
+    pin_to_sidebar: "{{name}} 사이드바에 고정",
+    unpin_from_sidebar: "{{name}} 사이드바 고정 해제",
     home: "홈",
     recordings: "녹음",
     meetings: "회의",

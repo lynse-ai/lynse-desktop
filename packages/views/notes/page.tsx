@@ -478,11 +478,11 @@ export function NotesPage() {
       markVaultLastSync();
       if (summary.failed > 0) {
         toast.error(
-          t("vault.sync_partial", { written: summary.written, failed: summary.failed }),
+          t("vault.sync_partial", { written: summary.written + (summary.reused ?? 0), failed: summary.failed }),
           { id: loadingToastId },
         );
       } else {
-        toast.success(t("vault.sync_done", { count: summary.written }), { id: loadingToastId });
+        toast.success(t("vault.sync_done", { count: summary.written + (summary.reused ?? 0) }), { id: loadingToastId });
       }
     } catch (error) {
       toast.error(t("vault.sync_failed", { error: error instanceof Error ? error.message : "" }), {

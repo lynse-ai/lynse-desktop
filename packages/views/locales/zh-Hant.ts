@@ -90,6 +90,11 @@ const zhHant = {
     callback_back: "返回 Lynse",
   },
   nav: {
+    more: "更多",
+    wiki: "Wiki",
+    pinned: "已固定的功能",
+    pin_to_sidebar: "將 {{name}} 固定到側邊欄",
+    unpin_from_sidebar: "從側邊欄取消固定 {{name}}",
     home: "主頁",
     recordings: "錄音",
     meetings: "會議",

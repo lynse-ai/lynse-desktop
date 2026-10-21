@@ -1,4 +1,9 @@
 //! Reviewed, file-backed Wiki pages. SQLite contains only rebuildable indexes and work receipts.
+#[path = "wiki_graph.rs"]
+mod graph;
+#[path = "wiki_topics.rs"]
+mod topic_store;
+use super::store::WikiProgress;
 use super::{
     current, invalidate_runtime, load_state, persist, require_current, roots, start_worker, store,
     sync, Document, Manifest, Session, SourceRef, WorkbenchState,
@@ -14,19 +19,34 @@ use std::{
 };
 use tauri::{AppHandle, Manager, State};
 
+const MEMORY_KIND_GUIDANCE: &str = "For every memoryItems[].kind, use exactly one English value: \"observation\", \"proposal\", \"decision\", or \"unresolved\". Do not translate these values, combine them, or copy the pipe-separated schema as a value. Use observation for reported facts, proposal for suggestions, decision only for explicitly agreed decisions, and unresolved for open questions or conflicts. Source kinds such as meeting are not memory kinds.";
+
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Model {
     pub base_url: String,
     pub model: String,
 }
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Models {
     #[serde(skip_deserializing)]
     pub text_revision: String,
     pub embedding: Model,
     pub revision: String,
+}
+impl Default for Models {
+    fn default() -> Self {
+        Self {
+            text_revision: String::new(),
+            embedding: Model {
+                base_url: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+                    .into(),
+                model: "qwen3.7-text-embedding".into(),
+            },
+            revision: String::new(),
+        }
+    }
 }
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -45,6 +65,7 @@ pub struct Revision {
 #[serde(rename_all = "camelCase", default)]
 pub struct Topic {
     pub id: String,
+    pub merged_ids: Vec<String>,
     pub title: String,
     pub purpose: String,
     pub notes: String,
@@ -54,6 +75,7 @@ pub struct Topic {
     pub published: Option<Revision>,
     pub history: Vec<Revision>,
     pub last_fingerprint: String,
+    pub last_attempt_fingerprint: String,
     pub force_refresh: bool,
     pub error: String,
 }
@@ -78,10 +100,27 @@ fn write_json(path: &Path, value: &impl Serialize) -> CommandResult<()> {
         &serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?,
     )
 }
+fn read_models(path: &Path) -> CommandResult<Models> {
+    let mut config: Models = read_json(path)?;
+    // Upgrade an unconfigured legacy value without replacing saved user choices.
+    if config.revision.is_empty()
+        && config.embedding.base_url.is_empty()
+        && config.embedding.model.is_empty()
+    {
+        config.embedding = Models::default().embedding;
+    }
+    Ok(config)
+}
 fn models(app: &AppHandle, session: &Session) -> CommandResult<Models> {
-    let mut config: Models = read_json(&models_path(app, session)?)?;
+    let mut config = read_models(&models_path(app, session)?)?;
     config.text_revision = store::digest(
-        json!(["lynclaw-wiki-v2", session.agent_url, session.model_override]).to_string(),
+        json!([
+            "lynclaw-wiki-v2",
+            super::markdown::INPUT_VERSION,
+            session.agent_url,
+            session.model_override
+        ])
+        .to_string(),
     );
     Ok(config)
 }
@@ -90,6 +129,10 @@ fn topics(root: &Path) -> CommandResult<Vec<Topic>> {
     for topic in &mut result {
         uuid::Uuid::parse_str(&topic.id)
             .map_err(|_| "Invalid Wiki topic ID; original file was preserved")?;
+        for id in &topic.merged_ids {
+            uuid::Uuid::parse_str(id)
+                .map_err(|_| "Invalid Wiki topic alias; original file was preserved")?;
+        }
         // External Markdown edits are authoritative and must never be overwritten by compilation.
         if let Some(page) = &mut topic.published {
             if let Ok(text) = fs::read_to_string(root.join(&topic.id).join("published.md")) {
@@ -102,6 +145,7 @@ fn topics(root: &Path) -> CommandResult<Vec<Topic>> {
             }
         }
     }
+    topic_store::deduplicate(root, &mut result)?;
     Ok(result)
 }
 fn save_topics(root: &Path, values: &[Topic]) -> CommandResult<()> {
@@ -132,6 +176,132 @@ fn save_page(root: &Path, topic: &Topic, page: &Revision, candidate: bool) -> Co
     crate::atomic_write(&target, page.markdown.as_bytes())?;
     write_json(&dir.join(format!("{name}.json")), page)
 }
+
+fn is_page_title(title: &str, heading: &str) -> bool {
+    let normalize = |text: &str| {
+        text.chars()
+            .filter(|ch| ch.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect::<String>()
+    };
+    let title = normalize(title);
+    let heading = normalize(heading);
+    if title.is_empty() {
+        return false;
+    }
+    let Some(mut suffix) = heading.strip_prefix(&title) else {
+        return false;
+    };
+    while !suffix.is_empty() {
+        let Some(label) = [
+            "项目状态",
+            "项目",
+            "专题",
+            "页面",
+            "候选稿",
+            "候选",
+            "草稿",
+            "projectstatus",
+            "project",
+            "status",
+            "wiki",
+            "candidate",
+            "draft",
+            "page",
+        ]
+        .into_iter()
+        .find(|label| suffix.starts_with(label)) else {
+            return false;
+        };
+        suffix = &suffix[label.len()..];
+    }
+    true
+}
+
+fn page_body(title: &str, markdown: &str) -> (String, usize) {
+    let mut lines = Vec::new();
+    let mut removed = 0;
+    let mut fence: Option<(char, usize)> = None;
+    for line in markdown.lines() {
+        let trimmed = line.trim_start_matches(' ');
+        let indented = line.len() - trimmed.len() > 3 || trimmed.starts_with('\t');
+        let marker = trimmed.chars().next().filter(|ch| matches!(ch, '`' | '~'));
+        if !indented {
+            if let Some(marker) = marker {
+                let length = trimmed.chars().take_while(|ch| *ch == marker).count();
+                if length >= 3 {
+                    if let Some((open, count)) = fence {
+                        if open == marker && length >= count && trimmed[length..].trim().is_empty()
+                        {
+                            fence = None;
+                        }
+                    } else {
+                        fence = Some((marker, length));
+                    }
+                    lines.push(line);
+                    continue;
+                }
+            }
+        }
+        if fence.is_none() && !indented {
+            let level = trimmed.chars().take_while(|ch| *ch == '#').count();
+            if (1..=6).contains(&level)
+                && trimmed[level..].starts_with(char::is_whitespace)
+                && is_page_title(title, trimmed[level..].trim().trim_end_matches('#').trim())
+            {
+                removed += 1;
+                continue;
+            }
+        }
+        lines.push(line);
+    }
+    (lines.join("\n").trim().to_owned(), removed)
+}
+
+fn assemble_page(title: &str, summaries: &[String]) -> String {
+    let bodies: Vec<_> = summaries
+        .iter()
+        .map(|summary| page_body(title, summary).0)
+        .filter(|body| !body.is_empty())
+        .collect();
+    format!("# {}\n\n{}", title.trim(), bodies.join("\n\n---\n\n"))
+}
+
+fn repair_page_titles(root: &Path, topics: &mut [Topic]) -> CommandResult<bool> {
+    let mut changed = false;
+    for topic in topics.iter_mut() {
+        for candidate in [false, true] {
+            let Some(original) = (if candidate {
+                &topic.candidate
+            } else {
+                &topic.published
+            }) else {
+                continue;
+            };
+            // Repair only unchanged generated content; external edits remain authoritative.
+            if original.content_hash != store::digest(&original.markdown)
+                || page_body(&topic.title, &original.markdown).1 < 2
+            {
+                continue;
+            }
+            let mut page = original.clone();
+            page.markdown = assemble_page(&topic.title, &[original.markdown.clone()]);
+            page.content_hash = store::digest(&page.markdown);
+            save_page(root, topic, &page, candidate)?;
+            if candidate {
+                topic.candidate = Some(page);
+            } else {
+                topic.published = Some(page);
+            }
+            changed = true;
+        }
+    }
+    if changed {
+        save_topics(root, topics)?;
+    }
+    Ok(changed)
+}
+
 fn db(root: &Path) -> CommandResult<Connection> {
     fs::create_dir_all(root).map_err(|e| e.to_string())?;
     let path = root.join("index.sqlite");
@@ -203,9 +373,23 @@ pub(super) fn ready(manifest: &Manifest) -> CommandResult<()> {
         || manifest.sync_round.is_empty()
         || manifest.completed_round != manifest.sync_round
     {
-        return Err("Finish full meeting sync and allow AI processing first".into());
+        return Err("Finish syncing available meeting text and allow AI processing first".into());
     }
     Ok(())
+}
+async fn report_progress(
+    app: &AppHandle,
+    state: &WorkbenchState,
+    session: &Session,
+    progress: WikiProgress,
+) -> CommandResult<()> {
+    let _guard = state.serial.lock().await;
+    require_current(state, session)?;
+    let mut manifest = load_state(app, session)?;
+    ready(&manifest)?;
+    manifest.phase = "processing".into();
+    manifest.wiki_progress = Some(progress);
+    persist(app, session, &manifest)
 }
 fn fingerprint(topic: &Topic, manifest: &Manifest, config: &Models) -> String {
     let versions: Vec<_> = manifest
@@ -224,6 +408,63 @@ fn fingerprint(topic: &Topic, manifest: &Manifest, config: &Models) -> String {
         ])
         .to_string(),
     )
+}
+fn inputs_fingerprint(manifest: &Manifest, config: &Models) -> String {
+    let versions: Vec<_> = manifest
+        .entries
+        .values()
+        .map(|entry| json!([entry.id, entry.revision, entry.excluded, entry.status]))
+        .collect();
+    store::digest(json!([config, manifest.sync_root, versions]).to_string())
+}
+fn needs_compilation(topic: &Topic, manifest: &Manifest, config: &Models) -> bool {
+    if topic.pinned || topic.excluded {
+        return false;
+    }
+    let version = fingerprint(topic, manifest, config);
+    topic.force_refresh
+        || (topic.last_fingerprint != version && topic.last_attempt_fingerprint != version)
+}
+fn needs_processing(manifest: &mut Manifest, topics: &[Topic], config: &Models) -> bool {
+    let pending = topics
+        .iter()
+        .any(|topic| needs_compilation(topic, manifest, config));
+    let inputs = inputs_fingerprint(manifest, config);
+    // Adopt the existing completed snapshot without regenerating it after an upgrade.
+    if !pending
+        && manifest.wiki_attempted_fingerprint.is_empty()
+        && manifest
+            .wiki_progress
+            .as_ref()
+            .is_some_and(|progress| progress.stage == "complete" && progress.failed == 0)
+    {
+        manifest.wiki_attempted_fingerprint = inputs.clone();
+    }
+    pending || manifest.wiki_attempted_fingerprint != inputs
+}
+fn complete_processing(manifest: &mut Manifest, topics: &[Topic], embedding_failures: usize) {
+    let active: Vec<_> = topics.iter().filter(|topic| !topic.excluded).collect();
+    let topic_failures = active
+        .iter()
+        .filter(|topic| !topic.error.is_empty())
+        .count();
+    manifest.wiki_progress = Some(WikiProgress {
+        stage: "complete".into(),
+        completed: active.len() - topic_failures,
+        total: active.len(),
+        failed: topic_failures + embedding_failures,
+        ..Default::default()
+    });
+    manifest.error = if topic_failures > 0 {
+        format!("Wiki processing failed for {topic_failures} topics; open Wiki to review and retry")
+    } else if embedding_failures > 0 {
+        format!(
+            "Embedding failed for {embedding_failures} sources; keyword search remains available"
+        )
+    } else {
+        String::new()
+    };
+    manifest.phase = "ready".into();
 }
 fn page_fingerprint(
     topic: &Topic,
@@ -260,6 +501,11 @@ fn validate_model(model: &Model) -> CommandResult<()> {
     if model.base_url.is_empty() && model.model.is_empty() {
         return Ok(());
     }
+    if model.base_url.contains(['{', '}']) {
+        return Err(
+            "Replace {WorkspaceId} with your Alibaba Cloud Model Studio workspace ID".into(),
+        );
+    }
     super::normalize_url(&model.base_url)?;
     let url = url::Url::parse(&model.base_url).map_err(|_| "Invalid model API URL")?;
     if url.scheme() != "https"
@@ -271,6 +517,37 @@ fn validate_model(model: &Model) -> CommandResult<()> {
         return Err("A model name is required".into());
     }
     Ok(())
+}
+fn updated_models(current: &Models, mut next: Models) -> CommandResult<Models> {
+    next.embedding.base_url = next.embedding.base_url.trim().trim_end_matches('/').into();
+    next.embedding.model = next.embedding.model.trim().into();
+    validate_model(&next.embedding)?;
+    let unchanged = next.embedding.base_url
+        == current.embedding.base_url.trim().trim_end_matches('/')
+        && next.embedding.model == current.embedding.model.trim();
+    // Preserve existing vector identities when saving the same provider and model.
+    next.revision = if unchanged {
+        current.revision.clone()
+    } else {
+        uuid::Uuid::new_v4().to_string()
+    };
+    next.text_revision = current.text_revision.clone();
+    Ok(next)
+}
+fn embedding_configured(model: &Model) -> bool {
+    !model.base_url.is_empty() && !model.model.is_empty() && validate_model(model).is_ok()
+}
+fn embedding_ready(model: &Model, key: Option<&str>) -> bool {
+    if !embedding_configured(model) {
+        return false;
+    }
+    let requires_key = url::Url::parse(&model.base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| {
+            host == "dashscope.aliyuncs.com" || host.ends_with(".maas.aliyuncs.com")
+        });
+    !requires_key || key.is_some_and(|key| !key.trim().is_empty())
 }
 fn key_name(session: &Session, kind: &str) -> String {
     format!("wiki-{}-{kind}", session.scope)
@@ -335,34 +612,156 @@ async fn request_model(
     } else {
         "/api/desktop/synthesize"
     };
-    let response = client
-        .post(format!("{}{path}", session.agent_url))
-        .header("Authorization", &session.token)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|_| "Lynclaw model service is unavailable")?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "Lynclaw synthesis failed (HTTP {})",
-            response.status().as_u16()
-        ));
-    }
-    let value: Value = response
-        .json()
-        .await
-        .map_err(|_| "Lynclaw returned invalid synthesis JSON")?;
-    Ok(if value.get("code").is_some() {
-        if value["code"] != 200 {
-            return Err("Lynclaw synthesis failed".into());
+    send_synthesis(
+        &client,
+        &format!("{}{path}", session.agent_url),
+        &session.token,
+        body,
+        || {
+            require_current(&state, session)?;
+            super::require_beta(&state)?;
+            ready(&load_state(app, session)?)
+        },
+    )
+    .await
+}
+async fn send_synthesis(
+    client: &reqwest::Client,
+    endpoint: &str,
+    token: &str,
+    mut body: Value,
+    check_current: impl Fn() -> CommandResult<()>,
+) -> CommandResult<Value> {
+    for attempt in 0..2 {
+        check_current()?;
+        let response = client
+            .post(endpoint)
+            .header("Authorization", token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|_| "Lynclaw model service is unavailable")?;
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let detail = response.json::<Value>().await.unwrap_or(Value::Null);
+            if attempt == 0 && status == 422 {
+                if let Some(corrected) = corrected_synthesis_request(&body, &detail) {
+                    body = corrected;
+                    continue;
+                }
+            }
+            return Err(synthesis_error(status, &detail));
         }
-        value["data"].clone()
+        let value: Value = response
+            .json()
+            .await
+            .map_err(|_| "Lynclaw returned invalid synthesis JSON")?;
+        return if value.get("code").is_some() {
+            if value["code"] != 200 {
+                return Err("Lynclaw synthesis failed".into());
+            }
+            Ok(value["data"].clone())
+        } else {
+            Ok(value)
+        };
+    }
+    Err("Lynclaw synthesis failed".into())
+}
+fn corrected_synthesis_request(body: &Value, error: &Value) -> Option<Value> {
+    let reason = error["detail"].as_str()?;
+    if !matches!(
+        reason,
+        "Model did not return valid structured output"
+            | "Invalid synthesis result"
+            | "Invalid summary"
+            | "Every claim needs source citations"
+            | "Invalid citation"
+            | "Citation does not match source evidence"
+            | "Citation has an unsupported audio position"
+            | "Insufficient evidence must not contain factual output"
+            | "Too many synthesis items"
+            | "Invalid synthesis item"
+            | "Invalid memory kind"
+            | "Irrelevant Wiki analysis must contain no claims"
+    ) {
+        return None;
+    }
+    let correction = if reason == "Invalid memory kind" {
+        format!("{MEMORY_KIND_GUIDANCE} Return valid JSON only. Preserve the original statements, citations and uncertainty. For topic_compile, consolidate supported statements in summary and keep memoryItems, todoSuggestions and decisions empty.")
     } else {
-        value
-    })
+        "Keep the same project, purpose and notes above. Return valid JSON only. If insufficientEvidence=true, summary must be empty and all claim/citation arrays must be empty. Otherwise the top-level citations array and each factual item's citations array must contain 1 to 40 references, never more than 40. For topic_compile, keep memoryItems, todoSuggestions and decisions empty, and consolidate supported statements in a concise Markdown summary with short exact original-source citations. If the source supports relevant statements, use insufficientEvidence=false and preserve uncertainty. Do not invent or drop evidence to resolve the validation error.".into()
+    };
+    let query = format!(
+        "{}\n\nResponse correction: the previous output failed validation: {reason}. {correction}",
+        body["query"].as_str().unwrap_or_default()
+    );
+    let limit = if matches!(
+        body["task"].as_str(),
+        Some("source_analysis" | "topic_compile")
+    ) {
+        30000
+    } else {
+        1000
+    };
+    if query.chars().count() > limit {
+        return None;
+    }
+    let mut corrected = body.clone();
+    corrected["query"] = json!(query);
+    Some(corrected)
+}
+fn synthesis_error(status: u16, body: &Value) -> String {
+    // Only forward fixed validation messages, never echoed request inputs or provider errors.
+    let detail = body["detail"].as_str().filter(|detail| {
+        matches!(
+            *detail,
+            "Unknown synthesis task"
+                | "Unsupported language"
+                | "Invalid project query"
+                | "Invalid source id"
+                | "Invalid source revision"
+                | "Invalid source kind"
+                | "Invalid source title"
+                | "Invalid source text"
+                | "Provide 1–20 sources"
+                | "Invalid source segments"
+                | "Invalid segment"
+                | "Invalid segment time"
+                | "Invalid segment time range"
+                | "Duplicate source ID"
+                | "Source text exceeds the request budget"
+                | "Source segments exceed the request budget"
+                | "Invalid Wiki evidence budget"
+                | "Synthesis exceeds the complete request budget"
+                | "Model did not return valid structured output"
+                | "Invalid synthesis result"
+                | "Invalid summary"
+                | "Every claim needs source citations"
+                | "Invalid citation"
+                | "Citation does not match source evidence"
+                | "Citation has an unsupported audio position"
+                | "Insufficient evidence must not contain factual output"
+                | "Too many synthesis items"
+                | "Invalid synthesis item"
+                | "Invalid memory kind"
+                | "Irrelevant Wiki analysis must contain no claims"
+        )
+    });
+    match detail {
+        Some(detail) => format!("Lynclaw synthesis failed (HTTP {status}): {detail}"),
+        None => format!("Lynclaw synthesis failed (HTTP {status})"),
+    }
 }
 fn lynclaw_payload(session: &Session, task: &str, payload: Value) -> Value {
-    json!({"task":task,"language":session.locale,"query":payload["topic"],"sources":payload["sources"],"evidence":payload["evidence"],"modelOverride":session.model_override})
+    let query = if task == "source_analysis" {
+        json!(format!(
+            "{}\n\n{MEMORY_KIND_GUIDANCE}",
+            payload["topic"].as_str().unwrap_or_default()
+        ))
+    } else {
+        payload["topic"].clone()
+    };
+    json!({"task":task,"language":session.locale,"query":query,"sources":payload["sources"],"evidence":payload["evidence"],"modelOverride":session.model_override})
 }
 pub(super) async fn synthesize(
     app: &AppHandle,
@@ -372,7 +771,10 @@ pub(super) async fn synthesize(
     query: Option<&str>,
 ) -> CommandResult<Value> {
     let mut budget = 60_000;
-    let sources:Vec<_>=documents.iter().filter_map(|doc|{if budget==0{return None;} let text=doc.text().chars().take(budget.min(12_000)).collect::<String>();budget-=text.chars().count();Some(json!({"id":doc.id,"revision":doc.revision,"kind":doc.kind,"title":doc.title,"text":text,"segments":doc.segments}))}).collect();
+    let sources:Vec<_>=documents.iter().cloned().filter_map(super::markdown::source).filter_map(|doc|{if budget==0{return None;} let text=doc.text().chars().take(budget.min(12_000)).collect::<String>();budget-=text.chars().count();Some(json!({"id":doc.id,"revision":doc.revision,"kind":doc.kind,"title":doc.title,"text":text,"segments":doc.segments}))}).collect();
+    if sources.is_empty() {
+        return Err("No Markdown meeting text is available for AI processing".into());
+    }
     request_model(app, session, task, json!({"topic":query,"sources":sources})).await
 }
 fn sources_for(root: &Path, manifest: &Manifest) -> Vec<Document> {
@@ -381,7 +783,7 @@ fn sources_for(root: &Path, manifest: &Manifest) -> Vec<Document> {
         .values()
         .filter(|e| store::eligible(e))
         .filter_map(|e| store::read_document(root, e).ok())
-        .filter(|d| d.ai_context_enabled && !d.text().trim().is_empty())
+        .filter_map(super::markdown::source)
         .collect()
 }
 fn valid_page(root: &Path, manifest: &Manifest, page: &Revision) -> bool {
@@ -390,9 +792,11 @@ fn valid_page(root: &Path, manifest: &Manifest, page: &Revision) -> bool {
     {
         return false;
     }
+    let mut seen = std::collections::BTreeSet::new();
     let docs: Vec<_> = page
         .citations
         .iter()
+        .filter(|reference| seen.insert(reference.id.as_str()))
         .filter_map(|r| manifest.entries.get(&r.id))
         .filter_map(|e| store::read_document(root, e).ok())
         .collect();
@@ -434,7 +838,7 @@ pub(super) fn context(
 pub(super) fn read_page(app: &AppHandle, session: &Session, id: &str) -> CommandResult<Value> {
     let topic = topics(&wiki_root(app, session)?)?
         .into_iter()
-        .find(|t| format!("wiki:{}", t.id) == id)
+        .find(|t| topic_store::matches_id(t, id.strip_prefix("wiki:").unwrap_or(id)))
         .ok_or("Wiki page not found")?;
     let page = topic
         .published
@@ -452,11 +856,22 @@ pub(super) fn read_page(app: &AppHandle, session: &Session, id: &str) -> Command
     Ok(json!({"document":document,"markdown":page.markdown,"artifacts":Value::Null}))
 }
 
+fn analysis_citations(result: &Value) -> impl Iterator<Item = &Value> {
+    std::iter::once(result)
+        .chain(
+            ["memoryItems", "todoSuggestions", "decisions"]
+                .into_iter()
+                .flat_map(|key| result[key].as_array().into_iter().flatten()),
+        )
+        .flat_map(|item| item["citations"].as_array().into_iter().flatten())
+}
+
 fn compile_sources(docs: &[Document], evidence: &[Value]) -> CommandResult<Vec<Value>> {
     let mut grouped: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
     for result in evidence {
-        for reference in result["citations"].as_array().into_iter().flatten() {
+        // Claim citations can quote different passages than the summary citations.
+        for reference in analysis_citations(result) {
             let id = reference["id"].as_str().ok_or("Invalid analysis source")?;
             let quote = reference["quote"]
                 .as_str()
@@ -479,7 +894,7 @@ fn compile_sources(docs: &[Document], evidence: &[Value]) -> CommandResult<Vec<V
             return Err("Topic evidence exceeds one compilation batch; shorten this topic or retry".into());
         }
         let segments: Vec<_> = evidence.iter()
-            .flat_map(|value| value["citations"].as_array().into_iter().flatten())
+            .flat_map(analysis_citations)
             .filter(|reference| reference["id"] == doc.id && ["segmentId", "startMs", "endMs"].iter().any(|key| reference.get(*key).is_some_and(|value| !value.is_null())))
             .map(|reference| {
                 let mut segment = json!({"id":reference["segmentId"].as_str().unwrap_or_default(),"text":reference["quote"]});
@@ -493,6 +908,46 @@ fn compile_sources(docs: &[Document], evidence: &[Value]) -> CommandResult<Vec<V
         Ok(json!({"id":doc.id,"kind":doc.kind,"revision":doc.revision,"title":doc.title,"text":text,"segments":segments}))
     }).collect()
 }
+
+fn compilation_query(query: &str) -> String {
+    format!("{query}\n\nWiki page output: Return one compact JSON object with summary, citations and insufficientEvidence. Put the Wiki Markdown in summary, keeping it within 3000 characters. Use short exact original-source quotations in citations. Return empty memoryItems, todoSuggestions and decisions arrays; these intermediate records are already supplied as evidence. Preserve supported uncertainty and conflicts in the Markdown. Do not repeat the supplied analysis or source text as extra JSON fields. Return no code fences or text outside JSON.")
+}
+
+async fn cached_compilation(
+    root: &Path,
+    key: &str,
+    serial: &tokio::sync::Mutex<()>,
+    validate: impl Fn(&Value) -> CommandResult<()>,
+    use_cache: bool,
+    generate: impl std::future::Future<Output = CommandResult<Value>>,
+) -> CommandResult<Value> {
+    if use_cache {
+        let _guard = serial.lock().await;
+        if let Some(value) = receipt(root, key)? {
+            if validate(&value).is_ok() {
+                return Ok(value);
+            }
+        }
+    }
+    job(root, key, "running", None, "")?;
+    let response = generate.await;
+    let _guard = serial.lock().await;
+    let result = response.and_then(|value| {
+        validate(&value)?;
+        Ok(value)
+    });
+    match result {
+        Ok(value) => {
+            job(root, key, "done", Some(&value), "")?;
+            Ok(value)
+        }
+        Err(error) => {
+            job(root, key, "failed", None, &error)?;
+            Err(error)
+        }
+    }
+}
+
 async fn compile(
     app: &AppHandle,
     state: &WorkbenchState,
@@ -504,6 +959,11 @@ async fn compile(
     local: &Path,
 ) -> CommandResult<Revision> {
     let docs = sources_for(local, manifest);
+    let analysis_total = docs
+        .iter()
+        .map(|doc| sync::split_text(&doc.text(), 12_000).len())
+        .sum();
+    let mut analyzed = 0;
     let mut evidence = Vec::new();
     let query = format!(
         "{}\n{}\nUser corrections and notes: {}",
@@ -512,6 +972,20 @@ async fn compile(
     for doc in &docs {
         for (index, chunk) in sync::split_text(&doc.text(), 12_000).iter().enumerate() {
             require_current(state, session)?;
+            report_progress(
+                app,
+                state,
+                session,
+                WikiProgress {
+                    stage: "analyzing".into(),
+                    completed: analyzed,
+                    total: analysis_total,
+                    current_title: doc.title.clone(),
+                    topic_title: topic.title.clone(),
+                    ..Default::default()
+                },
+            )
+            .await?;
             let key = store::digest(
                 json!([
                     "source-analysis-v1",
@@ -567,18 +1041,23 @@ async fn compile(
             if result["relevant"] != false && result["insufficientEvidence"] != true {
                 evidence.push(result);
             }
+            analyzed += 1;
         }
     }
     if evidence.is_empty() {
         return Err("No relevant source evidence found for this topic".into());
     }
-    let cache_key = store::digest(json!(["topic-compile-v1", query, config, evidence]).to_string());
+    let page_query = compilation_query(&query);
+    let cache_key =
+        store::digest(json!(["topic-compile-v2", page_query, config, evidence]).to_string());
     if let Some(value) = receipt(root, &cache_key)?.filter(|_| !topic.force_refresh) {
-        if let Ok(page) = serde_json::from_value::<Revision>(value) {
+        if let Ok(mut page) = serde_json::from_value::<Revision>(value) {
             if uuid::Uuid::parse_str(&page.id).is_ok()
                 && valid_page(local, manifest, &page)
                 && page.fingerprint == page_fingerprint(topic, manifest, config, &page.citations)
             {
+                page.markdown = assemble_page(&topic.title, &[page.markdown]);
+                page.content_hash = store::digest(&page.markdown);
                 return Ok(page);
             }
         }
@@ -607,15 +1086,44 @@ async fn compile(
     if !current.is_empty() {
         batches.push(current);
     }
-    for batch in batches {
-        let result = request_model(
+    let batch_total = batches.len();
+    for (index, batch) in batches.into_iter().enumerate() {
+        report_progress(
             app,
+            state,
             session,
-            "topic_compile",
-            json!({"topic":query,"evidence":batch,"sources":compile_sources(&docs,&batch)?}),
+            WikiProgress {
+                stage: "compiling".into(),
+                completed: index,
+                total: batch_total,
+                topic_title: topic.title.clone(),
+                ..Default::default()
+            },
         )
         .await?;
-        sync::validate_result(&docs, manifest, &result)?;
+        let sources = compile_sources(&docs, &batch)?;
+        let key = store::digest(
+            json!(["topic-batch-v1", page_query, config, batch, sources]).to_string(),
+        );
+        let result = cached_compilation(
+            root,
+            &key,
+            &state.serial,
+            |value| {
+                require_current(state, session)?;
+                let latest = load_state(app, session)?;
+                ready(&latest)?;
+                sync::validate_result(&docs, &latest, value)
+            },
+            !topic.force_refresh,
+            request_model(
+                app,
+                session,
+                "topic_compile",
+                json!({"topic":page_query,"evidence":batch,"sources":sources}),
+            ),
+        )
+        .await?;
         if result["insufficientEvidence"] == true {
             continue;
         }
@@ -632,7 +1140,7 @@ async fn compile(
     if summaries.is_empty() || citations.is_empty() {
         return Err("Wiki page has no supported evidence".into());
     }
-    let markdown = summaries.join("\n\n---\n\n");
+    let markdown = assemble_page(&topic.title, &summaries);
     Ok(Revision {
         content_hash: store::digest(&markdown),
         id: uuid::Uuid::new_v4().to_string(),
@@ -660,9 +1168,29 @@ pub(super) async fn run(
         backup_legacy(app, session)?;
         let config = models(app, session)?;
         ready(&manifest)?;
-        manifest.phase = "processing".into();
-        persist(app, session, &manifest)?;
         let root = wiki_root(app, session)?;
+        let mut initial = topics(&root)?;
+        let repaired_titles = repair_page_titles(&root, &mut initial)?;
+        let previous_inputs = manifest.wiki_attempted_fingerprint.clone();
+        if !needs_processing(&mut manifest, &initial, &config) {
+            let restore_progress = manifest.wiki_progress.is_none();
+            if restore_progress {
+                complete_processing(&mut manifest, &initial, 0);
+            }
+            if repaired_titles
+                || restore_progress
+                || manifest.wiki_attempted_fingerprint != previous_inputs
+            {
+                persist(app, session, &manifest)?;
+            }
+            return Ok(());
+        }
+        manifest.phase = "processing".into();
+        manifest.wiki_progress = Some(WikiProgress {
+            stage: "preparing".into(),
+            ..Default::default()
+        });
+        persist(app, session, &manifest)?;
         let local = roots(app, session)?.0;
         fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         // Preserve the old memory exactly once. It remains editable in the existing reader.
@@ -677,7 +1205,7 @@ pub(super) async fn run(
             )
             .map_err(|e| e.to_string())?;
         }
-        (root, local, config, topics(&wiki_root(app, session)?)?)
+        (root, local, config, initial)
     };
     for topic in initial {
         if topic.pinned || topic.excluded {
@@ -691,7 +1219,7 @@ pub(super) async fn run(
             m
         };
         let version = fingerprint(&topic, &manifest, &config);
-        if topic.last_fingerprint == version {
+        if !needs_compilation(&topic, &manifest, &config) {
             continue;
         }
         let task = store::digest(format!("compile:{}:{version}", topic.id));
@@ -749,10 +1277,13 @@ pub(super) async fn run(
                 }
                 current.force_refresh = false;
                 current.last_fingerprint = version;
+                current.last_attempt_fingerprint = current.last_fingerprint.clone();
                 current.error.clear();
                 job(&root, &task, "done", None, "")?;
             }
             Err(error) => {
+                current.force_refresh = false;
+                current.last_attempt_fingerprint = version;
                 current.error = error.clone();
                 job(&root, &task, "failed", None, &error)?;
             }
@@ -760,12 +1291,21 @@ pub(super) async fn run(
         save_topics(&root, &values)?;
         persist(app, session, &latest)?;
     }
-    embed_sources(app, state, session, &config, &root, &local).await?;
+    let embedding_failures = embed_sources(app, state, session, &config, &root, &local).await?;
     let _guard = state.serial.lock().await;
     require_current(state, session)?;
     let mut manifest = load_state(app, session)?;
-    manifest.phase = "ready".into();
+    manifest.wiki_attempted_fingerprint = inputs_fingerprint(&manifest, &config);
+    complete_processing(&mut manifest, &topics(&root)?, embedding_failures);
     persist(app, session, &manifest)
+}
+
+pub(super) async fn discover(
+    app: &AppHandle,
+    state: &WorkbenchState,
+    session: &Session,
+) -> CommandResult<bool> {
+    graph::run(app, state, session).await
 }
 
 async fn embedding(
@@ -774,6 +1314,7 @@ async fn embedding(
     session: &Session,
     config: &Models,
     text: &str,
+    api_key: Option<&str>,
 ) -> CommandResult<Vec<f64>> {
     require_current(state, session)?;
     ready(&load_state(app, session)?)?;
@@ -786,7 +1327,7 @@ async fn embedding(
         "{}/embeddings",
         config.embedding.base_url.trim_end_matches('/')
     ));
-    if let Some(key) = model_key(app, session, "embedding").await? {
+    if let Some(key) = api_key {
         request = request.bearer_auth(key);
     }
     require_current(state, session)?;
@@ -821,6 +1362,18 @@ fn cosine(left: &[f64], right: &[f64]) -> Option<f64> {
     }
     Some(dot / norm)
 }
+fn embedding_revision(config: &Models) -> String {
+    store::digest(json!([super::markdown::INPUT_VERSION, config.revision]).to_string())
+}
+fn embedding_cached(root: &Path, doc: &Document, config: &Models) -> CommandResult<bool> {
+    db(root)?
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM vectors WHERE id=?1 AND revision=?2 AND model_revision=?3)",
+            params![doc.id, doc.revision, embedding_revision(config)],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())
+}
 pub(super) async fn semantic_search(
     app: &AppHandle,
     state: &WorkbenchState,
@@ -828,13 +1381,14 @@ pub(super) async fn semantic_search(
     query: &str,
 ) -> CommandResult<Vec<Value>> {
     let config = models(app, session)?;
-    if config.embedding.model.is_empty()
-        || config.embedding.base_url.is_empty()
-        || query.trim().is_empty()
-    {
+    if !embedding_configured(&config.embedding) || query.trim().is_empty() {
         return Ok(vec![]);
     }
-    let vector = embedding(app, state, session, &config, query).await?;
+    let key = model_key(app, session, "embedding").await?;
+    if !embedding_ready(&config.embedding, key.as_deref()) {
+        return Ok(vec![]);
+    }
+    let vector = embedding(app, state, session, &config, query, key.as_deref()).await?;
     let _guard = state.serial.lock().await;
     require_current(state, session)?;
     let manifest = load_state(app, session)?;
@@ -846,7 +1400,7 @@ pub(super) async fn semantic_search(
         .prepare("SELECT id,revision,embedding FROM vectors WHERE model_revision=?")
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([&config.revision], |r| {
+        .query_map([embedding_revision(&config)], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
@@ -864,12 +1418,12 @@ pub(super) async fn semantic_search(
         else {
             continue;
         };
-        let Ok(doc) = store::read_document(&local, entry) else {
+        let Some(doc) = store::read_document(&local, entry)
+            .ok()
+            .and_then(super::markdown::source)
+        else {
             continue;
         };
-        if !doc.ai_context_enabled {
-            continue;
-        }
         let other: Vec<f64> = serde_json::from_str(&raw).unwrap_or_default();
         if let Some(score) = cosine(&vector, &other).filter(|s| s.is_finite() && *s > 0.25) {
             ranked.push((score, doc));
@@ -885,19 +1439,39 @@ async fn embed_sources(
     config: &Models,
     root: &Path,
     local: &Path,
-) -> CommandResult<()> {
-    if config.embedding.model.is_empty() || config.embedding.base_url.is_empty() {
-        return Ok(());
+) -> CommandResult<usize> {
+    if !embedding_configured(&config.embedding) {
+        return Ok(0);
+    }
+    let key = model_key(app, session, "embedding").await?;
+    if !embedding_ready(&config.embedding, key.as_deref()) {
+        return Ok(0);
     }
     let manifest = load_state(app, session)?;
     ready(&manifest)?;
     let mut failures = 0;
-    for doc in sources_for(local, &manifest) {
-        let exists:bool=db(root)?.query_row("SELECT EXISTS(SELECT 1 FROM vectors WHERE id=?1 AND revision=?2 AND model_revision=?3)",params![doc.id,doc.revision,config.revision],|r|r.get(0)).map_err(|e|e.to_string())?;
-        if exists {
+    let docs = sources_for(local, &manifest);
+    let total = docs.len();
+    for (index, doc) in docs.into_iter().enumerate() {
+        if embedding_cached(root, &doc, config)? {
             continue;
         }
-        let vector = match embedding(app, state, session, config, &doc.text()).await {
+        report_progress(
+            app,
+            state,
+            session,
+            WikiProgress {
+                stage: "embedding".into(),
+                completed: index,
+                total,
+                current_title: doc.title.clone(),
+                failed: failures,
+                ..Default::default()
+            },
+        )
+        .await?;
+        let vector = match embedding(app, state, session, config, &doc.text(), key.as_deref()).await
+        {
             Ok(vector) => vector,
             Err(_) => {
                 require_current(state, session)?;
@@ -916,22 +1490,14 @@ async fn embed_sources(
                     params![
                         doc.id,
                         doc.revision,
-                        config.revision,
+                        embedding_revision(config),
                         json!(vector).to_string()
                     ],
                 )
                 .map_err(|e| e.to_string())?;
         }
     }
-    if failures > 0 {
-        let _guard = state.serial.lock().await;
-        require_current(state, session)?;
-        let mut manifest = load_state(app, session)?;
-        manifest.error =
-            format!("Embedding failed for {failures} sources; keyword search remains available");
-        persist(app, session, &manifest)?;
-    }
-    Ok(())
+    Ok(failures)
 }
 
 #[tauri::command]
@@ -942,8 +1508,12 @@ pub async fn workbench_wiki(
 ) -> CommandResult<Value> {
     super::require_beta(&state)?;
     let action = request["action"].as_str().unwrap_or("state");
-    // Reads do not revoke active work. Every mutation invalidates outstanding model responses.
-    let session = if action == "state" {
+    // Topic edits are checked by compilation fingerprints; repeated creation cannot cancel work.
+    let incremental_action = matches!(
+        action,
+        "topic" | "tracking" | "tracking_retry" | "tracking_dismiss" | "tracking_restore"
+    );
+    let session = if action == "state" || incremental_action {
         current(&state)?
     } else {
         invalidate_runtime(&state)?
@@ -955,19 +1525,22 @@ pub async fn workbench_wiki(
     let mut config = models(&app, &session)?;
     match action {
         "state" => {}
+        "tracking" | "tracking_retry" | "tracking_dismiss" | "tracking_restore" => {
+            graph::configure(&root, &request)?;
+            state.discovery_requested.notify_one();
+        }
         "sources" => {
             super::sources::configure(&app, &session, &request["sources"])?;
         }
         "models" => {
-            let mut next: Models = serde_json::from_value(request["models"].clone())
+            let next: Models = serde_json::from_value(request["models"].clone())
                 .map_err(|_| "Invalid Wiki model configuration")?;
-            validate_model(&next.embedding)?;
-            next.revision = uuid::Uuid::new_v4().to_string();
+            let next = updated_models(&config, next)?;
             for kind in ["embedding"] {
                 if let Some(value) = request.get(format!("{kind}Key")) {
                     let app = app.clone();
                     let name = key_name(&session, kind);
-                    let value = value.as_str().unwrap_or_default().to_owned();
+                    let value = value.as_str().unwrap_or_default().trim().to_owned();
                     crate::run_secret_io(move || {
                         if value.is_empty() {
                             crate::secret_delete(&app, &name)
@@ -983,46 +1556,16 @@ pub async fn workbench_wiki(
             config = next;
         }
         "topic" => {
-            let title = request["title"].as_str().unwrap_or_default().trim();
-            let purpose = request["purpose"].as_str().unwrap_or_default().trim();
-            if title.is_empty() || title.chars().count() > 200 || purpose.chars().count() > 8000 {
-                return Err("Enter a topic title and a purpose of at most 8000 characters".into());
-            }
-            let id = request["id"].as_str().unwrap_or_default();
-            let index = if id.is_empty() {
-                values.push(Topic {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    ..Default::default()
-                });
-                values.len() - 1
-            } else {
-                values
-                    .iter()
-                    .position(|t| t.id == id)
-                    .ok_or("Topic not found")?
-            };
-            let topic = &mut values[index];
-            topic.title = title.into();
-            topic.purpose = purpose.into();
-            if let Some(notes) = request["notes"].as_str() {
-                if notes.chars().count() > 20000 {
-                    return Err("Notes are too long".into());
-                }
-                topic.notes = notes.into();
-            }
-            if let Some(pin) = request["pinned"].as_bool() {
-                topic.pinned = pin;
-            }
-            if let Some(excluded) = request["excluded"].as_bool() {
-                topic.excluded = excluded;
-            }
-            topic.error.clear();
-            save_topics(&root, &values)?;
+            topic_store::upsert(&root, &mut values, &request)?;
         }
         "review" => {
             let topic = values
                 .iter_mut()
-                .find(|t| Some(t.id.as_str()) == request["id"].as_str())
+                .find(|t| {
+                    request["id"]
+                        .as_str()
+                        .is_some_and(|id| topic_store::matches_id(t, id))
+                })
                 .ok_or("Topic not found")?;
             let mut page = topic.candidate.clone().ok_or("No candidate to review")?;
             if Some(page.id.as_str()) != request["candidateId"].as_str() {
@@ -1069,7 +1612,11 @@ pub async fn workbench_wiki(
         }
         "retry" => {
             for topic in &mut values {
-                if request["id"].is_null() || Some(topic.id.as_str()) == request["id"].as_str() {
+                if request["id"].is_null()
+                    || request["id"]
+                        .as_str()
+                        .is_some_and(|id| topic_store::matches_id(topic, id))
+                {
                     topic.force_refresh = true;
                     topic.last_fingerprint.clear();
                     topic.error.clear();
@@ -1079,7 +1626,29 @@ pub async fn workbench_wiki(
         }
         _ => return Err("Unknown Wiki operation".into()),
     }
-    let manifest = load_state(&app, &session)?;
+    let mut manifest = load_state(&app, &session)?;
+    let reconciled = topic_store::reconcile_progress(&mut manifest, &values);
+    if action == "retry" {
+        let failed = values
+            .iter()
+            .filter(|topic| !topic.excluded && !topic.error.is_empty())
+            .count();
+        if manifest.error.starts_with("Wiki processing failed for ") {
+            manifest.error = if failed == 0 {
+                String::new()
+            } else {
+                format!("Wiki processing failed for {failed} topics; open Wiki to review and retry")
+            };
+        }
+        if ready(&manifest).is_ok() {
+            manifest.phase = "processing".into();
+            manifest.wiki_progress = Some(WikiProgress {
+                stage: "preparing".into(),
+                failed,
+                ..Default::default()
+            });
+        }
+    }
     let local = roots(&app, &session)?.0;
     let items: Vec<_> = values
         .iter()
@@ -1093,18 +1662,505 @@ pub async fn workbench_wiki(
             value
         })
         .collect();
-    if action != "state" {
+    if action != "state" || reconciled {
         persist(&app, &session, &manifest)?;
-        if crate::vault::load_vault_config(&app)?.enabled {
+        if action != "state" && crate::vault::load_vault_config(&app)?.enabled {
             start_worker(&app, &state);
         }
     }
-    Ok(json!({"topics":items,"models":config,"sources":super::sources::config(&app,&session)?}))
+    let graph = graph::view(&root, &local, &manifest, &values, &config)?;
+    Ok(
+        json!({"topics":items,"models":config,"sources":super::sources::config(&app,&session)?,"graph":graph}),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn page_batches_share_one_title_without_changing_facts_or_code_blocks() {
+        let summaries = vec![
+            "# 灵光记 项目 Wiki 候选\n\n## 决策\nFriday remains a proposal.\n\n```markdown\n# 灵光记 项目状态（Wiki 候选）\n```".into(),
+            "# 灵光记 · 项目状态（Wiki 候选）\n\n## 未决问题\nFriday was rejected in another meeting.".into(),
+            "## 灵光记项目状态（Wiki 候选稿）\n\n## 与灵光记归属未确认\nThe relationship remains unknown.".into(),
+        ];
+        let markdown = assemble_page("灵光记", &summaries);
+        assert!(markdown.starts_with("# 灵光记\n\n## 决策"));
+        assert_eq!(page_body("灵光记", &markdown).1, 1);
+        for text in [
+            "Friday remains a proposal.",
+            "Friday was rejected in another meeting.",
+            "## 与灵光记归属未确认\nThe relationship remains unknown.",
+            "```markdown\n# 灵光记 项目状态（Wiki 候选）\n```",
+        ] {
+            assert!(markdown.contains(text));
+        }
+        assert_eq!(assemble_page("灵光记", &[markdown.clone()]), markdown);
+        assert!(!is_page_title("灵光记", "灵光记的发布日期仍未确认"));
+        assert!(!is_page_title("Alpha", "Alphabet project status"));
+    }
+    #[test]
+    fn legacy_page_title_repair_preserves_review_citations_backups_and_manual_edits() {
+        for candidate in [false, true] {
+            let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+            let mut topic = Topic {
+                id: uuid::Uuid::new_v4().to_string(),
+                title: "灵光记".into(),
+                last_fingerprint: "unchanged-inputs".into(),
+                ..Default::default()
+            };
+            let page = Revision {
+                id: uuid::Uuid::new_v4().to_string(),
+                markdown: "# 灵光记 项目 Wiki 候选\n\nFriday is tentative.\n\n---\n\n## 灵光记项目状态（Wiki 候选稿）\n\nNo date was approved.".into(),
+                citations: vec![SourceRef {
+                    id: "meeting".into(),
+                    kind: "meeting".into(),
+                    revision: "r1".into(),
+                    quote: "Friday is tentative.".into(),
+                    ..Default::default()
+                }],
+                review: if candidate { "" } else { "approved" }.into(),
+                reviewed_at: if candidate { "" } else { "review-time" }.into(),
+                cache_key: "existing-cache".into(),
+                ..Default::default()
+            };
+            let page = Revision {
+                content_hash: store::digest(&page.markdown),
+                ..page
+            };
+            if candidate {
+                topic.candidate = Some(page.clone());
+            } else {
+                topic.published = Some(page.clone());
+            }
+            save_page(&root, &topic, &page, candidate).unwrap();
+            save_topics(&root, &[topic.clone()]).unwrap();
+            let mut values = topics(&root).unwrap();
+            assert!(repair_page_titles(&root, &mut values).unwrap());
+            let repaired = if candidate {
+                values[0].candidate.as_ref().unwrap()
+            } else {
+                values[0].published.as_ref().unwrap()
+            };
+            assert_eq!(page_body(&topic.title, &repaired.markdown).1, 1);
+            assert_eq!(repaired.content_hash, store::digest(&repaired.markdown));
+            assert_eq!(values[0].last_fingerprint, topic.last_fingerprint);
+            let mut before = serde_json::to_value(&page).unwrap();
+            let mut after = serde_json::to_value(repaired).unwrap();
+            for value in [&mut before, &mut after] {
+                value.as_object_mut().unwrap().remove("markdown");
+                value.as_object_mut().unwrap().remove("contentHash");
+            }
+            assert_eq!(before, after);
+            let directory = root.join(&topic.id);
+            assert_eq!(
+                fs::read_to_string(
+                    directory
+                        .join("edits")
+                        .join(format!("{}.md", page.content_hash))
+                )
+                .unwrap(),
+                page.markdown
+            );
+            let archived: Revision = read_json(
+                &directory
+                    .join("revisions")
+                    .join(format!("{}.json", page.id)),
+            )
+            .unwrap();
+            assert_eq!(archived.markdown, page.markdown);
+            assert!(!repair_page_titles(&root, &mut topics(&root).unwrap()).unwrap());
+            let target = directory.join(if candidate {
+                "candidate.md"
+            } else {
+                "published.md"
+            });
+            let edited = format!("{}\n\nManual correction: retain this text.", page.markdown);
+            fs::write(&target, &edited).unwrap();
+            assert!(!repair_page_titles(&root, &mut topics(&root).unwrap()).unwrap());
+            assert_eq!(fs::read_to_string(target).unwrap(), edited);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
+    fn markdown_sources_keep_original_citations_without_sending_rendered_pages() {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let mut document = Document {
+            id: "meeting".into(),
+            kind: "meeting".into(),
+            transcript: "Friday remains a proposal.".into(),
+            conclusions: vec![
+                json!({"conclusionText":"## Notes\nNo date was confirmed."}),
+                json!({"conclusionText":format!("<html><style>body {{ color: red; }}</style><img src=\"data:image/png;base64,{}\"></html>", "a".repeat(60000))}),
+            ],
+            ai_context_enabled: true,
+            ..Default::default()
+        };
+        document.refresh_revision();
+        let entry = store::write_document(&root, &document, None).unwrap();
+        let mut manifest = Manifest::default();
+        manifest.entries.insert(document.id.clone(), entry.clone());
+        let sources = sources_for(&root, &manifest);
+        assert_eq!(sources.len(), 1);
+        assert!(store::is_current_document(&root, &manifest, &sources[0]));
+        assert_eq!(sync::split_text(&sources[0].text(), 12000).len(), 1);
+        assert!(sync::split_text(&document.text(), 12000).len() > 5);
+        let reference = json!({"id":document.id,"kind":"meeting","revision":document.revision,"quote":"No date was confirmed."});
+        sync::validate_result(&sources, &manifest, &json!({"citations":[reference]})).unwrap();
+        assert_eq!(
+            store::read_document(&root, &entry)
+                .unwrap()
+                .conclusions
+                .len(),
+            2
+        );
+        assert!(store::read_document(&root, &entry)
+            .unwrap()
+            .text()
+            .contains("base64"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    fn synthesis_server(
+        responses: Vec<(u16, Value)>,
+    ) -> (String, std::thread::JoinHandle<Vec<Value>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/synthesize", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (status, response) in responses {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0; 4096];
+                let body = loop {
+                    let n = socket.read(&mut buffer).unwrap();
+                    assert!(n > 0);
+                    bytes.extend_from_slice(&buffer[..n]);
+                    if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
+                        let length: usize = headers
+                            .lines()
+                            .find_map(|line| line.strip_prefix("content-length:"))
+                            .unwrap()
+                            .trim()
+                            .parse()
+                            .unwrap();
+                        if bytes.len() >= end + 4 + length {
+                            break bytes[end + 4..end + 4 + length].to_vec();
+                        }
+                    }
+                };
+                requests.push(serde_json::from_slice(&body).unwrap());
+                let data = response.to_string();
+                write!(socket, "HTTP/1.1 {status} Response\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{data}", data.len()).unwrap();
+            }
+            requests
+        });
+        (endpoint, worker)
+    }
+    #[tokio::test]
+    async fn invalid_model_output_is_corrected_once_without_changing_sources() {
+        let failure = json!({"detail":"Insufficient evidence must not contain factual output"});
+        let result = json!({"summary":"","insufficientEvidence":true,"citations":[]});
+        let (endpoint, server) = synthesis_server(vec![(422, failure), (200, result.clone())]);
+        let body = json!({"task":"source_analysis","query":"Project Alpha","language":"zh-Hans","sources":[{"id":"one","text":"Original evidence"}],"modelOverride":{"preset":"chosen","model":"selected"}});
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        assert_eq!(
+            send_synthesis(&client, &endpoint, "synthetic-token", body.clone(), || Ok(
+                ()
+            ))
+            .await
+            .unwrap(),
+            result
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0], body);
+        assert_eq!(requests[1]["sources"], body["sources"]);
+        assert_eq!(requests[1]["modelOverride"], body["modelOverride"]);
+        assert!(requests[1]["query"]
+            .as_str()
+            .unwrap()
+            .starts_with("Project Alpha\n\nResponse correction:"));
+        assert!(requests[1]["query"]
+            .as_str()
+            .unwrap()
+            .contains("summary must be empty"));
+    }
+    #[tokio::test]
+    async fn invalid_memory_kind_is_corrected_with_explicit_types_and_original_evidence() {
+        let reference =
+            json!({"id":"one","revision":"r1","kind":"meeting","quote":"Friday is a proposal."});
+        let result = json!({"summary":"Friday remains a proposal.","citations":[reference.clone()],"memoryItems":[{"text":"Friday remains a proposal.","kind":"proposal","citations":[reference]}],"todoSuggestions":[],"decisions":[],"insufficientEvidence":false});
+        let (endpoint, server) = synthesis_server(vec![
+            (422, json!({"detail":"Invalid memory kind"})),
+            (200, result.clone()),
+        ]);
+        let body = json!({"task":"source_analysis","query":"Project Alpha\nKeep Friday tentative.","language":"zh-Hans","sources":[{"id":"one","revision":"r1","kind":"meeting","text":"Friday is a proposal."}],"modelOverride":{"preset":"chosen","model":"selected"}});
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        assert_eq!(
+            send_synthesis(&client, &endpoint, "synthetic-token", body.clone(), || Ok(
+                ()
+            ))
+            .await
+            .unwrap(),
+            result
+        );
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0], body);
+        let correction = requests[1]["query"].as_str().unwrap();
+        assert!(correction.starts_with(body["query"].as_str().unwrap()));
+        assert!(correction.contains("memoryItems[].kind"));
+        for kind in ["observation", "proposal", "decision", "unresolved"] {
+            assert!(correction.contains(&format!("\"{kind}\"")));
+        }
+        assert!(correction.contains("Do not translate"));
+        assert_eq!(requests[1]["sources"], body["sources"]);
+        assert_eq!(requests[1]["modelOverride"], body["modelOverride"]);
+    }
+
+    #[tokio::test]
+    async fn corrections_are_bounded_and_do_not_retry_invalid_inputs() {
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let failure = json!({"detail":"Model did not return valid structured output"});
+        let (endpoint, server) = synthesis_server(vec![(422, failure.clone()), (422, failure)]);
+        let error = send_synthesis(
+            &client,
+            &endpoint,
+            "synthetic-token",
+            json!({"task":"source_analysis","query":"Alpha"}),
+            || Ok(()),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("Model did not return valid structured output"));
+        assert_eq!(server.join().unwrap().len(), 2);
+        let (endpoint, server) =
+            synthesis_server(vec![(422, json!({"detail":"Invalid source text"}))]);
+        assert!(
+            send_synthesis(&client, &endpoint, "synthetic-token", json!({}), || Ok(()))
+                .await
+                .unwrap_err()
+                .contains("Invalid source text")
+        );
+        assert_eq!(server.join().unwrap().len(), 1);
+        assert!(
+            !synthesis_error(422, &json!({"detail":"PRIVATE_INPUT synthetic-secret"}))
+                .contains("PRIVATE_INPUT")
+        );
+    }
+    #[tokio::test]
+    async fn revoked_scope_prevents_a_correction_request() {
+        let (endpoint, server) = synthesis_server(vec![(422, json!({"detail":"Invalid summary"}))]);
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let checks = std::sync::atomic::AtomicUsize::new(0);
+        let result = send_synthesis(
+            &client,
+            &endpoint,
+            "synthetic-token",
+            json!({"task":"source_analysis","query":"Alpha"}),
+            || {
+                if checks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Ok(())
+                } else {
+                    Err("Account or consent changed".into())
+                }
+            },
+        )
+        .await;
+        assert!(result.unwrap_err().contains("Account or consent changed"));
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+    #[test]
+    fn unchanged_model_settings_preserve_vector_and_wiki_revisions() {
+        let current = Models {
+            embedding: Model {
+                base_url: "http://localhost:11434/v1".into(),
+                model: "local-embedding".into(),
+            },
+            revision: "existing-vector-version".into(),
+            text_revision: "existing-text-version".into(),
+        };
+        let request = json!({
+            "embedding":{"baseUrl":" http://localhost:11434/v1/ ","model":" local-embedding "},
+            "revision":"client-revision-must-not-replace-the-cache-identity"
+        });
+        let saved = updated_models(&current, serde_json::from_value(request).unwrap()).unwrap();
+        assert_eq!(embedding_revision(&saved), embedding_revision(&current));
+        let topic = Topic::default();
+        let manifest = Manifest::default();
+        assert_eq!(
+            fingerprint(&topic, &manifest, &saved),
+            fingerprint(&topic, &manifest, &current)
+        );
+        for (base_url, model) in [
+            ("http://localhost:11434/v1", "different-embedding"),
+            ("http://localhost:1234/v1", "local-embedding"),
+        ] {
+            let mut changed = saved.clone();
+            changed.embedding.base_url = base_url.into();
+            changed.embedding.model = model.into();
+            let changed = updated_models(&saved, changed).unwrap();
+            assert_ne!(embedding_revision(&changed), embedding_revision(&saved));
+            assert_eq!(changed.text_revision, current.text_revision);
+        }
+    }
+    #[test]
+    fn vectors_survive_reopen_and_invalidate_only_for_changed_inputs() {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let path = root.join("wiki-models.json");
+        let config = Models {
+            embedding: Model {
+                base_url: "http://localhost:11434/v1".into(),
+                model: "local-embedding".into(),
+            },
+            revision: "already-built".into(),
+            ..Default::default()
+        };
+        let mut first = Document {
+            id: "first-meeting".into(),
+            transcript: "Original meeting text".into(),
+            ..Default::default()
+        };
+        first.refresh_revision();
+        let mut second = first.clone();
+        second.id = "second-meeting".into();
+        second.refresh_revision();
+        let conn = db(&root).unwrap();
+        for doc in [&first, &second] {
+            conn.execute(
+                "INSERT INTO vectors VALUES (?1,?2,?3,?4)",
+                params![
+                    doc.id,
+                    doc.revision,
+                    embedding_revision(&config),
+                    "[1.0,0.0]"
+                ],
+            )
+            .unwrap();
+        }
+        drop(conn);
+        write_json(&path, &config).unwrap();
+        let loaded = read_models(&path).unwrap();
+        let saved = updated_models(&loaded, loaded.clone()).unwrap();
+        write_json(&path, &saved).unwrap();
+        let reopened = read_models(&path).unwrap();
+        assert!(embedding_cached(&root, &first, &reopened).unwrap());
+        assert!(embedding_cached(&root, &second, &reopened).unwrap());
+        first.transcript = "Updated meeting text".into();
+        first.refresh_revision();
+        assert!(!embedding_cached(&root, &first, &reopened).unwrap());
+        assert!(embedding_cached(&root, &second, &reopened).unwrap());
+        let new_doc = Document {
+            id: "new-meeting".into(),
+            ..second.clone()
+        };
+        assert!(!embedding_cached(&root, &new_doc, &reopened).unwrap());
+        let mut changed = reopened.clone();
+        changed.embedding.model = "different-embedding".into();
+        let changed = updated_models(&reopened, changed).unwrap();
+        assert!(!embedding_cached(&root, &second, &changed).unwrap());
+        assert_eq!(
+            db(&root)
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM vectors", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn embedding_defaults_upgrade_unconfigured_files_and_preserve_user_choices() {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let path = root.join("wiki-models.json");
+        let initial = read_models(&path).unwrap();
+        assert_eq!(initial.embedding.model, "qwen3.7-text-embedding");
+        assert_eq!(
+            initial.embedding.base_url,
+            "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+        );
+        assert!(!embedding_configured(&initial.embedding));
+        write_json(
+            &path,
+            &json!({"embedding":{"baseUrl":"","model":""},"revision":""}),
+        )
+        .unwrap();
+        assert_eq!(
+            read_models(&path).unwrap().embedding.model,
+            initial.embedding.model
+        );
+        let custom = Models {
+            embedding: Model {
+                base_url: "http://localhost:11434/v1".into(),
+                model: "local-embedding".into(),
+            },
+            revision: "user-saved".into(),
+            ..Default::default()
+        };
+        write_json(&path, &custom).unwrap();
+        let loaded = read_models(&path).unwrap();
+        assert_eq!(loaded.embedding.base_url, custom.embedding.base_url);
+        assert_eq!(loaded.embedding.model, custom.embedding.model);
+        assert!(embedding_configured(&loaded.embedding));
+        assert!(embedding_ready(&loaded.embedding, None));
+        write_json(
+            &path,
+            &Models {
+                embedding: Model::default(),
+                ..custom
+            },
+        )
+        .unwrap();
+        let disabled = read_models(&path).unwrap();
+        assert!(disabled.embedding.base_url.is_empty());
+        assert!(disabled.embedding.model.is_empty());
+        assert!(!embedding_configured(&disabled.embedding));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn embedding_validation_requires_a_real_endpoint_and_supports_other_providers() {
+        let mut model = Models::default().embedding;
+        assert!(validate_model(&model).unwrap_err().contains("WorkspaceId"));
+        model.base_url =
+            "https://workspace-123.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1".into();
+        assert!(embedding_configured(&model));
+        assert!(!embedding_ready(&model, None));
+        assert!(!embedding_ready(&model, Some("  ")));
+        assert!(embedding_ready(&model, Some("synthetic-key")));
+        model.base_url = "https://embeddings.example.com/v1".into();
+        model.model = "other-provider-model".into();
+        assert!(embedding_configured(&model));
+        for url in [
+            "http://remote.example.com/v1",
+            "https://user:secret@example.com/v1",
+            "https://example.com/v1?key=value",
+        ] {
+            model.base_url = url.into();
+            assert!(validate_model(&model).is_err());
+            assert!(!embedding_configured(&model));
+        }
+    }
     #[test]
     fn lynclaw_requests_reuse_the_selected_model_without_identity_in_the_body() {
         let session = Session {
@@ -1126,6 +2182,10 @@ mod tests {
         assert!(payload.get("token").is_none());
         assert!(payload.get("userId").is_none());
         assert!(payload.get("apiKey").is_none());
+        let query = payload["query"].as_str().unwrap();
+        assert!(query.starts_with("Launch\n\n"));
+        assert!(query.contains("memoryItems[].kind"));
+        assert!(query.contains("Do not translate"));
     }
     #[test]
     fn compiler_carries_original_quotes_and_segment_identity_within_server_limits() {
@@ -1144,6 +2204,153 @@ mod tests {
         assert_eq!(sources[0]["segments"][1]["startMs"], 1000);
         let excessive = vec![json!({"citations":[{"id":"a","quote":"x".repeat(12001)}]})];
         assert!(compile_sources(&docs, &excessive).is_err());
+    }
+    #[test]
+    fn compiler_includes_original_quotes_for_every_nested_claim() {
+        let docs = vec![
+            Document {
+                id: "a".into(),
+                kind: "meeting".into(),
+                revision: "r1".into(),
+                ..Default::default()
+            },
+            Document {
+                id: "b".into(),
+                kind: "meeting".into(),
+                revision: "r2".into(),
+                ..Default::default()
+            },
+        ];
+        let reference = |id: &str, revision: &str, quote: &str| json!({"id":id,"kind":"meeting","revision":revision,"quote":quote});
+        let summary = reference("a", "r1", "Friday is a proposal.");
+        let memory = reference("a", "r1", "The budget is unapproved.");
+        let decision = reference("a", "r1", "The owner remains undecided.");
+        let mut todo = reference("b", "r2", "Confirm the launch date.");
+        todo["segmentId"] = json!("s2");
+        todo["startMs"] = json!(1000);
+        todo["endMs"] = json!(2000);
+        let evidence = vec![json!({
+            "citations":[summary],
+            "memoryItems":[{"text":"Budget unapproved","kind":"unresolved","citations":[memory]}],
+            "todoSuggestions":[{"title":"Confirm launch date","citations":[todo]}],
+            "decisions":[{"text":"Owner undecided","citations":[decision,summary]}]
+        })];
+        let sources = compile_sources(&docs, &evidence).unwrap();
+        assert_eq!(sources.len(), 2);
+        assert_eq!(
+            sources[0]["text"],
+            "Friday is a proposal.\n\nThe budget is unapproved.\n\nThe owner remains undecided."
+        );
+        assert_eq!(sources[1]["id"], "b");
+        assert_eq!(sources[1]["revision"], "r2");
+        assert_eq!(sources[1]["text"], "Confirm the launch date.");
+        assert_eq!(
+            sources[1]["segments"],
+            json!([{"id":"s2","text":"Confirm the launch date.","startMs":1000,"endMs":2000}])
+        );
+    }
+    #[test]
+    fn compiler_counts_nested_quotes_toward_source_limits() {
+        let docs = vec![Document {
+            id: "a".into(),
+            ..Default::default()
+        }];
+        for key in ["memoryItems", "todoSuggestions", "decisions"] {
+            let mut analysis = json!({"citations":[{"id":"a","quote":"Summary"}]});
+            analysis[key] = json!([{"citations":[{"id":"a","quote":"x".repeat(12000)}]}]);
+            assert!(compile_sources(&docs, &[analysis]).is_err(), "{key}");
+        }
+    }
+    #[tokio::test]
+    async fn compilation_batches_resume_without_reusing_failures_or_invalid_evidence() {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let mut doc = Document {
+            id: "meeting".into(),
+            kind: "meeting".into(),
+            transcript: "Friday remains a proposal.".into(),
+            ai_context_enabled: true,
+            ..Default::default()
+        };
+        doc.refresh_revision();
+        let mut manifest = Manifest::default();
+        manifest.entries.insert(
+            doc.id.clone(),
+            store::write_document(&root, &doc, None).unwrap(),
+        );
+        let result = json!({"summary":"Friday is unconfirmed.","citations":[{
+            "id":doc.id,"kind":doc.kind,"revision":doc.revision,"quote":doc.transcript
+        }]});
+        let docs = [doc];
+        let serial = tokio::sync::Mutex::new(());
+        let validate = |value: &Value| sync::validate_result(&docs, &manifest, value);
+        let calls = std::cell::Cell::new(0);
+        let generate = || async {
+            calls.set(calls.get() + 1);
+            Ok(result.clone())
+        };
+        cached_compilation(&root, "first", &serial, &validate, true, generate())
+            .await
+            .unwrap();
+        let failure = cached_compilation(&root, "second", &serial, &validate, true, async {
+            Err("Model did not return valid structured output".into())
+        })
+        .await;
+        assert!(failure.is_err());
+        assert!(receipt(&root, "second").unwrap().is_none());
+        assert_eq!(
+            cached_compilation(&root, "first", &serial, &validate, true, generate())
+                .await
+                .unwrap(),
+            result
+        );
+        assert_eq!(calls.get(), 1);
+        cached_compilation(&root, "second", &serial, &validate, true, generate())
+            .await
+            .unwrap();
+        assert_eq!(calls.get(), 2);
+        cached_compilation(&root, "first", &serial, &validate, false, generate())
+            .await
+            .unwrap();
+        assert_eq!(calls.get(), 3);
+        let mut invented = result.clone();
+        invented["citations"][0]["quote"] = json!("An unsupported claim");
+        assert!(
+            cached_compilation(&root, "invalid", &serial, &validate, true, async {
+                Ok(invented)
+            })
+            .await
+            .is_err()
+        );
+        assert!(receipt(&root, "invalid").unwrap().is_none());
+        let allowed = std::cell::Cell::new(true);
+        assert!(cached_compilation(
+            &root,
+            "revoked",
+            &serial,
+            |value| {
+                if !allowed.get() {
+                    return Err("Account or consent changed".into());
+                }
+                validate(value)
+            },
+            true,
+            async {
+                allowed.set(false);
+                Ok(result.clone())
+            }
+        )
+        .await
+        .is_err());
+        assert!(receipt(&root, "revoked").unwrap().is_none());
+        manifest.entries.get_mut("meeting").unwrap().excluded = true;
+        let validate = |value: &Value| sync::validate_result(&docs, &manifest, value);
+        assert!(
+            cached_compilation(&root, "first", &serial, &validate, true, generate())
+                .await
+                .is_err()
+        );
+        assert_eq!(calls.get(), 4);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn unrelated_sources_do_not_invalidate_published_evidence() {
@@ -1265,6 +2472,75 @@ mod tests {
             },
         );
         assert_ne!(fingerprint(&t, &m, &c), first);
+    }
+    #[test]
+    fn completed_wiki_only_resumes_when_inputs_change_or_retry_is_requested() {
+        let config = Models::default();
+        let mut manifest = Manifest::default();
+        manifest.entries.insert(
+            "existing".into(),
+            store::Entry {
+                id: "existing".into(),
+                revision: "r1".into(),
+                status: "synced".into(),
+                ..Default::default()
+            },
+        );
+        let mut topic = Topic {
+            title: "Launch".into(),
+            ..Default::default()
+        };
+        topic.last_fingerprint = fingerprint(&topic, &manifest, &config);
+        complete_processing(&mut manifest, &[topic.clone()], 0);
+        assert!(!needs_processing(&mut manifest, &[topic.clone()], &config));
+        assert!(!manifest.wiki_attempted_fingerprint.is_empty());
+        let serialized = serde_json::to_value(&manifest).unwrap();
+        let mut restored: Manifest = serde_json::from_value(serialized).unwrap();
+        for round in ["poll-1", "foreground", "online"] {
+            restored.sync_round = round.into();
+            restored.completed_round = round.into();
+            assert!(!needs_processing(&mut restored, &[topic.clone()], &config));
+            assert_eq!(restored.phase, "ready");
+            assert_eq!(restored.wiki_progress.as_ref().unwrap().stage, "complete");
+        }
+        topic.force_refresh = true;
+        assert!(needs_processing(&mut restored, &[topic.clone()], &config));
+        topic.force_refresh = false;
+        restored.entries.insert(
+            "new".into(),
+            store::Entry {
+                id: "new".into(),
+                revision: "r1".into(),
+                status: "synced".into(),
+                ..Default::default()
+            },
+        );
+        assert!(needs_processing(&mut restored, &[topic.clone()], &config));
+        topic.last_fingerprint = fingerprint(&topic, &restored, &config);
+        restored.wiki_attempted_fingerprint = inputs_fingerprint(&restored, &config);
+        assert!(!needs_processing(&mut restored, &[topic.clone()], &config));
+        restored.entries.get_mut("existing").unwrap().revision = "updated".into();
+        assert!(needs_processing(&mut restored, &[topic], &config));
+    }
+    #[test]
+    fn failed_wiki_waits_for_new_inputs_or_manual_retry() {
+        let config = Models::default();
+        let mut manifest = Manifest::default();
+        let mut topic = Topic {
+            title: "Launch".into(),
+            error: "Model unavailable".into(),
+            ..Default::default()
+        };
+        topic.last_attempt_fingerprint = fingerprint(&topic, &manifest, &config);
+        manifest.wiki_attempted_fingerprint = inputs_fingerprint(&manifest, &config);
+        complete_processing(&mut manifest, &[topic.clone()], 0);
+        assert!(!needs_processing(&mut manifest, &[topic.clone()], &config));
+        assert_eq!(manifest.wiki_progress.as_ref().unwrap().failed, 1);
+        topic.force_refresh = true;
+        assert!(needs_processing(&mut manifest, &[topic.clone()], &config));
+        topic.force_refresh = false;
+        topic.notes = "A new correction".into();
+        assert!(needs_processing(&mut manifest, &[topic], &config));
     }
     #[test]
     fn gate_requires_round_and_consent() {

@@ -1,7 +1,18 @@
 "use client";
 
 import { create } from "zustand";
+import { useSyncExternalStore } from "react";
+import { isWikiEnabled } from "../feature-flags";
 import type { DesktopWorkbenchApi, WorkbenchStatus, SourceRef } from "./types";
+
+function subscribeBetaMode(changed: () => void) {
+  window.addEventListener("lynse-test-mode-changed", changed);
+  return () => window.removeEventListener("lynse-test-mode-changed", changed);
+}
+
+export function useWikiEnabled(): boolean {
+  return useSyncExternalStore(subscribeBetaMode, isWikiEnabled, () => false);
+}
 
 export function getWorkbenchApi(): DesktopWorkbenchApi | null {
   if (typeof window === "undefined") return null;

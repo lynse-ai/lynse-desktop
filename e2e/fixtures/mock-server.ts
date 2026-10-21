@@ -313,9 +313,11 @@ export async function startMockServer(script?: ChatScript): Promise<MockServer> 
       recorded.length = 0;
     },
     close() {
-      return new Promise((resolve, reject) =>
-        server.close((err) => (err ? reject(err) : resolve())),
-      );
+      return new Promise((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+        // Browser polling can still be active while the test fixture tears down.
+        server.closeAllConnections();
+      });
     },
   };
 }

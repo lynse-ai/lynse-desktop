@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@lynse/ui/lib/utils";
+import { Popover, PopoverContent, PopoverTrigger } from "@lynse/ui/components/ui/popover";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
 import { getDesktopInspirationApi } from "../inspiration";
@@ -16,9 +17,12 @@ import {
 } from "../notifications/use-notification-store";
 import { AppUpdateDialog } from "../app-update-dialog";
 import { featureFlags } from "../feature-flags";
+import { BetaBadge } from "../beta-badge";
+import { getWorkbenchApi, useWorkbench, useWikiEnabled } from "../workbench/api";
 import { SettingsDialog } from "../settings/settings-dialog";
 import { openAppUpdateDialog, useAppUpdate } from "../app-update";
 import { UserProfileDropdown } from "./user-profile-dropdown";
+import { useSidebarPreferences } from "./sidebar-preferences";
 import {
   Bell,
   Download,
@@ -27,6 +31,9 @@ import {
   ListChecks,
   FolderOpen,
   Bot,
+  BookOpen,
+  MoreHorizontal,
+  Pin,
 } from "../icons";
 
 // Module-level constants keep the notification selector identities stable across renders.
@@ -47,6 +54,7 @@ interface NavItem {
    * stay outlined when selected.
    */
   solid?: boolean;
+  beta?: boolean;
 }
 
 function isNavActive(pathname: string, href: string): boolean {
@@ -65,13 +73,22 @@ export function LynseSidebar() {
   const contextUserId = useAuthStore((s) => s.isAuthenticated ? s.user?.id ?? null : null);
   const contextEnabled = useContextInboxEnabled(contextUserId);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const pinnedKeys = useSidebarPreferences((state) => state.pinnedItems);
+  const togglePin = useSidebarPreferences((state) => state.togglePin);
+  const hasWorkbenchStatus = useWorkbench((state) => !!state.status);
+  const wikiEnabled = useWikiEnabled();
   // Shared update store (already polled by the mounted AppUpdateDialog) — the
   // rail badge is just another subscriber.
   const { update } = useAppUpdate();
 
+  useEffect(() => {
+    void useSidebarPreferences.persist.rehydrate();
+  }, []);
+
   const nickname = (data?.nickname as string) || "User";
   const initials = nickname.slice(0, 2).toUpperCase();
-  // Web shell renders a wider, label-first sidebar; the desktop rail is untouched.
+  // Web uses the same navigation with a wider, label-first presentation.
   const isWeb = isWebPlatform();
 
   const topItems: NavItem[] = [
@@ -106,6 +123,41 @@ export function LynseSidebar() {
     : true,
   );
 
+  // New optional destinations belong here so they share the More/pinning flow.
+  const moreItems: NavItem[] = [
+    { key: "wiki", label: t("nav.wiki"), icon: BookOpen, path: "/memory", solid: false, beta: true },
+  ].filter((item) => item.key !== "wiki" || (!isWeb && wikiEnabled && (hasWorkbenchStatus || !!getWorkbenchApi())));
+  const pinnedItems = pinnedKeys.flatMap((key) => moreItems.filter((item) => item.key === key));
+  const moreActive = moreItems.some((item) =>
+    !pinnedKeys.includes(item.key) && isNavActive(pathname, item.path ?? ""),
+  );
+
+  function renderNavItem(item: NavItem) {
+    const Icon = item.icon;
+    const active = isNavActive(pathname, item.path ?? "");
+    const badgeCount = item.key === "chat" ? chatUnreadCount : 0;
+    const dot = item.key === "home" ? systemUnread > 0
+      : item.key === "notes" ? notesUnread > 0 : false;
+    return (
+      <NavButton
+        key={item.key}
+        active={active}
+        badgeCount={badgeCount}
+        dot={dot}
+        onClick={() => (item.action ? item.action() : push(item.path ?? ""))}
+        title={item.label}
+        beta={item.beta}
+      >
+        <Icon className={cn("size-5", active && item.solid !== false && "fill-current")} />
+        <span className={isWeb
+          ? "whitespace-nowrap text-[13px] font-medium leading-none"
+          : "mt-1 whitespace-nowrap text-3xs font-medium leading-none"}>
+          {item.label}
+        </span>
+      </NavButton>
+    );
+  }
+
   return (
     <>
       {/* .lyse-sidebar: no divider of its own — the rail and the strips around
@@ -128,35 +180,79 @@ export function LynseSidebar() {
       )}
 
       <div className={cn("flex w-full flex-1 flex-col overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", isWeb ? "items-stretch gap-0.5" : "items-center gap-1")}>
-        {topItems.map((item) => {
-          const Icon = item.icon;
-          const active = isNavActive(pathname, item.path ?? "");
-          // The AI-assistant (chat) icon carries its own unread badge so a new
-          // assistant reply is visible at a glance; home/notes carry the
-          // notification types that belong to their module as plain dots.
-          const badgeCount = item.key === "chat" ? chatUnreadCount : 0;
-          const dot =
-            item.key === "home" ? systemUnread > 0
-            : item.key === "notes" ? notesUnread > 0
-            : false;
-          return (
-            <NavButton
-              key={item.key}
-              active={active}
-              badgeCount={badgeCount}
-              dot={dot}
-              onClick={() => (item.action ? item.action() : push(item.path ?? ""))}
-              title={item.label}
+        {topItems.map(renderNavItem)}
+        {moreItems.length > 0 && (
+          <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+            <PopoverTrigger
+              title={t("nav.more")}
+              data-tauri-drag-region={false}
+              className={cn(navButtonClassName(isWeb, moreActive), moreOpen && "bg-foreground/5 text-foreground")}
             >
-              <Icon className={cn("size-5", active && item.solid !== false && "fill-current")} />
-              {isWeb ? (
-                <span className="whitespace-nowrap text-[13px] font-medium leading-none">{item.label}</span>
-              ) : (
-                <span className="mt-1 whitespace-nowrap text-3xs font-medium leading-none">{item.label}</span>
-              )}
-            </NavButton>
-          );
-        })}
+              <MoreHorizontal className="size-5" />
+              <span className={isWeb ? "text-[13px] font-medium" : "mt-1 text-3xs font-medium leading-none"}>
+                {t("nav.more")}
+              </span>
+            </PopoverTrigger>
+            <PopoverContent
+              side="right"
+              align="start"
+              sideOffset={10}
+              aria-label={t("nav.more")}
+              className="w-60 gap-0.5 rounded-2xl p-1.5"
+              data-tauri-drag-region={false}
+            >
+              {moreItems.map((item) => {
+                const Icon = item.icon;
+                const active = isNavActive(pathname, item.path ?? "");
+                const pinned = pinnedKeys.includes(item.key);
+                const pinLabel = t(pinned ? "nav.unpin_from_sidebar" : "nav.pin_to_sidebar", { name: item.label });
+                return (
+                  <div key={item.key} className="flex items-center rounded-xl hover:bg-foreground/5 focus-within:bg-foreground/5">
+                    <button
+                      type="button"
+                      aria-label={item.label}
+                      aria-current={active ? "page" : undefined}
+                      onClick={() => {
+                        setMoreOpen(false);
+                        if (item.action) item.action();
+                        else push(item.path ?? "");
+                      }}
+                      className={cn(
+                        "flex min-h-10 min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                        active ? "text-accent-brand-text" : "text-popover-foreground",
+                      )}
+                    >
+                      <Icon className="size-[18px] shrink-0" />
+                      <span className="truncate">{item.label}</span>
+                      {item.beta && <span aria-hidden="true"><BetaBadge /></span>}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={pinLabel}
+                      title={pinLabel}
+                      aria-pressed={pinned}
+                      onClick={() => togglePin(item.key)}
+                      className={cn(
+                        "mr-1 flex size-8 shrink-0 items-center justify-center rounded-lg outline-none transition-colors duration-150 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+                        pinned ? "text-foreground" : "text-muted-foreground",
+                      )}
+                    >
+                      <Pin className={cn("size-4", pinned && "fill-current")} />
+                    </button>
+                  </div>
+                );
+              })}
+            </PopoverContent>
+          </Popover>
+        )}
+        {pinnedItems.length > 0 && (
+          <>
+            <div role="separator" className={cn("my-1 h-px shrink-0 bg-sidebar-border", isWeb ? "w-full" : "w-6")} />
+            <div role="group" aria-label={t("nav.pinned")} className={cn("flex w-full flex-col", isWeb ? "gap-0.5" : "items-center gap-1")}>
+              {pinnedItems.map(renderNavItem)}
+            </div>
+          </>
+        )}
       </div>
 
       {/* ── Bottom: avatar — profile menu (usage, appearance, settings,
@@ -233,6 +329,16 @@ export function LynseSidebar() {
   );
 }
 
+function navButtonClassName(isWeb: boolean, active: boolean): string {
+  return cn(
+    "relative flex rounded-lg transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+    isWeb ? "w-full items-center gap-2.5 px-2.5 py-2"
+      : "w-[40px] shrink-0 flex-col items-center justify-center px-1 py-2",
+    active ? "text-accent-brand-text"
+      : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+  );
+}
+
 function NavButton({
   active,
   badgeCount,
@@ -240,6 +346,7 @@ function NavButton({
   onClick,
   title,
   children,
+  beta = false,
 }: {
   active: boolean;
   /** Unread count shown as a numeric badge (IM-style). 0/undefined hides it. */
@@ -249,6 +356,7 @@ function NavButton({
   onClick: () => void;
   title: string;
   children: React.ReactNode;
+  beta?: boolean;
 }) {
   const { t } = useTranslation();
   const isWeb = isWebPlatform();
@@ -256,19 +364,12 @@ function NavButton({
     <button
       type="button"
       onClick={onClick}
-      title={title}
+      title={beta ? `${title} · ${t("settings.beta_badge")}` : title}
+      aria-label={beta ? title : undefined}
+      aria-description={beta ? t("settings.beta_badge") : undefined}
+      aria-current={active ? "page" : undefined}
       data-tauri-drag-region={false}
-      className={cn(
-        "relative flex rounded-lg transition-colors",
-        isWeb
-          ? "w-full items-center gap-2.5 px-2.5 py-2"
-          : "w-[40px] flex-col items-center justify-center px-1 py-2",
-        // Selected = accent-colored icon+label, no pill behind them; the solid
-        // glyph alone carries the selected state.
-        active
-          ? "text-accent-brand-text"
-          : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground"
-      )}
+      className={navButtonClassName(isWeb, active)}
     >
       {!!badgeCount && (
         <span
@@ -285,6 +386,7 @@ function NavButton({
         />
       )}
       {children}
+      {beta && <span aria-hidden="true"><BetaBadge className={isWeb ? "ml-auto" : "mt-0.5 h-3 px-1 text-[8px]"} /></span>}
     </button>
   );
 }

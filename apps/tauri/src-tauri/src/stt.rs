@@ -761,6 +761,14 @@ fn binaries_present(dir: &Path) -> bool {
         .all(|name| file_present(dir, name))
 }
 
+/// Use the exact release tag so prerelease runtimes stay separate from stable ones.
+pub(crate) fn runtime_version(app: &tauri::AppHandle) -> String {
+    option_env!("LYNSE_RELEASE_TAG")
+        .filter(|tag| tag.starts_with('v'))
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("v{}", app.package_info().version))
+}
+
 /// Directory of the on-demand shared runtime for `version` (e.g. `v0.1.14`)
 /// + this platform, under the app data dir. May be empty before first download.
 pub(crate) fn runtime_dir(app: &tauri::AppHandle, version: &str) -> PathBuf {
@@ -804,7 +812,7 @@ pub(crate) fn sidecar_path(app: &tauri::AppHandle, base: &str) -> CommandResult<
     }
 
     // 3. On-demand shared runtime in the user data dir.
-    let version = format!("v{}", app.package_info().version);
+    let version = runtime_version(app);
     let runtime = runtime_dir(app, &version);
     if runtime_is_complete(&runtime) {
         let candidate = runtime.join(&name);

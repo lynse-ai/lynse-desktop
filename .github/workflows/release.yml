@@ -97,6 +97,7 @@ jobs:
         run: bash apps/tauri/scripts/test-sidecar-help.sh
 
       - name: Verify prerelease mirror isolation
+        if: runner.os != 'Windows'
         run: python apps/tauri/scripts/test-prerelease-mirror.py
 
       - name: Fetch / build STT sidecars
@@ -420,6 +421,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Verify prerelease mirror isolation on the publishing host
+        run: python3 apps/tauri/scripts/test-prerelease-mirror.py
 
       - name: Publish the verified prerelease
         run: >-

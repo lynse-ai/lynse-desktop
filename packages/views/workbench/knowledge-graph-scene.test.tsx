@@ -42,6 +42,17 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("particle knowledge graph", () => {
+  it("keeps lines readable and does not dim the scene for an offscreen selection", () => {
+    const { container, rerender } = render(<KnowledgeGraphScene {...props} />);
+    const opacity = [...container.querySelectorAll("[data-graph-node]")].map(node => node.getAttribute("opacity"));
+    rerender(<KnowledgeGraphScene {...props} selection="not-visible" />);
+    expect([...container.querySelectorAll("[data-graph-node]")].map(node => node.getAttribute("opacity"))).toEqual(opacity);
+    const line = container.querySelector('[role="group"] line')!;
+    expect(Number(line.getAttribute("opacity"))).toBeGreaterThanOrEqual(0.2);
+    expect(Number(line.getAttribute("opacity"))).toBeLessThanOrEqual(0.38);
+    expect(Number(line.getAttribute("stroke-width"))).toBeLessThanOrEqual(1);
+  });
+
   it("renders only real relationships and reveals names on hover or keyboard focus", () => {
     const { container } = render(<KnowledgeGraphScene {...props} edges={[...edges,
       { ...edges[0]!, id: "duplicate", source: "Beta", target: "Alpha" },

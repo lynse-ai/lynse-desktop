@@ -92,7 +92,7 @@ const en = {
   },
   nav: {
     more: "More",
-    wiki: "Wiki",
+    memory: "Memory",
     pinned: "Pinned features",
     pin_to_sidebar: "Pin {{name}} to sidebar",
     unpin_from_sidebar: "Unpin {{name}} from sidebar",

@@ -81,22 +81,22 @@ async function installWorkbench(page: import("@playwright/test").Page) {
 
 async function openWiki(page: import("@playwright/test").Page) {
   await page.locator(".lyse-sidebar").getByRole("button", {name:"More",exact:true}).click();
-  await page.getByRole("dialog", {name:"More",exact:true}).getByRole("button", {name:"Wiki",exact:true}).click();
+  await page.getByRole("dialog", {name:"More",exact:true}).getByRole("button", {name:/^(Memory|Wiki)$/}).click();
 }
 
-test("More keeps Wiki optional and persists sidebar pinning without navigating", async ({page,mockServer}) => {
+test("More keeps Memory optional and persists sidebar pinning without navigating", async ({page,mockServer}) => {
   await openWorkspace(page,mockServer.url);
   const sidebar = page.locator(".lyse-sidebar");
   const more = sidebar.getByRole("button",{name:"More",exact:true});
-  const wiki = sidebar.getByRole("button",{name:"Wiki",exact:true});
+  const wiki = sidebar.getByRole("button",{name:"Memory",exact:true});
   const popup = page.getByRole("dialog",{name:"More",exact:true});
   await expect(wiki).toHaveCount(0);
   await more.click();
-  await expect(popup.getByRole("button",{name:"Wiki",exact:true})).toBeVisible();
-  await popup.getByRole("button",{name:"Pin Wiki to sidebar",exact:true}).click();
+  await expect(popup.getByRole("button",{name:"Memory",exact:true})).toBeVisible();
+  await popup.getByRole("button",{name:"Pin Memory to sidebar",exact:true}).click();
   await expect(popup).toBeVisible();
-  await expect(popup.getByRole("button",{name:"Unpin Wiki from sidebar",exact:true})).toHaveAttribute("aria-pressed","true");
-  await expect(sidebar.getByRole("group",{name:"Pinned features",exact:true}).getByRole("button",{name:"Wiki",exact:true})).toBeVisible();
+  await expect(popup.getByRole("button",{name:"Unpin Memory from sidebar",exact:true})).toHaveAttribute("aria-pressed","true");
+  await expect(sidebar.getByRole("group",{name:"Pinned features",exact:true}).getByRole("button",{name:"Memory",exact:true})).toBeVisible();
   await expect(sidebar.getByRole("separator")).toBeVisible();
   await expect(page.getByRole("heading",{name:/E2E Tester/})).toBeVisible();
   await page.screenshot({path:test.info().outputPath("sidebar-more-pinned.png"),animations:"disabled"});
@@ -105,7 +105,7 @@ test("More keeps Wiki optional and persists sidebar pinning without navigating",
   await page.evaluate(async(url)=>{await (await import(url)).changeLanguage("zh-Hans");},`/@fs${resolve(__dirname,"../../packages/core/i18n/react.ts")}`);
   await page.setViewportSize({width:690,height:800});
   const chinesePopup = page.getByRole("dialog",{name:"更多",exact:true});
-  await expect(chinesePopup.getByRole("button",{name:"从侧边栏取消固定 Wiki",exact:true})).toBeVisible();
+  await expect(chinesePopup.getByRole("button",{name:"从侧边栏取消固定 记忆",exact:true})).toBeVisible();
   const popupBounds = await chinesePopup.boundingBox();
   expect(popupBounds!.x + popupBounds!.width).toBeLessThanOrEqual(690);
   await page.screenshot({path:test.info().outputPath("sidebar-more-dark-zh.png"),clip:{x:0,y:35,width:330,height:450},animations:"disabled"});
@@ -121,7 +121,7 @@ test("More keeps Wiki optional and persists sidebar pinning without navigating",
   await page.reload();
   await expect(wiki).toBeVisible();
   await more.click();
-  await popup.getByRole("button",{name:"Unpin Wiki from sidebar",exact:true}).click();
+  await popup.getByRole("button",{name:"Unpin Memory from sidebar",exact:true}).click();
   await expect(wiki).toHaveCount(0);
   await expect(sidebar.getByRole("separator")).toHaveCount(0);
   await page.keyboard.press("Escape");
@@ -131,7 +131,7 @@ test("More keeps Wiki optional and persists sidebar pinning without navigating",
   await more.focus();
   await page.keyboard.press("Enter");
   await expect(popup).toBeVisible();
-  await popup.getByRole("button",{name:"Wiki",exact:true}).click();
+  await popup.getByRole("button",{name:"Memory",exact:true}).click();
   await expect(popup).toHaveCount(0);
   await expect(page.getByRole("main",{name:"Memory",exact:true})).toBeVisible();
 });
@@ -585,8 +585,8 @@ test("Wiki hides outside test mode and rebinds when the mode changes", async ({p
   await installWorkbench(page);
   await openWiki(page);
   await page.locator(".lyse-sidebar").getByRole("button",{name:"More",exact:true}).click();
-  await page.getByRole("dialog",{name:"More",exact:true}).getByRole("button",{name:"Pin Wiki to sidebar",exact:true}).click();
-  await expect(page.getByRole("dialog",{name:"More",exact:true}).getByRole("button",{name:"Wiki",exact:true}).getByText("Beta",{exact:true})).toBeVisible();
+  await page.getByRole("dialog",{name:"More",exact:true}).getByRole("button",{name:"Pin Memory to sidebar",exact:true}).click();
+  await expect(page.getByRole("dialog",{name:"More",exact:true}).getByRole("button",{name:"Memory",exact:true}).getByText("Beta",{exact:true})).toBeVisible();
   await page.keyboard.press("Escape");
   const memory = page.getByRole("main",{name:"Memory",exact:true});
   await expect(memory.getByRole("heading",{name:"Memory",exact:true}).getByText("Beta",{exact:true})).toBeVisible();
@@ -598,7 +598,7 @@ test("Wiki hides outside test mode and rebinds when the mode changes", async ({p
     flags.setTestMode(false);
   }, `/@fs${resolve(__dirname, "../../packages/views/feature-flags.ts")}`);
   await expect(page.locator(".lyse-sidebar").getByRole("button",{name:"More",exact:true})).toHaveCount(0);
-  await expect(page.locator(".lyse-sidebar").getByRole("button",{name:"Wiki",exact:true})).toHaveCount(0);
+  await expect(page.locator(".lyse-sidebar").getByRole("button",{name:"Memory",exact:true})).toHaveCount(0);
   await expect(memory).toHaveCount(0);
   await expect(page.getByRole("group",{name:"Knowledge graph canvas",exact:true})).toHaveCount(0);
   await updateWorkbench(page,{enabled:true,allowAi:true,initialComplete:true,phase:"ready"});
@@ -611,7 +611,7 @@ test("Wiki hides outside test mode and rebinds when the mode changes", async ({p
   await config.getByRole("button",{name:"Manage Wiki & memory",exact:true}).click();
   await expect(page.getByRole("tabpanel",{name:"Memory settings",exact:true}).getByRole("switch", {name:"Enable Wiki",exact:true})).toBeVisible();
   await expect(page.locator(".lyse-sidebar").getByRole("button",{name:"More",exact:true})).toBeVisible();
-  await expect(page.locator(".lyse-sidebar").getByRole("button",{name:"Wiki",exact:true})).toBeVisible();
+  await expect(page.locator(".lyse-sidebar").getByRole("button",{name:"Memory",exact:true})).toBeVisible();
 });
 
 test("opening the configured vault folder uses the native command and recovers after failure", async ({page,mockServer}) => {
@@ -752,6 +752,8 @@ test("Wiki combines its note sidebar, reader and linked graph across window size
   await expect(reader.getByRole("heading",{name:"当前进展",exact:true})).toBeVisible();
   const initial=await reader.boundingBox();const graphBox=await graph.boundingBox();
   expect(initial!.x+initial!.width).toBeLessThanOrEqual(graphBox!.x+1);
+  expect(graphBox!.width).toBeGreaterThan(initial!.width*1.5);
+  expect((await graph.getByRole("group",{name:"Knowledge graph canvas",exact:true}).boundingBox())!.height).toBeGreaterThan(500);
   const resize=panel.getByRole("separator",{name:"Resize note and graph panels",exact:true});
   await resize.focus();await page.keyboard.press("ArrowRight");
   expect((await reader.boundingBox())!.width).toBeGreaterThan(initial!.width);
@@ -781,6 +783,51 @@ test("Wiki combines its note sidebar, reader and linked graph across window size
   await expect(panel.getByRole("navigation",{name:"Wiki 笔记",exact:true})).toBeVisible();
   expect(await panel.evaluate(el=>el.scrollWidth<=el.clientWidth+1)).toBe(true);
   await page.screenshot({path:test.info().outputPath("wiki-linked-workspace-zh.png"),animations:"disabled"});
+});
+
+test("particle graph keeps source relationships visible when named nodes exceed the display limit", async ({page,mockServer}) => {
+  await page.setViewportSize({width:1680,height:1050});
+  await openWorkspace(page,mockServer.url);
+  await installWorkbench(page);
+  await page.evaluate(async()=>{
+    const runtime=window as unknown as {desktopAPI:{workbench:{configure:(enabled:boolean,allowAi:boolean)=>Promise<unknown>;sync:()=>Promise<void>;wiki:(request:Record<string,unknown>)=>Promise<import("../../packages/views/workbench/types").WikiState>}};__LYNSE_E2E__:{setCommand:(name:string,handler:(args:Record<string,unknown>)=>unknown)=>void}};
+    const api=runtime.desktopAPI.workbench;await api.configure(true,true);await api.sync();
+    const state=await api.wiki({action:"state"});
+    const base=state.graph!.nodes[0]!;
+    const topics=Array.from({length:100},(_,i)=>({...base,id:`topic-${i}`,title:`Topic ${String(i).padStart(3,"0")}`,kind:"topic" as const,status:"active" as const,updates:[]}));
+    const sources=topics.map((node,i)=>({...node,id:`source-${i}`,title:`Meeting ${i}`,kind:"source" as const,status:"source" as const}));
+    state.graph!.nodes=[...topics,...sources];
+    state.graph!.edges=topics.map((node,i)=>({id:`evidence-${i}`,source:node.id,target:sources[i]!.id,kind:"evidence"}));
+    runtime.__LYNSE_E2E__.setCommand("workbench_wiki",()=>structuredClone(state));
+  });
+  await openWiki(page);
+  const graph=page.getByRole("group",{name:"Knowledge graph canvas",exact:true});
+  await expect(graph.getByRole("button")).toHaveCount(90);
+  await expect.poll(()=>graph.locator("line").count()).toBeGreaterThan(0);
+  const strokes=await graph.locator("line").evaluateAll(lines=>lines.map(line=>({stroke:getComputedStyle(line).stroke,opacity:Number(getComputedStyle(line).opacity),width:Number.parseFloat(getComputedStyle(line).strokeWidth)})));
+  expect(strokes.every(line=>line.stroke!=="none" && line.opacity>=0.2 && line.opacity<=0.38 && line.width>0 && line.width<=1)).toBe(true);
+  await page.screenshot({path:test.info().outputPath("particle-source-connections.png"),animations:"disabled"});
+  const before=(await graph.boundingBox())!;
+  const originalCount=await graph.getByRole("button").count();
+  await page.getByRole("button",{name:"Expand graph",exact:true}).click();
+  const expanded=page.getByRole("dialog",{name:"Knowledge graph",exact:true});
+  const expandedGraph=expanded.getByRole("group",{name:"Knowledge graph canvas",exact:true});
+  await expect(expandedGraph.getByRole("button")).toHaveCount(originalCount);
+  await expect(expandedGraph.locator("line")).toHaveCount(45);
+  const after=(await expandedGraph.boundingBox())!;
+  expect(after.width).toBeGreaterThan(1500);
+  expect(after.height).toBeGreaterThan(850);
+  expect(after.width*after.height).toBeGreaterThan(before.width*before.height*2);
+  await expandedGraph.focus();
+  const node=expandedGraph.getByRole("button",{name:"Topic: Topic 000",exact:true});
+  const position=await node.getAttribute("transform");
+  await page.keyboard.press("ArrowRight");
+  await expect(node).not.toHaveAttribute("transform",position!);
+  await page.screenshot({path:test.info().outputPath("particle-expanded-connections.png"),animations:"disabled"});
+  await page.keyboard.press("Escape");
+  await expect(expanded).toHaveCount(0);
+  await expect(graph.getByRole("button")).toHaveCount(originalCount);
+  await expect(graph.locator("line")).toHaveCount(45);
 });
 
 test("particle graph rotates with a hand cursor, bounds visible data and rests after interaction", async ({page,mockServer}) => {

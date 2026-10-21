@@ -12,6 +12,7 @@ import { useWorkbench } from "./api";
 import { useWiki } from "./wiki";
 import { workbenchErrorCopy } from "./errors";
 import { KnowledgeGraphScene } from "./knowledge-graph-scene";
+import { visibleGraphNodes } from "./graph-visible-nodes";
 import type { GraphKind, GraphNode, GraphStatus, KnowledgeGraph, SourceRef } from "./types";
 
 const kinds: GraphKind[] = ["project", "topic", "goal", "wiki", "source"];
@@ -86,20 +87,11 @@ export function KnowledgeGraphView({ embedded = false, selectedId, onSelect }: {
   const nodes = graph?.nodes;
   const edges = graph?.edges;
   const filtered = useMemo(() => (nodes ?? []).filter((node) => (kind === "all" || node.kind === kind) && `${node.title} ${node.description}`.toLowerCase().includes(search.trim().toLowerCase())), [nodes, kind, search]);
-  const visible = useMemo(() => {
-    const degree = new Map<string, number>();
-    for (const edge of edges ?? []) { degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1); degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1); }
-    const ranked = filtered.slice().sort((a, b) => Number(a.kind === "source") - Number(b.kind === "source") || (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0) || a.title.localeCompare(b.title));
-    const limited = ranked.slice(0, 90);
-    const selected = ranked.find((node) => node.id === selection);
-    if (selected && !limited.some((node) => node.id === selection)) limited[limited.length - 1] = selected;
-    return limited;
-  }, [filtered, edges, selection]);
+  const visible = useMemo(() => visibleGraphNodes(filtered, edges ?? [], selection), [filtered, edges, selection]);
   const selected = nodes?.find((n) => n.id === selection);
   if (!graph) return <section className="space-y-3" aria-label={t("workbench.graph_title")}><h2 className="text-base font-semibold">{t("workbench.graph_title")}</h2><p role={wiki.error ? "alert" : "status"} className="text-sm text-muted-foreground">{t(wiki.isPending ? "workbench.graph_loading" : "workbench.graph_load_failed")}</p>{wiki.error && <p className="break-words text-xs text-destructive">{String(wiki.error)}</p>}{!wiki.isPending && <Button size="sm" variant="outline" onClick={() => void wiki.refetch()}>{t("workbench.retry")}</Button>}</section>;
   return <section className="space-y-4" aria-label={t("workbench.graph_title")}>
     <div><h2 className="text-base font-semibold">{t("workbench.graph_title")}</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t("workbench.graph_hint")}</p></div>
-    {embedded && !graph.tracking?.failed && !graph.tracking?.processing && (!graph.tracking || graph.tracking.completed >= graph.tracking.total || graph.tracking.paused) ? <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer text-xs font-medium">{t("workbench.graph_auto")}</summary><div className="mt-3"><TrackingSettings wiki={wiki} /></div></details> : <TrackingSettings wiki={wiki} />}
     {wiki.error && <p role="alert" className="text-xs text-destructive">{String(wiki.error)}</p>}
     <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("workbench.graph_search")} aria-label={t("workbench.graph_search")} />
     <div className="flex flex-wrap gap-1" aria-label={t("workbench.graph_filter")}>{(["all", ...kinds] as const).map((value) => <Button key={value} size="sm" variant={kind === value ? "secondary" : "ghost"} aria-pressed={kind === value} onClick={() => setKind(value)}>{value !== "all" && <span className="size-2 rounded-full" style={{ background: color[value] }} />}{t(value === "all" ? "workbench.graph_all" : kindKey[value])}<span className="text-muted-foreground">{value === "all" ? nodes?.length ?? 0 : nodes?.filter((node) => node.kind === value).length ?? 0}</span></Button>)}</div>
@@ -114,5 +106,6 @@ export function KnowledgeGraphView({ embedded = false, selectedId, onSelect }: {
       </div>
       {!embedded && <aside className="min-w-0 rounded-xl border border-border p-4" aria-label={t("workbench.graph_details")}><GraphNodeDetails selected={selected} graph={graph} onSelect={setSelection} /></aside>}
     </div>
+    {embedded && !graph.tracking?.failed && !graph.tracking?.processing && (!graph.tracking || graph.tracking.completed >= graph.tracking.total || graph.tracking.paused) ? <details className="rounded-lg border border-border p-3"><summary className="cursor-pointer text-xs font-medium">{t("workbench.graph_auto")}</summary><div className="mt-3"><TrackingSettings wiki={wiki} /></div></details> : <TrackingSettings wiki={wiki} />}
   </section>;
 }

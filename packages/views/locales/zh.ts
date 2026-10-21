@@ -91,7 +91,7 @@ const zh = {
   },
   nav: {
     more: "更多",
-    wiki: "Wiki",
+    memory: "记忆",
     pinned: "已固定的功能",
     pin_to_sidebar: "将 {{name}} 固定到侧边栏",
     unpin_from_sidebar: "从侧边栏取消固定 {{name}}",

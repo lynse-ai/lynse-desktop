@@ -39,7 +39,7 @@ export function WikiWorkspace() {
   const wiki = useWiki();
   const [search, setSearch] = useState("");
   const [createdTitle, setCreatedTitle] = useState("");
-  const [readerShare, setReaderShare] = useState(54);
+  const [readerShare, setReaderShare] = useState(34);
   const stage = useRef<HTMLDivElement>(null);
   const topics = wiki.data?.topics ?? [];
   const graph = wiki.data?.graph;
@@ -84,8 +84,8 @@ export function WikiWorkspace() {
         <section className="min-w-0 space-y-4 @min-[64rem]:max-h-[75dvh] @min-[64rem]:basis-[var(--wiki-reader-share)] @min-[64rem]:overflow-y-auto @min-[64rem]:pe-4" aria-label={t("workbench.wiki_reader")}>
           {source ? <SourceNote key={`${wiki.status?.scope}:${source.id}`} source={source} /> : selectedTopic ? <><WikiTopicContent key={`${wiki.status?.scope}:${selectedTopic.id}`} topic={selectedTopic} mutate={wiki.mutate} busy={wiki.busy} canPublish={!!wiki.status?.initialComplete && wiki.status.allowAi && wiki.status.enabled} onSource={selectSource} reading />{selectedNode && selectedNode.kind !== "wiki" && graph && <GraphNodeDetails selected={selectedNode} graph={graph} onSelect={selectNode} onSource={selectSource} />}</> : graph && selectedNode ? <div className="rounded-lg border border-border p-4"><GraphNodeDetails selected={selectedNode} graph={graph} onSelect={selectNode} onSource={selectSource} /></div> : <div className="space-y-2 rounded-lg border border-dashed border-border p-6"><BookOpen className="size-6 text-muted-foreground" aria-hidden="true" /><p className="text-sm text-muted-foreground">{t(wiki.isPending ? "workbench.wiki_loading_topics" : "workbench.wiki_reader_empty")}</p></div>}
         </section>
-        <div className="hidden @min-[64rem]:flex"><ResizableHandle label={t("workbench.wiki_resize_reader")} onResize={(delta) => { const width = stage.current?.clientWidth ?? 1; const direction = stage.current && getComputedStyle(stage.current).direction === "rtl" ? -1 : 1; setReaderShare((share) => Math.max(40, Math.min(60, share + direction * delta / width * 100))); }} /></div>
-        <aside className="min-w-0 flex-1 @min-[64rem]:sticky @min-[64rem]:top-0 @min-[64rem]:max-h-[75dvh] @min-[64rem]:self-start @min-[64rem]:overflow-y-auto @min-[64rem]:ps-4" aria-label={t("workbench.wiki_graph_panel")}><KnowledgeGraphView embedded selectedId={selection} onSelect={selectNode} /></aside>
+        <div className="hidden @min-[64rem]:flex"><ResizableHandle label={t("workbench.wiki_resize_reader")} onResize={(delta) => { const width = stage.current?.clientWidth ?? 1; const direction = stage.current && getComputedStyle(stage.current).direction === "rtl" ? -1 : 1; setReaderShare((share) => Math.max(26, Math.min(50, share + direction * delta / width * 100))); }} /></div>
+        <aside className="min-w-0 flex-1 @min-[64rem]:sticky @min-[64rem]:top-0 @min-[64rem]:self-start @min-[64rem]:ps-4" aria-label={t("workbench.wiki_graph_panel")}><KnowledgeGraphView embedded selectedId={selection} onSelect={selectNode} /></aside>
       </div>
     </div>
   </div>;

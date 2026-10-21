@@ -104,17 +104,26 @@ pub(super) async fn verify_identity(base: &str, token: &str) -> CommandResult<St
         generation: 0,
     };
     let identity = request(&session, "/api/business/customer/current", false, json!({})).await?;
-    identity
-        .get("id")
-        .or_else(|| identity.get("userId"))
-        .filter(|v| !v.is_null())
-        .map(|v| {
-            v.as_str()
-                .map(String::from)
-                .unwrap_or_else(|| v.to_string())
-        })
-        .filter(|v| !v.trim().is_empty())
-        .ok_or_else(|| "Server did not return a verified account".into())
+    // Match Lynclaw's authenticated profile identity before comparing its binding.
+    [
+        "userId",
+        "user_id",
+        "id",
+        "uid",
+        "accountId",
+        "account_id",
+        "customerId",
+        "customer_id",
+        "customerNo",
+    ]
+    .iter()
+    .filter_map(|key| identity.get(key))
+    .find_map(|value| match value {
+        Value::String(id) if !id.trim().is_empty() => Some(id.trim().to_owned()),
+        Value::Number(id) => Some(id.to_string()),
+        _ => None,
+    })
+    .ok_or_else(|| "Server did not return a verified account".into())
 }
 fn string(row: &Value, keys: &[&str]) -> String {
     keys.iter()
@@ -1348,6 +1357,48 @@ mod tests {
             "verified-account"
         );
         assert!(server.join().unwrap()[0].contains("/api/business/customer/current"));
+    }
+    #[tokio::test]
+    async fn identity_matches_lynclaw_when_user_and_customer_ids_differ() {
+        for (profile, expected) in [
+            (
+                json!({"id":"customer-record", "userId":"verified-user"}),
+                "verified-user",
+            ),
+            (json!({"id":17, "userId":42}), "42"),
+            (
+                json!({"userId":"  ", "user_id":" verified-user ", "id":"customer-record"}),
+                "verified-user",
+            ),
+            (json!({"userId":null, "id":17}), "17"),
+            (
+                json!({"accountId":"verified-account", "customerId":"customer-record"}),
+                "verified-account",
+            ),
+        ] {
+            let (session, server) = mock_pages(vec![json!({"code":200,"data":profile})]);
+            assert_eq!(
+                verify_identity(&session.base_url, &session.token)
+                    .await
+                    .unwrap(),
+                expected,
+            );
+            server.join().unwrap();
+        }
+    }
+    #[tokio::test]
+    async fn identity_rejects_profiles_without_account_identifiers() {
+        for profile in [
+            json!({"id":true}),
+            json!({"userId":{}, "id":[]}),
+            json!({"email":"user@example.test", "phone":"123", "nickname":"User"}),
+        ] {
+            let (session, server) = mock_pages(vec![json!({"code":200,"data":profile})]);
+            assert!(verify_identity(&session.base_url, &session.token)
+                .await
+                .is_err());
+            server.join().unwrap();
+        }
     }
     #[test]
     fn transcript_has_speakers_times_and_all_detail_versions() {

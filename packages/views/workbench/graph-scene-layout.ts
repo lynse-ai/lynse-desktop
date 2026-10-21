@@ -68,13 +68,14 @@ export function projectGraph(points: Map<string, GraphPoint>, camera: GraphCamer
     const perspective = 850 / (850 - depth);
     return { id, x: x * perspective, y: y * perspective, depth, perspective };
   });
-  // A stable scene radius prevents the camera from stretching during rotation.
-  const radius = Math.max(100, ...[...points.values()].map(p => Math.hypot(p.x, p.y, p.z)));
-  const projectedRadius = radius / Math.sqrt(1 - (radius / 850) ** 2);
-  const fit = Math.min(Math.max(1, width - 56), Math.max(1, height - 72)) / (projectedRadius * 2) * camera.scale;
+  if (!raw.length) return new Map<string, { x: number; y: number; depth: number; size: number; opacity: number }>();
+  const minX = Math.min(...raw.map(p => p.x)), maxX = Math.max(...raw.map(p => p.x));
+  const minY = Math.min(...raw.map(p => p.y)), maxY = Math.max(...raw.map(p => p.y));
+  // Fit the actual cloud to the rectangular viewport instead of an enclosing sphere.
+  const fit = Math.min(Math.max(1, width - 64) / Math.max(140, maxX - minX), Math.max(1, height - 80) / Math.max(140, maxY - minY)) * camera.scale;
   return new Map(raw.map(p => [p.id, {
-    x: width / 2 + p.x * fit,
-    y: height / 2 - p.y * fit,
+    x: width / 2 + (p.x - (minX + maxX) / 2) * fit,
+    y: height / 2 - (p.y - (minY + maxY) / 2) * fit,
     depth: p.depth,
     size: Math.max(0.65, Math.min(1.7, p.perspective)),
     opacity: Math.max(0.3, Math.min(1, 0.7 + p.depth / 700)),

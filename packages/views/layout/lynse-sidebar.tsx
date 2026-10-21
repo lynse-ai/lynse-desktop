@@ -125,7 +125,7 @@ export function LynseSidebar() {
 
   // New optional destinations belong here so they share the More/pinning flow.
   const moreItems: NavItem[] = [
-    { key: "wiki", label: t("nav.wiki"), icon: BookOpen, path: "/memory", solid: false, beta: true },
+    { key: "wiki", label: t("nav.memory"), icon: BookOpen, path: "/memory", solid: false, beta: true },
   ].filter((item) => item.key !== "wiki" || (!isWeb && wikiEnabled && (hasWorkbenchStatus || !!getWorkbenchApi())));
   const pinnedItems = pinnedKeys.flatMap((key) => moreItems.filter((item) => item.key === key));
   const moreActive = moreItems.some((item) =>

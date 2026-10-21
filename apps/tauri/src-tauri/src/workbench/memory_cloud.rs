@@ -120,6 +120,29 @@ fn queue(
     put(root, cache, next)
 }
 
+fn check_status(status: reqwest::StatusCode) -> CommandResult<()> {
+    match status.as_u16() {
+        200..=299 => Ok(()),
+        409 => Err("Memory file changed; reload it before saving".into()),
+        401 | 403 => Err("Cloud memory authorization required".into()),
+        404 | 405 => Err("Cloud memory endpoint or file is unavailable".into()),
+        429 | 500..=599 => Err("Cloud memory offline".into()),
+        _ => Err("Cloud memory rejected this change; review its classification and consent".into()),
+    }
+}
+
+fn verify_binding(binding: &Value, session: &Session) -> CommandResult<()> {
+    if binding["user_id"].as_str() != Some(&session.user_id)
+        || binding["host"]
+            .as_str()
+            .map(|host| host.trim_end_matches('/'))
+            != Some(session.base_url.as_str())
+    {
+        return Err("Cloud memory identity verification failed".into());
+    }
+    Ok(())
+}
+
 async fn request(
     app: &AppHandle,
     session: &Session,
@@ -145,21 +168,12 @@ async fn request(
         require_current(&state, session)?;
         require_beta(&state)?;
         let binding = binding.map_err(|_| "Cloud memory offline")?;
-        if !binding.status().is_success() {
-            return Err("Cloud memory identity verification failed".into());
-        }
+        check_status(binding.status())?;
         let binding: Value = binding
             .json()
             .await
-            .map_err(|_| "Invalid cloud memory identity")?;
-        if binding["user_id"].as_str() != Some(&session.user_id)
-            || binding["host"]
-                .as_str()
-                .map(|host| host.trim_end_matches('/'))
-                != Some(session.base_url.as_str())
-        {
-            return Err("Cloud memory identity verification failed".into());
-        }
+            .map_err(|_| "Cloud memory returned an invalid response")?;
+        verify_binding(&binding, session)?;
     }
     require_current(&state, session)?;
     require_beta(&state)?;
@@ -186,24 +200,7 @@ async fn request(
     require_current(&state, session)?;
     require_beta(&state)?;
     let response = response.map_err(|_| "Cloud memory offline")?;
-    let status = response.status();
-    if status.as_u16() == 409 {
-        return Err("Memory file changed; reload it before saving".into());
-    }
-    if matches!(status.as_u16(), 401 | 403) {
-        return Err("Cloud memory authorization required".into());
-    }
-    if status.as_u16() == 404 {
-        return Err("Cloud memory endpoint or file is unavailable".into());
-    }
-    if status.is_server_error() {
-        return Err("Cloud memory offline".into());
-    }
-    if !status.is_success() {
-        return Err(
-            "Cloud memory rejected this change; review its classification and consent".into(),
-        );
-    }
+    check_status(response.status())?;
     let value = response
         .json()
         .await
@@ -366,6 +363,50 @@ pub(super) async fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn binding_keeps_verified_account_and_backend_isolation() {
+        let session = Session {
+            scope: "account".into(),
+            user_id: "verified-user".into(),
+            base_url: "https://backend.test".into(),
+            agent_url: "https://agent.test".into(),
+            token: "synthetic-token".into(),
+            model_override: None,
+            locale: "en".into(),
+            generation: 0,
+        };
+        assert!(verify_binding(
+            &json!({"user_id":"verified-user", "host":"https://backend.test/"}),
+            &session,
+        )
+        .is_ok());
+        for binding in [
+            json!({"user_id":"customer-record", "host":"https://backend.test"}),
+            json!({"user_id":"verified-user", "host":"https://other-backend.test"}),
+            json!({"host":"https://backend.test"}),
+        ] {
+            assert!(verify_binding(&binding, &session).is_err());
+        }
+    }
+
+    #[test]
+    fn service_failures_do_not_require_another_login() {
+        for (status, error) in [
+            (401, "Cloud memory authorization required"),
+            (403, "Cloud memory authorization required"),
+            (404, "Cloud memory endpoint or file is unavailable"),
+            (405, "Cloud memory endpoint or file is unavailable"),
+            (429, "Cloud memory offline"),
+            (503, "Cloud memory offline"),
+            (409, "Memory file changed; reload it before saving"),
+        ] {
+            assert_eq!(
+                check_status(reqwest::StatusCode::from_u16(status).unwrap()).unwrap_err(),
+                error,
+            );
+        }
+    }
+
     #[test]
     fn offline_edits_preserve_the_cloud_base_and_survive_restart() {
         let root = std::env::temp_dir().join(format!("memory-cloud-{}", uuid::Uuid::new_v4()));

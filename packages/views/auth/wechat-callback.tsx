@@ -22,7 +22,7 @@ const STATE_STORAGE_KEY = "lynse_wechat_state";
 /**
  * Landing page for the WeChat OAuth redirect (`<web>/auth/wechat?code=…&state=…`).
  *
- * Runs the backend's WECHAT_JUMP login with the one-time `code` and completes
+ * Runs the backend's WECHAT_SCAN login with the one-time `code` and completes
  * the login on this client. A first-time WeChat identity responds with a
  * bind-required marker instead of a token; the phone + SMS form then finishes
  * the login through `/api/auth/bind`. Shared view — the web app mounts this

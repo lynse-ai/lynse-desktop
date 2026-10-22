@@ -72,7 +72,15 @@ export interface FileOutline {
   [key: string]: unknown;
 }
 
+export interface RecordingAudioSourceInterval {
+  startMs: number;
+  sources: ("mic" | "system")[];
+  reason: string;
+}
+
 export interface FileTranscription {
+  audioSourceIntervals?: RecordingAudioSourceInterval[];
+  waveformPeaks?: number[];
   id: string;
   fileId: string;
   taskId: string;
@@ -139,6 +147,8 @@ export interface RecordingTrackManifest {
 }
 
 export interface LocalTranscriptionRecord {
+  audioSourceIntervals?: RecordingAudioSourceInterval[];
+  waveformPeaks?: number[];
   id: string;
   title: string;
   sourcePath: string;

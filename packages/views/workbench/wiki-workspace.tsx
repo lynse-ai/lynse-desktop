@@ -1,37 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
-import { Markdown } from "@lynse/ui/markdown";
 import { BookOpen, FileText, Network } from "../icons";
 import { useNavigation } from "../navigation";
 import { ResizableHandle } from "../workspace/resizable-handle";
-import { getWorkbenchApi } from "./api";
-import { GraphNodeDetails, KnowledgeGraphView } from "./knowledge-graph";
+import { GraphNodeDetails, GraphRelations, KnowledgeGraphView } from "./knowledge-graph";
+import { GraphSourceNote } from "./graph-source-note";
 import { useWiki, WikiTopicContent, WikiTopicForm } from "./wiki";
 import type { SourceRef, WikiTopic } from "./types";
-
-function SourceNote({ source }: { source: SourceRef }) {
-  const { t } = useTranslation();
-  const wiki = useWiki();
-  const api = getWorkbenchApi();
-  const result = useQuery({
-    queryKey: ["wiki-source-note", wiki.status?.scope, source.id, source.revision],
-    queryFn: () => api!.read(source.id),
-    enabled: !!api && !!wiki.status?.scope,
-    networkMode: "always",
-  });
-  return <article className="min-w-0 space-y-4 rounded-lg border border-border p-4" aria-label={t("workbench.wiki_source_note")}>
-    <div className="space-y-2"><p className="text-xs text-muted-foreground">{t("workbench.graph_source")}</p><h3 className="break-words text-base font-semibold">{result.data?.document.title ?? source.id}</h3></div>
-    {source.quote && <blockquote className="border-s-2 border-border ps-3 text-sm text-muted-foreground">{source.quote}</blockquote>}
-    {result.isPending && <p role="status" className="text-sm text-muted-foreground">{t("workbench.wiki_loading_note")}</p>}
-    {result.error && <div className="space-y-2"><p role="alert" className="break-words text-xs text-destructive">{String(result.error)}</p><Button size="sm" variant="outline" onClick={() => void result.refetch()}>{t("workbench.retry")}</Button></div>}
-    {result.data && <Markdown mode="full">{result.data.markdown}</Markdown>}
-  </article>;
-}
 
 export function WikiWorkspace() {
   const { t } = useTranslation();
@@ -45,6 +23,7 @@ export function WikiWorkspace() {
   const graph = wiki.data?.graph;
   const requestedTopic = navigation.searchParams.get("topic");
   const requestedNode = navigation.searchParams.get("node");
+  const [evidence, setEvidence] = useState<{ scope?: string; reference: SourceRef } | null>(null);
   const sourceId = navigation.searchParams.get("source");
   const selectedNode = graph?.nodes.find((node) => node.id === requestedNode);
   const linkedWiki = graph?.edges.find((edge) => edge.source === selectedNode?.id && edge.kind === "documented_by")?.target.replace(/^wiki:/, "");
@@ -52,17 +31,18 @@ export function WikiWorkspace() {
   const selectedTopic = topics.find((topic) => matches(topic, requestedTopic))
     ?? topics.find((topic) => matches(topic, selectedNode?.wikiId ?? linkedWiki ?? null))
     ?? (!requestedNode && !sourceId ? topics.find((topic) => topic.title === createdTitle) ?? topics.find((topic) => !topic.excluded && !!topic.error) ?? topics.find((topic) => !topic.excluded) ?? topics[0] : undefined);
-  const source = sourceId ? graph?.nodes.find((node) => node.source?.id === sourceId)?.source
+  const source = sourceId ? (evidence?.scope === wiki.status?.scope && evidence?.reference.id === sourceId ? evidence.reference : null) ?? graph?.nodes.find((node) => node.source?.id === sourceId)?.source
     ?? selectedNode?.citations.find((ref) => ref.id === sourceId)
     ?? (selectedTopic?.candidate ?? selectedTopic?.published)?.citations.find((ref) => ref.id === sourceId)
     : selectedNode?.kind === "source" ? selectedNode.source : undefined;
-  const selection = requestedNode ?? (selectedTopic ? `wiki:${selectedTopic.id}` : null);
+  const selection = (source ? graph?.nodes.find(node => node.kind === "source" && node.source?.id === source.id)?.id : null) ?? requestedNode ?? (selectedTopic ? `wiki:${selectedTopic.id}` : null);
   const term = search.trim().toLowerCase();
   const filteredTopics = topics.filter((topic) => `${topic.title} ${topic.purpose}`.toLowerCase().includes(term));
   const discoveries = graph?.nodes.filter((node) => node.kind !== "wiki" && `${node.title} ${node.description}`.toLowerCase().includes(term)) ?? [];
   const selectNode = (id: string | null) => navigation.replace(id ? `/memory?tab=wiki&node=${encodeURIComponent(id)}` : "/memory?tab=wiki");
   const selectTopic = (id: string) => navigation.replace(`/memory?tab=wiki&topic=${encodeURIComponent(id)}&node=${encodeURIComponent(`wiki:${id}`)}`);
   const selectSource = (ref: SourceRef) => {
+    setEvidence({ scope: wiki.status?.scope, reference: ref });
     const params = new URLSearchParams({ tab: "wiki", source: ref.id });
     if (requestedNode) params.set("node", requestedNode);
     if (selectedTopic) params.set("topic", selectedTopic.id);
@@ -82,10 +62,10 @@ export function WikiWorkspace() {
       </nav>
       <div ref={stage} className="flex min-w-0 flex-1 flex-col gap-4 @min-[64rem]:flex-row @min-[64rem]:gap-0" style={{ "--wiki-reader-share": `${readerShare}%` } as CSSProperties}>
         <section className="min-w-0 space-y-4 @min-[64rem]:max-h-[75dvh] @min-[64rem]:basis-[var(--wiki-reader-share)] @min-[64rem]:overflow-y-auto @min-[64rem]:pe-4" aria-label={t("workbench.wiki_reader")}>
-          {source ? <SourceNote key={`${wiki.status?.scope}:${source.id}`} source={source} /> : selectedTopic ? <><WikiTopicContent key={`${wiki.status?.scope}:${selectedTopic.id}`} topic={selectedTopic} mutate={wiki.mutate} busy={wiki.busy} canPublish={!!wiki.status?.initialComplete && wiki.status.allowAi && wiki.status.enabled} onSource={selectSource} reading />{selectedNode && selectedNode.kind !== "wiki" && graph && <GraphNodeDetails selected={selectedNode} graph={graph} onSelect={selectNode} onSource={selectSource} />}</> : graph && selectedNode ? <div className="rounded-lg border border-border p-4"><GraphNodeDetails selected={selectedNode} graph={graph} onSelect={selectNode} onSource={selectSource} /></div> : <div className="space-y-2 rounded-lg border border-dashed border-border p-6"><BookOpen className="size-6 text-muted-foreground" aria-hidden="true" /><p className="text-sm text-muted-foreground">{t(wiki.isPending ? "workbench.wiki_loading_topics" : "workbench.wiki_reader_empty")}</p></div>}
+          {source ? <><GraphSourceNote key={`${wiki.status?.scope}:${source.id}`} source={source} />{graph && <GraphRelations selected={graph.nodes.find(node => node.source?.id === source.id)} graph={graph} onSelect={selectNode} onSource={selectSource} />}</> : selectedTopic ? <><WikiTopicContent key={`${wiki.status?.scope}:${selectedTopic.id}`} topic={selectedTopic} mutate={wiki.mutate} busy={wiki.busy} canPublish={!!wiki.status?.initialComplete && wiki.status.allowAi && wiki.status.enabled} onSource={selectSource} reading />{selectedNode && selectedNode.kind !== "wiki" && graph && <GraphNodeDetails selected={selectedNode} graph={graph} onSelect={selectNode} onSource={selectSource} />}</> : graph && selectedNode ? <div className="rounded-lg border border-border p-4"><GraphNodeDetails selected={selectedNode} graph={graph} onSelect={selectNode} onSource={selectSource} /></div> : <div className="space-y-2 rounded-lg border border-dashed border-border p-6"><BookOpen className="size-6 text-muted-foreground" aria-hidden="true" /><p className="text-sm text-muted-foreground">{t(wiki.isPending ? "workbench.wiki_loading_topics" : "workbench.wiki_reader_empty")}</p></div>}
         </section>
         <div className="hidden @min-[64rem]:flex"><ResizableHandle label={t("workbench.wiki_resize_reader")} onResize={(delta) => { const width = stage.current?.clientWidth ?? 1; const direction = stage.current && getComputedStyle(stage.current).direction === "rtl" ? -1 : 1; setReaderShare((share) => Math.max(26, Math.min(50, share + direction * delta / width * 100))); }} /></div>
-        <aside className="min-w-0 flex-1 @min-[64rem]:sticky @min-[64rem]:top-0 @min-[64rem]:self-start @min-[64rem]:ps-4" aria-label={t("workbench.wiki_graph_panel")}><KnowledgeGraphView embedded selectedId={selection} onSelect={selectNode} /></aside>
+        <aside className="min-w-0 flex-1 @min-[64rem]:sticky @min-[64rem]:top-0 @min-[64rem]:self-start @min-[64rem]:ps-4" aria-label={t("workbench.wiki_graph_panel")}><KnowledgeGraphView embedded selectedId={selection} onSelect={selectNode} onSource={selectSource} /></aside>
       </div>
     </div>
   </div>;

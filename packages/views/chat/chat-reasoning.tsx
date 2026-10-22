@@ -17,7 +17,6 @@ import {
   CircleStop,
   FileSearch,
   Lightbulb,
-  Loader2,
   Pencil,
   Plug,
   ScrollText,
@@ -26,6 +25,7 @@ import {
   Wrench,
 } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
+import { StatusGlyph } from "@lynse/ui/components/ui/status-glyph";
 import type { ChatToolUse } from "../workspace/types";
 
 export type ToolKind =
@@ -94,7 +94,7 @@ export function ToolActivity({ tools }: { tools: ChatToolUse[] }) {
             <span className="shrink-0 font-medium text-foreground/80">{t(`chat.tool_${kind}`)}</span>
             <span className="min-w-0 truncate font-mono">{tool.name}</span>
             {tool.state === "running" ? (
-              <Loader2 className="size-3 shrink-0 animate-spin" />
+              <StatusGlyph activity="running" className="size-3 shrink-0" />
             ) : tool.state === "error" ? (
               <AlertCircle className="size-3 shrink-0 text-destructive" aria-label={t("chat.tool_failed")} />
             ) : (
@@ -131,8 +131,14 @@ export function ThinkingBlock({ text, active }: { text: string; active?: boolean
         aria-expanded={open}
         className="flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
       >
-        <Lightbulb className="size-3.5 shrink-0" />
-        <span>{active ? t("chat.thinking_active") : t("chat.thought_process")}</span>
+        {active ? (
+          <StatusGlyph activity="thinking" className="size-3.5 shrink-0" />
+        ) : (
+          <Lightbulb className="size-3.5 shrink-0" />
+        )}
+        <span className={cn(active && "status-shimmer")}>
+          {active ? t("chat.thinking_active") : t("chat.thought_process")}
+        </span>
         <ChevronDown className={cn("size-3 shrink-0 transition-transform", open && "rotate-180")} />
       </button>
       {open && (

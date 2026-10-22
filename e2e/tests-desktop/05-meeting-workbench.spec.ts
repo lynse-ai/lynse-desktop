@@ -15,9 +15,9 @@ async function installWorkbench(page: import("@playwright/test").Page) {
       memories:[{id:"memory-1",sourceId:"meeting-1995",sourceTitle:"Project Alpha",kind:"proposal",text:"Friday remains a proposal",citations:[reference]}]};
     const record = {document:{id:"meeting-1995",kind:"meeting",title:"Project Alpha · 1995",revision:"r1",transcript:reference.quote,outline:"Review the deadline",segments:[{id:"s1",text:reference.quote,startMs:12000,speakerName:"Sam"}],conclusions:[{id:"v1",templateName:"Original summary",conclusionText:"No final date was agreed."},{id:"v2",templateName:"Updated summary",conclusionText:"The team still needs to confirm."}],todos:[],aiContextEnabled:true},markdown:"# Project Alpha",artifacts:{summaries:[],todoSuggestions:[{id:"suggestion-1",title:"Confirm the launch date",citations:[reference],accepted:false}]}};
     const vault={enabled:false,path:"/tmp/lynse-e2e-vault"};
-    const graph: KnowledgeGraph = { automaticTracking:true,tracking:{processing:false,completed:2,total:2,failed:0,error:""},nodes:[
-      {id:"entity:alpha",kind:"project",title:"Project Alpha",description:"Launch date needs confirmation.",status:"blocked",citations:[reference],updates:[{description:"Launch date needs confirmation.",status:"blocked",observedAt:"2026-10-20",citations:[reference]},{description:"Initial development started.",status:"active",observedAt:"2026-10-01",citations:[reference]}]},
-      {id:"entity:goal",kind:"goal",title:"Friday launch",description:"Friday remains a proposal.",status:"proposed",citations:[reference],updates:[{description:"Friday remains a proposal.",status:"proposed",observedAt:"2026-10-20",citations:[reference]}]},
+    const graph: KnowledgeGraph = { schemaVersion:1,availableSources:[{id:"meeting-1995",title:"Project Alpha · 1995",selected:true}],automaticTracking:true,tracking:{processing:false,completed:2,total:2,failed:0,error:""},nodes:[
+      {id:"entity:alpha",kind:"entity",subtype:"project",title:"Project Alpha",description:"Launch date needs confirmation.",status:"blocked",citations:[reference],updates:[{description:"Launch date needs confirmation.",status:"blocked",observedAt:"2026-10-20",citations:[reference]},{description:"Initial development started.",status:"active",observedAt:"2026-10-01",citations:[reference]}]},
+      {id:"entity:goal",kind:"event",subtype:"milestone",title:"Friday launch",description:"Friday remains a proposal.",status:"proposed",citations:[reference],updates:[{description:"Friday remains a proposal.",status:"proposed",observedAt:"2026-10-20",citations:[reference]}]},
       {id:"wiki:topic-1",kind:"wiki",title:"Launch plan",description:"Review the launch plan",status:"published",wikiId:"topic-1",citations:[reference],updates:[]},
       {id:"source:meeting-1995",kind:"source",title:"Project Alpha · 1995",description:reference.quote,status:"source",source:reference,citations:[reference],updates:[]}
     ],edges:[{id:"g1",source:"entity:alpha",target:"entity:goal",kind:"related"},{id:"g2",source:"entity:alpha",target:"source:meeting-1995",kind:"evidence"},{id:"g3",source:"wiki:topic-1",target:"source:meeting-1995",kind:"evidence"}]};
@@ -277,34 +277,36 @@ test("knowledge graph explores discoveries, history, sources and tracking contro
   await expect(details.getByRole("heading", {name:"Project Alpha",exact:true})).toBeVisible();
   await expect(details.getByText("Initial development started.",{exact:true})).toBeVisible();
   await expect(details.getByText("Project · Blocked",{exact:true})).toBeVisible();
-  await expect(canvas.getByRole("button", {name:"Goal: Friday launch",exact:true})).toBeVisible();
+  await expect(canvas.getByRole("button", {name:"Milestone: Friday launch",exact:true})).toBeVisible();
   await page.screenshot({path:test.info().outputPath("knowledge-graph.png"),animations:"disabled"});
   await panel.getByRole("button", {name:"Zoom in",exact:true}).click();
   await panel.getByRole("button", {name:"Reset view",exact:true}).click();
-  await canvas.getByRole("button", {name:"Goal: Friday launch",exact:true}).focus();
+  await canvas.getByRole("button", {name:"Milestone: Friday launch",exact:true}).focus();
   await page.keyboard.press("Enter");
   await expect(details.getByRole("heading", {name:"Friday launch",exact:true})).toBeVisible();
-  await expect(details.getByText("Goal · Proposed",{exact:true})).toBeVisible();
-  await details.getByRole("button", {name:/Project Alpha · 1995/}).click();
+  await expect(details.getByText("Milestone · Proposed",{exact:true})).toBeVisible();
+  await details.getByRole("button", {name:/Project Alpha · 1995/}).last().click();
   const source = details.getByRole("article",{name:"Meeting note",exact:true});
   await expect(source.getByRole("heading",{name:"Project Alpha · 1995",exact:true})).toBeVisible();
   await expect(source).toContainText("Friday is only a proposal.");
-  await canvas.getByRole("button",{name:"Goal: Friday launch",exact:true}).click();
+  await panel.getByRole("button",{name:"Back to previous node",exact:true}).click();
   await expect(source).toHaveCount(0);
   await panel.getByRole("textbox",{name:"Search graph names or updates",exact:true}).fill("unrelated");
-  await expect(panel.getByText("No matching local sources.",{exact:true})).toBeVisible();
+  await expect(panel.getByText("No matching nodes. Clear filters or try another name.",{exact:true})).toBeVisible();
+  await expect(canvas.getByRole("button",{name:"Milestone: Friday launch",exact:true})).toBeVisible();
   await panel.getByRole("textbox",{name:"Search graph names or updates",exact:true}).fill("");
-  await panel.getByRole("button",{name:"Goal 1",exact:true}).click();
+  await panel.getByRole("button",{name:"Event 1",exact:true}).click();
+  await panel.getByRole("button",{name:"Global graph",exact:true}).click();
   await expect(canvas.getByRole("button")).toHaveCount(1);
   await details.getByRole("button",{name:"Stop showing this discovery",exact:true}).click();
   await expect(canvas.getByRole("button")).toHaveCount(0);
   await page.getByRole("button",{name:"Undo",exact:true}).click();
-  await expect(canvas.getByRole("button",{name:"Goal: Friday launch",exact:true})).toBeVisible();
-  await canvas.getByRole("button",{name:"Goal: Friday launch",exact:true}).click();
+  await expect(canvas.getByRole("button",{name:"Milestone: Friday launch",exact:true})).toBeVisible();
+  await canvas.getByRole("button",{name:"Milestone: Friday launch",exact:true}).click();
   await details.getByRole("button",{name:"Stop showing this discovery",exact:true}).click();
   await expect(canvas.getByRole("button")).toHaveCount(0);
-  await panel.getByText("Automatically discover & track",{exact:true}).first().click();
-  const tracking = panel.getByRole("switch",{name:"Automatically discover & track",exact:true});
+  await panel.getByText("Extract selected sources",{exact:true}).first().click();
+  const tracking = panel.getByRole("switch",{name:"Extract selected sources",exact:true});
   await tracking.click();
   await expect(tracking).not.toBeChecked();
   await panel.getByRole("button",{name:"All 3",exact:true}).click();
@@ -338,7 +340,7 @@ test("failed discovery pauses with a retry and preserves usable graph nodes", as
   await page.getByRole("tab",{name:"Wiki",exact:true}).click();
   const panel=page.getByRole("tabpanel",{name:"Wiki",exact:true});
   await expect(panel.getByRole("alert")).toHaveText("3 sections need a retry. Other findings are available.");
-  await expect(panel.getByRole("status")).toHaveCount(0);
+  await expect(panel.getByRole("status").filter({hasText:/Discovering/})).toHaveCount(0);
   await expect(panel.getByRole("button",{name:"Project: Project Alpha",exact:true})).toBeVisible();
   await panel.getByText("View reason",{exact:true}).click();
   await expect(panel.getByText("The discovered names could not be verified in the cited text. These findings were not saved. Retry the failed sections; existing findings will be kept.",{exact:true})).toBeVisible();
@@ -349,7 +351,7 @@ test("failed discovery pauses with a retry and preserves usable graph nodes", as
   await page.evaluate(async(url)=>{await (await import(url)).changeLanguage("en");},`/@fs${resolve(__dirname,"../../packages/core/i18n/react.ts")}`);
   await panel.getByRole("button",{name:"Retry",exact:true}).click();
   await expect(panel.getByRole("alert")).toHaveCount(0);
-  await expect(panel.getByRole("status")).toHaveText("Discovering · 1 / 5 text sections processed");
+  await expect(panel.getByRole("status").filter({hasText:/Discovering/})).toHaveText("Discovering · 1 / 5 text sections processed");
 });
 
 test("Memory sidebar manages Wiki, memories, settings and the settings shortcut", async ({page,mockServer}) => {
@@ -361,22 +363,11 @@ test("Memory sidebar manages Wiki, memories, settings and the settings shortcut"
   await expect(main.getByRole("heading",{name:"Memory",exact:true})).toBeVisible();
   await page.getByRole("tab",{name:"Memory library",exact:true}).click();
   const library = page.getByRole("tabpanel",{name:"Memory library",exact:true});
-  await library.getByRole("tab",{name:"Legacy meeting memories",exact:true}).click();
-  await expect(library.getByText("Friday remains a proposal",{exact:true})).toBeVisible();
-  await library.getByRole("button",{name:"Edit",exact:true}).click();
-  await library.getByRole("textbox",{name:"Edit",exact:true}).fill("Friday still needs confirmation");
-  await library.getByRole("button",{name:"Save",exact:true}).click();
-  await expect(library.getByText("Friday still needs confirmation",{exact:true})).toBeVisible();
-  await library.getByRole("button",{name:"Pin",exact:true}).click();
-  await expect(library.getByRole("button",{name:"Unpin",exact:true})).toBeVisible();
-  await library.getByRole("button",{name:"Exclude",exact:true}).click();
-  await expect(library.getByText("Friday still needs confirmation",{exact:true})).toHaveCount(0);
-  await library.getByRole("switch",{name:"Show excluded memories",exact:true}).click();
-  await expect(library.getByText("Friday still needs confirmation",{exact:true})).toBeVisible();
-  await library.getByRole("button",{name:"Include in AI",exact:true}).click();
-  await expect(library.getByRole("button",{name:"Exclude",exact:true})).toBeVisible();
+  await expect(library.getByRole("tab",{name:"Legacy meeting memories",exact:true})).toHaveCount(0);
+  await expect(library.getByText("Friday remains a proposal",{exact:true})).toHaveCount(0);
+  await expect(library.getByRole("article",{name:"Memory document",exact:true})).toContainText("Long-term memory");
   await library.getByRole("textbox",{name:"Search memory titles or file names",exact:true}).fill("unrelated");
-  await expect(library.getByText("No matching local sources.",{exact:true})).toBeVisible();
+  await expect(library.getByText("No matching memory files. Clear the search or create a memory.",{exact:true})).toBeVisible();
   await library.getByRole("textbox",{name:"Search memory titles or file names",exact:true}).fill("");
   await page.screenshot({path:test.info().outputPath("memory-library.png"),animations:"disabled"});
   await page.getByRole("tab",{name:"Wiki",exact:true}).click();
@@ -668,6 +659,41 @@ test("failed topics stay visible with a targeted retry alongside the graph", asy
   await page.screenshot({path:test.info().outputPath("wiki-failed-topic-retry.png"),animations:"disabled"});
 });
 
+test("empty graph exposes source selection even when a Wiki topic failed citations", async ({ page, mockServer }) => {
+  await openWorkspace(page, mockServer.url);
+  await installWorkbench(page);
+  await page.evaluate(async () => {
+    const runtime = window as unknown as { desktopAPI: { workbench: { configure: (enabled: boolean, allowAi: boolean) => Promise<unknown>; sync: () => Promise<void>; status: () => Promise<WorkbenchStatus>; wiki: (request: Record<string, unknown>) => Promise<import("../../packages/views/workbench/types").WikiState> } }; __LYNSE_E2E__: { setCommand: (name: string, handler: (args: Record<string, unknown>) => unknown) => void; emit: (name: string, payload: unknown) => void }; graphStarts: Record<string, unknown>[] };
+    const api = runtime.desktopAPI.workbench;
+    await api.configure(true, true); await api.sync();
+    const value = await api.wiki({ action: "state" });
+    const status = await api.status();
+    status.error = "Wiki processing failed for 1 topics; open Wiki to review and retry";
+    status.wikiProgress = { stage: "complete", completed: 0, total: 1, failed: 1, currentTitle: "", topicTitle: "" };
+    value.topics = [{ id: "marketing", title: "Marketing", purpose: "", notes: "", pinned: false, excluded: false, stale: false, candidate: null, published: null, error: "Lynclaw synthesis failed (HTTP 422): Citation does not match source evidence" }];
+    value.graph = { nodes: [], edges: [], automaticTracking: false, availableSources: [{ id: "meeting-1995", title: "Project Alpha · 1995", selected: false }], tracking: { processing: false, paused: false, completed: 0, total: 0, failed: 0, error: "" } };
+    runtime.graphStarts = [];
+    runtime.__LYNSE_E2E__.setCommand("workbench_wiki", args => {
+      const request = args.request as Record<string, unknown>;
+      if (request.action === "tracking_sources") { runtime.graphStarts.push(request); value.graph!.availableSources![0]!.selected = true; }
+      if (request.action === "tracking") { runtime.graphStarts.push(request); value.graph!.automaticTracking = !!request.enabled; }
+      return structuredClone(value);
+    });
+    runtime.__LYNSE_E2E__.emit("workbench-updated", { ...status, updatedAt: "empty-graph" });
+  });
+  await openWiki(page);
+  const graph = page.getByRole("region", { name: "Knowledge graph", exact: true });
+  const source = graph.getByRole("checkbox", { name: "Project Alpha · 1995", exact: true });
+  await expect(source).toBeVisible();
+  await expect(graph.getByText(/Choose recordings above/)).toBeVisible();
+  await graph.getByRole("button", { name: "Select all available summaries", exact: true }).click();
+  await expect(source).toBeChecked();
+  await graph.getByRole("button", { name: "Analyze 1 selected sources", exact: true }).click();
+  await expect(graph.getByRole("switch", { name: "Extract selected sources", exact: true })).toBeChecked();
+  expect(await page.evaluate(() => (window as unknown as { graphStarts: Record<string, unknown>[] }).graphStarts)).toEqual([{ action: "tracking_sources", ids: ["meeting-1995"] }, { action: "tracking", enabled: true }]);
+  await page.screenshot({ path: test.info().outputPath("empty-graph-start.png"), animations: "disabled" });
+});
+
 test("graph data stays visible while frequent native progress updates refresh details", async ({page,mockServer}) => {
   await openWorkspace(page,mockServer.url);
   await installWorkbench(page);
@@ -739,7 +765,7 @@ test("Wiki combines its note sidebar, reader and linked graph across window size
     value.topics=[{id:"canonical-topic",mergedIds:["old-duplicate"],title:"灵光记",purpose:"追踪项目状态",notes:"",pinned:false,excluded:false,stale:false,error:"",candidate:null,published:page}];
     value.graph!.nodes.find(node=>node.kind==="wiki")!.wikiId="old-duplicate";
     value.graph!.nodes.find(node=>node.kind==="wiki")!.title="灵光记";value.graph!.nodes.find(node=>node.kind==="wiki")!.id="wiki:canonical-topic";for(const edge of value.graph!.edges){if(edge.source==="wiki:topic-1")edge.source="wiki:canonical-topic";if(edge.target==="wiki:topic-1")edge.target="wiki:canonical-topic";}
-    value.graph!.nodes.find(node=>node.kind==="project")!.title="A very long named project with several milestones and responsibilities ".repeat(3);
+    value.graph!.nodes.find(node=>node.subtype==="project")!.title="A very long named project with several milestones and responsibilities ".repeat(3);
     runtime.__LYNSE_E2E__.setCommand("workbench_wiki",()=>structuredClone(value));runtime.__LYNSE_E2E__.setCommand("workbench_bind",()=>structuredClone(status));
   });
   await openWiki(page);
@@ -785,6 +811,84 @@ test("Wiki combines its note sidebar, reader and linked graph across window size
   await page.screenshot({path:test.info().outputPath("wiki-linked-workspace-zh.png"),animations:"disabled"});
 });
 
+test("graph search opens local context and expanded readers can follow evidence without closing", async ({page,mockServer}) => {
+  await page.setViewportSize({width:1440,height:1000});
+  await openWorkspace(page,mockServer.url);
+  await installWorkbench(page);
+  await page.evaluate(async()=>{
+    const runtime=window as unknown as {desktopAPI:{workbench:{configure:(enabled:boolean,allowAi:boolean)=>Promise<unknown>;sync:()=>Promise<void>;wiki:(request:Record<string,unknown>)=>Promise<import("../../packages/views/workbench/types").WikiState>}};__LYNSE_E2E__:{setCommand:(name:string,handler:(args:Record<string,unknown>)=>unknown)=>void}};
+    const api=runtime.desktopAPI.workbench;await api.configure(true,true);await api.sync();
+    const state=await api.wiki({action:"state"});
+    state.graph!.edges.push({id:"goal-evidence",source:"entity:goal",target:"source:meeting-1995",kind:"evidence"});
+    const ref=state.graph!.nodes.find(node=>node.kind==="source")!.source!;
+    state.topics=[{id:"topic-1",title:"Launch plan",purpose:"Review the launch plan",notes:"",pinned:false,excluded:false,stale:false,error:"",candidate:null,published:{id:"reviewed",markdown:"# Launch plan\n\nReviewed launch context.",citations:[ref],fingerprint:"f",createdAt:"",reviewedAt:"",review:"approved"}}];
+    runtime.__LYNSE_E2E__.setCommand("workbench_wiki",()=>structuredClone(state));
+  });
+  await openWiki(page);
+  const panel=page.getByRole("tabpanel",{name:"Wiki",exact:true});
+  const canvas=panel.getByRole("group",{name:"Knowledge graph canvas",exact:true});
+  await panel.getByRole("textbox",{name:"Search graph names or updates",exact:true}).fill("Friday launch");
+  await panel.locator("[data-graph-browse]").getByRole("button",{name:/^Friday launch/}).click();
+  await expect(canvas.getByRole("button",{name:"Source: Project Alpha · 1995",exact:true})).toBeVisible();
+  await expect(canvas.getByRole("button")).toHaveCount(3);
+  await panel.getByRole("button",{name:"2 hops",exact:true}).click();
+  await expect(canvas.getByRole("button",{name:"Wiki page: Launch plan",exact:true})).toBeVisible();
+  await panel.getByRole("button",{name:"Expand graph",exact:true}).click();
+  const expanded=page.getByRole("dialog",{name:"Knowledge graph",exact:true});
+  const reader=expanded.getByRole("complementary",{name:"Node details",exact:true});
+  await expect(reader.getByRole("heading",{name:"Friday launch",exact:true})).toBeVisible();
+  await expect(reader.getByRole("region",{name:"From the same meeting",exact:true})).toContainText("This does not imply a dependency or causal relationship.");
+  await reader.getByRole("region",{name:"Meeting evidence",exact:true}).getByRole("button",{name:/^Project Alpha · 1995/}).click();
+  await expect(reader.getByRole("article",{name:"Meeting note",exact:true})).toContainText("Friday is only a proposal.");
+  await reader.getByRole("region",{name:"Meeting evidence",exact:true}).getByRole("button",{name:/^Launch plan/}).click();
+  await expect(reader.getByText("Reviewed launch context.",{exact:true})).toBeVisible();
+  await reader.getByText("Search and graph scope",{exact:true}).click();
+  await reader.getByRole("button",{name:"Back to previous node",exact:true}).click();
+  await expect(reader.getByRole("article",{name:"Meeting note",exact:true})).toBeVisible();
+  await reader.getByRole("button",{name:"Global graph",exact:true}).click();
+  await expect(expanded.getByRole("group",{name:"Knowledge graph canvas",exact:true}).getByRole("button")).toHaveCount(1);
+  await reader.getByRole("button",{name:"Local graph",exact:true}).click();
+  await expect(expanded.getByRole("group",{name:"Knowledge graph canvas",exact:true}).getByRole("button")).toHaveCount(4);
+  await reader.getByText("Search and graph scope",{exact:true}).click();
+  await page.screenshot({path:test.info().outputPath("graph-local-expanded-reader.png"),animations:"disabled"});
+  await page.setViewportSize({width:320,height:900});
+  await expect.poll(async()=>expanded.getByRole("group",{name:"Knowledge graph canvas",exact:true}).evaluate(element=>{
+    const svg=element as SVGSVGElement;
+    return Math.max(Math.abs(svg.viewBox.baseVal.width-svg.clientWidth),Math.abs(svg.viewBox.baseVal.height-svg.clientHeight));
+  })).toBeLessThanOrEqual(1);
+  expect(await expanded.evaluate(element=>element.scrollWidth<=element.clientWidth+1)).toBe(true);
+  await expect(reader).toBeVisible();
+  await page.screenshot({path:test.info().outputPath("graph-expanded-320.png"),animations:"disabled"});
+  await page.setViewportSize({width:1280,height:1000});
+  await page.evaluate(()=>{document.documentElement.style.zoom="2";});
+  await expect.poll(async()=>expanded.getByRole("group",{name:"Knowledge graph canvas",exact:true}).evaluate(element=>{
+    const svg=element as SVGSVGElement;
+    return Math.abs(svg.viewBox.baseVal.width-svg.clientWidth);
+  })).toBeLessThanOrEqual(1);
+  expect(await expanded.evaluate(element=>element.scrollWidth<=element.clientWidth+1)).toBe(true);
+  await page.evaluate(()=>{document.documentElement.style.zoom="";});
+  await page.keyboard.press("Escape");
+  await expect(expanded).toHaveCount(0);
+});
+
+test("hidden discoveries keep their undo action beyond the old ten second timeout", async ({page,mockServer}) => {
+  await openWorkspace(page,mockServer.url);await installWorkbench(page);
+  await page.evaluate(async()=>{
+    const api=(window as unknown as {desktopAPI:{workbench:{configure:(enabled:boolean,allowAi:boolean)=>Promise<unknown>;sync:()=>Promise<void>}}}).desktopAPI.workbench;
+    await api.configure(true,true);await api.sync();
+  });
+  await openWiki(page);
+  await page.getByRole("navigation",{name:"Wiki notes",exact:true}).getByRole("button",{name:"Project Alpha",exact:true}).click();
+  await page.clock.install();
+  await page.getByRole("region",{name:"Note content",exact:true}).getByRole("button",{name:"Stop showing this discovery",exact:true}).click();
+  const undo=page.getByRole("button",{name:"Undo",exact:true});
+  await expect(undo).toBeVisible();
+  await page.clock.fastForward(15000);
+  await expect(undo).toBeVisible();
+  await undo.click();
+  await expect(page.getByRole("navigation",{name:"Wiki notes",exact:true}).getByRole("button",{name:"Project Alpha",exact:true})).toBeVisible();
+});
+
 test("particle graph keeps source relationships visible when named nodes exceed the display limit", async ({page,mockServer}) => {
   await page.setViewportSize({width:1680,height:1050});
   await openWorkspace(page,mockServer.url);
@@ -802,10 +906,10 @@ test("particle graph keeps source relationships visible when named nodes exceed 
   });
   await openWiki(page);
   const graph=page.getByRole("group",{name:"Knowledge graph canvas",exact:true});
-  await expect(graph.getByRole("button")).toHaveCount(90);
+  await expect(graph.getByRole("button")).toHaveCount(190);
   await expect.poll(()=>graph.locator("line").count()).toBeGreaterThan(0);
   const strokes=await graph.locator("line").evaluateAll(lines=>lines.map(line=>({stroke:getComputedStyle(line).stroke,opacity:Number(getComputedStyle(line).opacity),width:Number.parseFloat(getComputedStyle(line).strokeWidth)})));
-  expect(strokes.every(line=>line.stroke!=="none" && line.opacity>=0.2 && line.opacity<=0.38 && line.width>0 && line.width<=1)).toBe(true);
+  expect(strokes.every(line=>line.stroke!=="none" && line.opacity>=0.12 && line.opacity<=0.4 && line.width>0 && line.width<=1)).toBe(true);
   await page.screenshot({path:test.info().outputPath("particle-source-connections.png"),animations:"disabled"});
   const before=(await graph.boundingBox())!;
   const originalCount=await graph.getByRole("button").count();
@@ -813,10 +917,10 @@ test("particle graph keeps source relationships visible when named nodes exceed 
   const expanded=page.getByRole("dialog",{name:"Knowledge graph",exact:true});
   const expandedGraph=expanded.getByRole("group",{name:"Knowledge graph canvas",exact:true});
   await expect(expandedGraph.getByRole("button")).toHaveCount(originalCount);
-  await expect(expandedGraph.locator("line")).toHaveCount(45);
+  await expect(expandedGraph.locator("line")).toHaveCount(95);
   const after=(await expandedGraph.boundingBox())!;
-  expect(after.width).toBeGreaterThan(1500);
-  expect(after.height).toBeGreaterThan(850);
+  expect(after.width).toBeGreaterThan(900);
+  expect(after.height).toBeGreaterThan(800);
   expect(after.width*after.height).toBeGreaterThan(before.width*before.height*2);
   await expandedGraph.focus();
   const node=expandedGraph.getByRole("button",{name:"Topic: Topic 000",exact:true});
@@ -827,10 +931,10 @@ test("particle graph keeps source relationships visible when named nodes exceed 
   await page.keyboard.press("Escape");
   await expect(expanded).toHaveCount(0);
   await expect(graph.getByRole("button")).toHaveCount(originalCount);
-  await expect(graph.locator("line")).toHaveCount(45);
+  await expect(graph.locator("line")).toHaveCount(95);
 });
 
-test("particle graph rotates with a hand cursor, bounds visible data and rests after interaction", async ({page,mockServer}) => {
+test("particle graph pans with a hand cursor, bounds visible data and rests after interaction", async ({page,mockServer}) => {
   const errors:string[]=[];
   page.on("pageerror",error=>errors.push(error.message));
   await openWorkspace(page,mockServer.url);
@@ -840,17 +944,18 @@ test("particle graph rotates with a hand cursor, bounds visible data and rests a
     const api=runtime.desktopAPI.workbench;await api.configure(true,true);await api.sync();
     const state=await api.wiki({action:"state"});
     const base=state.graph!.nodes[0]!;
-    state.graph!.nodes=Array.from({length:140},(_,i)=>({...base,id:`particle-${i}`,title:`Particle ${String(i).padStart(3,"0")}`,kind:"topic",status:"active",updates:[]}));
-    state.graph!.edges=state.graph!.nodes.flatMap((node,i)=>[1,4,11].map(offset=>({id:`${i}:${offset}`,source:node.id,target:`particle-${(i+offset)%140}`,kind:"related"})));
+    state.graph!.nodes=Array.from({length:240},(_,i)=>({...base,id:`particle-${i}`,title:`Particle ${String(i).padStart(3,"0")}`,kind:"topic",status:"active",updates:[]}));
+    state.graph!.edges=state.graph!.nodes.flatMap((node,i)=>[1,4,11].map(offset=>({id:`${i}:${offset}`,source:node.id,target:`particle-${(i+offset)%240}`,kind:"related"})));
     runtime.__LYNSE_E2E__.setCommand("workbench_wiki",()=>structuredClone(state));
   });
   await openWiki(page);
   const graph=page.getByRole("group",{name:"Knowledge graph canvas",exact:true});
   await graph.scrollIntoViewIfNeeded();
-  await expect(graph.getByRole("button")).toHaveCount(90);
+  await expect(graph.getByRole("button")).toHaveCount(190);
   await expect(page.locator("[data-graph-browse] button")).toHaveCount(0);
   expect(await graph.locator("line").count()).toBeLessThanOrEqual(540);
-  await expect(graph.locator("text")).toHaveCount(0);
+  expect(await graph.locator("[data-graph-label]").count()).toBeGreaterThan(0);
+  expect(await graph.locator("[data-graph-label]").count()).toBeLessThanOrEqual(28);
   await expect(graph).toHaveCSS("cursor","grab");
   const node=graph.getByRole("button",{name:"Topic: Particle 000",exact:true});
   const initial=await node.getAttribute("transform");
@@ -881,16 +986,34 @@ test("particle graph rotates with a hand cursor, bounds visible data and rests a
   await page.mouse.wheel(0,-80);
   await expect(node).not.toHaveAttribute("transform",zoomed!);
   await page.getByRole("button",{name:"Reset view",exact:true}).click();
+  const particle=graph.locator("[data-graph-particle]").first();
+  const lightFill=await particle.evaluate(element=>getComputedStyle(element).fill);
+  await page.evaluate(()=>document.documentElement.classList.add("dark"));
+  await expect(particle).not.toHaveCSS("fill",lightFill);
+  const darkFill=await particle.evaluate(element=>getComputedStyle(element).fill);
+  await page.getByRole("button",{name:"Expand graph",exact:true}).click();
+  const expanded=page.getByRole("dialog",{name:"Knowledge graph",exact:true});
+  await expanded.getByRole("button",{name:"3D",exact:true}).click();
+  const rotation=expanded.getByRole("slider",{name:"Rotation",exact:true});
+  await rotation.fill("76");
+  await expect(expanded.locator("[data-graph-angle]")).toHaveText("76°");
+  await expect(expanded.locator("[data-graph-particle]").first()).toHaveCSS("fill",darkFill);
+  await page.screenshot({path:test.info().outputPath("particle-network-dark-theme.png"),animations:"disabled"});
+  await page.evaluate(()=>document.documentElement.classList.remove("dark"));
+  await expect(expanded.locator("[data-graph-particle]").first()).toHaveCSS("fill",lightFill);
+  await page.screenshot({path:test.info().outputPath("particle-network-light-theme.png"),animations:"disabled"});
+  await page.keyboard.press("Escape");
+  await expect(expanded).toHaveCount(0);
   await node.click();
   await expect(node).toHaveAttribute("aria-pressed","true");
   await expect(page.getByRole("region",{name:"Note content",exact:true}).getByRole("heading",{name:"Particle 000",exact:true})).toBeVisible();
   await page.screenshot({path:test.info().outputPath("particle-knowledge-graph.png"),animations:"disabled"});
-  await page.getByText("Browse all 140 matching nodes",{exact:true}).click();
-  await expect(page.locator("[data-graph-browse] button")).toHaveCount(140);
-  await page.locator("[data-graph-browse]").getByRole("button",{name:/Particle 139/}).click();
-  await expect(graph.getByRole("button",{name:"Topic: Particle 139",exact:true})).toHaveAttribute("aria-pressed","true");
-  await expect(graph.getByRole("button")).toHaveCount(90);
-  await expect(page.getByRole("region",{name:"Note content",exact:true}).getByRole("heading",{name:"Particle 139",exact:true})).toBeVisible();
+  await page.getByText("Browse all 240 matching nodes",{exact:true}).click();
+  await expect(page.locator("[data-graph-browse] button")).toHaveCount(240);
+  await page.locator("[data-graph-browse]").getByRole("button",{name:/Particle 239/}).click();
+  await expect(graph.getByRole("button",{name:"Topic: Particle 239",exact:true})).toHaveAttribute("aria-pressed","true");
+  expect(await graph.getByRole("button").count()).toBeLessThan(190);
+  await expect(page.getByRole("region",{name:"Note content",exact:true}).getByRole("heading",{name:"Particle 239",exact:true})).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -910,4 +1033,64 @@ test("normal sync fills missing files and cloud refresh is an explicit action", 
   await config.getByRole("button",{name:"Check cloud updates",exact:true}).click();
   await expect.poll(()=>page.evaluate(()=>(window as unknown as {__syncRequests:Record<string,unknown>[]}).__syncRequests.length)).toBe(2);
   expect(await page.evaluate(()=>(window as unknown as {__syncRequests:Record<string,unknown>[]}).__syncRequests[1])).toEqual({retryFailed:true,refreshExisting:true});
+});
+
+test("evidence graph queries typed claims, selects extraction sources and confirms tasks explicitly", async ({ page, mockServer }) => {
+  await openWorkspace(page, mockServer.url);
+  await installWorkbench(page);
+  await page.evaluate(async () => {
+    type WikiState = import("../../packages/views/workbench/types").WikiState;
+    type GraphNode = import("../../packages/views/workbench/types").GraphNode;
+    const runtime = window as unknown as { desktopAPI: { workbench: { configure: (enabled: boolean, ai: boolean) => Promise<unknown>; sync: () => Promise<void>; wiki: (request: Record<string, unknown>) => Promise<WikiState> } }; __LYNSE_E2E__: { setCommand: (name: string, handler: (args: Record<string, unknown>) => unknown) => void }; graphRequests: Record<string, unknown>[] };
+    await runtime.desktopAPI.workbench.configure(true, true); await runtime.desktopAPI.workbench.sync();
+    const value = await runtime.desktopAPI.workbench.wiki({ action: "state" });
+    const graph = value.graph!;
+    const source = graph.nodes.find(node => node.kind === "source")!;
+    const ref = { ...source.source!, speaker: "Sam", positions: [{ segmentId: "s1", startMs: 12000, speaker: "Sam" }] };
+    const make = (id: string, kind: GraphNode["kind"], subtype: string, title: string, status: GraphNode["status"] = "unknown"): GraphNode => ({ id, kind, subtype, title, status, description: title, modality: "asserted", confidence: .8, review: "candidate", sourceId: ref.id, citations: [ref], updates: [] });
+    graph.nodes = [source, make("entity:alpha", "entity", "project", "Project Alpha"), make("entity:sam", "entity", "person", "Sam"), { ...make("entity:budget", "event", "task", "Submit budget"), modality: "planned", dueText: "Friday" }, make("entity:complete", "event", "task", "Completed delivery", "completed"), { ...make("entity:risk", "event", "risk", "Budget overrun concern"), modality: "uncertain" }];
+    graph.edges = [
+      { id: "relation:owns", source: "entity:sam", target: "entity:alpha", kind: "responsible_for", citations: [ref], modality: "asserted", review: "candidate" },
+      ...["budget", "risk"].map(id => ({ id: `relation:${id}`, source: `entity:${id}`, target: "entity:alpha", kind: "project", citations: [ref], modality: "asserted" as const })),
+      ...graph.nodes.filter(node => node.kind !== "source").map(node => ({ id: `evidence:${node.id}`, source: node.id, target: source.id, kind: "evidence" })),
+    ];
+    graph.automaticTracking = false;
+    graph.availableSources = [{ id: ref.id, title: source.title, selected: false }];
+    runtime.graphRequests = [];
+    runtime.__LYNSE_E2E__.setCommand("workbench_wiki", args => {
+      const request = args.request as Record<string, unknown>; runtime.graphRequests.push(request);
+      if (request.action === "tracking_sources") graph.availableSources!.forEach(source => { source.selected = (request.ids as string[]).includes(source.id); });
+      if (request.action === "tracking") graph.automaticTracking = !!request.enabled;
+      if (request.action === "tracking_review") Object.assign(graph.nodes.find(node => node.id === request.id)!, { review: request.review, ...(request.description ? { description: request.description, userEdited: true } : {}) });
+      if (request.action === "tracking_reset") Object.assign(graph.nodes.find(node => node.id === request.id)!, { review: "candidate", userEdited: false });
+      if (request.action === "tracking_todo") graph.nodes.find(node => node.id === request.id)!.linkedTodo = { id: "todo:budget", title: "Submit budget", completed: false, updatedAt: "2026-10-21" };
+      return structuredClone(value);
+    });
+  });
+  await openWiki(page);
+  const panel = page.getByRole("tabpanel", { name: "Wiki", exact: true });
+  await panel.getByText("Find related information", { exact: true }).click();
+  await expect(panel.getByRole("button", { name: "Sam → Project Alpha", exact: true })).toBeVisible();
+  await panel.getByRole("button", { name: "Open tasks", exact: true }).click();
+  const questions = panel.getByRole("region", { name: "Knowledge graph", exact: true });
+  await expect(questions.getByRole("button", { name: "Submit budget", exact: true })).toBeVisible();
+  await expect(questions.getByRole("button", { name: "Completed delivery", exact: true })).toHaveCount(0);
+  await expect(panel.getByText("Deadline in source: Friday · exact date not resolved", { exact: true })).toBeVisible();
+  await questions.getByRole("button", { name: "Submit budget", exact: true }).click();
+  const reader = panel.getByRole("region", { name: "Note content", exact: true });
+  await expect(reader.getByText("AI extraction · needs confirmation", { exact: true }).first()).toBeVisible();
+  await reader.getByRole("button", { name: "Confirm statement", exact: true }).first().click();
+  await expect(reader.getByText("Human confirmed", { exact: true }).first()).toBeVisible();
+  await reader.getByRole("button", { name: "Confirm and create a to-do", exact: true }).click();
+  await expect(reader.getByText("To-do system: Open", { exact: true })).toBeVisible();
+  await expect(reader.getByRole("button", { name: "Confirm and create a to-do", exact: true })).toHaveCount(0);
+  await panel.getByText("Extract selected sources", { exact: true }).first().click();
+  await panel.getByText("Choose sources · 0 selected", { exact: true }).click();
+  await panel.getByRole("checkbox", { name: "Project Alpha · 1995", exact: true }).check();
+  await panel.getByRole("button", { name: "Analyze 1 selected sources", exact: true }).click();
+  await expect(panel.getByRole("switch", { name: "Extract selected sources", exact: true })).toBeChecked();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { graphRequests: { action: string }[] }).graphRequests.filter(request => request.action === "tracking_todo").length)).toBe(1);
+  await panel.getByRole("switch", { name: "Extract selected sources", exact: true }).click();
+  await expect(panel.getByRole("switch", { name: "Extract selected sources", exact: true })).not.toBeChecked();
+  await page.screenshot({ path: test.info().outputPath("evidence-knowledge-graph.png"), animations: "disabled" });
 });

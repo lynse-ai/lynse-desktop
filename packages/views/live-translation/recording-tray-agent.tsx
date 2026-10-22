@@ -12,19 +12,7 @@ import {
   refreshUntilRecordingVisible,
   usePendingRecordingStore,
 } from "./pending-recording-store";
-import type { DesktopLiveTranslationApi, LivePermissionStatus } from "./types";
 
-async function ensurePermissions(
-  api: DesktopLiveTranslationApi,
-): Promise<LivePermissionStatus | null> {
-  try {
-    let perms = await api.permissions();
-    if (perms.microphone !== "granted") perms = await api.requestPermission("microphone");
-    return perms;
-  } catch {
-    return null;
-  }
-}
 
 /** Stable sonner toast id, so repeated recovery scans replace the existing
  *  prompt instead of stacking duplicates. */
@@ -65,15 +53,6 @@ export function RecordingTrayAgent() {
       const cfg = await api.getProviderConfig().catch(() => null);
 
       const audioSources = audioModeSources(cfg?.audioSource);
-      const perms = await ensurePermissions(api);
-      if (!perms || (audioSources.includes("mic") && perms.microphone !== "granted")) {
-        toast.warning(t("live_translation.start_hint_mic"));
-        return;
-      }
-      if (perms.restartRequired) {
-        toast.warning(t("live_translation.start_hint_restart"));
-        return;
-      }
 
       // Source language comes from the persisted direction preference (the
       // recording page's header pickers keep it updated) so a tray-started

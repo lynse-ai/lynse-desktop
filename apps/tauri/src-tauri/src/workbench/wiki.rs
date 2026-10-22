@@ -3,6 +3,8 @@
 mod graph;
 #[path = "wiki_topics.rs"]
 mod topic_store;
+#[path = "wiki_analysis.rs"]
+mod analysis;
 use super::store::WikiProgress;
 use super::{
     current, invalidate_runtime, load_state, persist, require_current, roots, start_worker, store,
@@ -561,6 +563,22 @@ async fn model_key(
     let key = key_name(session, kind);
     crate::run_secret_io(move || crate::secret_get(&app, &key)).await
 }
+fn synthesis_client(endpoint: &str) -> CommandResult<reqwest::Client> {
+    let endpoint = url::Url::parse(endpoint).map_err(|_| "Invalid synthesis service URL")?;
+    let mut builder = reqwest::Client::builder()
+        .timeout(Duration::from_secs(100))
+        .redirect(reqwest::redirect::Policy::none());
+    let loopback = match endpoint.host() {
+        Some(url::Host::Domain("localhost")) => true,
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        _ => false,
+    };
+    if loopback {
+        builder = builder.no_proxy();
+    }
+    builder.build().map_err(|_| "Network client unavailable".into())
+}
 async fn request_model(
     app: &AppHandle,
     session: &Session,
@@ -574,11 +592,7 @@ async fn request_model(
         require_current(&state, session)?;
         ready(&load_state(app, session)?)?;
     }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(100))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = synthesis_client(&session.agent_url)?;
     if session.agent_url != session.base_url {
         let response = client
             .post(format!("{}/api/session/backend", session.agent_url))
@@ -686,7 +700,9 @@ fn corrected_synthesis_request(body: &Value, error: &Value) -> Option<Value> {
     ) {
         return None;
     }
-    let correction = if reason == "Invalid memory kind" {
+    let correction = if reason == "Citation does not match source evidence" {
+        "Copy each citation's id, revision and kind verbatim from the supplied sources. Copy quote as one contiguous exact substring of that source's text, at most 500 characters. Keep its original punctuation, whitespace and wording; do not join separate passages or quote your own summary. Preserve the project, purpose, corrections and supported uncertainty. Every factual item still needs valid citations; do not invent or discard evidence to bypass validation.".into()
+    } else if reason == "Invalid memory kind" {
         format!("{MEMORY_KIND_GUIDANCE} Return valid JSON only. Preserve the original statements, citations and uncertainty. For topic_compile, consolidate supported statements in summary and keep memoryItems, todoSuggestions and decisions empty.")
     } else {
         "Keep the same project, purpose and notes above. Return valid JSON only. If insufficientEvidence=true, summary must be empty and all claim/citation arrays must be empty. Otherwise the top-level citations array and each factual item's citations array must contain 1 to 40 references, never more than 40. For topic_compile, keep memoryItems, todoSuggestions and decisions empty, and consolidate supported statements in a concise Markdown summary with short exact original-source citations. If the source supports relevant statements, use insufficientEvidence=false and preserve uncertainty. Do not invent or drop evidence to resolve the validation error.".into()
@@ -716,6 +732,7 @@ fn synthesis_error(status: u16, body: &Value) -> String {
         matches!(
             *detail,
             "Unknown synthesis task"
+                | "Invalid evidence graph output"
                 | "Unsupported language"
                 | "Invalid project query"
                 | "Invalid source id"
@@ -999,47 +1016,39 @@ async fn compile(
                 ])
                 .to_string(),
             );
-            let result = if let Some(value) = receipt(root, &key)? {
-                value
-            } else {
-                job(root, &key, "running", None, "")?;
-                let mut part = doc.clone();
-                part.transcript = chunk.clone();
-                part.outline.clear();
-                part.conclusions.clear();
-                part.todos.clear();
-                part.segments.retain(|s| {
-                    chunk.contains(
-                        s["text"]
-                            .as_str()
-                            .or_else(|| s["recognizedText"].as_str())
-                            .unwrap_or_default(),
-                    )
-                });
-                let result =
-                    synthesize(app, session, "source_analysis", &[part], Some(&query)).await;
-                let value = match result {
-                    Ok(value) => value,
-                    Err(error) => {
-                        job(root, &key, "failed", None, &error)?;
-                        return Err(error);
-                    }
+            let part = analysis::part(doc, chunk.clone());
+            let results = analysis::with_recovery(part, |part| {
+                let key = if part.transcript == *chunk {
+                    key.clone()
+                } else {
+                    store::digest(json!([key, "citation-recovery-v1", part.transcript]).to_string())
                 };
-                {
-                    let _guard = state.serial.lock().await;
-                    require_current(state, session)?;
-                    let latest = load_state(app, session)?;
-                    ready(&latest)?;
-                    if !store::is_current_document(local, &latest, doc) {
-                        return Err("Source changed during analysis".into());
-                    }
-                    sync::validate_result(&[doc.clone()], &latest, &value)?;
-                    job(root, &key, "done", Some(&value), "")?;
+                let query = &query;
+                async move {
+                    cached_compilation(
+                        root,
+                        &key,
+                        &state.serial,
+                        |value| {
+                            require_current(state, session)?;
+                            let latest = load_state(app, session)?;
+                            ready(&latest)?;
+                            if !store::is_current_document(local, &latest, doc) {
+                                return Err("Source changed during analysis".into());
+                            }
+                            sync::validate_result(std::slice::from_ref(&part), &latest, value)
+                        },
+                        true,
+                        synthesize(app, session, "source_analysis", std::slice::from_ref(&part), Some(query)),
+                    )
+                    .await
                 }
-                value
-            };
-            if result["relevant"] != false && result["insufficientEvidence"] != true {
-                evidence.push(result);
+            })
+            .await?;
+            for result in results {
+                if result["relevant"] != false && result["insufficientEvidence"] != true {
+                    evidence.push(result);
+                }
             }
             analyzed += 1;
         }
@@ -1511,7 +1520,7 @@ pub async fn workbench_wiki(
     // Topic edits are checked by compilation fingerprints; repeated creation cannot cancel work.
     let incremental_action = matches!(
         action,
-        "topic" | "tracking" | "tracking_retry" | "tracking_dismiss" | "tracking_restore"
+        "topic" | "tracking" | "tracking_retry" | "tracking_dismiss" | "tracking_restore" | "tracking_sources" | "tracking_review" | "tracking_reset" | "tracking_merge" | "tracking_unmerge" | "tracking_todo"
     );
     let session = if action == "state" || incremental_action {
         current(&state)?
@@ -1525,9 +1534,13 @@ pub async fn workbench_wiki(
     let mut config = models(&app, &session)?;
     match action {
         "state" => {}
-        "tracking" | "tracking_retry" | "tracking_dismiss" | "tracking_restore" => {
+        "tracking" | "tracking_retry" | "tracking_dismiss" | "tracking_restore" | "tracking_sources" | "tracking_review" | "tracking_reset" | "tracking_merge" | "tracking_unmerge" => {
             graph::configure(&root, &request)?;
             state.discovery_requested.notify_one();
+        }
+        "tracking_todo" => {
+            let manifest = load_state(&app, &session)?;
+            graph::confirm_todo(&app, &session, &root, &roots(&app, &session)?.0, &manifest, request["id"].as_str().ok_or("Invalid graph task")?)?;
         }
         "sources" => {
             super::sources::configure(&app, &session, &request["sources"])?;
@@ -1668,7 +1681,8 @@ pub async fn workbench_wiki(
             start_worker(&app, &state);
         }
     }
-    let graph = graph::view(&root, &local, &manifest, &values, &config)?;
+    let mut graph = graph::view(&root, &local, &manifest, &values, &config)?;
+    graph::attach_todos(&app, &session, &root, &mut graph)?;
     Ok(
         json!({"topics":items,"models":config,"sources":super::sources::config(&app,&session)?,"graph":graph}),
     )
@@ -1893,6 +1907,26 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("summary must be empty"));
+    }
+    #[tokio::test]
+    async fn citation_correction_preserves_original_sources_and_compilation_evidence() {
+        let reference = json!({"id":"one","revision":"r1","kind":"meeting","quote":"Friday is a proposal."});
+        let output = json!({"summary":"Friday remains tentative.","citations":[reference],"insufficientEvidence":false});
+        let body = json!({"task":"topic_compile","query":"Keep dates tentative","sources":[{"id":"one","revision":"r1","kind":"meeting","text":"Friday is a proposal."}],"evidence":[output.clone()]});
+        let (endpoint, server) = synthesis_server(vec![
+            (422, json!({"detail":"Citation does not match source evidence"})),
+            (200, output.clone()),
+        ]);
+        let client = synthesis_client(&endpoint).unwrap();
+        assert_eq!(send_synthesis(&client, &endpoint, "synthetic-token", body.clone(), || Ok(())).await.unwrap(), output);
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1]["sources"], body["sources"]);
+        assert_eq!(requests[1]["evidence"], body["evidence"]);
+        let correction = requests[1]["query"].as_str().unwrap();
+        assert!(correction.starts_with("Keep dates tentative\n\nResponse correction:"));
+        assert!(correction.contains("id, revision and kind verbatim"));
+        assert!(correction.contains("one contiguous exact substring"));
     }
     #[tokio::test]
     async fn invalid_memory_kind_is_corrected_with_explicit_types_and_original_evidence() {

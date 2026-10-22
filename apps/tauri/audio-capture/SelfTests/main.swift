@@ -311,6 +311,7 @@ private func testMissingReferenceDegradesInsteadOfMuting() {
     let drop = 20.0 * log10(max(inRms, 1e-9) / max(outRms, 1e-9))
     expect(drop < 6.0, "degraded passthrough must not mute the microphone (attenuated \(String(format: "%.1f", drop)) dB)")
     let intervals = processor.snapshotDegradedIntervals()
+    expect(processor.snapshotAecDegraded(), "a missing reference is surfaced to the live recording controls")
     expect(!intervals.isEmpty, "the missing-reference span must be recorded as degraded")
     expect(intervals[0].startMs == 0, "degradation starts with the first unmatched frame")
 }
@@ -437,6 +438,40 @@ private func testRestartHandsOverTheTimelineBase() {
 
 runDelayProbe()
 testContiguousTailNeverTraps()
+private func testSourceSwitchDoesNotArchiveDisabledAudio() {
+    let processor = DualChannelProcessor(enableAec: false)
+    var rawMicTimes: [UInt64] = []
+    var masterTimes: [UInt64] = []
+    processor.onRawMic = { at, _ in rawMicTimes.append(at) }
+    processor.onMaster48k = { at, _ in masterTimes.append(at) }
+    processor.setSources(mic: false, system: true)
+    for frame in 0..<50 {
+        let position = Int64(frame * 480)
+        processor.pushMic(positionSamples: position, samples: [Float](repeating: 0.9, count: 480))
+        processor.pushSystem(positionSamples: position, samples: [Float](repeating: 0.2, count: 960))
+    }
+    processor.setSources(mic: true, system: true)
+    expect(rawMicTimes.isEmpty, "disabled microphone must not reach the raw archive")
+    expect(masterTimes.count == 50, "system-only audio flows without waiting for a disabled microphone")
+    for frame in 50..<60 {
+        let position = Int64(frame * 480)
+        processor.pushMic(positionSamples: position, samples: [Float](repeating: 0.1, count: 480))
+        processor.pushSystem(positionSamples: position, samples: [Float](repeating: 0.2, count: 960))
+    }
+    processor.setSources(mic: false, system: true)
+    let archivedMicCount = rawMicTimes.count
+    for frame in 60..<70 {
+        let position = Int64(frame * 480)
+        processor.pushMic(positionSamples: position, samples: [Float](repeating: 0.9, count: 480))
+        processor.pushSystem(positionSamples: position, samples: [Float](repeating: 0.2, count: 960))
+    }
+    processor.flush()
+    expect(rawMicTimes.count == archivedMicCount, "queued microphone callbacks after close must be discarded")
+    expect(rawMicTimes.allSatisfy { $0 >= 500 && $0 < 600 }, "only explicitly enabled microphone intervals are archived")
+    expect(masterTimes.last == 690, "source switches preserve the complete master timeline")
+}
+
+testSourceSwitchDoesNotArchiveDisabledAudio()
 testWavCheckpointBeforeClose()
 testTimelineNeverRunsBehindItsPinnedAnchor()
 testArbitraryBuffersBecomeExactFrames()

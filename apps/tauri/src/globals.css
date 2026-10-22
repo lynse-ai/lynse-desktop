@@ -4,6 +4,7 @@
 @import "../../../packages/ui/styles/fonts.css";
 @import "../../../packages/ui/styles/tokens.css";
 @import "../../../packages/ui/styles/base.css";
+@import "../../../packages/ui/styles/solid-glass-status.css";
 
 /* One step lighter: plain text inherits the variable Light (300) cut of the
    bundled Inter + OPPO Sans pairing (see packages/ui/styles/fonts.css).

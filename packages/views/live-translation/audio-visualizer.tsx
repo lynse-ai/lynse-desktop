@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 
 interface AudioVisualizerProps {
-  /** Real-time microphone level in [0, 1], sourced from the capture sidecar. */
+  /** Real-time recorded audio level in [0, 1], sourced from the capture sidecar. */
   level: number;
   /** Whether a recording session is currently active. */
   active: boolean;
@@ -105,11 +105,11 @@ export function AudioVisualizer({ level, active, className }: AudioVisualizerPro
         const bar = bars[i]!;
         const pos = i / (bars.length - 1); // 0 … 1 left-to-right
         // Travelling ripple — neighbouring bars are slightly out of phase.
-        const waveTime = isActive ? t : 0;
+        const waveTime = isActive && target > 0 ? t : 0;
         const wave = 0.5 + 0.5 * Math.sin(pos * Math.PI * 7 - waveTime * 5 + bar.phase);
         // Soft bell envelope: centre bars fuller, edges taper off.
         const bell = 0.6 + 0.4 * (1 - Math.abs(pos - 0.5) * 2);
-        const amp = isActive ? 0.14 + target * 0.86 : 0.06;
+        const amp = isActive ? target : 0;
         const targetVal = amp * bell * (0.4 + 0.6 * wave);
         bar.value += (targetVal - bar.value) * (1 - Math.exp(-dt / 0.06));
         const barH = Math.max(3, bar.value * height);

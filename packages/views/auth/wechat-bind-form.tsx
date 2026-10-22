@@ -23,7 +23,7 @@ import { Loader2 } from "../icons";
 
 /**
  * Phone + SMS binding form for a first-time WeChat sign-in. The backend's
- * WECHAT_JUMP login responds with a bind-required marker instead of a token
+ * WECHAT_SCAN login responds with a bind-required marker instead of a token
  * when the scanned WeChat identity has no phone linked yet; this form collects
  * the phone number, texts a code (`actionType: "BIND"`), and completes the
  * login through `GET /api/auth/bind`. Shared by the desktop login page and

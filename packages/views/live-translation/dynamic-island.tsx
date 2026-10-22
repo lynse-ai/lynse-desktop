@@ -5,6 +5,8 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
 import { ChevronDown, Maximize2, Pause, Play, Square, X } from "../icons";
 import { IconSwap } from "../icon-swap";
+import { AudioSourceControls } from "./audio-source-controls";
+import { recordingLevel } from "./audio-sources";
 import { AudioVisualizer } from "./audio-visualizer";
 import { useLiveTranslation } from "./use-live-translation";
 
@@ -121,13 +123,15 @@ export function DynamicIsland({
           {fmt(view.elapsedMs)}
         </span>
 
+        <AudioSourceControls compact />
+
         {/* Mini live waveform — the same wave the expanded drawer shows in its
             footer, shrunk to a sliver: just enough to read "recording" at a
             glance. Flexes to absorb leftover pill width, so the row always
             fits the narrow capsule. */}
         <div data-tauri-drag-region className="h-3 min-w-8 flex-1">
           <AudioVisualizer
-            level={view.micSuppressed ? view.systemLevel : Math.max(view.micLevel, view.systemLevel)}
+            level={recordingLevel(view)}
             active={recording && !paused}
             className="h-full w-full"
           />
@@ -201,6 +205,7 @@ export function DynamicIsland({
       </div>
 
       {/* Live-transcript drawer (expanded state) */}
+      {drawerOpen && <AudioSourceControls statusOnly />}
       {children}
     </div>
   );

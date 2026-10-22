@@ -88,6 +88,19 @@ describe("Tencent real-time ASR session", () => {
     expect(session.connections[0]?.extra?.engineType).toBe("16k_ja");
   });
 
+  it("uses the active source set when it differs from the next-recording preference", async () => {
+    const systemOnly = await requestRealtimeSession(
+      { sourceLanguage: "zh", targetLanguage: "none", epoch: 2, audioSources: ["system"] },
+      tencentValues({}, "both"),
+    );
+    expect(systemOnly.connections.map((connection) => connection.source)).toEqual(["system"]);
+    const both = await requestRealtimeSession(
+      { sourceLanguage: "zh", targetLanguage: "none", epoch: 3, audioSources: ["mic", "system"] },
+      tencentValues({}, "system"),
+    );
+    expect(both.connections.map((connection) => connection.source).sort()).toEqual(["mic", "system"]);
+  });
+
   it("rejects incomplete credentials and insecure endpoints", async () => {
     await expect(requestRealtimeSession(
       { sourceLanguage: "zh", targetLanguage: "en", epoch: 0 },

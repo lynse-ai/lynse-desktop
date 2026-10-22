@@ -25,6 +25,7 @@ import { cn } from "@lynse/ui/lib/utils";
 import { useRecordingSession } from "./use-recording-session";
 import { useRecordingCloudSync } from "./use-recording-cloud-sync";
 import { useRecordingCompleteStore } from "./recording-complete-store";
+import { AudioSourceControls } from "./audio-source-controls";
 import { RecordingWaveform } from "./recording-waveform";
 import { SmoothTimer } from "./smooth-timer";
 import { RecordingMarkers } from "../workbench/recording-markers";
@@ -316,6 +317,7 @@ export function TranscriptDetailPage() {
             )}
           </div>
         </header>
+        <AudioSourceControls />
 
         {/* ═══ Main — full-page live output ═══ */}
         <main className="relative min-h-0 flex-1 overflow-hidden">
@@ -348,7 +350,7 @@ export function TranscriptDetailPage() {
                     busy={busy}
                     stopping={stopping}
                     formattedTime={session.formattedTime}
-                    micLevel={session.micLevel}
+                    level={session.audioLevel}
                     bookmarked={session.bookmarked}
                     onStart={() => void session.toggleRecording()}
                     onTogglePause={() => void session.togglePause()}
@@ -376,7 +378,7 @@ export function TranscriptDetailPage() {
                   stopping={stopping}
                   elapsedMs={session.elapsedMs}
                   markers={session.markers.map((marker) => marker.startMs / 1000)}
-                  micLevel={session.micLevel}
+                  level={session.audioLevel}
                   statusLabel={stageStatus}
                   onStart={() => void session.toggleRecording()}
                   onTogglePause={() => void session.togglePause()}
@@ -540,7 +542,7 @@ function RecordingStage({
   stopping,
   elapsedMs,
   markers,
-  micLevel,
+  level,
   statusLabel,
   onStart,
   onTogglePause,
@@ -557,7 +559,7 @@ function RecordingStage({
   stopping: boolean;
   elapsedMs: number;
   markers: number[];
-  micLevel: number;
+  level: number;
   statusLabel: string;
   onStart: () => void;
   onTogglePause: () => void;
@@ -596,7 +598,7 @@ function RecordingStage({
       <motion.div className="flex min-h-0 w-full flex-[2]" {...enter(0, 14)}>
         <RecordingWaveform
           elapsedMs={elapsedMs}
-          micLevel={micLevel}
+          level={level}
           active={recording && !paused}
           markers={markers}
           className="min-h-0 w-full flex-1"

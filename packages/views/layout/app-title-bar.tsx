@@ -15,7 +15,8 @@ export const TITLE_BAR_HEIGHT = 34;
 // Windows/Linux desktop windows ship without native title bar (see
 // `tauri.windows.conf.json`), so the app bar is the only caption area there and
 // has to carry the window buttons itself. macOS keeps its traffic lights.
-const showWindowControls = isTauri && !isMacDesktop;
+// The login page keys off this too: it mounts a caption band of its own.
+export const showWindowControls = isTauri && !isMacDesktop;
 
 /* ── Slot store ────────────────────────────────────────────────────────────
  * The shell-level bar is one strip for the whole window, but only the mounted
@@ -279,10 +280,10 @@ function ZoneDivider() {
  * target sits at the window edge, not inset by the app's own padding.
  *
  * Renders nothing on macOS (native traffic lights) and in the web build. The
- * login page has no title bar of its own — it carries just a drag strip — so it
- * mounts this directly, otherwise a signed-out window could not be closed.
+ * login page mounts this in its own caption band with `allowMaximize: false` —
+ * the welcome window keeps its normal look but the maximize button is a no-op.
  */
-export function WindowControls() {
+export function WindowControls({ allowMaximize = true }: { allowMaximize?: boolean }) {
   const { t } = useTranslation();
   const maximized = useMaximized();
 
@@ -298,7 +299,7 @@ export function WindowControls() {
       </CaptionButton>
       <CaptionButton
         label={t(maximized ? "layout.window_restore" : "layout.window_maximize")}
-        onClick={() => void getCurrentWindow().toggleMaximize()}
+        onClick={allowMaximize ? () => void getCurrentWindow().toggleMaximize() : undefined}
       >
         {maximized ? (
           <Copy className="size-3.5" strokeWidth={1.5} />
@@ -321,7 +322,7 @@ function CaptionButton({
 }: {
   label: string;
   danger?: boolean;
-  onClick: () => void;
+  onClick?: () => void;
   children: React.ReactNode;
 }) {
   return (

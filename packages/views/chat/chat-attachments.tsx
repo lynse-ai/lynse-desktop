@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { getAuthStore } from "@lynse/core/auth";
@@ -403,7 +404,8 @@ function ChatImageLightbox({
   const zoomButton =
     "flex items-center justify-center rounded-full p-2 text-white transition-colors hover:bg-white/15 disabled:pointer-events-none disabled:opacity-40";
 
-  return (
+  // Sidebar backdrop filters contain fixed descendants; escape to the viewport.
+  return createPortal(
     <AnimatePresence>
       <motion.div
         ref={stageRef}
@@ -551,7 +553,8 @@ function ChatImageLightbox({
           </button>
         </div>
       </motion.div>
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }
 

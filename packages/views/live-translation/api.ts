@@ -1,5 +1,6 @@
 import type {
   LiveConnectionDescriptor,
+  LiveAudioSource,
   LiveTranslationProviderConfig,
 } from "./types";
 import { effectiveValues, resolveProvider } from "./providers";
@@ -14,6 +15,7 @@ export { buildCustomRealtimeEndpoint } from "./providers/custom-realtime";
 
 interface RealtimeSessionRequest {
   workspaceId?: string;
+  audioSources?: LiveAudioSource[];
   sourceLanguage: string;
   targetLanguage: string;
   sessionId?: string;
@@ -43,7 +45,7 @@ export async function requestRealtimeSession(
     // Field defaults (endpoints, model names) apply at use time — the
     // storage layer never bakes them in.
     values: effectiveValues(plugin, config?.values[plugin.id]),
-    sources: audioModeSources(config?.audioSource),
+    sources: request.audioSources?.length ? request.audioSources : audioModeSources(config?.audioSource),
     sourceLanguage: request.sourceLanguage,
     targetLanguage: request.targetLanguage,
     sessionId,

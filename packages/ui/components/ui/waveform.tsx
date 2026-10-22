@@ -112,6 +112,17 @@ function setupCanvas(
 }
 
 /** Base waveform: renders `data` as bars on a canvas, edges faded by default. */
+/** Reduce the complete timeline to the available pixel columns. */
+export function waveformBars(data: readonly number[], count: number): number[] {
+  return Array.from({ length: Math.max(0, count) }, (_, index) => {
+    const start = Math.floor(index * data.length / count);
+    const end = Math.max(start + 1, Math.floor((index + 1) * data.length / count));
+    let peak = 0;
+    for (let sample = start; sample < end; sample++) peak = Math.max(peak, data[sample] ?? 0);
+    return peak;
+  });
+}
+
 export function Waveform({
   data = [],
   barWidth = 4,
@@ -144,11 +155,12 @@ export function Waveform({
       const color = resolveColor(barColor);
       const step = barWidth + barGap;
       const count = Math.max(0, Math.floor(cssWidth / step));
+      const bars = waveformBars(data, count);
       const centerY = cssHeight / 2;
       const pad = 4;
 
       for (let i = 0; i < count; i++) {
-        const value = data[i] ?? 0;
+        const value = bars[i] ?? 0;
         const h = Math.max(barHeight, value * (cssHeight - pad * 2));
         let alpha = 1;
         if (fadeEdges) {
@@ -175,14 +187,15 @@ export function Waveform({
     const container = containerRef.current;
     if (!canvas || !container) return;
     const handler = (e: MouseEvent) => {
+      if (data.length === 0) return;
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
-      const idx = Math.floor(x / (barWidth + barGap));
+      const idx = Math.min(data.length - 1, Math.max(0, Math.floor(x / Math.max(1, rect.width) * data.length)));
       onClick(idx, data[idx] ?? 0);
     };
     canvas.addEventListener("click", handler);
     return () => canvas.removeEventListener("click", handler);
-  }, [onClick, data, barWidth, barGap]);
+  }, [onClick, data]);
 
   const cssHeight = typeof height === "number" ? height : undefined;
 

@@ -282,6 +282,8 @@ export function localRecordToTranscription(record: LocalTranscriptionRecord): Fi
     // Dual-channel metadata surfaces in the detail panel (per-track
     // listening, degraded banner, targeted retries).
     trackManifest: record.trackManifest,
+    audioSourceIntervals: record.audioSourceIntervals,
+    waveformPeaks: record.waveformPeaks,
     aecDegraded: record.aecDegraded,
     trackStatuses: record.trackStatuses,
     liveSessionId: record.liveSessionId,

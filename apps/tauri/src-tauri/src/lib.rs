@@ -4033,6 +4033,122 @@ fn update_vault_entry(app: &AppHandle, account: &str, value: Option<String>) -> 
     secret_set(app, SECRET_VAULT_ACCOUNT, &raw)
 }
 
+fn resolve_local_media_path(app: &AppHandle, id: String) -> CommandResult<PathBuf> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())?;
+    // Paths come in two shapes: `<id>` resolves the record's audio file,
+    // `<id>/<file>` picks a concrete asset (a saved inspiration image),
+    // and `staging:<file>` previews an attachment that is not saved yet.
+    let (id, asset_file) = match id.split_once('/') {
+        Some((id, file)) => (id.to_owned(), Some(file.to_owned())),
+        None => (id, None),
+    };
+    if let Some(file) = asset_file.as_deref() {
+        if !is_safe_asset_file_name(file) {
+            return Err("Unsafe local media asset name".to_owned());
+        }
+    }
+    let path = if let Some(file) = id.strip_prefix("staging:") {
+        if !is_safe_asset_file_name(file) {
+            return Err("Unsafe local media asset name".to_owned());
+        }
+        data_dir.join("inspirations").join("staging").join(file)
+    } else if let Some(inspiration_uuid) = id.strip_prefix("inspiration:") {
+        let file = match asset_file {
+            Some(file) => file,
+            None => {
+                let index = data_dir.join("local-inspirations").join("index.json");
+                let record = read_array(&index)?
+                    .into_iter()
+                    .find(|value| value.get("id").and_then(Value::as_str) == Some(id.as_str()))
+                    .ok_or("Unknown local media id")?;
+                record
+                    .get("audio")
+                    .and_then(|audio| audio.get("file"))
+                    .and_then(Value::as_str)
+                    .ok_or("Missing audio file")?
+                    .to_owned()
+            }
+        };
+        if !is_safe_asset_file_name(&file) {
+            return Err("Unsafe local media asset name".to_owned());
+        }
+        vault::content_dir(app, vault::ContentKind::Inspirations)?
+            .join(inspiration_uuid)
+            .join(file)
+    } else {
+        let index = data_dir.join("local-transcriptions").join("index.json");
+        let record = read_array(&index)?
+            .into_iter()
+            .find(|value| value.get("id").and_then(Value::as_str) == Some(id.as_str()))
+            .ok_or("Unknown local media id")?;
+        let source = PathBuf::from(
+            record
+                .get("sourcePath")
+                .and_then(Value::as_str)
+                .ok_or("Missing source path")?,
+        );
+        // `<id>/<file>` on a recording picks a concrete audio track from
+        // the session directory (本机/远端 per-track listening). Only
+        // files listed in the record's track manifest are servable.
+        match asset_file.as_deref() {
+            Some(file) => {
+                let allowed = record
+                    .get("trackManifest")
+                    .and_then(|manifest| manifest.get("tracks"))
+                    .and_then(Value::as_array)
+                    .map(|tracks| {
+                        tracks
+                            .iter()
+                            .any(|track| track.get("file").and_then(Value::as_str) == Some(file))
+                    })
+                    .unwrap_or(false);
+                if !allowed {
+                    return Err("Unknown recording track".to_owned());
+                }
+                source
+                    .parent()
+                    .map(|dir| dir.join(file))
+                    .ok_or("Missing session directory")?
+            }
+            None => source,
+        }
+    };
+    Ok(path)
+}
+
+#[tauri::command]
+async fn local_audio_waveform(
+    app: AppHandle,
+    src: String,
+    record_id: Option<String>,
+) -> CommandResult<audio_contract::waveform::Waveform> {
+    let url = tauri::Url::parse(&src).map_err(|e| e.to_string())?;
+    if !(url.scheme() == "local-media" && url.host_str() == Some("localhost"))
+        && !(["http", "https"].contains(&url.scheme())
+            && url.host_str() == Some("local-media.localhost"))
+    {
+        // The uploaded object path identifies the exact remote audio version.
+        // A bare cloud id is insufficient after an edit or replacement.
+        let record_id = record_id.ok_or("Only local media URLs are supported")?;
+        let records = read_array(&app.path().app_data_dir().map_err(|e| e.to_string())?.join("local-transcriptions").join("index.json"))?;
+        let record = records.iter().find(|record| record.get("cloudFileId").and_then(Value::as_str) == Some(record_id.as_str())).ok_or("No local waveform for this cloud recording")?;
+        let cache = record.get("uploadedWaveform").cloned().ok_or("No waveform for this uploaded audio version")?;
+        let uploaded = serde_json::from_value::<audio_contract::waveform::UploadedWaveform>(cache).map_err(|e| e.to_string())?;
+        return uploaded.for_path(url.path()).ok_or_else(|| "Cloud audio version changed".to_owned());
+    }
+    let id = percent_decode_str(url.path().trim_start_matches('/'))
+        .decode_utf8()
+        .map_err(|e| e.to_string())?
+        .into_owned();
+    let path = resolve_local_media_path(&app, id)?;
+    tauri::async_runtime::spawn_blocking(move || audio_contract::waveform::cached(&path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 fn media_response_body(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
     let id = request
         .uri()
@@ -4041,69 +4157,7 @@ fn media_response_body(app: &AppHandle, request: Request<Vec<u8>>) -> Response<V
         .map(|value| percent_decode_str(value).decode_utf8_lossy().into_owned());
     let result = (|| -> CommandResult<(PathBuf, u64, u64, bool, u64)> {
         let id = id.ok_or("Missing local media id")?;
-        let data_dir = app.path().app_data_dir().map_err(|error| error.to_string())?;
-        // Paths come in two shapes: `<id>` resolves the record's audio file,
-        // `<id>/<file>` picks a concrete asset (a saved inspiration image),
-        // and `staging:<file>` previews an attachment that is not saved yet.
-        let (id, asset_file) = match id.split_once('/') {
-            Some((id, file)) => (id.to_owned(), Some(file.to_owned())),
-            None => (id, None),
-        };
-        if let Some(file) = asset_file.as_deref() {
-            if !is_safe_asset_file_name(file) {
-                return Err("Unsafe local media asset name".to_owned());
-            }
-        }
-        let path = if let Some(file) = id.strip_prefix("staging:") {
-            if !is_safe_asset_file_name(file) {
-                return Err("Unsafe local media asset name".to_owned());
-            }
-            data_dir.join("inspirations").join("staging").join(file)
-        } else if let Some(inspiration_uuid) = id.strip_prefix("inspiration:") {
-            let file = match asset_file {
-                Some(file) => file,
-                None => {
-                    let index = data_dir.join("local-inspirations").join("index.json");
-                    let record = read_array(&index)?.into_iter()
-                        .find(|value| value.get("id").and_then(Value::as_str) == Some(id.as_str()))
-                        .ok_or("Unknown local media id")?;
-                    record.get("audio")
-                        .and_then(|audio| audio.get("file"))
-                        .and_then(Value::as_str)
-                        .ok_or("Missing audio file")?
-                        .to_owned()
-                }
-            };
-            if !is_safe_asset_file_name(&file) {
-                return Err("Unsafe local media asset name".to_owned());
-            }
-            vault::content_dir(app, vault::ContentKind::Inspirations)?
-                .join(inspiration_uuid)
-                .join(file)
-        } else {
-            let index = data_dir.join("local-transcriptions").join("index.json");
-            let record = read_array(&index)?.into_iter()
-                .find(|value| value.get("id").and_then(Value::as_str) == Some(id.as_str()))
-                .ok_or("Unknown local media id")?;
-            let source = PathBuf::from(record.get("sourcePath").and_then(Value::as_str).ok_or("Missing source path")?);
-            // `<id>/<file>` on a recording picks a concrete audio track from
-            // the session directory (本机/远端 per-track listening). Only
-            // files listed in the record's track manifest are servable.
-            match asset_file.as_deref() {
-                Some(file) => {
-                    let allowed = record.get("trackManifest")
-                        .and_then(|manifest| manifest.get("tracks"))
-                        .and_then(Value::as_array)
-                        .map(|tracks| tracks.iter().any(|track| track.get("file").and_then(Value::as_str) == Some(file)))
-                        .unwrap_or(false);
-                    if !allowed {
-                        return Err("Unknown recording track".to_owned());
-                    }
-                    source.parent().map(|dir| dir.join(file)).ok_or("Missing session directory")?
-                }
-                None => source,
-            }
-        };
+        let path = resolve_local_media_path(app, id)?;
         let total = fs::metadata(&path).map_err(|error| error.to_string())?.len();
         let range = request.headers().get(header::RANGE).and_then(|value| value.to_str().ok());
         let (start, end, partial) = parse_range(range, total);
@@ -4644,6 +4698,120 @@ fn ensure_window_revealed(app: &AppHandle, label: &'static str) {
     });
 }
 
+// ── Pre-auth zoom gate ─────────────────────────────────────────────────────
+// The welcome window (splash + login) must look completely stock yet never
+// zoom: the traffic lights keep their default wiring and appearance, and the
+// zoom is refused at the window level via AppKit's official
+// `windowShouldZoom:toFrame:` delegate hook. A click on the green button
+// highlights it and does nothing — no greyed-out visual, which is exactly
+// what nil-ing the button's action would produce.
+//
+// The refusal is injected once into the window delegate's class (tao's
+// delegate never implements that selector), and an identity check inside
+// keeps every other window (island, popups) fully zoomable.
+
+#[cfg(target_os = "macos")]
+static MAIN_WINDOW_ADDR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+#[cfg(target_os = "macos")]
+static MAIN_WINDOW_ZOOM_GATED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Same layout as CGRect (4×f64) — only needed to match the method ABI; the
+/// frame itself is irrelevant since we refuse unconditionally while gated.
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct ZoomFrame {
+    _x: f64,
+    _y: f64,
+    _w: f64,
+    _h: f64,
+}
+
+/// Delegate hook: refuse zooming the gated main window. Returning true for
+/// an already-zoomed window keeps the restore path (sign-out unmaximize)
+/// working no matter the gate state.
+#[cfg(target_os = "macos")]
+unsafe extern "C-unwind" fn refuse_main_window_zoom(
+    _receiver: &objc2::runtime::AnyObject,
+    _cmd: objc2::runtime::Sel,
+    window: &objc2_app_kit::NSWindow,
+    _to_frame: ZoomFrame,
+) -> objc2::runtime::Bool {
+    use std::sync::atomic::Ordering;
+
+    let is_main = (window as *const objc2_app_kit::NSWindow as usize)
+        == MAIN_WINDOW_ADDR.load(Ordering::Relaxed);
+    if !is_main || !MAIN_WINDOW_ZOOM_GATED.load(Ordering::Relaxed) {
+        return objc2::runtime::Bool::YES;
+    }
+    objc2::runtime::Bool::from(window.isZoomed())
+}
+
+/// Remember the main window's NSWindow and teach its delegate class to
+/// refuse zooming while the gate is on. Runs once from the setup hook.
+#[cfg(target_os = "macos")]
+fn install_main_window_zoom_gate(window: &tauri::WebviewWindow) {
+    use objc2::runtime::{AnyClass, Imp};
+    use objc2_app_kit::NSWindow;
+    use std::sync::atomic::Ordering;
+
+    let Ok(handle) = window.ns_window() else {
+        return;
+    };
+    let window_ptr = handle as *mut NSWindow;
+    if window_ptr.is_null() {
+        return;
+    }
+    MAIN_WINDOW_ADDR.store(window_ptr as usize, Ordering::Relaxed);
+
+    let ns_window: &NSWindow = unsafe { &*window_ptr };
+    let Some(delegate) = ns_window.delegate() else {
+        return;
+    };
+    // ProtocolObject is #[repr(C)] with the AnyObject as its first field, so
+    // the pointer doubles as the object reference.
+    let object = unsafe { &*(objc2::rc::Retained::as_ptr(&delegate) as *const objc2::runtime::AnyObject) };
+    let class_ref: &'static AnyClass = object.class();
+    let imp: Imp = unsafe {
+        std::mem::transmute::<
+            unsafe extern "C-unwind" fn(
+                &objc2::runtime::AnyObject,
+                objc2::runtime::Sel,
+                &NSWindow,
+                ZoomFrame,
+            ) -> objc2::runtime::Bool,
+            Imp,
+        >(refuse_main_window_zoom)
+    };
+    let types = c"B@:@{_NSRect={_NSPoint=dd}{_NSSize=dd}}";
+    let added = unsafe {
+        objc2::ffi::class_addMethod(
+            std::ptr::from_ref(class_ref).cast_mut(),
+            objc2::sel!(windowShouldZoom:toFrame:),
+            imp,
+            types.as_ptr(),
+        )
+    };
+    if !added.as_bool() {
+        // The delegate class already implements the hook — tao never does,
+        // so this would mean another injection won and we must not fight it.
+        log::warn!("[window] zoom gate not installed: delegate has windowShouldZoom already");
+    }
+}
+
+/// Gate or ungate zooming for the main window. The traffic lights are
+/// pixel-identical in both states; while gated, pressing the green button
+/// (or double-clicking a drag region) simply refuses to zoom.
+#[cfg(target_os = "macos")]
+fn set_main_window_zoom_gated(gated: bool) {
+    use std::sync::atomic::Ordering;
+
+    MAIN_WINDOW_ZOOM_GATED.store(gated, Ordering::Relaxed);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_main_window_zoom_gated(_gated: bool) {}
+
 /// Shape the main window between the two faces it hosts: the compact
 /// welcome window (690×450, the pre-auth login face) and the dashboard
 /// size (960×600) once signed in. The packaged default is already compact —
@@ -4655,6 +4823,20 @@ fn set_compact_window_mode(app: AppHandle, active: bool) -> CommandResult<()> {
     let Some(main) = app.get_webview_window("main") else {
         return Ok(());
     };
+    // A maximized (zoomed) or fullscreen window pins its frame to the screen:
+    // set_size only rewrites the restore geometry while the window visibly
+    // stays enlarged, which is exactly the "sign-out doesn't shrink" report.
+    // Drop both states before reshaping so the login face always lands at its
+    // compact size. Signing in keeps whatever state the window is in — a user
+    // who maximized the login face stays maximized on the dashboard.
+    if active {
+        if main.is_fullscreen().unwrap_or(false) {
+            let _ = main.set_fullscreen(false);
+        }
+        if main.is_maximized().unwrap_or(false) {
+            let _ = main.unmaximize();
+        }
+    }
     let (size, min_size) = if active {
         ((690.0, 450.0), (560.0, 400.0))
     } else {
@@ -4663,6 +4845,7 @@ fn set_compact_window_mode(app: AppHandle, active: bool) -> CommandResult<()> {
     let _ = main.set_min_size(Some(LogicalSize::new(min_size.0, min_size.1)));
     let _ = main.set_size(LogicalSize::new(size.0, size.1));
     let _ = main.center();
+    set_main_window_zoom_gated(active);
     Ok(())
 }
 
@@ -4971,6 +5154,11 @@ pub fn run() {
                 if let Err(error) = window_effects::apply_window_effects(&window) {
                     log::error!("Failed to apply native window effects: {error}");
                 }
+                // The window is born on the pre-auth faces (splash, then
+                // login): zoom stays gated until sign-in ungates it via
+                // set_compact_window_mode(false).
+                install_main_window_zoom_gate(&window);
+                set_main_window_zoom_gated(true);
             }
             Ok(())
         })
@@ -5135,6 +5323,8 @@ pub fn run() {
             live_translation::live_translation_expand_island,
             live_translation::live_translation_update_tray,
             live_translation::live_translation_set_mode,
+            live_translation::live_translation_set_sources,
+            local_audio_waveform,
             live_translation::live_translation_marker,
             meeting_detector::meeting_detector_set_config,
             meeting_detector::meeting_detector_get_state,

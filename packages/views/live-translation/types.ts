@@ -115,10 +115,18 @@ export interface LiveTranslationSnapshot {
   elapsedMs: number;
   micLevel: number;
   systemLevel: number;
+  recordingLevel?: number;
+  audioSources?: LiveAudioSource[];
+  sourceRevision?: number;
+  aecActive?: boolean;
+  aecDegraded?: boolean;
+  sourceErrors?: Partial<Record<LiveAudioSource, string>>;
   segments: LiveTranslationSegment[];
 }
 
 export interface LivePermissionStatus {
+  microphoneAvailable?: boolean | null;
+  systemAudioAvailable?: boolean | null;
   microphone: "granted" | "denied" | "notDetermined";
   systemAudio: "granted" | "denied" | "notDetermined";
   /** EventKit calendar grant (macOS only). "unsupported" (Windows) or absent
@@ -228,7 +236,7 @@ export type LiveTranslationEvent =
   | { type: "state"; snapshot: LiveTranslationSnapshot }
   | { type: "segment"; segment: LiveTranslationSegment }
   | { type: "segments"; segments: LiveTranslationSegment[] }
-  | { type: "levels"; mic: number; system: number; elapsedMs: number; micSuppressed?: boolean }
+  | { type: "levels"; mic: number; system: number; elapsedMs: number; micSuppressed?: boolean; recordingLevel?: number; sourceRevision?: number; sessionId?: string; aecDegraded?: boolean }
   | { type: "streamState"; source: LiveAudioSource; state: string; epoch: number }
   | { type: "error"; source?: LiveAudioSource; message: string }
   | { type: "completed"; session: CompletedLiveSession };
@@ -249,6 +257,8 @@ export interface DesktopLiveTranslationApi {
   pause: () => Promise<LiveTranslationSnapshot>;
   resume: (request: LiveResumeRequest) => Promise<LiveTranslationSnapshot>;
   setMode: (request: LiveSetModeRequest) => Promise<LiveTranslationSnapshot>;
+  setSources?: (request: { sessionId: string; audioSources: LiveAudioSource[]; sourceRevision: number }) => Promise<LiveTranslationSnapshot>;
+  waveformPeaks?: (src: string, recordId?: string | null) => Promise<{ peaks: number[]; durationMs: number }>;
   /** Acks as soon as the stop is registered; the finished session arrives
    *  later via the `completed` event once the sidecar drain and local
    *  persistence finish. */

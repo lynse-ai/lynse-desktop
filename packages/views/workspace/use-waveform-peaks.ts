@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { getDesktopLiveTranslationApi } from "../live-translation/desktop-api";
 
 // ───────────────────────────────────────────────────────────────
 // Waveform peak extraction.
@@ -22,71 +23,73 @@ export interface WaveformPeaksResult {
   skipped: boolean;
   /** True when fetch or decode failed (e.g. CORS on a remote URL). */
   error: boolean;
+  loading: boolean;
+  retry: () => void;
 }
 
 const BAR_COUNT = 96;
 const MAX_DECODE_SECONDS = 20 * 60;
 const MAX_DECODE_BYTES = 80 * 1024 * 1024;
 
-export function useWaveformPeaks(src: string | null | undefined): WaveformPeaksResult {
-  const [peaks, setPeaks] = useState<number[]>([]);
-  const [skipped, setSkipped] = useState(false);
-  const [error, setError] = useState(false);
+export function useWaveformPeaks(src: string | null | undefined, recordId?: string | null): WaveformPeaksResult {
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((value) => value + 1), []);
+  const [result, setResult] = useState<{ src: string; recordId?: string | null; attempt: number; peaks: number[]; skipped: boolean; error: boolean } | null>(null);
 
   useEffect(() => {
     if (!src) return;
     let cancelled = false;
     const controller = new AbortController();
-
-    (async () => {
+    const finish = (peaks: number[], skipped = false, error = false) => {
+      if (!cancelled) setResult({ src, recordId, attempt, peaks, skipped, error });
+    };
+    void (async () => {
       try {
+        const native = getDesktopLiveTranslationApi()?.waveformPeaks;
+        if (native && (recordId || /^(local-media:|https?:\/\/local-media\.localhost)/.test(src))) {
+          try {
+            const data = await native(src, recordId);
+            finish(data.peaks);
+            return;
+          } catch {
+            // Imported compressed audio may require the browser decoder.
+          }
+        }
         const response = await fetch(src, { signal: controller.signal });
         if (!response.ok) throw new Error(`fetch failed: ${response.status}`);
+        const length = Number(response.headers.get("content-length"));
+        if (length > MAX_DECODE_BYTES) { await response.body?.cancel(); finish([], true); return; }
         const blob = await response.blob();
         if (cancelled) return;
-        if (blob.size > MAX_DECODE_BYTES) {
-          setSkipped(true);
-          return;
-        }
+        if (blob.size > MAX_DECODE_BYTES) { finish([], true); return; }
         const arrayBuffer = await blob.arrayBuffer();
         if (cancelled) return;
-
-        const AudioContextCtor: typeof AudioContext =
-          window.AudioContext ??
-          (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-        if (!AudioContextCtor) {
-          setSkipped(true);
-          return;
-        }
+        const AudioContextCtor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioContextCtor) { finish([], true); return; }
         const context = new AudioContextCtor();
         try {
-          const audioBuffer = await context.decodeAudioData(arrayBuffer);
+          const audio = await context.decodeAudioData(arrayBuffer);
           if (cancelled) return;
-          if (audioBuffer.duration > MAX_DECODE_SECONDS) {
-            setSkipped(true);
-            return;
-          }
-          setPeaks(computePeaks(audioBuffer, BAR_COUNT));
-        } finally {
-          void context.close();
-        }
-      } catch {
-        if (!cancelled) setError(true);
-      }
+          if (audio.duration > MAX_DECODE_SECONDS) { finish([], true); return; }
+          finish(computePeaks(audio, BAR_COUNT));
+        } finally { void context.close(); }
+      } catch { finish([], false, true); }
     })();
+    return () => { cancelled = true; controller.abort(); };
+  }, [src, recordId, attempt]);
 
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [src]);
-
-  return { peaks, skipped, error };
+  // Derive the empty state immediately on a URL/retry change so the previous
+  // file's waveform is never rendered while the new request is pending.
+  const current = result && result.src === src && result.recordId === recordId && result.attempt === attempt ? result : null;
+  return { peaks: current?.peaks ?? [], skipped: current?.skipped ?? false, error: current?.error ?? false,
+    loading: !!src && current === null, retry };
 }
 
-/** Reduce the first channel to `bars` peak amplitudes in [0.05, 1]. */
-function computePeaks(buffer: AudioBuffer, bars: number): number[] {
-  const channel = buffer.getChannelData(0);
+/** All channels contribute; true silence stays at zero. */
+export function computePeaks(buffer: AudioBuffer, bars: number): number[] {
+  const channels = Array.from({ length: buffer.numberOfChannels }, (_, index) => buffer.getChannelData(index));
+  const channel = channels[0];
+  if (!channel || bars < 1) return [];
   const samplesPerBar = Math.max(1, Math.floor(channel.length / bars));
   const out: number[] = [];
   for (let i = 0; i < bars; i++) {
@@ -94,12 +97,12 @@ function computePeaks(buffer: AudioBuffer, bars: number): number[] {
     const end = i === bars - 1 ? channel.length : start + samplesPerBar;
     let peak = 0;
     for (let j = start; j < end; j++) {
-      const value = Math.abs(channel[j] ?? 0);
-      if (value > peak) peak = value;
+      for (const samples of channels) {
+        const value = Math.abs(samples[j] ?? 0);
+        if (value > peak) peak = value;
+      }
     }
-    // Boost quiet speech so the waveform reads clearly, keep a floor so
-    // silence still renders as a subtle baseline instead of gaps.
-    out.push(Math.min(1, Math.max(0.05, peak * 2.2)));
+    out.push(Math.min(1, peak * 2.2));
   }
   return out;
 }

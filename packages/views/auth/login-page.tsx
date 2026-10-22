@@ -38,7 +38,8 @@ import {
   setTestMode,
 } from "../feature-flags";
 import { privacyUrl, termsUrl } from "../about/links";
-import { WindowControls } from "../layout/app-title-bar";
+import { WindowControls, showWindowControls } from "../layout/app-title-bar";
+import { cn } from "@lynse/ui/lib/utils";
 import { WechatIcon } from "./wechat-icon";
 import { WechatBindForm } from "./wechat-bind-form";
 import { authErrorText } from "./auth-errors";
@@ -439,15 +440,26 @@ export function LoginPage() {
        right. text-foreground is re-declared because <Input> carries no color
        class of its own. */
     <main className="relative flex h-dvh overflow-hidden bg-background text-foreground">
-      {/* The login face replaces the whole dashboard, so it carries its own
-          drag strip — the unified title bar is not mounted here. */}
-      <div aria-hidden data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-10" />
-      {/* Frameless Windows/Linux: this strip is the only caption area while
-          signed out, so it needs the window buttons too. Renders nothing on
-          macOS/web. Kept outside the aria-hidden drag strip above. */}
-      <div className="absolute right-0 top-0 z-30 flex h-10">
-        <WindowControls />
-      </div>
+      {showWindowControls ? (
+        /* Frameless Windows/Linux: a dedicated caption band above the content
+           so the window buttons own a title-bar strip instead of floating
+           over the artwork card. The artwork and the form column both start
+           below it. */
+        <div
+          data-tauri-drag-region
+          className="absolute inset-x-0 top-0 z-30 flex h-10 items-stretch justify-end"
+        >
+          {/* Welcome window keeps its normal caption look; maximize is inert
+              here on every platform (macOS mirrors this via the disabled
+              zoom button in set_traffic_lights). */}
+          <WindowControls allowMaximize={false} />
+        </div>
+      ) : (
+        /* The login face replaces the whole dashboard, so it carries its own
+          drag strip — the unified title bar is not mounted here (macOS keeps
+          its native traffic lights, the web build has neither). */
+        <div aria-hidden data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-10" />
+      )}
 
       {/* Left column: brand block + the active sign-in form, actions hugging
           the bottom edge like the reference window. Half the window — the
@@ -747,8 +759,16 @@ export function LoginPage() {
       </div>
 
       {/* ── Right column — full-height rounded artwork card, inset on all
-          sides like the reference window; exactly half the window. ── */}
-      <aside aria-hidden className="w-1/2 shrink-0 py-3 pr-3">
+          sides like the reference window; exactly half the window. On
+          frameless Windows/Linux the card starts below the caption band so
+          the window buttons never overlap the image. ── */}
+      <aside
+        aria-hidden
+        className={cn(
+          "w-1/2 shrink-0 pb-3 pr-3",
+          showWindowControls ? "pt-[52px]" : "pt-3",
+        )}
+      >
         <img
           src={LOGIN_ARTWORK_SRC}
           alt=""

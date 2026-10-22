@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { AudioSourceControls } from "./audio-source-controls";
 import { IconSwap } from "../icon-swap";
 import { Badge } from "@lynse/ui/components/ui/badge";
 import { Button } from "@lynse/ui/components/ui/button";
@@ -40,7 +41,6 @@ import { useNavigation } from "../navigation";
 import { useLiveTranslation } from "./use-live-translation";
 import type {
   CompletedLiveSession,
-  LiveAudioSourceMode,
   LivePermissionStatus,
   LiveTranslationTrayAction,
   LiveTranslationProviderConfig,
@@ -169,9 +169,6 @@ export function LiveTranslationPage() {
     );
   const canStart = !!api
     && providerReady
-    && permissions?.microphone === "granted"
-    && (!permissions.systemAudioRequired || permissions.systemAudio === "granted")
-    && !permissions.restartRequired
     && (transcriptOnly || sourceLanguage !== targetLanguage)
     && !active;
 
@@ -183,11 +180,6 @@ export function LiveTranslationPage() {
     if (permissionError) return t("live_translation.start_hint_permission_error");
     if (!providerConfigLoaded || permissions === null) {
       return t("live_translation.start_hint_loading");
-    }
-    if (permissions.restartRequired) return t("live_translation.start_hint_restart");
-    if (permissions.microphone !== "granted") return t("live_translation.start_hint_mic");
-    if (permissions.systemAudioRequired && permissions.systemAudio !== "granted") {
-      return t("live_translation.start_hint_system_audio");
     }
     if (!providerReady) return t("live_translation.start_hint_provider");
     if (!transcriptOnly && sourceLanguage === targetLanguage) {
@@ -218,20 +210,6 @@ export function LiveTranslationPage() {
       toast.error(String(error));
     } finally {
       setSavingProviderConfig(false);
-    }
-  }
-
-  // The capture mode must be settled before recording starts (it is passed to
-  // the audio sidecar at spawn), so the selector is disabled while active.
-  async function selectAudioSource(mode: LiveAudioSourceMode) {
-    if (!api) return;
-    try {
-      setProviderConfig(
-        await api.saveProviderConfig({ ...providerConfig, audioSource: mode }),
-      );
-      configDirtyRef.current = false;
-    } catch (error) {
-      toast.error(String(error));
     }
   }
 
@@ -495,23 +473,7 @@ export function LiveTranslationPage() {
 
           <section className="mt-6 space-y-3">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("live_translation.audio_sources")}</h2>
-            <div className="grid grid-cols-3 gap-1 rounded-lg border border-border bg-muted/40 p-1">
-              {(["both", "mic", "system"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  disabled={busy || active}
-                  onClick={() => selectAudioSource(mode)}
-                  className={
-                    (providerConfig.audioSource ?? "both") === mode
-                      ? "h-7 rounded-sm bg-background text-xs font-medium shadow-sm"
-                      : "h-7 rounded-sm text-xs text-muted-foreground transition-colors hover:text-foreground"
-                  }
-                >
-                  {t(`live_translation.audio_source_${mode}`)}
-                </button>
-              ))}
-            </div>
+            <AudioSourceControls onPreferenceChange={(audioSource) => setProviderConfig((config) => ({ ...config, audioSource }))} />
             <p className="text-2xs leading-relaxed text-muted-foreground">
               {t("live_translation.audio_source_hint")}
             </p>

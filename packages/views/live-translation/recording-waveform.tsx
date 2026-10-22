@@ -24,7 +24,7 @@ import { createElapsedClock } from "./elapsed-clock";
 // raw value moves in ~20 px steps five times a second. Four things keep the
 // band scrolling at a continuous 60 fps:
 //   · a local clock extrapolates between sidecar ticks (see elapsed-clock.ts),
-//   · the microphone level is linearly ramped between the sidecar's ~5 Hz
+//   · the recorded audio level is linearly ramped between the sidecar's ~5 Hz
 //     updates, then smoothed frame-rate independently with a fast attack /
 //     slow release plus a peak-hold, so bars never pop,
 //   · canvas size, theme colours and the bar path are cached — every frame
@@ -55,8 +55,8 @@ const RELEASE_TAU = 0.14;
 interface RecordingWaveformProps {
   /** Authoritative elapsed time from the capture sidecar, in ms. */
   readonly elapsedMs: number;
-  /** Latest microphone level in [0, 1]. */
-  readonly micLevel: number;
+  /** Latest recorded audio level in [0, 1]. */
+  readonly level: number;
   /** True while the session appends audio (recording and not paused). */
   readonly active: boolean;
   /** Bookmark marker positions in seconds, drawn on the band floor. */
@@ -81,7 +81,7 @@ const THEME_FALLBACK = {
 
 export function RecordingWaveform({
   elapsedMs,
-  micLevel,
+  level,
   active,
   markers,
   className,
@@ -97,14 +97,14 @@ export function RecordingWaveform({
   // The sidecar publishes levels at ~5 Hz; remember when the value last
   // changed so the render loop can ramp linearly between updates instead of
   // stepping. `interval` is the measured cadence, clamped to sane bounds.
-  const levelRamp = useRef({ prev: micLevel, curr: micLevel, at: 0, interval: 200 });
-  if (micLevel !== levelRamp.current.curr) {
+  const levelRamp = useRef({ prev: level, curr: level, at: 0, interval: 200 });
+  if (level !== levelRamp.current.curr) {
     const nowMs = performance.now();
     const interval =
       levelRamp.current.at > 0
         ? Math.min(500, Math.max(80, nowMs - levelRamp.current.at))
         : 200;
-    levelRamp.current = { prev: levelRamp.current.curr, curr: micLevel, at: nowMs, interval };
+    levelRamp.current = { prev: levelRamp.current.curr, curr: level, at: nowMs, interval };
   }
 
   useEffect(() => {

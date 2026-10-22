@@ -111,9 +111,11 @@ pub enum EngineEvent {
         system: Option<DeviceInfo>,
     },
     Diagnostic(String),
+    SourceFailed { source: u8, message: String },
     Levels {
         mic: f32,
         system: f32,
+        aec_degraded: bool,
     },
     /// One 640-byte recognition frame (16 kHz mono s16), already positioned
     /// on the session timeline.
@@ -167,7 +169,10 @@ impl SessionClock {
 
 struct EngineShared {
     config: CaptureConfig,
-    sources: Sources,
+    sources: Mutex<Sources>,
+    active_sources: Mutex<Sources>,
+    ingest: Mutex<()>,
+    source_revision: AtomicU32,
     directory: PathBuf,
     control: Mutex<ControlState>,
     control_wake: Condvar,
@@ -187,6 +192,21 @@ struct EngineShared {
 }
 
 impl EngineShared {
+    fn source_enabled(&self, kind: SourceKind) -> bool {
+        let sources = self.sources.lock().expect("capture sources lock");
+        match kind {
+            SourceKind::Mic => sources.mic,
+            SourceKind::System => sources.system,
+        }
+    }
+    fn set_active(&self, kind: SourceKind, value: bool) {
+        let mut active = self.active_sources.lock().expect("active sources lock");
+        match kind {
+            SourceKind::Mic => active.mic = value,
+            SourceKind::System => active.system = value,
+        }
+    }
+
     fn control(&self) -> std::sync::MutexGuard<'_, ControlState> {
         self.control.lock().expect("capture control lock")
     }
@@ -295,7 +315,13 @@ impl AecTrack {
             // A real gap: pad with silence so later content keeps its
             // absolute timeline position.
             let gap = (position - self.next_position) as usize;
-            self.append(&vec![0.0; gap]);
+            if gap > MAX_QUEUED_FRAMES * ENGINE_FRAME_SAMPLES {
+                self.pending.clear();
+                self.frames.clear();
+                self.next_position = position;
+            } else {
+                self.append(&vec![0.0; gap]);
+            }
         }
         self.append(samples);
     }
@@ -404,7 +430,7 @@ impl CaptureEngine {
     /// the error while they can still fix it).
     pub fn start(
         config: CaptureConfig,
-        sources: Sources,
+        mut sources: Sources,
         directory: PathBuf,
     ) -> Result<Self, String> {
         if !sources.mic && !sources.system {
@@ -416,23 +442,19 @@ impl CaptureEngine {
         // Up-front availability check per source, with device facts for the
         // Ready event.
         let mic_probe = if sources.mic {
-            Some(probe_device_with_timeout(
-                &config.mic_endpoint,
-                SourceKind::Mic,
-                config.raw_mic,
-            )?)
-        } else {
-            None
-        };
+            match probe_device_with_timeout(&config.mic_endpoint, SourceKind::Mic, config.raw_mic) {
+                Ok(probe) => Some(probe),
+                Err(error) if sources.system => { sources.mic = false; log::warn!("Microphone unavailable; retaining selected computer audio: {error}"); None }
+                Err(error) => return Err(error),
+            }
+        } else { None };
         let system_probe = if sources.system {
-            Some(probe_device_with_timeout(
-                &config.system_endpoint,
-                SourceKind::System,
-                false,
-            )?)
-        } else {
-            None
-        };
+            match probe_device_with_timeout(&config.system_endpoint, SourceKind::System, false) {
+                Ok(probe) => Some(probe),
+                Err(error) if sources.mic => { sources.system = false; log::warn!("Computer audio unavailable; retaining selected microphone: {error}"); None }
+                Err(error) => return Err(error),
+            }
+        } else { None };
         // Step markers: a start that never reaches Ready has no event-pump
         // logging yet, so these lines are the only way to tell WHICH call
         // (probe / writer / thread spawn) hung or failed on a given machine.
@@ -451,7 +473,7 @@ impl CaptureEngine {
         // Engine id: the manifest must say which canceller actually ran. The
         // fallback backend is created here only when the feature build failed
         // to load its engine, so the id reflects reality either way.
-        let aec_active = sources.mic && sources.system && config.aec_enabled;
+        let aec_active = config.aec_enabled;
         let manifest = if aec_active {
             TrackManifest::dual_channel(&session_id, &started_at, "pending".to_owned())
         } else if sources.mic && sources.system {
@@ -463,7 +485,10 @@ impl CaptureEngine {
 
         let shared = Arc::new(EngineShared {
             config,
-            sources,
+            sources: Mutex::new(sources),
+            active_sources: Mutex::new(Sources { mic: false, system: false }),
+            ingest: Mutex::new(()),
+            source_revision: AtomicU32::new(0),
             directory,
             control: Mutex::new(ControlState {
                 paused: false,
@@ -499,14 +524,14 @@ impl CaptureEngine {
         };
         let dual = aec_active;
         let mut writers: Vec<Arc<WavTrackWriter>> = Vec::new();
-        if sources.system {
+        {
             writers.push(open_writer("system_raw.wav", PROCESSING_SAMPLE_RATE, 2)?);
             writers.push(open_writer("system.wav", RECOGNITION_SAMPLE_RATE, 1)?);
         }
         if dual {
             writers.push(open_writer("mic_raw.wav", PROCESSING_SAMPLE_RATE, 1)?);
             writers.push(open_writer("mic_processed.wav", RECOGNITION_SAMPLE_RATE, 1)?);
-        } else if sources.mic {
+        } else {
             writers.push(open_writer("mic.wav", RECOGNITION_SAMPLE_RATE, 1)?);
         }
         log::info!(
@@ -543,7 +568,7 @@ impl CaptureEngine {
 
         // Order matters for the AEC bridge: system first so the reference
         // lands before the mic frames that need cancelling.
-        if sources.system {
+        {
             let thread_shared = shared.clone();
             let recognition = find_writer("system.wav");
             let raw = find_writer("system_raw.wav");
@@ -551,7 +576,7 @@ impl CaptureEngine {
                 run_stream_thread(thread_shared, Some(recognition), Some(raw), SourceKind::System)
             })?;
         }
-        if sources.mic {
+        {
             let thread_shared = shared.clone();
             // Only the AEC thread takes the mic away from `mic.wav`, and only
             // when it actually runs: without `aec_enabled` the rollback layout
@@ -585,15 +610,60 @@ impl CaptureEngine {
             "capture threads spawned: {}",
             engine.handles.lock().map(|handles| handles.len()).unwrap_or(0)
         );
-        shared.emit(EngineEvent::Ready {
-            mic: mic_probe.map(|(info, _)| info),
-            system: system_probe.map(|(info, _)| info),
-        });
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let selected = *shared.sources.lock().expect("sources lock");
+            let active = *shared.active_sources.lock().expect("active sources lock");
+            if !selected.mic && !selected.system {
+                shared.request_stop();
+                return Err("No selected audio source could be opened".into());
+            }
+            if selected == active {
+                shared.emit(EngineEvent::Ready {
+                    mic: if selected.mic { shared.mic_device.lock().expect("mic device lock").clone() } else { None },
+                    system: if selected.system { shared.system_device.lock().expect("system device lock").clone() } else { None },
+                });
+                break;
+            }
+            if Instant::now() >= deadline {
+                shared.request_stop();
+                return Err("Audio capture did not confirm device startup".into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
         Ok(engine)
+    }
+
+    pub fn set_sources(&self, sources: Sources) -> Result<(), String> {
+        if !sources.mic && !sources.system { return Err("At least one audio source is required".into()); }
+        let previous = *self.shared.sources.lock().map_err(|_| "source lock")?;
+        if sources.mic && !previous.mic { probe_device_with_timeout(&self.shared.config.mic_endpoint, SourceKind::Mic, self.shared.config.raw_mic)?; }
+        if sources.system && !previous.system { probe_device_with_timeout(&self.shared.config.system_endpoint, SourceKind::System, false)?; }
+        {
+            let _boundary = self.shared.ingest.lock().map_err(|_| "capture ingest lock")?;
+            *self.shared.sources.lock().map_err(|_| "source lock")? = sources;
+            if let Some(aec) = &self.shared.aec { aec.lock().map_err(|_| "AEC lock")?.reset(); }
+            self.shared.source_revision.fetch_add(1, Ordering::Relaxed);
+            if !sources.mic { self.shared.mic_level.store(0, Ordering::Relaxed); }
+            if !sources.system { self.shared.system_level.store(0, Ordering::Relaxed); }
+        }
+        self.shared.control_wake.notify_all();
+        if self.shared.control().paused { return Ok(()); }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if *self.shared.active_sources.lock().map_err(|_| "active sources lock")? == sources { return Ok(()); }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.shared.set_paused(true);
+        Err("Could not confirm audio sources; recording paused".into())
     }
 
     pub fn pause(&self) {
         self.shared.set_paused(true);
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.shared.control().paused
     }
 
     pub fn resume(&self) {
@@ -972,7 +1042,10 @@ fn run_stream_thread(
                 if control.stop {
                     break 'session;
                 }
-                if control.paused {
+                if control.paused || !shared.source_enabled(kind) {
+                    opened = None;
+                    shared.set_active(kind, false);
+                    framer = PcmFramer::new();
                     // Stop feeding audio while paused: nothing lands on disk
                     // or in the recognition feed. The clock is frozen, so on
                     // resume the timeline continues where it left off.
@@ -1023,6 +1096,7 @@ fn run_stream_thread(
                         as_requested: endpoint.as_deref().map(|id| id == client.device_id).unwrap_or(true),
                     };
                     shared.set_device(kind, info);
+                    shared.set_active(kind, true);
                     generation_seen = current_generation;
                     opened = Some(client);
                     shared.emit(EngineEvent::Diagnostic(format!(
@@ -1030,6 +1104,14 @@ fn run_stream_thread(
                     )));
                 }
                 Err(error) => {
+                    {
+                        let _boundary = shared.ingest.lock().expect("capture ingest lock");
+                        let mut selected = shared.sources.lock().expect("sources lock");
+                        match kind { SourceKind::Mic => selected.mic = false, SourceKind::System => selected.system = false }
+                    }
+                    shared.set_active(kind, false);
+                    shared.emit(EngineEvent::SourceFailed { source: kind.source_byte(), message: error.clone() });
+                    if !shared.source_enabled(SourceKind::Mic) && !shared.source_enabled(SourceKind::System) { shared.set_paused(true); }
                     // The endpoint is gone (unplugged, service restarting).
                     // Keep the selection — never silently switch to another
                     // device — and retry. Gaps land on the timeline; the
@@ -1120,6 +1202,9 @@ fn run_stream_thread(
             }
             last_chunk_end_ms = Some(chunk_end_ms);
 
+            let _boundary = shared.ingest.lock().expect("capture ingest lock");
+            if !shared.source_enabled(kind) || shared.control().paused { continue; }
+
             // Raw track keeps the verbatim device stream (s16 at the
             // processing rate — the frozen cross-platform raw format).
             if let Some(raw) = raw_writer.as_ref() {
@@ -1144,6 +1229,7 @@ fn run_stream_thread(
                         bridge.system.push(position as i64, &mono_48);
                         bridge.frames_since_system = 0;
                     }
+                    if shared.aec.is_none() {
                     let mono_16 = resampler_16.process(&mono_48);
                     emit_frames(
                         &shared,
@@ -1153,6 +1239,7 @@ fn run_stream_thread(
                         &mono_16,
                         chunk_start_ms,
                     );
+                    }
                 }
                 SourceKind::Mic => {
                     if shared.aec.is_some() {
@@ -1179,7 +1266,7 @@ fn run_stream_thread(
     }
 
     // ---- shutdown: flush tail frames and close writers ------------------------
-    for frame in framer.finish() {
+    for frame in if shared.source_enabled(kind) { framer.finish() } else { Vec::new() } {
         write_frame(recognition_writer.as_ref(), &frame);
         let _ = shared.events.send(EngineEvent::AudioFrame {
             source: kind.source_byte(),
@@ -1252,6 +1339,7 @@ fn run_aec_thread(
     // The 48k→16k ratio is a whole 3:1, so the resampler is stateless in
     // practice; share it (it carries no phase at step 3.0).
     let mut generation_seen = shared.generation.load(Ordering::Relaxed);
+    let mut source_revision_seen = shared.source_revision.load(Ordering::Relaxed);
     let mut flushed_degraded: Vec<[u64; 2]> = Vec::new();
     let mut mic_output_count: u64 = 0;
     let mut system_output_count: u64 = 0;
@@ -1296,6 +1384,14 @@ fn run_aec_thread(
                 bridge.reset();
             }
         }
+        let _boundary = shared.ingest.lock().expect("capture ingest lock");
+        if shared.control().paused { drop(_boundary); std::thread::sleep(Duration::from_millis(8)); continue; }
+        if source_revision_seen != shared.source_revision.load(Ordering::Relaxed) {
+            source_revision_seen = shared.source_revision.load(Ordering::Relaxed);
+            canceller.reset();
+            mic_framer = PcmFramer::new();
+            system_framer = PcmFramer::new();
+        }
         let Some(aec) = shared.aec.as_ref() else { break };
         let mut processed_any = false;
         let mut degraded_spans: Vec<[u64; 2]> = Vec::new();
@@ -1315,6 +1411,7 @@ fn run_aec_thread(
                     if mic_position.map(|mic_at| system_at < mic_at).unwrap_or(true) {
                         let (_, system_samples) =
                             bridge.system.frames.pop_front().expect("head checked");
+                        system_output_count = system_output_count.max(system_at.max(0) as u64 / 3);
                         let reference_16k = resampler_16.process(&system_samples);
                         emit_16k!(reference_16k, system_output_count, 1, system_framer, system_writer);
                         continue;
@@ -1329,12 +1426,14 @@ fn run_aec_thread(
                         let (_, mut mic_samples) =
                             bridge.mic.frames.pop_front().expect("head checked");
                         let mut reference = system_samples.clone();
+                        let unprocessed = mic_samples.clone();
                         if canceller.process_reverse(&mut reference) {
                             // Frames are position-aligned, so the residual
                             // acoustic delay is small; AEC3's internal delay
                             // estimator absorbs it. (A correlation-based
                             // estimator like the macOS one is a refinement.)
                             if !canceller.process_near(&mut mic_samples, 0) {
+                                mic_samples = unprocessed;
                                 degraded_spans.push([
                                     position_ms(mic_at),
                                     position_ms(mic_at + ENGINE_FRAME_SAMPLES as i64),
@@ -1347,6 +1446,9 @@ fn run_aec_thread(
                             ]);
                         }
                         bridge.reference_lost = false;
+                        mic_output_count = mic_output_count.max(mic_at.max(0) as u64 / 3);
+                        system_output_count = system_output_count.max(system_at.max(0) as u64 / 3);
+                        store_level(&shared.mic_level, &mic_samples);
                         let mic_16 = resampler_16.process(&mic_samples);
                         emit_16k!(mic_16, mic_output_count, 0, mic_framer, mic_writer);
                         let reference_16k = resampler_16.process(&system_samples);
@@ -1363,19 +1465,21 @@ fn run_aec_thread(
                 bridge.frames_since_system += 1;
                 let stalled = bridge.frames_since_system >= REFERENCE_STALL_LIMIT_FRAMES
                     || bridge.mic.frames.len() >= REFERENCE_STALL_LIMIT_FRAMES;
-                if !stalled {
+                if shared.source_enabled(SourceKind::System) && !stalled {
                     break;
                 }
                 let (_, mut mic_samples) = bridge.mic.frames.pop_front().expect("head checked");
-                if canceller.process_reverse(&mut vec![0.0; ENGINE_FRAME_SAMPLES]) {
+                if shared.source_enabled(SourceKind::System) && canceller.process_reverse(&mut vec![0.0; ENGINE_FRAME_SAMPLES]) {
                     let _ = canceller.process_near(&mut mic_samples, 0);
                 }
-                degraded_spans.push([
+                if shared.source_enabled(SourceKind::System) { degraded_spans.push([
                     position_ms(mic_at),
                     position_ms(mic_at + ENGINE_FRAME_SAMPLES as i64),
-                ]);
+                ]); }
                 bridge.reference_lost = true;
+                mic_output_count = mic_output_count.max(mic_at.max(0) as u64 / 3);
                 let mic_16 = resampler_16.process(&mic_samples);
+                store_level(&shared.mic_level, &mic_samples);
                 emit_16k!(mic_16, mic_output_count, 0, mic_framer, mic_writer);
                 processed_any = true;
             }
@@ -1390,11 +1494,12 @@ fn run_aec_thread(
                 flushed_degraded.clear();
             }
         }
+        drop(_boundary);
         if !processed_any {
             std::thread::sleep(Duration::from_millis(8));
         }
     }
-    for frame in mic_framer.finish() {
+    for frame in if shared.source_enabled(SourceKind::Mic) { mic_framer.finish() } else { Vec::new() } {
         write_frame(Some(&mic_writer), &frame);
         let _ = shared.events.send(EngineEvent::AudioFrame {
             source: 0,
@@ -1402,7 +1507,7 @@ fn run_aec_thread(
             bytes: frame.bytes,
         });
     }
-    for frame in system_framer.finish() {
+    for frame in if shared.source_enabled(SourceKind::System) { system_framer.finish() } else { Vec::new() } {
         write_frame(Some(&system_writer), &frame);
         let _ = shared.events.send(EngineEvent::AudioFrame {
             source: 1,
@@ -1420,8 +1525,13 @@ fn run_levels_thread(shared: Arc<EngineShared>) {
             break;
         }
         std::thread::sleep(Duration::from_millis(LEVELS_INTERVAL_MS));
-        let mic = f32::from_bits(shared.mic_level.load(Ordering::Relaxed));
-        let system = f32::from_bits(shared.system_level.load(Ordering::Relaxed));
-        shared.emit(EngineEvent::Levels { mic, system });
+        let mic = if shared.source_enabled(SourceKind::Mic) { f32::from_bits(shared.mic_level.swap(0, Ordering::Relaxed)) } else { 0.0 };
+        let system = if shared.source_enabled(SourceKind::System) { f32::from_bits(shared.system_level.swap(0, Ordering::Relaxed)) } else { 0.0 };
+        let selected = *shared.sources.lock().expect("sources lock");
+        let elapsed = shared.clock.lock().expect("clock lock").elapsed_ms();
+        let aec_degraded = selected.mic && selected.system && shared.config.aec_enabled && shared.manifest.lock().map(|manifest| {
+            manifest.engine == "none" || manifest.degraded_intervals_ms.last().map(|span| span[1] + 500 >= elapsed).unwrap_or(false)
+        }).unwrap_or(true);
+        shared.emit(EngineEvent::Levels { mic, system, aec_degraded });
     }
 }

@@ -20,7 +20,7 @@ vi.mock("../feature-flags", () => ({
   setTestMode: vi.fn(),
 }));
 
-const AUTHORIZE_URL = "https://open.weixin.qq.com/connect/oauth2/authorize?appid=test-app&redirect_uri=https%3A%2F%2Fold.example%2Fauth%2Flogin&state=expected&scope=snsapi_userinfo";
+const AUTHORIZE_URL = "https://open.weixin.qq.com/connect/qrconnect?appid=wx61e2752a63d15239&redirect_uri=https%3A%2F%2Fapi.lynse.cn%2Fauth%2Fwechat%2Fcallback&state=expected&response_type=code&scope=snsapi_login#wechat_redirect";
 let auth: ReturnType<typeof createAuthStore>;
 let callback: (url: string) => void;
 let fetchMock: ReturnType<typeof vi.fn<(url: string, init?: RequestInit) => Promise<Response>>>;
@@ -78,23 +78,29 @@ describe("desktop WeChat sign-in", () => {
     const finish = deferredLogin();
     await start();
     const url = new URL(openAuthWindow.mock.calls[0]![0]);
-    expect(url.searchParams.get("redirect_uri")).toBe("https://www.lynse.cn/auth/login");
+    expect(openAuthWindow).toHaveBeenCalledWith(AUTHORIZE_URL);
+    expect(url.searchParams.get("redirect_uri")).toBe("https://api.lynse.cn/auth/wechat/callback");
     expect(url.pathname).toBe("/connect/qrconnect");
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://gapp.lynse.cn/api/auth/render?authType=WECHAT_SCAN");
 
     act(() => {
-      callback("https://www.lynse.cn/auth/login?code=once&state=expected");
-      callback("https://www.lynse.cn/auth/login?code=once&state=expected");
+      callback("https://api.lynse.cn/auth/wechat/callback?code=once&state=expected");
+      callback("https://api.lynse.cn/auth/wechat/callback?code=once&state=expected");
     });
     expect(fetchMock.mock.calls.filter(([url]) => url.endsWith("/login"))).toHaveLength(1);
-    await act(async () => { finish({ token: "session", customerId: "customer" }); });
+    const login = fetchMock.mock.calls.find(([url]) => url.endsWith("/login"))!;
+    expect(JSON.parse(login[1]!.body as string)).toEqual({ authType: "WECHAT_SCAN", code: "once", state: "expected" });
+    await act(async () => { finish({ token: "session", expireIn: 3600, customerId: "customer", isFirstLogin: false, isNeedBind: false, thirdPartyId: null }); });
     expect(auth.getState().isAuthenticated).toBe(true);
+    expect(auth.getState().user?.id).toBe("customer");
+    expect(screen.queryByText("auth.wechat_bind_title")).toBeNull();
     expect(closeAuthWindow).toHaveBeenCalled();
   });
 
   it("does not complete a session after the user cancels an in-flight exchange", async () => {
     const finish = deferredLogin();
     await start();
-    act(() => callback("https://www.lynse.cn/auth/login?code=once&state=expected"));
+    act(() => callback("https://api.lynse.cn/auth/wechat/callback?code=once&state=expected"));
     fireEvent.click(screen.getByRole("button", { name: "auth.wechat_cancel" }));
     await act(async () => { finish({ token: "session", customerId: "customer" }); });
     expect(auth.getState().isAuthenticated).toBe(false);
@@ -106,13 +112,13 @@ describe("desktop WeChat sign-in", () => {
     fireEvent.click(screen.getByRole("button", { name: "auth.wechat_cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "auth.wechat_login" }));
     await waitFor(() => expect(openAuthWindow).toHaveBeenCalledTimes(2));
-    act(() => previous("https://www.lynse.cn/auth/login?code=old&state=expected"));
+    act(() => previous("https://api.lynse.cn/auth/wechat/callback?code=old&state=expected"));
     expect(fetchMock.mock.calls.every(([url]) => url.includes("/render"))).toBe(true);
   });
 
   it("rejects mismatched state without exchanging the code", async () => {
     await start();
-    await act(async () => callback("https://www.lynse.cn/auth/login?code=once&state=other"));
+    await act(async () => callback("https://api.lynse.cn/auth/wechat/callback?code=once&state=other"));
     expect(screen.getByText("wechat.callback_invalid_state")).toBeTruthy();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(closeAuthWindow).toHaveBeenCalled();
@@ -122,7 +128,7 @@ describe("desktop WeChat sign-in", () => {
     await start();
     const { api } = await import("@lynse/core/api");
     api().setBaseUrl("https://api.lynse.cn");
-    await act(async () => callback("https://www.lynse.cn/auth/login?code=once&state=expected"));
+    await act(async () => callback("https://api.lynse.cn/auth/wechat/callback?code=once&state=expected"));
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(auth.getState().isAuthenticated).toBe(false);
   });
@@ -130,10 +136,44 @@ describe("desktop WeChat sign-in", () => {
   it("shows the phone binding form for a new WeChat identity", async () => {
     const finish = deferredLogin();
     await start();
-    act(() => callback("https://www.lynse.cn/auth/login?code=once&state=expected"));
-    await act(async () => { finish({ isNeedBind: true, thirdPartyId: "new-identity" }); });
+    act(() => callback("https://api.lynse.cn/auth/wechat/callback?code=once&state=expected"));
+    await act(async () => { finish({ token: null, expireIn: null, customerId: null, isFirstLogin: true, isNeedBind: true, thirdPartyId: "new-identity" }); });
     expect(screen.getByText("auth.wechat_bind_title")).toBeTruthy();
     expect(auth.getState().isAuthenticated).toBe(false);
+  });
+
+  it("sends a BIND captcha and binds the scan openid with WECHAT_SCAN before persisting the session", async () => {
+    fetchMock.mockImplementation(async (url) => {
+      if (url.includes("/render")) return Response.json({ code: 200, data: AUTHORIZE_URL });
+      if (url.includes("/captcha/sms?")) return Response.json({ code: 200, data: { success: true, cooldown: 60 } });
+      if (url.includes("/bind?")) return Response.json({ code: 200, data: {
+        token: "bound-session", expireIn: 3600, isFirstLogin: false, isNeedBind: false, customerId: "unified-customer", thirdPartyId: null,
+      } });
+      return Response.json({ code: 200, data: {
+        token: null, expireIn: null, customerId: null, isFirstLogin: true, isNeedBind: true, thirdPartyId: "scan-openid",
+      } });
+    });
+    await start();
+    await act(async () => callback("https://api.lynse.cn/auth/wechat/callback?code=once&state=expected"));
+    fireEvent.change(screen.getByPlaceholderText("auth.sms_phone_placeholder"), { target: { value: "13800000000" } });
+    fireEvent.click(screen.getByRole("button", { name: "auth.sms_send_code" }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url.includes("/captcha/sms?"))).toBe(true));
+    const captcha = new URL(fetchMock.mock.calls.find(([url]) => url.includes("/captcha/sms?"))![0]);
+    expect(captcha.searchParams.get("actionType")).toBe("BIND");
+    expect(auth.getState().isAuthenticated).toBe(false);
+
+    fireEvent.change(screen.getByPlaceholderText("auth.sms_code_placeholder"), { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "auth.wechat_bind_submit" }));
+    await waitFor(() => expect(auth.getState().isAuthenticated).toBe(true));
+    const bind = new URL(fetchMock.mock.calls.find(([url]) => url.includes("/bind?"))![0]);
+    expect(bind.origin).toBe("https://gapp.lynse.cn");
+    expect(Object.fromEntries(bind.searchParams)).toEqual({
+      thirdPartyId: "scan-openid", username: "13800000000", captchaCode: "123456", authType: "WECHAT_SCAN",
+    });
+    expect(auth.getState().user?.id).toBe("unified-customer");
+    const { api } = await import("@lynse/core/api");
+    expect(api().getToken()).toBe("bound-session");
   });
 
   it("explains an existing phone binding and lets the user return to phone sign-in", async () => {
@@ -145,7 +185,7 @@ describe("desktop WeChat sign-in", () => {
     });
     try {
       await start();
-      await act(async () => callback("https://www.lynse.cn/auth/login?code=once&state=expected"));
+      await act(async () => callback("https://api.lynse.cn/auth/wechat/callback?code=once&state=expected"));
       fireEvent.change(screen.getByPlaceholderText("auth.sms_phone_placeholder"), { target: { value: "13800000000" } });
       fireEvent.change(screen.getByPlaceholderText("auth.sms_code_placeholder"), { target: { value: "123456" } });
       fireEvent.click(screen.getByRole("checkbox"));
@@ -171,7 +211,7 @@ describe("desktop WeChat sign-in", () => {
 
   it("handles denied authorization without calling login", async () => {
     await start();
-    await act(async () => callback("https://www.lynse.cn/auth/login?error=access_denied&state=expected"));
+    await act(async () => callback("https://api.lynse.cn/auth/wechat/callback?error=access_denied&state=expected"));
     expect(screen.getByText("wechat.callback_denied")).toBeTruthy();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

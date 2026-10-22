@@ -1,0 +1,80 @@
+/* Solid Glass status slice — adapted from deeplethe/solid-glass (MIT).
+   Only the status/motion primitives are adopted, NOT the full theme: upstream
+   expects to own the whole :root palette, so the three status colours are
+   remapped onto the existing Multica tokens (tokens.css) instead. They
+   inherit both themes and any accent/preset overrides for free, hence no
+   .dark block here.
+
+   Companions: packages/ui/components/ui/status-glyph.tsx, dot-loader.tsx. */
+
+@theme inline {
+  --color-status-running: var(--status-running);
+  --color-status-done: var(--status-done);
+  --color-status-interrupted: var(--status-interrupted);
+}
+
+:root {
+    /* "Still running" is deliberately neutral — status colour is reserved for
+       runs that have stopped (upstream rule); muted-foreground keeps 4.5:1+. */
+    --status-running: var(--muted-foreground);
+    --status-done: var(--success);
+    --status-interrupted: var(--warning-text);
+}
+
+/* ---- Motion ---------------------------------------------------------------
+   Motion means something is running. Nothing moves to decorate. */
+
+@keyframes sg-dot-flash {
+    0%,
+    80%,
+    100% {
+        opacity: 0.25;
+    }
+    40% {
+        opacity: 1;
+    }
+}
+
+@keyframes sg-status-shimmer {
+    from {
+        background-position: 100% 0;
+    }
+    to {
+        background-position: -100% 0;
+    }
+}
+
+@layer utilities {
+    /* Three dots flashing in turn; see DotLoader. */
+    .animate-dot-flash {
+        animation: sg-dot-flash 1.2s ease-in-out infinite;
+    }
+
+    /* A slow glint across the words that say what is being done. */
+    .status-shimmer {
+        background-image: linear-gradient(
+            100deg,
+            var(--muted-foreground) 35%,
+            var(--foreground) 50%,
+            var(--muted-foreground) 65%
+        );
+        background-size: 200% 100%;
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        animation: sg-status-shimmer 2.4s linear infinite;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .animate-dot-flash {
+            animation: none;
+            opacity: 1;
+        }
+
+        .status-shimmer {
+            animation: none;
+            color: inherit;
+            background-image: none;
+        }
+    }
+}

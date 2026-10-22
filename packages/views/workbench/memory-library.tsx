@@ -5,13 +5,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
-import { Switch } from "@lynse/ui/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@lynse/ui/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@lynse/ui/components/ui/dialog";
 import { Markdown } from "@lynse/ui/markdown";
 import { FileText, Plus, RefreshCw } from "../icons";
 import { getWorkbenchApi, refreshWorkbench, useWorkbench } from "./api";
-import { MemoryCard, SourceButtons } from "./components";
+import { SourceButtons } from "./components";
 import { useMemoryDrafts } from "./memory-drafts";
 import type { MemoryDocument } from "./types";
 
@@ -90,7 +88,6 @@ export function MemoryLibrary() {
   const queryClient = useQueryClient();
   const [path, setPath] = useState("MEMORY.md");
   const [query, setQuery] = useState("");
-  const [showExcluded, setShowExcluded] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [title, setTitle] = useState("");
   const drafts = useMemoryDrafts((state) => state.drafts);
@@ -105,7 +102,6 @@ export function MemoryLibrary() {
     },
   });
   const filtered = files.data?.filter((file) => `${file.path} ${file.title}`.toLowerCase().includes(query.trim().toLowerCase())) ?? [];
-  const memories = (status?.memories ?? []).filter((item) => (showExcluded || !item.excluded) && `${item.text} ${item.sourceTitle}`.toLowerCase().includes(query.trim().toLowerCase())).slice().reverse();
   useEffect(() => {
     const resume = () => {
       if (window.document.visibilityState !== "hidden") {
@@ -120,8 +116,7 @@ export function MemoryLibrary() {
   return <section className="space-y-4" aria-label={t("workbench.memory_library")}>
     <div className="flex flex-wrap items-start justify-between gap-3"><div className="space-y-1"><h2 className="text-sm font-semibold">{t("workbench.memory_library")}</h2><p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">{t("workbench.memory_library_hint")}</p></div><div className="flex gap-2"><Button size="sm" variant="outline" disabled={!scope || files.isFetching || document.isFetching} onClick={reload}><RefreshCw aria-hidden="true" className="size-3.5" />{t("workbench.memory_refresh_files")}</Button><Button size="sm" disabled={!scope || !files.data} onClick={() => setCreateOpen(true)}><Plus aria-hidden="true" className="size-3.5" />{t("workbench.memory_create_document")}</Button></div></div>
     <Input value={query} onChange={(event) => setQuery(event.target.value)} aria-label={t("workbench.memory_file_search")} placeholder={t("workbench.memory_file_search")} />
-    <Tabs defaultValue="files"><TabsList variant="line"><TabsTrigger value="files">{t("workbench.memory_files")}</TabsTrigger><TabsTrigger value="items">{t("workbench.memory_sourced")}</TabsTrigger></TabsList>
-      <TabsContent value="files" keepMounted className="pt-3">
+    <div className="space-y-3">
         {files.error && <div role="alert" className="space-y-2"><p>{errorCopy(files.error, t)}</p><Button variant="outline" size="sm" onClick={reload}>{t("workbench.retry")}</Button></div>}
         <div className="@container"><div className="flex min-w-0 flex-col gap-4 @min-[50rem]:flex-row">
           <nav aria-label={t("workbench.memory_files")} className="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-border p-2 @min-[50rem]:max-h-[65dvh] @min-[50rem]:w-60 @min-[50rem]:shrink-0">
@@ -135,9 +130,7 @@ export function MemoryLibrary() {
             {document.data && <MemoryFileEditor key={`${scope}/${path}`} document={document.data} scope={scope} reload={reload} select={setPath} />}
           </div>
         </div></div>
-      </TabsContent>
-      <TabsContent value="items" className="space-y-3 pt-3"><p className="text-xs text-muted-foreground">{t("workbench.memory_legacy_hint")}</p><div className="flex items-center gap-2"><Switch id="memory-show-excluded" checked={showExcluded} onCheckedChange={setShowExcluded} /><label htmlFor="memory-show-excluded" className="text-xs text-muted-foreground">{t("workbench.memory_show_excluded")}</label></div>{memories.map((item) => <MemoryCard key={`${scope}:${item.id}`} item={item} />)}{!memories.length && <p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">{t(query ? "workbench.no_results" : "workbench.memory_empty")}</p>}</TabsContent>
-    </Tabs>
+    </div>
     <Dialog open={createOpen} onOpenChange={setCreateOpen}><DialogContent className="max-w-md"><DialogHeader><DialogTitle>{t("workbench.memory_create_document")}</DialogTitle><DialogDescription>{t("workbench.memory_create_hint")}</DialogDescription></DialogHeader><form className="space-y-4" onSubmit={(event) => { event.preventDefault(); create.mutate(); }}><label className="block space-y-2 text-sm"><span>{t("workbench.memory_document_title")}</span><Input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={120} autoFocus /></label>{create.error && <p role="alert" className="text-sm text-destructive">{errorCopy(create.error, t)}</p>}<div className="flex justify-end gap-2"><Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>{t("workbench.cancel")}</Button><Button type="submit" disabled={!title.trim() || create.isPending}>{t("workbench.memory_create_document")}</Button></div></form></DialogContent></Dialog>
   </section>;
 }

@@ -63,7 +63,13 @@ pub async fn sync_upload_put_signed_file(
     put: SignedOssPut,
 ) -> CommandResult<UploadedObject> {
     let path = recorded_audio_path(&app, &put.record_id)?;
+    let before = fs::metadata(&path).map_err(|error| error.to_string())?;
+    let waveform = crate::audio_contract::waveform::cached(&path).ok();
     let bytes = fs::read(&path).map_err(|error| error.to_string())?;
+    let after = fs::metadata(&path).map_err(|error| error.to_string())?;
+    let waveform = waveform.filter(|_| before.len() == after.len()
+        && before.modified().ok().is_some()
+        && before.modified().ok() == after.modified().ok());
     let size_bytes = bytes.len() as u64;
     let url = oss_upload_url(&put.bucket, &put.endpoint, &put.object_key)?;
     let date = chrono::Utc::now().format(OSS_DATE_FORMAT).to_string();
@@ -107,6 +113,20 @@ pub async fn sync_upload_put_signed_file(
         ));
     }
     log::info!("[sync_upload] OSS PUT {url} -> {status} ({size_bytes} bytes)");
+    if let Some(waveform) = waveform {
+        // Bind this snapshot to the uploaded object's versioned path. A later
+        // local edit or a new cloud object must never reuse the old peaks.
+        let mut patch = serde_json::Map::new();
+        let uploaded = crate::audio_contract::waveform::UploadedWaveform {
+            path: url.path().to_owned(), waveform,
+        };
+        if let Ok(value) = serde_json::to_value(uploaded) {
+            patch.insert("uploadedWaveform".into(), value);
+            if let Err(error) = crate::update_store_value(&app, "local-transcriptions", &put.record_id, patch) {
+                log::warn!("Could not retain uploaded waveform: {error}");
+            }
+        }
+    }
     Ok(UploadedObject { size_bytes })
 }
 

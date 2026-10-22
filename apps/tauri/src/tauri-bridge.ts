@@ -453,6 +453,8 @@ export async function installTauriBridge(): Promise<void> {
       pause: () => command<LiveTranslationSnapshot>("live_translation_pause"),
       resume: (request: LiveResumeRequest) => command<LiveTranslationSnapshot>("live_translation_resume", { request }),
       setMode: (request: LiveSetModeRequest) => command<LiveTranslationSnapshot>("live_translation_set_mode", { request }),
+      setSources: (request) => command<LiveTranslationSnapshot>("live_translation_set_sources", { request }),
+      waveformPeaks: (src, recordId) => command<{ peaks: number[]; durationMs: number }>("local_audio_waveform", { src, recordId }),
       marker: (kind, note, id, remove) => command<LiveTranslationSnapshot>("live_translation_marker", { kind, note, id, remove }),
       stop: () => command<void>("live_translation_stop"),
       getState: () => command<LiveTranslationSnapshot>("live_translation_state"),

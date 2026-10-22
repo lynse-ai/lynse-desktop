@@ -132,12 +132,13 @@ fn check_status(status: reqwest::StatusCode) -> CommandResult<()> {
 }
 
 fn verify_binding(binding: &Value, session: &Session) -> CommandResult<()> {
-    if binding["user_id"].as_str() != Some(&session.user_id)
-        || binding["host"]
-            .as_str()
-            .map(|host| host.trim_end_matches('/'))
-            != Some(session.base_url.as_str())
-    {
+    let user_matches = binding["user_id"].as_str() == Some(&session.user_id);
+    let host_matches = binding["host"]
+        .as_str()
+        .map(|host| host.trim_end_matches('/'))
+        == Some(session.base_url.as_str());
+    if !user_matches || !host_matches {
+        log::warn!("[cloud-memory] binding mismatch: user_matches={user_matches}, host_matches={host_matches}");
         return Err("Cloud memory identity verification failed".into());
     }
     Ok(())
@@ -168,7 +169,10 @@ async fn request(
         require_current(&state, session)?;
         require_beta(&state)?;
         let binding = binding.map_err(|_| "Cloud memory offline")?;
-        check_status(binding.status())?;
+        if let Err(error) = check_status(binding.status()) {
+            log::warn!("[cloud-memory] session binding failed: HTTP {}", binding.status().as_u16());
+            return Err(error);
+        }
         let binding: Value = binding
             .json()
             .await
@@ -200,7 +204,20 @@ async fn request(
     require_current(&state, session)?;
     require_beta(&state)?;
     let response = response.map_err(|_| "Cloud memory offline")?;
-    check_status(response.status())?;
+    if let Err(error) = check_status(response.status()) {
+        let status = response.status().as_u16();
+        let failure = response.json::<Value>().await.unwrap_or(Value::Null);
+        require_current(&state, session)?;
+        require_beta(&state)?;
+        // Log only known error codes, never the response body or caller credentials.
+        let code = match failure.pointer("/error/code").and_then(Value::as_str) {
+            Some(code @ ("reauthentication_required" | "missing_token" | "invalid_token"
+                | "identity_unavailable" | "context_unavailable" | "http_401" | "http_403")) => code,
+            _ => "unclassified",
+        };
+        log::warn!("[cloud-memory] memory files request failed: HTTP {status}, code={code}");
+        return Err(error);
+    }
     let value = response
         .json()
         .await

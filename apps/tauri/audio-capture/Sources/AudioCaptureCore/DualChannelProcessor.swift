@@ -63,6 +63,9 @@ public final class DualChannelProcessor {
     private var framesSinceSystemEnqueue = 0
     private var framesSinceMicEnqueue = 0
     private var flushing = false
+    private var micEnabled = true
+    private var systemEnabled = true
+    private var latestAecFailure = false
     var dbgPaired = 0
     var dbgMicAlone = 0
     var dbgSystemAlone = 0
@@ -112,6 +115,37 @@ public final class DualChannelProcessor {
     /// True when the engine is present and dual-channel processing is live.
     public var aecActive: Bool { aec != nil }
 
+    public func snapshotAecDegraded() -> Bool {
+        queue.sync { micEnabled && systemEnabled && (engineUnavailable || latestAecFailure) }
+    }
+
+    /// A synchronous source boundary: queued callbacks from a disabled source
+    /// are discarded before this returns, including its unprocessed raw data.
+    public func setSources(mic: Bool, system: Bool) {
+        queue.sync {
+            if micEnabled != mic || systemEnabled != system {
+                flushing = true
+                drain()
+                flushing = false
+                let base = max(micTrack.nextPosition, systemTrack.nextPosition)
+                micTrack.frames.removeAll()
+                systemTrack.frames.removeAll()
+                micTrack.pending.removeAll()
+                systemTrack.pending.removeAll()
+                micTrack.nextPosition = base
+                systemTrack.nextPosition = base
+                micDecimator = Decimator48to16()
+                systemDecimator = Decimator48to16()
+                rawNearDecimator = Decimator48to16()
+                delayEstimator = AcousticDelayEstimator()
+                latestAecFailure = false
+                aec?.reset()
+            }
+            micEnabled = mic
+            systemEnabled = system
+        }
+    }
+
     // MARK: - Ingest (called from the capture callbacks)
 
     public func pushMic(positionSamples: Int64, samples: [Float]) {
@@ -139,9 +173,9 @@ public final class DualChannelProcessor {
             rawNearDecimator = Decimator48to16()
             delayEstimator = AcousticDelayEstimator()
             delayHintMs = 0
-            micOutputCount = 0
-            systemOutputCount = 0
-            masterOutputCount = 0
+            micOutputCount = Int(base / 3)
+            systemOutputCount = Int(base / 3)
+            masterOutputCount = Int(base)
             framesSinceSystemEnqueue = 0
             framesSinceMicEnqueue = 0
             aec?.reset()
@@ -182,6 +216,7 @@ public final class DualChannelProcessor {
     // that touches self again)
 
     private func ingest(_ kind: SourceKind, position: Int64, samples original: [Float]) {
+        guard kind == .mic ? micEnabled : systemEnabled else { return }
         var samples = original
         var position = position
         guard !samples.isEmpty else { return }
@@ -193,10 +228,18 @@ public final class DualChannelProcessor {
         var track = trackFor(kind)
         track.channels = kind == .mic ? 1 : DualChannelProcessor.systemChannels
         if position < track.nextPosition {
-            let overlap = track.nextPosition - position
-            guard overlap < Int64(samples.count) else { return }
-            samples = Array(samples.dropFirst(Int(overlap)))
+            let overlap = Int(track.nextPosition - position) * track.channels
+            guard overlap < samples.count else { return }
+            samples = Array(samples.dropFirst(overlap))
             position = track.nextPosition
+        }
+        if position - track.nextPosition > Int64(DualChannelProcessor.maxQueuedFrames * DualChannelProcessor.frameSamples) {
+            // Writers retain the gap as sparse silence; do not materialize
+            // minutes of zero frames in the processing queue after a fault.
+            markDegraded(startMs: ms(track.nextPosition), endMs: ms(position))
+            track.frames.removeAll()
+            track.pending.removeAll()
+            track.nextPosition = position
         }
         if position > track.nextPosition {
             let gap = Int(position - track.nextPosition)
@@ -298,7 +341,7 @@ public final class DualChannelProcessor {
             // other one's output.
             if let system = systemHead {
                 framesSinceMicEnqueue += 1
-                if !flushing,
+                if micEnabled, !flushing,
                    framesSinceMicEnqueue < DualChannelProcessor.referenceStallLimitFrames,
                    systemTrack.frames.count < DualChannelProcessor.referenceStallLimitFrames {
                     return
@@ -310,7 +353,7 @@ public final class DualChannelProcessor {
             }
             guard let mic = micHead else { return }
             framesSinceSystemEnqueue += 1
-            if !flushing,
+            if systemEnabled, !flushing,
                framesSinceSystemEnqueue < DualChannelProcessor.referenceStallLimitFrames,
                micTrack.frames.count < DualChannelProcessor.referenceStallLimitFrames {
                 return
@@ -322,6 +365,10 @@ public final class DualChannelProcessor {
     }
 
     private func emitPaired(mic: Track.Frame, system: Track.Frame) {
+        latestAecFailure = engineUnavailable
+        micOutputCount = max(micOutputCount, Int(mic.position / 3))
+        systemOutputCount = max(systemOutputCount, Int(system.position / 3))
+        masterOutputCount = max(masterOutputCount, Int(min(mic.position, system.position)))
         if ProcessInfo.processInfo.environment["LYNSE_DBG"] != nil, mic.position == 0 {
             FileHandle.standardError.write(Data("dbg: first paired frame\n".utf8))
         }
@@ -345,6 +392,7 @@ public final class DualChannelProcessor {
                 cancelled = aec.processNear(&near, delayHintMs: Int32(delayHintMs))
             }
             if !cancelled {
+                latestAecFailure = true
                 // The engine rejected the frame — pass the original audio
                 // through and record the interval rather than muting.
                 near = mic.samples
@@ -359,15 +407,18 @@ public final class DualChannelProcessor {
     }
 
     private func emitMicWithoutReference(_ mic: Track.Frame) {
+        latestAecFailure = systemEnabled && (aec != nil || engineUnavailable)
+        micOutputCount = max(micOutputCount, Int(mic.position / 3))
+        masterOutputCount = max(masterOutputCount, Int(mic.position))
         var near = mic.samples
-        if let aec {
+        if systemEnabled, let aec {
             // Feed a silent reference so the engine keeps its internal block
             // alignment; the near audio passes through uncancelled and the
             // interval is recorded as degraded.
             _ = aec.processReference([Float](repeating: 0, count: AecProcessor.frameSamples))
             _ = aec.processNear(&near, delayHintMs: 0)
             markDegraded(startMs: ms(mic.position), endMs: ms(mic.position + Int64(DualChannelProcessor.frameSamples)))
-        } else if engineUnavailable {
+        } else if systemEnabled && engineUnavailable {
             markDegraded(startMs: ms(mic.position), endMs: ms(mic.position + Int64(DualChannelProcessor.frameSamples)))
         }
         emitMicProcessed(near)
@@ -380,6 +431,8 @@ public final class DualChannelProcessor {
     }
 
     private func emitSystem(_ system: Track.Frame) {
+        systemOutputCount = max(systemOutputCount, Int(system.position / 3))
+        masterOutputCount = max(masterOutputCount, Int(system.position))
         let decimated = systemDecimator.decimate(downmixToMono(system.samples))
         emit16k(decimated, outputCount: &systemOutputCount, sink: onSystem16k)
         emitMaster(near: [], systemStereo: system.samples)

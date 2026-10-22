@@ -1063,7 +1063,7 @@ export function ContentPanel() {
                               ["all", t("workspace.track_all")],
                               ["mic", t("workspace.track_local")],
                               ["system", t("workspace.track_remote")],
-                            ] as const).map(([value, label]) => (
+                            ] as const).filter(([value]) => value === "all" || selectedTrackManifest.tracks.some((track) => track.role === value)).map(([value, label]) => (
                               <button
                                 key={value}
                                 type="button"
@@ -1117,6 +1117,8 @@ export function ContentPanel() {
                             <AudioPlayer
                               ref={audioPlayerRef}
                               src={playerAudioUrl}
+                              recordId={trackFilter === "all" ? selectedItemId : undefined}
+                              sourceIntervals={transcription?.audioSourceIntervals}
                               highlightTimeMs={highlightTimeMs}
                               onEdit={isLocalSelectedItem ? handleEditSelectedAudio : undefined}
                             />

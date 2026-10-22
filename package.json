@@ -21,6 +21,7 @@
     "typecheck": "turbo typecheck",
     "lint": "turbo lint",
     "test": "turbo test",
+    "test:graph:local": "python3 e2e/scripts/test_graph_local.py",
     "i18n:check": "node scripts/i18n-audit.mjs",
     "ui:add": "cd packages/ui && npx shadcn@latest add"
   },

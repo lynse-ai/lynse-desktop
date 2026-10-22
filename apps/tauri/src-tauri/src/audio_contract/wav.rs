@@ -126,15 +126,18 @@ impl WavTrackWriter {
         let intended = start_ms * rate / 1_000;
         let mut inner = self.inner.lock().map_err(|_| "wav track lock poisoned")?;
         let pad_frames = intended.saturating_sub(inner.sample_frames) as usize;
-        let mut payload = Vec::with_capacity(bytes.len() + pad_frames * frame_bytes);
-        payload.resize(pad_frames * frame_bytes, 0);
-        payload.extend_from_slice(bytes);
         let Some(file) = inner.file.as_mut() else {
             return Ok(());
         };
-        file.write_all(&payload).map_err(|error| error.to_string())?;
+        if pad_frames > 0 {
+            // Sparse gaps read as silence without allocating or writing the
+            // duration for which this source was intentionally disabled.
+            file.seek(SeekFrom::Start(44 + intended * frame_bytes as u64))
+                .map_err(|error| error.to_string())?;
+        }
+        file.write_all(bytes).map_err(|error| error.to_string())?;
         inner.sample_frames += pad_frames as u64 + incoming_frames;
-        inner.bytes_since_sync += payload.len();
+        inner.bytes_since_sync += bytes.len() + pad_frames * frame_bytes;
         if inner.bytes_since_sync >= SYNC_BYTES || inner.last_sync.elapsed() >= SYNC_INTERVAL {
             if let Some(handle) = inner.file.as_ref() {
                 // A failed sync only means the bytes are still in the OS cache;

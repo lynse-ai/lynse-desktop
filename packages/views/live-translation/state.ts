@@ -37,6 +37,7 @@ export function reduceLiveTranslationEvent(
     // connection states (or echo-gate flag): stale "connected"/"error"
     // entries would mislabel the new session's still-dialing streams.
     const freshSession = event.snapshot.sessionId !== current.sessionId;
+    if (!freshSession && (event.snapshot.sourceRevision ?? 0) < (current.sourceRevision ?? 0)) return current;
     return {
       ...current,
       ...event.snapshot,
@@ -48,10 +49,16 @@ export function reduceLiveTranslationEvent(
     };
   }
   if (event.type === "levels") {
+    if ((event.sessionId && event.sessionId !== current.sessionId)
+      || (event.sourceRevision != null && event.sourceRevision !== (current.sourceRevision ?? 0))) return current;
+    const mic = current.audioSources?.includes("mic") === false ? 0 : event.mic;
+    const system = current.audioSources?.includes("system") === false ? 0 : event.system;
     return {
       ...current,
-      micLevel: event.mic,
-      systemLevel: event.system,
+      micLevel: mic,
+      systemLevel: system,
+      recordingLevel: event.recordingLevel,
+      aecDegraded: event.aecDegraded ?? current.aecDegraded,
       elapsedMs: event.elapsedMs,
       micSuppressed: event.micSuppressed ?? current.micSuppressed,
     };

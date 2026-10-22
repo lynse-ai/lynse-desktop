@@ -1,6 +1,31 @@
 import type { GraphNode, KnowledgeGraph } from "./types";
 
-export const GRAPH_NODE_LIMIT = 90;
+export const GRAPH_NODE_LIMIT = 190;
+
+// Traverse the complete graph before applying the drawing budget or search filters.
+export function graphNeighborhood(nodes: GraphNode[], edges: KnowledgeGraph["edges"], selection: string | null, depth: number): GraphNode[] {
+  if (!selection || !nodes.some(node => node.id === selection)) return [];
+  const ids = new Set(nodes.map(node => node.id));
+  const adjacency = new Map<string, Set<string>>();
+  for (const edge of edges) {
+    if (!ids.has(edge.source) || !ids.has(edge.target)) continue;
+    for (const [a, b] of [[edge.source, edge.target], [edge.target, edge.source]]) {
+      if (!adjacency.has(a!)) adjacency.set(a!, new Set());
+      adjacency.get(a!)!.add(b!);
+    }
+  }
+  const visited = new Set([selection]);
+  let frontier = [selection];
+  for (let level = 0; level < depth; level++) {
+    const next: string[] = [];
+    for (const id of frontier) for (const neighbor of adjacency.get(id) ?? []) {
+      if (!visited.has(neighbor)) { visited.add(neighbor); next.push(neighbor); }
+    }
+    frontier = next;
+  }
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  return [...visited].map(id => byId.get(id)!);
+}
 
 // Keep both ends of real relationships instead of dropping all source nodes.
 export function visibleGraphNodes(nodes: GraphNode[], edges: KnowledgeGraph["edges"], selection: string | null, limit = GRAPH_NODE_LIMIT): GraphNode[] {

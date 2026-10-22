@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient, setApiInstance, setApiTransportMode } from "../api/client";
 import { createAuthStore } from "./index";
-import { bindWechatPhone, desktopWechatAuthorizeUrl, loginByWechat } from "./wechat";
+import { bindWechatPhone, desktopWechatAuthorizeUrl, loginByWechat, wechatSessionFromVo } from "./wechat";
 
 function renderedUrl(appId = "server-app", state = "server-state"): string {
-  return `https://open.weixin.qq.com/connect/oauth2/authorize?${new URLSearchParams({
+  return `https://open.weixin.qq.com/connect/qrconnect?${new URLSearchParams({
     appid: appId,
     state,
-    redirect_uri: "https://old-tunnel.example/auth/login?source=desktop",
+    redirect_uri: "https://api.lynse.cn/auth/wechat/callback?source=desktop",
     response_type: "code",
-    scope: "snsapi_userinfo",
-  })}`;
+    scope: "snsapi_login",
+  })}#wechat_redirect`;
 }
 
 function setup() {
@@ -42,10 +42,12 @@ afterEach(() => {
 });
 
 describe("desktop WeChat server selection", () => {
-  it("uses the registered website callback domain and retains the backend path, appid and state", () => {
-    const url = new URL(desktopWechatAuthorizeUrl(renderedUrl()));
+  it("preserves the complete website-app authorization URL supplied by the backend", () => {
+    const rendered = renderedUrl();
+    expect(desktopWechatAuthorizeUrl(rendered)).toBe(rendered);
+    const url = new URL(desktopWechatAuthorizeUrl(rendered));
     expect(url.origin + url.pathname).toBe("https://open.weixin.qq.com/connect/qrconnect");
-    expect(url.searchParams.get("redirect_uri")).toBe("https://www.lynse.cn/auth/login?source=desktop");
+    expect(url.searchParams.get("redirect_uri")).toBe("https://api.lynse.cn/auth/wechat/callback?source=desktop");
     expect(url.searchParams.get("appid")).toBe("server-app");
     expect(url.searchParams.get("state")).toBe("server-state");
     expect(url.searchParams.get("scope")).toBe("snsapi_login");
@@ -59,21 +61,23 @@ describe("desktop WeChat server selection", () => {
 
     const test = await store.getState().startWechatLogin({ apiUrl: "https://gapp.lynse.cn", desktopQr: true });
     expect(new URL(test.authorizeUrl).searchParams.get("appid")).toBe("test-app");
-    expect(new URL(test.authorizeUrl).searchParams.get("redirect_uri")).toBe("https://www.lynse.cn/auth/login?source=desktop");
+    expect(new URL(test.authorizeUrl).searchParams.get("redirect_uri")).toBe("https://api.lynse.cn/auth/wechat/callback?source=desktop");
     expect(saved.get("lynse_api_url")).toBe(client.getBaseUrl());
     expect(saved.get("lynse_wechat_state")).toBe(test.state);
 
     await loginByWechat("one-time-code", test.state);
     await bindWechatPhone({ thirdPartyId: "wechat-identity", phone: "13800000000", captchaCode: "123456" });
     const calls = fetchMock.mock.calls as unknown as [string, RequestInit][];
-    expect(calls[0]![0]).toBe("https://api.lynse.cn/api/auth/render?authType=WECHAT_JUMP");
-    expect(calls[1]![0]).toBe("https://gapp.lynse.cn/api/auth/render?authType=WECHAT_JUMP");
+    expect(calls[0]![0]).toBe("https://api.lynse.cn/api/auth/render?authType=WECHAT_SCAN");
+    expect(calls[1]![0]).toBe("https://gapp.lynse.cn/api/auth/render?authType=WECHAT_SCAN");
     expect(calls[2]![0]).toBe("https://gapp.lynse.cn/api/auth/login");
     expect(JSON.parse(calls[2]![1].body as string)).toEqual({
-      authType: "WECHAT_JUMP", code: "one-time-code", state: "server-state",
+      authType: "WECHAT_SCAN", code: "one-time-code", state: "server-state",
     });
     expect(calls[3]![0]).toContain("https://gapp.lynse.cn/api/auth/bind?");
-    expect(new URL(calls[3]![0]).searchParams.get("authType")).toBe("WECHAT_JUMP");
+    expect(Object.fromEntries(new URL(calls[3]![0]).searchParams)).toEqual({
+      authType: "WECHAT_SCAN", thirdPartyId: "wechat-identity", username: "13800000000", captchaCode: "123456",
+    });
   });
 
   it("keeps the web authorization URL as rendered by the backend", async () => {
@@ -97,5 +101,28 @@ describe("desktop WeChat server selection", () => {
     const { store, fetchMock } = setup();
     fetchMock.mockResolvedValue(Response.json({ code: 200, data: renderedUrl("app", "") }));
     await expect(store.getState().startWechatLogin()).rejects.toThrow("missing state");
+  });
+
+  it("rejects the mobile OAuth flow instead of converting its appid and callback into a QR flow", () => {
+    const mobile = new URL(renderedUrl());
+    mobile.pathname = "/connect/oauth2/authorize";
+    mobile.searchParams.set("scope", "snsapi_userinfo");
+    expect(() => desktopWechatAuthorizeUrl(mobile.toString())).toThrow();
+    expect(() => desktopWechatAuthorizeUrl(renderedUrl().replace("snsapi_login", "snsapi_userinfo"))).toThrow();
+    expect(() => desktopWechatAuthorizeUrl(renderedUrl().replace("response_type=code", "response_type=token"))).toThrow();
+  });
+
+  it("rejects an invalid callback without rewriting it", () => {
+    const url = new URL(renderedUrl());
+    url.searchParams.set("redirect_uri", "javascript:alert(1)");
+    expect(() => desktopWechatAuthorizeUrl(url.toString())).toThrow();
+  });
+
+  it("uses the server customerId for both login and bind responses", () => {
+    expect(wechatSessionFromVo({ token: "scan-token", customerId: "unified-customer", isNeedBind: false })).toEqual({
+      accessToken: "scan-token", user: { id: "unified-customer", name: "", email: "" },
+    });
+    expect(wechatSessionFromVo({ token: "bind-token", customerId: "unified-customer", isFirstLogin: true, isNeedBind: false })?.user.id).toBe("unified-customer");
+    expect(wechatSessionFromVo({ token: null, customerId: null, thirdPartyId: "scan-openid", isFirstLogin: true, isNeedBind: true })).toBeNull();
   });
 });

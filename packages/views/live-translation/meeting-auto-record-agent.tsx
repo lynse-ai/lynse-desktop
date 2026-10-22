@@ -1,5 +1,7 @@
 "use client";
 
+import { audioModeSources } from "./api";
+
 /**
  * Headless meeting auto-record agent living in the main window.
  *
@@ -28,7 +30,6 @@ import {
   loadMeetingAutoRecordConfig,
   resolveEventAppName,
   toDetectorConfigPayload,
-  autoRecordAudioSources,
   type MeetingDetectorEvent,
 } from "./meeting-auto-record";
 
@@ -85,12 +86,8 @@ export function MeetingAutoRecordAgent() {
         cfg?.audioSource !== "mic" &&
         perms.systemAudioRequired &&
         perms.systemAudio !== "granted";
-      const sources = autoRecordAudioSources(cfg?.audioSource, perms);
-      if (!sources) {
-        console.warn("[meeting-auto-record] skip start: microphone permission missing");
-        toast.warning(t("auto_record.permission_missing_mic"));
-        return null;
-      }
+      const sources = audioModeSources(cfg?.audioSource);
+
 
       const appName = resolveEventAppName(event, config, (key) => t(key));
       const sessionId = crypto.randomUUID();

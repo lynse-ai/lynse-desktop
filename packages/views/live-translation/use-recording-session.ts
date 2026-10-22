@@ -4,10 +4,10 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useLiveTranslation } from "./use-live-translation";
+import { recordingLevel } from "./audio-sources";
 import { audioModeSources, realtimeEngineLabel, requestRealtimeSession } from "./api";
 import type {
   LiveConnectionDescriptor,
-  LivePermissionStatus,
   LiveTranslationProviderConfig,
   LiveTranslationSegment,
 } from "./types";
@@ -56,7 +56,7 @@ export interface UseRecordingSessionReturn {
   // ── view snapshot shortcuts ──
   sessionId: string | undefined;
   elapsedMs: number;
-  micLevel: number;
+  audioLevel: number;
   /** When the current session started recording (undefined while idle). */
   startedAt: string | undefined;
   segmentCount: number;
@@ -150,18 +150,6 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     [view.segments],
   );
 
-  // ── permissions -------------------------------------------------
-  const ensurePermissions = useCallback(async (): Promise<LivePermissionStatus | null> => {
-    if (!api) return null;
-    try {
-      let perms = await api.permissions();
-      if (perms.microphone !== "granted") perms = await api.requestPermission("microphone");
-      return perms;
-    } catch {
-      return null;
-    }
-  }, [api]);
-
   // ── attach / detach transcription or translation live ------------
   const switchMode = useCallback(async (
     next: RecordMode,
@@ -197,7 +185,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
         return false;
       }
       const credentials = await requestRealtimeSession(
-        { sourceLanguage: source, targetLanguage: target, sessionId: sid, epoch: (view.epoch ?? 0) + 1 },
+        { audioSources: view.audioSources, sourceLanguage: source, targetLanguage: target, sessionId: sid, epoch: (view.epoch ?? 0) + 1 },
         cfg as LiveTranslationProviderConfig,
       );
       await api.setMode({
@@ -220,7 +208,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
       toast.warning(String(error));
       return false;
     }
-  }, [api, view.sessionId, view.sourceLanguage, view.epoch, translationEnabled, targetLanguage, t]);
+  }, [api, view.sessionId, view.sourceLanguage, view.epoch, view.audioSources, translationEnabled, targetLanguage, t]);
 
   // ── toggle record / stop ----------------------------------------
   const toggleRecording = useCallback(async () => {
@@ -254,22 +242,6 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     try {
       const cfg = await api.getProviderConfig().catch(() => null);
       const audioSources = audioModeSources(cfg?.audioSource);
-      const perms = await ensurePermissions();
-      // Microphone permission only matters when the mic is actually captured;
-      // a system-only session (transcribing a playing video) skips it.
-      if (!perms || (audioSources.includes("mic") && perms.microphone !== "granted")) {
-        const msg = t("live_translation.start_hint_mic");
-        setBlocked(msg);
-        toast.warning(msg);
-        return;
-      }
-      if (perms.restartRequired) {
-        const msg = t("live_translation.start_hint_restart");
-        setBlocked(msg);
-        toast.warning(msg);
-        return;
-      }
-
       // Capture first, always with no provider attached. Recognition is only
       // ever layered on afterwards, and only because the user pre-armed the
       // Captions toggle (`selectMode` stores that intent while idle). The
@@ -301,7 +273,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     } finally {
       setBusy(false);
     }
-  }, [api, recording, ensurePermissions, mode, switchMode, voiceEnhancement, sourceLanguage, t, view.state]);
+  }, [api, recording, mode, switchMode, voiceEnhancement, sourceLanguage, t, view.state]);
 
   // ── pause / resume ----------------------------------------------
   const togglePause = useCallback(async () => {
@@ -318,6 +290,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
             connections =
               (await requestRealtimeSession(
                 {
+                  audioSources: view.audioSources,
                   sourceLanguage: view.sourceLanguage ?? "zh",
                   targetLanguage: target,
                   sessionId: view.sessionId,
@@ -336,7 +309,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     } finally {
       setBusy(false);
     }
-  }, [api, view.sessionId, view.state, view.epoch, view.sourceLanguage, activeMode, translationEnabled, targetLanguage]);
+  }, [api, view.sessionId, view.state, view.epoch, view.sourceLanguage, view.audioSources, activeMode, translationEnabled, targetLanguage]);
 
   // ── microphone speech enhancement -------------------------------
   // Applies to the recording that starts next: the canceller's audio-processing
@@ -387,7 +360,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
         return false;
       }
       const credentials = await requestRealtimeSession(
-        { sourceLanguage: source, targetLanguage: target, sessionId: sid, epoch: (view.epoch ?? 0) + 1 },
+        { audioSources: view.audioSources, sourceLanguage: source, targetLanguage: target, sessionId: sid, epoch: (view.epoch ?? 0) + 1 },
         cfg as LiveTranslationProviderConfig,
       );
       await api.setMode({
@@ -402,7 +375,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
       toast.warning(String(error));
       return false;
     }
-  }, [api, recording, view.sessionId, view.epoch, t]);
+  }, [api, recording, view.sessionId, view.epoch, view.audioSources, t]);
 
   // ── translation switch ------------------------------------------
   const setTranslationEnabled = useCallback(async (enabled: boolean): Promise<void> => {
@@ -432,7 +405,7 @@ export function useRecordingSession(): UseRecordingSessionReturn {
     voiceEnhancement,
     sessionId: view.sessionId,
     elapsedMs: view.elapsedMs,
-    micLevel: view.micLevel,
+    audioLevel: recordingLevel(view),
     startedAt: view.startedAt,
     segmentCount: view.segments.filter((s) => !s.echoOf).length,
     recentSegments,

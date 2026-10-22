@@ -1078,24 +1078,12 @@ pub async fn workbench_confirm_todos(
             .as_str()
             .filter(|s| !s.trim().is_empty() && s.chars().count() <= 500)
             .ok_or("Todo title is required")?;
-        let todo_id = format!(
-            "todo:workbench:{}",
-            store::digest(format!("{}\n{}\n{}", session.scope, id, proposal_id))
-        );
-        // The saved todo is the idempotency record, including after a crash.
-        if let Some(existing) = crate::get_store_value(&app, "local-todos", &todo_id)? {
-            saved.push(existing);
-            continue;
-        }
         let source = original["citations"]
             .as_array()
             .and_then(|v| v.first())
             .cloned()
             .unwrap_or_else(|| json!(document.reference()));
-        let todo = json!({"id":todo_id,"title":title.trim(),"completed":false,"createdAt":crate::now(),"updatedAt":crate::now(),
-            "sourceFileId":id,"sourceTitle":document.title,"sourceRef":source,"workbenchScope":session.scope,
-            "dueDate":suggestion.get("dueDate").cloned().unwrap_or(Value::Null)});
-        saved.push(crate::save_todo(&app, todo)?);
+        saved.push(save_confirmed_todo(&app, &session, &document, proposal_id, title, suggestion.get("dueDate").cloned().unwrap_or(Value::Null), source)?);
     }
     if let Some(array) = manifest
         .artifacts
@@ -1116,6 +1104,17 @@ pub async fn workbench_confirm_todos(
     }
     persist(&app, &session, &manifest)?;
     Ok(saved)
+}
+
+pub(super) fn confirmed_todo_id(session: &Session, source_id: &str, proposal_id: &str) -> String {
+    format!("todo:workbench:{}", store::digest(format!("{}\n{}\n{}", session.scope, source_id, proposal_id)))
+}
+pub(super) fn save_confirmed_todo(app: &AppHandle, session: &Session, document: &Document, proposal_id: &str, title: &str, due_date: Value, source: Value) -> CommandResult<Value> {
+    if title.trim().is_empty() || title.chars().count() > 500 { return Err("Todo title is required".into()); }
+    let todo_id = confirmed_todo_id(session, &document.id, proposal_id);
+    // The durable todo is the idempotency record, even when recording the graph link fails.
+    if let Some(existing) = crate::get_store_value(app, "local-todos", &todo_id)? { return Ok(existing); }
+    crate::save_todo(app, json!({"id":todo_id,"title":title.trim(),"completed":false,"createdAt":crate::now(),"updatedAt":crate::now(),"sourceFileId":document.id,"sourceTitle":document.title,"sourceRef":source,"workbenchScope":session.scope,"dueDate":due_date}))
 }
 
 #[tauri::command]

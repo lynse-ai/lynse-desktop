@@ -103,3 +103,9 @@ pub fn live_translation_show_subtitles(show: bool) -> CommandResult<()> {
         Ok(())
     }
 }
+
+#[tauri::command]
+pub async fn live_translation_set_sources(request: Value) -> CommandResult<Value> {
+    let _ = request;
+    unsupported()
+}

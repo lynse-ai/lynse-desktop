@@ -18,24 +18,11 @@ import { useNavigation } from "../navigation";
 import { audioModeSources, realtimeEngineLabel, requestRealtimeSession } from "./api";
 import { useLiveTranslation } from "./use-live-translation";
 import type {
-  DesktopLiveTranslationApi,
   LiveConnectionDescriptor,
-  LivePermissionStatus,
   LiveTranslationProviderConfig,
   LiveTranslationSnapshot,
 } from "./types";
 
-async function ensurePermissions(
-  api: DesktopLiveTranslationApi,
-): Promise<LivePermissionStatus | null> {
-  try {
-    let perms = await api.permissions();
-    if (perms.microphone !== "granted") perms = await api.requestPermission("microphone");
-    return perms;
-  } catch {
-    return null;
-  }
-}
 
 export function useQuickRecording() {
   const { api, view } = useLiveTranslation();
@@ -100,16 +87,6 @@ export function useQuickRecording() {
 
       const cfg = await api.getProviderConfig().catch(() => null);
       const audioSources = audioModeSources(cfg?.audioSource);
-      const perms = await ensurePermissions(api);
-      // Microphone permission only matters when the mic is actually captured.
-      if (!perms || (audioSources.includes("mic") && perms.microphone !== "granted")) {
-        toast.warning(t("live_translation.start_hint_mic"));
-        return false;
-      }
-      if (perms.restartRequired) {
-        toast.warning(t("live_translation.start_hint_restart"));
-        return false;
-      }
 
       // Start in pure recording mode — no provider or API key required.
       // No navigation here: the float dock stretches into its runway bar
@@ -159,6 +136,7 @@ export function useQuickRecording() {
             connections =
               (await requestRealtimeSession(
                 {
+                  audioSources: view.audioSources,
                   sourceLanguage: view.sourceLanguage ?? "zh",
                   targetLanguage: target,
                   sessionId: view.sessionId,
@@ -182,7 +160,7 @@ export function useQuickRecording() {
     } finally {
       busyRef.current = false;
     }
-  }, [api, view.sessionId, view.state, view.epoch, view.sourceLanguage, view.targetLanguage]);
+  }, [api, view.sessionId, view.state, view.epoch, view.sourceLanguage, view.targetLanguage, view.audioSources, t]);
 
   /** Stop the live session from outside the recording page. Mirrors the
    *  page's stop contract: the command acks immediately, the Rust side

@@ -24,8 +24,8 @@ interface RecordingDockProps {
   stopping?: boolean;
   /** Elapsed time formatted as HH:MM:SS. */
   formattedTime: string;
-  /** Live microphone level in [0, 1] for the in-dock animation. */
-  micLevel: number;
+  /** Live recorded audio level in [0, 1] for the in-dock animation. */
+  level: number;
   /** Whether the current position is bookmarked. */
   bookmarked: boolean;
   onStart: () => void;
@@ -54,7 +54,7 @@ export function RecordingDock({
   busy,
   stopping = false,
   formattedTime,
-  micLevel,
+  level,
   bookmarked,
   onStart,
   onTogglePause,
@@ -116,7 +116,7 @@ export function RecordingDock({
             {/* Middle: live recording animation */}
             <div className="mx-1 h-9 min-w-0 flex-1">
               <AudioVisualizer
-                level={micLevel}
+                level={level}
                 active={recording && !paused}
                 className="h-full w-full"
               />

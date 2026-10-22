@@ -1,3 +1,4 @@
+use crate::audio_contract::sources::{self, SourceSelection};
 use crate::{now, remove_store_value, save_store_value, update_store_value, CommandResult};
 use futures_util::{SinkExt, StreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
@@ -96,6 +97,7 @@ fn enqueue_audio(
     elapsed_ms: u64,
     payload: Vec<u8>,
 ) {
+    if !session.source_enabled(source) { return; }
     session
         .last_elapsed_ms
         .fetch_max(elapsed_ms.saturating_add(20), Ordering::Relaxed);
@@ -106,7 +108,7 @@ fn enqueue_audio(
         .get(&source)
         .cloned()
     {
-        let _ = sender.send(WsCommand::Audio(payload));
+        let _ = sender.send(WsCommand::Audio(payload, session.sources.lock().expect("source lock").revision));
     }
 }
 
@@ -203,10 +205,7 @@ impl StartRequest {
     /// Collapse the requested sources into the sidecar's `--sources` value.
     fn sources_argument(&self) -> &'static str {
         let mic = self.wants_mic();
-        let system = self
-            .audio_sources
-            .iter()
-            .any(|source| source == "system");
+        let system = self.wants_system();
         match (mic, system) {
             (true, false) => "mic",
             (false, true) => "system",
@@ -243,6 +242,10 @@ pub struct PermissionStatus {
     /// EventKit calendar grant (macOS) or "unsupported" elsewhere; optional
     /// permission owned by the onboarding page, not the recording flow.
     pub(crate) calendar: String,
+    #[serde(default)]
+    microphone_available: Option<bool>,
+    #[serde(default)]
+    system_audio_available: Option<bool>,
     system_audio_required: bool,
     restart_required: bool,
 }
@@ -284,6 +287,12 @@ pub struct LiveSnapshot {
     elapsed_ms: u64,
     mic_level: f32,
     system_level: f32,
+    recording_level: f32,
+    audio_sources: Vec<String>,
+    source_revision: u64,
+    source_errors: HashMap<String, String>,
+    aec_active: bool,
+    aec_degraded: bool,
     segments: Vec<LiveSegment>,
 }
 
@@ -390,7 +399,7 @@ pub struct RecoverySummary {
 }
 
 enum WsCommand {
-    Audio(Vec<u8>),
+    Audio(Vec<u8>, u64),
     VoiceEnd,
 }
 
@@ -420,6 +429,12 @@ impl LiveTranslationManager {
 
 struct LiveSession {
     markers: Mutex<Vec<RecordingMarker>>,
+    sources: Mutex<SourceSelection>,
+    source_change: tokio::sync::Mutex<()>,
+    source_reply: Mutex<Option<(String, Option<String>)>>,
+    recording_level: AtomicU32,
+    aec_active: AtomicBool,
+    live_aec_degraded: AtomicBool,
     automatic: bool,
     session_id: String,
     title: String,
@@ -482,18 +497,45 @@ impl LiveSession {
         *self.last_voice_at.lock().expect("live last voice lock") = Instant::now();
     }
 
+    fn source_enabled(&self, source: AudioSource) -> bool {
+        self.sources
+            .lock()
+            .expect("source selection lock")
+            .enabled(match source {
+                AudioSource::Mic => "mic",
+                AudioSource::System => "system",
+            })
+    }
+
     fn snapshot(&self) -> LiveSnapshot {
+        let sources = self.sources.lock().expect("source selection lock").clone();
         LiveSnapshot {
             markers: self.markers.lock().expect("recording markers lock").clone(),
             state: self.state.lock().expect("live state lock").clone(),
             session_id: Some(self.session_id.clone()),
             epoch: self.epoch.load(Ordering::Relaxed),
-            source_language: Some(self.source_language.read().expect("live source language").clone()),
-            target_language: Some(self.target_language.read().expect("live target language").clone()),
+            source_language: Some(
+                self.source_language
+                    .read()
+                    .expect("live source language")
+                    .clone(),
+            ),
+            target_language: Some(
+                self.target_language
+                    .read()
+                    .expect("live target language")
+                    .clone(),
+            ),
             started_at: Some(self.started_at.clone()),
             elapsed_ms: self.last_elapsed_ms.load(Ordering::Relaxed),
             mic_level: f32::from_bits(self.mic_level.load(Ordering::Relaxed)),
             system_level: f32::from_bits(self.system_level.load(Ordering::Relaxed)),
+            recording_level: f32::from_bits(self.recording_level.load(Ordering::Relaxed)),
+            audio_sources: sources.sources,
+            source_revision: sources.revision,
+            source_errors: sources.errors,
+            aec_active: self.aec_active.load(Ordering::Relaxed),
+            aec_degraded: self.live_aec_degraded.load(Ordering::Relaxed),
             segments: self.segments.lock().expect("live segments lock").clone(),
         }
     }
@@ -511,6 +553,12 @@ fn idle_snapshot() -> LiveSnapshot {
         elapsed_ms: 0,
         mic_level: 0.0,
         system_level: 0.0,
+        recording_level: 0.0,
+        audio_sources: Vec::new(),
+        source_revision: 0,
+        source_errors: HashMap::new(),
+        aec_active: false,
+        aec_degraded: false,
         segments: Vec::new(),
     }
 }
@@ -616,6 +664,8 @@ pub(crate) fn run_permission_command(app: &AppHandle, argument: &str) -> Command
         // The sidecar knows nothing about EventKit; calendar state always
         // comes from the main process, which owns the EventKit connection.
         calendar: crate::calendar_permission_state().to_owned(),
+        microphone_available: value.get("microphoneAvailable").and_then(Value::as_bool),
+        system_audio_available: value.get("systemAudioAvailable").and_then(Value::as_bool),
         system_audio_required: true,
         restart_required: value
             .get("restartRequired")
@@ -669,6 +719,8 @@ fn read_windows_permission_status() -> PermissionStatus {
         // (WinRT Appointments needs package identity); cloud calendars come
         // via Connections instead, so the onboarding row stays hidden.
         calendar: "unsupported".to_owned(),
+        microphone_available: Some(!crate::windows_capture::enumerate_devices().inputs.is_empty()),
+        system_audio_available: Some(!crate::windows_capture::enumerate_devices().outputs.is_empty()),
         system_audio_required: true,
         restart_required: false,
     }
@@ -797,11 +849,246 @@ pub fn live_translation_state(state: State<LiveTranslationManager>) -> CommandRe
         .unwrap_or_else(idle_snapshot))
 }
 
+fn prepare_source_permissions(
+    app: &AppHandle,
+    requested: &[String],
+    interactive: bool,
+) -> CommandResult<PermissionStatus> {
+    let permissions = live_translation_permissions(app.clone())?;
+    #[cfg(target_os = "macos")]
+    if interactive {
+        if requested.iter().any(|s| s == "mic")
+            && permissions.microphone_available != Some(false)
+            && permissions.microphone == "notDetermined"
+        {
+            let _ = crate::mic_permission::request_access();
+        }
+        if requested.iter().any(|s| s == "system") && permissions.system_audio != "granted" {
+            let _ = run_permission_command(app, "--request-system-audio");
+        }
+    }
+    #[cfg(target_os = "windows")]
+    let _ = (interactive, requested, permissions);
+    live_translation_permissions(app.clone())
+}
+
+fn resolve_source_selection(
+    requested: &[String],
+    permissions: &PermissionStatus,
+) -> CommandResult<SourceSelection> {
+    let error = |available: Option<bool>, permission: &str| {
+        if available == Some(false) {
+            Some("no_device")
+        } else if permission != "granted" {
+            Some("permission")
+        } else {
+            None
+        }
+    };
+    sources::resolve(
+        requested,
+        error(permissions.microphone_available, &permissions.microphone),
+        error(
+            permissions.system_audio_available,
+            &permissions.system_audio,
+        ),
+    )
+}
+
+fn apply_capture_sources(app: &AppHandle, session: &LiveSession, value: &Value) {
+    session.aec_active.store(
+        value.get("aec").and_then(Value::as_bool).unwrap_or(false),
+        Ordering::Relaxed,
+    );
+    let Some(values) = value.get("sources").and_then(Value::as_array) else {
+        return;
+    };
+    let enabled: Vec<String> = values
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    let revision = value
+        .get("sourceRevision")
+        .and_then(Value::as_u64)
+        .unwrap_or(1);
+    let at = value
+        .get("elapsedMs")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| session.last_elapsed_ms.load(Ordering::Relaxed));
+    session.live_aec_degraded.store(value.get("aecDegraded").and_then(Value::as_bool).unwrap_or(enabled.len() == 2 && session.dual_channel && aec_enabled() && !session.aec_active.load(Ordering::Relaxed)), Ordering::Relaxed);
+    let reason = value
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or("user");
+    let mut selection = session.sources.lock().expect("source selection lock");
+    if revision < selection.revision {
+        return;
+    }
+    if revision > selection.revision || selection.sources != enabled {
+        let previous = selection.sources.clone();
+        if value.get("event").and_then(Value::as_str) == Some("ready")
+            && selection.revision == 1 && selection.intervals.len() == 1 {
+            // An open failure is resolved before the first native ready event;
+            // do not record the unconfirmed source as having been captured.
+            selection.sources = enabled.clone();
+            selection.intervals[0].sources = enabled.clone();
+        } else {
+            selection.update(enabled.clone(), at, reason);
+        }
+        selection.revision = revision;
+        for source in &enabled {
+            selection.errors.remove(source);
+        }
+        if reason != "user" {
+            for source in previous.iter().filter(|s| !enabled.contains(s)) {
+                selection.errors.insert(source.clone(), reason.to_owned());
+            }
+        }
+    }
+    let _ = crate::atomic_write(
+        &session.directory.join("sources.json"),
+        &serde_json::to_vec(&selection.intervals).unwrap_or_default(),
+    );
+    drop(selection);
+    if !session.source_enabled(AudioSource::Mic) {
+        session.mic_level.store(0, Ordering::Relaxed);
+    }
+    if !session.source_enabled(AudioSource::System) {
+        session.system_level.store(0, Ordering::Relaxed);
+    }
+    if session.sources.lock().expect("source lock").sources.is_empty()
+        && matches!(session.state.lock().expect("live state lock").as_str(), "recording" | "connecting" | "paused") {
+        session.set_state("paused");
+    }
+    emit_snapshot(app, session);
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSourcesRequest {
+    session_id: String,
+    audio_sources: Vec<String>,
+    source_revision: u64,
+}
+
+#[tauri::command]
+pub async fn live_translation_set_sources(
+    app: AppHandle,
+    state: State<'_, LiveTranslationManager>,
+    request: SetSourcesRequest,
+) -> CommandResult<LiveSnapshot> {
+    sources::validate(&request.audio_sources)?;
+    let session = state
+        .session
+        .lock()
+        .map_err(|_| "session lock")?
+        .clone()
+        .ok_or("No active recording")?;
+    if !session.dual_channel {
+        return Err("Source switching is unavailable for legacy recordings".into());
+    }
+    let _change = session
+        .source_change
+        .try_lock()
+        .map_err(|_| "A source change is in progress")?;
+    if request.session_id != session.session_id {
+        return Err("Source change session mismatch".into());
+    }
+    if !matches!(session.snapshot().state.as_str(), "recording" | "paused") {
+        return Err("Recording is busy".into());
+    }
+    if request.source_revision != session.sources.lock().map_err(|_| "source lock")?.revision {
+        return Err("Audio source state changed; please retry".into());
+    }
+    let permissions = prepare_source_permissions(&app, &request.audio_sources, true)?;
+    let selection = resolve_source_selection(&request.audio_sources, &permissions)?;
+    if selection.sources.len() != request.audio_sources.len() {
+        return Err("Selected audio source is unavailable".into());
+    }
+    let previous = session
+        .sources
+        .lock()
+        .map_err(|_| "source lock")?
+        .sources
+        .clone();
+    let revision = request.source_revision + 1;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    *session
+        .source_reply
+        .lock()
+        .map_err(|_| "source reply lock")? = None;
+    #[cfg(target_os = "macos")]
+    {
+        let mut child = session.child.lock().map_err(|_| "capture process lock")?;
+        let stdin = child
+            .as_mut()
+            .and_then(|c| c.stdin.as_mut())
+            .ok_or("Capture control unavailable")?;
+        writeln!(stdin, "{}", json!({"sources": request.audio_sources, "sourceRevision": revision, "requestId": request_id})).map_err(|e| e.to_string())?;
+        stdin.flush().map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let selected = crate::windows_capture::Sources {
+            mic: request.audio_sources.iter().any(|s| s == "mic"),
+            system: request.audio_sources.iter().any(|s| s == "system"),
+        };
+        if let Err(error) = with_windows_engine(|engine| engine.set_sources(selected))
+            .ok_or("Capture engine unavailable")?
+        {
+            if with_windows_engine(|engine| engine.is_paused()).unwrap_or(false) {
+                session.set_state("paused");
+                voice_end(&session);
+                emit_snapshot(&app, &session);
+            }
+            return Err(error);
+        }
+        apply_capture_sources(
+            &app,
+            &session,
+            &json!({"sources": request.audio_sources, "sourceRevision": revision, "aec": selected.mic && selected.system && session.dual_channel && aec_enabled()}),
+        );
+        *session
+            .source_reply
+            .lock()
+            .map_err(|_| "source reply lock")? = Some((request_id.clone(), None));
+    }
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let reply = session
+            .source_reply
+            .lock()
+            .map_err(|_| "source reply lock")?
+            .clone();
+        if let Some((reply_id, error)) = reply {
+            if reply_id == request_id {
+                if let Some(message) = error {
+                    if previous.iter().any(|s| !request.audio_sources.contains(s)) {
+                        let _ = signal_child(&session, SIGNAL_PAUSE);
+                    }
+                    return Err(message);
+                }
+                return Ok(session.snapshot());
+            }
+        }
+        if Instant::now() >= deadline {
+            // Never claim a failed close succeeded. Pause the native capture
+            // before letting the caller retry against its actual snapshot.
+            let _ = signal_child(&session, SIGNAL_PAUSE);
+            #[cfg(target_os = "windows")]
+            let _ = with_windows_engine(|engine| engine.pause());
+            return Err("Audio source change timed out; recording is being paused".into());
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 #[tauri::command]
 pub async fn live_translation_start(
     app: AppHandle,
     state: State<'_, LiveTranslationManager>,
-    request: StartRequest,
+    mut request: StartRequest,
 ) -> CommandResult<LiveSnapshot> {
     if !valid_session_id(&request.session_id)
         || request.source_language.trim().is_empty()
@@ -818,74 +1105,11 @@ pub async fn live_translation_start(
         request.sources_argument(),
         request.title.trim()
     );
-    #[cfg(target_os = "windows")]
-    {
-        // Say WHY a start cannot proceed when the machine has no usable audio
-        // endpoint for a requested source; the WASAPI probe would otherwise
-        // surface (at best) a raw HRESULT string in a corner Alert.
-        let devices = crate::windows_capture::enumerate_devices();
-        let mut missing: Vec<&str> = Vec::new();
-        if request.wants_mic() && devices.inputs.is_empty() {
-            missing.push("麦克风");
-        }
-        if request.wants_system() && devices.outputs.is_empty() {
-            missing.push("扬声器/耳机");
-        }
-        if !missing.is_empty() {
-            log::warn!(
-                "Live translation start rejected: no audio device (missing {missing:?})"
-            );
-            return Err(format!(
-                "未检测到可用的{}，无法开始录音。请在 Windows「设置 → 系统 → 声音」中启用音频设备后重试。",
-                missing.join(" 和 ")
-            ));
-        }
-    }
-    #[cfg(target_os = "macos")]
-    {
-        // First, surface the native TCC prompts so the OS dialog actually
-        // appears and a "Lynse" entry is created in System Settings (the
-        // microphone one is asked in-process — see `mic_permission`). Without
-        // this the user is sent to the privacy pane where nothing is listed
-        // yet, leaving them with nothing to toggle — the entry only
-        // materialises after the OS prompt has fired at least once.
-        let permissions = read_permission_status(&app)?;
-        // In system-only mode the microphone is never captured, so its
-        // permission is neither requested nor required.
-        let needs_mic = request.wants_mic() && permissions.microphone != "granted";
-        let needs_screen = permissions.system_audio != "granted";
-        if needs_mic || needs_screen {
-            if needs_mic {
-                let _ = crate::mic_permission::request_access();
-            }
-            if needs_screen {
-                let _ = run_permission_command(&app, "--request-system-audio");
-            }
-        }
-        // Re-read the actual grant state. Screen Recording only takes effect
-        // after a full app restart even once the user clicks Allow, so we still
-        // send the user to the pane and ask for a restart.
-        let after = read_permission_status(&app)?;
-        if request.wants_mic() && after.microphone != "granted" {
-            open_macos_privacy_pane("microphone");
-            return Err(
-                "缺少麦克风权限。请在系统弹出的对话框中点击「允许」（或在「隐私与安全性 → 麦克风」中允许 Lynse），然后重新启动 Lynse。"
-                    .to_owned(),
-            );
-        }
-        // The audio-capture sidecar always pulls audio through ScreenCaptureKit
-        // (SCStream) — even for pure microphone recording — so the "Screen &
-        // System Audio Recording" TCC grant is required in every mode. Without
-        // it the sidecar exits immediately and no audio is ever captured, which
-        // would otherwise surface as a silent "recording" with no audio.
-        if after.system_audio != "granted" {
-            open_macos_privacy_pane("screen");
-            return Err(
-                "缺少“屏幕与系统音频录制”权限。请在系统弹出的对话框中点击「允许」（或在「隐私与安全性 → 屏幕录制」中允许 Lynse），然后完全退出并重新启动 Lynse。"
-                    .to_owned(),
-            );
-        }
-    }
+    if request.audio_sources.is_empty() { request.audio_sources = vec!["mic".into(), "system".into()]; }
+    sources::validate(&request.audio_sources)?;
+    let permissions = prepare_source_permissions(&app, &request.audio_sources, !request.automatic)?;
+    let selection = resolve_source_selection(&request.audio_sources, &permissions)?;
+    request.audio_sources = selection.sources.clone();
     {
         let guard = state
             .session
@@ -913,6 +1137,12 @@ pub async fn live_translation_start(
 
     let session = Arc::new(LiveSession {
         markers: Mutex::new(Vec::new()),
+        sources: Mutex::new(selection),
+        source_change: tokio::sync::Mutex::new(()),
+        source_reply: Mutex::new(None),
+        recording_level: AtomicU32::new(0),
+        aec_active: AtomicBool::new(false),
+        live_aec_degraded: AtomicBool::new(false),
         automatic: request.automatic,
         session_id: request.session_id.clone(),
         title: request.title.trim().to_owned(),
@@ -980,8 +1210,10 @@ pub async fn live_translation_start(
             .arg(&session.directory)
             .arg("--sources")
             .arg(&sources_argument)
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        if session.dual_channel { command.arg("--switchable-sources"); }
         if session.dual_channel && aec_enabled() {
             command.arg("--aec");
             if session.voice_enhancement {
@@ -1125,6 +1357,7 @@ fn spawn_control_reader(
             };
             match value.get("event").and_then(Value::as_str) {
                 Some("ready" | "resumed") => {
+                    if !matches!(session.state.lock().expect("live state lock").as_str(), "connecting" | "recording" | "paused") { continue; }
                     log::info!(
                         "Live translation {} (session={})",
                         if value.get("event").and_then(Value::as_str) == Some("ready") {
@@ -1135,13 +1368,26 @@ fn spawn_control_reader(
                         session.session_id
                     );
                     session.set_state("recording");
+                    apply_capture_sources(&app, &session, &value);
                     // A fresh capture (re)start also restarts the silence
                     // window, so a long pause never bleeds into the resumed
                     // session's watchdog budget.
                     session.mark_voice_activity();
                     emit_snapshot(&app, &session);
                 }
+                Some("sourcesChanged") => {
+                    apply_capture_sources(&app, &session, &value);
+                    if let Some(request_id) = value.get("requestId").and_then(Value::as_str).filter(|id| !id.is_empty()) {
+                        *session.source_reply.lock().expect("source reply lock") = Some((request_id.to_owned(), None));
+                    }
+                }
+                Some("sourcesFailed") => {
+                    let request_id = value.get("requestId").and_then(Value::as_str).unwrap_or_default().to_owned();
+                    let message = value.get("message").and_then(Value::as_str).unwrap_or("Capture source change failed").to_owned();
+                    *session.source_reply.lock().expect("source failure lock") = Some((request_id, Some(message)));
+                }
                 Some("paused") => {
+                    if matches!(session.state.lock().expect("live state lock").as_str(), "stopping" | "idle" | "failed") { continue; }
                     session.set_state("paused");
                     emit_snapshot(&app, &session);
                 }
@@ -1151,6 +1397,12 @@ fn spawn_control_reader(
                         .get("system")
                         .and_then(Value::as_f64)
                         .unwrap_or_default() as f32;
+                    let recording = value.get("recordingLevel").and_then(Value::as_f64).unwrap_or(mic.max(system) as f64) as f32;
+                    let revision = value.get("sourceRevision").and_then(Value::as_u64).unwrap_or(0);
+                    if revision != session.sources.lock().expect("source lock").revision { continue; }
+                    let aec_degraded = value.get("aecDegraded").and_then(Value::as_bool).unwrap_or(false);
+                    session.live_aec_degraded.store(aec_degraded, Ordering::Relaxed);
+                    session.recording_level.store(recording.to_bits(), Ordering::Relaxed);
                     let elapsed = value
                         .get("elapsedMs")
                         .and_then(Value::as_u64)
@@ -1174,7 +1426,7 @@ fn spawn_control_reader(
                     if mic >= MIC_SILENCE_LEVEL || system >= MIC_SILENCE_LEVEL {
                         session.mark_voice_activity();
                     }
-                    let _ = app.emit(LIVE_EVENT, json!({ "type": "levels", "mic": mic, "system": system, "elapsedMs": elapsed, "micSuppressed": mic_suppressed }));
+                    let _ = app.emit(LIVE_EVENT, json!({ "type": "levels", "mic": mic, "system": system, "elapsedMs": elapsed, "micSuppressed": mic_suppressed, "recordingLevel": recording, "aecDegraded": aec_degraded, "sourceRevision": revision, "sessionId": session.session_id }));
                 }
                 Some("error") => emit_error(
                     &app,
@@ -1528,7 +1780,8 @@ async fn websocket_loop(
                     tokio::select! {
                         command = receiver.recv(), if finishing.is_none() => {
                             match command {
-                                Some(WsCommand::Audio(payload)) => {
+                                Some(WsCommand::Audio(payload, revision)) => {
+                                    if !session.source_enabled(source) || revision != session.sources.lock().expect("source lock").revision { continue; }
                                     if !audio_forward_logged {
                                         audio_forward_logged = true;
                                         log::info!(
@@ -2268,13 +2521,14 @@ pub async fn live_translation_set_mode(
         .write()
         .map_err(|_| "live target language lock is poisoned")? = request.target_language.clone();
     session.epoch.store(request.epoch, Ordering::Relaxed);
-    session.epoch_offset_ms.store(0, Ordering::Relaxed);
+    let offset = session.last_elapsed_ms.load(Ordering::Relaxed);
+    session.epoch_offset_ms.store(offset, Ordering::Relaxed);
     // Tear down any previous connections, then attach the new ones (if any).
     // `spawn_connections` already calls `clear_connections` first, but we do
     // it explicitly so a pure-recording switch drops the websocket handles.
     clear_connections(&session);
     if !request.connections.is_empty() {
-        spawn_connections(&app, &session, request.epoch, 0, request.connections)?;
+        spawn_connections(&app, &session, request.epoch, offset, request.connections)?;
     }
     emit_snapshot(&app, &session);
     Ok(session.snapshot())
@@ -2318,7 +2572,7 @@ fn silence_expired(state: &str, silent_for: Duration) -> bool {
 }
 
 fn spawn_silence_watchdog(app: AppHandle, session: Arc<LiveSession>) {
-    if !session.wants_mic || !session.automatic {
+    if !session.automatic {
         return;
     }
     tauri::async_runtime::spawn(async move {
@@ -2635,6 +2889,13 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
         system.exists().then_some(system.as_path()),
         &playback,
     )?;
+    if let Ok(bytes) = fs::read(session.directory.join("waveform-windows.json")) {
+        if let Ok(windows) = serde_json::from_slice::<Vec<(u64, f32)>>(&bytes) {
+            let _ = crate::audio_contract::waveform::seed_from_windows(&playback, &windows);
+        }
+    }
+    let waveform = crate::audio_contract::waveform::cached(&playback).ok();
+    let source_intervals = session.sources.lock().map_err(|_| "source lock")?.intervals.clone();
     // Dual-channel recordings carry the versioned track manifest (engine +
     // degraded intervals + per-track files, `tracks.json`); legacy recordings
     // have none. The same file is written by the macOS sidecar and the
@@ -2647,10 +2908,16 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
             )
             .ok()
         })
-        .flatten();
+        .flatten()
+        .map(|mut manifest| {
+            // Switchable sessions create writers eagerly; an unselected
+            // source's empty files must not appear as recorded audio tracks.
+            manifest.tracks.retain(|track| wav_data_len(&session.directory.join(&track.file)).map(|bytes| bytes > 0).unwrap_or(false));
+            manifest
+        });
     let aec_degraded = tracks_manifest
         .as_ref()
-        .map(|manifest| !manifest.degraded_intervals_ms.is_empty() || manifest.engine == "none")
+        .map(|manifest| !manifest.degraded_intervals_ms.is_empty() || (manifest.engine == "none" && source_intervals.iter().any(|interval| interval.sources.len() == 2)))
         .unwrap_or(false);
     let tracks_value = tracks_manifest
         .as_ref()
@@ -2679,6 +2946,7 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
             "sourceLanguage": session.source_language.read().expect("live source language").clone(),
             "targetLanguage": session.target_language.read().expect("live target language").clone(),
             "durationMs": duration_ms,
+            "audioSourceIntervals": source_intervals,
             "segments": segments,
         }))
         .map_err(|error| error.to_string())?,
@@ -2774,6 +3042,8 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
             "markers": session.markers.lock().expect("recording markers lock").clone(),
             "workbenchScope": crate::workbench::current_scope(app),
             "trackManifest": tracks_value.clone().unwrap_or(Value::Null),
+            "audioSourceIntervals": source_intervals,
+            "waveformPeaks": waveform.as_ref().map(|value| &value.peaks),
         }),
     )?;
 
@@ -3421,8 +3691,17 @@ fn recover_session(app: &AppHandle, session_id: &str) -> CommandResult<Completed
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(error) => return Err(error.to_string()),
     };
+    let recovered_intervals = fs::read(directory.join("sources.json")).ok()
+        .and_then(|bytes| serde_json::from_slice::<Vec<sources::SourceInterval>>(&bytes).ok()).unwrap_or_default();
+    let recovered_selection = SourceSelection { sources: recovered_intervals.last().map(|i| i.sources.clone()).unwrap_or_default(), intervals: recovered_intervals, ..SourceSelection::default() };
     let session = LiveSession {
         markers: Mutex::new(markers),
+        sources: Mutex::new(recovered_selection),
+        source_change: tokio::sync::Mutex::new(()),
+        source_reply: Mutex::new(None),
+        recording_level: AtomicU32::new(0),
+        aec_active: AtomicBool::new(false),
+        live_aec_degraded: AtomicBool::new(false),
         automatic: manifest.automatic,
         session_id: manifest.session_id,
         title: manifest.title,
@@ -3497,7 +3776,7 @@ pub fn live_translation_discard_recovery(
 /// the frosted capsule behind the webview. Toggling the live-transcript
 /// drawer grows the window downward to [`RECORDING_ISLAND_EXPANDED_HEIGHT`]
 /// via `live_translation_expand_island` (the frontend mirrors these values).
-const RECORDING_ISLAND_WIDTH: f64 = 280.0;
+const RECORDING_ISLAND_WIDTH: f64 = 340.0;
 const RECORDING_ISLAND_HEIGHT: f64 = 44.0;
 const RECORDING_ISLAND_EXPANDED_HEIGHT: f64 = 480.0;
 
@@ -4069,6 +4348,14 @@ fn handle_engine_event(
     use crate::windows_capture::EngineEvent;
     match event {
         EngineEvent::Ready { mic, system } => {
+            if matches!(session.state.lock().expect("live state lock").as_str(), "stopping" | "idle" | "failed") { return; }
+            session.aec_active.store(mic.is_some() && system.is_some() && session.dual_channel && aec_enabled(), Ordering::Relaxed);
+            let actual = [mic.as_ref().map(|_| "mic".to_owned()), system.as_ref().map(|_| "system".to_owned())].into_iter().flatten().collect::<Vec<_>>();
+            let selected = session.sources.lock().expect("source lock").clone();
+            if selected.sources != actual {
+                apply_capture_sources(app, session, &json!({"event": "ready", "sources": actual, "sourceRevision": selected.revision + 1,
+                    "reason": "capture_failed", "aec": mic.is_some() && system.is_some() && session.dual_channel && aec_enabled()}));
+            }
             log::info!(
                 "Live translation recording started (session={}, mic={:?}, system={:?})",
                 session.session_id,
@@ -4080,12 +4367,25 @@ fn handle_engine_event(
             session.mark_voice_activity();
             emit_snapshot(app, session);
         }
+        EngineEvent::SourceFailed { source, message } => {
+            if matches!(session.state.lock().expect("live state lock").as_str(), "stopping" | "idle" | "failed") { return; }
+            let source = if source == 0 { "mic" } else { "system" };
+            let (enabled, revision) = {
+                let selected = session.sources.lock().expect("source lock");
+                (selected.sources.iter().filter(|s| s.as_str() != source).cloned().collect::<Vec<_>>(), selected.revision + 1)
+            };
+            apply_capture_sources(app, session, &json!({"event": if session.snapshot().state == "connecting" { "ready" } else { "sourcesChanged" }, "sources": enabled, "sourceRevision": revision, "reason": "capture_failed"}));
+            log::warn!("Audio source {source} failed: {message}");
+            if enabled.is_empty() { session.set_state("paused"); emit_snapshot(app, session); }
+        }
         EngineEvent::Diagnostic(message) => {
             log::info!("Capture diagnostic: {message}");
         }
-        EngineEvent::Levels { mic, system } => {
+        EngineEvent::Levels { mic, system, aec_degraded } => {
+            session.live_aec_degraded.store(aec_degraded, Ordering::Relaxed);
             session.mic_level.store(mic.to_bits(), Ordering::Relaxed);
             session.system_level.store(system.to_bits(), Ordering::Relaxed);
+            session.recording_level.store(mic.max(system).to_bits(), Ordering::Relaxed);
             // The watchdog must check BOTH sources: a remote speaker talking
             // alone is a live meeting, not an empty room.
             if mic > MIC_SILENCE_LEVEL || (session.wants_system && system > MIC_SILENCE_LEVEL) {
@@ -4103,6 +4403,10 @@ fn handle_engine_event(
                     "mic": mic,
                     "system": system,
                     "elapsedMs": session.last_elapsed_ms.load(Ordering::Relaxed),
+                    "recordingLevel": mic.max(system),
+                    "aecDegraded": aec_degraded,
+                    "sourceRevision": session.sources.lock().expect("source lock").revision,
+                    "sessionId": session.session_id,
                 }),
             );
         }
@@ -4185,6 +4489,12 @@ mod tests {
     fn live_session() -> LiveSession {
         LiveSession {
             markers: Mutex::new(Vec::new()),
+            sources: Mutex::new(sources::resolve(&["mic".into(), "system".into()], None, None).expect("default sources")),
+            source_change: tokio::sync::Mutex::new(()),
+            source_reply: Mutex::new(None),
+            recording_level: AtomicU32::new(0),
+        aec_active: AtomicBool::new(false),
+        live_aec_degraded: AtomicBool::new(false),
             automatic: false,
             session_id: "session".to_owned(),
             title: "test".to_owned(),
@@ -4261,14 +4571,14 @@ mod tests {
     #[test]
     fn drain_drops_stale_audio_but_reports_voice_end() {
         let (tx, mut rx) = unbounded_channel::<WsCommand>();
-        tx.send(WsCommand::Audio(vec![1, 2, 3])).unwrap();
-        tx.send(WsCommand::Audio(vec![4])).unwrap();
+        tx.send(WsCommand::Audio(vec![1, 2, 3], 0)).unwrap();
+        tx.send(WsCommand::Audio(vec![4], 0)).unwrap();
         assert!(!drain_stale_audio(&mut rx));
         assert!(rx.try_recv().is_err(), "stale audio must be dropped");
 
-        tx.send(WsCommand::Audio(vec![5])).unwrap();
+        tx.send(WsCommand::Audio(vec![5], 0)).unwrap();
         tx.send(WsCommand::VoiceEnd).unwrap();
-        tx.send(WsCommand::Audio(vec![6])).unwrap();
+        tx.send(WsCommand::Audio(vec![6], 0)).unwrap();
         drop(tx);
         // VoiceEnd ends the drain immediately: the session paused or stopped
         // while the stream was down, so the loop must not reconnect.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { visibleGraphNodes } from "./graph-visible-nodes";
+import { graphNeighborhood, visibleGraphNodes } from "./graph-visible-nodes";
 import type { GraphNode, KnowledgeGraph } from "./types";
 
 const topics: GraphNode[] = Array.from({ length: 100 }, (_, i) => ({ id: `topic-${i}`, title: `Topic ${String(i).padStart(3, "0")}`, kind: "topic", status: "unknown", description: "", updates: [], citations: [] }));
@@ -7,17 +7,24 @@ const sources: GraphNode[] = topics.map((node, i) => ({ ...node, id: `source-${i
 const edges: KnowledgeGraph["edges"] = topics.map((node, i) => ({ id: `evidence-${i}`, source: node.id, target: sources[i]!.id, kind: "evidence" }));
 
 describe("bounded graph neighborhood", () => {
+  it("keeps complete one and two hop neighborhoods independently of search matches", () => {
+    const chain = [topics[0]!, sources[0]!, topics[1]!, sources[1]!];
+    const links = [edges[0]!, { id: "shared", source: topics[1]!.id, target: sources[0]!.id, kind: "evidence" }, edges[1]!];
+    expect(graphNeighborhood(chain, links, topics[0]!.id, 1).map(node => node.id)).toEqual([topics[0]!.id, sources[0]!.id]);
+    expect(graphNeighborhood(chain, links, topics[0]!.id, 2).map(node => node.id)).toEqual([topics[0]!.id, sources[0]!.id, topics[1]!.id]);
+    expect(graphNeighborhood(chain, links, "revoked", 2)).toEqual([]);
+  });
   it("keeps both ends of evidence links when discoveries alone exceed the limit", () => {
     const visible = visibleGraphNodes([...topics, ...sources], edges, null);
     const ids = new Set(visible.map(node => node.id));
-    expect(visible).toHaveLength(90);
-    expect(visible.filter(node => node.kind === "source")).toHaveLength(45);
-    expect(edges.filter(edge => ids.has(edge.source) && ids.has(edge.target))).toHaveLength(45);
+    expect(visible).toHaveLength(190);
+    expect(visible.filter(node => node.kind === "source")).toHaveLength(95);
+    expect(edges.filter(edge => ids.has(edge.source) && ids.has(edge.target))).toHaveLength(95);
   });
 
   it("includes a selected node outside the default neighborhood with its source", () => {
     const visible = visibleGraphNodes([...topics, ...sources], edges, "topic-99");
-    expect(visible).toHaveLength(90);
+    expect(visible).toHaveLength(190);
     expect(visible.map(node => node.id)).toContain("topic-99");
     expect(visible.map(node => node.id)).toContain("source-99");
   });
@@ -31,7 +38,7 @@ describe("bounded graph neighborhood", () => {
 
   it("respects the filtered node set without inventing source nodes or relationships", () => {
     const visible = visibleGraphNodes(topics, edges, null);
-    expect(visible).toHaveLength(90);
+    expect(visible).toHaveLength(100);
     expect(visible.every(node => node.kind === "topic")).toBe(true);
     expect(visibleGraphNodes([], edges, null)).toEqual([]);
   });

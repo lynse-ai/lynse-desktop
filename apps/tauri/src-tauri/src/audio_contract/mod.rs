@@ -42,7 +42,9 @@ pub mod aec3;
 pub mod framer;
 pub mod manifest;
 pub mod resampler;
+pub mod sources;
 pub mod wav;
+pub mod waveform;
 
 
 /// Frame length every recognition consumer expects: 20 ms of 16 kHz mono

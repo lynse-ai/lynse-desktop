@@ -105,7 +105,7 @@ export interface KnowledgeDocument {
 export interface WorkbenchReadResult {
   document: KnowledgeDocument;
   markdown: string;
-  artifacts: { summaries: { id: string; markdown: string; createdAt: string }[]; todoSuggestions: TodoSuggestion[] } | null;
+  artifacts: { summaries: { id: string; markdown: string; createdAt: string; sourceRevision?: string }[]; todoSuggestions: TodoSuggestion[] } | null;
 }
 export interface SearchResult {
   items: { id: string; title: string; kind: string; excerpt: string; source: SourceRef }[];
@@ -148,10 +148,14 @@ export interface WikiModelsConfig { embedding: WikiModel; revision?: string; tex
 export interface WikiRevision { id: string; markdown: string; citations: SourceRef[]; fingerprint: string; createdAt: string; reviewedAt: string; review: string }
 export interface WikiTopic { id: string; mergedIds?: string[]; title: string; purpose: string; notes: string; pinned: boolean; excluded: boolean; stale: boolean; candidate: WikiRevision | null; published: WikiRevision | null; error: string }
 export interface WikiSources { gmailEnabled: boolean; gmailAccountId: string; integrationsUrl: string; error?: string; updatedAt?: string }
-export type GraphKind = "project" | "topic" | "goal" | "wiki" | "source";
-export type GraphStatus = "unknown" | "proposed" | "active" | "blocked" | "completed" | "unresolved" | "candidate" | "published" | "stale" | "source";
+export type GraphKind = "entity" | "event" | "topic" | "wiki" | "source";
+export type GraphModality = "asserted" | "planned" | "proposed" | "negated" | "uncertain";
+export type GraphStatus = "unknown" | "proposed" | "active" | "blocked" | "completed" | "cancelled" | "unresolved" | "candidate" | "published" | "stale" | "source";
+export interface GraphEvidence extends SourceRef { speaker?: string; positions?: { segmentId?: string; startMs?: number; endMs?: number; speaker?: string }[] }
+export interface GraphClaim { modality?: GraphModality; confidence?: number; review?: "candidate" | "confirmed"; userEdited?: boolean; reviewedAt?: string; citations?: GraphEvidence[] }
 export interface GraphUpdate { description: string; status: GraphStatus; observedAt: string; citations: SourceRef[] }
-export interface GraphNode { id: string; kind: GraphKind; title: string; description: string; status: GraphStatus; wikiId?: string | null; source?: SourceRef | null; citations: SourceRef[]; updates: GraphUpdate[] }
-export interface KnowledgeGraph { nodes: GraphNode[]; edges: { id: string; source: string; target: string; kind: string }[]; automaticTracking: boolean; tracking: { processing: boolean; paused?: boolean; completed: number; total: number; failed: number; error: string } }
+export interface GraphNode extends GraphClaim { id: string; kind: GraphKind; linkedTodo?: { id: string; title: string; completed: boolean; dueDate?: string | null; updatedAt: string }; subtype?: string; members?: GraphNode[]; title: string; description: string; status: GraphStatus; timeText?: string; dueText?: string; extractedAt?: string; sourceId?: string; wikiId?: string | null; source?: SourceRef | null; citations: GraphEvidence[]; updates: GraphUpdate[] }
+export interface GraphEdge extends GraphClaim { id: string; source: string; target: string; kind: string }
+export interface KnowledgeGraph { schemaVersion?: number; nodes: GraphNode[]; edges: GraphEdge[]; availableSources?: { id: string; title: string; selected: boolean }[]; automaticTracking: boolean; tracking: { processing: boolean; paused?: boolean; completed: number; total: number; failed: number; error: string } }
 export interface WikiState { topics: WikiTopic[]; models: WikiModelsConfig; sources?: WikiSources; graph?: KnowledgeGraph }
-export type WikiRequest = { action: "state" } | { action: "models"; models: WikiModelsConfig; embeddingKey?: string } | { action: "topic"; id?: string; title: string; purpose: string; notes?: string; pinned?: boolean; excluded?: boolean } | { action: "review"; id: string; candidateId: string; approve: boolean; markdown?: string } | { action: "retry"; id?: string } | { action: "sources"; sources: WikiSources } | { action: "tracking"; enabled: boolean } | { action: "tracking_retry" } | { action: "tracking_dismiss" | "tracking_restore"; id: string };
+export type WikiRequest = { action: "state" } | { action: "models"; models: WikiModelsConfig; embeddingKey?: string } | { action: "topic"; id?: string; title: string; purpose: string; notes?: string; pinned?: boolean; excluded?: boolean } | { action: "review"; id: string; candidateId: string; approve: boolean; markdown?: string } | { action: "retry"; id?: string } | { action: "sources"; sources: WikiSources } | { action: "tracking"; enabled: boolean } | { action: "tracking_retry" } | { action: "tracking_sources"; ids: string[] } | { action: "tracking_todo"; id: string } | { action: "tracking_merge"; id: string; target: string } | { action: "tracking_unmerge"; id: string } | { action: "tracking_review"; id: string; review: "candidate" | "confirmed"; description?: string; status?: GraphStatus; modality?: GraphModality } | { action: "tracking_dismiss" | "tracking_restore" | "tracking_reset"; id: string };

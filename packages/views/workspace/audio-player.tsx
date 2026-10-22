@@ -1,10 +1,11 @@
 "use client";
 
 import { useRef, useState, useEffect, useCallback, useImperativeHandle, forwardRef } from "react";
-import { Play, Pause, SkipForward, Volume2, VolumeX, Scissors } from "../icons";
+import { Play, Pause, SkipForward, Volume2, VolumeX, Scissors, Mic, Monitor } from "../icons";
 import { IconSwap } from "../icon-swap";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useWaveformPeaks } from "./use-waveform-peaks";
+import type { RecordingAudioSourceInterval } from "./types";
 import { WaveformProgress } from "./waveform-progress";
 
 const SPEEDS = [1, 1.5, 2];
@@ -22,6 +23,8 @@ export interface AudioPlayerHandle {
 
 interface AudioPlayerProps {
   src: string | null | undefined;
+  recordId?: string | null;
+  sourceIntervals?: RecordingAudioSourceInterval[];
   /** Highlight a specific time (ms) when clicked from transcript */
   highlightTimeMs?: number | null;
   /** Open the audio editor for this recording; renders the scissors entry when set. */
@@ -29,7 +32,7 @@ interface AudioPlayerProps {
 }
 
 export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
-  function AudioPlayer({ src, highlightTimeMs, onEdit }, ref) {
+  function AudioPlayer({ src, recordId, sourceIntervals, highlightTimeMs, onEdit }, ref) {
     const audioRef = useRef<HTMLAudioElement>(null);
     const pendingSeek = useRef<number | null>(null);
     const [playing, setPlaying] = useState(false);
@@ -40,7 +43,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(false);
     // Real waveform peaks for the scrubber; empty while decoding / on failure.
-    const { peaks } = useWaveformPeaks(src);
+    const { peaks, loading: waveformLoading, error: waveformError, skipped: waveformSkipped, retry: retryWaveform } = useWaveformPeaks(src, recordId);
     const { t } = useTranslation();
 
     // Expose seekTo to parent
@@ -216,6 +219,23 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
                   className="absolute top-1/2 size-3 -translate-y-1/2 rounded-full border-2 border-primary bg-background opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
                   style={{ left: `calc(${progress}% - 6px)` }}
                 />
+              </div>
+            )}
+
+            {(waveformLoading || waveformError || waveformSkipped) && (
+              <div role="status" className="flex items-center gap-2 text-2xs text-muted-foreground">
+                <span>{t(waveformLoading ? "recording_sources.waveform_loading" : "recording_sources.waveform_failed")}</span>
+                {!waveformLoading && <button type="button" onClick={retryWaveform} className="underline underline-offset-2 hover:text-foreground">{t("recording_sources.retry")}</button>}
+              </div>
+            )}
+
+            {!!sourceIntervals?.length && (
+              <div className="flex items-center gap-2 text-muted-foreground" role="img"
+                aria-label={sourceIntervals.some((interval) => interval.sources.includes("mic"))
+                  ? (sourceIntervals.some((interval) => interval.sources.includes("system")) ? `${t("recording_sources.system")} + ${t("recording_sources.mic")}` : t("recording_sources.mic"))
+                  : t("recording_sources.system")}>
+                {sourceIntervals.some((interval) => interval.sources.includes("system")) && <span title={t("recording_sources.system")}><Monitor aria-hidden="true" className="size-3.5" /></span>}
+                {sourceIntervals.some((interval) => interval.sources.includes("mic")) && <span title={t("recording_sources.mic")}><Mic aria-hidden="true" className="size-3.5" /></span>}
               </div>
             )}
 

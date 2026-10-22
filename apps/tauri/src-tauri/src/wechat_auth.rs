@@ -1,6 +1,6 @@
 //! WeChat OAuth sign-in window.
 //!
-//! The backend's WECHAT_JUMP flow (`GET /api/auth/render`) hands back a WeChat
+//! The backend's WECHAT_SCAN flow (`GET /api/auth/render`) hands back a WeChat
 //! authorize URL; after the scan is confirmed WeChat redirects the browser to
 //! the backend-configured `redirect_uri` with `?code=…&state=…`. The desktop
 //! app can never be that redirect target, so instead of the system browser
@@ -121,10 +121,10 @@ mod tests {
 
     #[test]
     fn callback_is_bound_to_server_path_and_state() {
-        let callback = "https://www.lynse.cn/auth/login".parse().unwrap();
+        let callback = "https://api.lynse.cn/auth/wechat/callback".parse().unwrap();
         for url in [
-            "https://www.lynse.cn/auth/login?code=once&state=expected",
-            "https://www.lynse.cn/auth/login?error=access_denied&state=expected",
+            "https://api.lynse.cn/auth/wechat/callback?code=once&state=expected",
+            "https://api.lynse.cn/auth/wechat/callback?error=access_denied&state=expected",
         ] {
             assert!(is_wechat_callback(
                 &url.parse().unwrap(),
@@ -133,12 +133,12 @@ mod tests {
             ));
         }
         for url in [
-            "https://api.lynse.cn/auth/login?code=once&state=expected",
-            "https://gapp.lynse.cn/auth/login?code=once&state=expected",
-            "https://www.lynse.cn/other?code=once&state=expected",
-            "https://www.lynse.cn/auth/login?code=once&state=other",
-            "https://www.lynse.cn/auth/login?code=&state=expected",
-            "https://www.lynse.cn/auth/login?code=once",
+            "https://www.lynse.cn/auth/wechat/callback?code=once&state=expected",
+            "https://gapp.lynse.cn/auth/wechat/callback?code=once&state=expected",
+            "https://api.lynse.cn/other?code=once&state=expected",
+            "https://api.lynse.cn/auth/wechat/callback?code=once&state=other",
+            "https://api.lynse.cn/auth/wechat/callback?code=&state=expected",
+            "https://api.lynse.cn/auth/wechat/callback?code=once",
         ] {
             assert!(!is_wechat_callback(
                 &url.parse().unwrap(),

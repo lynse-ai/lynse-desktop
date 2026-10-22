@@ -60,7 +60,7 @@ export function RecordingIslandWindow() {
         }
         const epoch = (view.epoch ?? 0) + 1;
         const credentials = await requestRealtimeSession(
-          { sourceLanguage: source, targetLanguage, sessionId: view.sessionId, epoch },
+          { audioSources: view.audioSources, sourceLanguage: source, targetLanguage, sessionId: view.sessionId, epoch },
           cfg,
         );
         await api.setMode({
@@ -79,7 +79,7 @@ export function RecordingIslandWindow() {
         toast.warning(String(error));
       }
     },
-    [api, view.sessionId, view.epoch, view.sourceLanguage, t],
+    [api, view.sessionId, view.epoch, view.sourceLanguage, view.audioSources, t],
   );
 
   const collapseDrawer = useCallback(() => {
@@ -136,6 +136,7 @@ export function RecordingIslandWindow() {
             connections =
               (await requestRealtimeSession(
                 {
+                  audioSources: view.audioSources,
                   sourceLanguage: view.sourceLanguage ?? "zh",
                   targetLanguage: target,
                   sessionId: view.sessionId,
@@ -152,7 +153,7 @@ export function RecordingIslandWindow() {
     } catch (error) {
       console.error("recording island: pause toggle failed", error);
     }
-  }, [api, view.sessionId, view.state, view.epoch, view.sourceLanguage, view.targetLanguage]);
+  }, [api, view.sessionId, view.state, view.epoch, view.sourceLanguage, view.targetLanguage, view.audioSources]);
 
   // Tray transport bridge: the island webview is alive exactly as long as a
   // session is, so it — not the main window's recording page — reliably

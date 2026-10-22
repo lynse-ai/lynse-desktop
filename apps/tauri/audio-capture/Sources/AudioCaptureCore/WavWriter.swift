@@ -29,10 +29,10 @@ public final class WavWriter {
             guard !closed, !samples.isEmpty else { return }
             let intendedFrames = firstFrameElapsedMs.saturatingMultiply(UInt64(sampleRate)) / 1_000
             if intendedFrames > sampleFrames {
-                let padding = Int(min(intendedFrames - sampleFrames, UInt64(Int.max))) * Int(channels)
-                let silence = [Int16](repeating: 0, count: padding)
-                try? handle.write(contentsOf: silence.withUnsafeBytesData())
-                sampleFrames += UInt64(intendedFrames - sampleFrames)
+                // Seeking leaves a zero-filled sparse gap, even when a source
+                // was disabled for hours. No gap-sized allocation or write.
+                try? handle.seek(toOffset: 44 + intendedFrames * UInt64(channels) * 2)
+                sampleFrames = intendedFrames
             }
             try? handle.write(contentsOf: samples.withUnsafeBytesData())
             sampleFrames += UInt64(samples.count / Int(channels))

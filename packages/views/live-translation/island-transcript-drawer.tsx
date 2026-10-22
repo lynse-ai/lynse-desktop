@@ -1,5 +1,7 @@
 "use client";
 
+import { recordingLevel } from "./audio-sources";
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "@lynse/core/i18n/react";
@@ -77,7 +79,7 @@ export function IslandTranscriptDrawer({
 
   // When the mic feed is echo-suppressed the system stream is the one that
   // actually carries the audio — animate to whichever level is alive.
-  const level = view.micSuppressed ? view.systemLevel : Math.max(view.micLevel, view.systemLevel);
+  const level = recordingLevel(view);
 
   return (
     <motion.div

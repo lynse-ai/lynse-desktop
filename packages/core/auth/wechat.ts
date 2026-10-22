@@ -2,16 +2,16 @@ import { api, type ApiClient } from "../api/client";
 import type { AuthSession } from "./session";
 
 /**
- * WeChat QR-code sign-in (backend "WECHAT_JUMP" flow).
+ * WeChat QR-code sign-in (backend "WECHAT_SCAN" website-app flow).
  *
  * Flow:
- *  1. `GET /api/auth/render?authType=WECHAT_JUMP` → the WeChat authorize URL.
+ *  1. `GET /api/auth/render?authType=WECHAT_SCAN` → the WeChat qrconnect URL.
  *     The appid, scope and a backend-generated `state` are baked into the
  *     URL server-side — the client holds no WeChat credentials at all.
  *  2. The URL is opened (web: same-window redirect; desktop: an embedded
  *     auth window). After the scan is confirmed WeChat redirects the browser
  *     to the backend-configured `redirect_uri` with `?code=…&state=…`.
- *  3. `POST /api/auth/login` `{ authType: "WECHAT_JUMP", code, state }` →
+ *  3. `POST /api/auth/login` `{ authType: "WECHAT_SCAN", code, state }` →
  *     `WechatLoginVo`. When the response says a phone number must be linked
  *     first (`isNeedBind`), the client shows a phone + SMS form and calls
  *     `GET /api/auth/bind` with the `thirdPartyId` from the login response;
@@ -21,21 +21,20 @@ import type { AuthSession } from "./session";
  * arrive as HTTP 200 with `code !== 200` and surface as ApiError.
  */
 
-export const WECHAT_AUTH_TYPE = "WECHAT_JUMP";
-/** Registered website-app callback origin, shared by both backend environments. */
-export const WECHAT_CALLBACK_ORIGIN = "https://www.lynse.cn";
+export const WECHAT_AUTH_TYPE = "WECHAT_SCAN";
 
 /**
- * Use the selected backend's appid and state for desktop QR sign-in. Some
- * deployments still render the mobile OAuth endpoint and a stale callback
- * origin; retain the callback path on the registered website callback domain.
- * The native window intercepts that callback before the page is requested.
+ * Validate the backend's website-app configuration without changing it.
+ * Mobile WECHAT_JUMP credentials cannot be reused for qrconnect. The native
+ * window intercepts the supplied redirect_uri before the page is requested.
  */
 export function desktopWechatAuthorizeUrl(authorizeUrl: string): string {
   const url = new URL(authorizeUrl);
   if (
     url.origin !== "https://open.weixin.qq.com" ||
-    !["/connect/qrconnect", "/connect/oauth2/authorize"].includes(url.pathname) ||
+    url.pathname !== "/connect/qrconnect" ||
+    url.searchParams.get("scope") !== "snsapi_login" ||
+    url.searchParams.get("response_type") !== "code" ||
     !url.searchParams.get("appid") ||
     !url.searchParams.get("state") ||
     !url.searchParams.get("redirect_uri")
@@ -46,33 +45,23 @@ export function desktopWechatAuthorizeUrl(authorizeUrl: string): string {
   if (!["https:", "http:"].includes(callback.protocol)) {
     throw new Error("Invalid WeChat callback URL");
   }
-  const registered = new URL(WECHAT_CALLBACK_ORIGIN);
-  callback.protocol = registered.protocol;
-  callback.host = registered.host;
-  callback.username = "";
-  callback.password = "";
-  callback.hash = "";
-  url.pathname = "/connect/qrconnect";
-  url.searchParams.set("redirect_uri", callback.toString());
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("scope", "snsapi_login");
-  url.hash = "wechat_redirect";
-  return url.toString();
+  return authorizeUrl;
 }
 
 /** `AuthLoginVO` returned by the WeChat branch of `/api/auth/login`. */
 export interface WechatLoginVo {
-  token?: string;
-  expireIn?: number;
+  token?: string | null;
+  expireIn?: number | null;
+  isFirstLogin?: boolean;
   firstLogin?: boolean;
   /** Bind-required flag — documented as `isNeedBind`; `needBind` is the
    *  legacy spelling some builds return. */
   isNeedBind?: boolean;
   needBind?: boolean;
   openId?: string;
-  customerId?: string;
+  customerId?: string | null;
   /** WeChat identity handle echoed back for the bind call. */
-  thirdPartyId?: string;
+  thirdPartyId?: string | null;
 }
 
 /** Ask the backend for the WeChat authorize URL (`state` included). */

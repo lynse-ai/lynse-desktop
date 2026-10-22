@@ -488,6 +488,8 @@ mod tests {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         let local = root.join("meetings");
         let mut manifest = Manifest::default();
+        manifest.enabled = true;
+        manifest.allow_ai = true;
         let mut doc = Document {
             id: "meeting".into(),
             kind: "meeting".into(),

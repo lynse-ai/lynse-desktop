@@ -169,6 +169,16 @@
     --chart-3: #8b91e8;
     --chart-4: #a7abed;
     --chart-5: #c7c9f3;
+    /* Knowledge-graph particle ramp — one hue derived from the live accent
+       (--brand), stepped toward the background so node kinds read as deep →
+       pale steps of the same colour. Declared once: var(--brand) and
+       var(--background) resolve against the active mode and accent override,
+       so picking a gold accent yields a gold family in both themes. */
+    --graph-entity: var(--brand);
+    --graph-event: color-mix(in oklch, var(--brand) 76%, var(--background));
+    --graph-topic: color-mix(in oklch, var(--brand) 58%, var(--background));
+    --graph-wiki: color-mix(in oklch, var(--brand) 42%, var(--background));
+    --graph-source: var(--muted-foreground);
     --radius: 0.625rem;
     --sidebar: oklch(0.963 0 0);                       /* ≈#f5f5f5, ZCode/Codex-style rail grey — a step darker than the white content surfaces */
     --sidebar-foreground: oklch(0.245 0.006 285.8);

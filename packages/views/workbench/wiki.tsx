@@ -144,9 +144,11 @@ export function WikiSources() {
 
 export function WikiTopicContent({ topic, mutate, busy, canPublish, onSource, reading = false }: { topic: WikiTopic; mutate: (request: WikiRequest) => Promise<void>; busy: boolean; canPublish: boolean; onSource?: (source: SourceRef) => void; reading?: boolean }) {
   const { t } = useTranslation();
+  const navigation = useNavigation();
   const [notes, setNotes] = useState(topic.notes);
   const [markdown, setMarkdown] = useState(topic.candidate?.markdown ?? topic.published?.markdown ?? "");
   const [reviewing, setReviewing] = useState(!reading);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   useEffect(() => setMarkdown(topic.candidate?.markdown ?? topic.published?.markdown ?? ""), [topic.candidate?.id, topic.published?.id, topic.candidate?.markdown, topic.published?.markdown]);
   const update = (patch: Partial<WikiTopic>) => void mutate({ action: "topic", id: topic.id, title: topic.title, purpose: topic.purpose, notes, ...patch }).catch(() => undefined);
   const errorCopy = workbenchErrorCopy(topic.error);
@@ -154,7 +156,11 @@ export function WikiTopicContent({ topic, mutate, busy, canPublish, onSource, re
   const preview = page?.markdown.trimStart().startsWith(`# ${topic.title}\n`) ? page.markdown.trimStart().slice(topic.title.length + 3).trimStart() : page?.markdown ?? "";
   const controls = <>
     <label className="block space-y-1 text-xs"><span>{t("workbench.topic_notes")}</span><textarea className="min-h-16 w-full rounded-md border border-input bg-background p-2 text-sm" value={notes} maxLength={20000} onChange={(e) => setNotes(e.target.value)} /></label>
-    <div className="flex flex-wrap gap-1"><Button size="sm" variant="ghost" disabled={busy} onClick={() => update({})}>{t("workbench.save")}</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => update({ pinned: !topic.pinned })}>{t(topic.pinned ? "workbench.unpin" : "workbench.pin")}</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => update({ excluded: !topic.excluded })}>{t(topic.excluded ? "workbench.include" : "workbench.exclude")}</Button><Button size="sm" variant="ghost" disabled={busy || topic.excluded || topic.pinned} onClick={() => void mutate({ action: "retry", id: topic.id }).catch(() => undefined)}>{t("workbench.retry")}</Button></div>
+    <div className="flex flex-wrap gap-1"><Button size="sm" variant="ghost" disabled={busy} onClick={() => update({})}>{t("workbench.save")}</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => update({ pinned: !topic.pinned })}>{t(topic.pinned ? "workbench.unpin" : "workbench.pin")}</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => update({ excluded: !topic.excluded })}>{t(topic.excluded ? "workbench.include" : "workbench.exclude")}</Button><Button size="sm" variant="ghost" disabled={busy || topic.excluded || topic.pinned} onClick={() => void mutate({ action: "retry", id: topic.id }).catch(() => undefined)}>{t("workbench.retry")}</Button>
+      {confirmingDelete
+        ? <Button size="sm" variant="ghost" className="text-destructive" disabled={busy} onBlur={() => setConfirmingDelete(false)} onClick={() => { setConfirmingDelete(false); void mutate({ action: "topic_delete", id: topic.id }).then(() => navigation.replace("/memory?tab=wiki")).catch(() => undefined); }}>{t("workbench.topic_delete_confirm")}</Button>
+        : <Button size="sm" variant="ghost" className="text-destructive" disabled={busy} onClick={() => setConfirmingDelete(true)}>{t("workbench.topic_delete")}</Button>}
+    </div>
   </>;
   return <article id={`wiki-topic-${topic.id}`} tabIndex={-1} aria-label={topic.title} className="scroll-mt-4 space-y-3 rounded-lg border border-border p-3">
     <div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="text-sm font-medium">{topic.title}</h3><p className="text-xs text-muted-foreground">{topic.purpose}</p></div><span className="text-xs text-muted-foreground">{t(topic.error ? "workbench.topic_failed" : topic.candidate ? "workbench.candidate" : topic.stale ? "workbench.stale" : topic.published ? "workbench.published" : "workbench.pending")}</span></div>

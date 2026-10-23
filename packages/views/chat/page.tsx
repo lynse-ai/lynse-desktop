@@ -30,6 +30,7 @@ import {
   WorkBuddy,
 } from "../icons";
 import { Button } from "@lynse/ui/components/ui/button";
+import { DotLoader } from "@lynse/ui/components/ui/dot-loader";
 import { Textarea } from "@lynse/ui/components/ui/textarea";
 import { ChatReplyBody } from "./chat-reply-body";
 import { toast } from "sonner";
@@ -139,10 +140,10 @@ function ThinkingIndicator() {
       className="flex h-6 items-center gap-2 text-muted-foreground"
       aria-label={t("chat.thinking")}
     >
-      <span className="flex items-center gap-1" aria-hidden="true">
-        <span className="size-1.5 animate-bounce rounded-full bg-primary [animation-delay:0ms]" />
-        <span className="size-1.5 animate-bounce rounded-full bg-primary [animation-delay:150ms]" />
-        <span className="size-1.5 animate-bounce rounded-full bg-primary [animation-delay:300ms]" />
+      <span className="flex items-center" aria-hidden="true">
+        {/* Neutral dots — solid-glass rule: motion says "still running", brand
+            colour is reserved for states that have stopped. */}
+        <DotLoader dotClassName="size-1" />
       </span>
       <span key={stepIndex} className="text-13 animate-in fade-in duration-300">
         {steps[stepIndex]}

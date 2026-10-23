@@ -3,7 +3,6 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { KnowledgeGraphScene } from "./knowledge-graph-scene";
-import { GRAPH_EDGE_LIMIT } from "./graph-scene-layout";
 import type { GraphNode, KnowledgeGraph } from "./types";
 
 vi.mock("@lynse/core/i18n/react", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
@@ -41,15 +40,17 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("particle knowledge graph", () => {
-  it("keeps lines readable and does not dim the scene for an offscreen selection", () => {
+  it("hides idle 2D edges behind contour terrain and does not dim nodes for an offscreen selection", () => {
     const { container, rerender } = render(<KnowledgeGraphScene {...props} />);
+    expect(container.querySelectorAll('[role="group"] line')).toHaveLength(0);
+    expect(container.querySelectorAll("[data-graph-contour]").length).toBeGreaterThan(0);
+    expect(container.querySelector('circle[fill^="url(#"]')).toBeNull();
     const opacity = [...container.querySelectorAll("[data-graph-node]")].map(node => node.getAttribute("opacity"));
     rerender(<KnowledgeGraphScene {...props} selection="not-visible" />);
     expect([...container.querySelectorAll("[data-graph-node]")].map(node => node.getAttribute("opacity"))).toEqual(opacity);
+    fireEvent.pointerEnter(screen.getByRole("button", { name: "Beta" }));
     const line = container.querySelector('[role="group"] line')!;
-    expect(Number(line.getAttribute("opacity"))).toBeGreaterThanOrEqual(0.12);
-    expect(Number(line.getAttribute("opacity"))).toBeLessThanOrEqual(0.4);
-    expect(Number(line.getAttribute("stroke-width"))).toBeLessThanOrEqual(1);
+    expect(line.getAttribute("opacity")).toBe("0.8");
   });
 
   it("renders only real relationships and reveals names on hover or keyboard focus", () => {
@@ -59,10 +60,11 @@ describe("particle knowledge graph", () => {
       { ...edges[0]!, id: "self", target: "Alpha" },
     ]} />);
     expect(screen.getAllByRole("button").filter(element => element.hasAttribute("data-graph-node"))).toHaveLength(3);
-    expect(container.querySelectorAll('[role="group"] line')).toHaveLength(1);
+    expect(container.querySelectorAll('[role="group"] line')).toHaveLength(0);
     expect(container.querySelectorAll("[data-graph-label]").length).toBeGreaterThan(0);
     const beta = screen.getByRole("button", { name: "Beta" });
     fireEvent.pointerEnter(beta);
+    expect(container.querySelectorAll('[role="group"] line')).toHaveLength(1);
     expect(container.querySelector("[data-graph-preview]")?.textContent).toContain("Beta");
     expect(container.querySelector("[data-graph-edge]")?.getAttribute("opacity")).toBe("0.8");
     expect(Number(screen.getByRole("button", { name: "Gamma" }).getAttribute("opacity"))).toBeLessThan(1);
@@ -113,17 +115,25 @@ describe("particle knowledge graph", () => {
     expect(frames.size).toBe(0);
   });
 
-  it("uses the theme particle token and exposes the same rotation through the slider", () => {
+  it("uses the theme particle token and rotates the view by dragging in 3D", () => {
     const { container } = render(<KnowledgeGraphScene {...props} />);
-    expect([...container.querySelectorAll("[data-graph-particle]")].every(node => node.getAttribute("fill") === "var(--chart-2)")).toBe(true);
+    expect([...container.querySelectorAll("[data-graph-particle]")].every(node => node.getAttribute("fill") === "var(--graph-topic)")).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "3D" }));
     flushFrames();
+    expect(screen.queryByRole("slider")).toBeNull();
+    expect(container.querySelectorAll("[data-graph-contour]")).toHaveLength(0);
+    expect(container.querySelectorAll("radialGradient")).toHaveLength(5);
+    expect(container.querySelectorAll('circle[fill^="url(#"]').length).toBeGreaterThan(0);
+    const svg = preparePointer();
     const node = screen.getByRole("button", { name: "Beta" });
     const initial = node.getAttribute("transform");
-    fireEvent.change(screen.getByRole("slider"), { target: { value: "76" } });
+    fireEvent.pointerDown(svg, { button: 0, clientX: 100, clientY: 100, pointerId: 7 });
+    fireEvent.pointerMove(svg, { clientX: 140, clientY: 118, pointerId: 7 });
+    expect(frames.size).toBe(1);
     flushFrames();
     expect(node.getAttribute("transform")).not.toBe(initial);
-    expect(container.querySelector("[data-graph-angle]")?.textContent).toBe("76°");
+    fireEvent.pointerUp(svg, { pointerId: 7 });
+    expect(svg.getAttribute("data-dragging")).toBe("false");
     expect(frames.size).toBe(0);
   });
 
@@ -137,6 +147,14 @@ describe("particle knowledge graph", () => {
     expect(container.querySelectorAll("[data-graph-edge]")).toHaveLength(4);
     expect(container.querySelectorAll('[data-graph-edge="wiki_link"][marker-end]')).toHaveLength(2);
     expect(container.querySelector('[data-graph-edge="evidence"]')?.getAttribute("stroke-dasharray")).toBe("3 3");
+  });
+
+  it("pulses the selected node's glow outward in 3D only", () => {
+    const { container } = render(<KnowledgeGraphScene {...props} selection="Beta" />);
+    expect(container.querySelectorAll("animate")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "3D" }));
+    flushFrames();
+    expect(container.querySelectorAll("animate").length).toBeGreaterThanOrEqual(2);
   });
 
   it("keeps one node in the tab order and sizes nodes by connection count", () => {
@@ -175,11 +193,11 @@ describe("particle knowledge graph", () => {
     const denseNodes = Array.from({ length: 90 }, (_, i) => ({ ...nodes[0]!, id: `node-${i}`, title: `Node ${i}` }));
     const denseEdges = denseNodes.flatMap((a, i) => denseNodes.slice(i + 1).map(b => ({ id: `${a.id}:${b.id}`, source: a.id, target: b.id, kind: "related" })));
     const { container, rerender } = render(<KnowledgeGraphScene {...props} nodes={denseNodes} edges={denseEdges} />);
-    expect(container.querySelectorAll('[role="group"] line')).toHaveLength(GRAPH_EDGE_LIMIT);
+    expect(container.querySelectorAll('[role="group"] line')).toHaveLength(0);
     const before = [...container.querySelectorAll("[data-graph-node]")].map(node => [node.getAttribute("data-graph-node"), node.getAttribute("transform")]);
     rerender(<KnowledgeGraphScene {...props} nodes={denseNodes.map(node => ({ ...node, description: "New progress" }))} edges={denseEdges.map(edge => ({ ...edge }))} selection="node-89" />);
     expect([...container.querySelectorAll("[data-graph-node]")].map(node => [node.getAttribute("data-graph-node"), node.getAttribute("transform")])).toEqual(before);
-    expect(container.querySelectorAll('[role="group"] line')).toHaveLength(GRAPH_EDGE_LIMIT);
+    expect(container.querySelectorAll('[role="group"] line')).toHaveLength(89);
     fireEvent.pointerEnter(screen.getByRole("button", { name: "Node 88" }));
     expect([...container.querySelectorAll("[data-graph-edge]")].filter(edge => edge.getAttribute("data-source") === "node-88" || edge.getAttribute("data-target") === "node-88")).toHaveLength(89);
     expect(requestAnimationFrame).not.toHaveBeenCalled();

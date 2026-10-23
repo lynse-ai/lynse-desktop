@@ -249,14 +249,8 @@ pub fn validate(value: Value, part: &Document) -> CommandResult<Extraction> {
             return Err(invalid.into());
         }
         // Validate against what the model actually saw before restoring local private text.
-        if named
-            && !node
-                .citations
-                .iter()
-                .any(|reference| reference.quote.contains(&node.title))
-        {
-            return Err(invalid.into());
-        }
+        // Titles are model-authored labels grounded by the required verbatim citations
+        // (descriptions are likewise model-authored); only the quotes themselves are verbatim.
         for time in [&node.time_text, &node.due_text] {
             if time.chars().count() > 160
                 || (!time.is_empty()

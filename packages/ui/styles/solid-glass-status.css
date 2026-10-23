@@ -44,6 +44,17 @@
     }
 }
 
+/* Sweeps across a bar to say the number under it is still moving. Distance is
+   in multiples of the highlight's own width, which is a third of the bar. */
+@keyframes sg-sweep {
+    from {
+        transform: translateX(0);
+    }
+    to {
+        transform: translateX(386%);
+    }
+}
+
 @layer utilities {
     /* Three dots flashing in turn; see DotLoader. */
     .animate-dot-flash {
@@ -65,6 +76,28 @@
         animation: sg-status-shimmer 2.4s linear infinite;
     }
 
+    /* Live-bar sweep — solid-glass progress-glow retargeted to the track, so
+       it is applied via .progress-live on the Progress root. A standing glow
+       keeps the bar reading as live between value ticks, plus a highlight a
+       third of the bar wide sweeping across; across the whole width it would
+       wash out into a gradient nobody can see moving. Glow is primary-tinted
+       (upstream used white — invisible on a light-theme track). */
+    .progress-live [data-slot="progress-track"] {
+        position: relative;
+        overflow: hidden;
+        box-shadow: 0 0 10px 0 color-mix(in srgb, var(--primary) 30%, transparent);
+    }
+
+    .progress-live [data-slot="progress-track"]::after {
+        content: "";
+        position: absolute;
+        inset-block: 0;
+        inset-inline-start: -35%;
+        width: 35%;
+        background: linear-gradient(90deg, transparent, oklch(1 0 0 / 90%), transparent);
+        animation: sg-sweep 1.6s ease-in-out infinite;
+    }
+
     @media (prefers-reduced-motion: reduce) {
         .animate-dot-flash {
             animation: none;
@@ -75,6 +108,11 @@
             animation: none;
             color: inherit;
             background-image: none;
+        }
+
+        .progress-live [data-slot="progress-track"]::after {
+            animation: none;
+            opacity: 0;
         }
     }
 }

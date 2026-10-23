@@ -381,7 +381,7 @@ export function TranscriptionModelsSection({
                         real progress tick from the download pipeline. */}
                     <Progress
                       value={percent ?? 0}
-                      className={cn("h-1.5", percent === null && "animate-pulse")}
+                      className={cn("h-1.5 progress-live", percent === null && "animate-pulse")}
                     />
                     <p className="mt-1 text-2xs text-muted-foreground">
                       {t("settings.stt_status_downloading")}

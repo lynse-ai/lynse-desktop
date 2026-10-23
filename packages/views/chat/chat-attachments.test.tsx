@@ -222,12 +222,19 @@ describe("ChatAttachments", () => {
     expect(screen.getByRole("button", { name: /meeting-report\.html/ })).toBeTruthy();
   });
 
-  it("previews markdown attachments in-app without exposing the signed url", async () => {
+  it("names markdown attachments by their first heading and downloads instead of previewing", async () => {
+    const body = "# 10-20 产品运营周会：录音卡产品运营与版本规划周会\n\n结论速览";
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
-      text: async () => "# 周报\n\n结论",
+      text: async () => body,
+      blob: async () => new Blob([body], { type: "text/markdown" }),
     });
     vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("URL", Object.assign(URL, {
+      createObjectURL: vi.fn(() => "blob:mock-body"),
+      revokeObjectURL: vi.fn(),
+    }));
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
     render(
       <ChatAttachments
         attachments={[
@@ -241,13 +248,56 @@ describe("ChatAttachments", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /summary\.md/ }));
+    // The generic server name is replaced by the document's own title…
+    expect(await screen.findByRole("button", { name: /10-20 产品运营周会：录音卡产品运营与版本规划周会\.md/ })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /summary\.md/ })).toBeNull();
 
-    // The body is fetched and rendered by the app's own markdown renderer;
-    // nothing in the DOM points at the object host.
-    expect(await screen.findByRole("heading", { name: "周报" })).toBeTruthy();
+    // …and tapping the card saves the file (no preview dialog, no eye icon).
+    // The download anchor is removed right after its programmatic click, so
+    // capture it through the click itself.
+    const clicked: HTMLAnchorElement[] = [];
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        clicked.push(this);
+      });
+    fireEvent.click(screen.getByRole("button", { name: /10-20 产品运营周会：录音卡产品运营与版本规划周会\.md/ }));
+    await waitFor(() => expect(clicked.length).toBeGreaterThan(0));
+    expect(clicked[0]?.getAttribute("download")).toBe(
+      "10-20 产品运营周会：录音卡产品运营与版本规划周会.md",
+    );
+    // Nothing in the DOM points at the object host.
     expect(document.querySelector("[href*='bucket.example.com']")).toBeNull();
-    expect(document.querySelector("[src*='bucket.example.com']")).toBeNull();
+    clickSpy.mockRestore();
+    open.mockRestore();
+    Reflect.deleteProperty(URL, "createObjectURL");
+    Reflect.deleteProperty(URL, "revokeObjectURL");
+    vi.unstubAllGlobals();
+  });
+
+  it("re-signs once and retries when the stored markdown url is already dead", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("expired"))
+      .mockResolvedValueOnce({ ok: true, text: async () => "# 会议纪要\n\n正文" });
+    vi.stubGlobal("fetch", fetchMock);
+    refreshMock.mockResolvedValue("https://bucket.example.com/fresh.md");
+    render(
+      <ChatAttachments
+        attachments={[
+          {
+            id: "c".repeat(32),
+            name: "summary.md",
+            type: "file",
+            url: "https://bucket.example.com/stale.md",
+            downloadUrl: "https://bucket.example.com/stale.md",
+          },
+        ]}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: /会议纪要\.md/ })).toBeTruthy();
+    expect(refreshMock).toHaveBeenCalledTimes(1);
     vi.unstubAllGlobals();
   });
 

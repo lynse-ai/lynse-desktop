@@ -8,15 +8,8 @@ import { getAuthStore } from "@lynse/core/auth";
 import { api } from "@lynse/core/api/client";
 import { downloadContextReview, isContextExportPath } from "@lynse/core/api";
 import { toast } from "sonner";
-import { Check, Download, Eye, FileText, Fullscreen, Loader2, Share, X, ZoomIn, ZoomOut } from "../icons";
+import { Check, Download, FileText, Fullscreen, Loader2, Share, X, ZoomIn, ZoomOut } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@lynse/ui/components/ui/dialog";
-import { Markdown } from "@lynse/ui/markdown";
 import type { AttachmentDraft } from "./chat-attachment-upload";
 import { formatFileSize } from "./chat-attachment-upload";
 import type { ChatAttachment } from "../workspace/types";
@@ -47,9 +40,9 @@ type DesktopDownloadBridge = {
 };
 
 /**
- * Read a text attachment for the in-app preview. Desktop goes through Rust:
- * the signed object hosts send no CORS headers for the app origin, so a
- * renderer fetch dies there (see `attachment_save` in the shell).
+ * Read a text attachment. Desktop goes through Rust: the signed object hosts
+ * send no CORS headers for the app origin, so a renderer fetch dies there
+ * (see `attachment_save` in the shell).
  */
 async function loadAttachmentText(url: string): Promise<string> {
   if (/^(blob:|data:)/.test(url)) return (await fetch(url)).text();
@@ -741,10 +734,27 @@ function AttachmentItem({
   );
 }
 
+/** The document's first ATX heading — a deep summary's real title. */
+function markdownTitle(text: string): string | null {
+  const line = text.split("\n").find((candidate) => /^#{1,6}\s+\S/.test(candidate));
+  if (!line) return null;
+  const value = line
+    .replace(/^#{1,6}\s+/, "")
+    // Headings become filenames; drop the ones file systems reject.
+    .replace(/[\\/:*?"<>|]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+  return value || null;
+}
+
 /**
- * Markdown attachment: a card that opens the document inside the app instead
- * of handing the user a bucket URL. The body is fetched lazily on first open
- * and kept for the lifetime of the message.
+ * Markdown attachment (the deep-summary document the assistant returns): a
+ * plain download card, no in-app preview. The server names the file
+ * generically ("summary.md"), so the body is fetched once on mount and the
+ * document's first heading becomes the display and saved filename. The text
+ * stays in memory, which also lets the download work after the signed URL
+ * has expired.
  */
 function MarkdownAttachmentCard({
   attachment,
@@ -758,57 +768,74 @@ function MarkdownAttachmentCard({
   refresh: () => Promise<string | null>;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
   const [text, setText] = useState<string | null>(attachment.text ?? null);
-  const [failed, setFailed] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   useEffect(() => { if (attachment.text !== undefined) setText(attachment.text); }, [attachment.text]);
+  const title = useMemo(() => (text == null ? null : markdownTitle(text)), [text]);
+  const displayName = title ? `${title}.md` : name;
 
-  const onOpenChange = (next: boolean) => {
-    setOpen(next);
-    if (!next || text != null) return;
-    setFailed(false);
+  // Background fetch for the title. Old history cards may carry an
+  // already-expired signature: re-sign once and retry before giving up (the
+  // card then keeps the server's generic name).
+  useEffect(() => {
+    if (text != null) return;
+    let cancelled = false;
     void (async () => {
-      // Re-sign first: the URL stored in history may already be dead.
-      const fresh = attachment.id ? await refresh() : null;
       try {
-        setText(await loadAttachmentText(fresh || href));
+        const body = await loadAttachmentText(href);
+        if (!cancelled) setText(body);
+        return;
       } catch {
-        setFailed(true);
+        // Expired or unreachable — fall through to the re-sign retry.
+      }
+      const fresh = attachment.id ? await refresh() : null;
+      if (!fresh || cancelled || fresh === href) return;
+      try {
+        const body = await loadAttachmentText(fresh);
+        if (!cancelled) setText(body);
+      } catch { /* keep the server's generic name */ }
+    })();
+    return () => { cancelled = true; };
+  }, [text, href, attachment.id, refresh]);
+
+  const save = () => {
+    if (downloading) return;
+    setDownloading(true);
+    void (async () => {
+      // Prefer the in-memory body — the signed URL may already be dead and
+      // the download then never depends on re-signing success.
+      let local: string | null = null;
+      try {
+        const target = text != null
+          ? (local = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" })))
+          : (attachment.id ? await refresh() : null) || href;
+        await downloadAttachment(target, displayName, t("chat.attachment_download_done"));
+      } finally {
+        if (local) URL.revokeObjectURL(local);
+        setDownloading(false);
       }
     })();
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <button
-        type="button"
-        onClick={() => onOpenChange(true)}
-        className="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent"
-      >
-        <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate">{name}</span>
-        <span className="ml-auto shrink-0 rounded bg-muted px-1.5 py-0.5 text-3xs font-medium text-muted-foreground">
-          MD
-        </span>
-        <Eye className="size-3.5 shrink-0 text-muted-foreground" />
-      </button>
-      <DialogContent className="max-w-3xl gap-0 p-0">
-        <DialogHeader className="border-b border-border/50 px-5 py-4">
-          <DialogTitle className="truncate text-sm">{name}</DialogTitle>
-        </DialogHeader>
-        <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
-          {failed ? (
-            <p className="text-sm text-muted-foreground">{t("chat.attachment_preview_failed")}</p>
-          ) : text == null ? (
-            <Loader2 className="size-4 animate-spin text-muted-foreground" />
-          ) : (
-            <Markdown mode="full" className="text-sm">
-              {text}
-            </Markdown>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+    <button
+      type="button"
+      onClick={save}
+      title={displayName}
+      disabled={downloading}
+      className="flex min-w-0 items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent disabled:opacity-50"
+    >
+      <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="truncate">{displayName}</span>
+      <span className="ml-auto shrink-0 rounded bg-muted px-1.5 py-0.5 text-3xs font-medium text-muted-foreground">
+        MD
+      </span>
+      {downloading ? (
+        <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+      ) : (
+        <Download className="size-3.5 shrink-0 text-muted-foreground" />
+      )}
+    </button>
   );
 }
 

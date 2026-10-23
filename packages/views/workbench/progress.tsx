@@ -84,14 +84,26 @@ export function WorkbenchProgress({ status, error }: { status: WorkbenchStatus |
       getAriaValueText={() => counter ?? t(label)}
       className={cn("w-full [&_[data-slot=progress-track]]:h-1.5 [&_[data-slot=progress-indicator]]:motion-reduce:transition-none",
         value === null && "[&_[data-slot=progress-indicator]]:w-1/3",
-        busy && value === null && "[&_[data-slot=progress-indicator]]:animate-pulse [&_[data-slot=progress-indicator]]:motion-reduce:animate-none")}
+        busy && value === null && "[&_[data-slot=progress-indicator]]:animate-pulse [&_[data-slot=progress-indicator]]:motion-reduce:animate-none",
+        busy && "progress-live")}
     />
     {counter && <p className="tabular-nums text-muted-foreground">{counter}</p>}
     {status.initialComplete && status.phase === "processing" && progress?.topicTitle && <p className="truncate text-muted-foreground" title={progress.topicTitle}>{t("workbench.home_current_topic", { title: progress.topicTitle })}</p>}
     {status.initialComplete && status.phase === "processing" && progress?.currentTitle && <p className="truncate text-muted-foreground" title={progress.currentTitle}>{progress.currentTitle}</p>}
     <p className="leading-relaxed text-muted-foreground">{t(hint)}</p>
-    {(status.awaitingTranscription > 0 || status.failed > 0) && <p className="leading-relaxed text-muted-foreground">{t("workbench.home_skipped", { waiting: status.awaitingTranscription, failed: status.failed })}</p>}
-    {status.conflicts > 0 && <p className="text-destructive">{t("workbench.home_conflicts", { count: status.conflicts })}</p>}
-    {failure && <p role="alert" className="break-words text-destructive">{errorCopy ? t(errorCopy.key, { count: errorCopy.count }) : failure}</p>}
+    {(status.awaitingTranscription > 0 || status.failed > 0) && <p className="flex items-start gap-2 leading-relaxed text-muted-foreground">
+      {/* task-notice pattern (solid-glass): ended background work is reported
+          by a status dot — grey for skipped, red for problems; nothing moves. */}
+      <span aria-hidden="true" className="mt-1.5 size-1.5 shrink-0 rounded-full bg-muted-foreground/60" />
+      <span>{t("workbench.home_skipped", { waiting: status.awaitingTranscription, failed: status.failed })}</span>
+    </p>}
+    {status.conflicts > 0 && <p className="flex items-start gap-2 text-destructive">
+      <span aria-hidden="true" className="mt-1.5 size-1.5 shrink-0 rounded-full bg-destructive" />
+      <span>{t("workbench.home_conflicts", { count: status.conflicts })}</span>
+    </p>}
+    {failure && <p role="alert" className="flex items-start gap-2 break-words text-destructive">
+      <span aria-hidden="true" className="mt-1.5 size-1.5 shrink-0 rounded-full bg-destructive" />
+      <span>{errorCopy ? t(errorCopy.key, { count: errorCopy.count }) : failure}</span>
+    </p>}
   </div>;
 }

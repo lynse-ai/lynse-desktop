@@ -203,6 +203,26 @@ pub(super) fn upsert(root: &Path, values: &mut Vec<Topic>, request: &Value) -> C
     save_topics(root, values)
 }
 
+pub(super) fn delete(root: &Path, values: &mut Vec<Topic>, request: &Value) -> CommandResult<()> {
+    let id = request["id"].as_str().unwrap_or_default();
+    let index = values
+        .iter()
+        .position(|topic| matches_id(topic, id))
+        .ok_or("Topic not found")?;
+    let topic = values.remove(index);
+    // A deleted topic must stop resolving through other topics' merge history.
+    for other in values.iter_mut() {
+        other
+            .merged_ids
+            .retain(|alias| alias != &topic.id && !topic.merged_ids.contains(alias));
+    }
+    let dir = root.join(&topic.id);
+    if dir.exists() {
+        fs::remove_dir_all(&dir).map_err(|error| error.to_string())?;
+    }
+    save_topics(root, values)
+}
+
 pub(super) fn reconcile_progress(manifest: &mut Manifest, topics: &[Topic]) -> bool {
     let before = json!([manifest.error, manifest.wiki_progress]);
     let active: Vec<_> = topics.iter().filter(|topic| !topic.excluded).collect();

@@ -5,8 +5,8 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@lynse/ui/components/ui/dialog";
 import { Fullscreen, Maximize2, ZoomIn, ZoomOut } from "../icons";
-import { DEFAULT_GRAPH_CAMERA, GRAPH_EDGE_LIMIT, layoutGraph, projectGraph, zoomGraphCamera, type GraphCamera, type GraphTopology } from "./graph-scene-layout";
-import { graphColors } from "./graph-vocabulary";
+import { contourFrame, contourPolylines, DEFAULT_GRAPH_CAMERA, GRAPH_EDGE_LIMIT, layoutGraph, projectGraph, zoomGraphCamera, type GraphCamera, type GraphTopology } from "./graph-scene-layout";
+import { graphColors, graphKinds } from "./graph-vocabulary";
 import { graphRelationKey } from "./graph-relations";
 import type { GraphNode, KnowledgeGraph } from "./types";
 
@@ -41,8 +41,8 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
   const [focused, setFocused] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
   const previousView = useRef(viewKey);
-  const rotationId = useId();
   const arrowId = useId().replace(/:/g, "");
+  const glowId = useId().replace(/:/g, "") + "-glow-";
   const mode = camera.mode ?? "2d";
 
   const connections = useMemo(() => {
@@ -69,12 +69,20 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
   const preview = [hovered, focused, selection].find(id => id && projected.has(id)) ?? null;
   const previewNode = nodes.find(node => node.id === preview);
   const connected = useMemo(() => new Set(connections.flatMap(edge => edge.source === preview ? [edge.target] : edge.target === preview ? [edge.source] : [])), [connections, preview]);
-  const visibleEdges = useMemo(() => connections.slice().sort((a, b) =>
-    Number(b.source === preview || b.target === preview) - Number(a.source === preview || a.target === preview)
-    || a.id.localeCompare(b.id)).slice(0, GRAPH_EDGE_LIMIT), [connections, preview]);
+  const visibleEdges = useMemo(() => {
+    // 2D swaps the always-on edge web for contour terrain: links appear only
+    // around the hovered, focused or selected node.
+    if (mode === "2d" && !preview) return [];
+    return connections.slice().sort((a, b) =>
+      Number(b.source === preview || b.target === preview) - Number(a.source === preview || a.target === preview)
+      || a.id.localeCompare(b.id))
+      .filter(edge => mode !== "2d" || edge.source === preview || edge.target === preview)
+      .slice(0, GRAPH_EDGE_LIMIT);
+  }, [connections, preview, mode]);
+  const terrain = useMemo(() => mode === "2d" ? contourPolylines(points) : [], [points, mode]);
+  const terrainFrame = useMemo(() => contourFrame(points, camera, size.width, size.height), [points, camera, size]);
   const ordered = useMemo(() => nodes.slice().sort((a, b) => projected.get(a.id)!.depth - projected.get(b.id)!.depth), [nodes, projected]);
   const tabStop = [focused, selection, nodes[0]?.id].find(id => id && projected.has(id));
-  const angle = Math.round(((camera.yaw * 180 / Math.PI + 180) % 360 + 360) % 360 - 180);
 
   const labels = useMemo(() => {
     const candidates = nodes.slice().sort((a, b) =>
@@ -165,7 +173,7 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
           if (event.button !== 0 || drag.current) return;
           event.preventDefault();
           const node = (event.target as Element).closest<SVGGElement>("[data-graph-node]");
-          drag.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, camera: pendingCamera.current, node, moved: false, rotate: mode === "3d" && event.altKey };
+          drag.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, camera: pendingCamera.current, node, moved: false, rotate: mode === "3d" && !event.shiftKey };
           event.currentTarget.setPointerCapture(event.pointerId); setDragging(true);
         }}
         onPointerMove={event => {
@@ -197,26 +205,40 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
             ? { ...current, yaw: current.yaw + delta[0]! * 0.12, pitch: Math.max(-1.2, Math.min(1.2, current.pitch + delta[1]! * 0.12)) }
             : { ...current, x: (current.x ?? 0) + delta[0]! * 40, y: (current.y ?? 0) + delta[1]! * 40 });
         }}>
-        <defs><marker id={arrowId} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted-foreground)" /></marker></defs>
+        <defs>
+          <marker id={arrowId} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted-foreground)" /></marker>
+          {graphKinds.map(kind => <radialGradient key={kind} id={glowId + kind}>
+            <stop offset="0%" stopColor={graphColors[kind]} stopOpacity={0.9} />
+            <stop offset="40%" stopColor={graphColors[kind]} stopOpacity={0.32} />
+            <stop offset="100%" stopColor={graphColors[kind]} stopOpacity={0} />
+          </radialGradient>)}
+        </defs>
         <rect width={size.width} height={size.height} fill="transparent" data-graph-background />
+        {terrainFrame && terrain.length > 0 && <g data-graph-terrain transform={"translate(" + terrainFrame.tx + " " + terrainFrame.ty + ") scale(" + terrainFrame.fit + " " + -terrainFrame.fit + ")"} pointerEvents="none" aria-hidden="true">
+          {terrain.map((ring, index) => <path key={index} data-graph-contour fill="none" stroke="var(--muted-foreground)"
+            strokeOpacity={[0.14, 0.2, 0.27][ring.band]} strokeWidth={1} vectorEffect="non-scaling-stroke" strokeLinejoin="round"
+            d={"M" + ring.points.map(point => point[0]!.toFixed(2) + " " + point[1]!.toFixed(2)).join("L") + (ring.closed ? "Z" : "")} />)}
+        </g>}
         <g pointerEvents="none" aria-hidden="true">{visibleEdges.map(edge => {
           const a = projected.get(edge.source)!, b = projected.get(edge.target)!;
           const active = edge.source === preview || edge.target === preview;
+          // Depth-of-field: links collapse into the background as they recede.
+          const near = Math.max(0, Math.min(1, ((a.depth + b.depth) / 2 + 380) / 760));
           const distance = Math.max(1, Math.hypot(b.x - a.x, b.y - a.y));
           const inset = Math.min(10, distance / 3);
           return <line key={edge.id} data-graph-edge={edge.kind} data-source={edge.source} data-target={edge.target}
             x1={a.x} y1={a.y} x2={b.x - (b.x - a.x) / distance * inset} y2={b.y - (b.y - a.y) / distance * inset}
-            stroke="var(--muted-foreground)" strokeWidth={active ? 1.3 : 0.8}
+            stroke="var(--muted-foreground)" strokeWidth={active ? 1.3 : 0.55 + near * 0.55}
             strokeDasharray={edge.kind === "evidence" ? "3 3" : undefined}
             markerEnd={active && edge.kind !== "evidence" ? "url(#" + arrowId + ")" : undefined}
-            opacity={active ? 0.8 : preview ? 0.16 : 0.28}>
+            opacity={active ? 0.8 : preview ? 0.1 : 0.1 + near * 0.4}>
             <title>{t(graphRelationKey[edge.kind as keyof typeof graphRelationKey] ?? "workbench.graph_related")}</title>
           </line>;
         })}</g>
         {ordered.map(node => {
           const p = projected.get(node.id)!;
           const active = node.id === selection;
-          const radius = 3 + Math.min(5, Math.log2((degree.get(node.id) ?? 0) + 1) * 1.1);
+          const radius = (3 + Math.min(5, Math.log2((degree.get(node.id) ?? 0) + 1) * 1.1)) * (mode === "3d" ? p.size : 1);
           const glow = active || node.id === preview;
           return <g key={node.id} ref={element => { if (element) elements.current.set(node.id, element); else elements.current.delete(node.id); }}
             data-graph-node={node.id} role="button" tabIndex={node.id === tabStop ? 0 : -1} aria-label={nodeLabel(node)} aria-pressed={active}
@@ -245,7 +267,12 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
             <title>{nodeLabel(node)}</title>
             <circle r={16} fill="transparent" />
             <circle className="graph-focus" r={13} fill="none" stroke="var(--ring)" strokeWidth={2} opacity={0} pointerEvents="none" />
-            {glow && <circle r={radius * 2.5} fill={graphColors[node.kind]} opacity={0.12} pointerEvents="none" />}
+            {mode === "3d" && <circle r={radius * 3.6} fill={"url(#" + glowId + node.kind + ")"} opacity={glow ? 0.9 : Math.max(0.22, Math.min(0.8, 0.45 * p.size))} pointerEvents="none" />}
+            {mode === "3d" && active && <circle r={radius} fill={"url(#" + glowId + node.kind + ")"} opacity={0.55} pointerEvents="none" aria-hidden="true">
+              <animate attributeName="r" values={radius + ";" + radius * 4.4} dur="1.8s" repeatCount="indefinite" />
+              <animate attributeName="opacity" values="0.55;0" dur="1.8s" repeatCount="indefinite" />
+            </circle>}
+            {mode === "2d" && glow && <circle r={radius * 2.5} fill={graphColors[node.kind]} opacity={0.12} pointerEvents="none" />}
             <circle data-graph-particle r={radius} fill={graphColors[node.kind]} stroke={active ? "var(--foreground)" : "none"} strokeWidth={active ? 1.5 : 0} pointerEvents="none" />
           </g>;
         })}
@@ -256,11 +283,8 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
       </div>}
     </div>
     <div className="shrink-0 space-y-1 px-3 py-2">
-      {mode === "3d" && <><div className="flex items-center justify-between gap-3 text-xs"><label htmlFor={rotationId}>{t("workbench.graph_rotation")}</label><span data-graph-angle aria-hidden="true" className="tabular-nums">{angle}°</span></div>
-        <input id={rotationId} type="range" min={-180} max={180} step={1} value={angle} onChange={event => schedule({ ...pendingCamera.current, yaw: Number(event.currentTarget.value) * Math.PI / 180 })}
-          className="h-6 w-full accent-foreground focus-visible:outline-2 focus-visible:outline-ring" /></>}
       <p className="text-xs leading-relaxed text-muted-foreground">{t(mode === "3d" ? "workbench.graph_gestures_3d" : "workbench.graph_gestures")}</p>
-      {connections.length > visibleEdges.length && <p role="status" className="text-xs text-muted-foreground">{t("workbench.graph_edge_budget", { shown: visibleEdges.length, total: connections.length })}</p>}
+      {mode === "3d" && connections.length > visibleEdges.length && <p role="status" className="text-xs text-muted-foreground">{t("workbench.graph_edge_budget", { shown: visibleEdges.length, total: connections.length })}</p>}
     </div>
   </div>;
   return <Dialog open={expanded} onOpenChange={open => { stop(); setHovered(null); setFocused(null); setExpanded(open); }}>

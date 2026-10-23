@@ -1,6 +1,6 @@
 import type { GraphKind, GraphNode, GraphStatus } from "./types";
 export const graphKinds: GraphKind[] = ["entity", "event", "topic", "wiki", "source"];
-export const graphColors: Record<GraphKind, string> = { entity: "var(--chart-1)", event: "var(--chart-3)", topic: "var(--chart-2)", wiki: "var(--chart-4)", source: "var(--muted-foreground)" };
+export const graphColors: Record<GraphKind, string> = { entity: "var(--graph-entity)", event: "var(--graph-event)", topic: "var(--graph-topic)", wiki: "var(--graph-wiki)", source: "var(--graph-source)" };
 export const graphKindKey = { entity: "workbench.graph_entity", event: "workbench.graph_event", topic: "workbench.graph_topic", wiki: "workbench.graph_wiki", source: "workbench.graph_source" } as const;
 export const graphStatusKey: Record<GraphStatus, string> = { unknown: "workbench.graph_unknown", proposed: "workbench.graph_proposed", active: "workbench.graph_active", blocked: "workbench.graph_blocked", completed: "workbench.graph_completed", cancelled: "workbench.graph_cancelled", unresolved: "workbench.unresolved", candidate: "workbench.candidate", published: "workbench.published", stale: "workbench.stale", source: "workbench.graph_source" };
 export const graphSubtypeKey: Record<string, string> = Object.fromEntries(["person", "organization", "department", "location", "product", "project", "document", "term", "system", "customer", "supplier", "meeting", "task", "commitment", "decision", "issue", "risk", "change", "milestone", "opinion", "need"].map(value => [value, `workbench.graph_type_${value}`]));

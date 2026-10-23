@@ -697,11 +697,14 @@ fn corrected_synthesis_request(body: &Value, error: &Value) -> Option<Value> {
             | "Invalid synthesis item"
             | "Invalid memory kind"
             | "Irrelevant Wiki analysis must contain no claims"
+            | "Invalid evidence graph output"
     ) {
         return None;
     }
     let correction = if reason == "Citation does not match source evidence" {
         "Copy each citation's id, revision and kind verbatim from the supplied sources. Copy quote as one contiguous exact substring of that source's text, at most 500 characters. Keep its original punctuation, whitespace and wording; do not join separate passages or quote your own summary. Preserve the project, purpose, corrections and supported uncertainty. Every factual item still needs valid citations; do not invent or discard evidence to bypass validation.".into()
+    } else if reason == "Invalid evidence graph output" {
+        "Return the same graph with the exact schemaVersion 1 shape. Every node and relation keeps 1-4 citations whose quote is a contiguous exact substring of the supplied source text. Each status, modality, predicate and kind must use exactly the allowed enum values. timeText and dueText must either be empty or a contiguous substring of one of that node's citation quotes, copied without any change. Keep all endpoint keys present and confidence between 0 and 1. Do not invent or drop findings to bypass validation.".into()
     } else if reason == "Invalid memory kind" {
         format!("{MEMORY_KIND_GUIDANCE} Return valid JSON only. Preserve the original statements, citations and uncertainty. For topic_compile, consolidate supported statements in summary and keep memoryItems, todoSuggestions and decisions empty.")
     } else {
@@ -1570,6 +1573,9 @@ pub async fn workbench_wiki(
         }
         "topic" => {
             topic_store::upsert(&root, &mut values, &request)?;
+        }
+        "topic_delete" => {
+            topic_store::delete(&root, &mut values, &request)?;
         }
         "review" => {
             let topic = values
@@ -2475,6 +2481,31 @@ mod tests {
             .file_name()
             .to_string_lossy()
             .starts_with("index.corrupt-")));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn topic_delete_removes_pages_and_merge_aliases() {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("topics.json"), "[]").unwrap();
+        let mut values: Vec<Topic> = Vec::new();
+        topic_store::upsert(&root, &mut values, &json!({"title": "出海营销", "purpose": "p"}))
+            .unwrap();
+        let id = values[0].id.clone();
+        values[0].merged_ids.push("legacy".into());
+        let mut other = Topic {
+            title: "Other".into(),
+            ..Default::default()
+        };
+        other.merged_ids.push(id.clone());
+        values.push(other);
+        let dir = root.join(&id);
+        fs::create_dir_all(&dir).unwrap();
+        topic_store::delete(&root, &mut values, &json!({"id": id})).unwrap();
+        assert_eq!(values.len(), 1);
+        assert!(values[0].merged_ids.is_empty());
+        assert!(!dir.exists());
+        assert!(topic_store::delete(&root, &mut values, &json!({"id": id})).is_err());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

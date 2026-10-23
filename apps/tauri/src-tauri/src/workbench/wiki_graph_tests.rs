@@ -100,6 +100,28 @@ fn contract_keeps_plans_dates_and_verifies_each_relation() {
     }
 }
 #[test]
+fn entity_and_topic_titles_are_model_labels_backed_by_verbatim_citations() {
+    let doc = summary(&doc());
+    let mut value = output(&doc);
+    let reference = value["nodes"][0]["citations"][0].clone();
+    value["nodes"].as_array_mut().unwrap().push(json!({
+        "key":"theme","kind":"topic","title":"春节版本提审","description":"本周冲刺春节版本提审",
+        "status":"unknown","modality":"asserted","confidence":0.8,"timeText":"","dueText":"",
+        "citations":[reference.clone()]
+    }));
+    value["relations"].as_array_mut().unwrap().push(json!({
+        "subject":"p","target":"theme","predicate":"topic","modality":"asserted","confidence":0.8,"citations":[reference.clone()]
+    }));
+    value["nodes"].as_array_mut().unwrap().push(json!({
+        "key":"proj","kind":"project","title":"春节版本提审准备","description":"准备春节版本提审",
+        "status":"unknown","modality":"asserted","confidence":0.8,"timeText":"","dueText":"",
+        "citations":[reference]
+    }));
+    let graph = schema::validate(value, &doc).unwrap();
+    assert_eq!(graph.nodes[3].kind, "topic");
+    assert_eq!(graph.nodes[4].title, "春节版本提审准备");
+}
+#[test]
 fn privacy_mask_keeps_character_offsets_and_restores_only_local_quotes() {
     let mut doc = doc();
     doc.conclusions = vec![json!({"conclusionText":"张三邮箱 zhang@example.com，电话 13812345678。"})];

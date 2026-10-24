@@ -1,6 +1,7 @@
 import { getWorkbenchApi, useWorkbench, type DesktopWorkbenchApi } from "@lynse/views/workbench";
 import { api } from "@lynse/core/api";
 import { getAuthStore } from "@lynse/core/auth";
+import { memoryApi } from "@lynse/core/api/memory";
 import { getDesktopLocalTranscriptionApi, getDesktopVaultApi } from "@lynse/views/workspace";
 import { getDesktopInspirationApi } from "@lynse/views/inspiration";
 import { isWikiEnabled } from "@lynse/views/feature-flags";
@@ -8,6 +9,7 @@ import { isWikiEnabled } from "@lynse/views/feature-flags";
 type Row = Record<string, unknown>;
 type Args = Record<string, unknown>;
 export interface McpDataDependencies {
+  authorizeSources?: (ids: string[], kind: "meeting" | "note") => Promise<string[]>;
   memory?: DesktopWorkbenchApi | null;
   meetings: () => Promise<Row[]>;
   notes: () => Promise<Row[]>;
@@ -66,10 +68,30 @@ function list(rows: Row[], args: Args, keys: string[]): Row {
 export async function readDesktopMcpTool(name: string, args: Args, deps: McpDataDependencies): Promise<unknown> {
   if (!args || typeof args !== "object" || Array.isArray(args)) throw new McpInputError("Invalid arguments");
   const meetingKeys = ["id", "title", "createdAt", "updatedAt", "status", "durationMs"];
+  const capturedToken = deps.cloud.getToken();
+  const capturedOrigin = deps.cloud.getBaseUrl();
+  async function eligible(rows: Row[], kind: "meeting" | "note"): Promise<Row[]> {
+    if (deps.cloud.getToken() !== capturedToken || deps.cloud.getBaseUrl() !== capturedOrigin || !deps.authenticated()) throw new McpInputError("Account or server changed; retry");
+    if (!deps.authenticated() || !capturedToken || !deps.authorizeSources) throw new McpInputError("Cloud source eligibility unavailable");
+    const allowed = await deps.authorizeSources(rows.map(row => String(row.id)), kind);
+    if (!deps.authenticated() || deps.cloud.getToken() !== capturedToken || deps.cloud.getBaseUrl() !== capturedOrigin) throw new McpInputError("Account or server changed; retry");
+    return rows.filter(row => allowed.includes(String(row.id)));
+  }
+  async function eligiblePage(value: unknown): Promise<unknown> {
+    if (!value || typeof value !== "object") throw new McpInputError("Unrecognized meeting page");
+    if (Array.isArray(value)) return eligible(value as Row[], "meeting");
+    const page = value as Row;
+    for (const key of ["items", "records", "rows", "list"]) {
+      if (Array.isArray(page[key])) return { ...page, [key]: await eligible(page[key] as Row[], "meeting") };
+    }
+    if (page.data && typeof page.data === "object") return { ...page, data: await eligiblePage(page.data) };
+    throw new McpInputError("Unrecognized meeting page");
+  }
   if (["search_local_memory", "get_local_memory", "get_local_memory_source"].includes(name)) {
     if (!isWikiEnabled()) throw new McpInputError("Wiki is only available in test mode");
     const bridge = deps.memory;
     if (!bridge) throw new McpInputError("Local meeting memory is unavailable");
+    if (!bridge.readForAi) throw new McpInputError("Cloud source eligibility unavailable; update the desktop bridge");
     const status = await bridge.status();
     if (!status.enabled || !status.allowAi || !status.initialComplete) throw new McpInputError("Enable meeting memory and finish the initial knowledge-base sync first");
     let result: unknown;
@@ -78,19 +100,27 @@ export async function readDesktopMcpTool(name: string, args: Args, deps: McpData
       const limit = numberArg(args, "limit", 20, 100);
       const sources = await bridge.search(keyword, true);
       const wiki = await bridge.wiki({ action: "state" });
-      result = { sources: sources.items.slice(0, limit), memories: wiki.topics.filter((topic) => !topic.excluded && !topic.stale && topic.published?.review === "approved"
-        && (!keyword || `${topic.title} ${topic.published.markdown}`.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()))).slice(0, limit).map((topic) => ({ id: `wiki:${topic.id}`, text: topic.published!.markdown.slice(0, 12000), citations: topic.published!.citations })) };
+      const memories = [];
+      for (const topic of wiki.topics.filter(topic => !!topic.published && !topic.excluded && !topic.stale && ["approved", "auto_validated"].includes(topic.published?.review ?? "") && topic.inScope !== false
+        && (!keyword || `${topic.title} ${topic.published.markdown}`.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()))).slice(0, limit)) {
+        try {
+          const record = await bridge.readForAi(`wiki:${topic.id}`);
+          memories.push({ id: `wiki:${topic.id}`, text: record.markdown.slice(0, 12000), citations: record.document.citations ?? [] });
+        } catch { /* Ineligible pages remain browsable but never enter MCP context. */ }
+      }
+      result = { sources: sources.items.slice(0, limit), memories };
     } else if (name === "get_local_memory") {
       const id = stringArg(args, "id", true);
       const wiki = await bridge.wiki({ action: "state" });
-      const item = wiki.topics.find((topic) => `wiki:${topic.id}` === id && !topic.excluded && !topic.stale && topic.published?.review === "approved");
+      const item = wiki.topics.find((topic) => `wiki:${topic.id}` === id && !topic.excluded && !topic.stale && ["approved", "auto_validated"].includes(topic.published?.review ?? "") && topic.inScope !== false);
       if (!item) throw new McpInputError("Wiki page not published, excluded or stale");
-      result = { id, text: item.published!.markdown, citations: item.published!.citations };
+      const record = await bridge.readForAi(id);
+      result = { id, text: record.markdown, citations: record.document.citations ?? [] };
     } else {
       const id = stringArg(args, "id", true);
       const source = status.entries.find((entry) => entry.id === id && !entry.excluded && entry.status === "synced");
       if (!source) throw new McpInputError("Source unavailable or excluded from AI");
-      const record = await bridge.read(id);
+      const record = await bridge.readForAi(id);
       if (record.document.aiContextEnabled === false) throw new McpInputError("Source excluded from AI");
       result = { document: record.document, markdown: record.markdown };
     }
@@ -99,17 +129,21 @@ export async function readDesktopMcpTool(name: string, args: Args, deps: McpData
     return result;
   }
   switch (name) {
-    case "list_local_meetings": return list(await deps.meetings(), args, meetingKeys);
+    case "list_local_meetings": return list(await eligible(await deps.meetings(), "meeting"), args, meetingKeys);
     case "get_local_meeting": {
       const id = stringArg(args, "id", true);
-      const row = find(await deps.meetings(), id);
+      const row = find(await eligible(await deps.meetings(), "meeting"), id);
       const content = enumArg(args, "content", ["info", "transcript", "notes"], "info");
-      if (content === "notes") return { id, markdown: await deps.readMeetingNote(id) };
+      if (content === "notes") {
+        const markdown = await deps.readMeetingNote(id);
+        find(await eligible([row], "meeting"), id);
+        return { id, markdown };
+      }
       if (content === "transcript") return pick(row, [...meetingKeys, "transcriptText", "segments"]);
       return pick(row, meetingKeys);
     }
-    case "list_local_notes": return list((await deps.notes()).filter(shareable), args, ["id", "text", "tags", "createdAt", "updatedAt"]);
-    case "get_local_note": return pick(find((await deps.notes()).filter(shareable), stringArg(args, "id", true)), ["id", "text", "tags", "transcript", "createdAt", "updatedAt"]);
+    case "list_local_notes": return list(await eligible((await deps.notes()).filter(shareable), "note"), args, ["id", "text", "tags", "createdAt", "updatedAt"]);
+    case "get_local_note": return pick(find(await eligible((await deps.notes()).filter(shareable), "note"), stringArg(args, "id", true)), ["id", "text", "tags", "transcript", "createdAt", "updatedAt"]);
     case "list_local_todos": {
       const status = enumArg(args, "status", ["all", "open", "done"], "all");
       const rows = (await deps.todos()).filter((row) => status === "all" || (row.completed === true) === (status === "done"));
@@ -128,15 +162,18 @@ export async function readDesktopMcpTool(name: string, args: Args, deps: McpData
       break;
     }
     case "list_cloud_meetings":
-      result = await deps.cloud.get("/api/business/file/page", {
+      result = await eligiblePage(await deps.cloud.get("/api/business/file/page", {
         pageNum: numberArg(args, "page", 1, 1000), pageSize: numberArg(args, "page_size", 20, 100),
         originalFilename: stringArg(args, "keyword"),
-      });
+      }));
       break;
     case "get_cloud_meeting": {
       const content = enumArg(args, "content", ["info", "summary", "outline", "transcript"], "info");
       const paths: Record<string, string> = { info:"info", summary:"conclusion/list", outline:"outline/get", transcript:"trans/get" };
-      result = await deps.cloud.get(`/api/business/file/${paths[content]}`, { fileId: stringArg(args, "id", true) });
+      const id = stringArg(args, "id", true);
+      find(await eligible([{ id }], "meeting"), id);
+      result = await deps.cloud.get(`/api/business/file/${paths[content]}`, { fileId: id });
+      find(await eligible([{ id }], "meeting"), id);
       break;
     }
     case "list_cloud_folders": result = await deps.cloud.get("/api/business/file/folder/list", {}); break;
@@ -158,6 +195,22 @@ export async function readDesktopMcpTool(name: string, args: Args, deps: McpData
 
 export function currentMcpDependencies(): McpDataDependencies {
   return {
+    authorizeSources: async (ids, kind) => {
+      if (kind === "note") {
+        const key = (id: string) => id.startsWith("inspiration:") ? id : `inspiration:${id}`;
+        const keys = ids.map(key);
+        const allowed = (await memoryApi.knownSourceEligibility(keys)).allowed_source_ids;
+        return ids.filter(id => allowed.includes(key(id)));
+      }
+      const local = ids.filter(id => id.startsWith("local:"));
+      const allowedLocal: string[] = [];
+      for (const id of local) {
+        try { await getWorkbenchApi()?.readForAi?.(id).then(() => allowedLocal.push(id)); } catch { /* Withdrawn sources stay out of MCP. */ }
+      }
+      const cloud = ids.filter(id => !id.startsWith("local:"));
+      const allowed = cloud.length ? (await memoryApi.sourceEligibility(cloud.map(source_id => ({ source_id })))).allowed_source_ids : [];
+      return [...allowedLocal, ...allowed];
+    },
     memory: getWorkbenchApi(),
     meetings: async () => {
       const rows = await getDesktopLocalTranscriptionApi()?.list() as unknown as Row[] ?? [];

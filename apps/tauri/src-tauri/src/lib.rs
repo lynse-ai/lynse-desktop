@@ -26,6 +26,8 @@ mod live_translation;
 #[path = "live_translation_stub.rs"]
 mod live_translation;
 mod logging;
+mod todo_state;
+static TODO_STATE_LOCK: Mutex<()> = Mutex::new(());
 mod desktop_mcp;
 mod inspiration_cloud;
 mod inspiration_voice;
@@ -322,6 +324,7 @@ pub(crate) fn now() -> String {
 }
 
 fn save_todo(app: &AppHandle, mut todo: Value) -> CommandResult<Value> {
+    let _guard = TODO_STATE_LOCK.lock().map_err(|_| "Todo state lock unavailable")?;
     let object = todo.as_object_mut().ok_or("Todo must be an object")?;
     let title = object.get("title").and_then(Value::as_str).map(str::trim).unwrap_or_default();
     if title.is_empty() { return Err("Todo title is required".to_owned()) }
@@ -332,6 +335,8 @@ fn save_todo(app: &AppHandle, mut todo: Value) -> CommandResult<Value> {
     object.entry("createdAt".to_owned()).or_insert_with(|| json!(timestamp));
     object.insert("updatedAt".to_owned(), json!(timestamp));
     object.entry("completed".to_owned()).or_insert_with(|| json!(false));
+    let current=get_store_value(app,"local-todos",todo["id"].as_str().ok_or("Todo ID required")?)?.unwrap_or(Value::Null);
+    todo_state::preserve_status(&current,&mut todo)?;
     let saved = save_store_value(app, "local-todos", todo)?;
     // Mirror the todo into the Obsidian-style Tasks folder (markdown file).
     vault::sync_task(app, &saved);
@@ -2553,7 +2558,22 @@ fn todo_list(app: AppHandle) -> CommandResult<Vec<Value>> { list_store(&app, "lo
 fn todo_save(app: AppHandle, todo: Value) -> CommandResult<Value> { save_todo(&app, todo) }
 
 #[tauri::command]
+fn todo_status_action(app: AppHandle, id: String, request: Value) -> CommandResult<Value> {
+    let _guard=TODO_STATE_LOCK.lock().map_err(|_| "Todo state lock unavailable")?;
+    let current=get_store_value(&app,"local-todos",&id)?.ok_or("Todo not found")?;
+    if current["workbenchScope"].as_str().is_some_and(|scope|Some(scope.to_owned())!=workbench::current_scope(&app)) { return Err("Todo belongs to another account".into()); }
+    let saved=todo_state::transition(&current,&request,&now())?;
+    let saved=save_store_value(&app,"local-todos",saved)?;
+    vault::sync_task(&app,&saved);
+    Ok(saved)
+}
+
+#[tauri::command]
+fn todo_capabilities() -> Value { json!({"protocol":1,"fourStates":true,"businessFourStates":false}) }
+
+#[tauri::command]
 fn todo_delete(app: AppHandle, id: String) -> CommandResult<()> {
+    let _guard=TODO_STATE_LOCK.lock().map_err(|_| "Todo state lock unavailable")?;
     remove_store_value(&app, "local-todos", &id)?;
     vault::remove_task(&app, &id);
     Ok(())
@@ -5237,6 +5257,9 @@ pub fn run() {
             workbench::workbench_exclude,
             workbench::workbench_memory_edit,
             workbench::workbench_memory_files,
+            workbench::workbench_knowledge_policy,
+            workbench::workbench_read_for_ai,
+            workbench::workbench_sync_memory_source,
             workbench::workbench_clear,
             workbench::workbench_confirm_todos,
             workbench::workbench_context,
@@ -5248,7 +5271,7 @@ pub fn run() {
             local_transcription_list, local_transcription_get, local_transcription_delete, local_transcription_audio_url,
             local_transcription_track_audio_url,
             sync_upload::sync_upload_audio_size, sync_upload::sync_upload_put_signed_file,
-            todo_list, todo_save, todo_delete, todo_add_to_calendar,
+            todo_list, todo_save, todo_delete, todo_add_to_calendar, todo_status_action, todo_capabilities,
             inspiration_list, inspiration_save, inspiration_delete, inspiration_transcribe, inspiration_audio_url,
             inspiration_image_url, inspiration_stage_image, inspiration_stage_image_from_path,
             inspiration_stage_image_from_clipboard, inspiration_capture_from_iphone,

@@ -95,6 +95,26 @@
   animation: completion-check 400ms var(--ease-out) 350ms both;
 }
 
+/* Selected graph nodes emit slow, overlapping waves as a state indicator.
+   Only the glow moves; node positions and hit targets stay fixed. */
+@keyframes graph-selection-pulse {
+  0% { transform: scale(0.95); opacity: 0; }
+  12% { opacity: 0.65; }
+  65% { opacity: 0.25; }
+  100% { transform: scale(4.4); opacity: 0; }
+}
+
+.graph-selection-pulse {
+  --graph-pulse-duration: 1.8s;
+  transform-origin: 0 0;
+  opacity: 0;
+  animation: graph-selection-pulse var(--graph-pulse-duration) linear infinite;
+}
+
+.graph-selection-pulse-delayed {
+  animation-delay: calc(var(--graph-pulse-duration) / -2);
+}
+
 /* Chat FAB: gentle color + border tint while a chat task is running.
  * Keeps the ring at the same thickness — only hue shifts towards brand
  * at half-cycle, no outer glow. */
@@ -339,6 +359,7 @@
   }
   /* Continuous/ambient loops: stop; element rests in its natural state */
   .animate-chat-impulse,
+  .graph-selection-pulse,
   .animate-nav-progress-sweep,
   .animate-chat-text-shimmer {
     animation: none;

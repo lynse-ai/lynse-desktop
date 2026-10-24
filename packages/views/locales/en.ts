@@ -1,4 +1,6 @@
+import { memoryManagementEnglish } from "../workbench/memory-management-locales";
 const en = {
+  memory_manager: memoryManagementEnglish,
   recording_sources: {
     aec_failed: "Echo cancellation unavailable; duplicate audio may be recorded.",
     source_status: "{{source}}: {{status}}",
@@ -115,7 +117,7 @@ const en = {
   },
   nav: {
     more: "More",
-    memory: "Memory",
+    memory: "Knowledge base",
     pinned: "Pinned features",
     pin_to_sidebar: "Pin {{name}} to sidebar",
     unpin_from_sidebar: "Unpin {{name}} from sidebar",

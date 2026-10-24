@@ -11,7 +11,7 @@ vi.mock("@lynse/core/i18n/react", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 vi.mock("../app-update", () => ({ getDesktopAppApi: vi.fn(), openExternalUrl: vi.fn() }));
-vi.mock("../layout/app-title-bar", () => ({ WindowControls: () => null }));
+vi.mock("../layout/app-title-bar", () => ({ WindowControls: () => null, showWindowControls: () => false }));
 vi.mock("./api-auth-panel", () => ({ ApiAuthPanel: () => null }));
 vi.mock("../feature-flags", () => ({
   hasPasswordlessAuth: () => true,

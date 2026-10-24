@@ -154,7 +154,9 @@ fn rows(value: &Value) -> Vec<Value> {
     vec![]
 }
 fn absent_text(error: &str) -> bool {
-    error.contains("not.ready") || error.contains("not ready")
+    error.contains("not.ready")
+        || error.contains("not ready")
+        || error == "API request failed (1001)"
 }
 
 async fn enumerate(session: &Session) -> CommandResult<Vec<Value>> {
@@ -661,9 +663,18 @@ pub(super) async fn run(
                 continue;
             }
         };
-        if !refresh_existing && cached.is_some() {
+        let automatic_refresh = if let Some(doc) = &cached {
+            let _guard = state.serial.lock().await;
+            local_sources::needs_automatic_refresh(&load_state(app,session)?,doc,row,&remote_revision)
+        } else { false };
+        if !refresh_existing && !automatic_refresh && cached.is_some() {
             let document = local_sources::load_meeting(session, row, &cloud_todos, cached).await?;
             commit_document_inner(app, state, session, document, !imported_legacy).await?;
+            let _guard = state.serial.lock().await;
+            require_current(state,session)?;
+            let mut manifest = load_state(app,session)?;
+            if let Some(entry) = manifest.entries.get_mut(&id).filter(|entry| entry.remote_revision.is_empty()) { entry.remote_revision = remote_revision; }
+            persist(app,session,&manifest)?;
             continue;
         }
         let (unchanged, unavailable) = {
@@ -671,7 +682,8 @@ pub(super) async fn run(
             let manifest = load_state(app, session)?;
             let (root, _) = roots(app, session)?;
             let unavailable = manifest.entries.get(&id).is_some_and(|entry| {
-                matches!(entry.status.as_str(), "awaiting_transcription" | "failed")
+                entry.status == "awaiting_transcription"
+                    || (entry.status == "failed" && !absent_text(&entry.error))
             });
             let unchanged = !string(row, &["updatedAt", "updateTime"]).is_empty()
                 && manifest.entries.get(&id).is_some_and(|entry| {
@@ -694,7 +706,7 @@ pub(super) async fn run(
             if manifest
                 .entries
                 .get(&id)
-                .is_some_and(|entry| entry.failed_download_revision == remote_revision)
+                .is_some_and(|entry| entry.failed_download_revision == remote_revision && !absent_text(&entry.error))
             {
                 continue;
             }
@@ -900,7 +912,7 @@ pub(super) async fn run(
         let Ok(document) = cloud_document(session, &row, &cloud_todos).await else {
             continue;
         };
-        let ready = !document.transcript.trim().is_empty();
+        let ready = document.has_meeting_text();
         let id = document.id.clone();
         commit_document(app, state, session, document).await?;
         let _guard = state.serial.lock().await;
@@ -1311,6 +1323,51 @@ mod tests {
         });
         (session, worker)
     }
+    #[tokio::test]
+    async fn processing_summary_keeps_ready_transcript_and_skips_empty_meetings() {
+        use std::io::{Read, Write};
+        for has_transcript in [true, false] {
+            let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let session = test_session(format!("http://{}", server.local_addr().unwrap()));
+            let worker = std::thread::spawn(move || {
+                for _ in 0..3 {
+                    let (mut socket, _) = server.accept().unwrap();
+                    socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    let mut bytes = [0u8; 4096];
+                    let count = socket.read(&mut bytes).unwrap();
+                    let header = String::from_utf8_lossy(&bytes[..count]);
+                    let body = if header.contains("/trans/get?") && has_transcript {
+                        json!({"code":200,"data":{"content":"Available meeting evidence"}})
+                    } else if header.contains("/outline/get?") {
+                        json!({"code":200,"data":{}})
+                    } else {
+                        json!({"code":1001,"msg":"TASK_PROCESSING","data":null})
+                    }.to_string();
+                    write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+                }
+            });
+            let doc = cloud_document(&session, &json!({"id":"processing","status":2}), &[]).await.unwrap();
+            assert_eq!(doc.has_meeting_text(), has_transcript);
+            assert!(doc.conclusions.is_empty());
+            let local = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+            let entry = write_document(&local, &doc, None).unwrap();
+            assert_eq!(entry.status, if has_transcript { "synced" } else { "awaiting_transcription" });
+            assert_eq!(eligible(&entry), has_transcript);
+            worker.join().unwrap();
+            std::fs::remove_dir_all(local).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn optional_text_does_not_hide_authentication_or_other_business_errors() {
+        for code in [2000, 2013, 500, 10010] {
+            let (session, worker) = mock_pages(vec![json!({"code":code,"msg":"Failure"})]);
+            let result = optional_detail(&session, "/api/business/file/conclusion/list", "one", true).await;
+            assert_eq!(result.unwrap_err(), format!("API request failed ({code})"));
+            worker.join().unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn all_pages_include_old_years_even_when_gateway_caps_page_size() {
         let mut pages = vec![];

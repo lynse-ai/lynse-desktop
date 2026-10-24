@@ -29,6 +29,9 @@ import type { SourceRef } from "../workbench/types";
 import { useWorkbench } from "../workbench/api";
 
 export interface TodoItem {
+  status?: TodoStatus;
+  statusVersion?: number;
+  statusHistory?: { from: TodoStatus; to: TodoStatus; at: string; version: number }[];
   sourceRef?: SourceRef;
   workbenchScope?: string;
   id: string;
@@ -48,6 +51,14 @@ export interface TodoItem {
   owner?: string; // cloud-only: team / person responsible
   backend?: boolean; // true when sourced from the lynse.ai cloud
   [key: string]: unknown;
+}
+
+export type TodoStatus = "open" | "doing" | "done" | "cancelled";
+export function todoStatus(todo: Pick<TodoItem, "status" | "completed">): TodoStatus {
+  return todo.status ?? (todo.completed ? "done" : "open");
+}
+export function todoClosed(todo: Pick<TodoItem, "status" | "completed">): boolean {
+  return ["done", "cancelled"].includes(todoStatus(todo));
 }
 
 // ── Cloud (lynse.ai) layer — same API as lynse-cli ────────
@@ -191,6 +202,8 @@ export async function clearCloudCompleted(): Promise<void> {
 // ── Desktop local store bridge ────────────────────────────
 
 type TodoBridge = {
+  capabilities?: () => Promise<{ fourStates: boolean }>;
+  statusAction?: (id: string, request: { status: TodoStatus; baseVersion: number; operationId: string }) => Promise<unknown>;
   list: () => Promise<unknown[]>;
   save: (todo: unknown) => Promise<unknown>;
   delete: (id: string) => Promise<void>;
@@ -215,9 +228,10 @@ function getTodoBridge(): TodoBridge | null {
 export function normalizeStored(raw: unknown): TodoItem {
   const t = (raw ?? {}) as Record<string, unknown>;
   return {
+    ...(typeof t.status === "string" && ["open", "doing", "done", "cancelled"].includes(t.status) ? { status: t.status as TodoStatus, statusVersion: Number(t.statusVersion ?? 0), statusHistory: t.statusHistory as TodoItem["statusHistory"] } : {}),
     id: String(t.id ?? (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `todo-${Date.now()}`)),
     title: String(t.title ?? "").trim() || "(无标题待办)",
-    completed: t.completed === true || t.completed === 1,
+    completed: typeof t.status === "string" && ["open", "doing", "done", "cancelled"].includes(t.status) ? t.status === "done" : t.completed === true || t.completed === 1,
     notes: t.notes ? String(t.notes) : undefined,
     dueDate: t.dueDate ? String(t.dueDate) : undefined,
     sourceRef: t.sourceRef && typeof t.sourceRef === "object" ? t.sourceRef as SourceRef : undefined,
@@ -296,6 +310,9 @@ export async function saveTodo(todo: TodoItem): Promise<TodoItem> {
   }
   const bridge = getTodoBridge();
   if (bridge) {
+    if (todo.statusVersion && todo.completed !== (todo.status === "done")) {
+      return setTodoStatus(todo, todo.completed ? "done" : "open", crypto.randomUUID());
+    }
     const saved = await bridge.save({ ...todo });
     return normalizeStored(saved);
   }
@@ -303,6 +320,15 @@ export async function saveTodo(todo: TodoItem): Promise<TodoItem> {
   next.unshift(todo);
   saveLocalTodos(next);
   return todo;
+}
+
+export async function localTodoFourStates(): Promise<boolean> {
+  try { return !!(await getTodoBridge()?.capabilities?.())?.fourStates; } catch { return false; }
+}
+export async function setTodoStatus(todo: TodoItem, status: TodoStatus, operationId: string): Promise<TodoItem> {
+  const bridge = getTodoBridge();
+  if (todo.backend || !bridge?.statusAction || !await localTodoFourStates()) throw new Error("Todo state capability unavailable");
+  return normalizeStored(await bridge.statusAction(todo.id, { status, baseVersion: todo.statusVersion ?? 0, operationId }));
 }
 
 /** Delete a single todo (cloud or local). */

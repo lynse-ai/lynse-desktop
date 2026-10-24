@@ -24,7 +24,7 @@ def main():
     loopback = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     with tempfile.TemporaryDirectory(prefix='lynse-graph-local-') as temporary:
         staging = Path(temporary)
-        ready, result = staging / 'ready.json', staging / 'result.json'
+        ready, result, wiki_result = staging / 'ready.json', staging / 'result.json', staging / 'wiki-result.json'
         with (staging / 'service.log').open('w') as log:
             service = subprocess.Popen([str(python), str(root / 'e2e/fixtures/graph-local-service.py'), '--lynclaw-root', str(lynclaw), '--ready-file', str(ready)], cwd=root, stdout=log, stderr=subprocess.STDOUT)
             try:
@@ -45,12 +45,14 @@ def main():
                 else:
                     raise RuntimeError('Local synthetic Lynclaw route did not become ready: ' + (staging / 'service.log').read_text())
                 print('Local Lynclaw route:', url, '(synthetic identity and model; loopback only)', flush=True)
-                env = {**os.environ, 'LYNSE_GRAPH_LOCAL_URL':url, 'LYNSE_GRAPH_LOCAL_RESULT':str(result), 'LYNSE_E2E_VIDEO':'off'}
+                env = {**os.environ, 'LYNSE_GRAPH_LOCAL_URL':url, 'LYNSE_GRAPH_LOCAL_RESULT':str(result), 'LYNSE_E2E_VIDEO':'off', 'LYNSE_WIKI_LOCAL_RESULT':str(wiki_result)}
                 subprocess.run(['cargo','test','--manifest-path','apps/tauri/src-tauri/Cargo.toml','local_graph_service_smoke','--lib','--','--ignored','--nocapture'], cwd=root, env=env, check=True)
+                subprocess.run(['cargo','test','--manifest-path','apps/tauri/src-tauri/Cargo.toml','local_automatic_service_smoke','--lib','--','--ignored','--nocapture'], cwd=root, env=env, check=True)
                 subprocess.run(['pnpm','--dir','e2e','test:desktop','06-graph-local-service.spec.ts','--workers=1'], cwd=root, env=env, check=True)
                 output = root / 'e2e/test-results/graph-local-service'
                 output.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(result, output / 'result.json')
+                shutil.copy2(wiki_result, output / 'wiki-result.json')
                 with loopback.open(url + '/health', timeout=2) as response:
                     health = json.load(response)
                 (output / 'health.json').write_text(json.dumps(health, indent=2), encoding='utf-8')

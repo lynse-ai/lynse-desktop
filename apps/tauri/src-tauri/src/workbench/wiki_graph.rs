@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[path = "wiki_graph_schema.rs"]
 mod schema;
 use schema::{ExtractNode, Extraction};
+pub(super) use schema::mask;
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -14,7 +15,7 @@ struct Chunk {
     extraction: Extraction,
     error: String,
 }
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 struct Tracking {
     enabled: bool,
@@ -40,6 +41,15 @@ fn summary_sources(local: &Path, manifest: &Manifest) -> Vec<Document> {
     sources_for(local, manifest).iter()
         .filter_map(|doc| schema::summary_source(doc, manifest))
         .collect()
+}
+fn effective_tracking(tracking: &Tracking, manifest: &Manifest, docs: &[Document]) -> Tracking {
+    let mut result = tracking.clone();
+    if manifest.wiki_automation.is_some() {
+        result.enabled = true;
+        result.paused = false;
+        result.selected_sources = docs.iter().map(|doc| doc.id.clone()).collect();
+    }
+    result
 }
 fn pending_chunks(docs: &[Document], tracking: &Tracking) -> Vec<(String, Document)> {
     let mut pending = Vec::new();
@@ -237,11 +247,12 @@ pub(super) async fn run(
         }
         let root = wiki_root(app, session)?;
         let mut tracking: Tracking = read_json(&path(&root))?;
-        if !tracking.enabled || tracking.paused {
+        let docs = summary_sources(&roots(app, session)?.0, &manifest);
+        let effective = effective_tracking(&tracking, &manifest, &docs);
+        if !effective.enabled || effective.paused {
             return Ok(false);
         }
-        let docs = summary_sources(&roots(app, session)?.0, &manifest);
-        let Some((key, part)) = pending_chunks(&docs, &tracking).into_iter().next() else {
+        let Some((key, part)) = pending_chunks(&docs, &effective).into_iter().next() else {
             if tracking.processing {
                 tracking.processing = false;
                 write_json(&path(&root), &tracking)?;
@@ -272,21 +283,21 @@ pub(super) async fn run(
     let current = summary_sources(&local, &latest)
         .into_iter()
         .find(|doc| doc.id == part.id);
-    if !tracking.enabled
-        || !tracking.selected_sources.contains(&part.id)
+    let automatic = latest.wiki_automation.is_some();
+    if (!automatic && (!tracking.enabled || !tracking.selected_sources.contains(&part.id)))
         || current
             .as_ref()
             .is_none_or(|doc| schema::content_revision(doc) != source_content)
     {
         write_json(&path(&root), &tracking)?;
         persist(app, session, &latest)?;
-        return Ok(tracking.enabled && !tracking.paused);
+        return Ok(automatic || (tracking.enabled && !tracking.paused));
     }
     let (extraction, error) = match result {
         Ok(extraction) => (extraction, String::new()),
         Err(error) => (Extraction::default(), error),
     };
-    tracking.paused = !error.is_empty();
+    tracking.paused = !automatic && !error.is_empty();
     tracking.chunks.insert(
         key,
         Chunk {
@@ -299,7 +310,9 @@ pub(super) async fn run(
     );
     write_json(&path(&root), &tracking)?;
     persist(app, session, &latest)?;
-    Ok(!tracking.paused && !pending_chunks(&summary_sources(&local, &latest), &tracking).is_empty())
+    let docs = summary_sources(&local, &latest);
+    let effective = effective_tracking(&tracking, &latest, &docs);
+    Ok(!effective.paused && !pending_chunks(&docs, &effective).is_empty())
 }
 pub(super) fn confirm_todo(
     app: &AppHandle,
@@ -506,6 +519,7 @@ pub(super) fn view(
     let docs = sources_for(local, manifest);
     let current: BTreeMap<_, _> = docs.iter().map(|doc| (doc.id.as_str(), doc)).collect();
     let summaries = summary_sources(local, manifest);
+    let tracking = effective_tracking(&tracking, manifest, &summaries);
     let summary_docs: BTreeMap<_, _> = summaries.iter().map(|doc| (doc.id.as_str(), doc)).collect();
     let mut nodes = BTreeMap::<String, Value>::new();
     let mut edges = BTreeMap::new();

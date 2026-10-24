@@ -1,4 +1,6 @@
+import { memoryManagementEnglish } from "../workbench/memory-management-locales";
 const ja = {
+  memory_manager: memoryManagementEnglish,
   recording_sources: {
     aec_failed: "エコー除去を利用できません。音声が重複して録音される可能性があります。",
     source_status: "{{source}}：{{status}}",
@@ -117,7 +119,7 @@ const ja = {
   },
   nav: {
     more: "その他",
-    memory: "メモリ",
+    memory: "ナレッジベース",
     pinned: "固定した機能",
     pin_to_sidebar: "{{name}} をサイドバーに固定",
     unpin_from_sidebar: "{{name}} の固定を解除",

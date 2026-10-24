@@ -10,7 +10,8 @@ import { featureFlags, isConnectionsEnabled } from "../feature-flags";
 import { getDesktopInspirationApi } from "../inspiration/desktop-api";
 import { isWebPlatform } from "../platform";
 import { useInspirationCaptureStore } from "../inspiration/capture-store";
-import { type TodoItem, addTodoToSystemCalendar, isCalendarAvailable, saveTodo } from "./todo-api";
+import { type TodoItem, todoStatus, todoClosed, addTodoToSystemCalendar, isCalendarAvailable, saveTodo } from "./todo-api";
+import { TodoStateControl } from "./state-control";
 import { useTodos } from "./use-todos";
 import { TodoExportBar, TodoExportDialog, useTodoExportSelection } from "./export-action-items";
 import { useWorkbench } from "../workbench";
@@ -216,11 +217,12 @@ function TodoItemRow({
       />
       <span
         className={`flex-1 truncate text-sm leading-tight ${
-          todo.completed ? "line-through text-muted-foreground" : "text-foreground"
+          todoClosed(todo) ? "line-through text-muted-foreground" : "text-foreground"
         }`}
       >
         {todo.title}
       </span>
+      {todo.status && <span className="text-xs text-muted-foreground">{t(`memory_manager.todo_${todoStatus(todo)}`)}</span>}
       {dueText && (
         <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{dueText}</span>
       )}
@@ -460,6 +462,7 @@ export function TodoEditSheet({
           </div>
         ) : (
           <div className="flex min-h-[208px] flex-col gap-2 p-4 pt-3">
+            <TodoStateControl todo={todo} onSaved={onSaved} />
             {/* Header — title is an inline editable field like the notes */}
             <div className="flex items-start justify-between gap-2">
               <input

@@ -155,8 +155,14 @@ export function contourPolylines(points: Map<string, GraphPoint>, bandwidth: num
         case 4: case 11: link(top, right); break;
         case 6: case 9: link(top, bottom); break;
         case 7: case 8: link(left, top); break;
-        case 5: saddle ? (link(left, top), link(bottom, right)) : (link(left, bottom), link(top, right)); break;
-        case 10: saddle ? (link(left, bottom), link(top, right)) : (link(left, top), link(bottom, right)); break;
+        case 5:
+          if (saddle) { link(left, top); link(bottom, right); }
+          else { link(left, bottom); link(top, right); }
+          break;
+        case 10:
+          if (saddle) { link(left, bottom); link(top, right); }
+          else { link(left, top); link(bottom, right); }
+          break;
       }
     }
     // Chain cell segments into rings keyed on quantized endpoints.

@@ -34,7 +34,8 @@
     "./integrations/errors": "./integrations/errors.ts",
     "./integrations/types": "./integrations/types.ts",
     "./types": "./types/index.ts",
-    "./types/storage": "./types/storage.ts"
+    "./types/storage": "./types/storage.ts",
+    "./api/memory": "./api/memory.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "catalog:",

@@ -1,4 +1,5 @@
 "use client";
+import { todoClosed } from "../todo/todo-api";
 
 /**
  * Global search (全局搜索) — a ⌘K command palette over everything the client
@@ -81,7 +82,7 @@ export function GlobalSearchDialog({
     () =>
       q
         ? todos.todos
-            .filter((todo) => !todo.completed && todo.title.toLowerCase().includes(q))
+            .filter((todo) => !todoClosed(todo) && todo.title.toLowerCase().includes(q))
             .slice(0, MAX_PER_GROUP)
         : [],
     [todos.todos, q],

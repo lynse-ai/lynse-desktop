@@ -12,6 +12,44 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.2.0 (2026-10-24)
+
+### New Features
+
+- Manage shared work memory from the assistant, with candidate review, source explanations, corrections and forgetting previews.
+- Set shared source ranges and separately authorize memory extraction and local transcript synchronization.
+- Publish Wiki topics automatically with linked sources, browse the graph and retry failed topics individually.
+- Track local to-dos as open, doing, done or cancelled, with a visible change history.
+
+### Fixed
+
+- Preserve chat drafts and memory-file drafts when navigating away and returning.
+- Recheck source authorization before supplying local knowledge or MCP results to the assistant.
+- Keep forgotten sources available for manual browsing while blocking their automatic AI use.
+
+### Changed
+
+- Start the new shared memory system with an empty data space. Existing memory is not imported.
+- Enable cloud-dependent features only when the deployed service advertises the required capabilities.
+
+### 新功能
+
+- 从助手进入共用记忆管理，审阅候选、查看来源解释、纠正记忆，并预览遗忘范围。
+- 设置账号共享的来源范围，分别授权记忆提取和本地转写文本同步。
+- Wiki 专题自动发布并保留来源，可浏览知识图谱、单独重试失败专题。
+- 本地待办支持未开始、进行中、已完成和已取消四种状态，并保留变更历史。
+
+### 修复
+
+- 离开页面再返回时保留聊天草稿、记忆文件草稿及文件选择。
+- 本地知识和 MCP 结果交给助手前重新检查来源授权。
+- 遗忘后保留来源和 Wiki 的人工浏览能力，同时阻断相关内容的自动 AI 使用。
+
+### 变更
+
+- 新版共用记忆使用空白数据空间，不导入旧版记忆。
+- 云端相关功能仅在服务声明具备所需能力时启用。
+
 ## 1.1.16 (2026-10-21)
 
 ### New Features

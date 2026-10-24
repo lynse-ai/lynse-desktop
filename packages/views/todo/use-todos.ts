@@ -192,7 +192,8 @@ const useTodoStore = create<TodoStore>((set, get) => ({
     const updated = { ...todo, completed: !todo.completed, updatedAt: nowIso() };
     set((s) => ({ todos: s.todos.map((x) => (x.id === todo.id ? updated : x)) })); // optimistic
     try {
-      await saveTodo(updated);
+      const saved = await saveTodo(updated);
+      set((s) => ({ todos: s.todos.map((x) => (x.id === todo.id ? saved : x)) }));
     } catch (e) {
       console.error("[Todo] toggle failed:", e);
       // Reconcile with the real store so the checkbox reflects the truth.

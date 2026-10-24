@@ -4,7 +4,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@lynse/ui/components/ui/dialog";
-import { Fullscreen, Maximize2, ZoomIn, ZoomOut } from "../icons";
+import { BookOpen, Fullscreen, Layers, Maximize2, ZoomIn, ZoomOut } from "../icons";
 import { contourFrame, contourPolylines, DEFAULT_GRAPH_CAMERA, GRAPH_EDGE_LIMIT, layoutGraph, projectGraph, zoomGraphCamera, type GraphCamera, type GraphTopology } from "./graph-scene-layout";
 import { graphColors, graphKinds } from "./graph-vocabulary";
 import { graphRelationKey } from "./graph-relations";
@@ -19,21 +19,25 @@ interface Props {
   details?: ReactNode;
   controls?: ReactNode;
   viewKey?: string;
+  simple?: boolean;
+  initialCamera?: GraphCamera;
+  onCameraChange?: (camera: GraphCamera) => void;
 }
 interface Drag {
   pointerId: number; x: number; y: number; camera: GraphCamera;
   node: SVGGElement | null; moved: boolean; rotate: boolean;
 }
 
-export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLabel, details, controls, viewKey }: Props) {
+export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLabel, details, controls, viewKey, simple = false, initialCamera, onCameraChange }: Props) {
   const { t } = useTranslation();
   const svg = useRef<SVGSVGElement>(null);
   const [svgElement, setSvgElement] = useState<SVGSVGElement | null>(null);
   const mountSvg = useCallback((element: SVGSVGElement | null) => { svg.current = element; setSvgElement(element); }, []);
   const elements = useRef(new Map<string, SVGGElement>());
   const [size, setSize] = useState({ width: 600, height: 340 });
-  const [camera, setCamera] = useState(DEFAULT_GRAPH_CAMERA);
+  const [camera, setCamera] = useState(initialCamera ?? DEFAULT_GRAPH_CAMERA);
   const pendingCamera = useRef(camera);
+  useEffect(() => { onCameraChange?.(camera); }, [camera, onCameraChange]);
   const frame = useRef<number | null>(null);
   const drag = useRef<Drag | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -72,14 +76,14 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
   const visibleEdges = useMemo(() => {
     // 2D swaps the always-on edge web for contour terrain: links appear only
     // around the hovered, focused or selected node.
-    if (mode === "2d" && !preview) return [];
+    if (!simple && mode === "2d" && !preview) return [];
     return connections.slice().sort((a, b) =>
       Number(b.source === preview || b.target === preview) - Number(a.source === preview || a.target === preview)
       || a.id.localeCompare(b.id))
-      .filter(edge => mode !== "2d" || edge.source === preview || edge.target === preview)
+      .filter(edge => simple || mode !== "2d" || edge.source === preview || edge.target === preview)
       .slice(0, GRAPH_EDGE_LIMIT);
-  }, [connections, preview, mode]);
-  const terrain = useMemo(() => mode === "2d" ? contourPolylines(points) : [], [points, mode]);
+  }, [connections, preview, mode, simple]);
+  const terrain = useMemo(() => !simple && mode === "2d" ? contourPolylines(points) : [], [points, mode, simple]);
   const terrainFrame = useMemo(() => contourFrame(points, camera, size.width, size.height), [points, camera, size]);
   const ordered = useMemo(() => nodes.slice().sort((a, b) => projected.get(a.id)!.depth - projected.get(b.id)!.depth), [nodes, projected]);
   const tabStop = [focused, selection, nodes[0]?.id].find(id => id && projected.has(id));
@@ -100,12 +104,12 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
       const text = characters.length > maxCharacters ? characters.slice(0, maxCharacters - 1).join("") + "…" : node.title;
       const width = Math.min(size.width - 24, [...text].reduce((sum, c) => sum + (/[^\u0000-\u00ff]/.test(c) ? 12 : 7), 0) + 12);
       const x = Math.max(width / 2 + 6, Math.min(size.width - width / 2 - 6, p.x));
-      const y = p.y + 23;
+      const y = p.y + (simple ? 48 : 23);
       if (occupied.some(box => Math.abs(box.y - y) < 21 && Math.abs(box.x - x) < (box.width + width) / 2 + 5)) return [];
       occupied.push({ x, y, width });
-      return [{ id: node.id, text, x, y }];
+      return [{ id: node.id, text, x, y, width }];
     });
-  }, [nodes, preview, connected, degree, projected, size, camera.scale]);
+  }, [nodes, preview, connected, degree, projected, size, camera.scale, simple]);
 
   const flush = useCallback(() => { frame.current = null; setCamera(pendingCamera.current); }, []);
   const schedule = useCallback((next: GraphCamera) => {
@@ -163,12 +167,12 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
   const scene = <div className={(expanded ? "flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg " : "") + "relative bg-background"}>
     <div className={expanded ? "relative flex min-h-0 flex-1 flex-col" : "relative"}>
       <div className="absolute end-2 top-2 z-10 flex max-w-[calc(100%-1rem)] flex-wrap gap-1 rounded-md border border-border bg-background p-1">
-        {(["2d", "3d"] as const).map(value => <Button key={value} size="sm" variant={mode === value ? "secondary" : "ghost"} aria-pressed={mode === value} onClick={() => { stop(); schedule({ ...DEFAULT_GRAPH_CAMERA, mode: value }); }}>{value === "2d" ? "2D" : "3D"}</Button>)}
+        {!simple && (["2d", "3d"] as const).map(value => <Button key={value} size="sm" variant={mode === value ? "secondary" : "ghost"} aria-pressed={mode === value} onClick={() => { stop(); schedule({ ...DEFAULT_GRAPH_CAMERA, mode: value }); }}>{value === "2d" ? "2D" : "3D"}</Button>)}
         {[{ icon: ZoomIn, label: "workbench.graph_zoom_in" as const, action: () => zoom(1.25) }, { icon: ZoomOut, label: "workbench.graph_zoom_out" as const, action: () => zoom(0.8) }, { icon: Fullscreen, label: "workbench.graph_reset" as const, action: fit }].map(({ icon: Icon, label, action }) => <Button key={label} size="icon-sm" variant="ghost" aria-label={t(label)} onClick={action}><Icon className="size-4" aria-hidden="true" /></Button>)}
-        <Button size="sm" variant="ghost" disabled={!selection || !projected.has(selection)} onClick={focusSelection}>{t("workbench.graph_focus")}</Button>
-        {!expanded && <Button size="icon-sm" variant="ghost" aria-label={t("workbench.graph_expand")} onClick={() => { stop(); setHovered(null); setFocused(null); setExpanded(true); }}><Maximize2 className="size-4" aria-hidden="true" /></Button>}
+        {!simple && <Button size="sm" variant="ghost" disabled={!selection || !projected.has(selection)} onClick={focusSelection}>{t("workbench.graph_focus")}</Button>}
+        {!simple && !expanded && <Button size="icon-sm" variant="ghost" aria-label={t("workbench.graph_expand")} onClick={() => { stop(); setHovered(null); setFocused(null); setExpanded(true); }}><Maximize2 className="size-4" aria-hidden="true" /></Button>}
       </div>
-      <svg ref={mountSvg} viewBox={"0 0 " + size.width + " " + size.height} className={(expanded ? "h-full min-h-0 flex-1 " : "h-[clamp(24rem,52dvh,48rem)] ") + "w-full touch-none select-none cursor-grab outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[dragging=true]:cursor-grabbing"} role="group" tabIndex={0} aria-label={t("workbench.graph_canvas")} data-dragging={dragging}
+      <svg ref={mountSvg} viewBox={"0 0 " + size.width + " " + size.height} className={(expanded ? "h-full min-h-0 flex-1 " : (simple ? "h-[clamp(24rem,70dvh,54rem)] " : "h-[clamp(24rem,52dvh,48rem)] ")) + "w-full touch-none select-none cursor-grab outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[dragging=true]:cursor-grabbing"} role="group" tabIndex={0} aria-label={t("workbench.graph_canvas")} data-dragging={dragging}
         onPointerDown={event => {
           if (event.button !== 0 || drag.current) return;
           event.preventDefault();
@@ -206,12 +210,17 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
             : { ...current, x: (current.x ?? 0) + delta[0]! * 40, y: (current.y ?? 0) + delta[1]! * 40 });
         }}>
         <defs>
-          <marker id={arrowId} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted-foreground)" /></marker>
-          {graphKinds.map(kind => <radialGradient key={kind} id={glowId + kind}>
-            <stop offset="0%" stopColor={graphColors[kind]} stopOpacity={0.9} />
-            <stop offset="40%" stopColor={graphColors[kind]} stopOpacity={0.32} />
-            <stop offset="100%" stopColor={graphColors[kind]} stopOpacity={0} />
+          <marker id={arrowId} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--graph-edge-active)" /></marker>
+          {([...graphKinds, "highlight"] as const).map(kind => <radialGradient key={kind} id={glowId + kind}>
+            <stop offset="0%" stopColor={kind === "highlight" ? "var(--graph-highlight)" : graphColors[kind]} stopOpacity={0.65} />
+            <stop offset="40%" stopColor={kind === "highlight" ? "var(--graph-highlight)" : graphColors[kind]} stopOpacity={0.16} />
+            <stop offset="100%" stopColor={kind === "highlight" ? "var(--graph-highlight)" : graphColors[kind]} stopOpacity={0} />
           </radialGradient>)}
+          <radialGradient id={glowId + "pulse"}>
+            <stop offset="45%" stopColor="var(--graph-highlight)" stopOpacity={0} />
+            <stop offset="76%" stopColor="var(--graph-highlight)" stopOpacity={0.55} />
+            <stop offset="100%" stopColor="var(--graph-highlight)" stopOpacity={0} />
+          </radialGradient>
         </defs>
         <rect width={size.width} height={size.height} fill="transparent" data-graph-background />
         {terrainFrame && terrain.length > 0 && <g data-graph-terrain transform={"translate(" + terrainFrame.tx + " " + terrainFrame.ty + ") scale(" + terrainFrame.fit + " " + -terrainFrame.fit + ")"} pointerEvents="none" aria-hidden="true">
@@ -228,18 +237,20 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
           const inset = Math.min(10, distance / 3);
           return <line key={edge.id} data-graph-edge={edge.kind} data-source={edge.source} data-target={edge.target}
             x1={a.x} y1={a.y} x2={b.x - (b.x - a.x) / distance * inset} y2={b.y - (b.y - a.y) / distance * inset}
-            stroke="var(--muted-foreground)" strokeWidth={active ? 1.3 : 0.55 + near * 0.55}
-            strokeDasharray={edge.kind === "evidence" ? "3 3" : undefined}
-            markerEnd={active && edge.kind !== "evidence" ? "url(#" + arrowId + ")" : undefined}
-            opacity={active ? 0.8 : preview ? 0.1 : 0.1 + near * 0.4}>
+            stroke={active ? "var(--graph-edge-active)" : "var(--graph-edge)"} strokeWidth={active ? (edge.kind === "evidence" ? 1.3 : 1) : 0.55 + near * 0.55}
+            strokeDasharray={edge.kind === "evidence" || edge.kind === "shared_source" ? "3 3" : undefined}
+            markerEnd={!simple && active && edge.kind !== "evidence" ? "url(#" + arrowId + ")" : undefined}
+            opacity={active ? 0.8 : simple ? (preview ? 0.2 : 0.4) : preview ? 0.06 : 0.06 + near * 0.16}>
             <title>{t(graphRelationKey[edge.kind as keyof typeof graphRelationKey] ?? "workbench.graph_related")}</title>
           </line>;
         })}</g>
         {ordered.map(node => {
           const p = projected.get(node.id)!;
           const active = node.id === selection;
-          const radius = (3 + Math.min(5, Math.log2((degree.get(node.id) ?? 0) + 1) * 1.1)) * (mode === "3d" ? p.size : 1);
+          const radius = (simple ? 20 + Math.min(8, degree.get(node.id) ?? 0) : (3 + Math.min(5, Math.log2((degree.get(node.id) ?? 0) + 1) * 1.1)) * (mode === "3d" ? p.size : 1));
           const glow = active || node.id === preview;
+          const color = glow ? "var(--graph-highlight)" : graphColors[node.kind];
+          const TopicIcon = node.subtype === "project" ? Layers : BookOpen;
           return <g key={node.id} ref={element => { if (element) elements.current.set(node.id, element); else elements.current.delete(node.id); }}
             data-graph-node={node.id} role="button" tabIndex={node.id === tabStop ? 0 : -1} aria-label={nodeLabel(node)} aria-pressed={active}
             aria-description={t("workbench.graph_connections", { count: degree.get(node.id) ?? 0 })}
@@ -265,25 +276,29 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
               if (target && Number.isFinite(target.score)) elements.current.get(target.id)?.focus({ preventScroll: true });
             }}>
             <title>{nodeLabel(node)}</title>
-            <circle r={16} fill="transparent" />
-            <circle className="graph-focus" r={13} fill="none" stroke="var(--ring)" strokeWidth={2} opacity={0} pointerEvents="none" />
-            {mode === "3d" && <circle r={radius * 3.6} fill={"url(#" + glowId + node.kind + ")"} opacity={glow ? 0.9 : Math.max(0.22, Math.min(0.8, 0.45 * p.size))} pointerEvents="none" />}
-            {mode === "3d" && active && <circle r={radius} fill={"url(#" + glowId + node.kind + ")"} opacity={0.55} pointerEvents="none" aria-hidden="true">
-              <animate attributeName="r" values={radius + ";" + radius * 4.4} dur="1.8s" repeatCount="indefinite" />
-              <animate attributeName="opacity" values="0.55;0" dur="1.8s" repeatCount="indefinite" />
-            </circle>}
-            {mode === "2d" && glow && <circle r={radius * 2.5} fill={graphColors[node.kind]} opacity={0.12} pointerEvents="none" />}
-            <circle data-graph-particle r={radius} fill={graphColors[node.kind]} stroke={active ? "var(--foreground)" : "none"} strokeWidth={active ? 1.5 : 0} pointerEvents="none" />
+            <circle r={simple ? 28 : 16} fill="transparent" />
+            <circle className="graph-focus" r={simple ? radius + 5 : 13} fill="none" stroke="var(--ring)" strokeWidth={2} opacity={0} pointerEvents="none" />
+            {mode === "3d" && <circle r={radius * 3.6} fill={"url(#" + glowId + (glow ? "highlight" : node.kind) + ")"} opacity={glow ? 0.7 : Math.max(0.06, Math.min(0.16, 0.1 * p.size))} pointerEvents="none" />}
+            {mode === "3d" && active && <g pointerEvents="none" aria-hidden="true">
+              <circle className="graph-selection-pulse" r={radius} fill={"url(#" + glowId + "pulse)"} />
+              <circle className="graph-selection-pulse graph-selection-pulse-delayed" r={radius} fill={"url(#" + glowId + "pulse)"} />
+            </g>}
+            {mode === "2d" && glow && <circle r={radius * (simple ? 1.8 : 2.5)} fill={color} opacity={0.12} pointerEvents="none" />}
+            <circle data-graph-particle r={radius} fill={simple && !active ? "var(--muted)" : color} stroke={simple ? color : undefined} strokeWidth={simple ? 1.2 : undefined} pointerEvents="none" />
+            {simple && <TopicIcon x={-11} y={-11} width={22} height={22} color={active ? "var(--primary-foreground)" : "var(--primary)"} pointerEvents="none" aria-hidden="true" />}
           </g>;
         })}
-        {labels.map(label => <text key={label.id} data-graph-label={label.id} x={label.x} y={label.y} textAnchor="middle" fill="var(--foreground)" fontSize={12} paintOrder="stroke" stroke="var(--background)" strokeWidth={4} strokeLinejoin="round" pointerEvents="none" aria-hidden="true">{label.text}</text>)}
+        {labels.map(label => <g key={label.id} pointerEvents="none" aria-hidden="true">
+          {simple && <rect x={label.x - label.width / 2} y={label.y - 17} width={label.width} height={26} rx={13} fill="var(--background)" stroke={label.id === preview ? "var(--primary)" : "var(--border)"} strokeOpacity={label.id === preview ? 0.5 : 1} />}
+          <text data-graph-label={label.id} x={label.x} y={label.y} textAnchor="middle" fill={label.id === preview ? "var(--graph-label-active)" : "var(--graph-label)"} fontSize={simple ? 14 : 12} fontWeight={simple ? 500 : undefined} paintOrder="stroke" stroke="var(--background)" strokeWidth={4} strokeLinejoin="round">{label.text}</text>
+        </g>)}
       </svg>
-      {previewNode && <div data-graph-preview className="absolute bottom-2 start-2 max-h-24 max-w-[calc(100%-1rem)] overflow-y-auto rounded-md border border-border bg-background px-3 py-2 text-xs shadow-sm">
+      {!simple && previewNode && <div data-graph-preview className="absolute bottom-2 start-2 max-h-24 max-w-[calc(100%-1rem)] overflow-y-auto rounded-md border border-border bg-background px-3 py-2 text-xs shadow-sm">
         <p className="break-words font-medium">{nodeLabel(previewNode)}</p><p className="mt-1 text-muted-foreground">{t("workbench.graph_connections", { count: degree.get(previewNode.id) ?? 0 })}</p>
       </div>}
     </div>
     <div className="shrink-0 space-y-1 px-3 py-2">
-      <p className="text-xs leading-relaxed text-muted-foreground">{t(mode === "3d" ? "workbench.graph_gestures_3d" : "workbench.graph_gestures")}</p>
+      <p className="text-xs leading-relaxed text-muted-foreground">{t(simple ? "workbench.auto_graph_hint" : mode === "3d" ? "workbench.graph_gestures_3d" : "workbench.graph_gestures")}</p>
       {mode === "3d" && connections.length > visibleEdges.length && <p role="status" className="text-xs text-muted-foreground">{t("workbench.graph_edge_budget", { shown: visibleEdges.length, total: connections.length })}</p>}
     </div>
   </div>;

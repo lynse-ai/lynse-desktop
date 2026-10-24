@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Build a draft release; stable publishing remains manual"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -15,6 +20,7 @@ permissions:
 # below is the "lynse" CloudBase environment; the only secret needed is
 # CLOUDBASE_API_KEY (云开发控制台 → 环境设置 → API 密钥).
 env:
+  LYNSE_RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
   CLOUDBASE_ENV_ID: lynse-d8g49o1i956741f9e
   CLOUDBASE_UPDATES_BASE: https://dl.lynse.cn/updates
 
@@ -287,7 +293,7 @@ jobs:
         # CHANGELOG has no section for the tagged version.
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${LYNSE_RELEASE_TAG#v}"
           VERSION="${VERSION%%-*}"
           # Literal prefix match, not a regex: version headings may contain
           # build-counter parentheses (`## 1.1.4(2) (date)`) that a regex
@@ -324,7 +330,7 @@ jobs:
           # `pnpm build:debug`, e.g. for throwaway test builds.)
           VITE_BUILD_CHANNEL: official
           # Keep on-demand runtimes attached to the exact release, including beta tags.
-          LYNSE_RELEASE_TAG: ${{ github.ref_name }}
+          LYNSE_RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
           # audiopus_sys (opus codec) vendors a CMakeLists.txt with an old
           # cmake_minimum_required, which CMake 4.x on the runners rejects.
           # Re-allow the legacy policy so the codec builds.
@@ -344,11 +350,11 @@ jobs:
         with:
           projectPath: apps/tauri
           args: ${{ matrix.args }}
-          tagName: ${{ github.ref_name }}
-          releaseName: "Lynse ${{ github.ref_name }}"
+          tagName: ${{ inputs.release_tag || github.ref_name }}
+          releaseName: "Lynse ${{ inputs.release_tag || github.ref_name }}"
           releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(inputs.release_tag || github.ref_name, '-') }}
           includeRelease: true
           includeUpdater: true
 
@@ -377,27 +383,27 @@ jobs:
             "$BUNDLE/dmg/Lynse_${VERSION}_aarch64.dmg" "$VERSION"
 
       - name: Upload verified stapled macOS installer
-        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/')
+        if: runner.os == 'macOS' && (startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '')
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION=$(node -p 'require("./apps/tauri/package.json").version')
-          gh release upload "${{ github.ref_name }}" \
+          gh release upload "$LYNSE_RELEASE_TAG" \
             "apps/tauri/src-tauri/target/release/bundle/dmg/Lynse_${VERSION}_aarch64.dmg" \
             --repo "${{ github.repository }}" --clobber
 
       - name: Upload STT runtime archive to the release
-        # Tag builds only (workflow_dispatch has no release to attach to).
+        # Tag builds and explicitly named draft-release builds.
         # The mirror-cloudbase job downloads every release asset, so the
         # archive is mirrored to updates/<tag>/ on CloudBase automatically —
         # the layout lib.rs runtime_mirror_url() expects.
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ github.ref_name }}" "${{ steps.runtime.outputs.archive }}" \
+          gh release upload "$LYNSE_RELEASE_TAG" "${{ steps.runtime.outputs.archive }}" \
             --repo "${{ github.repository }}" --clobber
 
       - name: Upload STT runtime archive as workflow artifact

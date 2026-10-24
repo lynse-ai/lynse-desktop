@@ -1,4 +1,6 @@
+import { memoryManagementChinese } from "../workbench/memory-management-locales";
 const zh = {
+  memory_manager: memoryManagementChinese,
   recording_sources: {
     aec_failed: "回声消除暂不可用，可能录入重复声音。",
     source_status: "{{source}}：{{status}}",
@@ -114,7 +116,7 @@ const zh = {
   },
   nav: {
     more: "更多",
-    memory: "记忆",
+    memory: "知识库",
     pinned: "已固定的功能",
     pin_to_sidebar: "将 {{name}} 固定到侧边栏",
     unpin_from_sidebar: "从侧边栏取消固定 {{name}}",

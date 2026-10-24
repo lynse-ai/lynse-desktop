@@ -122,7 +122,7 @@ describe("particle knowledge graph", () => {
     flushFrames();
     expect(screen.queryByRole("slider")).toBeNull();
     expect(container.querySelectorAll("[data-graph-contour]")).toHaveLength(0);
-    expect(container.querySelectorAll("radialGradient")).toHaveLength(5);
+    expect(container.querySelectorAll("radialGradient")).toHaveLength(7);
     expect(container.querySelectorAll('circle[fill^="url(#"]').length).toBeGreaterThan(0);
     const svg = preparePointer();
     const node = screen.getByRole("button", { name: "Beta" });
@@ -150,11 +150,17 @@ describe("particle knowledge graph", () => {
   });
 
   it("pulses the selected node's glow outward in 3D only", () => {
-    const { container } = render(<KnowledgeGraphScene {...props} selection="Beta" />);
-    expect(container.querySelectorAll("animate")).toHaveLength(0);
+    const { container, rerender } = render(<KnowledgeGraphScene {...props} selection="Beta" />);
+    expect(container.querySelectorAll(".graph-selection-pulse")).toHaveLength(0);
     fireEvent.click(screen.getByRole("button", { name: "3D" }));
     flushFrames();
-    expect(container.querySelectorAll("animate").length).toBeGreaterThanOrEqual(2);
+    expect(container.querySelectorAll(".graph-selection-pulse")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Beta" }).querySelectorAll(".graph-selection-pulse")).toHaveLength(2);
+    rerender(<KnowledgeGraphScene {...props} selection="Alpha" />);
+    expect(screen.getByRole("button", { name: "Beta" }).querySelectorAll(".graph-selection-pulse")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Alpha" }).querySelectorAll(".graph-selection-pulse")).toHaveLength(2);
+    rerender(<KnowledgeGraphScene {...props} />);
+    expect(container.querySelectorAll(".graph-selection-pulse")).toHaveLength(0);
   });
 
   it("keeps one node in the tab order and sizes nodes by connection count", () => {

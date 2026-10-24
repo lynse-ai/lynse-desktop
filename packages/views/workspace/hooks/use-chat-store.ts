@@ -254,6 +254,8 @@ export const MAX_CONCURRENT_CHATS = 3;
  * into their stored copy inside `conversations`.
  */
 interface ChatStoreState {
+  composerDrafts: Record<string, string>;
+  setComposerDraft: (key: string, value: string) => void;
   messages: ChatMessage[];
   /** True while the ACTIVE conversation is streaming a reply. */
   isLoading: boolean;
@@ -816,6 +818,8 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
   };
 
   return {
+    composerDrafts: {},
+    setComposerDraft: (key, value) => set(state => ({ composerDrafts: { ...state.composerDrafts, [key]: value } })),
     messages: [],
     isLoading: false,
     conversations: [],
@@ -848,7 +852,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
         for (const controller of historyLoads.values()) controller.abort();
         historyLoads.clear();
         hydrated = false;
-        set({ userId: nextUserId, messages: [], conversations: [], activeConversationId: null,
+        set({ userId: nextUserId, composerDrafts: {}, messages: [], conversations: [], activeConversationId: null,
           activeAssistant: "lynse", lastCloudConversationId: null, lastWorkBuddyConversationId: null, pendingConfirm: null,
           workingConversationIds: [], unreadCounts: {}, isLoading: false });
         for (const notification of useNotificationStore.getState().items) {

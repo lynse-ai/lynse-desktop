@@ -242,6 +242,14 @@ pub struct WikiProgress {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WikiAutomation {
+    pub folder_ids: Vec<String>,
+    #[serde(default)]
+    pub include_unfiled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Manifest {
     pub enabled: bool,
     pub allow_ai: bool,
@@ -260,6 +268,16 @@ pub struct Manifest {
     pub wiki_progress: Option<WikiProgress>,
     #[serde(default)]
     pub wiki_attempted_fingerprint: String,
+    #[serde(default)]
+    pub wiki_automation: Option<WikiAutomation>,
+    #[serde(default)]
+    pub knowledge_policy: Option<Value>,
+    #[serde(default)]
+    pub knowledge_pending: Option<Value>,
+    #[serde(default)]
+    pub knowledge_uploads: std::collections::BTreeMap<String,Value>,
+    #[serde(default)]
+    pub knowledge_events: std::collections::BTreeMap<String,String>,
     #[serde(default)]
     pub entries: BTreeMap<String, Entry>,
     #[serde(default)]
@@ -285,6 +303,11 @@ impl Default for Manifest {
             error: String::new(),
             wiki_progress: None,
             wiki_attempted_fingerprint: String::new(),
+            wiki_automation: None,
+            knowledge_policy: None,
+            knowledge_pending: None,
+            knowledge_uploads: Default::default(),
+            knowledge_events: Default::default(),
             entries: BTreeMap::new(),
             memories: vec![],
             artifacts: BTreeMap::new(),

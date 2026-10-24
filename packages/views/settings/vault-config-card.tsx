@@ -21,7 +21,7 @@ import {
 
 /** Settings card for the local markdown vault (desktop only). Renders nothing
  *  when the vault bridge is unavailable (web). */
-export function VaultConfigCard({ onManageMemory }: { onManageMemory?: () => void } = {}) {
+export function VaultConfigCard({ onManageKnowledge, wikiSettings = false }: { onManageKnowledge?: () => void; wikiSettings?: boolean } = {}) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const vaultApi = getDesktopVaultApi();
@@ -109,77 +109,81 @@ export function VaultConfigCard({ onManageMemory }: { onManageMemory?: () => voi
 
   const enabled = config?.enabled ?? false;
 
-  return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-xs">{t("vault.title")}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <Label htmlFor="vault-enable" className="text-xs">
-            {t("vault.enable")}
-          </Label>
-          <Switch
-            id="vault-enable"
-            checked={enabled}
-            onCheckedChange={handleToggle}
-            disabled={saving}
-          />
-        </div>
-        <p className="text-2xs leading-relaxed text-muted-foreground text-pretty">{t("vault.hint")}</p>
+  const localFiles = <div className="space-y-3">
+    <div className="flex items-center justify-between gap-3">
+      <Label htmlFor="vault-enable" className="text-xs">
+        {t("vault.enable")}
+      </Label>
+      <Switch
+        id="vault-enable"
+        checked={enabled}
+        onCheckedChange={handleToggle}
+        disabled={saving}
+      />
+    </div>
+    <p className="text-2xs leading-relaxed text-muted-foreground text-pretty">{t("vault.hint")}</p>
 
-        {enabled && (
-          <>
-            <div className="flex items-center gap-2">
-              <span
-                className="min-w-0 flex-1 truncate rounded-md border bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground"
-                title={path ?? undefined}
-              >
-                {path ?? t("vault.no_path")}
-              </span>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 shrink-0 text-xs"
-                onClick={handleChangeFolder}
-                disabled={saving}
-              >
-                <FolderOpen className="size-3.5" />
-                {t("vault.change_folder")}
-              </Button>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-2xs text-muted-foreground">
-                {lastSync
-                  ? t("vault.last_sync", { time: new Date(lastSync).toLocaleString() })
-                  : t("vault.never_synced")}
-              </span>
-              <div className="flex shrink-0 items-center gap-1.5">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs"
-                  onClick={handleOpenFolder}
-                  disabled={!path || opening}
-                >
-                  {opening && <Loader2 className="size-3.5 animate-spin" />}
-                  {t("vault.open_folder")}
-                </Button>
-                <Button
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={handleSyncAll}
-                  disabled={syncing}
-                >
-                  {syncing && <Loader2 className="size-3.5 animate-spin" />}
-                  {t("vault.sync_now")}
-                </Button>
-              </div>
-            </div>
-          </>
-        )}
-        {onManageMemory ? wikiEnabled && <div className="space-y-2 border-t border-border pt-3"><p className="text-xs text-muted-foreground">{t("workbench.memory_settings_moved")}</p><Button size="sm" variant="outline" onClick={onManageMemory}>{t("workbench.memory_manage")}<span aria-hidden="true"><BetaBadge /></span></Button></div> : <WorkbenchSettingsContent disabled={saving} />}
-      </CardContent>
-    </Card>
-  );
+    {enabled && (
+      <>
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className="min-w-0 flex-1 truncate rounded-md border bg-muted/30 px-2 py-1.5 text-xs text-muted-foreground"
+            title={path ?? undefined}
+          >
+            {path ?? t("vault.no_path")}
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 shrink-0 text-xs"
+            onClick={handleChangeFolder}
+            disabled={saving}
+          >
+            <FolderOpen className="size-3.5" />
+            {t("vault.change_folder")}
+          </Button>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span className="text-2xs text-muted-foreground">
+            {lastSync
+              ? t("vault.last_sync", { time: new Date(lastSync).toLocaleString() })
+              : t("vault.never_synced")}
+          </span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={handleOpenFolder}
+              disabled={!path || opening}
+            >
+              {opening && <Loader2 className="size-3.5 animate-spin" />}
+              {t("vault.open_folder")}
+            </Button>
+            <Button
+              size="sm"
+              className="h-7 text-xs"
+              onClick={handleSyncAll}
+              disabled={syncing}
+            >
+              {syncing && <Loader2 className="size-3.5 animate-spin" />}
+              {t("vault.sync_now")}
+            </Button>
+          </div>
+        </div>
+      </>
+    )}
+  </div>;
+
+  if (wikiSettings) return <WorkbenchSettingsContent disabled={saving} localFiles={localFiles} />;
+  return <Card>
+    <CardHeader className="pb-2"><CardTitle className="text-sm">{t("vault.title")}</CardTitle></CardHeader>
+    <CardContent className="space-y-4">
+      {localFiles}
+      {onManageKnowledge && wikiEnabled && <div className="space-y-2 border-t border-border pt-3">
+        <p className="text-xs leading-relaxed text-muted-foreground">{t("workbench.memory_settings_moved")}</p>
+        <Button size="sm" variant="outline" onClick={onManageKnowledge}>{t("workbench.memory_manage")}<span aria-hidden="true"><BetaBadge /></span></Button>
+      </div>}
+    </CardContent>
+  </Card>;
 }

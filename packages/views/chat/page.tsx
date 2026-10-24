@@ -74,6 +74,7 @@ import {
 } from "./chat-attachment-upload";
 import { ChatHistorySidebar } from "./chat-history-sidebar";
 import { AssistantSwitcher } from "./assistant-switcher";
+import { useComposerDraft } from "./use-composer-draft";
 import { TitleBarSlot } from "../layout/app-title-bar";
 import { MentionChips, MentionPicker } from "./chat-mention-picker";
 import {
@@ -153,7 +154,7 @@ function ThinkingIndicator() {
 }
 
 export function ChatPage() {
-  const [input, setInput] = useState("");
+
   // Skill quick prompts hide their `skill://` marker from the composer: the
   // chip drops only the prompt body and the marker waits here until the send
   // re-attaches it, so the backend agent still receives the skill reference.
@@ -183,6 +184,7 @@ export function ChatPage() {
     dismissConfirm,
     setActiveAssistant,
   } = useChat({ persistHistory: true });
+  const [input, setInput] = useComposerDraft(activeConversationId, activeAssistant);
   const isWorkBuddy = activeAssistant === "workbuddy";
   const isWorkBuddyCloud = isWorkBuddy && hasWorkBuddyAcpBridge();
   const showHistory = historyOpen && (!isWorkBuddy || isWorkBuddyCloud);
@@ -693,7 +695,7 @@ export function ChatPage() {
             : undefined
         }
         actions={
-          (!isWorkBuddy || isWorkBuddyCloud) ? (
+          <div className="flex items-center gap-1"><Button variant="ghost" size="sm" onClick={() => push("/memory/manage")}>{t("memory_manager.title")}</Button>{(!isWorkBuddy || isWorkBuddyCloud) ? (
             <Button
               variant="ghost"
               size="icon"
@@ -704,7 +706,7 @@ export function ChatPage() {
             >
               <Plus className="size-4" />
             </Button>
-          ) : undefined
+          ) : null}</div>
         }
       />
 

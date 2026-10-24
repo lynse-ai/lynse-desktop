@@ -1,6 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@lynse/core/api/client";
 import type { FolderAddOrEditReq, FolderSortUpdateReq } from "../types";
+import { getWorkbenchApi, useWorkbench } from "../../workbench/api";
+import { isWikiEnabled } from "../../feature-flags";
 
 /** POST /api/business/file/folder/add */
 export function useCreateFolder() {
@@ -74,7 +76,12 @@ export function useMoveFiles() {
         newFolderId: newFolderId || "",
         fileIds: fileIds.join(","),
       }),
-    onSuccess: () => {
+    onSuccess: async (_result, { fileIds, newFolderId }) => {
+      const bridge = getWorkbenchApi();
+      if (bridge && isWikiEnabled() && useWorkbench.getState().status?.automation) {
+        try { await bridge.wiki({ action: "source_folders", ids: fileIds, folderId: newFolderId || "" }); }
+        catch (error) { useWorkbench.getState().setError(String(error)); }
+      }
       qc.invalidateQueries({ queryKey: ["files"] });
       qc.invalidateQueries({ queryKey: ["notes"] });
       qc.invalidateQueries({ queryKey: ["folder-counts"] });

@@ -11,6 +11,7 @@ let deps: McpDataDependencies;
 beforeEach(() => {
   configureBuildChannel("debug");
   deps = {
+    authorizeSources: vi.fn(async (ids: string[]) => ids),
     meetings: vi.fn().mockResolvedValue([{ id:"local-1", title:"Design", transcriptText:"Public transcript", providerConfig:{apiKey:"secret"}, sourcePath:"/private/audio.wav" }]),
     notes: vi.fn().mockResolvedValue([
       { id:"shared", text:"Shared note" },
@@ -25,6 +26,15 @@ beforeEach(() => {
 });
 
 describe("Desktop MCP data access", () => {
+  it("blocks forgotten original meetings and notes and requires online authority", async () => {
+    deps.authorizeSources = async () => [];
+    expect(await readDesktopMcpTool("list_local_meetings", {}, deps)).toEqual({ total: 0, items: [] });
+    expect(await readDesktopMcpTool("list_local_notes", {}, deps)).toEqual({ total: 0, items: [] });
+    await expect(readDesktopMcpTool("get_cloud_meeting", { id: "forgotten", content: "transcript" }, deps)).rejects.toThrow("not shared with AI");
+    expect(deps.cloud.get).not.toHaveBeenCalled();
+    deps.authorizeSources = undefined;
+    await expect(readDesktopMcpTool("get_local_meeting", { id: "local-1" }, deps)).rejects.toThrow("eligibility unavailable");
+  });
   it("returns local transcripts without provider credentials or file paths", async () => {
     const result = await readDesktopMcpTool("get_local_meeting", {id:"local-1", content:"transcript"}, deps);
     expect(result).toEqual({id:"local-1", title:"Design", transcriptText:"Public transcript"});
@@ -89,6 +99,7 @@ describe("Local memory MCP consent and stale-result guards", () => {
   function memory() {
     const status = {scope:"account-a",enabled:true,allowAi:true,initialComplete:true,updatedAt:"r1",memories:[{id:"m1",text:"Friday is a proposal",excluded:false,stale:false},{id:"private",text:"Private",excluded:true},{id:"stale",text:"Old",stale:true}],entries:[{id:"s1",status:"synced",excluded:false}]};
     const bridge = {wiki:vi.fn().mockResolvedValue({topics:[{id:"topic-1",title:"Launch",published:{markdown:"Friday is a proposal",review:"approved",citations:[]}},{id:"private",excluded:true,published:{review:"approved"}},{id:"stale",stale:true,published:{review:"approved"}},{id:"candidate",published:null,candidate:{markdown:"Unreviewed"}}]}),status:vi.fn().mockImplementation(async()=>status),search:vi.fn().mockResolvedValue({items:[{id:"s1"}],initialComplete:true}),read:vi.fn().mockResolvedValue({document:{id:"s1",aiContextEnabled:true,transcript:"Original"},markdown:"Original"})};
+    Object.assign(bridge, { readForAi: vi.fn().mockImplementation(async (id: string) => id.startsWith("wiki:") ? { document: { id, kind: "wiki", citations: [] }, markdown: "Friday is a proposal" } : bridge.read(id)) });
     deps.memory = bridge as unknown as NonNullable<McpDataDependencies["memory"]>;
     return {status,bridge};
   }
@@ -101,6 +112,16 @@ describe("Local memory MCP consent and stale-result guards", () => {
   it.each(["enabled","allowAi","initialComplete"] as const)("requires %s before reading memory",async(flag)=>{
     const {status,bridge}=memory();status[flag]=false;
     await expect(readDesktopMcpTool("search_local_memory",{},deps)).rejects.toThrow("finish");expect(bridge.search).not.toHaveBeenCalled();
+  });
+  it("allows automatically validated pages while rejecting out-of-scope or unvalidated pages", async()=>{
+    const {bridge}=memory();
+    bridge.wiki.mockResolvedValue({topics:[
+      {id:"auto",title:"Automatic",published:{markdown:"Valid automatic page",review:"auto_validated",citations:[]}},
+      {id:"outside",title:"Outside",inScope:false,published:{markdown:"Outside page",review:"auto_validated",citations:[]}},
+      {id:"draft",title:"Draft",published:{markdown:"Unvalidated",review:"",citations:[]}},
+    ]} as never);
+    expect(await readDesktopMcpTool("get_local_memory",{id:"wiki:auto"},deps)).toEqual({id:"wiki:auto",text:"Friday is a proposal",citations:[]});
+    for(const id of ["outside","draft"])await expect(readDesktopMcpTool("get_local_memory",{id:`wiki:${id}`},deps)).rejects.toThrow("excluded");
   });
   it("rejects an account switch while the local search is running",async()=>{
     const {status,bridge}=memory();bridge.search.mockImplementation(async()=>{status.scope="account-b";return {items:[],initialComplete:true};});

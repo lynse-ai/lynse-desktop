@@ -1,4 +1,5 @@
 export function workbenchErrorCopy(error: string): { key: string; count?: number } | null {
+  if (error === "Lynclaw authentication failed; sign in again") return { key: "workbench.error_session_auth" };
   if (error.includes("Discovery names do not match source evidence")) return { key: "workbench.error_discovery_names" };
   const topics = error.match(/^Wiki processing failed for (\d+) topics;/);
   if (topics) return { key: "workbench.error_topics", count: Number(topics[1]) };

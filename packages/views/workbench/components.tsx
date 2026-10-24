@@ -1,13 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@lynse/core/api";
 import { useAuthStore } from "@lynse/core/auth";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/ui/card";
 import { Button } from "@lynse/ui/components/ui/button";
-import { Switch } from "@lynse/ui/components/ui/switch";
 import { Input } from "@lynse/ui/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@lynse/ui/components/ui/dialog";
 import { Markdown } from "@lynse/ui/markdown";
@@ -24,10 +23,13 @@ import { isWikiEnabled, featureFlags } from "../feature-flags";
 import { BetaBadge } from "../beta-badge";
 import { usePluginStore } from "../plugins/state";
 import { loadChatModelSetting, MODEL_OVERRIDE_STORAGE_KEY, toRequestOverride } from "../workspace/model-override";
-import { WikiAttention, WikiModels, WikiTopics, WikiStatus, WikiSources } from "./wiki";
+import { WikiAttention, WikiModels, WikiTopics, WikiSources } from "./wiki";
 import { isWikiProcessingComplete, WorkbenchProgress } from "./progress";
 import { useNavigation } from "../navigation";
 import { useMemoryDrafts } from "./memory-drafts";
+import { WikiAutomationSettings } from "./wiki-automation-settings";
+import { LocalMemorySync } from "./local-memory-sync";
+import { useWikiBrowser } from "./wiki-browser-state";
 
 /** Account lifecycle stays outside AuthGate so logout also cancels native work. */
 export function WorkbenchSupervisor() {
@@ -40,7 +42,7 @@ export function WorkbenchSupervisor() {
     window.addEventListener("beforeunload", leave);
     return () => window.removeEventListener("beforeunload", leave);
   }, [hasMemoryDrafts]);
-  useEffect(() => { useMemoryDrafts.getState().clear(); }, [user?.id, authenticated]);
+  useEffect(() => { useMemoryDrafts.getState().clear(); useWikiBrowser.getState().setScope(undefined); }, [user?.id, authenticated]);
   const gmailPluginEnabled = usePluginStore((state) => !featureFlags.pluginMarketplace || !!state.entries["lynse.gmail"]?.enabled);
   const [configurationVersion, setConfigurationVersion] = useState(0);
   useEffect(() => {
@@ -91,49 +93,32 @@ function Progress() {
   return <WorkbenchProgress status={status} error={error} />;
 }
 
-export function WorkbenchSettingsContent({ disabled = false }: { disabled?: boolean }) {
+export function WorkbenchSettingsContent({ disabled = false, activation = false, localFiles }: { disabled?: boolean; activation?: boolean; localFiles?: ReactNode }) {
   const bridge = getWorkbenchApi();
   const status = useWorkbench((s) => s.status);
-  const authenticated = useAuthStore((s) => s.isAuthenticated);
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [clearing, setClearing] = useState(false);
-  const qc = useQueryClient();
   const wikiEnabled = useWikiEnabled();
   if (!bridge || !wikiEnabled) return null;
-  async function configure(enabled: boolean, allowAi: boolean) {
-    if (!bridge) return;
-    setBusy(true);
-    try { useWorkbench.getState().setStatus(await bridge.configure(enabled, allowAi)); await qc.invalidateQueries({ queryKey: ["vault-config"] }); }
-    catch (error) { await refreshWorkbench().catch(() => undefined); await qc.invalidateQueries({ queryKey: ["vault-config"] }); useWorkbench.getState().setError(String(error)); }
-    finally { setBusy(false); }
-  }
-  return <div className="space-y-3 border-t border-border pt-3">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2"><label htmlFor="meeting-memory-enable" className="text-xs">{t("workbench.enable")}</label><BetaBadge /></div>
-        <Switch id="meeting-memory-enable" checked={status?.enabled ?? false} disabled={disabled || busy || !authenticated || !status}
-          onCheckedChange={(checked) => void configure(checked, status?.allowAi ?? false)} />
-      </div>
-      <p className="text-xs leading-relaxed text-muted-foreground">{t("workbench.hint")}</p>
+  if (activation) return <WikiAutomationSettings key={status?.scope} activation disabled={disabled} />;
+  return <div className="space-y-4">
+      <WikiAutomationSettings key={status?.scope} disabled={disabled} />
+      <details className="rounded-md border border-border p-3"><summary className="cursor-pointer text-sm font-medium">{t("workbench.wiki_advanced")}</summary><div className="mt-4 space-y-4">
+      <p className="text-sm leading-relaxed text-muted-foreground">{t("workbench.wiki_advanced_hint")}</p>
+      {status?.enabled && <><WikiSources /><WikiModels /></>}
+      {localFiles && <section className="space-y-3 rounded-md border border-border p-3"><h3 className="text-sm font-medium">{t("workbench.wiki_local_files")}</h3>{localFiles}</section>}
+      <section className="space-y-3 rounded-md border border-border p-3"><h3 className="text-sm font-medium">{t("workbench.wiki_maintenance")}</h3>
       <p className="text-xs leading-relaxed text-muted-foreground">{t("workbench.local_first_hint")}</p>
-      {!authenticated && <p className="text-xs text-muted-foreground">{t("workbench.sign_in")}</p>}
-      {status?.enabled && <>
-        <div className="flex items-center justify-between gap-4">
-          <label htmlFor="meeting-memory-ai" className="text-xs">{t("workbench.allow_ai")}</label>
-          <Switch id="meeting-memory-ai" checked={status.allowAi} disabled={disabled || busy} onCheckedChange={(checked) => void configure(true, checked)} />
-        </div>
-        <p className="text-xs leading-relaxed text-muted-foreground">{t("workbench.ai_hint")}</p>
-      </>}
-      <Progress />
-      {status?.enabled && <><WikiStatus /><WikiModels /><WikiSources /></>}
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" variant="outline" onClick={() => useWorkbench.getState().show()}>{t("workbench.open")}</Button>
         {status?.enabled && <Button size="sm" variant="outline" disabled={busy} onClick={() => void bridge.sync().then(refreshWorkbench).catch((error: unknown) => toast.error(String(error)))}>
           <RefreshCw className="size-3.5" />{t("workbench.sync")}
         </Button>}
         {status?.enabled && <Button size="sm" variant="outline" disabled={busy} onClick={() => { setBusy(true); void bridge.sync(true, true).then(refreshWorkbench).catch((error: unknown) => toast.error(String(error))).finally(() => setBusy(false)); }}>{t("workbench.refresh_cloud")}</Button>}
-        {status && <Button size="sm" variant="ghost" onClick={() => setClearing(true)}>{t("workbench.clear")}</Button>}
+        {status && <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setClearing(true)}>{t("workbench.clear")}</Button>}
       </div>
+      </section>
+      </div></details>
       <DeleteConfirmDialog open={clearing} onOpenChange={setClearing} description={t("workbench.clear_confirm")} pending={busy} confirmLabel={t("workbench.clear")}
         onConfirm={() => { setBusy(true); void bridge.clear().then(refreshWorkbench).then(() => setClearing(false)).catch((error: unknown) => toast.error(String(error))).finally(() => setBusy(false)); }} />
   </div>;
@@ -154,8 +139,8 @@ export function WorkbenchHomeCard() {
   const wikiEnabled = useWikiEnabled();
   if (!status?.enabled || !wikiEnabled) return null;
   if (isWikiProcessingComplete(status, error)) return null;
-  return <Card role="region" aria-label={t("workbench.title")} className="mt-5 shrink-0">
-    <CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="flex items-center gap-2 text-sm"><BookOpen aria-hidden="true" className="size-4" />{t("workbench.title")}<span aria-hidden="true"><BetaBadge /></span></CardTitle><Button variant="ghost" size="sm" onClick={() => navigation.push("/memory")}>{t("workbench.home_view")}</Button></CardHeader>
+  return <Card role="region" aria-label={t("workbench.home_progress_label")} className="mt-5 shrink-0">
+    <CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="flex items-center gap-2 text-sm"><BookOpen aria-hidden="true" className="size-4" />{t("workbench.home_progress_label")}<span aria-hidden="true"><BetaBadge /></span></CardTitle><Button variant="ghost" size="sm" onClick={() => navigation.push("/memory")}>{t("workbench.home_view")}</Button></CardHeader>
     <CardContent className="space-y-3">
       <Progress />
     </CardContent>
@@ -290,6 +275,7 @@ function MeetingReader({ id }: { id: string }) {
       <Markdown>{result.markdown}</Markdown>
     </div>}
     {entry?.error && <p role="alert" className="text-sm text-destructive">{entry.error}</p>}
+    {document.id.startsWith("local:") && <LocalMemorySync id={document.id} title={document.title} />}
     {document.kind === "meeting" && (audioUrl ? <AudioPlayer ref={player} src={audioUrl} /> : <p className="text-xs text-muted-foreground">{t("workbench.no_audio")}</p>)}
     {!!document.markers?.length && <section className="space-y-2"><h3 className="text-sm font-medium">{t("workbench.marker")}</h3>
       {document.markers.map((marker) => <button key={marker.id} type="button" className="flex w-full gap-3 rounded-md border border-border p-2 text-left text-sm hover:bg-accent" onClick={() => {

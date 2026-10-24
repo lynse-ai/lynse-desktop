@@ -1,4 +1,5 @@
 "use client";
+import { todoClosed } from "../todo/todo-api";
 
 /**
  * Home (主页) — the app's launch page, following the reference layout:
@@ -158,7 +159,7 @@ export function HomePage() {
   // The nearest unfinished due todo powers the "due soon" banner.
   const upcomingTodo = useMemo(() => {
     const withDue = todosStore.todos
-      .filter((todo) => !todo.completed && todo.dueDate)
+      .filter((todo) => !todoClosed(todo) && todo.dueDate)
       .sort(
         (a, b) => new Date(a.dueDate!).getTime() - new Date(b.dueDate!).getTime(),
       );

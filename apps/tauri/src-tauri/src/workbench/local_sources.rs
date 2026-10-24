@@ -160,6 +160,13 @@ pub(super) fn legacy_document(row: &Value, markdown: &str) -> Option<Document> {
 }
 
 pub(super) fn restrict_context(mut doc: Document, row: &Value) -> Document {
+    let previous_folder = doc.folder_id.clone();
+    if row.get("folderId").is_some() {
+        doc.folder_id = string(row, &["folderId"]);
+    }
+    if previous_folder != doc.folder_id {
+        doc.refresh_revision();
+    }
     if row
         .get("aiContextEnabled")
         .or_else(|| row.get("ai_context_enabled"))
@@ -188,6 +195,16 @@ pub(super) async fn load_meeting(
         Some(doc) => Ok(restrict_context(doc, row)),
         None => cloud_document(session, row, todos).await,
     }
+}
+pub(super) fn needs_automatic_refresh(manifest: &Manifest, cached: &Document, row: &Value, remote_revision: &str) -> bool {
+    let current = restrict_context(cached.clone(),row);
+    manifest.enabled && manifest.allow_ai && super::super::wiki::in_automatic_scope(&current,manifest)
+        && current.ai_context_enabled
+        && manifest.entries.get(&cached.id).is_some_and(|entry| !entry.excluded
+            && if entry.remote_revision.is_empty() {
+                let updated = string(row,&["updatedAt","updateTime"]);
+                !updated.is_empty() && !cached.updated_at.is_empty() && updated != cached.updated_at
+            } else { entry.remote_revision != remote_revision })
 }
 
 #[cfg(test)]
@@ -371,5 +388,37 @@ mod tests {
             );
         }
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod folder_scope_tests {
+    use super::*;
+    #[test]
+    fn cached_text_adopts_cloud_folder_moves_without_downloading_or_losing_notes() {
+        let mut doc=Document {id:"one".into(),kind:"meeting".into(),folder_id:"work".into(),transcript:"Preserved local text".into(),..Default::default()};doc.refresh_revision();
+        let version=doc.revision.clone();let moved=restrict_context(doc.clone(),&json!({"folderId":"team"}));
+        assert_eq!(moved.transcript,doc.transcript);assert_eq!(moved.folder_id,"team");assert_ne!(moved.revision,version);
+        let unfiled=restrict_context(moved,&json!({"folderId":null}));assert!(unfiled.folder_id.is_empty());
+        assert_eq!(restrict_context(doc,&json!({})).folder_id,"work");
+    }
+}
+
+#[cfg(test)]
+mod automatic_refresh_tests {
+    use super::*;
+    #[test]
+    fn only_changed_selected_sources_refresh_automatically_and_resume_catches_up() {
+        let mut manifest=Manifest {enabled:true,allow_ai:true,wiki_automation:Some(store::WikiAutomation {folder_ids:vec!["work".into()],include_unfiled:false}),..Default::default()};
+        let doc=Document {id:"one".into(),kind:"meeting".into(),folder_id:"work".into(),updated_at:"v1".into(),ai_context_enabled:true,..Default::default()};
+        manifest.entries.insert(doc.id.clone(),Entry {id:doc.id.clone(),remote_revision:"old".into(),..Default::default()});
+        let row=json!({"folderId":"work","updatedAt":"v2"});
+        assert!(needs_automatic_refresh(&manifest,&doc,&row,"new"));
+        assert!(!needs_automatic_refresh(&manifest,&doc,&row,"old"));
+        assert!(!needs_automatic_refresh(&manifest,&doc,&json!({"folderId":"team"}),"new"));
+        manifest.enabled=false;assert!(!needs_automatic_refresh(&manifest,&doc,&row,"new"));
+        manifest.enabled=true;assert!(needs_automatic_refresh(&manifest,&doc,&row,"new"));
+        manifest.entries.get_mut(&doc.id).unwrap().remote_revision.clear();assert!(needs_automatic_refresh(&manifest,&doc,&row,"new"));
+        manifest.entries.get_mut(&doc.id).unwrap().excluded=true;assert!(!needs_automatic_refresh(&manifest,&doc,&row,"new"));
     }
 }

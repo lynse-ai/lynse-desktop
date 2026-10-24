@@ -17,7 +17,7 @@ export function isWikiProcessingComplete(status: WorkbenchStatus | null, error?:
     && status.conflicts === 0 && !status.error && !error;
 }
 
-export function WorkbenchProgress({ status, error }: { status: WorkbenchStatus | null; error?: string | null }) {
+export function WorkbenchProgress({ status, error, compact = false }: { status: WorkbenchStatus | null; error?: string | null; compact?: boolean }) {
   const { t } = useTranslation();
   if (isWikiProcessingComplete(status, error)) return null;
   if (!status?.enabled) return error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null;
@@ -39,7 +39,7 @@ export function WorkbenchProgress({ status, error }: { status: WorkbenchStatus |
       hint = "workbench.home_sync_paused_hint";
       busy = false;
     }
-    counter = t("workbench.home_sync_count", { completed: status.synced, total: syncTotal });
+    if (!compact || syncTotal > 0) counter = t("workbench.home_sync_count", { completed: status.synced, total: syncTotal });
   } else if (!status.allowAi) {
     label = "workbench.home_wait_consent";
     hint = "workbench.home_consent_hint";
@@ -52,11 +52,11 @@ export function WorkbenchProgress({ status, error }: { status: WorkbenchStatus |
     busy = false;
   } else if (status.phase === "processing") {
     const stage = progress?.stage ?? "preparing";
-    label = `workbench.home_${stage}`;
-    hint = "workbench.home_processing_hint";
+    label = stage === "compiling" && status.automation ? "workbench.auto_compiling" : `workbench.home_${stage}`;
+    hint = status.automation ? "workbench.auto_progress_hint" : "workbench.home_processing_hint";
     value = progress ? percent(progress.completed, progress.total) : null;
     if (progress && progress.total > 0) {
-      counter = t(`workbench.home_${stage}_count`, { completed: progress.completed, total: progress.total });
+      counter = t(stage === "compiling" && status.automation ? "workbench.auto_compiling_count" : `workbench.home_${stage}_count`, { completed: progress.completed, total: progress.total });
     }
   } else if (status.phase === "failed" || (progress?.failed ?? 0) > 0 || error || status.error) {
     label = "workbench.home_needs_attention";
@@ -70,11 +70,14 @@ export function WorkbenchProgress({ status, error }: { status: WorkbenchStatus |
     busy = progress?.stage !== "complete";
   }
 
+  if (status.automation && hint === "workbench.home_processing_hint") hint = "workbench.auto_progress_hint";
+  if (status.automation && hint === "workbench.home_create_topic_hint") hint = "workbench.auto_empty_hint";
+  const current = status.initialComplete && status.phase === "processing" ? [progress?.topicTitle, progress?.currentTitle].filter(Boolean).join(" · ") : "";
   return <div className="space-y-2 text-xs" aria-live="polite">
     <div className="flex items-center justify-between gap-3">
-      <p className="flex min-w-0 items-center gap-1.5 font-medium">
+      <p className={cn("flex min-w-0 items-center gap-1.5 font-medium", compact && "flex-wrap gap-y-1")}>
         {busy && <Loader2 aria-hidden="true" className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none" />}
-        {t(label)}
+        {t(label)}{compact && counter && <span className="font-normal text-muted-foreground">{counter}</span>}
       </p>
       {value !== null && <span aria-hidden="true" className="shrink-0 tabular-nums text-muted-foreground">{value}%</span>}
     </div>
@@ -87,21 +90,22 @@ export function WorkbenchProgress({ status, error }: { status: WorkbenchStatus |
         busy && value === null && "[&_[data-slot=progress-indicator]]:animate-pulse [&_[data-slot=progress-indicator]]:motion-reduce:animate-none",
         busy && "progress-live")}
     />
-    {counter && <p className="tabular-nums text-muted-foreground">{counter}</p>}
-    {status.initialComplete && status.phase === "processing" && progress?.topicTitle && <p className="truncate text-muted-foreground" title={progress.topicTitle}>{t("workbench.home_current_topic", { title: progress.topicTitle })}</p>}
-    {status.initialComplete && status.phase === "processing" && progress?.currentTitle && <p className="truncate text-muted-foreground" title={progress.currentTitle}>{progress.currentTitle}</p>}
-    <p className="leading-relaxed text-muted-foreground">{t(hint)}</p>
-    {(status.awaitingTranscription > 0 || status.failed > 0) && <p className="flex items-start gap-2 leading-relaxed text-muted-foreground">
+    {!compact && counter && <p className="tabular-nums text-muted-foreground">{counter}</p>}
+    {compact && current && <p className="truncate text-muted-foreground" title={current}>{current}</p>}
+    {!compact && status.initialComplete && status.phase === "processing" && progress?.topicTitle && <p className="truncate text-muted-foreground" title={progress.topicTitle}>{t("workbench.home_current_topic", { title: progress.topicTitle })}</p>}
+    {!compact && status.initialComplete && status.phase === "processing" && progress?.currentTitle && <p className="truncate text-muted-foreground" title={progress.currentTitle}>{progress.currentTitle}</p>}
+    {(!compact || status.phase === "waiting_configuration") && <p className="leading-relaxed text-muted-foreground">{t(hint)}</p>}
+    {status.failed > 0 && <p className="flex items-start gap-2 leading-relaxed text-muted-foreground">
       {/* task-notice pattern (solid-glass): ended background work is reported
           by a status dot — grey for skipped, red for problems; nothing moves. */}
       <span aria-hidden="true" className="mt-1.5 size-1.5 shrink-0 rounded-full bg-muted-foreground/60" />
-      <span>{t("workbench.home_skipped", { waiting: status.awaitingTranscription, failed: status.failed })}</span>
+      <span>{t(compact ? "workbench.auto_progress_skipped" : "workbench.home_skipped", { failed: status.failed })}</span>
     </p>}
     {status.conflicts > 0 && <p className="flex items-start gap-2 text-destructive">
       <span aria-hidden="true" className="mt-1.5 size-1.5 shrink-0 rounded-full bg-destructive" />
       <span>{t("workbench.home_conflicts", { count: status.conflicts })}</span>
     </p>}
-    {failure && <p role="alert" className="flex items-start gap-2 break-words text-destructive">
+    {!compact && failure && <p role="alert" className="flex items-start gap-2 break-words text-destructive">
       <span aria-hidden="true" className="mt-1.5 size-1.5 shrink-0 rounded-full bg-destructive" />
       <span>{errorCopy ? t(errorCopy.key, { count: errorCopy.count }) : failure}</span>
     </p>}

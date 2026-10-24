@@ -459,3 +459,14 @@ async fn local_graph_service_smoke() {
     fs::remove_dir_all(root).unwrap();
     println!("Local HTTP -> Rust evidence validation -> graph storage passed; unauthorized/forged requests and unsupported evidence rejected.");
 }
+
+#[test]
+fn automatic_details_follow_folder_scope_without_overwriting_legacy_selections() {
+    let mut manifest=Manifest::default();
+    manifest.wiki_automation=Some(store::WikiAutomation {folder_ids:vec!["work".into()],include_unfiled:false});
+    let original=Tracking {selected_sources:BTreeSet::from(["legacy".into()]),..Default::default()};
+    let effective=effective_tracking(&original,&manifest,&[summary(&doc())]);
+    assert!(effective.enabled); assert!(effective.selected_sources.contains("one"));
+    assert_eq!(original.selected_sources,BTreeSet::from(["legacy".into()])); assert!(!original.enabled);
+    assert!(effective_tracking(&original,&manifest,&[]).selected_sources.is_empty());
+}

@@ -30,7 +30,7 @@ function MemoryFileEditor({ document, scope, reload, select }: { document: Memor
   const draft = useMemoryDrafts((state) => state.drafts[key]);
   const dirty = !!draft && draft.markdown !== draft.original;
   const markdown = dirty ? draft.markdown : document.markdown;
-  const [mode, setMode] = useState<"read" | "edit">("read");
+  const [mode, setMode] = useState<"read" | "edit">(dirty ? "edit" : "read");
   const [discard, setDiscard] = useState(false);
   const [saved, setSaved] = useState(false);
   const save = useMutation({
@@ -86,7 +86,8 @@ export function MemoryLibrary() {
   const scope = status?.scope ?? "";
   const bridge = getWorkbenchApi();
   const queryClient = useQueryClient();
-  const [path, setPath] = useState("MEMORY.md");
+  const path = useMemoryDrafts((state) => state.selectedPaths[scope]) ?? "MEMORY.md";
+  const setPath = (value: string) => useMemoryDrafts.getState().select(scope, value);
   const [query, setQuery] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [title, setTitle] = useState("");

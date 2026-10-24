@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from "@lynse/ui/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/ui/card";
+import { Button } from "@lynse/ui/components/ui/button";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
 import {
@@ -49,6 +50,7 @@ import { ModelConfigCard } from "./model-config-card";
 import { WorkBuddyConfigCard } from "./workbuddy-config-card";
 import { AppearanceSection } from "./appearance-settings";
 import { ContextInboxCard } from "./context-inbox-card";
+
 import {
   getSettingsSections,
   PluginCommunitySection,
@@ -100,6 +102,7 @@ export function SettingsDialog({
   const { t } = useTranslation();
   const navigation = useNavigation();
 
+
   const [activeSectionId, setActiveSectionId] = useState<SettingsSectionId>(initialSectionId);
   const pluginEntries = usePluginStore((s) => s.entries);
   const localTranscriptionApi = getDesktopLocalTranscriptionApi();
@@ -150,6 +153,13 @@ export function SettingsDialog({
         )}
         {isBetaFeaturesUnlocked() && <AgentServerCard />}
         {isBetaFeaturesUnlocked() && <ModelConfigCard />}
+        {<Card>
+          <CardHeader className="pb-2"><CardTitle className="text-sm">{t("workbench.memory_library")}</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-xs leading-relaxed text-muted-foreground">{t("workbench.memory_library_hint")}</p>
+            <Button size="sm" variant="outline" onClick={() => { onOpenChange(false); navigation.push("/memory/manage"); }}>{t("memory_manager.title")}</Button>
+          </CardContent>
+        </Card>}
         <WorkBuddyConfigCard />
         <McpConfigCard />
       </>
@@ -187,7 +197,7 @@ export function SettingsDialog({
       icon: Cloud,
       content: (
         <>
-          <VaultConfigCard onManageMemory={() => { onOpenChange(false); navigation.push("/memory?tab=settings"); }} />
+          <VaultConfigCard onManageKnowledge={() => { onOpenChange(false); navigation.push("/memory?tab=settings"); }} />
           <WebdavSyncConfigCard />
         </>
       ),

@@ -1,6 +1,7 @@
 mod markdown;
 mod memory;
 mod memory_cloud;
+mod knowledge_cloud;
 mod sources;
 mod store;
 mod sync;
@@ -243,7 +244,7 @@ fn public_status(session: &Session, state: &Manifest) -> Value {
         .filter(|entry| entry.kind == "meeting")
         .collect();
     json!({"scope":session.scope,"userId":session.user_id,"enabled":state.enabled,"allowAi":state.allow_ai,
-        "initialComplete":state.initial_complete,"phase":state.phase,"updatedAt":state.updated_at,"error":state.error,"wikiProgress":state.wiki_progress,
+        "initialComplete":state.initial_complete,"phase":state.phase,"updatedAt":state.updated_at,"error":state.error,"wikiProgress":state.wiki_progress,"automation":state.wiki_automation,
         "discovered":meetings.len(),"synced":meetings.iter().filter(|e|e.status=="synced").count(),
         "awaitingTranscription":meetings.iter().filter(|e|e.status=="awaiting_transcription").count(),
         "failed":meetings.iter().filter(|e|e.status=="failed").count(),"conflicts":meetings.iter().filter(|e|e.status=="conflict").count(),
@@ -432,6 +433,7 @@ pub async fn workbench_bind(
         locale: request.locale,
     };
     let mut manifest = load_state(&app, &session)?;
+    wiki::resume_session(&app, &session, &mut manifest)?;
     for entry in manifest.entries.values_mut() {
         entry.failed_download_revision.clear();
     }
@@ -560,9 +562,13 @@ pub async fn workbench_configure(
     state: State<'_, WorkbenchState>,
     enabled: bool,
     allow_ai: bool,
+    automation: Option<store::WikiAutomation>,
 ) -> CommandResult<Value> {
     if enabled {
         require_beta(&state)?;
+    }
+    if let Some(config) = &automation {
+        wiki::validate_automation(config)?;
     }
     let _guard = state.serial.lock().await;
     let mut session = current(&state)?;
@@ -588,6 +594,9 @@ pub async fn workbench_configure(
         }
     }
     let mut manifest = load_state(&app, &session)?;
+    if let Some(config) = automation {
+        manifest.wiki_automation = Some(config);
+    }
     manifest.enabled = enabled;
     manifest.initial_complete = false;
     manifest.completed_round.clear();
@@ -667,7 +676,7 @@ pub async fn workbench_search(
         let (root, _) = roots(&app, &session)?;
         (
             if ai_only.unwrap_or(false) {
-                store::search(&root, &manifest, &query, 30)
+                store::search(&root, &wiki::ai_manifest(&root, &manifest), &query, 30)
             } else {
                 store::browse(&root, &manifest, &query, 100)
             },
@@ -685,6 +694,7 @@ pub async fn workbench_search(
         }
     }
     require_current(&state, &session)?;
+    if ai_only.unwrap_or(false) { items = knowledge_cloud::filter_items(&app,&session,items).await.unwrap_or_default(); }
     Ok(json!({"items":items,"initialComplete":complete}))
 }
 
@@ -709,12 +719,13 @@ pub async fn workbench_read(
         .ok_or("Meeting is not in this account's knowledge base")?;
     let (root, _) = roots(&app, &session)?;
     let (markdown, source) = store::paths(&root, actual);
-    let document = if entry.status == "conflict" {
+    let mut document = if entry.status == "conflict" {
         serde_json::from_slice::<Document>(&fs::read(source).map_err(|e| e.to_string())?)
             .map_err(|e| e.to_string())?
     } else {
         store::read_document(&root, entry)?
     };
+    if wiki::ai_manifest(&root, &manifest).entries.get(actual).is_none_or(|entry| entry.excluded) { document.ai_context_enabled = false; }
     Ok(
         json!({"document":document,"markdown":fs::read_to_string(markdown).map_err(|e|e.to_string())?,
         "artifacts":if manifest.enabled {manifest.artifacts.get(actual).cloned().unwrap_or(Value::Null)}else{Value::Null}}),
@@ -735,7 +746,8 @@ pub async fn workbench_review(
             return Err("Finish knowledge-base sync and enable AI processing first".into());
         }
         let (root, _) = roots(&app, &session)?;
-        let mut documents = store::search(&root, &manifest, &query, 18)
+        let scoped = wiki::ai_manifest(&root, &manifest);
+        let mut documents = store::search(&root, &scoped, &query, 18)
             .iter()
             .filter_map(|row| manifest.entries.get(row["id"].as_str()?))
             .filter_map(|entry| store::read_document(&root, entry).ok())
@@ -767,7 +779,7 @@ pub async fn workbench_review(
     let (root, _) = roots(&app, &session)?;
     if documents
         .iter()
-        .any(|document| !store::is_current_document(&root, &manifest, document))
+        .any(|document| !store::is_current_document(&root, &wiki::ai_manifest(&root, &manifest), document))
     {
         return Err("Sources changed; prepare the brief again".into());
     }
@@ -783,7 +795,7 @@ pub async fn workbench_exclude(
     excluded: bool,
 ) -> CommandResult<()> {
     let _guard = state.serial.lock().await;
-    let session = current(&state)?;
+    let session = invalidate_runtime(&state)?;
     let mut manifest = load_state(&app, &session)?;
     let entry = manifest.entries.get_mut(&id).ok_or("Source not found")?;
     entry.excluded = excluded;
@@ -795,7 +807,21 @@ pub async fn workbench_exclude(
     if excluded {
         sync::forget_source(&mut manifest, &id);
     }
-    persist(&app, &session, &manifest)
+    persist(&app, &session, &manifest)?;
+    if crate::vault::load_vault_config(&app)?.enabled { start_worker(&app,&state); }
+    if let Some(policy) = manifest.knowledge_policy.as_ref() {
+        let key=knowledge_cloud::source_id(&id);
+        let mut exclusions=policy["excluded_source_ids"].as_array().cloned().unwrap_or_default();
+        exclusions.retain(|value|value.as_str()!=Some(&key));
+        if excluded { exclusions.push(json!(key)); }
+        knowledge_cloud::policy_action(&app,&session,json!({"action":"update","policy":{
+            "excluded_source_ids":exclusions,"base_range_version":policy["range_version"],
+            "base_grant_version":policy["grant_version"],"base_processing_version":policy["processing_version"]
+        }})).await?;
+    } else {
+        return Err("Local exclusion saved; confirm the shared cloud source range to synchronize it".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -881,7 +907,8 @@ pub async fn workbench_regenerate(
         let _guard = state.serial.lock().await;
         let manifest = load_state(&app, &session)?;
         wiki::ready(&manifest)?;
-        let entry = manifest
+        let scoped = wiki::ai_manifest(&roots(&app, &session)?.0, &manifest);
+        let entry = scoped
             .entries
             .get(&id)
             .filter(|e| store::eligible(e))
@@ -894,7 +921,7 @@ pub async fn workbench_regenerate(
     require_current(&state, &session)?;
     let mut manifest = load_state(&app, &session)?;
     wiki::ready(&manifest)?;
-    if !store::is_current_document(&roots(&app, &session)?.0, &manifest, &document) {
+    if !store::is_current_document(&roots(&app, &session)?.0, &wiki::ai_manifest(&roots(&app, &session)?.0, &manifest), &document) {
         return Err("Source changed; retry the summary".into());
     }
     sync::validate_result(&[document.clone()], &manifest, &result)?;
@@ -1126,12 +1153,13 @@ pub async fn workbench_context(
     let _guard = state.serial.lock().await;
     let session = current(&state)?;
     let manifest = load_state(&app, &session)?;
-    if !manifest.enabled || !manifest.allow_ai || !manifest.initial_complete {
+    if wiki::ready(&manifest).is_err() {
         return Ok(Value::Null);
     }
     let (root, _) = roots(&app, &session)?;
-    let mut sources = store::search(&root, &manifest, &query, 3);
+    let mut sources = store::search(&root, &wiki::ai_manifest(&root, &manifest), &query, 3);
     sources.extend(wiki::context(&app, &session, &manifest, &query)?);
+    let sources = knowledge_cloud::filter_items(&app,&session,sources).await.unwrap_or_default();
     Ok(json!({"version":1,"sources":sources,"scope":session.scope}))
 }
 
@@ -1219,4 +1247,27 @@ mod wiki_lifecycle_tests {
         m.completed_round = "two".into();
         assert!(m.bootstrap_valid("/old/Meetings/account-a"));
     }
+}
+
+#[tauri::command]
+pub async fn workbench_knowledge_policy(app: AppHandle, state: State<'_, WorkbenchState>, request: Value) -> CommandResult<Value> {
+    let _guard = state.serial.lock().await;
+    let session = current(&state)?;
+    knowledge_cloud::policy_action(&app,&session,request).await
+}
+
+#[tauri::command]
+pub async fn workbench_read_for_ai(app: AppHandle, state: State<'_, WorkbenchState>, id: String) -> CommandResult<Value> {
+    let session = current(&state)?;
+    let value = workbench_read(app.clone(),state,id).await?;
+    let authorized = knowledge_cloud::filter_items(&app,&session,vec![value.clone()]).await?;
+    if authorized.is_empty() { return Err("Source stopped from automatic AI use".into()); }
+    Ok(value)
+}
+
+#[tauri::command]
+pub async fn workbench_sync_memory_source(app: AppHandle,state: State<'_,WorkbenchState>,id:String) -> CommandResult<Value> {
+    let _guard=state.serial.lock().await;
+    let session=current(&state)?;
+    knowledge_cloud::upload_local(&app,&session,&id).await
 }

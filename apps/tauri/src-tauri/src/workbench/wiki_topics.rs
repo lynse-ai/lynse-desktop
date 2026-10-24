@@ -45,7 +45,7 @@ pub(super) fn deduplicate(root: &Path, values: &mut Vec<Topic>) -> CommandResult
     for (index, topic) in values.iter().enumerate() {
         let key = title_key(&topic.title);
         // Do not guess the identity of malformed legacy empty titles.
-        if !key.is_empty() {
+        if !key.is_empty() && topic.automatic_key.is_empty() {
             indices.entry(key).or_default().push(index);
         }
     }
@@ -145,7 +145,7 @@ pub(super) fn upsert(root: &Path, values: &mut Vec<Topic>, request: &Value) -> C
     let existing = if id.is_empty() {
         values
             .iter()
-            .position(|topic| title_key(&topic.title) == title_key(title))
+            .position(|topic| topic.automatic_key.is_empty() && title_key(&topic.title) == title_key(title))
     } else {
         Some(
             values

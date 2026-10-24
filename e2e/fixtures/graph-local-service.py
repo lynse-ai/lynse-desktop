@@ -35,6 +35,13 @@ def main():
             raise ValueError('Expected synthetic, already masked source')
         calls.append({'task': payload['task'], 'masked': True})
         ref = dict(id=source['id'], kind=source['kind'], revision=source['revision'], quote=text.strip())
+        if payload['task'] == 'wiki_catalog':
+            return {'topics':[{'key':'a-project-budget','existingId':None,'kind':'project','title':'A项目','overview':'预算与方案进展','citations':[ref]}]}
+        if payload['task'] in {'source_analysis','topic_compile'}:
+            result={'summary':'# A项目\n\n## 当前情况\n\n张三负责A项目。\n\n## 重要变化\n\n采用方案B。\n\n## 未解决问题\n\n预算超支风险待确认。','citations':[ref],'memoryItems':[],'todoSuggestions':[],'decisions':[],'insufficientEvidence':False,'relevant':True}
+            if payload['task'] == 'topic_compile':
+                result.update(overview='A项目采用方案B，预算风险待确认。',changes=[{'text':'会议决定采用方案B。','citations':[ref]}])
+            return result
         def node(key, kind, title, modality='asserted', due=''):
             return dict(key=key,kind=kind,title=title,description=title,status='unknown',modality=modality,confidence=.8,timeText='',dueText=due,citations=[ref])
         def relation(subject, target, predicate, modality='asserted'):

@@ -47,6 +47,11 @@ describe("existing memory links", () => {
     expect(screen.queryByRole("tablist")).toBeNull();
   });
 
+  it("does not mount the legacy file editor behind knowledge browsing", () => {
+    render(<Harness initialPath="/memory?tab=wiki" />);
+    expect(screen.queryByText("Existing shared long-term memory")).toBeNull();
+  });
+
   it("keeps topic, source and directory parameters through knowledge settings", () => {
     render(<Harness initialPath="/memory?tab=wiki&view=catalog&topic=topic-1&node=wiki%3Atopic-1&source=meeting-1" />);
     fireEvent.click(screen.getByRole("button", { name: "Knowledge base settings" }));

@@ -2810,7 +2810,7 @@ pub(super) async fn publish_memory_events(app: &AppHandle,state: &WorkbenchState
         let manifest=load_state(app,session)?;
         let (local,_)=roots(app,session)?;
         topics(&wiki_root(app,session)?)?.into_iter().filter(|topic|citable(topic,&local,&manifest,&models(app,session).unwrap_or_default()))
-            .filter_map(|topic|topic.published.map(|page|json!({"topic_id":topic.id,"fingerprint":page.fingerprint,"citations":page.citations}))).collect()
+            .filter_map(|topic|topic.published.map(|page|json!({"topic_id":topic.id,"topic_title":topic.title,"fingerprint":page.fingerprint,"citations":page.citations}))).collect()
     };
     knowledge_cloud::publish_events(app,session,pages).await
 }

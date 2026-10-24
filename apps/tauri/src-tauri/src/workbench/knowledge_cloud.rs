@@ -233,11 +233,11 @@ pub(super) async fn publish_events(app: &AppHandle,session: &Session,pages: Vec<
         }
         if ids.iter().any(|id|!versions.contains_key(&source_id(id))) { return Ok(()); }
         let source_refs: Vec<_>=ids.iter().map(|id| json!({"source_id":source_id(id),"source_revision":versions[&source_id(id)]})).collect();
-        let identity=store::digest(json!([page["topic_id"],page["fingerprint"],source_refs,policy["processing_version"],policy["grant_version"]]).to_string());
+        let identity=store::digest(json!([page["topic_id"],page["topic_title"],page["fingerprint"],source_refs,policy["processing_version"],policy["grant_version"]]).to_string());
         let mut manifest=load_state(app,session)?;
         let topic=page["topic_id"].as_str().ok_or("Invalid Wiki topic")?;
         if manifest.knowledge_events.get(topic).is_some_and(|saved|saved == &identity) { return Ok(()); }
-        request(app,session,"/wiki-memory/events",Some(json!({"topic_id":topic,"input_fingerprint":identity,"source_refs":source_refs})),Some(&format!("wiki-memory-{identity}"))).await?;
+        request(app,session,"/wiki-memory/events",Some(json!({"topic_id":topic,"topic_title":page["topic_title"],"input_fingerprint":identity,"source_refs":source_refs})),Some(&format!("wiki-memory-{identity}"))).await?;
         manifest=load_state(app,session)?;
         manifest.knowledge_events.insert(topic.to_owned(),identity);
         persist(app,session,&manifest)?;

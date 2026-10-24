@@ -35,3 +35,20 @@ describe("memory authority client", () => {
     client.setToken(null); await expect(memoryApi.list("confirmed")).rejects.toThrow("Sign in"); expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+
+describe("topic file client", () => {
+  it("encodes a stable path and freezes save/organization operations", async () => {
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ status: "ok" })));
+    await memoryApi.readFile("notes/topic-123.md");
+    await memoryApi.saveFile({ path: "notes/topic-123.md", revision: "frozen-revision", markdown: "# 灵光记\n\nHuman note." }, "file-operation");
+    await memoryApi.organizeFile({ action: "split", path: "notes/topic-123.md", revision: "frozen-revision", title: "Review", record_ids: ["mem-one"] }, "split-operation");
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://runtime.invalid/api/memory/files/read?path=notes%2Ftopic-123.md");
+    for (const [, options] of fetchMock.mock.calls) {
+      expect(options.headers.Authorization).toBe("synthetic-token");
+      expect(options.headers["X-API-Key"]).toBeUndefined();
+    }
+    expect(JSON.parse(fetchMock.mock.calls[1]?.[1].body)).toMatchObject({ revision: "frozen-revision", operation_id: "file-operation" });
+    expect(JSON.parse(fetchMock.mock.calls[2]?.[1].body)).toMatchObject({ action: "split", record_ids: ["mem-one"], operation_id: "split-operation" });
+  });
+});

@@ -62,7 +62,7 @@ export function KnowledgePage() {
           {(!status?.automation || !status.enabled || !status.allowAi) && <WorkbenchSettingsContent activation />}
           <WikiWorkspace key={status?.scope} />
         </>}
-        <div hidden={tab !== "library"}><MemoryLibrary key={status?.scope} /></div>
+        {tab === "library" && <MemoryLibrary key={status?.scope} />}
         {tab === "settings" && <VaultConfigCard key={status?.scope} wikiSettings />}
       </div>
     </div>}

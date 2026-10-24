@@ -77,12 +77,26 @@ export function WikiAutomationSettings({ activation = false, disabled = false }:
     </fieldset>
     <p className="text-sm leading-relaxed text-muted-foreground">{t("workbench.auto_consent")}</p>
     <p className="text-xs text-muted-foreground">{t("memory_manager.range_hint")}</p>
-    {cloud.data?.capabilities?.available && <fieldset disabled={unavailable} className="space-y-3 rounded-lg border border-border p-3">
-      <label className="flex min-h-10 items-center gap-3 text-sm"><input type="checkbox" checked={memoryConsent} onChange={event => { setMemoryConsent(event.target.checked); setDirty(true); }} className="size-4" />{t("memory_manager.cloud_consent")}</label>
-      <p className="text-xs leading-relaxed text-muted-foreground">{t("memory_manager.cloud_hint")}</p>
-      <label className="flex min-h-10 items-center gap-3 text-sm"><input type="checkbox" checked={localConsent} onChange={event => { setLocalConsent(event.target.checked); setDirty(true); }} className="size-4" />{t("memory_manager.local_consent")}</label>
-      <label className="flex min-h-10 items-center gap-3 text-sm"><input type="checkbox" checked={projections} onChange={event => { setProjections(event.target.checked); setDirty(true); }} className="size-4" />{t("memory_manager.projection_enabled")}</label>
-      <label className="flex min-h-10 items-center gap-3 text-sm"><input type="checkbox" checked={extractionPaused} onChange={event => { setExtractionPaused(event.target.checked); setDirty(true); }} className="size-4" />{t("memory_manager.pause")}</label>
+    {cloud.data?.capabilities?.available && <fieldset disabled={unavailable} className="space-y-4 rounded-lg border border-border p-4">
+      <legend className="px-1 text-sm font-medium">{t("memory_manager.settings_title")}</legend>
+      <div className="space-y-1">
+        <label className="flex min-h-10 cursor-pointer items-center gap-3 text-sm font-medium"><input type="checkbox" checked={memoryConsent} aria-describedby={`${id}-memory-hint`} onChange={event => { setMemoryConsent(event.target.checked); setDirty(true); }} className="size-4 shrink-0" />{t("memory_manager.cloud_consent")}</label>
+        <p id={`${id}-memory-hint`} className="pl-7 text-sm leading-relaxed text-muted-foreground">{t("memory_manager.cloud_hint")}</p>
+      </div>
+      {memoryConsent && <div className="space-y-4 border-t border-border pt-4">
+        <div className="space-y-1">
+          <label className="flex min-h-10 cursor-pointer items-center gap-3 text-sm"><input type="checkbox" checked={!extractionPaused} aria-describedby={`${id}-update-hint`} onChange={event => { setExtractionPaused(!event.target.checked); setDirty(true); }} className="size-4 shrink-0" />{t("memory_manager.auto_update")}</label>
+          <p id={`${id}-update-hint`} className="pl-7 text-sm leading-relaxed text-muted-foreground">{t("memory_manager.auto_update_hint")}</p>
+        </div>
+        <div className="space-y-1">
+          <label className="flex min-h-10 cursor-pointer items-center gap-3 text-sm"><input type="checkbox" checked={localConsent} aria-describedby={`${id}-local-hint`} onChange={event => { setLocalConsent(event.target.checked); setDirty(true); }} className="size-4 shrink-0" />{t("memory_manager.local_consent")}</label>
+          <p id={`${id}-local-hint`} className="pl-7 text-sm leading-relaxed text-muted-foreground">{t("memory_manager.local_hint")}</p>
+        </div>
+        <div className="space-y-1">
+          <label className="flex min-h-10 cursor-pointer items-center gap-3 text-sm"><input type="checkbox" checked={projections} aria-describedby={`${id}-recap-hint`} onChange={event => { setProjections(event.target.checked); setDirty(true); }} className="size-4 shrink-0" />{t("memory_manager.projection_enabled")}</label>
+          <p id={`${id}-recap-hint`} className="pl-7 text-sm leading-relaxed text-muted-foreground">{t("memory_manager.projection_setting_hint")}</p>
+        </div>
+      </div>}
     </fieldset>}
     {(cloud.error || cloud.data && !cloud.data.capabilities?.available) && <p role="status" className="text-sm text-muted-foreground">{t("memory_manager.unavailable")}</p>}
     {cloud.data?.pending && <p role="status" className="text-sm text-muted-foreground">{t("memory_manager.policy_pending")}</p>}

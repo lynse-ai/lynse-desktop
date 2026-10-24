@@ -65,6 +65,7 @@ export interface ForgetPreview {
   manifest_hash: string;
   items: { id: string; revision: number; fingerprint: string }[];
   blocked_source_count?: number;
+  affected_file_paths?: string[];
   source_isolation?: "whole_source";
   preserves_original_sources: boolean;
   preserves_wiki_browsing: boolean;
@@ -79,6 +80,41 @@ export interface ForgetStatus {
   processed: number;
   total: number;
 }
+
+export interface MemoryFileMember {
+  id: string;
+  revision: number;
+  content: string;
+  status: string;
+  updatedAt?: string;
+  sources: { parent_type: string; parent_id: string; parent_revision: number; excerpt: string }[];
+  eligibility: { usable: boolean; reasons: string[] };
+}
+
+export interface MemoryFileDescriptor {
+  path: string;
+  title: string;
+  revision: string;
+  editable: boolean;
+  folder?: string;
+  aliases?: string[];
+  pendingCount?: number;
+  updatedAt?: string;
+  searchText?: string;
+  recordIds: string[];
+}
+
+export interface MemoryFileDocument extends MemoryFileDescriptor {
+  markdown: string;
+  members: MemoryFileMember[];
+  pendingUpdates: MemoryFileMember[];
+}
+
+export type MemoryFileOrganization = { path: string; revision: string } & (
+  { action: "rename"; title: string } | { action: "move"; folder: string } |
+  { action: "merge"; target_path: string; target_revision: string } |
+  { action: "split"; title: string; record_ids: string[] }
+);
 
 /** Frozen IDs belong to a user action and are reused only for the same payload. */
 export function memoryOperationId(): string {
@@ -109,6 +145,12 @@ async function request<T>(path: string, body?: unknown, operationId?: string, si
 }
 
 export const memoryApi = {
+  files: (signal?: AbortSignal) => request<{ files: MemoryFileDescriptor[] }>("/files", undefined, undefined, signal),
+  readFile: (path: string, signal?: AbortSignal) => request<MemoryFileDocument>(`/files/read?path=${encodeURIComponent(path)}`, undefined, undefined, signal),
+  saveFile: (body: { path: string; revision: string; markdown: string }, operationId: string) => request<MemoryFileDocument>("/files/save", { ...body, operation_id: operationId }, operationId),
+  createFile: (title: string, operationId: string) => request<MemoryFileDocument>("/files/create", { title, operation_id: operationId }, operationId),
+  organizeFile: (body: MemoryFileOrganization, operationId: string) => request<MemoryFileDocument>("/files/organize", { ...body, operation_id: operationId }, operationId),
+  removeEmptyFile: (path: string, revision: string, operationId: string) => request<{ status: string }>("/files/organize", { action: "delete_empty", path, revision, operation_id: operationId }, operationId),
   projections: (view: string, offset = 0, signal?: AbortSignal) => request<{ projections: MemoryProjection[]; total: number }>(`/projections/${encodeURIComponent(view)}?offset=${offset}&limit=25`, undefined, undefined, signal),
   sourceEligibility: (sources: { source_id: string; folder_id?: string; local?: boolean }[]) => request<{ allowed_source_ids: string[] }>("/source-eligibility", { sources }),
   knownSourceEligibility: (source_ids: string[]) => request<{ allowed_source_ids: string[] }>("/source-eligibility", { source_ids }),

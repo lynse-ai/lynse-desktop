@@ -10,6 +10,15 @@ on:
         description: "Build a draft release; stable publishing remains manual"
         required: false
         type: string
+      platform:
+        description: "Platform to build"
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - windows
+          - macos
 
 permissions:
   contents: write
@@ -30,14 +39,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            args: --bundles msi
-          - os: macos-latest
-            # `app` is required alongside dmg: the macOS updater artifact
-            # (.app.tar.gz + .sig) is produced from the app bundle — dmg-only
-            # builds leave latest.json without a darwin entry.
-            args: --bundles app,dmg
+        os: ${{ fromJSON(inputs.platform == 'windows' && '["windows-latest"]' || inputs.platform == 'macos' && '["macos-latest"]' || '["windows-latest","macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -349,14 +351,15 @@ jobs:
           # to "" and tauri-action fails on `security import ""`.
         with:
           projectPath: apps/tauri
-          args: ${{ matrix.args }}
+          # app is required alongside dmg for the macOS updater archive.
+          args: ${{ matrix.os == 'windows-latest' && '--bundles msi' || '--bundles app,dmg' }}
           tagName: ${{ inputs.release_tag || github.ref_name }}
           releaseName: "Lynse ${{ inputs.release_tag || github.ref_name }}"
           releaseBody: ${{ steps.notes.outputs.body }}
           releaseDraft: true
           prerelease: ${{ contains(inputs.release_tag || github.ref_name, '-') }}
           includeRelease: true
-          includeUpdater: true
+          includeUpdaterJson: true
 
       - name: Notarize and staple macOS installer
         if: runner.os == 'macOS'

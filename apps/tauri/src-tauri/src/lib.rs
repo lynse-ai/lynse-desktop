@@ -5177,6 +5177,7 @@ pub fn run() {
                 // The window is born on the pre-auth faces (splash, then
                 // login): zoom stays gated until sign-in ungates it via
                 // set_compact_window_mode(false).
+                #[cfg(target_os = "macos")]
                 install_main_window_zoom_gate(&window);
                 set_main_window_zoom_gated(true);
             }

@@ -333,3 +333,54 @@ describe("ChatPage", () => {
     expect(screen.queryByRole("button", { name: "chat.insert_to_note" })).toBeNull();
   });
 });
+
+describe("ChatPage image input", () => {
+  const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jGZkAAAAASUVORK5CYII=";
+  function png() { return new File([Uint8Array.from(atob(data), c => c.charCodeAt(0))], "context.png", {type:"image/png"}); }
+  it("previews selected images and sends pixels separately from meeting IDs", async () => {
+    const {container} = render(<ChatPage />);
+    fireEvent.change(container.querySelector('input[type="file"]')!, {target:{files:[png()]}});
+    await waitFor(() => expect(screen.getByAltText("context.png")).toBeTruthy());
+    const input = screen.getByPlaceholderText("chat.page_placeholder");
+    fireEvent.change(input,{target:{value:"结合刚才的内容解释这张图"}});
+    fireEvent.keyDown(input,{key:"Enter"});
+    expect(chat.sendMessage).toHaveBeenCalledWith("结合刚才的内容解释这张图", undefined, false,
+      [expect.objectContaining({type:"image",inputAttachment:true})], {images:[`data:image/png;base64,${data}`]});
+    expect(uploadMock.uploadFileToOSS).not.toHaveBeenCalled();
+    expect(screen.queryByAltText("context.png")).toBeNull();
+  });
+  it("accepts pasted images and supports image-only turns", async () => {
+    render(<ChatPage />);
+    const input=screen.getByPlaceholderText("chat.page_placeholder");
+    fireEvent.paste(input,{clipboardData:{items:[{kind:"file",type:"image/png",getAsFile:png}]}});
+    await waitFor(() => expect(screen.getByAltText("context.png")).toBeTruthy());
+    fireEvent.keyDown(input,{key:"Enter"});
+    expect(chat.sendMessage.mock.calls[0]?.[4]).toEqual({images:[`data:image/png;base64,${data}`]});
+    expect(chat.sendMessage.mock.calls[0]?.[0]).toBeTruthy();
+  });
+  it("removes an image before sending and rejects disguised files", async () => {
+    const {container}=render(<ChatPage />);
+    const picker=container.querySelector('input[type="file"]')!;
+    fireEvent.change(picker,{target:{files:[png()]}});
+    await waitFor(() => expect(screen.getByAltText("context.png")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button",{name:/Remove attachment:|移除附件:/}));
+    expect(screen.queryByAltText("context.png")).toBeNull();
+    fireEvent.change(picker,{target:{files:[new File(["bad"],"fake.png",{type:"image/png"})]}});
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalled());
+    expect(chat.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+it("sends selected documents as evidence, independently of meeting IDs", async () => {
+  const {container}=render(<ChatPage />);
+  const file=new File(["# Context\nSynthetic finding"],"context.md",{type:"text/markdown"});
+  fireEvent.change(container.querySelectorAll('input[type="file"]')[1]!,{target:{files:[file]}});
+  await waitFor(()=>expect(screen.getByText("context.md")).toBeTruthy());
+  const input=screen.getByPlaceholderText("chat.page_placeholder");
+  fireEvent.change(input,{target:{value:"结合上文比较"}});
+  fireEvent.keyDown(input,{key:"Enter"});
+  expect(chat.sendMessage).toHaveBeenCalledWith("结合上文比较",undefined,false,
+    [expect.objectContaining({name:"context.md",type:"file"})],
+    {documents:[expect.objectContaining({name:"context.md",dataUrl:expect.stringContaining("base64,")})]});
+  expect(uploadMock.uploadFileToOSS).not.toHaveBeenCalled();
+});

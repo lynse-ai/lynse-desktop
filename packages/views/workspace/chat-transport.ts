@@ -15,6 +15,8 @@ import type { RequestModelOverride } from "./model-override";
 
 export interface SendChatOptions {
   query: string;
+  images?: string[];
+  documents?: {name:string;dataUrl:string}[];
   desktopContext?: DesktopContext | null;
   sessionId: string;
   userId: string;
@@ -180,6 +182,8 @@ function chatTurnBody(opts: SendChatOptions): Record<string, unknown> {
     body.userSpecifiedFile = true;
   }
   if (modelOverride) body.modelOverride = modelOverride;
+  if (opts.images?.length) body.images = opts.images;
+  if (opts.documents?.length) body.documents = opts.documents;
   if (isWikiEnabled() && opts.desktopContext?.sources.length) body.desktopContext = opts.desktopContext;
   if (confirmToken) {
     body.confirm_token = confirmToken;

@@ -576,15 +576,20 @@ describe("PollChatTransport", () => {
 
     const body = apiMocks.post.mock.calls[0]![1] as Record<string, unknown>;
     expect(body).not.toHaveProperty("modelOverride");
+    expect(body).not.toHaveProperty("images");
   });
 
   it("carries the custom-endpoint override with its key in both transports", async () => {
     apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
     apiMocks.get.mockResolvedValue({ status: "done", text: "ok" });
     const override = { baseUrl: "https://gw.example.com/v1", apiKey: "sk-test", model: "m1" };
+    const images = ["data:image/png;base64,offline-test-image"];
+    const documents = [{name:"agenda.md",dataUrl:"data:text/markdown;base64,IyBBZ2VuZGE="}];
 
-    await new PollChatTransport().send(sendOptions({ modelOverride: override }));
+    await new PollChatTransport().send(sendOptions({ modelOverride: override, images, documents }));
     expect((apiMocks.post.mock.calls[0]![1] as Record<string, unknown>).modelOverride).toEqual(override);
+    expect((apiMocks.post.mock.calls[0]![1] as Record<string, unknown>).images).toEqual(images);
+    expect((apiMocks.post.mock.calls[0]![1] as Record<string, unknown>).documents).toEqual(documents);
 
     apiMocks.stream.mockImplementation(
       (
@@ -599,8 +604,10 @@ describe("PollChatTransport", () => {
         return new AbortController();
       },
     );
-    await new StreamChatTransport().send(sendOptions({ modelOverride: override }));
+    await new StreamChatTransport().send(sendOptions({ modelOverride: override, images, documents }));
     expect((apiMocks.stream.mock.calls[0]![1] as Record<string, unknown>).modelOverride).toEqual(override);
+    expect((apiMocks.stream.mock.calls[0]![1] as Record<string, unknown>).images).toEqual(images);
+    expect((apiMocks.stream.mock.calls[0]![1] as Record<string, unknown>).documents).toEqual(documents);
   });
 
   it("surfaces the backend error text for status=error turns", async () => {

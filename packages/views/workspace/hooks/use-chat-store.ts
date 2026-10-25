@@ -288,7 +288,7 @@ interface ChatStoreState {
     fileIds?: string | string[],
     userSpecifiedFile?: boolean,
     attachments?: ChatAttachment[],
-    opts?: { assistant?: ChatAssistant; contextFileId?: string },
+    opts?: { assistant?: ChatAssistant; contextFileId?: string; images?: string[]; documents?: {name:string;dataUrl:string}[] },
   ) => void;
   answerConfirm: (messageId: string, value: string, expectedFileId?: string | null) => void;
   dismissConfirm: (messageId: string) => void;
@@ -602,12 +602,13 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     userSpecifiedFile = false,
     attachments?: ChatAttachment[],
     confirmToken?: string | null,
-    opts?: { assistant?: ChatAssistant; contextFileId?: string },
+    opts?: { assistant?: ChatAssistant; contextFileId?: string; images?: string[]; documents?: {name:string;dataUrl:string}[] },
   ) => {
     if (!content.trim()) return;
     const userId = get().userId;
     const assistant = opts?.assistant ?? get().activeAssistant;
     const contextFileId = opts?.contextFileId;
+    if ((opts?.images?.length || opts?.documents?.length) && assistant !== "lynse") return;
     const fileIds = Array.isArray(fileIdsInput) ? fileIdsInput : fileIdsInput ? [fileIdsInput] : [];
     if (contextFileId !== undefined && (
       !contextFileId.trim() || assistant !== "lynse" || fileIds.length !== 1 || fileIds[0] !== contextFileId
@@ -745,6 +746,8 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     transport
       .send({
         query: content,
+        ...(opts?.images?.length ? { images: opts.images } : {}),
+        ...(opts?.documents?.length ? { documents: opts.documents } : {}),
         sessionId: conversationId,
         userId,
         fileIds,

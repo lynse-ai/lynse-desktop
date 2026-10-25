@@ -6,6 +6,8 @@
          microphone access unless this entitlement is present: without it the
          TCC prompt never appears and capture fails silently, even after the
          user allows Lynse in System Settings. -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
     <key>com.apple.security.device.audio-input</key>
     <true/>
     <!-- WKWebView JIT compilation under Hardened Runtime, per the Tauri

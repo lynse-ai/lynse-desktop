@@ -60,6 +60,9 @@ function messagesForStorage(messages: ChatMessage[]): ChatMessage[] {
     // marker — neither belongs in persisted history.
     .map(({ status: _status, revealedAt: _revealedAt, ...message }) => ({
       ...message,
+      attachments: message.attachments?.map(attachment => attachment.inputAttachment
+        ? { id: attachment.id, name: attachment.name, type: attachment.type, inputAttachment: true }
+        : attachment),
       // Pending permissions require a live connection; resolved cards are history.
       confirm: message.confirm?.workbuddy && message.confirm.resolvedChoice === undefined ? undefined : message.confirm,
     }));

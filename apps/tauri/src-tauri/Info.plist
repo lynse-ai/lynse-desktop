@@ -14,6 +14,8 @@
   <string>Lynse 需要日历权限来选择默认日历，并仅在你确认后将待办写入系统日历。</string>
   <key>NSCalendarsWriteOnlyAccessUsageDescription</key>
   <string>Lynse 仅在你确认后将待办写入系统日历。</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Lynse 仅在你选择拍照时使用相机，将确认的照片加入小灵助手消息。</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Lynse 使用麦克风记录你的发言并生成实时双语字幕。</string>
   <!-- ScreenCaptureKit requires both keys on macOS 15+: screen-recording TCC

@@ -19,6 +19,7 @@ import { ConfirmCard } from "../confirm-card";
 import { isFreshlyRevealed } from "../chat-reveal";
 import { stripSkillMarker } from "../chat-skill-ref";
 import { ChatAttachments } from "../../chat/chat-attachments";
+import { ChatImagePicker, ChatImageTray, UserImagePreviews, imageAttachments, attachmentInput, imageCopy, useChatImages } from "../../chat/chat-images";
 import { ChatConnectionCards } from "../../chat/chat-connection-cards";
 import { ChatHistorySidebar } from "../../chat/chat-history-sidebar";
 import { ThinkingBlock } from "../../chat/chat-reasoning";
@@ -59,6 +60,7 @@ export function ChatPanel() {
   const viewLoading = !!viewActiveId && isLoading;
   const [historyOpen, setHistoryOpen] = useState(false);
   const [input, setInput] = useState("");
+  const images = useChatImages(`panel:${selectedItemId}:${viewActiveId ?? "new"}`);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
   const { data: files } = useFiles({ pageSize: 200 });
@@ -94,14 +96,16 @@ export function ChatPanel() {
   };
 
   const handleSend = () => {
-    if (!selectedItemId || !input.trim() || viewLoading) return;
+    if (!selectedItemId || (!input.trim() && !images.drafts.length) || images.reading || viewLoading) return;
     if (getWorkspaceState().selectedItemId !== selectedItemId) return;
     // A selected meeting scopes the assistant to that meeting. The send is
     // pinned to the cloud channel even while the page is on WorkBuddy.
-    sendMessage(input, selectedItemId, true, undefined, {
+    sendMessage(input.trim() || imageCopy().prompt, selectedItemId, true, images.drafts.length ? imageAttachments(images.drafts) : undefined, {
       assistant: "lynse",
       contextFileId: selectedItemId,
+      ...(images.drafts.length ? attachmentInput(images.drafts) : {}),
     });
+    images.clear();
     setInput("");
   };
 
@@ -204,6 +208,7 @@ export function ChatPanel() {
               >
                 {msg.role === "user" ? (
                   <>
+                    <UserImagePreviews attachments={msg.attachments} />
                     {(msg.attachments?.length ?? 0) > 0 && (
                       <div className="mb-1.5 flex flex-wrap justify-end gap-1">
                         {msg.attachments!.map((attachment, index) => (
@@ -295,11 +300,14 @@ export function ChatPanel() {
       </div>
 
       {/* Composer */}
-      <div className="flex shrink-0 border-t border-border" style={{ padding: "8px 12px" }}>
+      <div className="flex shrink-0 flex-col border-t border-border" style={{ padding: "8px 12px" }}>
+        <ChatImageTray images={images} />
         <div className="flex w-full items-end gap-2">
+          <ChatImagePicker key={images.scope} onFiles={files => { void images.add(files); }} disabled={!selectedItemId || images.reading} />
           <div className="min-w-0 flex-1">
             <Input
               value={input}
+              onPaste={images.onPaste}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
               placeholder={t("workspace.chat_placeholder")}
@@ -318,7 +326,7 @@ export function ChatPanel() {
               size="icon"
               className="size-8 shrink-0"
               onClick={handleSend}
-              disabled={!selectedItemId || !input.trim()}
+              disabled={!selectedItemId || (!input.trim() && !images.drafts.length) || images.reading}
               style={{
                 background: input.trim() ? "var(--primary)" : "var(--muted)",
                 color: input.trim() ? "var(--primary-foreground)" : "var(--muted-foreground)",

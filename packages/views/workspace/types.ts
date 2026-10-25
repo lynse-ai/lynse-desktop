@@ -377,6 +377,8 @@ export interface WorkBuddyCloudSession {
 }
 
 export interface ChatAttachment {
+  /** User image preview is transient; bytes are stripped from durable history. */
+  inputAttachment?: boolean;
   id?: string;
   name?: string;
   type?: "pdf" | "image" | "file" | string;

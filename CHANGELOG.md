@@ -12,6 +12,20 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.2.0 build 246 (2026-10-25)
+
+### New Features
+
+- Add photos, pasted images and common documents to the assistant with the new + menu.
+- Combine attachments, the current question and conversation context to understand requests.
+- Preview or remove attachments before sending; keep original file bytes out of durable chat history.
+
+### 新功能
+
+- 小灵助手新增「＋」菜单，支持拍照、相册、粘贴图片和常用文档输入。
+- 结合附件内容、本轮提问和对话上下文理解意图。
+- 发送前可预览或移除附件，聊天历史不持久保存原始附件数据。
+
 ## 1.2.0 (2026-10-24)
 
 ### New Features

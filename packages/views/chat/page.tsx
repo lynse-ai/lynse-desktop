@@ -66,6 +66,7 @@ import { ConfirmCard } from "../workspace/confirm-card";
 import { hasWorkBuddyAcpBridge, hasWorkBuddyCloudScopes } from "@lynse/core/workbuddy";
 import { isFreshlyRevealed } from "../workspace/chat-reveal";
 import { ChatAttachments } from "./chat-attachments";
+import { ChatImagePicker, ChatImageTray, UserImagePreviews, imageAttachments, attachmentInput, imageCopy, useChatImages } from "./chat-images";
 import { ChatConnectionCards } from "./chat-connection-cards";
 import { ThinkingBlock, ToolActivity } from "./chat-reasoning";
 import {
@@ -186,6 +187,7 @@ export function ChatPage() {
   } = useChat({ persistHistory: true });
   const [input, setInput] = useComposerDraft(activeConversationId, activeAssistant);
   const isWorkBuddy = activeAssistant === "workbuddy";
+  const images = useChatImages(`${activeAssistant}:${activeConversationId ?? "new"}`);
   const isWorkBuddyCloud = isWorkBuddy && hasWorkBuddyAcpBridge();
   const showHistory = historyOpen && (!isWorkBuddy || isWorkBuddyCloud);
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
@@ -553,7 +555,7 @@ export function ChatPage() {
 
   const handleSend = (content = input) => {
     const trimmedContent = content.trim();
-    if (!trimmedContent || isLoading) return;
+    if ((!trimmedContent && !images.drafts.length) || isLoading || images.reading) return;
     if (isWorkBuddy) {
       // The WorkBuddy thread has no local context channel (mentions, files):
       // the turn is plain text, authorization is a precondition.
@@ -580,15 +582,17 @@ export function ChatPage() {
       .map((d) => ({ id: d.fileId, name: d.name, type: d.kind }));
     // The composer only ever held the prompt body; the skill marker rides
     // along here so the outgoing message still carries the skill reference.
+    const body = trimmedContent || imageCopy().prompt;
     const outgoing = pendingSkillMarker
-      ? `${pendingSkillMarker.marker} ${trimmedContent}`
-      : trimmedContent;
-    if (fileIds.length > 0 || attachmentMeta.length > 0) {
+      ? `${pendingSkillMarker.marker} ${body}`
+      : body;
+    if (fileIds.length > 0 || attachmentMeta.length > 0 || images.drafts.length > 0) {
       sendMessage(
         outgoing,
         fileIds.length > 0 ? fileIds : undefined,
         fileIds.length > 0,
-        attachmentMeta.length > 0 ? attachmentMeta : undefined,
+        attachmentMeta.length || images.drafts.length ? [...attachmentMeta, ...imageAttachments(images.drafts)] : undefined,
+        ...(images.drafts.length ? [attachmentInput(images.drafts)] : []),
       );
     } else {
       sendMessage(outgoing);
@@ -598,6 +602,7 @@ export function ChatPage() {
     setMentions([]);
     resetMentionState();
     clearAttachmentDrafts();
+    images.clear();
   };
 
   const handleNewChat = () => {
@@ -607,6 +612,7 @@ export function ChatPage() {
     setMentions([]);
     resetMentionState();
     clearAttachmentDrafts();
+    images.clear();
     setCopiedMessageId(null);
     setInsertedMessageId(null);
     setInsertingMessageId(null);
@@ -804,6 +810,7 @@ export function ChatPage() {
               message.role === "user" ? (
                 <div key={message.id} className="flex justify-end">
                   <div className="flex max-w-[78%] flex-col items-end gap-1.5">
+                    <UserImagePreviews attachments={message.attachments} />
                     {(message.attachments?.length ?? 0) > 0 && (
                       <div className="flex flex-wrap justify-end gap-1">
                         {message.attachments!.map((attachment, index) => (
@@ -937,10 +944,11 @@ export function ChatPage() {
                 onRemoveSkill={() => setPendingSkillMarker(null)}
               />
             )}
-            {/* Attachment upload is not implemented yet; entry points hidden until it ships. */}
+            {!isWorkBuddy && <ChatImageTray images={images} />}
             <Textarea
               ref={textareaRef}
               value={input}
+              onPaste={isWorkBuddy ? undefined : images.onPaste}
               onChange={(event) => {
                 const value = event.target.value;
                 setInput(value);
@@ -995,7 +1003,7 @@ export function ChatPage() {
             />
             <div className="flex items-center gap-1 px-0.5 pb-0.5 pt-1">
               <div className="flex items-center gap-0.5">
-                {/* Attachment "+" button hidden: upload not implemented yet. */}
+                {!isWorkBuddy && <ChatImagePicker key={images.scope} onFiles={files => { void images.add(files); }} disabled={images.reading} />}
                 <Button
                   type="button"
                   variant="ghost"
@@ -1037,7 +1045,8 @@ export function ChatPage() {
                   className="size-8 bg-foreground text-background shadow-[0_1px_2px_rgba(0,0,0,0.12)] transition-[background-color,box-shadow] hover:bg-foreground/85 hover:shadow-[0_2px_7px_rgba(0,0,0,0.12)] disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none dark:bg-primary dark:text-primary-foreground dark:hover:bg-primary/90"
                   onClick={() => handleSend()}
                   disabled={
-                    !input.trim() ||
+                    (!input.trim() && !images.drafts.length) ||
+                    images.reading ||
                     hasUploadingAttachments ||
                     (isWorkBuddy && (wbAuth !== "ok" || wbAuthorizing || isLegacyWorkBuddy))
                   }

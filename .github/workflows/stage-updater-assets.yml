@@ -32,9 +32,9 @@ jobs:
           set -euo pipefail
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-build[0-9]+$ ]]
           [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-          ACTUAL_COMMIT="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object.sha)"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish,assets > assets.json
+          ACTUAL_COMMIT="$(node -p 'JSON.parse(require("fs").readFileSync("assets.json", "utf8")).targetCommitish')"
           [[ "$ACTUAL_COMMIT" == "$EXPECTED_COMMIT" ]]
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets > assets.json
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir stage --pattern '*.msi*' --pattern latest.json --pattern lynse-stt-runtime-windows-x86_64.tar.gz
           node <<'NODE'
           const fs = require('node:fs');

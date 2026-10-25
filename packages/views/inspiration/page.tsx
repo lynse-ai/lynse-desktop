@@ -16,6 +16,7 @@ import {
   Plus,
   RefreshCw,
   Trash2,
+  ShieldCheck,
 } from "../icons";
 import { getDesktopInspirationApi } from "./desktop-api";
 import { useInspirationCaptureStore } from "./capture-store";
@@ -25,6 +26,8 @@ import { dayGroupLabel, formatCardDateTime } from "./format";
 import { InspirationAudioPlayer } from "./audio-player";
 import { InspirationLightbox, type LightboxSlide } from "./lightbox";
 import { InspirationDetailDialog } from "./detail-dialog";
+import { InspirationFiles, InspirationLockButton, ProtectedRecordLabel } from "./privacy-controls";
+import { ensureInspirationUnlocked, openPrivacyDialog, privacyError, useInspirationPrivacy } from "./privacy-state";
 import { useInspirationCloud } from "./use-inspiration-cloud";
 import type { InspirationImage, InspirationRecord } from "./types";
 
@@ -266,6 +269,7 @@ function MasonryCard({ record, layout, dateTime, cardCountLabel, onImageResolved
         </div>
       )}
       <div className={cn(layout.bare && "px-2.5 pb-2.5 pt-2")}>
+        {record.protection === "e2ee" && <ProtectedRecordLabel />}
         {record.text.trim() && (
           <HighlightedText text={record.text} className={cn("text-[13px]", layout.clampClass)} />
         )}
@@ -379,6 +383,8 @@ function JournalCard({ record, dateTime, cardCountLabel, onImageResolved, onOpen
         <span className="text-3xs font-medium tracking-wide text-muted-foreground/70 uppercase">
           {dateTime}
         </span>
+        {record.protection === "e2ee" && <ProtectedRecordLabel />}
+        <InspirationFiles record={record} />
         {record.text.trim() && <HighlightedText text={record.text} className="mt-1.5 text-sm" />}
         <div className="mt-2.5 flex flex-col items-start gap-2.5">
           {record.audio && (
@@ -443,14 +449,22 @@ export function InspirationPage() {
   const reduceMotion = useReducedMotion();
   const desktopApi = getDesktopInspirationApi();
   const columns = useColumnCount();
+  const accountScope = useInspirationPrivacy((s) => s.accountScope);
+  const generation = useInspirationPrivacy((s) => s.generation);
+  const binding = useInspirationPrivacy((s) => s.binding);
+  useEffect(() => { setImageUrls({}); setLightbox(null); setActiveTag(null); }, [accountScope, generation, binding]);
+  const queryKey = ["inspirations", accountScope];
+  const openRecord = async (record: InspirationRecord) => {
+    try { if (record.protection === "e2ee" && !(await ensureInspirationUnlocked())) return; openDetail(record.id); } catch (error) { toast.error(privacyError(error, t)); }
+  };
   // Lynse Memory cloud sync (plan T7/T8): binding, trigger points and the
   // 仅本机/同步中/已同步/冲突 status for the header pill.
   const { status: cloudStatus, scheduleSync } = useInspirationCloud();
 
   const { data: inspirations = [], isLoading } = useQuery({
-    queryKey: ["inspirations"],
+    queryKey,
     queryFn: () => desktopApi!.list(),
-    enabled: Boolean(desktopApi),
+    enabled: Boolean(desktopApi) && !binding,
     // While any memo is awaiting its transcript, poll so completed texts
     // appear without a manual refresh.
     refetchInterval: (query) =>
@@ -463,20 +477,24 @@ export function InspirationPage() {
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["inspirations"] });
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => desktopApi!.delete(id),
+    mutationFn: async (id: string) => {
+      const record = inspirations.find((item) => item.id === id);
+      if (record?.protection === "e2ee" && !(await ensureInspirationUnlocked())) throw new Error("vault_locked");
+      return desktopApi!.delete(id);
+    },
     // Optimistic removal: the card disappears immediately instead of sitting
     // with a spinner; the snapshot is restored if the delete fails.
     onMutate: async (id: string) => {
       await queryClient.cancelQueries({ queryKey: ["inspirations"] });
-      const previous = queryClient.getQueryData<InspirationRecord[]>(["inspirations"]);
-      queryClient.setQueryData<InspirationRecord[]>(["inspirations"], (old) =>
+      const previous = queryClient.getQueryData<InspirationRecord[]>(queryKey);
+      queryClient.setQueryData<InspirationRecord[]>(queryKey, (old) =>
         (old ?? []).filter((record) => record.id !== id),
       );
       return { previous };
     },
     onError: (_error, _id, context) => {
       if (context?.previous) {
-        queryClient.setQueryData(["inspirations"], context.previous);
+        queryClient.setQueryData(queryKey, context.previous);
       }
       toast.error(t("inspiration.delete_failed"));
     },
@@ -575,9 +593,10 @@ export function InspirationPage() {
           dateTime={formatCardDateTime(record.createdAt, i18n.language)}
           cardCountLabel={extraCount > 0 ? t("inspiration.images_count", { count: extraCount + 1 }) : null}
           onImageResolved={trackImageUrl}
-          onOpen={() => openDetail(record.id)}
+          onOpen={() => void openRecord(record)}
           onOpenImage={(imageIndex) => setLightbox({ record, index: imageIndex })}
         />
+        <InspirationLockButton record={record} className="absolute right-10 top-2 z-10 rounded-md bg-background/80 p-1.5 text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring" />
         <button
           type="button"
           title={t("inspiration.delete")}
@@ -607,6 +626,7 @@ export function InspirationPage() {
         <h2 className="text-sm font-medium text-foreground">{t("inspiration.title")}</h2>
         {desktopApi && (
           <div className="flex items-center gap-2">
+            {desktopApi.privacy && <Button variant="ghost" size="icon-sm" title={t("inspiration_private.manage")} aria-label={t("inspiration_private.manage")} onClick={() => void openPrivacyDialog("manage")}><ShieldCheck className="size-4" /></Button>}
             {cloudStatus?.bound && (
               <button
                 type="button"
@@ -759,7 +779,7 @@ export function InspirationPage() {
                                   : null
                               }
                               onImageResolved={trackImageUrl}
-                              onOpen={() => openDetail(record.id)}
+                              onOpen={() => void openRecord(record)}
                               onOpenImage={(imageIndex) => setLightbox({ record, index: imageIndex })}
                               retrying={retryingId === record.id}
                               onRetry={(id) => {
@@ -767,6 +787,7 @@ export function InspirationPage() {
                                 retryMutation.mutate(id);
                               }}
                             />
+                            <InspirationLockButton record={record} className="absolute right-10 top-2.5 z-10 rounded-md bg-background/80 p-1.5 text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring" />
                             <button
                               type="button"
                               title={t("inspiration.delete")}
@@ -813,6 +834,7 @@ export function InspirationPage() {
       )}
 
       <InspirationLightbox
+        key={`${accountScope}:${generation}`}
         slides={lightbox ? lightboxSlides(lightbox.record) : []}
         index={lightbox ? lightbox.index : null}
         onIndexChange={(index) => setLightbox((current) => (current ? { ...current, index } : current))}

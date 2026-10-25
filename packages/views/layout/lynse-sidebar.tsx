@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { cn } from "@lynse/ui/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@lynse/ui/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@lynse/ui/components/ui/tooltip";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
 import { getDesktopInspirationApi } from "../inspiration";
@@ -149,11 +150,11 @@ export function LynseSidebar() {
         beta={item.beta}
       >
         <Icon className={cn("size-5", active && item.solid !== false && "fill-current")} />
-        <span className={isWeb
-          ? "whitespace-nowrap text-[13px] font-medium leading-none"
-          : "mt-1 whitespace-nowrap text-3xs font-medium leading-none"}>
-          {item.label}
-        </span>
+        {isWeb && (
+          <span className="whitespace-nowrap text-[13px] font-medium leading-none">
+            {item.label}
+          </span>
+        )}
       </NavButton>
     );
   }
@@ -179,20 +180,21 @@ export function LynseSidebar() {
         </div>
       )}
 
-      <div className={cn("flex w-full flex-1 flex-col overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", isWeb ? "items-stretch gap-0.5" : "items-center gap-1")}>
+      <div className={cn("flex w-full flex-1 flex-col gap-0.5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", isWeb ? "items-stretch" : "items-center")}>
         {topItems.map(renderNavItem)}
         {moreItems.length > 0 && (
           <Popover open={moreOpen} onOpenChange={setMoreOpen}>
-            <PopoverTrigger
-              title={t("nav.more")}
-              data-tauri-drag-region={false}
-              className={cn(navButtonClassName(isWeb, moreActive), moreOpen && "bg-foreground/5 text-foreground")}
-            >
-              <MoreHorizontal className="size-5" />
-              <span className={isWeb ? "text-[13px] font-medium" : "mt-1 text-3xs font-medium leading-none"}>
-                {t("nav.more")}
-              </span>
-            </PopoverTrigger>
+            <NavTooltip title={t("nav.more")} disabled={moreOpen}>
+              <PopoverTrigger
+                title={isWeb ? t("nav.more") : undefined}
+                aria-label={t("nav.more")}
+                data-tauri-drag-region={false}
+                className={cn(navButtonClassName(isWeb, moreActive), moreOpen && "bg-foreground/5 text-foreground")}
+              >
+                <MoreHorizontal className="size-5" />
+                {isWeb && <span className="text-[13px] font-medium">{t("nav.more")}</span>}
+              </PopoverTrigger>
+            </NavTooltip>
             <PopoverContent
               side="right"
               align="start"
@@ -248,7 +250,7 @@ export function LynseSidebar() {
         {pinnedItems.length > 0 && (
           <>
             <div role="separator" className={cn("my-1 h-px shrink-0 bg-sidebar-border", isWeb ? "w-full" : "w-6")} />
-            <div role="group" aria-label={t("nav.pinned")} className={cn("flex w-full flex-col", isWeb ? "gap-0.5" : "items-center gap-1")}>
+            <div role="group" aria-label={t("nav.pinned")} className={cn("flex w-full flex-col gap-0.5", !isWeb && "items-center")}>
               {pinnedItems.map(renderNavItem)}
             </div>
           </>
@@ -293,9 +295,7 @@ export function LynseSidebar() {
             title={t("nav.notifications")}
           >
             <Bell className="size-5" />
-            <span className={isWeb ? "text-[13px] font-medium" : "mt-1 text-3xs font-medium"}>
-              {t("nav.notifications")}
-            </span>
+            {isWeb && <span className="text-[13px] font-medium">{t("nav.notifications")}</span>}
           </NavButton>
         )}
         <UserProfileDropdown
@@ -333,9 +333,35 @@ function navButtonClassName(isWeb: boolean, active: boolean): string {
   return cn(
     "relative flex rounded-lg transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
     isWeb ? "w-full items-center gap-2.5 px-2.5 py-2"
-      : "w-[40px] shrink-0 flex-col items-center justify-center px-1 py-2",
+      : "h-9 w-10 shrink-0 items-center justify-center",
     active ? "text-accent-brand-text"
       : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+  );
+}
+
+function NavTooltip({
+  title,
+  disabled = false,
+  children,
+}: {
+  title: string;
+  disabled?: boolean;
+  children: React.ReactElement;
+}) {
+  if (isWebPlatform()) return children;
+
+  return (
+    <Tooltip disabled={disabled}>
+      <TooltipTrigger delay={200} render={children} />
+      <TooltipContent
+        side="right"
+        sideOffset={8}
+        showArrow={false}
+        className="glass-overlay rounded-lg border border-[var(--stroke-overlay)] bg-popover/70 text-popover-foreground"
+      >
+        {title}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -360,33 +386,36 @@ function NavButton({
 }) {
   const { t } = useTranslation();
   const isWeb = isWebPlatform();
+  const tooltipLabel = beta ? `${title} · ${t("settings.beta_badge")}` : title;
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={beta ? `${title} · ${t("settings.beta_badge")}` : title}
-      aria-label={beta ? title : undefined}
-      aria-description={beta ? t("settings.beta_badge") : undefined}
-      aria-current={active ? "page" : undefined}
-      data-tauri-drag-region={false}
-      className={navButtonClassName(isWeb, active)}
-    >
-      {!!badgeCount && (
-        <span
-          aria-label={t("layout.unread_replies", { count: badgeCount })}
-          className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-3xs font-semibold leading-none text-destructive-foreground ring-2 ring-sidebar"
-        >
-          {badgeCount > 99 ? "99+" : badgeCount}
-        </span>
-      )}
-      {!badgeCount && dot && (
-        <span
-          aria-hidden="true"
-          className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-sidebar"
-        />
-      )}
-      {children}
-      {beta && <span aria-hidden="true"><BetaBadge className={isWeb ? "ml-auto" : "mt-0.5 h-3 px-1 text-[8px]"} /></span>}
-    </button>
+    <NavTooltip title={tooltipLabel}>
+      <button
+        type="button"
+        onClick={onClick}
+        title={isWeb ? tooltipLabel : undefined}
+        aria-label={title}
+        aria-description={beta ? t("settings.beta_badge") : undefined}
+        aria-current={active ? "page" : undefined}
+        data-tauri-drag-region={false}
+        className={navButtonClassName(isWeb, active)}
+      >
+        {!!badgeCount && (
+          <span
+            aria-label={t("layout.unread_replies", { count: badgeCount })}
+            className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-3xs font-semibold leading-none text-destructive-foreground ring-2 ring-sidebar"
+          >
+            {badgeCount > 99 ? "99+" : badgeCount}
+          </span>
+        )}
+        {!badgeCount && dot && (
+          <span
+            aria-hidden="true"
+            className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-primary ring-2 ring-sidebar"
+          />
+        )}
+        {children}
+        {isWeb && beta && <span aria-hidden="true"><BetaBadge className="ml-auto" /></span>}
+      </button>
+    </NavTooltip>
   );
 }

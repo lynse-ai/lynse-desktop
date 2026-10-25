@@ -21,6 +21,8 @@ import { useInspirationDetailStore } from "./detail-store";
 import { formatCardDateTime } from "./format";
 import { InspirationAudioPlayer } from "./audio-player";
 import { InspirationLightbox, type LightboxSlide } from "./lightbox";
+import { InspirationFiles, InspirationLockButton } from "./privacy-controls";
+import { useInspirationPrivacy } from "./privacy-state";
 import type { InspirationRecord, InspirationSaveInput } from "./types";
 
 /** Xiaohongshu-style detail: images on top, content below; read-only —
@@ -35,12 +37,17 @@ export function InspirationDetailDialog() {
   const [urls, setUrls] = useState<Record<string, string>>({});
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const desktopApi = getDesktopInspirationApi();
+  const accountScope = useInspirationPrivacy((s) => s.accountScope);
+  const generation = useInspirationPrivacy((s) => s.generation);
+  const binding = useInspirationPrivacy((s) => s.binding);
+
+  useEffect(() => { setUrls({}); setLightboxIndex(null); }, [accountScope, generation, activeId]);
 
   // Shares the feed's query cache: edits made anywhere show up here too.
   const { data: inspirations = [] } = useQuery({
-    queryKey: ["inspirations"],
+    queryKey: ["inspirations", accountScope],
     queryFn: () => desktopApi!.list(),
-    enabled: Boolean(desktopApi),
+    enabled: Boolean(desktopApi) && !binding,
     refetchInterval: (query) =>
       ((query.state.data as InspirationRecord[] | undefined) ?? []).some(
         (record) => record.transcriptStatus === "pending",
@@ -48,7 +55,14 @@ export function InspirationDetailDialog() {
         ? 3_000
         : false,
   });
-  const record = inspirations.find((item) => item.id === activeId) ?? null;
+  const listed = inspirations.find((item) => item.id === activeId) ?? null;
+  const { data: detail } = useQuery({
+    queryKey: ["inspiration-detail", accountScope, activeId, generation],
+    queryFn: () => desktopApi!.read ? desktopApi!.read(activeId!) : Promise.resolve(listed!),
+    enabled: !!activeId && !!listed && !binding,
+    gcTime: 0,
+  });
+  const record = detail ?? (listed?.protection === "e2ee" ? null : listed);
 
   // Resolve saved image URLs once per record; staged (pending) images carry
   // their preview URL from the staging response.
@@ -91,7 +105,7 @@ export function InspirationDetailDialog() {
         ...patch,
       });
     },
-    onSuccess: () => void invalidate(),
+    onSuccess: () => { void invalidate(); void queryClient.invalidateQueries({ queryKey: ["inspiration-detail"] }); },
     onError: (error) => toast.error(String(error)),
   });
 
@@ -173,6 +187,7 @@ export function InspirationDetailDialog() {
       </Dialog>
 
       <InspirationLightbox
+        key={`${accountScope}:${generation}`}
         slides={slides}
         index={lightboxIndex}
         onIndexChange={setLightboxIndex}
@@ -212,6 +227,7 @@ function DetailView({ record, slides, onOpenLightbox, onEdit, onDelete, deleting
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      {record.protection === "e2ee" && record.historyCleanup === "unverified" && <p className="px-5 pt-3 text-xs text-muted-foreground">{t("inspiration_private.history_unverified")}</p>}
       {images.length > 0 && slides.length > 0 && (
         <div className="relative shrink-0 bg-black/5 dark:bg-black/20">
           <button
@@ -294,8 +310,8 @@ function DetailView({ record, slides, onOpenLightbox, onEdit, onDelete, deleting
             )}
             <button
               type="button"
-              disabled={busy}
-              title={t("inspiration.ai_context")}
+              disabled={busy || record.protection === "e2ee"}
+              title={t(record.protection === "e2ee" ? "inspiration_private.no_ai" : "inspiration.ai_context")}
               onClick={() => onToggleAiContext(!aiContextEnabled)}
               className={cn(
                 "rounded-full px-2 py-0.5 text-3xs transition-colors",
@@ -309,6 +325,7 @@ function DetailView({ record, slides, onOpenLightbox, onEdit, onDelete, deleting
             </button>
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            <InspirationLockButton record={record} className="rounded-md p-2 text-muted-foreground hover:bg-muted" />
             <Button variant="ghost" size="sm" className="gap-1.5" onClick={onEdit}>
               <Pencil className="size-3.5" />
               {t("inspiration.edit")}
@@ -326,9 +343,11 @@ function DetailView({ record, slides, onOpenLightbox, onEdit, onDelete, deleting
           </div>
         </div>
 
+        {record.protection === "e2ee" && <p className="text-xs text-muted-foreground">{t("inspiration_private.no_ai")}</p>}
+        <InspirationFiles record={record} />
         {record.text.trim() ? (
           <div className="min-h-0 text-sm leading-relaxed">
-            <MilkdownViewer content={record.text} />
+            {record.protection === "e2ee" ? <p className="whitespace-pre-wrap">{record.text}</p> : <MilkdownViewer content={record.text} />}
           </div>
         ) : null}
 

@@ -1,11 +1,11 @@
 import { resolve } from "node:path";
 import type { Page } from "@playwright/test";
-import type { WikiState, WorkbenchStatus, WikiAutomationConfig } from "../../packages/views/workbench/types";
+import type { WikiState, WikiTopic, WorkbenchStatus, WikiAutomationConfig } from "../../packages/views/workbench/types";
 
 export async function installAutomaticWiki(page: Page, enabled = true, seed?: Partial<WikiState>) {
   await page.evaluate(async ({enabled, seed}) => {
     const runtime = window as unknown as { __LYNSE_E2E__: { setCommand: (name:string, handler:(args:Record<string,unknown>)=>unknown)=>void;emit:(name:string,value:unknown)=>void };
-      wikiTest: {configure:Record<string,unknown>[];requests:Record<string,unknown>[];patch:(status:Partial<WorkbenchStatus>,wiki?:Partial<WikiState>)=>void} };
+      wikiTest: {configure:Record<string,unknown>[];requests:Record<string,unknown>[];failNextRetry?:boolean;patch:(status:Partial<WorkbenchStatus>,wiki?:Partial<WikiState>)=>void} };
     const hook=runtime.__LYNSE_E2E__;
     const previous=await (window as unknown as {desktopAPI:{workbench:{status:()=>Promise<WorkbenchStatus>}}}).desktopAPI.workbench.status();
     const source={id:"meeting-1",kind:"meeting_summary",revision:"r1",quote:"灵光记项目完成原型，客户反馈仍需整理。"};
@@ -35,7 +35,38 @@ export async function installAutomaticWiki(page: Page, enabled = true, seed?: Pa
       publish();return structuredClone(status);});
     hook.setCommand("workbench_wiki",args=>{const request=args.request as Record<string,unknown>;runtime.wikiTest.requests.push(structuredClone(request));
       if(request.action==="correction"){const topic=wiki.topics.find(topic=>topic.id===request.id);if(topic)topic.notes=String(request.notes);publish();}
-      if(request.action==="retry"){wiki.topics.forEach(topic=>{topic.error="";topic.stale=false;});status.error="";publish();}
+      if(request.action==="retry"){
+        if(runtime.wikiTest.failNextRetry){runtime.wikiTest.failNextRetry=false;throw new Error("Synthetic retry rejected");}
+        wiki.topics.filter(topic=>!request.id||topic.id===request.id).forEach(topic=>{topic.error="";topic.failure=null;topic.stale=false;
+          if(!topic.published)topic.published={...structuredClone(topics[0]!.published),id:`retry-${topic.id}`,markdown:`# ${topic.title}\n\nRetry completed.`};
+        });
+      }
+      if(request.action==="topic_link") {
+        const topic=wiki.topics.find(topic=>topic.id===request.id);
+        if(topic?.collection) {
+          const existing=topic.collection.links.find(link=>link.targetId===request.targetId);
+          if(existing){existing.state=request.state as "included"|"excluded";existing.manual=true;}
+          else topic.collection.links.push({targetId:String(request.targetId),state:request.state as "included"|"excluded",manual:true,reason:"",citations:[],events:[],fingerprint:"",error:""});
+          publish();
+        }
+      }
+      if(request.action==="topic"){
+        wiki.createdTopicId=null;
+        if(!request.id && request.mode==="collection") {
+          const created:WikiTopic={id:`manual-${serial}`,title:String(request.title),purpose:String(request.purpose),notes:"",candidate:null,published:null,pinned:false,excluded:false,stale:false,error:"",inScope:true,collection:{links:[],status:"pending",completed:0,total:wiki.topics.length}};
+          wiki.topics.push(created);wiki.createdTopicId=created.id;
+        }
+        const topic=wiki.topics.find(topic=>topic.id===request.id);
+        if(topic){wiki.createdTopicId=topic.id;Object.assign(topic,{title:request.title,purpose:request.purpose,notes:request.notes??topic.notes});
+          if(typeof request.excluded==="boolean"){topic.excluded=request.excluded;topic.error="";topic.failure=null;}
+          if(typeof request.pinned==="boolean")topic.pinned=request.pinned;
+        }
+      }
+      if(request.action==="retry"||request.action==="topic"){
+        const active=wiki.topics.filter(topic=>!topic.excluded);const failed=active.filter(topic=>!!topic.error).length;
+        status.error=failed?`Wiki processing failed for ${failed} topics; open Wiki to review and retry`:"";
+        status.wikiProgress={stage:"complete",completed:active.length-failed,total:active.length,failed,currentTitle:"",topicTitle:""};publish();
+      }
       return structuredClone(wiki);});
     hook.setCommand("workbench_read",()=>({document:{id:source.id,title:status.entries[0]!.title,kind:"meeting",revision:"r1",transcript:"TRANSCRIPT_ONLY",outline:"",segments:[],conclusions:[{id:"summary-1",templateName:"会议总结",conclusionText:source.quote}],todos:[],aiContextEnabled:true},markdown:"# 会议\n\nTRANSCRIPT_ONLY",artifacts:{summaries:[],todoSuggestions:[]}}));
     publish();

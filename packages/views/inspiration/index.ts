@@ -32,3 +32,5 @@ export type {
   InspirationVoiceSnapshot,
   InspirationVoiceStopResult,
 } from "./types";
+
+export { InspirationPrivacySupervisor } from "./privacy-supervisor";

@@ -122,7 +122,7 @@ fn preferred(mut doc: Document, manifest: &Manifest) -> Document {
     doc
 }
 
-fn documents(local: &Path, manifest: &Manifest) -> Vec<Document> {
+pub(super) fn documents(local: &Path, manifest: &Manifest) -> Vec<Document> {
     manifest
         .entries
         .values()
@@ -212,7 +212,7 @@ fn restore_refs(value: &mut Value, docs: &[Document]) -> CommandResult<()> {
     Ok(())
 }
 
-async fn request(
+pub(super) async fn request(
     app: &AppHandle,
     session: &Session,
     task: &str,
@@ -262,7 +262,7 @@ fn transport_payload(
         }
     }
     mask_value(&mut evidence);
-    let query = if task == "wiki_catalog" {
+    let query = if matches!(task, "wiki_catalog" | "wiki_topic_match") {
         let mut data: Value =
             serde_json::from_str(query).map_err(|_| "Invalid Wiki catalog context")?;
         mask_value(&mut data);
@@ -339,6 +339,7 @@ fn validate_catalog(
                 .iter()
                 .find(|topic| &topic.id == id)
                 .ok_or("Unknown Wiki catalog topic")?;
+            if old.collection.is_some() { return Err("Catalog cannot change a manual topic definition".into()); }
             if !old.topic_kind.is_empty() && old.topic_kind != row.kind {
                 return Err("Wiki catalog changed topic identity".into());
             }
@@ -441,7 +442,7 @@ fn citations_key(value: &Value) -> Vec<Value> {
         .collect()
 }
 
-fn input_key(doc: &Document, config: &Models) -> String {
+pub(super) fn input_key(doc: &Document, config: &Models) -> String {
     store::digest(
         json!([
             "wiki-auto-source-v2",
@@ -474,21 +475,21 @@ fn page_version(topic: &Topic, docs: &[Document], manifest: &Manifest, config: &
     )
 }
 
-fn compilation_parts(docs: &[Document], evidence: &[Value]) -> CommandResult<Vec<Document>> {
-    compile_sources(docs, evidence)?
+fn compilation_parts(evidence: &[CompilationEvidence]) -> CommandResult<Vec<Document>> {
+    compile_sources(evidence)?
         .into_iter()
         .map(|value| {
-            let source = docs
+            let source = &evidence
                 .iter()
-                .find(|doc| value["id"] == doc.id)
-                .ok_or("Invalid Wiki compilation source")?;
+                .find(|item| value["id"] == item.source.id)
+                .ok_or("Invalid Wiki compilation source")?.source;
             let text = value["text"].as_str().ok_or("Invalid Wiki compilation text")?;
             Ok(analysis::part(source, text.into()))
         })
         .collect()
 }
 
-async fn compile_automatic(
+pub(super) async fn compile_automatic(
     app: &AppHandle,
     state: &WorkbenchState,
     session: &Session,
@@ -497,7 +498,7 @@ async fn compile_automatic(
     manifest: &Manifest,
     root: &Path,
     version: &str,
-) -> CommandResult<Revision> {
+) -> Result<Revision, WikiFailure> {
     let query = format!("{}\n{}\nUser corrections (user-provided context, not verified meeting evidence): {}\nWrite Current situation, Important changes and Open questions in the requested language. Preserve source uncertainty. Do not treat unsupported user notes as meeting facts.",topic.title,topic.purpose,topic.notes);
     let mut evidence = Vec::new();
     let config = models(app, session)?;
@@ -534,16 +535,16 @@ async fn compile_automatic(
                     Value::Null,
                 ),
             )
-            .await?;
+            .await.map_err(|error| WikiFailure::new(error, "analyzing", vec![doc.id.clone()]))?;
             if value["relevant"] != false && value["insufficientEvidence"] != true {
-                evidence.push(value);
+                evidence.push(CompilationEvidence { value, source: part });
             }
         }
     }
     if evidence.is_empty() {
         return Err("No relevant source evidence found for this topic".into());
     }
-    let mut batches: Vec<Vec<Value>> = Vec::new();
+    let mut batches: Vec<Vec<CompilationEvidence>> = Vec::new();
     let mut batch = Vec::new();
     for item in evidence {
         let mut trial = batch.clone();
@@ -554,12 +555,12 @@ async fn compile_automatic(
                     .map_err(|e| e.to_string())?
                     .len()
                     > 50000
-                || compile_sources(docs, &trial).is_err())
+                || compile_sources(&trial).is_err())
         {
             batches.push(std::mem::take(&mut batch));
         }
         batch.push(item);
-        compile_sources(docs, &batch)?;
+        compile_sources(&batch)?;
     }
     if !batch.is_empty() {
         batches.push(batch);
@@ -569,7 +570,7 @@ async fn compile_automatic(
     let mut changes = Vec::new();
     let mut overview = String::new();
     for batch in batches {
-        let parts = compilation_parts(docs, &batch)?;
+        let parts = compilation_parts(&batch)?;
         let key = store::digest(json!(["wiki-auto-compile-v1", version, batch]).to_string());
         let value = cached_compilation(
             root,
@@ -589,7 +590,7 @@ async fn compile_automatic(
                 json!(batch),
             ),
         )
-        .await?;
+        .await.map_err(|error| WikiFailure::new(error, "compiling", parts.iter().map(|part| part.id.clone()).collect()))?;
         if value["insufficientEvidence"] == true {
             continue;
         }
@@ -647,7 +648,7 @@ async fn compile_automatic(
     })
 }
 
-fn publish_automatic(
+pub(super) fn publish_automatic(
     root: &Path,
     current: &mut Topic,
     mut page: Revision,
@@ -797,6 +798,7 @@ pub(super) async fn run(
                 let mut parts = vec![analysis::part(doc, text)];
                 let mut anchors = Vec::new();
                 for topic in &existing {
+                    if topic.collection.is_some() { continue; }
                     if anchors.len() >= 12 {
                         break;
                     }
@@ -874,7 +876,7 @@ pub(super) async fn run(
         require_current(state, session)?;
         let mut values = topics(&root)?;
         for topic in &mut values {
-            if !topic.automatic_key.is_empty() || active.contains_key(&topic.id) {
+            if topic.collection.is_none() && (!topic.automatic_key.is_empty() || active.contains_key(&topic.id)) {
                 topic.source_ids = active
                     .get(&topic.id)
                     .map(|ids| ids.iter().cloned().collect())
@@ -887,7 +889,7 @@ pub(super) async fn run(
     let active_topics: Vec<_> = initial
         .into_iter()
         .filter(|topic| {
-            !topic.excluded
+            topic.collection.is_none() && !topic.excluded
                 && !topic.pinned
                 && !topic.source_ids.is_empty()
                 && !topic
@@ -897,18 +899,27 @@ pub(super) async fn run(
         })
         .collect();
     let total_topics = active_topics.len();
-    for (completed, topic) in active_topics.into_iter().enumerate() {
-        let selected: Vec<_> = docs
-            .iter()
-            .filter(|doc| topic.source_ids.contains(&doc.id))
-            .cloned()
-            .collect();
-        let version = page_version(&topic, &selected, &manifest, &config);
-        if !topic.force_refresh
-            && (topic.last_fingerprint == version || topic.last_attempt_fingerprint == version)
-        {
-            continue;
-        }
+    let mut completed = 0;
+    let pending: Vec<_> = active_topics
+        .into_iter()
+        .filter_map(|topic| {
+            let selected: Vec<_> = docs
+                .iter()
+                .filter(|doc| topic.source_ids.contains(&doc.id))
+                .cloned()
+                .collect();
+            let version = page_version(&topic, &selected, &manifest, &config);
+            if !topic.force_refresh && topic.last_fingerprint == version {
+                completed += 1;
+                None
+            } else if !topic.force_refresh && topic.last_attempt_fingerprint == version {
+                None
+            } else {
+                Some((topic, selected, version))
+            }
+        })
+        .collect();
+    for (topic, selected, version) in pending {
         report_progress(
             app,
             state,
@@ -927,8 +938,8 @@ pub(super) async fn run(
         )
         .await;
         if let Err(error) = &result {
-            if is_service_failure(error) {
-                return Err(error.clone());
+            if is_service_failure(&error.message) {
+                return Err(error.message.clone());
             }
         }
         let _guard = state.serial.lock().await;
@@ -961,19 +972,26 @@ pub(super) async fn run(
                 page.fingerprint = page_fingerprint(current, &latest, &config, &page.citations);
                 if !valid_page(&local, &latest, &page) {
                     current.error = "Sources changed; automatic page discarded".into();
+                    current.failure = Some(WikiFailure::new(&current.error, "validating", current.source_ids.clone()));
                 } else {
                     publish_automatic(&root, current, page, &version)?;
                     current.error.clear();
+                    current.failure = None;
                     current.last_fingerprint = version.clone();
+                    completed += 1;
                 }
             }
-            Err(error) => current.error = error,
+            Err(failure) => {
+                current.error = failure.message.clone();
+                current.failure = Some(failure);
+            }
         }
         current.last_attempt_fingerprint = version;
         current.force_refresh = false;
         save_topics(&root, &values)?;
         persist(app, session, &latest)?;
     }
+    collections::run(app, state, session).await?;
     let embedding_failures = embed_sources(app, state, session, &config, &root, &local).await?;
     let _guard = state.serial.lock().await;
     require_current(state, session)?;
@@ -1003,7 +1021,7 @@ pub(super) fn topic_graph(topics: &[Topic], items: &[Value]) -> Value {
                 && topic.published.is_some()
                 && items
                     .iter()
-                    .any(|item| item["id"] == topic.id && item["inScope"] != false)
+                    .any(|item| item["id"] == topic.id && item["inScope"] != false && item["published"].is_object())
         })
         .collect();
     let nodes: Vec<_> = visible.iter().map(|topic| json!({"id":format!("wiki:{}",topic.id),"wikiId":topic.id,"kind":"wiki",
@@ -1027,6 +1045,15 @@ pub(super) fn topic_graph(topics: &[Topic], items: &[Value]) -> Value {
                 .collect();
             if !sources.is_empty() {
                 edges.push(json!({"id":format!("shared:{}:{}",a.id,b.id),"source":format!("wiki:{}",a.id),"target":format!("wiki:{}",b.id),"kind":"shared_source","sourceIds":sources}));
+            }
+        }
+    }
+    for topic in &visible {
+        if let Some(collection) = &topic.collection {
+            for link in &collection.links {
+                if link.state == "included" && visible.iter().any(|member| member.id == link.target_id) {
+                    edges.push(json!({"id":format!("contains:{}:{}",topic.id,link.target_id),"source":format!("wiki:{}",topic.id),"target":format!("wiki:{}",link.target_id),"kind":"contains_topic"}));
+                }
             }
         }
     }

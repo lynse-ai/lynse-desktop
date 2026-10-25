@@ -40,6 +40,7 @@ pub struct WorkbenchState {
     pub(super) worker: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pub(super) serial: tokio::sync::Mutex<()>,
     sync_requested: tokio::sync::Notify,
+    wiki_requested: AtomicBool,
     refresh_existing: AtomicBool,
     discovery_requested: tokio::sync::Notify,
     epoch: AtomicU64,
@@ -260,6 +261,7 @@ pub(super) fn require_beta(state: &WorkbenchState) -> CommandResult<()> {
 }
 pub(super) fn invalidate_runtime(state: &WorkbenchState) -> CommandResult<Session> {
     state.refresh_existing.store(false, Ordering::SeqCst);
+    state.wiki_requested.store(false, Ordering::SeqCst);
     let generation = state.epoch.fetch_add(1, Ordering::SeqCst) + 1;
     if let Some(worker) = state
         .worker
@@ -441,6 +443,10 @@ pub async fn workbench_bind(
     persist(&app, &session, &manifest)?;
     let status = public_status(&session, &manifest);
     if crate::vault::load_vault_config(&app)?.enabled {
+        state.wiki_requested.store(
+            manifest.phase == "processing" && wiki::ready(&manifest).is_ok(),
+            Ordering::SeqCst,
+        );
         start_worker(&app, &state);
     }
     Ok(status)
@@ -449,6 +455,7 @@ pub async fn workbench_bind(
 #[tauri::command]
 pub async fn workbench_unbind(state: State<'_, WorkbenchState>) -> CommandResult<()> {
     state.refresh_existing.store(false, Ordering::SeqCst);
+    state.wiki_requested.store(false, Ordering::SeqCst);
     state.beta_enabled.store(false, Ordering::SeqCst);
     state.gmail_plugin_enabled.store(false, Ordering::SeqCst);
     state.epoch.fetch_add(1, Ordering::SeqCst);
@@ -479,7 +486,7 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
     let Ok(mut worker) = state.worker.lock() else {
         return;
     };
-    if worker.is_some() {
+    if worker.as_ref().is_some_and(|handle| !handle.inner().is_finished()) {
         return;
     }
     let app = app.clone();
@@ -490,7 +497,12 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                 let Ok(session) = current(&state) else {
                     return;
                 };
-                if let Err(error) = sync::run(&app, &state, &session).await {
+                let result = run_requested_work(
+                    state.wiki_requested.swap(false, Ordering::SeqCst),
+                    wiki::run(&app, &state, &session),
+                    sync::run(&app, &state, &session),
+                ).await;
+                if let Err(error) = result {
                     let _guard = state.serial.lock().await;
                     if is_current(&state, &session) {
                         if let Ok(mut manifest) = load_state(&app, &session) {
@@ -554,6 +566,18 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
             _ = discovery_loop => {}
         }
     }));
+}
+
+async fn run_requested_work(
+    wiki_requested: bool,
+    wiki: impl std::future::Future<Output = CommandResult<()>>,
+    sync: impl std::future::Future<Output = CommandResult<()>>,
+) -> CommandResult<()> {
+    if wiki_requested {
+        wiki.await
+    } else {
+        sync.await
+    }
 }
 
 #[tauri::command]
@@ -933,6 +957,29 @@ pub async fn workbench_regenerate(
     persist(&app, &session, &manifest)
 }
 
+/// Withdraw app-managed plaintext copies after the private record is durable.
+pub(crate) async fn revoke_private_inspiration(app: &AppHandle, id: &str) -> CommandResult<()> {
+    let state = app.state::<WorkbenchState>();
+    let session = match invalidate_runtime(&state) { Ok(session)=>session, Err(_)=>return Ok(()) };
+    let _guard = state.serial.lock().await;
+    require_current(&state,&session)?;
+    let mut manifest=load_state(app,&session)?;
+    let uuid=id.trim_start_matches("inspiration:");
+    let owner=crate::inspiration_private::scope(app)?;
+    let aliases=[id.to_owned(),format!("inspiration:{id}"),format!("inspiration:{owner}:{uuid}")];
+    let (root,_)=roots(app,&session)?;
+    for alias in aliases {
+        manifest.entries.remove(&alias);
+        sync::forget_source(&mut manifest,&alias);
+        manifest.knowledge_uploads.remove(&alias);
+        let (markdown,source)=store::paths(&root,&alias);
+        for path in [markdown.with_extension("incoming.md"),markdown,source] {
+            match fs::remove_file(path) { Ok(())=>{},Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},Err(_)=>return Err("private_source_cleanup_failed".into()) }
+        }
+    }
+    persist(app,&session,&manifest)
+}
+
 #[tauri::command]
 pub async fn workbench_remove_source(
     app: AppHandle,
@@ -1166,6 +1213,28 @@ pub async fn workbench_context(
 #[cfg(test)]
 mod wiki_lifecycle_tests {
     use super::*;
+    #[tokio::test]
+    async fn ready_wiki_retry_runs_without_waiting_for_source_sync() {
+        let state = WorkbenchState::default();
+        state.wiki_requested.store(true, Ordering::SeqCst);
+        let wiki_calls = std::cell::Cell::new(0);
+        let sync_calls = std::cell::Cell::new(0);
+        let result = tokio::time::timeout(std::time::Duration::from_millis(250), run_requested_work(
+            state.wiki_requested.swap(false, Ordering::SeqCst),
+            async { wiki_calls.set(wiki_calls.get() + 1); Ok(()) },
+            async { sync_calls.set(sync_calls.get() + 1); std::future::pending().await },
+        )).await.unwrap();
+        result.unwrap();
+        assert_eq!(wiki_calls.get(), 1);
+        assert_eq!(sync_calls.get(), 0);
+        assert!(!state.wiki_requested.load(Ordering::SeqCst));
+        let result = run_requested_work(false,
+            async { panic!("A normal source sync must not start Wiki first") },
+            async { sync_calls.set(sync_calls.get() + 1); Err("Sync unavailable".into()) },
+        ).await;
+        assert_eq!(result.unwrap_err(), "Sync unavailable");
+        assert_eq!(sync_calls.get(), 1);
+    }
     #[test]
     fn status_exposes_processing_progress_with_skipped_meeting_counts() {
         let mut manifest = Manifest::default();
@@ -1225,7 +1294,9 @@ mod wiki_lifecycle_tests {
         let state = WorkbenchState::default();
         let old = session("account-a", 0);
         *state.session.lock().unwrap() = Some(old.clone());
+        state.wiki_requested.store(true, Ordering::SeqCst);
         let updated = invalidate_runtime(&state).unwrap();
+        assert!(!state.wiki_requested.load(Ordering::SeqCst));
         assert!(require_current(&state, &old).is_err());
         assert!(require_current(&state, &updated).is_ok());
         let another = session("account-b", updated.generation);
@@ -1258,6 +1329,7 @@ pub async fn workbench_knowledge_policy(app: AppHandle, state: State<'_, Workben
 
 #[tauri::command]
 pub async fn workbench_read_for_ai(app: AppHandle, state: State<'_, WorkbenchState>, id: String) -> CommandResult<Value> {
+    if crate::inspiration_private::source_is_protected(&app, &id) { return Err("Encrypted inspirations are unavailable to AI".into()); }
     let session = current(&state)?;
     let value = workbench_read(app.clone(),state,id).await?;
     let authorized = knowledge_cloud::filter_items(&app,&session,vec![value.clone()]).await?;

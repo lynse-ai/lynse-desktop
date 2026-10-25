@@ -354,15 +354,15 @@ fn graph_edges_are_shared_evidence_only_and_outside_topics_are_hidden() {
         ..Default::default()
     };
     let items = vec![
-        json!({"id":"one","inScope":true}),
-        json!({"id":"two","inScope":true}),
+        json!({"id":"one","inScope":true,"published":{}}),
+        json!({"id":"two","inScope":true,"published":{}}),
     ];
     let graph = topic_graph(&[first.clone(), second.clone()], &items);
     assert_eq!(graph["edges"][0]["kind"], "shared_source");
     let graph = topic_graph(
         &[first, second],
         &[
-            json!({"id":"one","inScope":true}),
+            json!({"id":"one","inScope":true,"published":{}}),
             json!({"id":"two","inScope":false}),
         ],
     );
@@ -566,6 +566,143 @@ fn legacy_published_ids_and_exclusions_survive_adoption_without_publishing_draft
 }
 
 #[test]
+fn manual_retry_preserves_completed_pages_catalog_and_progress() {
+    let root = root();
+    let local = root.join("sources");
+    let mut manifest = manifest();
+    manifest.enabled = true;
+    manifest.allow_ai = true;
+    manifest.initial_complete = true;
+    manifest.sync_round = "round".into();
+    manifest.completed_round = "round".into();
+    let source = doc("ready", "work");
+    add(&local, &mut manifest, &source);
+    let mut completed = Topic {
+        id: uuid::Uuid::new_v4().to_string(),
+        title: "Completed".into(),
+        source_ids: vec![source.id.clone()],
+        ..Default::default()
+    };
+    completed.last_fingerprint = page_version(&completed, &[source.clone()], &manifest, &Models::default());
+    completed.last_attempt_fingerprint = completed.last_fingerprint.clone();
+    completed.published = Some(page(&completed, &source, &manifest, "Saved knowledge"));
+    let saved = serde_json::to_value(&completed).unwrap();
+    let failed = Topic {
+        id: uuid::Uuid::new_v4().to_string(),
+        title: "Failed".into(),
+        error: "Model unavailable".into(),
+        last_fingerprint: "previous-success".into(),
+        last_attempt_fingerprint: "failed-attempt".into(),
+        ..Default::default()
+    };
+    let pending = Topic {
+        id: uuid::Uuid::new_v4().to_string(),
+        title: "Pending".into(),
+        ..Default::default()
+    };
+    let pinned = Topic { id: uuid::Uuid::new_v4().to_string(), title: "Pinned".into(), pinned: true, ..failed.clone() };
+    let excluded = Topic { id: uuid::Uuid::new_v4().to_string(), title: "Excluded".into(), excluded: true, ..failed.clone() };
+    let mut values = vec![completed, failed, pending, pinned, excluded];
+    let untouched = serde_json::to_value(&values[2..]).unwrap();
+    manifest.wiki_progress = Some(WikiProgress {
+        stage: "compiling".into(), completed: 1, total: 3, failed: 1, ..Default::default()
+    });
+    manifest.error = "Model unavailable".into();
+    let mut catalog = Catalog::default();
+    catalog.chunks.insert("completed".into(), vec![row(&source)]);
+    catalog.identities.insert("project".into(), "stable-identity".into());
+    catalog.failed.insert("failed".into(), "Invalid Wiki catalog output".into());
+    write_json(&catalog_path(&root), &catalog).unwrap();
+
+    retry_failed_work(&root, &mut values, &mut manifest, None).unwrap();
+
+    let restored = topics(&root).unwrap();
+    assert_eq!(serde_json::to_value(&restored[0]).unwrap(), saved);
+    assert_eq!(serde_json::to_value(&restored[2..]).unwrap(), untouched);
+    assert_eq!(restored[1].last_fingerprint, "previous-success");
+    assert!(restored[1].last_attempt_fingerprint.is_empty());
+    assert!(restored[1].error.is_empty());
+    assert!(!restored[1].force_refresh);
+    let catalog: Catalog = read_json(&catalog_path(&root)).unwrap();
+    assert!(catalog.failed.is_empty());
+    assert!(catalog.chunks.contains_key("completed"));
+    assert_eq!(catalog.identities["project"], "stable-identity");
+    let progress = manifest.wiki_progress.as_ref().unwrap();
+    assert_eq!((progress.completed, progress.total), (1, 3));
+    assert_eq!(manifest.phase, "processing");
+    assert_eq!(restored[0].last_fingerprint, page_version(&restored[0], &[source], &manifest, &Models::default()));
+    assert!(!restored[0].force_refresh);
+    assert!(needs_compilation(&restored[1], &manifest, &Models::default()));
+    assert!(needs_compilation(&restored[2], &manifest, &Models::default()));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn topic_retry_is_scoped_to_the_selected_topic_and_keeps_other_failures() {
+    let root = root();
+    let alias = uuid::Uuid::new_v4().to_string();
+    let mut values: Vec<_> = ["Selected", "Other"].into_iter().map(|title| Topic {
+        id: uuid::Uuid::new_v4().to_string(), title: title.into(), error: "Model unavailable".into(),
+        last_attempt_fingerprint: "attempted".into(), ..Default::default()
+    }).collect();
+    values[0].merged_ids.push(alias.clone());
+    let other = serde_json::to_value(&values[1]).unwrap();
+    let mut catalog = Catalog::default();
+    catalog.failed.insert("failed".into(), "Invalid Wiki catalog output".into());
+    write_json(&catalog_path(&root), &catalog).unwrap();
+    let graph_path = root.join("evidence-graph.json");
+    write_json(&graph_path, &json!({"chunks":{"failed":{"error":"offline"}},"paused":true})).unwrap();
+    let catalog_before = fs::read(catalog_path(&root)).unwrap();
+    let graph_before = fs::read(&graph_path).unwrap();
+    let mut manifest = Manifest {
+        enabled: true, allow_ai: true, initial_complete: true,
+        sync_round: "round".into(), completed_round: "round".into(),
+        error: "Wiki processing failed for 2 topics; open Wiki to review and retry".into(),
+        wiki_progress: Some(WikiProgress { stage: "complete".into(), completed: 3, total: 5, failed: 2, ..Default::default() }),
+        ..Default::default()
+    };
+
+    retry_failed_work(&root, &mut values, &mut manifest, Some(&alias)).unwrap();
+
+    assert!(values[0].error.is_empty());
+    assert!(values[0].last_attempt_fingerprint.is_empty());
+    assert!(!values[0].force_refresh);
+    assert_eq!(serde_json::to_value(&values[1]).unwrap(), other);
+    assert_eq!(fs::read(catalog_path(&root)).unwrap(), catalog_before);
+    assert_eq!(fs::read(graph_path).unwrap(), graph_before);
+    assert_eq!(manifest.error, "Wiki processing failed for 1 topics; open Wiki to review and retry");
+    let progress = manifest.wiki_progress.as_ref().unwrap();
+    assert_eq!((progress.stage.as_str(), progress.completed, progress.total, progress.failed), ("compiling", 3, 5, 1));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn embedding_retry_wakes_processing_without_recompiling_completed_topics() {
+    let root = root();
+    let config = Models::default();
+    let mut manifest = Manifest {
+        enabled: true, allow_ai: true, initial_complete: true,
+        sync_round: "round".into(), completed_round: "round".into(),
+        ..Default::default()
+    };
+    let mut topic = Topic { id: uuid::Uuid::new_v4().to_string(), title: "Complete".into(), ..Default::default() };
+    topic.last_fingerprint = fingerprint(&topic, &manifest, &config);
+    topic.last_attempt_fingerprint = topic.last_fingerprint.clone();
+    let mut values = vec![topic];
+    complete_processing(&mut manifest, &values, 1);
+    manifest.wiki_attempted_fingerprint = inputs_fingerprint(&manifest, &config);
+    assert!(!needs_processing(&mut manifest, &values, &config));
+
+    retry_failed_work(&root, &mut values, &mut manifest, None).unwrap();
+
+    assert!(needs_processing(&mut manifest, &values, &config));
+    assert!(!needs_compilation(&values[0], &manifest, &config));
+    let progress = manifest.wiki_progress.as_ref().unwrap();
+    assert_eq!((progress.completed, progress.total), (1, 1));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn new_session_retries_service_failures_and_keeps_completed_work() {
     let root = root();
     let local = root.join("sources");
@@ -634,17 +771,113 @@ fn automatic_source_chunks_keep_the_remote_text_budget_without_empty_padding() {
 }
 
 #[test]
+fn page_source_snapshots_reuse_reads_and_recheck_changes_on_the_next_request() {
+    let local = root();
+    let mut manifest = manifest();
+    let source = doc("shared", "work");
+    add(&local, &mut manifest, &source);
+    let topic = Topic::default();
+    let mut revision = page(&topic, &source, &manifest, "Saved knowledge");
+    revision.citations = vec![revision.citations[0].clone(); 100];
+    let mut sources = PageSources::new(&local, &manifest);
+    assert!(sources.valid_page(&revision));
+    assert_eq!(sources.documents.len(), 1);
+    fs::write(store::paths(&local, &source.id).0, "Externally changed meeting").unwrap();
+    assert!(sources.valid_page(&revision));
+    assert!(!PageSources::new(&local, &manifest).valid_page(&revision));
+    fs::remove_dir_all(local).unwrap();
+}
+
+#[test]
 fn compilation_snippets_preserve_consent_and_reject_revoked_sources() {
     let local = root();
     let mut manifest = manifest();
     let mut source = doc("compile", "work");
     add(&local, &mut manifest, &source);
     let evidence = json!({"citations":[{"id":source.id,"kind":source.kind,"revision":source.revision,"quote":source.transcript}]});
-    let parts = compilation_parts(&[source.clone()], &[evidence.clone()]).unwrap();
+    let parts = compilation_parts(&[CompilationEvidence { source: source.clone(), value: evidence.clone() }]).unwrap();
     assert!(sync::validate_result(&parts, &manifest, &evidence).is_ok());
     assert_eq!(parts[0].folder_id, "work");
     source.ai_context_enabled = false;
-    let revoked = compilation_parts(&[source], &[evidence.clone()]).unwrap();
+    let revoked = compilation_parts(&[CompilationEvidence { source, value: evidence.clone() }]).unwrap();
     assert!(sync::validate_result(&revoked, &manifest, &evidence).is_err());
+    fs::remove_dir_all(local).unwrap();
+}
+
+#[test]
+fn compilation_preserves_source_quotes_only_used_in_auxiliary_summaries() {
+    let local = root();
+    let mut manifest = manifest();
+    let mut source = doc("compile", "work");
+    source.transcript = "A项目计划下周投放广告。\n上周已增加投放，实际转化效果仍待确认。".into();
+    source.refresh_revision();
+    add(&local, &mut manifest, &source);
+    let reference = |quote: &str| json!({"id":source.id,"kind":source.kind,"revision":source.revision,"quote":quote});
+    let analysis = json!({
+        "summary":"计划下周投放。此前已增加投放，引用：「上周已增加投放，实际转化效果仍待确认。」",
+        "citations":[reference("A项目计划下周投放广告。")]
+    });
+    let batch = [CompilationEvidence { source: source.clone(), value: analysis.clone() }];
+    let parts = compilation_parts(&batch).unwrap();
+    let payload = transport_payload("topic_compile", &parts, "A项目", json!(batch)).unwrap();
+    assert_eq!(payload["sources"][0]["text"], source.transcript);
+    assert_eq!(payload["evidence"], json!([analysis]));
+    let supported = json!({"summary":"投放效果待确认。","citations":[reference("上周已增加投放，实际转化效果仍待确认。") ]});
+    assert!(sync::validate_result(&parts, &manifest, &supported).is_ok());
+    let invented = json!({"summary":"投放有效。","citations":[reference("投放已确认带来收益。") ]});
+    assert!(sync::validate_result(&parts, &manifest, &invented).is_err());
+    fs::remove_dir_all(local).unwrap();
+}
+
+#[test]
+#[ignore = "Requires an explicitly supplied local diagnostic fixture"]
+fn local_wiki_state_source_reads_are_shared_across_pages() {
+    let state = PathBuf::from(std::env::var("LYNSE_WIKI_STATE_PATH").expect("Local state file"));
+    let manifest: Manifest = read_json(&state).unwrap();
+    let local = PathBuf::from(&manifest.sync_root);
+    let wiki = local.parent().unwrap().parent().unwrap().join("Memory")
+        .join(state.parent().unwrap().file_name().unwrap()).join("wiki");
+    let topics = topics(&wiki).unwrap();
+    let started = std::time::Instant::now();
+    let mut sources = PageSources::new(&local, &manifest);
+    let mut pages = 0;
+    let mut citations = 0;
+    for page in topics.iter().filter_map(|topic| topic.published.as_ref()) {
+        for reference in &page.citations {
+            assert!(sources.document(reference).is_some());
+        }
+        assert!(sources.valid_page(page));
+        pages += 1;
+        citations += page.citations.len();
+    }
+    assert!(pages > 0);
+    assert!(sources.documents.len() < citations);
+    println!("Validated {pages} pages, {citations} citations, {} source reads in {} ms", sources.documents.len(), started.elapsed().as_millis());
+}
+
+#[test]
+#[ignore = "Requires an explicitly supplied local diagnostic fixture"]
+fn local_compiler_citation_regression() {
+    let fixture = PathBuf::from(std::env::var("LYNSE_WIKI_DIAGNOSTIC_DIR").expect("Local fixture directory"));
+    let topics: Vec<Topic> = read_json(&fixture.join("topics-local.json")).unwrap();
+    let documents: BTreeMap<String, Document> = read_json(&fixture.join("sources-local.json")).unwrap();
+    let topic = topics.iter().find(|topic| fixture.join(format!("{}-validated-with-complete-source.json", topic.id)).exists()).expect("Previously failed compiler response");
+    let request: Value = read_json(&fixture.join(format!("{}-request.json", topic.id))).unwrap();
+    let source = documents[&topic.source_ids[0]].clone();
+    let evidence = [CompilationEvidence { source, value: request["evidence"][0].clone() }];
+    let parts = compilation_parts(&evidence).unwrap();
+    let payload = transport_payload("topic_compile", &parts, "Local citation regression", json!(evidence)).unwrap();
+    let mut response: Value = read_json(&fixture.join(format!("{}-raw-response.json", topic.id))).unwrap();
+    restore_refs(&mut response, &parts).unwrap();
+    let local = root();
+    let mut manifest = manifest();
+    for part in &parts {
+        add(&local, &mut manifest, part);
+    }
+    sync::validate_result(&parts, &manifest, &response).unwrap();
+    for change in response["changes"].as_array().unwrap() {
+        sync::validate_result(&parts, &manifest, &json!({"citations":change["citations"]})).unwrap();
+    }
+    write_json(&fixture.join("fixed-compiler-request.json"), &payload).unwrap();
     fs::remove_dir_all(local).unwrap();
 }

@@ -20,6 +20,7 @@ interface Props {
   controls?: ReactNode;
   viewKey?: string;
   simple?: boolean;
+  fill?: boolean;
   initialCamera?: GraphCamera;
   onCameraChange?: (camera: GraphCamera) => void;
 }
@@ -28,7 +29,7 @@ interface Drag {
   node: SVGGElement | null; moved: boolean; rotate: boolean;
 }
 
-export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLabel, details, controls, viewKey, simple = false, initialCamera, onCameraChange }: Props) {
+export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLabel, details, controls, viewKey, simple = false, fill = false, initialCamera, onCameraChange }: Props) {
   const { t } = useTranslation();
   const svg = useRef<SVGSVGElement>(null);
   const [svgElement, setSvgElement] = useState<SVGSVGElement | null>(null);
@@ -164,15 +165,15 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
     };
   }, [stop, zoom, svgElement, size]);
 
-  const scene = <div className={(expanded ? "flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg " : "") + "relative bg-background"}>
-    <div className={expanded ? "relative flex min-h-0 flex-1 flex-col" : "relative"}>
+  const scene = <div className={((expanded || fill) ? "flex min-h-0 flex-1 flex-col " : "") + (expanded ? "overflow-hidden rounded-lg " : "") + "relative bg-background"}>
+    <div className={(expanded || fill) ? "relative flex min-h-0 flex-1 flex-col" : "relative"}>
       <div className="absolute end-2 top-2 z-10 flex max-w-[calc(100%-1rem)] flex-wrap gap-1 rounded-md border border-border bg-background p-1">
         {!simple && (["2d", "3d"] as const).map(value => <Button key={value} size="sm" variant={mode === value ? "secondary" : "ghost"} aria-pressed={mode === value} onClick={() => { stop(); schedule({ ...DEFAULT_GRAPH_CAMERA, mode: value }); }}>{value === "2d" ? "2D" : "3D"}</Button>)}
         {[{ icon: ZoomIn, label: "workbench.graph_zoom_in" as const, action: () => zoom(1.25) }, { icon: ZoomOut, label: "workbench.graph_zoom_out" as const, action: () => zoom(0.8) }, { icon: Fullscreen, label: "workbench.graph_reset" as const, action: fit }].map(({ icon: Icon, label, action }) => <Button key={label} size="icon-sm" variant="ghost" aria-label={t(label)} onClick={action}><Icon className="size-4" aria-hidden="true" /></Button>)}
         {!simple && <Button size="sm" variant="ghost" disabled={!selection || !projected.has(selection)} onClick={focusSelection}>{t("workbench.graph_focus")}</Button>}
         {!simple && !expanded && <Button size="icon-sm" variant="ghost" aria-label={t("workbench.graph_expand")} onClick={() => { stop(); setHovered(null); setFocused(null); setExpanded(true); }}><Maximize2 className="size-4" aria-hidden="true" /></Button>}
       </div>
-      <svg ref={mountSvg} viewBox={"0 0 " + size.width + " " + size.height} className={(expanded ? "h-full min-h-0 flex-1 " : (simple ? "h-[clamp(24rem,70dvh,54rem)] " : "h-[clamp(24rem,52dvh,48rem)] ")) + "w-full touch-none select-none cursor-grab outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[dragging=true]:cursor-grabbing"} role="group" tabIndex={0} aria-label={t("workbench.graph_canvas")} data-dragging={dragging}
+      <svg ref={mountSvg} viewBox={"0 0 " + size.width + " " + size.height} className={((expanded || fill) ? "h-full min-h-0 flex-1 " : (simple ? "h-[clamp(24rem,70dvh,54rem)] " : "h-[clamp(24rem,52dvh,48rem)] ")) + "w-full touch-none select-none cursor-grab outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring data-[dragging=true]:cursor-grabbing"} role="group" tabIndex={0} aria-label={t("workbench.graph_canvas")} data-dragging={dragging}
         onPointerDown={event => {
           if (event.button !== 0 || drag.current) return;
           event.preventDefault();
@@ -240,7 +241,7 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
             stroke={active ? "var(--graph-edge-active)" : "var(--graph-edge)"} strokeWidth={active ? (edge.kind === "evidence" ? 1.3 : 1) : 0.55 + near * 0.55}
             strokeDasharray={edge.kind === "evidence" || edge.kind === "shared_source" ? "3 3" : undefined}
             markerEnd={!simple && active && edge.kind !== "evidence" ? "url(#" + arrowId + ")" : undefined}
-            opacity={active ? 0.8 : simple ? (preview ? 0.2 : 0.4) : preview ? 0.06 : 0.06 + near * 0.16}>
+            opacity={active ? 0.8 : simple ? (preview ? 0.2 : 0.4) : preview ? 0.1 : 0.1 + near * 0.4}>
             <title>{t(graphRelationKey[edge.kind as keyof typeof graphRelationKey] ?? "workbench.graph_related")}</title>
           </line>;
         })}</g>

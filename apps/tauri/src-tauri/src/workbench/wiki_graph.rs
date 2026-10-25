@@ -518,7 +518,7 @@ pub(super) fn view(
     let tracking: Tracking = read_json(&path(root))?;
     let docs = sources_for(local, manifest);
     let current: BTreeMap<_, _> = docs.iter().map(|doc| (doc.id.as_str(), doc)).collect();
-    let summaries = summary_sources(local, manifest);
+    let summaries: Vec<_> = docs.iter().filter_map(|doc| schema::summary_source(doc, manifest)).collect();
     let tracking = effective_tracking(&tracking, manifest, &summaries);
     let summary_docs: BTreeMap<_, _> = summaries.iter().map(|doc| (doc.id.as_str(), doc)).collect();
     let mut nodes = BTreeMap::<String, Value>::new();
@@ -591,6 +591,7 @@ pub(super) fn view(
     }
     merge_entities(&mut nodes, &mut edges, &tracking);
     let mut pages = Vec::new();
+    let mut page_sources = PageSources::new(local, manifest);
     for topic in topics
         .iter()
         .filter(|topic| manifest.enabled && manifest.allow_ai && !topic.excluded)
@@ -598,12 +599,12 @@ pub(super) fn view(
         let Some(page) = topic
             .candidate
             .as_ref()
-            .filter(|page| valid_page(local, manifest, page))
+            .filter(|page| page_sources.valid_page(page))
             .or_else(|| {
                 topic
                     .published
                     .as_ref()
-                    .filter(|page| valid_page(local, manifest, page))
+                    .filter(|page| page_sources.valid_page(page))
             })
         else {
             continue;

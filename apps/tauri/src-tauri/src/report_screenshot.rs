@@ -20,6 +20,7 @@ const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(6);
 /// sits in front.
 #[tauri::command(async)]
 pub async fn report_capture_main_screenshot(app: AppHandle) -> CommandResult<Value> {
+    if crate::inspiration_private::has_unlocked(&app) { return Err("private_content_screenshot_disabled".into()); }
     let (tx, rx) = std::sync::mpsc::channel();
     #[cfg(target_os = "macos")]
     {

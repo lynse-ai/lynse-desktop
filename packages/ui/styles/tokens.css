@@ -178,7 +178,7 @@
     --graph-wiki: color-mix(in oklab, var(--graph-node) 88%, var(--background));
     --graph-source: color-mix(in oklab, var(--graph-node) 84%, var(--background));
     --graph-highlight: var(--brand);
-    --graph-edge: var(--graph-node);
+    --graph-edge: var(--muted-foreground);
     --graph-edge-active: var(--graph-highlight);
     --graph-label: var(--muted-foreground);
     --graph-label-active: var(--foreground);

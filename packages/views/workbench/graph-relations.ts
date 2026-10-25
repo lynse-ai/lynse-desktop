@@ -1,11 +1,12 @@
 import { graphPredicateKey } from "./graph-vocabulary";
 import type { GraphEdge, GraphNode, KnowledgeGraph } from "./types";
 
-export type GraphRelationKind = "evidence" | "wiki_link" | "documented_by" | "related" | "shared_source" | "claim";
+export type GraphRelationKind = "evidence" | "wiki_link" | "documented_by" | "related" | "shared_source" | "contains_topic" | "claim";
 export interface GraphRelation { node: GraphNode; incoming: boolean; via: GraphNode[]; edge?: GraphEdge }
 export interface GraphRelationGroup { kind: GraphRelationKind; entries: GraphRelation[] }
 
 export const graphRelationKey = {
+  contains_topic: "workbench.collection_contains",
   claim: "workbench.graph_claims",
   evidence: "workbench.graph_evidence", wiki_link: "workbench.graph_wiki_links",
   documented_by: "workbench.graph_documented", related: "workbench.graph_related", shared_source: "workbench.graph_shared_source",
@@ -27,7 +28,7 @@ export function graphRelations(graph: KnowledgeGraph, selection: string): GraphR
     const node = byId.get(edge.source === selection ? edge.target : edge.source);
     if (!node || node.id === selection) continue;
     direct.add(node.id);
-    const kind = edge.kind === "evidence" || edge.kind === "wiki_link" || edge.kind === "documented_by" ? edge.kind : graphPredicateKey[edge.kind] ? "claim" : "related";
+    const kind = edge.kind === "evidence" || edge.kind === "wiki_link" || edge.kind === "documented_by" || edge.kind === "contains_topic" ? edge.kind : graphPredicateKey[edge.kind] ? "claim" : "related";
     add(kind, node, edge.target === selection, [], kind === "claim" ? edge : undefined);
   }
   // Shared evidence is a discovery path, never a claim of dependency or causation.
@@ -37,7 +38,7 @@ export function graphRelations(graph: KnowledgeGraph, selection: string): GraphR
     const node = byId.get(edge.source), source = byId.get(edge.target);
     if (node && source) add("shared_source", node, false, [source]);
   }
-  return (["claim", "evidence", "wiki_link", "documented_by", "related", "shared_source"] as const).flatMap(kind => {
+  return (["claim", "evidence", "wiki_link", "documented_by", "contains_topic", "related", "shared_source"] as const).flatMap(kind => {
     const entries = [...(groups.get(kind)?.values() ?? [])].sort((a, b) => a.node.title.localeCompare(b.node.title));
     return entries.length ? [{ kind, entries }] : [];
   });

@@ -266,6 +266,7 @@ const en = {
     state_failed: "Interrupted",
   },
   recording_mode: {
+    switch_live_failed: "Could not switch the live translation mode.",
     title: "Live Recording",
     subtitle: "Tap to start recording and capture mic & system audio in real time",
     header_recording: "Recording",

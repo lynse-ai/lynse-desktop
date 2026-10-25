@@ -73,6 +73,7 @@ export {
   Eye,              // Preview mode
   Columns2,         // Split mode
   PanelLeft,        // Collapse / expand left sidebar
+  PanelRight,       // Collapse / expand right sidebar
   Bot,              // AI Chat / AI assistant
 
   // ── Markdown Toolbar ─────────────────────────────────
@@ -109,6 +110,10 @@ export {
   Clock,            // Time-based sort
   MessageCircle,    // Feedback
   Bell,             // Update reminder
+  LockKeyhole,
+  LockKeyholeOpen,
+  Paperclip,
+  ShieldCheck,
   Download,         // Download / update action
   Palette,          // Appearance / theme visual
   UserCircle,       // User profile / account

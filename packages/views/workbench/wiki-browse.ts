@@ -1,7 +1,7 @@
 import type { KnowledgeGraph, SourceRef, WikiChange, WikiTopic } from "./types";
 
 export function browsableTopics(topics: WikiTopic[]): WikiTopic[] {
-  return topics.filter(topic => !topic.excluded && topic.inScope !== false && !!topic.published);
+  return topics.filter(topic => !topic.excluded && topic.inScope !== false && (!!topic.published || !!topic.collection));
 }
 export function topicOverview(topic: WikiTopic): string {
   return topic.published?.overview || topic.purpose || topic.published?.markdown.split("\n").find(line => !!line.trim() && !line.startsWith("#")) || "";
@@ -23,11 +23,23 @@ export function topicDetails(topic: WikiTopic, graph?: KnowledgeGraph) {
   return graph?.nodes.filter(node => ["person", "task", "decision", "risk", "milestone", "document"].includes(node.subtype ?? "") && node.citations.some(reference => sources.has(reference.id))) ?? [];
 }
 export function browsingGraph(topics: WikiTopic[], supplied?: KnowledgeGraph): KnowledgeGraph {
-  const available = browsableTopics(topics);
+  const available = browsableTopics(topics).filter(topic => !!topic.published);
   const ids = new Set(available.map(topic => `wiki:${topic.id}`));
   return {
     nodes: available.map(topic => ({ id: `wiki:${topic.id}`, wikiId: topic.id, kind: "wiki", subtype: topic.topicKind, title: topic.title, description: topicOverview(topic), status: topic.stale ? "stale" : "published", citations: [], updates: [] })),
     edges: supplied?.edges.filter(edge => ids.has(edge.source) && ids.has(edge.target)) ?? [],
     automaticTracking: true, tracking: { processing: false, completed: available.length, total: available.length, failed: 0, error: "" },
   };
+}
+
+export function collectionTimeline(topic: WikiTopic) {
+  const events = (topic.collection?.links ?? []).filter(link => link.state === "included" && !link.error).flatMap(link => link.events.map(event => ({ ...event, topicId: link.targetId })));
+  const unique = new Map<string, typeof events[number]>();
+  for (const event of events) {
+    const key = JSON.stringify([event.text.replace(/\s+/g, " ").trim(), event.date]);
+    const previous = unique.get(key);
+    if (previous) previous.citations = [...new Map([...previous.citations, ...event.citations].map(ref => [JSON.stringify(ref), ref])).values()];
+    else unique.set(key, { ...event, citations: [...event.citations] });
+  }
+  return [...unique.values()].sort((a, b) => b.date.localeCompare(a.date) || a.id.localeCompare(b.id));
 }

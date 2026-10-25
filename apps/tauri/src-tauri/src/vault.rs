@@ -544,7 +544,7 @@ pub fn vault_remove_note(app: AppHandle, file_id: String) -> CommandResult<()> {
 /// markdown's wikilinks can point at them.
 pub(crate) struct VaultEntry {
     pub file_id: String,
-    pub folder: &'static str,
+    pub folder: String,
     pub title: String,
     pub markdown: String,
     /// `(source file, vault-relative target path)` pairs.
@@ -612,6 +612,7 @@ fn entry_markdown(
 /// Obsidian tags), image embeds and an audio wikilink, then the transcript
 /// behind a divider.
 pub(crate) fn build_journal_entry(record: &Value, attachments_root: &Path) -> Option<VaultEntry> {
+    if crate::inspiration_private::protected(record) || record["deletedAt"].is_string() { return None; }
     let id = record.get("id").and_then(Value::as_str)?.to_owned();
     let text = record
         .get("text")
@@ -677,7 +678,8 @@ pub(crate) fn build_journal_entry(record: &Value, attachments_root: &Path) -> Op
             };
             let relative = format!("{VAULT_ATTACHMENTS_FOLDER}/{uuid}/{file}");
             body.push_str(&format!("![[{relative}]]\n"));
-            attachments.push((attachments_root.join(&uuid).join(file), relative));
+            let disk_file = if record["account_scope"].is_string() { format!("{file}.bin") } else { file.to_owned() };
+            attachments.push((attachments_root.join(&uuid).join(disk_file), relative));
         }
     }
     if let Some(audio_file) = record
@@ -687,7 +689,15 @@ pub(crate) fn build_journal_entry(record: &Value, attachments_root: &Path) -> Op
     {
         let relative = format!("{VAULT_ATTACHMENTS_FOLDER}/{uuid}/{audio_file}");
         body.push_str(&format!("\n- [[{relative}|🔊 录音]]\n"));
-        attachments.push((attachments_root.join(&uuid).join(audio_file), relative));
+        let disk_file = if record["account_scope"].is_string() { format!("{audio_file}.bin") } else { audio_file.to_owned() };
+        attachments.push((attachments_root.join(&uuid).join(disk_file), relative));
+    }
+    for file in record["files"].as_array().into_iter().flatten() {
+        let Some(id) = file["file"].as_str().filter(|id|crate::is_safe_asset_file_name(id)) else { continue; };
+        let relative = format!("{VAULT_ATTACHMENTS_FOLDER}/{uuid}/{id}");
+        let disk_file = if record["account_scope"].is_string() {format!("{id}.bin")} else {id.to_owned()};
+        body.push_str(&format!("\n- [[{relative}]]\n"));
+        attachments.push((attachments_root.join(&uuid).join(disk_file), relative));
     }
     if let Some(transcript) = record
         .get("transcript")
@@ -702,7 +712,7 @@ pub(crate) fn build_journal_entry(record: &Value, attachments_root: &Path) -> Op
 
     Some(VaultEntry {
         file_id: id.clone(),
-        folder: VAULT_JOURNAL_FOLDER,
+        folder: VAULT_JOURNAL_FOLDER.to_owned(),
         title,
         markdown: entry_markdown(&id, "journal", created, updated, &[], &tags, &body),
         attachments,
@@ -751,7 +761,7 @@ pub(crate) fn build_task_entry(record: &Value) -> Option<VaultEntry> {
 
     Some(VaultEntry {
         file_id: id.clone(),
-        folder: VAULT_TASKS_FOLDER,
+        folder: VAULT_TASKS_FOLDER.to_owned(),
         title,
         markdown: entry_markdown(&id, "task", created, updated, &extra, &tags, &body),
         attachments: Vec::new(),
@@ -763,7 +773,7 @@ pub(crate) fn build_task_entry(record: &Value) -> Option<VaultEntry> {
 fn write_entry(app: &AppHandle, entry: &VaultEntry) -> CommandResult<()> {
     let config = load_vault_config(app)?;
     let root = entries_root(app, &config)?;
-    let folder = root.join(entry.folder);
+    let folder = root.join(&entry.folder);
     fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
 
     for (source, relative) in &entry.attachments {
@@ -821,11 +831,24 @@ fn write_entry(app: &AppHandle, entry: &VaultEntry) -> CommandResult<()> {
 /// Best-effort mirror write — a failed vault write must never disturb the
 /// store command that called it.
 pub(crate) fn sync_journal(app: &AppHandle, record: &Value) {
-    let attachments_root = match content_dir(app, ContentKind::Inspirations) {
-        Ok(path) => path,
-        Err(_) => return,
+    if crate::inspiration_private::protected(record) { return; }
+    let scoped = record["account_scope"].as_str();
+    let attachments_root = match scoped {
+        Some(owner) if crate::inspiration_private::storage_scope(app).ok().as_deref() == Some(owner) => {
+            let Ok(root)=content_dir(app,ContentKind::KnowledgeMemory) else {return}; root.join(owner).join("Inspirations")
+        },
+        Some(_) => return,
+        None => { let Ok(path)=content_dir(app,ContentKind::Inspirations) else {return}; path },
     };
-    if let Some(entry) = build_journal_entry(record, &attachments_root) {
+    if let Some(mut entry) = build_journal_entry(record, &attachments_root) {
+        if let Some(owner)=scoped {
+            entry.file_id = format!("inspiration:{owner}:{}",record["id"].as_str().unwrap_or("").trim_start_matches("inspiration:"));
+            entry.folder = format!("{VAULT_JOURNAL_FOLDER}/{owner}");
+            for (_,target) in &mut entry.attachments {
+                let previous=target.clone(); *target=previous.replacen("attachments/",&format!("attachments/{owner}/"),1);
+                entry.markdown=entry.markdown.replace(&previous,target);
+            }
+        }
         let _ = write_entry(app, &entry);
     }
 }
@@ -856,7 +879,12 @@ fn remove_entry(app: &AppHandle, id: &str, folder: &str, attachments_subdir: Opt
 /// Remove a journal memo's mirror file (and its copied attachments).
 pub(crate) fn remove_journal(app: &AppHandle, id: &str) {
     let uuid = id.strip_prefix("inspiration:").unwrap_or(id);
-    remove_entry(app, id, VAULT_JOURNAL_FOLDER, Some(uuid));
+    if let Ok(owner)=crate::inspiration_private::scope(app) {
+        remove_entry(app,&format!("inspiration:{owner}:{uuid}"),&format!("{VAULT_JOURNAL_FOLDER}/{owner}"),Some(&format!("{owner}/{uuid}")));
+    }
+    if crate::inspiration_private::stored(app,id).is_ok_and(|row|row["legacyImported"]==true) || !crate::inspiration_cloud::read_binding(app).ok().flatten().is_some_and(|binding|binding.private_v2) {
+        remove_entry(app, id, VAULT_JOURNAL_FOLDER, Some(uuid));
+    }
 }
 
 /// Remove a local todo's mirror file.
@@ -868,6 +896,15 @@ pub(crate) fn remove_task(app: &AppHandle, id: &str) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn private_journals_never_mirror_and_plain_v2_assets_use_scoped_bins() {
+        let id="inspiration:00000000-0000-4000-8000-000000000001";
+        assert!(build_journal_entry(&json!({"id":id,"protection":"e2ee","text":"private canary"}),Path::new("/scoped")).is_none());
+        assert!(build_journal_entry(&json!({"id":id,"protection":"plain","transition":{"id":"t"},"text":"private canary"}),Path::new("/scoped")).is_none());
+        let row=json!({"id":id,"account_scope":"scope","protection":"plain","text":"Normal note","files":[{"file":"00000000-0000-4000-8000-000000000002","name":"报告.pdf"}]});
+        let entry=build_journal_entry(&row,Path::new("/Memory/scope/Inspirations")).unwrap();
+        assert!(entry.attachments[0].0.ends_with("00000000-0000-4000-8000-000000000001/00000000-0000-4000-8000-000000000002.bin"));
+    }
     #[test]
     fn sanitize_keeps_cjk_and_drops_forbidden_chars() {
         assert_eq!(sanitize_file_base_name("产品评审会"), "产品评审会");

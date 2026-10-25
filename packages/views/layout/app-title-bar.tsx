@@ -7,7 +7,7 @@ import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
 import { isTauri, isMacDesktop, useMaximized } from "./use-maximized";
-import { ArrowLeft, ArrowRight, PanelLeft, Minus, Square, Copy, X } from "../icons";
+import { ArrowLeft, ArrowRight, PanelLeft, PanelRight, Minus, Square, Copy, X } from "../icons";
 import { RecordingTitleBarPill, useRecordingPillVisible } from "./recording-title-pill";
 
 export const TITLE_BAR_HEIGHT = 34;
@@ -26,8 +26,10 @@ export const showWindowControls = isTauri && !isMacDesktop;
  * resets the bar to the default route title automatically.
  * ------------------------------------------------------------------------- */
 
-/** A page's collapsible middle column (chat history drawer, notes file list). */
+/** A page's collapsible panel (chat history, notes file list, topic preview). */
 export interface MiddlePanelToggle {
+  /** Which side the panel occupies; only left panels declare panelWidth. */
+  side?: "left" | "right";
   /** True when the panel is currently hidden. */
   collapsed: boolean;
   onToggle: () => void;
@@ -98,7 +100,7 @@ export function TitleBarSlot({
 /* ── The bar ──────────────────────────────────────────────────────────────
  * Layout (ChatGPT-desktop style):
  *
- *   [traffic lights] [back][forward][middle] │ [ centered title ] │ [actions]
+ *   [traffic lights] [back][forward][left panel] │ [title] │ [actions][right panel]
  *
  * The whole strip is a drag region; interactive clusters opt out. Double-
  * click toggles maximize like a native macOS title bar. Pages register their
@@ -129,7 +131,7 @@ export function AppTitleBar() {
     typeof document !== "undefined" &&
     document.documentElement.dataset.windowEffects === "vibrancy";
   const railOffset = vibrant ? 58 : 52;
-  const panelWidth = middleToggle && !middleToggle.collapsed ? middleToggle.panelWidth ?? 0 : 0;
+  const panelWidth = middleToggle && middleToggle.side !== "right" && !middleToggle.collapsed ? middleToggle.panelWidth ?? 0 : 0;
   const panelEdge = panelWidth > 0 ? railOffset + panelWidth : null;
   // The zone divider carries the bar's gap-1 (4px) plus its own mx-1 (4px)
   // before the 1px line; shrink the stretched cluster by the same amount so
@@ -184,7 +186,7 @@ export function AppTitleBar() {
         >
           <ArrowRight className="size-4" />
         </BarButton>
-        {middleToggle && (
+        {middleToggle && middleToggle.side !== "right" && (
           <BarButton
             label={middleToggle.label}
             active={!middleToggle.collapsed}
@@ -219,9 +221,9 @@ export function AppTitleBar() {
         <RecordingTitleBarPill />
       </div>
 
-      {/* Only pages with registered actions get the closing divider; with an
+      {/* Only pages with right-side controls get the closing divider; with an
           empty actions zone the line would just dangle at the window edge. */}
-      {slotActions != null && <ZoneDivider />}
+      {(slotActions != null || middleToggle?.side === "right") && <ZoneDivider />}
 
       {/* ── Right: page actions (same 2px optical correction) ── */}
       <div
@@ -229,6 +231,15 @@ export function AppTitleBar() {
         data-tauri-drag-region={false}
       >
         {slotActions}
+        {middleToggle?.side === "right" && (
+          <BarButton
+            label={middleToggle.label}
+            active={!middleToggle.collapsed}
+            onClick={middleToggle.onToggle}
+          >
+            <PanelRight className="size-4" />
+          </BarButton>
+        )}
       </div>
 
       {showWindowControls && <WindowControls />}

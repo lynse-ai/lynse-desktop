@@ -687,6 +687,39 @@ export async function installTauriBridge(): Promise<void> {
     },
     inspiration: {
       list: () => command("inspiration_list"),
+      read: (id: string) => command("inspiration_private_read", { id }),
+      pickFiles: async () => { const selected = await open({ multiple: true, directory: false }); return Array.isArray(selected) ? selected : selected ? [selected] : []; },
+      stageFile: (path: string) => command("inspiration_stage_file", { path }),
+      exportFile: async (id: string, file: string, name: string) => {
+        const destination = await save({ defaultPath: name });
+        if (!destination) return false;
+        await command("inspiration_export_file", { id, file, destination });
+        return true;
+      },
+      privacy: {
+        status: () => command("inspiration_vault_status"),
+        confirmRecovery: () => command<void>("inspiration_vault_confirm_recovery"),
+        initialize: (password: string) => command("inspiration_vault_initialize", { password }),
+        unlock: async (password: string) => {
+          const result = await command("inspiration_vault_unlock", { password });
+          try { await command("inspiration_vault_refresh", { password }); }
+          catch (error) { if (String(error) !== "cloud_offline") { await command("inspiration_vault_lock"); throw error; } }
+          return result;
+        },
+        lock: () => command<void>("inspiration_vault_lock"),
+        touch: () => command<void>("inspiration_vault_touch"),
+        changePassword: (password: string) => command<void>("inspiration_vault_change_password", { password }),
+        recover: (password: string, recoveryCode: string) => command("inspiration_vault_recover", { password, recoveryCode }),
+        toggle: (id: string) => command("inspiration_toggle_protection", { id }),
+        requestDevice: (password: string) => command("inspiration_vault_pair_request", { password }),
+        approveDevice: (requestId: string, expectedFingerprint: string) => command("inspiration_vault_pair_approve", { requestId, expectedFingerprint }),
+        finishDevice: (requestId: string, password: string) => command("inspiration_vault_pair_finish", { requestId, password }),
+        devices: () => command("inspiration_vault_devices"),
+        rotate: (revoke: string[], password: string, fullReencrypt: boolean) => command("inspiration_vault_rotate", { revoke, password, fullReencrypt }),
+        legacy: () => command("inspiration_legacy_status"),
+        claimLegacy: () => command("inspiration_claim_legacy", { acknowledge: true }),
+        onLocked: (callback: () => void) => getCurrentWebview().listen("inspiration-vault-locked", () => callback()),
+      },
       save: (inspiration: unknown) => command("inspiration_save", { inspiration }),
       delete: (id: string) => command("inspiration_delete", { id }),
       transcribe: (id: string) => command("inspiration_transcribe", { id }),
@@ -711,8 +744,8 @@ export async function installTauriBridge(): Promise<void> {
       voiceStop: () => command("inspiration_voice_stop"),
       voiceCancel: () => command("inspiration_voice_cancel"),
       voiceState: () => command("inspiration_voice_state"),
-      cloudBind: (userId: string, apiBase: string) =>
-        command("inspiration_cloud_bind", { userId, apiBase }),
+      cloudBind: (userId: string, apiBase: string, token: string, backendHost: string) =>
+        command("inspiration_cloud_bind", { userId, apiBase, token, backendHost }),
       cloudUnbind: () => command<void>("inspiration_cloud_unbind"),
       cloudStatus: () => command("inspiration_cloud_status"),
       cloudSync: (token: string) => command("inspiration_cloud_sync", { token }),

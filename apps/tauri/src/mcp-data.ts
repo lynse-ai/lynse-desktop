@@ -49,7 +49,7 @@ function pick(row: Row, keys: string[]): Row {
   return Object.fromEntries(keys.filter((key) => row[key] !== undefined).map((key) => [key, row[key]]));
 }
 function shareable(row: Row): boolean {
-  return row.aiContextEnabled !== false && row.sensitivity !== "restricted";
+  return row.protection !== "e2ee" && !row.transition && row.locked !== true && row.aiContextEnabled !== false && row.sensitivity !== "restricted";
 }
 function find(rows: Row[], id: string): Row {
   const row = rows.find((item) => item.id === id);
@@ -197,7 +197,9 @@ export function currentMcpDependencies(): McpDataDependencies {
   return {
     authorizeSources: async (ids, kind) => {
       if (kind === "note") {
-        const key = (id: string) => id.startsWith("inspiration:") ? id : `inspiration:${id}`;
+        const scope = (await getDesktopInspirationApi()?.privacy?.status())?.accountScope;
+        if (!scope) return [];
+        const key = (id: string) => `inspiration:${scope}:${id.replace(/^inspiration:/, "")}`;
         const keys = ids.map(key);
         const allowed = (await memoryApi.knownSourceEligibility(keys)).allowed_source_ids;
         return ids.filter(id => allowed.includes(key(id)));
@@ -220,7 +222,7 @@ export function currentMcpDependencies(): McpDataDependencies {
     notes: async () => {
       const rows = await getDesktopInspirationApi()?.list() as unknown as Row[] ?? [];
       const scope = useWorkbench.getState().status?.scope;
-      return rows.filter((row) => !row.workbenchScope || row.workbenchScope === scope);
+      return rows.filter((row) => row.protection !== "e2ee" && !row.transition && (!row.workbenchScope || row.workbenchScope === scope));
     },
     todos: async () => {
       const bridge = (window as Window & { desktopAPI?: { todo?: { list: () => Promise<Row[]> } } }).desktopAPI;

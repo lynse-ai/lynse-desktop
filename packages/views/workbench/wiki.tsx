@@ -19,6 +19,7 @@ import { getWorkbenchApi, refreshWorkbench, useWorkbench, useWikiEnabled } from 
 import { useNavigation } from "../navigation";
 import { DEFAULT_EMBEDDING_MODEL, embeddingModelError } from "./embedding-model";
 import { workbenchErrorCopy } from "./errors";
+import { WikiFailures } from "./wiki-failures";
 import type { SourceRef, WikiModelsConfig, WikiRequest, WikiTopic } from "./types";
 
 const defaultModels: WikiModelsConfig = { embedding: DEFAULT_EMBEDDING_MODEL };
@@ -38,7 +39,7 @@ export function useWiki() {
   async function mutate(request: WikiRequest) {
     if (!bridge || busy) return;
     setBusy(true);
-    try { qc.setQueryData(queryKey, await bridge.wiki(request)); }
+    try { const result = await bridge.wiki(request); qc.setQueryData(queryKey, result); return result; }
     catch (error) { toast.error(String(error)); throw error; }
     finally { setBusy(false); }
   }
@@ -55,22 +56,15 @@ export function WikiStatus() {
 
 export function WikiAttention() {
   const { t } = useTranslation();
-  const navigation = useNavigation();
   const wiki = useWiki();
   const failures = wiki.data?.topics.filter((topic) => !!topic.error && !topic.excluded) ?? [];
   const errorCount = workbenchErrorCopy(wiki.status?.error ?? "")?.count ?? 0;
-  if (!failures.length && !errorCount) return null;
-  return <section className="space-y-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4" aria-label={t("workbench.wiki_attention")}>
-    <h2 className="text-sm font-medium">{t("workbench.wiki_attention")}</h2>
-    {wiki.isPending && <p role="status" className="text-xs text-muted-foreground">{t("workbench.wiki_loading_topics")}</p>}
-    {wiki.error && <div className="space-y-2"><p role="alert" className="text-xs text-destructive">{t("workbench.wiki_load_failed")}</p><Button size="sm" variant="outline" onClick={() => void wiki.refetch()}>{t("workbench.retry")}</Button></div>}
-    {!wiki.isPending && !wiki.error && !failures.length && <div className="space-y-2"><p className="text-xs text-muted-foreground">{t("workbench.wiki_refresh_topics")}</p><Button size="sm" variant="outline" onClick={() => void Promise.all([refreshWorkbench(), wiki.refetch()]).catch(() => undefined)}>{t("workbench.retry")}</Button></div>}
-    {failures.map((topic) => { const copy = workbenchErrorCopy(topic.error); return <div key={topic.id} className="space-y-2">
-      <h3 className="text-sm font-medium">{topic.title}</h3>
-      <p className="text-xs leading-relaxed text-destructive">{copy ? t(copy.key, { count: copy.count }) : topic.error}</p>
-      <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => { useWorkbench.getState().close(); navigation.replace(`/memory?tab=wiki&topic=${encodeURIComponent(topic.id)}`); const target = document.getElementById(`wiki-topic-${topic.id}`); target?.scrollIntoView({ block: "start" }); target?.focus({ preventScroll: true }); }}>{t("workbench.wiki_view_topic")}</Button><Button size="sm" disabled={wiki.busy || !wiki.status?.enabled || !wiki.status.allowAi || topic.pinned} onClick={() => void wiki.mutate({ action: "retry", id: topic.id }).catch(() => undefined)}>{t("workbench.retry")}</Button></div>
-    </div>; })}
-  </section>;
+  return <>
+    {!!errorCount && wiki.isPending && <p role="status" className="text-xs text-muted-foreground">{t("workbench.wiki_loading_topics")}</p>}
+    {!!errorCount && wiki.error && <div className="space-y-2"><p role="alert" className="text-xs text-destructive">{t("workbench.wiki_load_failed")}</p><Button size="sm" variant="outline" onClick={() => void wiki.refetch()}>{t("workbench.retry")}</Button></div>}
+    {!!errorCount && !wiki.isPending && !wiki.error && !failures.length && <div className="space-y-2"><p className="text-xs text-muted-foreground">{t("workbench.wiki_refresh_topics")}</p><Button size="sm" variant="outline" onClick={() => void Promise.all([refreshWorkbench(), wiki.refetch()]).catch(() => undefined)}>{t("workbench.retry")}</Button></div>}
+    <WikiFailures wiki={wiki} />
+  </>;
 }
 export function WikiModels() {
   const wiki = useWiki();
@@ -143,7 +137,7 @@ export function WikiSources() {
   </section>;
 }
 
-export function WikiTopicContent({ topic, mutate, busy, canPublish, onSource }: { topic: WikiTopic; mutate: (request: WikiRequest) => Promise<void>; busy: boolean; canPublish: boolean; onSource?: (source: SourceRef) => void; reading?: boolean }) {
+export function WikiTopicContent({ topic, mutate, busy, canPublish, onSource }: { topic: WikiTopic; mutate: (request: WikiRequest) => Promise<unknown>; busy: boolean; canPublish: boolean; onSource?: (source: SourceRef) => void; reading?: boolean }) {
   const { t } = useTranslation();
   const navigation = useNavigation();
   const [notes, setNotes] = useState(topic.notes);

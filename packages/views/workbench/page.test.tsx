@@ -18,7 +18,7 @@ vi.mock("./api", () => ({
   useWorkbench: (selector: (state: unknown) => unknown) => selector({ status: { scope: "account", enabled: true, allowAi: true, automation: {} }, error: null }),
 }));
 vi.mock("./memory-management", () => ({ MemoryManagementPage: () => <main aria-label="Memory management">Existing shared long-term memory</main> }));
-vi.mock("./wiki", () => ({ useWiki: () => ({ busy: false }) }));
+vi.mock("./wiki", () => ({ useWiki: () => ({ busy: false }), WikiAttention: () => <section aria-label="Topics needing attention">Topic recovery actions</section> }));
 vi.mock("./wiki-workspace", () => ({ WikiWorkspace: () => <p>Current meeting knowledge</p> }));
 vi.mock("./memory-library", () => ({ MemoryLibrary: () => <p>Existing shared long-term memory</p> }));
 vi.mock("./components", () => ({ WorkbenchSettingsContent: () => null }));
@@ -50,6 +50,7 @@ describe("existing memory links", () => {
   it("does not mount the legacy file editor behind knowledge browsing", () => {
     render(<Harness initialPath="/memory?tab=wiki" />);
     expect(screen.queryByText("Existing shared long-term memory")).toBeNull();
+    expect(screen.getByRole("region", { name: "Topics needing attention" })).toBeTruthy();
   });
 
   it("keeps topic, source and directory parameters through knowledge settings", () => {

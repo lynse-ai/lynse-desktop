@@ -30,6 +30,7 @@ mod todo_state;
 static TODO_STATE_LOCK: Mutex<()> = Mutex::new(());
 mod desktop_mcp;
 mod inspiration_cloud;
+mod inspiration_private;
 mod inspiration_voice;
 mod meeting_detector;
 mod feishu;
@@ -140,6 +141,7 @@ fn app_data_dir(app: &AppHandle) -> CommandResult<PathBuf> {
 }
 
 pub(crate) fn local_store_path(app: &AppHandle, directory: &str) -> CommandResult<PathBuf> {
+    if directory == "local-inspirations" { return inspiration_private::index_path(app); }
     let path = app_data_dir(app)?.join(directory).join("index.json");
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -2586,7 +2588,8 @@ fn todo_delete(app: AppHandle, id: String) -> CommandResult<()> {
 /// the legacy `<app_data>/inspirations/<uuid>/`. Records store relative file
 /// names only, so relocating the root needs no index rewrite.
 pub(crate) fn inspiration_dir(app: &AppHandle, uuid: &str) -> CommandResult<PathBuf> {
-    Ok(vault::content_dir(app, vault::ContentKind::Inspirations)?.join(uuid))
+    if inspiration_cloud::read_binding(app)?.is_some_and(|b| b.private_v2) { return inspiration_private::directory(app, uuid); }
+    Ok(vault::content_dir(app, vault::ContentKind::Inspirations)?.join(inspiration_private::storage_scope(app)?).join(uuid))
 }
 
 /// Create: fresh attachments arrive as `pendingAudioPath` / `pendingImages`
@@ -2780,6 +2783,9 @@ fn save_inspiration(app: &AppHandle, inspiration: Value) -> CommandResult<Value>
 /// the model is installed.
 fn transcribe_inspiration(app: &AppHandle, record: Value, audio_path: PathBuf) -> CommandResult<Value> {
     let id = record.get("id").and_then(Value::as_str).ok_or("Record id is required")?.to_owned();
+    if inspiration_private::protected(&record) { return Err("encrypted_ai_forbidden".into()); }
+    let owner = inspiration_private::storage_scope(app)?;
+    let binding_generation = app.state::<inspiration_private::PrivateState>().binding_generation.load(std::sync::atomic::Ordering::SeqCst);
     let audio_file = record.get("audio")
         .and_then(|audio| audio.get("file"))
         .and_then(Value::as_str)
@@ -2791,6 +2797,7 @@ fn transcribe_inspiration(app: &AppHandle, record: Value, audio_path: PathBuf) -
     // transcript state already landed — a slow transcription must never
     // overwrite newer state (plan T7.2).
     let write_back = |app: &AppHandle, transcript: Option<&str>, status: &str, error: Option<&str>| -> CommandResult<Option<Value>> {
+        if inspiration_private::storage_scope(app)? != owner || app.state::<inspiration_private::PrivateState>().binding_generation.load(std::sync::atomic::Ordering::SeqCst) != binding_generation { return Err("account_changed".into()); }
         let current = match get_store_value(app, "local-inspirations", &id)? {
             Some(current) => current,
             None => return Ok(None),
@@ -2799,7 +2806,7 @@ fn transcribe_inspiration(app: &AppHandle, record: Value, audio_path: PathBuf) -
             .and_then(|audio| audio.get("file"))
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if current_audio != audio_file
+        if inspiration_private::protected(&current) || current_audio != audio_file
             || current.get("transcriptStatus").and_then(Value::as_str) != Some("pending")
         {
             return Ok(None);
@@ -2855,16 +2862,23 @@ fn transcribe_inspiration(app: &AppHandle, record: Value, audio_path: PathBuf) -
 }
 
 #[tauri::command]
-fn inspiration_list(app: AppHandle) -> CommandResult<Vec<Value>> { list_store(&app, "local-inspirations") }
+fn inspiration_list(app: AppHandle) -> CommandResult<Vec<Value>> {
+    if inspiration_cloud::read_binding(&app)?.is_some_and(|b| b.private_v2) { return inspiration_private::list(&app); }
+    list_store(&app, "local-inspirations")
+}
 
 /// Async: adopting attachments copies multi-megabyte images on disk, which
 /// must not run on the main thread (sync commands are main-thread bound).
 #[tauri::command(async)]
-fn inspiration_save(app: AppHandle, inspiration: Value) -> CommandResult<Value> { save_inspiration(&app, inspiration) }
+fn inspiration_save(app: AppHandle, inspiration: Value) -> CommandResult<Value> {
+    if inspiration["protection"] == "e2ee" || inspiration_cloud::read_binding(&app)?.is_some_and(|b| b.private_v2) { return inspiration_private::save(&app, inspiration); }
+    save_inspiration(&app, inspiration)
+}
 
 /// Async: deleting removes the whole attachment directory from disk.
 #[tauri::command(async)]
 fn inspiration_delete(app: AppHandle, id: String) -> CommandResult<()> {
+    if inspiration_cloud::read_binding(&app)?.is_some_and(|b| b.private_v2) { return inspiration_private::delete(&app, &id); }
     remove_store_value(&app, "local-inspirations", &id)?;
     vault::remove_journal(&app, &id);
     let uuid = id.strip_prefix("inspiration:").unwrap_or(&id);
@@ -2883,18 +2897,9 @@ fn inspiration_delete(app: AppHandle, id: String) -> CommandResult<()> {
 /// the server-derived user id — the shell never trusts a self-reported id
 /// without that verification, and API-Key-only sessions never call it.
 #[tauri::command]
-fn inspiration_cloud_bind(app: AppHandle, userId: String, apiBase: String) -> CommandResult<Value> {
-    if userId.trim().is_empty() || apiBase.trim().is_empty() {
-        return Err("userId and apiBase are required".to_owned());
-    }
-    let binding = inspiration_cloud::AccountBinding {
-        user_id: userId.trim().to_owned(),
-        api_base: apiBase.trim().trim_end_matches('/').to_owned(),
-        verified_at: now(),
-    };
-    inspiration_cloud::write_binding(&app, &binding)?;
-    inspiration_cloud::account_dir(&app, &binding.user_id)?;
-    inspiration_cloud::status_view(&app)
+#[allow(non_snake_case)]
+async fn inspiration_cloud_bind(app: AppHandle, userId: String, apiBase: String, token: String, backendHost: Option<String>) -> CommandResult<Value> {
+    inspiration_private::bind(&app, &apiBase, &token, backendHost.as_deref().unwrap_or(""), &userId).await
 }
 
 /// Logout / account switch: drop the active binding; the per-account queue
@@ -2903,11 +2908,18 @@ fn inspiration_cloud_bind(app: AppHandle, userId: String, apiBase: String) -> Co
 /// account (plan T7.4).
 #[tauri::command]
 fn inspiration_cloud_unbind(app: AppHandle) -> CommandResult<()> {
+    let state=app.state::<inspiration_private::PrivateState>();
+    let _guard=state.serial.lock().map_err(|_|"session_unavailable")?;
+    app.state::<inspiration_private::PrivateState>().binding_generation.fetch_add(1, Ordering::SeqCst);
+    inspiration_private::lock(&app);
+    *app.state::<inspiration_private::PrivateState>().token.lock().map_err(|_| "session_unavailable")? = None;
+    *app.state::<inspiration_private::PrivateState>().transport.lock().map_err(|_| "session_unavailable")? = None;
     inspiration_cloud::clear_binding(&app)
 }
 
 #[tauri::command]
 fn inspiration_cloud_status(app: AppHandle) -> CommandResult<Value> {
+    if inspiration_cloud::read_binding(&app)?.is_some_and(|b| b.private_v2) { return inspiration_private::cloud_status(&app); }
     inspiration_cloud::status_view(&app)
 }
 
@@ -2916,6 +2928,9 @@ fn inspiration_cloud_status(app: AppHandle) -> CommandResult<Value> {
 /// renderer's keychain, never persisted by this module).
 #[tauri::command(async)]
 async fn inspiration_cloud_sync(app: AppHandle, token: String) -> CommandResult<Value> {
+    use sha2::{Digest,Sha256};
+    if !inspiration_cloud::read_binding(&app)?.is_some_and(|binding|binding.token_fingerprint==format!("{:x}",Sha256::digest(token.as_bytes()))) { return Err("account_changed".into()); }
+    if inspiration_cloud::read_binding(&app)?.is_some_and(|b| b.private_v2) { return inspiration_private::cloud::sync(&app, token).await; }
     inspiration_cloud::sync_once(&app, &token).await
 }
 
@@ -2928,7 +2943,8 @@ async fn inspiration_transcribe(app: AppHandle, id: String) -> CommandResult<Val
         .ok_or("Inspiration has no audio")?
         .to_owned();
     let uuid = id.strip_prefix("inspiration:").unwrap_or(&id);
-    let audio_path = inspiration_dir(&app, uuid)?.join(audio_file);
+    let mut audio_path = inspiration_dir(&app, uuid)?.join(&audio_file);
+    if !audio_path.exists() { audio_path = inspiration_dir(&app, uuid)?.join(format!("{audio_file}.bin")); }
     if !audio_path.exists() {
         return Err("灵感音频文件不存在".to_owned());
     }
@@ -2946,6 +2962,10 @@ async fn inspiration_transcribe(app: AppHandle, id: String) -> CommandResult<Val
 
 #[tauri::command]
 fn inspiration_audio_url(app: AppHandle, id: String) -> CommandResult<Option<String>> {
+    if inspiration_cloud::read_binding(&app)?.is_some_and(|b| b.private_v2) {
+        let row = inspiration_private::read(&app, &id)?;
+        return inspiration_private::media_url(&app, &id, row["audio"]["file"].as_str().ok_or("attachment_not_found")?);
+    }
     Ok(get_store_value(&app, "local-inspirations", &id)?.map(|_| {
         format!("local-media://localhost/{}", utf8_percent_encode(&id, NON_ALPHANUMERIC))
     }))
@@ -2998,6 +3018,10 @@ fn staged_image_response(path: &Path, file_name: &str) -> Value {
 }
 
 pub(crate) fn write_staged_image(app: &AppHandle, bytes: Vec<u8>, prefix: &str, extension: &str) -> CommandResult<Value> {
+    if prefix != "report" && inspiration_cloud::read_binding(app)?.is_some_and(|b| b.private_v2) {
+        let bytes=zeroize::Zeroizing::new(bytes);
+        return inspiration_private::stage_bytes(app, &bytes, &format!("{prefix}.{extension}"), mime_guess::from_ext(extension).first_or_octet_stream().as_ref());
+    }
     if bytes.is_empty() {
         return Err("Image payload is empty".to_owned());
     }
@@ -3106,6 +3130,7 @@ async fn inspiration_stage_image_from_clipboard(_app: AppHandle) -> CommandResul
 /// omitted — see [`inspiration_audio_url`]).
 #[tauri::command]
 fn inspiration_image_url(app: AppHandle, id: String, file: String) -> CommandResult<Option<String>> {
+    if inspiration_cloud::read_binding(&app)?.is_some_and(|b| b.private_v2) { return inspiration_private::media_url(&app, &id, &file); }
     Ok(get_store_value(&app, "local-inspirations", &id)?.map(|_| {
         format!(
             "local-media://localhost/{}",
@@ -4079,7 +4104,7 @@ fn resolve_local_media_path(app: &AppHandle, id: String) -> CommandResult<PathBu
         let file = match asset_file {
             Some(file) => file,
             None => {
-                let index = data_dir.join("local-inspirations").join("index.json");
+                let index = local_store_path(app, "local-inspirations")?;
                 let record = read_array(&index)?
                     .into_iter()
                     .find(|value| value.get("id").and_then(Value::as_str) == Some(id.as_str()))
@@ -4095,9 +4120,11 @@ fn resolve_local_media_path(app: &AppHandle, id: String) -> CommandResult<PathBu
         if !is_safe_asset_file_name(&file) {
             return Err("Unsafe local media asset name".to_owned());
         }
-        vault::content_dir(app, vault::ContentKind::Inspirations)?
-            .join(inspiration_uuid)
-            .join(file)
+        let record = get_store_value(app, "local-inspirations", &id)?.ok_or("Unknown inspiration")?;
+        if inspiration_private::protected(&record) { return Err("protected_media_requires_capability".into()); }
+        let allowed = record.get("images").and_then(Value::as_array).is_some_and(|items| items.iter().any(|item| item.get("file").and_then(Value::as_str) == Some(file.as_str()))) || record.get("audio").and_then(|a| a.get("file")).and_then(Value::as_str) == Some(file.as_str());
+        if !allowed { return Err("Unknown inspiration attachment".into()); }
+        inspiration_dir(app, inspiration_uuid)?.join(file)
     } else {
         let index = data_dir.join("local-transcriptions").join("index.json");
         let record = read_array(&index)?
@@ -4175,6 +4202,13 @@ fn media_response_body(app: &AppHandle, request: Request<Vec<u8>>) -> Response<V
         .path()
         .strip_prefix('/')
         .map(|value| percent_decode_str(value).decode_utf8_lossy().into_owned());
+    if let Some(private) = id.as_deref().filter(|id| id.starts_with("private-cap:") || id.starts_with("private-stage:")) {
+        let result = inspiration_private::media_bytes(app, private);
+        return match result {
+            Ok((bytes,mime)) => Response::builder().header(header::CONTENT_TYPE,mime).header(header::CACHE_CONTROL,"no-store").header("Content-Security-Policy","default-src 'none'").header(header::ACCESS_CONTROL_ALLOW_ORIGIN,"*").body(bytes.to_vec()).unwrap(),
+            Err(_) => Response::builder().status(StatusCode::FORBIDDEN).header(header::CACHE_CONTROL,"no-store").body(Vec::new()).unwrap()
+        };
+    }
     let result = (|| -> CommandResult<(PathBuf, u64, u64, bool, u64)> {
         let id = id.ok_or("Missing local media id")?;
         let path = resolve_local_media_path(app, id)?;
@@ -5112,6 +5146,7 @@ pub fn run() {
         .manage(workbuddy::WorkBuddyAcpState::default())
         .manage(desktop_mcp::DesktopMcpState::default())
         .manage(workbench::WorkbenchState::default())
+        .manage(inspiration_private::PrivateState::default())
         .register_asynchronous_uri_scheme_protocol("local-media", |context, request, responder| {
             // WKURLSchemeHandler fires this on the MAIN thread; a long
             // meeting's WAV is 100+ MB, so the file read must leave the main
@@ -5181,9 +5216,19 @@ pub fn run() {
                 install_main_window_zoom_gate(&window);
                 set_main_window_zoom_gated(true);
             }
+            inspiration_private::screen::install(app.handle());
+            let private_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    let expired = private_app.state::<inspiration_private::PrivateState>().unlocked.lock().map(|session| session.as_ref().is_some_and(|s|s.touched.elapsed() >= inspiration_private::IDLE)).unwrap_or(true);
+                    if expired || (inspiration_private::has_session(&private_app) && inspiration_private::screen::locked()) { inspiration_private::lock(&private_app); }
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Focused(false)) && inspiration_private::screen::locked() { inspiration_private::lock(window.app_handle()); }
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 let connections = window.state::<workbuddy::WorkBuddyAcpState>().inner().clone();
                 let owner = window.label().to_string();
@@ -5273,6 +5318,26 @@ pub fn run() {
             local_transcription_track_audio_url,
             sync_upload::sync_upload_audio_size, sync_upload::sync_upload_put_signed_file,
             todo_list, todo_save, todo_delete, todo_add_to_calendar, todo_status_action, todo_capabilities,
+            inspiration_private::migration::inspiration_legacy_status,
+            inspiration_private::migration::inspiration_claim_legacy,
+            inspiration_private::inspiration_vault_status,
+            inspiration_private::inspiration_vault_confirm_recovery,
+            inspiration_private::inspiration_vault_unlock,
+            inspiration_private::inspiration_vault_lock,
+            inspiration_private::inspiration_vault_touch,
+            inspiration_private::inspiration_private_read,
+            inspiration_private::inspiration_vault_change_password,
+            inspiration_private::inspiration_stage_file,
+            inspiration_private::inspiration_export_file,
+            inspiration_private::cloud::inspiration_toggle_protection,
+            inspiration_private::devices::inspiration_vault_initialize,
+            inspiration_private::devices::inspiration_vault_recover,
+            inspiration_private::devices::inspiration_vault_pair_request,
+            inspiration_private::devices::inspiration_vault_pair_approve,
+            inspiration_private::devices::inspiration_vault_pair_finish,
+            inspiration_private::devices::inspiration_vault_devices,
+            inspiration_private::devices::inspiration_vault_refresh,
+            inspiration_private::devices::inspiration_vault_rotate,
             inspiration_list, inspiration_save, inspiration_delete, inspiration_transcribe, inspiration_audio_url,
             inspiration_image_url, inspiration_stage_image, inspiration_stage_image_from_path,
             inspiration_stage_image_from_clipboard, inspiration_capture_from_iphone,

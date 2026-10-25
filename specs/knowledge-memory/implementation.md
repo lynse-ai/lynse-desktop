@@ -27,7 +27,7 @@ The user approved a fresh system on 2026-10-24. The prepared production design u
 - Verified existing dedicated PostgreSQL instance: `postgres-dcsis2lm`, 1 CPU / 2 GiB / 20 GB; its private VPC/subnet were read from the provider API.
 - Existing Memory deployment uses the REST adapter and is not suitable for protocol 4 transactions. It has not been switched to the new implementation yet.
 - `TCB_QcsRole` was denied `postgres:CreateAccount`. The user subsequently postponed database deployment. No database account or schema was created by the denied request.
-- Desktop version is 1.2.0; source commit `037e8bae` is on `codex/desktop-1.2.0`. Named draft build: https://github.com/lynse-ai/lynse-desktop/actions/runs/40064300860 . Stable update publication is a separate step.
+- Desktop version is 1.2.0; source commit `3bcc2c80` is on `codex/desktop-1.2.0`. macOS build: https://github.com/lynse-ai/lynse-desktop/actions/runs/40064300860 ; Windows build: https://github.com/lynse-ai/lynse-desktop/actions/runs/40065841835 . Both completed successfully. The GitHub release remains a draft; stable update publication is a separate step.
 - Production images, schema migration, deployment, gateway acceptance, installer build/signing and stable publication are recorded only after their actual results are verified.
 
 ## Remaining boundaries
@@ -40,4 +40,6 @@ Production operation checks: CloudBase private object-storage write/read/delete 
 
 Desktop artifact acceptance: macOS Apple Silicon 1.2.0 completed Developer ID signing, notarization, stapling and matching installer/updater app-seal checks in CI and on this Mac. Four immutable downloaded artifacts matched GitHub SHA-256 metadata. Five files were uploaded with CloudBase verification to `updates/v1.2.0/`; installer and STT archive returned HTTP 200. Stable updates/latest.json still advertises 1.1.15. The installer is https://dl.lynse.cn/updates/v1.2.0/Lynse_1.2.0_aarch64.dmg .
 
-The first Windows build identified an existing unguarded call to the macOS-only window zoom hook. The call is now compiled only on macOS; a Windows-only rebuild will verify this fix. The workflow supports selecting a platform and uses the current includeUpdaterJson action input.
+The first Windows build identified an existing unguarded call to the macOS-only window zoom hook. The call is now compiled only on macOS; the Windows-only rebuild completed successfully, including sidecar smoke checks and MSI packaging. All Windows downloads matched GitHub SHA-256 metadata. The macOS and Windows updater signatures, key IDs and trusted comments verified against the bundled public key. Native installation on Windows still requires separate acceptance. The workflow supports selecting a platform and uses the current includeUpdaterJson action input.
+
+Windows publication: four files were uploaded with CloudBase verification to the same `updates/v1.2.0/` directory. The MSI and Windows STT archive returned HTTP 200 with the expected lengths. The per-version manifest contains both macOS and Windows platforms; the stable manifest remains 1.1.15. Windows installer: https://dl.lynse.cn/updates/v1.2.0/Lynse_1.2.0_x64_en-US.msi . Both installers are available for manual installation; backend deployment remains postponed.

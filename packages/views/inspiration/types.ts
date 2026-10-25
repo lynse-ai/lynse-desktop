@@ -42,6 +42,29 @@ export type InspirationImage = {
   height?: number;
 };
 
+export type InspirationFile = { file: string; name: string; mime: string; size: number };
+export type InspirationStagedFile = { sourcePath: string; name: string; mime: string; size: number };
+export type InspirationVaultStatus = { accountScope: string; initialized: boolean; unlocked: boolean; enabled: boolean; generation: number; pairing?: boolean; deviceId?: string; recoveryConfirmed?: boolean };
+export interface InspirationPrivacyApi {
+  status: () => Promise<InspirationVaultStatus>;
+  confirmRecovery: () => Promise<void>;
+  initialize: (password: string) => Promise<{ recoveryCode: string; cloudPending: boolean; error?: string }>;
+  unlock: (password: string) => Promise<unknown>;
+  lock: () => Promise<void>;
+  touch: () => Promise<void>;
+  changePassword: (password: string) => Promise<void>;
+  recover: (password: string, recoveryCode: string) => Promise<unknown>;
+  toggle: (id: string) => Promise<InspirationRecord>;
+  requestDevice: (password: string) => Promise<{ requestId: string; fingerprint: string }>;
+  approveDevice: (requestId: string, fingerprint: string) => Promise<unknown>;
+  finishDevice: (requestId: string, password: string) => Promise<unknown>;
+  devices: () => Promise<{ devices: Array<{ id: string; revoked_at: string; key_epoch: number }> }>;
+  rotate: (revoke: string[], password: string, fullReencrypt: boolean) => Promise<{ recoveryCode: string }>;
+  legacy: () => Promise<{ count: number }>;
+  claimLegacy: () => Promise<unknown>;
+  onLocked: (callback: () => void) => Promise<() => void>;
+}
+
 /** A staged (not yet saved) image attachment in the capture sheet. */
 export type InspirationStagedImage = {
   /** Absolute path of the staged file; adopted into durable storage on save. */
@@ -54,6 +77,11 @@ export type InspirationStagedImage = {
 
 export type InspirationRecord = {
   id: string;
+  protection?: "plain" | "e2ee";
+  locked?: boolean;
+  historyCleanup?: "none" | "unverified";
+  transition?: { id: string; target?: "plain" | "e2ee"; phase?: "preparing" | "uploading" | "remote" } | null;
+  files?: InspirationFile[];
   /** Raw note text, flomo-style with inline `#tag` markers. */
   text: string;
   tags: string[];
@@ -86,6 +114,9 @@ export type InspirationSyncState = "local" | "syncing" | "synced" | "conflict";
 export type InspirationCloudStatus = {
   bound: boolean;
   userId?: string;
+  accountScope?: string;
+  privateV2?: boolean;
+  privateEnabled?: boolean;
   apiBase?: string;
   cursor?: string;
   pendingOps?: number;
@@ -112,6 +143,9 @@ export type InspirationCloudSyncReport = {
 /** Payload for `inspiration_save`. The backend fills id/timestamps. */
 export type InspirationSaveInput = {
   id?: string;
+  protection?: "plain" | "e2ee";
+  files?: Array<{ file: string }>;
+  pendingFiles?: InspirationStagedFile[];
   text: string;
   tags?: string[];
   /** Absolute path of a just-captured WAV to adopt into durable storage. */
@@ -156,6 +190,11 @@ export type InspirationVoiceEvent =
 /** Desktop-only bridge surface; the web app has no implementation (null). */
 export interface DesktopInspirationApi {
   list: () => Promise<InspirationRecord[]>;
+  read?: (id: string) => Promise<InspirationRecord>;
+  privacy?: InspirationPrivacyApi;
+  pickFiles?: () => Promise<string[]>;
+  stageFile?: (path: string) => Promise<{ path: string; name: string; mime: string; size: number }>;
+  exportFile?: (id: string, file: string, name: string) => Promise<boolean>;
   save: (inspiration: InspirationSaveInput) => Promise<InspirationRecord>;
   delete: (id: string) => Promise<void>;
   transcribe: (id: string) => Promise<InspirationRecord>;
@@ -186,7 +225,7 @@ export interface DesktopInspirationApi {
    * after the renderer verified the Lynse token via `GET /v1/me` and passes
    * the server-derived user id; API-Key sessions never bind.
    */
-  cloudBind: (userId: string, apiBase: string) => Promise<InspirationCloudStatus>;
+  cloudBind: (userId: string, apiBase: string, token: string, backendHost: string) => Promise<InspirationCloudStatus>;
   cloudUnbind: () => Promise<void>;
   cloudStatus: () => Promise<InspirationCloudStatus>;
   cloudSync: (token: string) => Promise<InspirationCloudSyncReport>;

@@ -69,7 +69,7 @@ export async function verifyMemoryIdentity(): Promise<{ userId: string; apiBase:
   const token = api().getToken();
   if (!token) throw new MemoryIdentityError("missing_token", "not logged in with a Lynse account");
   const response = await fetch(`${apiBase}/v1/me`, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { Authorization: `Bearer ${token}`, "X-Lynse-Backend-Host": api().getBaseUrl() },
   });
   let payload: { user_id?: string; error?: { code?: string; message?: string } } = {};
   try {
@@ -92,8 +92,12 @@ export async function verifyMemoryIdentity(): Promise<{ userId: string; apiBase:
 export async function bindInspirationCloud(): Promise<InspirationCloudStatus | null> {
   const desktop = getDesktopInspirationApi();
   if (!desktop || !memoryApiBase()) return null;
-  const { userId, apiBase } = await verifyMemoryIdentity();
-  return desktop.cloudBind(userId, apiBase);
+  const apiBase = memoryApiBase();
+  const token = api().getToken();
+  if (!token) throw new MemoryIdentityError("missing_token", "Sign in first");
+  // Native binding invalidates a different credential before any network wait.
+  // A renderer preflight would leave the previous account active when offline.
+  return desktop.cloudBind("", apiBase, token, api().getBaseUrl());
 }
 
 export async function unbindInspirationCloud(): Promise<void> {

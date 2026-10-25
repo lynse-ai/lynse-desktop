@@ -61,10 +61,12 @@ pub(super) fn local_allows(doc: &Document, manifest: &Manifest) -> bool {
 pub(super) async fn authorize(
     app: &AppHandle, session: &Session, documents: &[Document], purpose: &str,
 ) -> CommandResult<()> {
+    if documents.iter().any(|doc| crate::inspiration_private::source_is_protected(app, &doc.id)) { return Err("Encrypted inspirations are unavailable to AI".into()); }
     let sources: Vec<_> = documents.iter().map(|doc| json!({"source_id":source_id(&doc.id),
         "folder_id":doc.folder_id,"local":doc.id.starts_with("local:"),"revision":doc.revision})).collect();
     let result = request(app,session,"/source-eligibility",Some(json!({"sources":sources,"purpose":purpose})),None).await?;
     let allowed = result["allowed_source_ids"].as_array().ok_or("Cloud source eligibility unavailable")?;
+    if documents.iter().any(|doc|crate::inspiration_private::source_is_protected(app,&doc.id)) { return Err("Encrypted inspirations are unavailable to AI".into()); }
     if documents.iter().any(|doc| !allowed.iter().any(|value| value.as_str() == Some(&source_id(&doc.id)))) {
         return Err("A source is outside the current cloud policy or stopped from automatic use".into());
     }
@@ -84,7 +86,7 @@ pub(super) async fn filter_items(app: &AppHandle, session: &Session, items: Vec<
         } else if let Some(id) = item["id"].as_str().or(item["document"]["id"].as_str()) { identifiers.insert(id.to_owned()); }
     }
     let docs: Vec<_> = identifiers.iter().filter_map(|id| manifest.entries.get(id))
-        .filter_map(|entry| store::read_document(&root,entry).ok()).filter(|doc| local_allows(doc,&manifest)).collect();
+        .filter_map(|entry| store::read_document(&root,entry).ok()).filter(|doc| local_allows(doc,&manifest) && !crate::inspiration_private::source_is_protected(app,&doc.id)).collect();
     let sources: Vec<_> = docs.iter().map(|doc| json!({"source_id":source_id(&doc.id),"folder_id":doc.folder_id,
         "local":doc.id.starts_with("local:"),"revision":doc.revision})).collect();
     let result = request(app,session,"/source-eligibility",Some(json!({"sources":sources})),None).await?;

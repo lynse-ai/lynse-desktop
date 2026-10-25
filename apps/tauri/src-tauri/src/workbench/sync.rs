@@ -750,23 +750,21 @@ pub(super) async fn run(
     // Journal records remain in their existing local store; the knowledge-base
     // record is an indexed view used by the same retrieval path as meetings.
     for row in crate::list_store(app, "local-inspirations")? {
+        if crate::inspiration_private::protected(&row) || row.get("deletedAt").is_some() { continue; }
         if let Some(owner) = row.get("workbenchScope").and_then(Value::as_str) {
             if owner != session.scope {
                 continue;
             }
         } else {
-            let _guard = state.serial.lock().await;
-            require_current(state, session)?;
-            let mut claimed = row.clone();
-            claimed["workbenchScope"] = json!(session.scope);
-            crate::save_store_value(app, "local-inspirations", claimed)?;
+            let known_owner = crate::inspiration_private::scope(app).ok();
+            if row.get("account_scope").and_then(Value::as_str) != known_owner.as_deref() || known_owner.is_none() { continue; }
         }
         let raw_id = string(&row, &["id"]);
         if raw_id.is_empty() {
             continue;
         }
         let mut document = Document {
-            id: format!("inspiration:{raw_id}"),
+            id: format!("inspiration:{}:{}", crate::inspiration_private::scope(app)?, raw_id.strip_prefix("inspiration:").unwrap_or(&raw_id)),
             kind: "inspiration".into(),
             title: string(&row, &["text"]).chars().take(80).collect(),
             transcript: string(&row, &["text", "transcript"]),

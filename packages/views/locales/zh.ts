@@ -264,6 +264,7 @@ const zh = {
     state_failed: "已中断",
   },
   recording_mode: {
+    switch_live_failed: "实时翻译模式切换失败。",
     title: "实时录音",
     subtitle: "点击开始录制，实时捕捉麦克风与系统声音",
     header_recording: "设备录音中",

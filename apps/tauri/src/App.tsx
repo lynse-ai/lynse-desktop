@@ -10,7 +10,7 @@ import { HomePage } from "@lynse/views/home";
 import { ChatPage } from "@lynse/views/chat";
 import { TodoPage } from "@lynse/views/todo";
 import { NotesPage } from "@lynse/views/notes";
-import { InspirationCaptureSheet, InspirationPage } from "@lynse/views/inspiration";
+import { InspirationCaptureSheet, InspirationPage, InspirationPrivacySupervisor } from "@lynse/views/inspiration";
 import { NotificationsPage, AppUpdateNotifier, ContextInboxNotifier } from "@lynse/views/notifications";
 import { SettingsDialog, useWebdavAutoSync } from "@lynse/views/settings";
 import { AboutWindow } from "@lynse/views/about";
@@ -230,6 +230,7 @@ function AppContent() {
           answers. */}
       <BotAuthSupervisor />
       <WorkbenchSupervisor />
+      {featureFlags.inspiration && <InspirationPrivacySupervisor />}
       <WorkbenchDialog />
       <ContextInboxNotifier />
       <AppShell />

@@ -46,6 +46,11 @@ const SCHEMA_VERSION: u32 = 1;
 /// never bind, so the cloud cache never opens (plan T7.4).
 #[derive(Clone, Debug)]
 pub(crate) struct AccountBinding {
+    pub token_fingerprint: String,
+    pub account_scope: String,
+    pub backend_host: String,
+    pub private_v2: bool,
+    pub private_enabled: bool,
     pub user_id: String,
     pub api_base: String,
     pub verified_at: String,
@@ -86,6 +91,11 @@ pub(crate) fn read_binding(app: &AppHandle) -> CommandResult<Option<AccountBindi
         return Ok(None);
     }
     Ok(Some(AccountBinding {
+        token_fingerprint: value.get("tokenFingerprint").and_then(Value::as_str).unwrap_or_default().to_owned(),
+        account_scope: value.get("accountScope").and_then(Value::as_str).unwrap_or_default().to_owned(),
+        backend_host: value.get("backendHost").and_then(Value::as_str).unwrap_or_default().to_owned(),
+        private_v2: value.get("privateV2").and_then(Value::as_bool).unwrap_or(false),
+        private_enabled: value.get("privateEnabled").and_then(Value::as_bool).unwrap_or(false),
         user_id,
         api_base: value.get("apiBase").and_then(Value::as_str).unwrap_or_default().to_owned(),
         verified_at: value.get("verifiedAt").and_then(Value::as_str).unwrap_or_default().to_owned(),
@@ -95,6 +105,11 @@ pub(crate) fn read_binding(app: &AppHandle) -> CommandResult<Option<AccountBindi
 pub(crate) fn write_binding(app: &AppHandle, binding: &AccountBinding) -> CommandResult<()> {
     let path = binding_path(app)?;
     let content = serde_json::to_string_pretty(&json!({
+        "tokenFingerprint": binding.token_fingerprint,
+        "accountScope": binding.account_scope,
+        "backendHost": binding.backend_host,
+        "privateV2": binding.private_v2,
+        "privateEnabled": binding.private_enabled,
         "userId": binding.user_id,
         "apiBase": binding.api_base,
         "verifiedAt": binding.verified_at,
@@ -573,6 +588,10 @@ pub(crate) fn status_view(app: &AppHandle) -> CommandResult<Value> {
         .collect();
     Ok(json!({
         "bound": true,
+        "accountScope": binding.account_scope,
+        "backendHost": binding.backend_host,
+        "privateV2": binding.private_v2,
+        "privateEnabled": binding.private_enabled,
         "userId": binding.user_id,
         "apiBase": binding.api_base,
         "cursor": cache.cursor,

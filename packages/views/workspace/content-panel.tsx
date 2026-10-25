@@ -26,7 +26,6 @@ import { emitPluginEvent } from "../plugins";
 import { SummaryMarkdownEditor } from "./summary-editor";
 import { FloatingMarkdownToolbar } from "./center-panel/markdown-toolbar";
 import { DeleteConfirmDialog } from "./delete-confirm-dialog";
-import { WorkbenchButton } from "../workbench";
 import { AudioPlayer } from "./audio-player";
 import type { AudioPlayerHandle } from "./audio-player";
 import { getDesktopLiveTranslationApi } from "../live-translation/desktop-api";
@@ -834,7 +833,6 @@ export function ContentPanel() {
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col bg-background">
-      {selectedItemId && <div className="flex justify-end border-b border-border/50 px-3"><WorkbenchButton query={selectedTitle ?? ""} id={selectedItemId} /></div>}
       {/* Tab bar */}
       <div className="flex shrink-0 items-center border-b border-border/50 bg-background/80 px-4 backdrop-blur-xl" style={{ height: TAB_BAR_HEIGHT }}>
         <ScrollableTabs activeTab={contentTab}>

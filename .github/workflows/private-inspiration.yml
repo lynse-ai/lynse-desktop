@@ -1,0 +1,33 @@
+name: Private inspiration native checks
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'apps/tauri/src-tauri/src/inspiration_private/**'
+      - 'apps/tauri/src-tauri/Cargo.*'
+      - '.github/workflows/private-inspiration.yml'
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/tauri/src-tauri
+      - name: Materialise compile-only resource
+        shell: bash
+        # Unit tests do not execute or distribute the audio sidecar. Real
+        # sidecars and signed installers remain the release workflow's job.
+        run: |
+          mkdir -p apps/tauri/src-tauri/resources/sidecars
+          touch apps/tauri/src-tauri/resources/sidecars/audio-capture
+      - name: Verify crypto and opaque protocol
+        working-directory: apps/tauri/src-tauri
+        run: cargo test --locked --lib inspiration_private:: -- --test-threads=1

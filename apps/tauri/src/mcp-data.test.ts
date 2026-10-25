@@ -35,6 +35,13 @@ describe("Desktop MCP data access", () => {
     deps.authorizeSources = undefined;
     await expect(readDesktopMcpTool("get_local_meeting", { id: "local-1" }, deps)).rejects.toThrow("eligibility unavailable");
   });
+  it("rejects encrypted and transitioning notes even when a caller marks them AI-enabled", async () => {
+    deps.notes = async () => [{id:"locked",protection:"e2ee",locked:true,text:"cipher canary",aiContextEnabled:true},{id:"opened",protection:"e2ee",locked:false,text:"unlocked canary",aiContextEnabled:true},{id:"changing",protection:"plain",transition:{id:"t"},text:"transition canary",aiContextEnabled:true}];
+    expect(await readDesktopMcpTool("list_local_notes",{},deps)).toEqual({total:0,items:[]});
+    for (const id of ["locked","opened","changing"]) await expect(readDesktopMcpTool("get_local_note",{id},deps)).rejects.toThrow("not shared with AI");
+    expect(deps.authorizeSources).toHaveBeenCalledWith([],"note");
+  });
+
   it("returns local transcripts without provider credentials or file paths", async () => {
     const result = await readDesktopMcpTool("get_local_meeting", {id:"local-1", content:"transcript"}, deps);
     expect(result).toEqual({id:"local-1", title:"Design", transcriptText:"Public transcript"});

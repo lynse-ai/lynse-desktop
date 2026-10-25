@@ -19,8 +19,33 @@ describe("Wiki browsing", () => {
     expect(topicDetails(topic("a"),graph).map(node=>node.id)).toEqual(["person"]);
   });
   it("restores selection and camera within an account and clears them across account changes", () => {
-    const state=useWikiBrowser.getState(); state.setScope("one"); state.update({selectedId:"a",search:"预算",camera:{scale:1.4,x:30,y:15,yaw:0,pitch:0}});
+    const state=useWikiBrowser.getState(); state.setScope("one"); state.update({selectedId:"a",search:"预算",previewOpen:true,camera:{scale:1.4,x:30,y:15,yaw:0,pitch:0}});
     state.setScope("one"); expect(useWikiBrowser.getState().browse.selectedId).toBe("a");
-    state.setScope("two"); expect(useWikiBrowser.getState().browse).toEqual({selectedId:null,search:""});
+    expect(useWikiBrowser.getState().browse.previewOpen).toBe(true);
+    state.setScope("two"); expect(useWikiBrowser.getState().browse).toEqual({selectedId:null,search:"",previewOpen:false});
+  });
+});
+
+describe("Manual topic timeline", () => {
+  it("shows an unpublished manual topic in the directory and waits for publication in the graph", () => {
+    const manual=topic("manual",{published:null,collection:{links:[],status:"pending",completed:0,total:0}});
+    expect(browsableTopics([manual])).toHaveLength(1);
+    expect(browsingGraph([manual]).nodes).toHaveLength(0);
+  });
+  it("sorts event dates newest first, groups undated items last, and combines repeated evidence", async () => {
+    const {collectionTimeline}=await import("./wiki-browse");
+    const manual=topic("manual",{collection:{status:"ready",completed:2,total:2,links:[
+      {targetId:"a",state:"included",manual:false,reason:"",citations:[],fingerprint:"",error:"",events:[
+        {id:"older",text:"Proposed, still unapproved",date:"2026-10-01",dateBasis:"event",citations:[]},
+        {id:"unknown",text:"Date missing",date:"",dateBasis:"unknown",citations:[]},
+        {id:"new",text:"Progress",date:"2026-10-25",dateBasis:"record",citations:topic("a").published!.citations}]},
+      {targetId:"b",state:"included",manual:true,reason:"",citations:[],fingerprint:"",error:"",events:[{id:"same",text:"Progress",date:"2026-10-25",dateBasis:"record",citations:[{...topic("b").published!.citations[0]!,id:"another"}]}]},
+      {targetId:"excluded",state:"excluded",manual:true,reason:"",citations:[],fingerprint:"",error:"",events:[{id:"hidden",text:"Excluded",date:"2026-10-26",dateBasis:"event",citations:[]}]}
+    ]}});
+    const events=collectionTimeline(manual);
+    expect(events.map(event=>event.id)).toEqual(["new","older","unknown"]);
+    expect(events[0]?.citations).toHaveLength(2);
+    expect(events[0]?.dateBasis).toBe("record");
+    expect(events[1]?.text).toContain("unapproved");
   });
 });

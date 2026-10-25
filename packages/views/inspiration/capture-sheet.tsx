@@ -8,11 +8,12 @@ import { cn } from "@lynse/ui/lib/utils";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { featureFlags } from "../feature-flags";
-import { ArrowRight, Camera, Hash, Image as ImageIcon, Lightbulb, ListChecks, Loader2, Mic, Send, X } from "../icons";
+import { ArrowRight, Camera, Hash, Image as ImageIcon, Lightbulb, ListChecks, Loader2, Mic, Send, X, LockKeyhole, LockKeyholeOpen, Paperclip } from "../icons";
 import { useNavigation } from "../navigation";
 import { AudioVisualizer } from "../live-translation/audio-visualizer";
 import { getDesktopInspirationApi } from "./desktop-api";
 import { useInspirationCaptureStore, type CaptureMode } from "./capture-store";
+import { ensureInspirationUnlocked, privacyError, useInspirationPrivacy } from "./privacy-state";
 import { parseHashtags, splitByHashRuns, stripHashtags } from "./tags";
 import { formatVoiceDuration, useInspirationVoice } from "./use-inspiration-voice";
 import { saveTodo, type TodoItem } from "../todo/todo-api";
@@ -20,9 +21,21 @@ import { useTodoStore } from "../todo/use-todos";
 import {
   LINK_RECORD_TAG,
   type InspirationImage,
+  type InspirationFile,
+  type InspirationStagedFile,
   type InspirationStagedImage,
   type InspirationVoiceStopResult,
 } from "./types";
+
+function captureSession() {
+  const privacy = useInspirationPrivacy.getState();
+  const capture = useInspirationCaptureStore.getState();
+  return () => {
+    const current = useInspirationPrivacy.getState();
+    const sheet = useInspirationCaptureStore.getState();
+    return !current.binding && current.accountScope === privacy.accountScope && current.generation === privacy.generation && sheet.open && sheet.editId === capture.editId;
+  };
+}
 
 /** Xiaohongshu-style cap: nine images per inspiration. */
 const MAX_IMAGES = 9;
@@ -95,6 +108,13 @@ export function InspirationCaptureSheet() {
   const [images, setImages] = useState<InspirationStagedImage[]>([]);
   /** Already-saved images of the record being edited (kept files). */
   const [keptImages, setKeptImages] = useState<InspirationImage[]>([]);
+  const [files, setFiles] = useState<InspirationStagedFile[]>([]);
+  const [keptFiles, setKeptFiles] = useState<InspirationFile[]>([]);
+  const [protection, setProtection] = useState<"plain" | "e2ee">("plain");
+  const [privacyBusy, setPrivacyBusy] = useState(false);
+  const accountScope = useInspirationPrivacy((s) => s.accountScope);
+  const generation = useInspirationPrivacy((s) => s.generation);
+  const binding = useInspirationPrivacy((s) => s.binding);
   const [saving, setSaving] = useState(false);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -126,9 +146,15 @@ export function InspirationCaptureSheet() {
   // Shares the feed's query cache so the picker reflects existing tags even
   // when the capture sheet is opened from the home page before visiting it.
   const { data: inspirations = [] } = useQuery({
-    queryKey: ["inspirations"],
+    queryKey: ["inspirations", accountScope],
     queryFn: () => desktopApi!.list(),
-    enabled: Boolean(desktopApi),
+    enabled: Boolean(desktopApi) && !binding,
+  });
+  const { data: editingRecord } = useQuery({
+    queryKey: ["inspiration-detail", accountScope, editId, generation],
+    queryFn: () => desktopApi!.read!(editId!),
+    enabled: !!desktopApi?.read && !!editId && open && !binding,
+    gcTime: 0,
   });
   // Quick-picker source: tags ranked by how many records use them; the
   // reserved link-collection tag stays out of the picker.
@@ -155,17 +181,20 @@ export function InspirationCaptureSheet() {
       return;
     }
     if (prefilledEditId.current === editId) return;
-    const record = inspirations.find((item) => item.id === editId);
+    const record = editingRecord ?? inspirations.find((item) => item.id === editId);
+    if (record?.locked) return;
     if (!record) return;
     prefilledEditId.current = editId;
     setText(record.text);
     setKeptImages(record.images ?? []);
+    setKeptFiles(record.files ?? []);
+    setProtection(record.protection ?? "plain");
     setImages([]);
     setAudio(null);
     setDue("none");
     setMode("note");
     setTagPickerOpen(false);
-  }, [open, editId, inspirations]);
+  }, [open, editId, inspirations, editingRecord]);
 
   const canSave =
     saving
@@ -174,17 +203,25 @@ export function InspirationCaptureSheet() {
         ? true
         : mode === "todo"
           ? Boolean(todoTitle)
-          : Boolean(text.trim() || audio || images.length);
+          : Boolean(text.trim() || audio || images.length || files.length || keptFiles.length);
 
   const reset = useCallback(() => {
     setText("");
     setAudio(null);
     setImages([]);
     setKeptImages([]);
+    setFiles([]);
+    setKeptFiles([]);
+    setProtection("plain");
     setDue("none");
     setMode("note");
     setTagPickerOpen(false);
   }, []);
+
+  useEffect(() => {
+    reset();
+    if (binding) closeCapture();
+  }, [accountScope, binding, reset, closeCapture]);
 
   /** Complete a tag at the caret. When the caret sits right after a dangling
    * `#` (dropped by the # button when the picker opened), only the tag name
@@ -253,7 +290,8 @@ export function InspirationCaptureSheet() {
   );
 
   const addStagedImage = useCallback(
-    async (staged: { path: string; url: string }) => {
+    async (staged: { path: string; url: string }, current = captureSession()) => {
+      if (!current()) return;
       setImages((current) => {
         if (keptImages.length + current.length >= MAX_IMAGES) {
           toast.warning(t("inspiration.image_limit", { count: MAX_IMAGES }));
@@ -262,6 +300,7 @@ export function InspirationCaptureSheet() {
         return [...current, { sourcePath: staged.path, previewUrl: staged.url }];
       });
       const dimensions = await probeDimensions(staged.url);
+      if (!current()) return;
       setImages((current) =>
         current.map((image) =>
           image.sourcePath === staged.path ? { ...image, ...dimensions } : image,
@@ -273,11 +312,13 @@ export function InspirationCaptureSheet() {
 
   const handlePickImages = useCallback(async () => {
     if (!desktopApi) return;
+    const current = captureSession();
     try {
       const picked = await desktopApi.pickImages();
+      if (!current()) return;
       for (const path of picked) {
         const staged = await desktopApi.stageImageFromPath(path);
-        await addStagedImage(staged);
+        await addStagedImage(staged, current);
       }
     } catch (error) {
       toast.error(String(error));
@@ -297,10 +338,11 @@ export function InspirationCaptureSheet() {
       );
       if (files.length === 0) return;
       event.preventDefault();
+      const current = captureSession();
       if (isMac) {
         try {
           const staged = await api.stageImageFromClipboard();
-          await addStagedImage(staged);
+          await addStagedImage(staged, current);
           return;
         } catch {
           /* nothing usable on the pasteboard — fall through to raw transfer */
@@ -309,8 +351,9 @@ export function InspirationCaptureSheet() {
       for (const file of files) {
         try {
           const bytes = new Uint8Array(await file.arrayBuffer());
+          if (!current()) return;
           const staged = await api.stageImage(bytes);
-          await addStagedImage(staged);
+          await addStagedImage(staged, current);
         } catch (error) {
           toast.error(String(error));
         }
@@ -361,8 +404,43 @@ export function InspirationCaptureSheet() {
    * hooks into the note branch: after the note lands, classify it async and
    * promote it to a todo when it looks like one.
    */
+  useEffect(() => {
+    const locked = () => { if (protection === "e2ee") { reset(); closeCapture(); } };
+    window.addEventListener("inspiration-private-lock", locked);
+    return () => window.removeEventListener("inspiration-private-lock", locked);
+  }, [protection, reset, closeCapture]);
+
+  const togglePrivacy = async () => {
+    setPrivacyBusy(true);
+    try {
+      if (!(await ensureInspirationUnlocked())) return;
+      if (editId) {
+        const result = await desktopApi!.privacy!.toggle(editId);
+        setProtection(result.protection ?? "plain");
+        void queryClient.invalidateQueries({ queryKey: ["inspirations"] });
+      } else { setProtection((current) => current === "plain" ? "e2ee" : "plain"); }
+    } catch (error) { toast.error(privacyError(error, t)); } finally { setPrivacyBusy(false); }
+  };
+  const pickFiles = async () => {
+    const current = captureSession();
+    try {
+      if (!(await desktopApi?.privacy?.status())?.enabled) throw new Error("private_storage_unavailable");
+      const paths = await desktopApi?.pickFiles?.() ?? [];
+      if (!current()) return;
+      if (paths.length + files.length + keptFiles.length > 20) throw new Error("too_many_attachments");
+      const staged: InspirationStagedFile[] = [];
+      for (const path of paths) {
+        const file = await desktopApi!.stageFile!(path);
+        staged.push({ sourcePath: file.path, name: file.name, mime: file.mime, size: file.size });
+      }
+      if (!current()) return;
+      setFiles((previous) => [...previous, ...staged]);
+    } catch (error) { toast.error(privacyError(error, t)); }
+  };
+
   const persist = useCallback(async () => {
-    if (saving) return;
+    if (saving || privacyBusy) return;
+    if (protection === "e2ee" && !(await ensureInspirationUnlocked())) return;
     if (mode === "todo") {
       if (!todoTitle) return;
       setSaving(true);
@@ -402,6 +480,9 @@ export function InspirationCaptureSheet() {
       try {
         await api.save({
           id: editId,
+          protection,
+          files: keptFiles.map(({ file }) => ({ file })),
+          pendingFiles: files,
           text,
           tags: parseHashtags(text),
           images: keptImages.map((image) => ({ file: image.file })),
@@ -427,10 +508,12 @@ export function InspirationCaptureSheet() {
       return;
     }
     const api = getDesktopInspirationApi();
-    if (!api || (!text.trim() && !audio && images.length === 0)) return;
+    if (!api || (!text.trim() && !audio && images.length === 0 && files.length === 0)) return;
     setSaving(true);
     try {
       const saved = await api.save({
+        protection,
+        pendingFiles: files,
         text,
         tags: parseHashtags(text),
         ...(audio
@@ -447,7 +530,7 @@ export function InspirationCaptureSheet() {
           : {}),
       });
       // Fire-and-forget: the feed polls while any memo is `pending`.
-      if (audio) void api.transcribe(saved.id).catch(() => {});
+      if (audio && protection !== "e2ee") void api.transcribe(saved.id).catch(() => {});
       void queryClient.invalidateQueries({ queryKey: ["inspirations"] });
       toast.success(t("inspiration.toast_saved"));
       reset();
@@ -457,7 +540,7 @@ export function InspirationCaptureSheet() {
     } finally {
       setSaving(false);
     }
-  }, [audio, closeCapture, due, editId, images, keptImages, mode, queryClient, reset, saving, t, text, todoTitle]);
+  }, [audio, closeCapture, due, editId, images, keptImages, mode, queryClient, reset, saving, t, text, todoTitle, files, keptFiles, protection, privacyBusy]);
 
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -518,6 +601,11 @@ export function InspirationCaptureSheet() {
           <div className="flex min-h-[208px] flex-col gap-2 p-4 pt-3">
             {/* Fixed base height so both capture modes render the same sheet
                 size; the textarea flexes to absorb the leftover space. */}
+            {protection === "e2ee" && <p className="text-xs text-muted-foreground">{t("inspiration_private.no_ai")}</p>}
+            {(files.length > 0 || keptFiles.length > 0) && <div className="flex flex-col gap-1">
+              {keptFiles.map((file) => <div key={file.file} className="flex items-center gap-2 text-xs"><Paperclip className="size-3.5" /><span className="min-w-0 flex-1 truncate">{file.name}</span><button type="button" aria-label={t("inspiration.image_remove")} onClick={() => setKeptFiles((current) => current.filter((item) => item.file !== file.file))}><X className="size-3.5" /></button></div>)}
+              {files.map((file) => <div key={file.sourcePath} className="flex items-center gap-2 text-xs"><Paperclip className="size-3.5" /><span className="min-w-0 flex-1 truncate">{file.name}</span><button type="button" aria-label={t("inspiration.image_remove")} onClick={() => setFiles((current) => current.filter((item) => item.sourcePath !== file.sourcePath))}><X className="size-3.5" /></button></div>)}
+            </div>}
             <div className="flex items-center justify-between">
               {editId ? (
                 <span className="px-1 text-xs font-medium text-foreground">
@@ -727,6 +815,7 @@ export function InspirationCaptureSheet() {
                         <Hash className="size-4" />
                       </Button>
                     )}
+                    <Button variant="ghost" size="icon-sm" title={t("inspiration_private.add_file")} aria-label={t("inspiration_private.add_file")} disabled={files.length + keptFiles.length >= 20} onClick={() => void pickFiles()}><Paperclip className="size-4" /></Button>
                     <Button
                       variant="ghost"
                       size="icon-sm"
@@ -747,7 +836,7 @@ export function InspirationCaptureSheet() {
                         <Camera className="size-4" />
                       </Button>
                     )}
-                    {voiceEnabled && !editId && (
+                    {voiceEnabled && !editId && protection !== "e2ee" && (
                       <Button
                         variant="ghost"
                         size="icon-sm"
@@ -782,6 +871,9 @@ export function InspirationCaptureSheet() {
                 <span className="text-3xs text-muted-foreground/70">
                   {t("inspiration.save_hint")}
                 </span>
+                {mode === "note" && (<Button variant="ghost" size="icon-sm" aria-label={t(protection === "e2ee" ? "inspiration_private.decrypt" : "inspiration_private.encrypt")} title={t(protection === "e2ee" ? "inspiration_private.decrypt" : "inspiration_private.encrypt")} aria-pressed={protection === "e2ee"} disabled={privacyBusy || saving || recording || !!audio} onClick={() => void togglePrivacy()}>
+                      {privacyBusy ? <Loader2 className="size-4 animate-spin" /> : protection === "e2ee" ? <LockKeyhole className="size-4" /> : <LockKeyholeOpen className="size-4" />}
+                    </Button>)}
                 <Button
                   size="sm"
                   disabled={!canSave}

@@ -7,6 +7,8 @@ mod topic_store;
 mod analysis;
 #[path = "wiki_automation.rs"]
 mod automation;
+#[path = "wiki_collections.rs"]
+mod collections;
 pub(super) use automation::{ai_manifest, validate_automation};
 pub(super) fn in_automatic_scope(doc: &Document, manifest: &Manifest) -> bool {
     manifest.wiki_automation.is_some() && automation::allows(doc,manifest)
@@ -81,6 +83,27 @@ pub struct WikiChange {
 }
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
+pub struct WikiFailure {
+    pub message: String,
+    pub stage: String,
+    pub source_ids: Vec<String>,
+    pub occurred_at: String,
+}
+
+impl WikiFailure {
+    fn new(message: impl Into<String>, stage: &str, source_ids: Vec<String>) -> Self {
+        Self { message: message.into(), stage: stage.into(), source_ids, occurred_at: crate::now() }
+    }
+}
+impl From<String> for WikiFailure {
+    fn from(message: String) -> Self { Self::new(message, "preparing", Vec::new()) }
+}
+impl From<&str> for WikiFailure {
+    fn from(message: &str) -> Self { Self::from(message.to_owned()) }
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Topic {
     pub id: String,
     pub merged_ids: Vec<String>,
@@ -96,6 +119,8 @@ pub struct Topic {
     pub last_attempt_fingerprint: String,
     pub force_refresh: bool,
     pub error: String,
+    pub failure: Option<WikiFailure>,
+    pub collection: Option<collections::Collection>,
     pub automatic_key: String,
     pub topic_kind: String,
     pub source_ids: Vec<String>,
@@ -204,6 +229,8 @@ fn resume_session_at(root: &Path, manifest: &mut Manifest) -> CommandResult<()> 
         if !topic.pinned && !topic.excluded && is_service_failure(&topic.error) {
             topic.error.clear();
             topic.last_attempt_fingerprint.clear();
+            topic.failure = None;
+            if let Some(collection) = &mut topic.collection { for link in &mut collection.links { if is_service_failure(&link.error) {link.error.clear();link.fingerprint.clear();} } }
             changed = true;
         }
     }
@@ -491,7 +518,7 @@ fn inputs_fingerprint(manifest: &Manifest, config: &Models) -> String {
     store::digest(json!([config, manifest.sync_root, versions]).to_string())
 }
 fn needs_compilation(topic: &Topic, manifest: &Manifest, config: &Models) -> bool {
-    if topic.pinned || topic.excluded {
+    if topic.collection.is_some() || topic.pinned || topic.excluded {
         return false;
     }
     let version = fingerprint(topic, manifest, config);
@@ -514,6 +541,75 @@ fn needs_processing(manifest: &mut Manifest, topics: &[Topic], config: &Models) 
         manifest.wiki_attempted_fingerprint = inputs.clone();
     }
     pending || manifest.wiki_attempted_fingerprint != inputs
+}
+fn retry_failed_work(
+    root: &Path,
+    topics: &mut [Topic],
+    manifest: &mut Manifest,
+    id: Option<&str>,
+) -> CommandResult<()> {
+    if id.is_some_and(|id| !topics.iter().any(|topic| topic_store::matches_id(topic, id))) {
+        return Err("Topic not found".into());
+    }
+    if id.is_none() {
+        automation::retry(root)?;
+        graph::configure(root, &json!({"action":"tracking_retry"}))?;
+    }
+    if let Some(id) = id {
+        if let Some(topic) = topics.iter_mut().find(|t| topic_store::matches_id(t,id) && t.collection.is_some()) {
+            topic.last_attempt_fingerprint.clear();
+        }
+    }
+    let mut retried = 0;
+    for topic in topics.iter_mut() {
+        if !topic.pinned
+            && !topic.excluded
+            && (topic.force_refresh || !topic.error.is_empty())
+            && id.is_none_or(|id| topic_store::matches_id(topic, id))
+        {
+            // Retry failed work with its validated receipts and completed revision intact.
+            topic.force_refresh = false;
+            if let Some(collection) = &mut topic.collection {
+                for link in &mut collection.links { if !link.error.is_empty() { link.fingerprint.clear(); link.error.clear(); } }
+            }
+            topic.last_attempt_fingerprint.clear();
+            topic.error.clear();
+            topic.failure = None;
+            retried += 1;
+        }
+    }
+    save_topics(root, topics)?;
+    let failed = topics
+        .iter()
+        .filter(|topic| !topic.excluded && !topic.error.is_empty())
+        .count();
+    if id.is_none() || manifest.error.starts_with("Wiki processing failed for ") {
+        manifest.error = if failed == 0 {
+            String::new()
+        } else {
+            format!("Wiki processing failed for {failed} topics; open Wiki to review and retry")
+        };
+    }
+    // Embedding-only failures must also re-enter the worker without refreshing completed topics.
+    manifest.wiki_attempted_fingerprint.clear();
+    if ready(manifest).is_ok() {
+        manifest.phase = "processing".into();
+        let progress = manifest.wiki_progress.get_or_insert_with(|| WikiProgress {
+            stage: "preparing".into(),
+            ..Default::default()
+        });
+        if progress.stage == "complete" {
+            progress.stage = "compiling".into();
+            progress.current_title.clear();
+            progress.topic_title.clear();
+        }
+        progress.failed = if id.is_none() {
+            0
+        } else {
+            progress.failed.saturating_sub(retried)
+        };
+    }
+    Ok(())
 }
 fn complete_processing(manifest: &mut Manifest, topics: &[Topic], embedding_failures: usize) {
     let active: Vec<_> = topics.iter().filter(|topic| !topic.excluded).collect();
@@ -908,20 +1004,46 @@ fn sources_for(root: &Path, manifest: &Manifest) -> Vec<Document> {
         .collect()
 }
 fn valid_page(root: &Path, manifest: &Manifest, page: &Revision) -> bool {
-    if page.citations.is_empty()
-        || (matches!(page.review.as_str(), "approved" | "auto_validated") && page.content_hash != store::digest(&page.markdown))
-    {
-        return false;
+    PageSources::new(root, manifest).valid_page(page)
+}
+
+struct PageSources<'a> {
+    root: &'a Path,
+    manifest: &'a Manifest,
+    documents: std::collections::BTreeMap<(String, String), Option<Document>>,
+}
+
+impl<'a> PageSources<'a> {
+    fn new(root: &'a Path, manifest: &'a Manifest) -> Self {
+        Self { root, manifest, documents: Default::default() }
     }
-    let mut seen = std::collections::BTreeSet::new();
-    let docs: Vec<_> = page
-        .citations
-        .iter()
-        .filter(|reference| seen.insert(reference.id.as_str()))
-        .filter_map(|r| manifest.entries.get(&r.id).and_then(|entry| store::read_document(root, entry).ok()).map(|doc| automation::citation_document(doc, manifest, &r.kind)))
-        .filter(|doc| automation::allows(doc, manifest))
-        .collect();
-    sync::validate_result(&docs, manifest, &json!({"citations":page.citations})).is_ok()
+
+    fn document(&mut self, reference: &SourceRef) -> Option<&Document> {
+        let root = self.root;
+        let manifest = self.manifest;
+        self.documents.entry((reference.id.clone(), reference.kind.clone()))
+            .or_insert_with(|| {
+                manifest.entries.get(&reference.id)
+                    .and_then(|entry| store::read_document(root, entry).ok())
+                    .map(|doc| automation::citation_document(doc, manifest, &reference.kind))
+                    .filter(|doc| automation::allows(doc, manifest))
+            }).as_ref()
+    }
+
+    fn valid_page(&mut self, page: &Revision) -> bool {
+        if page.citations.is_empty()
+            || (matches!(page.review.as_str(), "approved" | "auto_validated")
+                && page.content_hash != store::digest(&page.markdown))
+        {
+            return false;
+        }
+        let manifest = self.manifest;
+        page.citations.iter().all(|reference| {
+            self.document(reference).is_some_and(|doc| {
+                sync::validate_result(std::slice::from_ref(doc), manifest, &json!({"citations":[reference]})).is_ok()
+            })
+        })
+    }
 }
 pub(super) fn context(
     app: &AppHandle,
@@ -989,35 +1111,48 @@ fn analysis_citations(result: &Value) -> impl Iterator<Item = &Value> {
         .flat_map(|item| item["citations"].as_array().into_iter().flatten())
 }
 
-fn compile_sources(docs: &[Document], evidence: &[Value]) -> CommandResult<Vec<Value>> {
+#[derive(Clone, Serialize)]
+#[serde(transparent)]
+struct CompilationEvidence {
+    value: Value,
+    #[serde(skip)]
+    source: Document,
+}
+
+fn compile_sources(evidence: &[CompilationEvidence]) -> CommandResult<Vec<Value>> {
     let mut grouped: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
     for result in evidence {
-        // Claim citations can quote different passages than the summary citations.
-        for reference in analysis_citations(result) {
-            let id = reference["id"].as_str().ok_or("Invalid analysis source")?;
-            let quote = reference["quote"]
-                .as_str()
-                .ok_or("Invalid analysis quote")?;
-            let values = grouped.entry(id.into()).or_default();
-            if !values.iter().any(|v| v == quote) {
-                values.push(quote.into());
-            }
+        // Auxiliary summaries can quote passages absent from their structured citations.
+        // Preserve the complete bounded source that produced each analysis.
+        let text = result.source.text();
+        let text = text.trim();
+        if text.is_empty() {
+            return Err("Wiki analysis source is empty".into());
+        }
+        let values = grouped.entry(result.source.id.clone()).or_default();
+        if !values.iter().any(|value| value == text) {
+            values.push(text.to_owned());
         }
     }
     if grouped.len() > 20 {
         return Err("Too many sources in one compilation batch".into());
     }
     let mut total = 0;
-    grouped.into_iter().map(|(id, quotes)| {
-        let doc = docs.iter().find(|d| d.id == id).ok_or("Analysis source no longer exists")?;
-        let text = quotes.join("\n\n");
+    grouped.into_iter().map(|(id, parts)| {
+        let doc = &evidence.iter().find(|item| item.source.id == id)
+            .ok_or("Analysis source no longer exists")?.source;
+        if evidence.iter().any(|item| item.source.id == id
+            && (item.source.revision != doc.revision || item.source.kind != doc.kind)) {
+            return Err("Analysis source changed during compilation".into());
+        }
+        let text = parts.join("\n\n");
         total += text.chars().count();
         if text.chars().count() > 12000 || total > 60000 {
             return Err("Topic evidence exceeds one compilation batch; shorten this topic or retry".into());
         }
         let segments: Vec<_> = evidence.iter()
-            .flat_map(analysis_citations)
+            .flat_map(|item| analysis_citations(&item.value))
             .filter(|reference| reference["id"] == doc.id && ["segmentId", "startMs", "endMs"].iter().any(|key| reference.get(*key).is_some_and(|value| !value.is_null())))
             .map(|reference| {
                 let mut segment = json!({"id":reference["segmentId"].as_str().unwrap_or_default(),"text":reference["quote"]});
@@ -1095,20 +1230,6 @@ async fn compile(
     for doc in &docs {
         for (index, chunk) in sync::split_text(&doc.text(), 12_000).iter().enumerate() {
             require_current(state, session)?;
-            report_progress(
-                app,
-                state,
-                session,
-                WikiProgress {
-                    stage: "analyzing".into(),
-                    completed: analyzed,
-                    total: analysis_total,
-                    current_title: doc.title.clone(),
-                    topic_title: topic.title.clone(),
-                    ..Default::default()
-                },
-            )
-            .await?;
             let key = store::digest(
                 json!([
                     "source-analysis-v1",
@@ -1123,7 +1244,7 @@ async fn compile(
                 .to_string(),
             );
             let part = analysis::part(doc, chunk.clone());
-            let results = analysis::with_recovery(part, |part| {
+            let results = analysis::with_recovery(part.clone(), |part| {
                 let key = if part.transcript == *chunk {
                     key.clone()
                 } else {
@@ -1145,7 +1266,30 @@ async fn compile(
                             sync::validate_result(std::slice::from_ref(&part), &latest, value)
                         },
                         true,
-                        synthesize(app, session, "source_analysis", std::slice::from_ref(&part), Some(query)),
+                        async {
+                            report_progress(
+                                app,
+                                state,
+                                session,
+                                WikiProgress {
+                                    stage: "analyzing".into(),
+                                    completed: analyzed,
+                                    total: analysis_total,
+                                    current_title: doc.title.clone(),
+                                    topic_title: topic.title.clone(),
+                                    ..Default::default()
+                                },
+                            )
+                            .await?;
+                            synthesize(
+                                app,
+                                session,
+                                "source_analysis",
+                                std::slice::from_ref(&part),
+                                Some(query),
+                            )
+                            .await
+                        },
                     )
                     .await
                 }
@@ -1153,7 +1297,10 @@ async fn compile(
             .await?;
             for result in results {
                 if result["relevant"] != false && result["insufficientEvidence"] != true {
-                    evidence.push(result);
+                    evidence.push(CompilationEvidence {
+                        value: result,
+                        source: part.clone(),
+                    });
                 }
             }
             analyzed += 1;
@@ -1190,33 +1337,20 @@ async fn compile(
                 .map_err(|e| e.to_string())?
                 .len()
                 > 50000
-                || compile_sources(&docs, &trial).is_err()
+                || compile_sources(&trial).is_err()
                 || trial.len() > 100)
         {
             batches.push(std::mem::take(&mut current));
         }
         current.push(item);
-        compile_sources(&docs, &current)?;
+        compile_sources(&current)?;
     }
     if !current.is_empty() {
         batches.push(current);
     }
     let batch_total = batches.len();
     for (index, batch) in batches.into_iter().enumerate() {
-        report_progress(
-            app,
-            state,
-            session,
-            WikiProgress {
-                stage: "compiling".into(),
-                completed: index,
-                total: batch_total,
-                topic_title: topic.title.clone(),
-                ..Default::default()
-            },
-        )
-        .await?;
-        let sources = compile_sources(&docs, &batch)?;
+        let sources = compile_sources(&batch)?;
         let key = store::digest(
             json!(["topic-batch-v1", page_query, config, batch, sources]).to_string(),
         );
@@ -1231,12 +1365,28 @@ async fn compile(
                 sync::validate_result(&docs, &latest, value)
             },
             !topic.force_refresh,
-            request_model(
-                app,
-                session,
-                "topic_compile",
-                json!({"topic":page_query,"evidence":batch,"sources":sources}),
-            ),
+            async {
+                report_progress(
+                    app,
+                    state,
+                    session,
+                    WikiProgress {
+                        stage: "compiling".into(),
+                        completed: index,
+                        total: batch_total,
+                        topic_title: topic.title.clone(),
+                        ..Default::default()
+                    },
+                )
+                .await?;
+                request_model(
+                    app,
+                    session,
+                    "topic_compile",
+                    json!({"topic":page_query,"evidence":batch,"sources":sources}),
+                )
+                .await
+            },
         )
         .await?;
         if result["insufficientEvidence"] == true {
@@ -1278,6 +1428,7 @@ pub(super) async fn run(
         if publish_memory_events(app,state,session).await.is_err() { log::warn!("[knowledge-memory] candidate dispatch pending; Wiki publication preserved"); }
         return Ok(());
     }
+    collections::run(app,state,session).await?;
     let (root, local, config, initial) = {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
@@ -1306,10 +1457,12 @@ pub(super) async fn run(
             return Ok(());
         }
         manifest.phase = "processing".into();
-        manifest.wiki_progress = Some(WikiProgress {
-            stage: "preparing".into(),
-            ..Default::default()
-        });
+        if manifest.wiki_progress.as_ref().is_none_or(|progress| progress.stage == "complete") {
+            manifest.wiki_progress = Some(WikiProgress {
+                stage: "preparing".into(),
+                ..Default::default()
+            });
+        }
         persist(app, session, &manifest)?;
         let local = roots(app, session)?.0;
         fs::create_dir_all(&root).map_err(|e| e.to_string())?;
@@ -1404,12 +1557,18 @@ pub(super) async fn run(
                 current.last_fingerprint = version;
                 current.last_attempt_fingerprint = current.last_fingerprint.clone();
                 current.error.clear();
+                current.failure = None;
                 job(&root, &task, "done", None, "")?;
             }
             Err(error) => {
                 current.force_refresh = false;
                 current.last_attempt_fingerprint = version;
                 current.error = error.clone();
+                current.failure = Some(WikiFailure::new(
+                    &error,
+                    latest.wiki_progress.as_ref().map(|progress| progress.stage.as_str()).unwrap_or("preparing"),
+                    current.source_ids.clone(),
+                ));
                 job(&root, &task, "failed", None, &error)?;
             }
         }
@@ -1639,7 +1798,7 @@ pub async fn workbench_wiki(
     // Topic edits are checked by compilation fingerprints; repeated creation cannot cancel work.
     let incremental_action = matches!(
         action,
-        "topic" | "correction" | "tracking" | "tracking_retry" | "tracking_dismiss" | "tracking_restore" | "tracking_sources" | "tracking_review" | "tracking_reset" | "tracking_merge" | "tracking_unmerge" | "tracking_todo"
+        "topic" | "topic_link" | "correction" | "tracking" | "tracking_retry" | "tracking_dismiss" | "tracking_restore" | "tracking_sources" | "tracking_review" | "tracking_reset" | "tracking_merge" | "tracking_unmerge" | "tracking_todo"
     );
     let session = if action == "state" || incremental_action {
         current(&state)?
@@ -1651,6 +1810,7 @@ pub async fn workbench_wiki(
     let root = wiki_root(&app, &session)?;
     let mut values = topics(&root)?;
     let mut config = models(&app, &session)?;
+    let mut created_topic_id: Option<String> = None;
     match action {
         "state" => {}
         "source_folders" => {
@@ -1698,7 +1858,13 @@ pub async fn workbench_wiki(
         }
         "topic" => {
             topic_store::upsert(&root, &mut values, &request)?;
+            created_topic_id = values.iter().find(|topic| {
+                request["id"].as_str().is_some_and(|id| topic_store::matches_id(topic,id))
+                    || (request["id"].is_null() && topic.title == request["title"].as_str().unwrap_or_default().trim()
+                        && topic.collection.is_some() == (request["mode"] == "collection"))
+            }).map(|topic| topic.id.clone());
         }
+        "topic_link" => { collections::edit_link(&mut values, &request)?; save_topics(&root, &values)?; }
         "correction" => {
             let notes = request["notes"].as_str().filter(|notes| notes.chars().count() <= 20000).ok_or("Correction is too long")?;
             let topic = values.iter_mut().find(|topic| request["id"].as_str().is_some_and(|id| topic_store::matches_id(topic, id))).ok_or("Topic not found")?;
@@ -1763,73 +1929,55 @@ pub async fn workbench_wiki(
             topic.candidate = None;
             save_topics(&root, &values)?;
         }
-        "retry" => {
-            automation::retry(&root)?;
-            graph::configure(&root, &json!({"action":"tracking_retry"}))?;
-            state.discovery_requested.notify_one();
-            for topic in &mut values {
-                if request["id"].is_null()
-                    || request["id"]
-                        .as_str()
-                        .is_some_and(|id| topic_store::matches_id(topic, id))
-                {
-                    topic.force_refresh = true;
-                    topic.last_fingerprint.clear();
-                    topic.error.clear();
-                }
-            }
-            save_topics(&root, &values)?;
-        }
+        "retry" => {}
         _ => return Err("Unknown Wiki operation".into()),
     }
     let mut manifest = load_state(&app, &session)?;
-    let reconciled = topic_store::reconcile_progress(&mut manifest, &values);
-    if action == "retry" {
-        let failed = values
-            .iter()
-            .filter(|topic| !topic.excluded && !topic.error.is_empty())
-            .count();
-        if manifest.error.starts_with("Wiki processing failed for ") {
-            manifest.error = if failed == 0 {
-                String::new()
-            } else {
-                format!("Wiki processing failed for {failed} topics; open Wiki to review and retry")
-            };
+    let reconciled = if action == "retry" {
+        retry_failed_work(&root, &mut values, &mut manifest, request["id"].as_str())?;
+        if request["id"].is_null() {
+            state.discovery_requested.notify_one();
         }
-        if ready(&manifest).is_ok() {
-            manifest.phase = "processing".into();
-            manifest.wiki_progress = Some(WikiProgress {
-                stage: "preparing".into(),
-                failed,
-                ..Default::default()
-            });
+        false
+    } else {
+        topic_store::reconcile_progress(&mut manifest, &values)
+    };
+    let local = roots(&app, &session)?.0;
+    if action != "state" || reconciled {
+        persist(&app, &session, &manifest)?;
+        if action != "state" && crate::vault::load_vault_config(&app)?.enabled {
+            if matches!(action, "retry" | "topic" | "topic_link" | "correction") && ready(&manifest).is_ok() {
+                state.wiki_requested.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            start_worker(&app, &state);
+            if matches!(action, "retry" | "topic" | "topic_link" | "correction") {
+                state.sync_requested.notify_one();
+            }
         }
     }
-    let local = roots(&app, &session)?.0;
+    // Rendering a snapshot must not hold the worker's mutation lock while reading sources.
+    drop(_guard);
+    let mut page_sources = PageSources::new(&local, &manifest);
     let items: Vec<_> = values
         .iter()
         .map(|topic| {
             let mut value = serde_json::to_value(topic).unwrap_or_default();
-            value["inScope"] = json!(manifest.wiki_automation.is_none() || topic.published.as_ref().is_some_and(|page| !page.citations.is_empty() && page.citations.iter().all(|reference| manifest.entries.get(&reference.id).and_then(|entry| store::read_document(&local,entry).ok()).is_some_and(|doc| automation::allows(&doc,&manifest)))));
+            collections::filter_view(&mut value, &values, &mut page_sources, &manifest);
+            value["inScope"] = json!(topic.collection.is_some() || manifest.wiki_automation.is_none() || topic.published.as_ref().is_some_and(|page| !page.citations.is_empty() && page.citations.iter().all(|reference| page_sources.document(reference).is_some())));
             value["stale"] = json!(topic.published.as_ref().is_some_and(|p| topic
                 .candidate
                 .is_some()
                 || !topic.error.is_empty()
                 || p.fingerprint != page_fingerprint(topic, &manifest, &config, &p.citations)
-                || !valid_page(&local, &manifest, p)));
+                || !page_sources.valid_page(p)));
             value
         })
         .collect();
-    if action != "state" || reconciled {
-        persist(&app, &session, &manifest)?;
-        if action != "state" && crate::vault::load_vault_config(&app)?.enabled {
-            start_worker(&app, &state);
-        }
-    }
     let mut graph = graph::view(&root, &local, &manifest, &values, &config)?;
     graph::attach_todos(&app, &session, &root, &mut graph)?;
     let topic_graph = automation::topic_graph(&values, &items);
-    Ok(json!({"topics":items,"models":config,"sources":super::sources::config(&app,&session)?,"graph":graph,"topicGraph":topic_graph,"automation":manifest.wiki_automation}))
+    require_current(&state, &session)?;
+    Ok(json!({"topics":items,"models":config,"sources":super::sources::config(&app,&session)?,"graph":graph,"topicGraph":topic_graph,"automation":manifest.wiki_automation,"createdTopicId":created_topic_id}))
 }
 
 #[cfg(test)]
@@ -2367,21 +2515,26 @@ mod tests {
     }
     #[test]
     fn compiler_carries_original_quotes_and_segment_identity_within_server_limits() {
-        let docs = vec![Document {
+        let source = Document {
             id: "a".into(),
             revision: "r1".into(),
+            transcript: "Original quote\n\nTimed quote".into(),
             ..Default::default()
+        };
+        let evidence = vec![CompilationEvidence {
+            source: source.clone(),
+            value: json!({"citations":[{"id":"a","quote":"Original quote","segmentId":"s1"},{"id":"a","quote":"Timed quote","startMs":1000,"endMs":2000}]}),
         }];
-        let evidence = vec![
-            json!({"citations":[{"id":"a","quote":"Original quote","segmentId":"s1"},{"id":"a","quote":"Timed quote","startMs":1000,"endMs":2000}]}),
-        ];
-        let sources = compile_sources(&docs, &evidence).unwrap();
+        let sources = compile_sources(&evidence).unwrap();
         assert_eq!(sources[0]["text"], "Original quote\n\nTimed quote");
         assert_eq!(sources[0]["segments"][0]["id"], "s1");
         assert!(sources[0]["segments"][0].get("startMs").is_none());
         assert_eq!(sources[0]["segments"][1]["startMs"], 1000);
-        let excessive = vec![json!({"citations":[{"id":"a","quote":"x".repeat(12001)}]})];
-        assert!(compile_sources(&docs, &excessive).is_err());
+        let excessive = vec![CompilationEvidence {
+            source: Document { transcript: "x".repeat(12001), ..source },
+            value: json!({"citations":[{"id":"a","quote":"x"}]}),
+        }];
+        assert!(compile_sources(&excessive).is_err());
     }
     #[test]
     fn compiler_includes_original_quotes_for_every_nested_claim() {
@@ -2390,12 +2543,14 @@ mod tests {
                 id: "a".into(),
                 kind: "meeting".into(),
                 revision: "r1".into(),
+                transcript: "Friday is a proposal.\n\nThe budget is unapproved.\n\nThe owner remains undecided.".into(),
                 ..Default::default()
             },
             Document {
                 id: "b".into(),
                 kind: "meeting".into(),
                 revision: "r2".into(),
+                transcript: "Confirm the launch date.".into(),
                 ..Default::default()
             },
         ];
@@ -2407,13 +2562,21 @@ mod tests {
         todo["segmentId"] = json!("s2");
         todo["startMs"] = json!(1000);
         todo["endMs"] = json!(2000);
-        let evidence = vec![json!({
-            "citations":[summary],
-            "memoryItems":[{"text":"Budget unapproved","kind":"unresolved","citations":[memory]}],
-            "todoSuggestions":[{"title":"Confirm launch date","citations":[todo]}],
-            "decisions":[{"text":"Owner undecided","citations":[decision,summary]}]
-        })];
-        let sources = compile_sources(&docs, &evidence).unwrap();
+        let evidence = vec![
+            CompilationEvidence {
+                source: docs[0].clone(),
+                value: json!({
+                    "citations":[summary],
+                    "memoryItems":[{"text":"Budget unapproved","kind":"unresolved","citations":[memory]}],
+                    "decisions":[{"text":"Owner undecided","citations":[decision,summary]}]
+                }),
+            },
+            CompilationEvidence {
+                source: docs[1].clone(),
+                value: json!({"citations":[reference("b", "r2", "Confirm the launch date.")],"todoSuggestions":[{"title":"Confirm launch date","citations":[todo]}]}),
+            },
+        ];
+        let sources = compile_sources(&evidence).unwrap();
         assert_eq!(sources.len(), 2);
         assert_eq!(
             sources[0]["text"],
@@ -2428,16 +2591,36 @@ mod tests {
         );
     }
     #[test]
-    fn compiler_counts_nested_quotes_toward_source_limits() {
-        let docs = vec![Document {
+    fn compiler_keeps_complete_analyzed_parts_bounded_and_deduplicated() {
+        let source = Document {
             id: "a".into(),
+            kind: "meeting".into(),
+            revision: "r1".into(),
+            transcript: format!("{}{}", "甲".repeat(12000), "乙".repeat(1000)),
             ..Default::default()
-        }];
-        for key in ["memoryItems", "todoSuggestions", "decisions"] {
-            let mut analysis = json!({"citations":[{"id":"a","quote":"Summary"}]});
-            analysis[key] = json!([{"citations":[{"id":"a","quote":"x".repeat(12000)}]}]);
-            assert!(compile_sources(&docs, &[analysis]).is_err(), "{key}");
+        };
+        let parts = sync::split_text(source.text().trim(), 12000);
+        let evidence: Vec<_> = parts.into_iter().map(|text| CompilationEvidence {
+            value: json!({"summary":"An analysis","citations":[{"id":"a","quote":text.chars().take(2).collect::<String>()}]}),
+            source: analysis::part(&source, text),
+        }).collect();
+        for item in &evidence {
+            let sources = compile_sources(std::slice::from_ref(item)).unwrap();
+            assert!(sources[0]["text"].as_str().unwrap().chars().count() <= 12000);
         }
+        assert!(compile_sources(&evidence).is_err());
+        let repeated = vec![evidence[0].clone(), evidence[0].clone()];
+        assert_eq!(compile_sources(&repeated).unwrap()[0]["text"], "甲".repeat(12000));
+        assert_eq!(serde_json::to_value(&evidence[0]).unwrap(), evidence[0].value);
+        let mut changed = evidence[0].clone();
+        changed.source.revision = "r2".into();
+        assert!(compile_sources(&[evidence[0].clone(), changed]).is_err());
+        let many: Vec<_> = (0..6).map(|index| {
+            let mut item = evidence[0].clone();
+            item.source.id = index.to_string();
+            item
+        }).collect();
+        assert!(compile_sources(&many).is_err());
     }
     #[tokio::test]
     async fn compilation_batches_resume_without_reusing_failures_or_invalid_evidence() {
@@ -2475,14 +2658,24 @@ mod tests {
         .await;
         assert!(failure.is_err());
         assert!(receipt(&root, "second").unwrap().is_none());
+        let mut topics = vec![Topic {
+            id: uuid::Uuid::new_v4().to_string(),
+            title: "Interrupted compilation".into(),
+            error: failure.unwrap_err(),
+            last_attempt_fingerprint: "attempted".into(),
+            ..Default::default()
+        }];
+        let id = topics[0].id.clone();
+        let mut retry_manifest = manifest.clone();
+        retry_failed_work(&root, &mut topics, &mut retry_manifest, Some(&id)).unwrap();
         assert_eq!(
-            cached_compilation(&root, "first", &serial, &validate, true, generate())
+            cached_compilation(&root, "first", &serial, &validate, !topics[0].force_refresh, generate())
                 .await
                 .unwrap(),
             result
         );
         assert_eq!(calls.get(), 1);
-        cached_compilation(&root, "second", &serial, &validate, true, generate())
+        cached_compilation(&root, "second", &serial, &validate, !topics[0].force_refresh, generate())
             .await
             .unwrap();
         assert_eq!(calls.get(), 2);
@@ -2809,7 +3002,7 @@ pub(super) async fn publish_memory_events(app: &AppHandle,state: &WorkbenchState
         require_current(state,session)?;
         let manifest=load_state(app,session)?;
         let (local,_)=roots(app,session)?;
-        topics(&wiki_root(app,session)?)?.into_iter().filter(|topic|citable(topic,&local,&manifest,&models(app,session).unwrap_or_default()))
+        topics(&wiki_root(app,session)?)?.into_iter().filter(|topic| topic.collection.is_none()).filter(|topic|citable(topic,&local,&manifest,&models(app,session).unwrap_or_default()))
             .filter_map(|topic|topic.published.map(|page|json!({"topic_id":topic.id,"topic_title":topic.title,"fingerprint":page.fingerprint,"citations":page.citations}))).collect()
     };
     knowledge_cloud::publish_events(app,session,pages).await

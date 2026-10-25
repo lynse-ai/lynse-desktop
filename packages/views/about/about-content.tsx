@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { selectReleaseNotes } from "@lynse/core/i18n";
 import { Button } from "@lynse/ui/components/ui/button";
 import {
   fetchLatestReleaseNotes,
@@ -112,7 +113,7 @@ export function AboutContent() {
             </span>
           </p>
           <p className="mt-1.5 whitespace-pre-line text-2xs leading-5 text-muted-foreground">
-            {latestNotes.notes}
+            {selectReleaseNotes(latestNotes.notes, latestNotes.notesByLocale, i18n.resolvedLanguage ?? i18n.language)}
           </p>
         </div>
       )}

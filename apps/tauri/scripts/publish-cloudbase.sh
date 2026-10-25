@@ -28,8 +28,7 @@
 #     etc. for Developer ID signing; without it the macOS bundle is ad-hoc
 #     (Gatekeeper right-click-open and TCC grants do not survive updates).
 #
-# The website download links point at the per-tag installers, e.g.
-#   https://<host>/updates/v1.2.0/Lynse_1.2.0_aarch64.dmg
+# The website uses fixed aliases under updates/latest/. Per-tag URLs are archives.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -184,10 +183,20 @@ else
 fi
 
 MANIFEST="$DIST/latest.json"
-node - "$DIST" "$MANIFEST" "$VERSION" "$UPDATES_BASE/$TAG" "$NOTES" "${ENTRIES[@]}" <<'NODE'
+RELEASE_NOTES_FILE="$ROOT/apps/tauri/release-notes/$VERSION.json" node - "$DIST" "$MANIFEST" "$VERSION" "$UPDATES_BASE/$TAG" "$NOTES" "${ENTRIES[@]}" <<'NODE'
 const [dist, manifest, version, baseUrl, notes, ...entries] = process.argv.slice(2);
 const fs = require("fs");
 const path = require("path");
+const localizedFile = process.env.RELEASE_NOTES_FILE;
+const localizedNotes = localizedFile && fs.existsSync(localizedFile)
+  ? JSON.parse(fs.readFileSync(localizedFile, "utf8")) : null;
+if (localizedNotes) {
+  for (const locale of ["en", "zh-Hans", "zh-Hant", "ja", "ko"]) {
+    if (typeof localizedNotes[locale] !== "string" || !localizedNotes[locale].trim()) {
+      throw new Error(`Missing release notes for ${locale}`);
+    }
+  }
+}
 const platforms = {};
 for (const entry of entries) {
   const [key, artifact, sigFile] = entry.split("|");
@@ -197,7 +206,7 @@ for (const entry of entries) {
   };
 }
 fs.writeFileSync(manifest, JSON.stringify(
-  { version, notes, pub_date: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), platforms },
+  { version, notes: localizedNotes?.en ?? notes, ...(localizedNotes ? { notes_i18n: localizedNotes } : {}), pub_date: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), platforms },
   null, 2,
 ) + "\n");
 NODE
@@ -208,21 +217,24 @@ cat "$MANIFEST"
 # already live for the same version so the flip never drops the other side.
 REMOTE_PLATFORMS="{}"
 if [[ ${#ENTRIES[@]} -eq 1 ]]; then
-  if REMOTE="$(curl -fsSL --max-time 20 "$UPDATES_BASE/latest.json" 2>/dev/null)"; then
-    REMOTE_PLATFORMS="$(REMOTE="$REMOTE" VERSION="$VERSION" node -e '
-      const r = JSON.parse(process.env.REMOTE);
-      console.log(JSON.stringify(r.version === process.env.VERSION ? (r.platforms ?? {}) : {}));
-    ' 2>/dev/null)"
-    REMOTE_PLATFORMS="${REMOTE_PLATFORMS:-}"
-    if [[ -z "$REMOTE_PLATFORMS" ]]; then REMOTE_PLATFORMS="{}"; fi
-    if [[ "$REMOTE_PLATFORMS" != "{}" ]]; then
-      KEYS="$(REMOTE_PLATFORMS="$REMOTE_PLATFORMS" node -e 'console.log(Object.keys(JSON.parse(process.env.REMOTE_PLATFORMS)).join(", "))')"
-      log "Merging live same-version platform entries: $KEYS"
-    else
-      echo "WARNING: no live entry for version $VERSION — publishing $PLATFORM only means
-  the other platform gets no update until its artifact run completes." >&2
+  for REMOTE_URL in "$UPDATES_BASE/$TAG/latest.json" "$UPDATES_BASE/latest.json"; do
+    if REMOTE="$(curl -fsSL --max-time 20 "$REMOTE_URL" 2>/dev/null)"; then
+      REMOTE_PLATFORMS="$(REMOTE="$REMOTE" VERSION="$VERSION" node -e '
+        const r = JSON.parse(process.env.REMOTE);
+        console.log(JSON.stringify(r.version === process.env.VERSION ? (r.platforms ?? {}) : {}));
+      ' 2>/dev/null)"
+      REMOTE_PLATFORMS="${REMOTE_PLATFORMS:-}"
+      if [[ -z "$REMOTE_PLATFORMS" ]]; then REMOTE_PLATFORMS="{}"; fi
+      if [[ "$REMOTE_PLATFORMS" != "{}" ]]; then
+        KEYS="$(REMOTE_PLATFORMS="$REMOTE_PLATFORMS" node -e 'console.log(Object.keys(JSON.parse(process.env.REMOTE_PLATFORMS)).join(", "))')"
+        log "Merging live same-version platform entries: $KEYS"
+        break
+      else
+        echo "WARNING: no live entry for version $VERSION — publishing $PLATFORM only means
+    the other platform gets no update until its artifact run completes." >&2
+      fi
     fi
-  fi
+  done
 fi
 
 FINAL="$DIST/latest.final.json"
@@ -258,7 +270,7 @@ log "Uploading artifacts to updates/$TAG (per-tag copy first…)"
 if [[ "$REUSE_LOGIN" != true ]]; then
   tcb login --cloudbase-api-key "$CLOUDBASE_API_KEY" -e "$CLOUDBASE_ENV_ID"
 fi
-tcb hosting deploy "$DIST" "updates/$TAG" -e "$CLOUDBASE_ENV_ID" --yes
+tcb hosting deploy "$DIST" "updates/$TAG" -e "$CLOUDBASE_ENV_ID"
 
 log "Verifying manifest URLs exist under $UPDATES_BASE/$TAG"
 for url in $(MANIFEST_JSON="$(cat "$MANIFEST")" node -e 'console.log(Object.values(JSON.parse(process.env.MANIFEST_JSON).platforms).map(p=>p.url).join("\n"))'); do
@@ -270,7 +282,14 @@ log "All manifest URLs reachable"
 # Stable endpoint polled by every client — flip last, atomically. The hosting
 # gateway serves no-store, so clients read it fresh.
 log "Flipping stable updates/latest.json"
-tcb hosting deploy "$MANIFEST" "updates/latest.json" -e "$CLOUDBASE_ENV_ID" --yes
+tcb hosting deploy "$MANIFEST" "updates/latest.json" -e "$CLOUDBASE_ENV_ID"
+
+# Keep the website's fixed download URL on the same published build.
+if [[ "$PLATFORM" == macos ]]; then
+  tcb hosting deploy "$DMG_SRC" "updates/latest/Lynse_aarch64.dmg" -e "$CLOUDBASE_ENV_ID"
+else
+  tcb hosting deploy "$MSI_SRC" "updates/latest/Lynse_x64_en-US.msi" -e "$CLOUDBASE_ENV_ID"
+fi
 
 log "Done. $TAG is live.
   Website download: $UPDATES_BASE/$TAG/  (dmg / msi)

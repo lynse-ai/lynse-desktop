@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { normalizeReleaseNotesLocales, selectReleaseNotes, type ReleaseNotesLocales } from "@lynse/core/i18n";
+import { useTranslation } from "@lynse/core/i18n/react";
 
 export type AppUpdateInfo = {
   currentVersion: string;
@@ -6,6 +8,7 @@ export type AppUpdateInfo = {
   hasUpdate: boolean;
   releaseUrl: string;
   releaseNotes?: string | null;
+  releaseNotesByLocale?: ReleaseNotesLocales;
   publishedAt?: string | null;
 };
 
@@ -23,6 +26,7 @@ const UPDATES_MANIFEST_URL = "https://dl.lynse.cn/updates/latest.json";
 export interface LatestReleaseNotes {
   version: string;
   notes: string;
+  notesByLocale?: ReleaseNotesLocales;
   pubDate?: string;
 }
 
@@ -38,14 +42,17 @@ export async function fetchLatestReleaseNotes(): Promise<LatestReleaseNotes | nu
     const body = (await res.json()) as {
       version?: unknown;
       notes?: unknown;
+      notes_i18n?: unknown;
       pub_date?: unknown;
     };
     const version = typeof body.version === "string" ? body.version : null;
-    const notes = typeof body.notes === "string" ? body.notes.trim() : "";
-    if (!version || !notes) return null;
+    const notesByLocale = normalizeReleaseNotesLocales(body.notes_i18n);
+    const notes = selectReleaseNotes(body.notes, notesByLocale, "en") ?? "";
+    if (!version || (!notes && Object.keys(notesByLocale).length === 0)) return null;
     return {
       version,
       notes,
+      notesByLocale,
       pubDate: typeof body.pub_date === "string" ? body.pub_date : undefined,
     };
   } catch {
@@ -271,6 +278,7 @@ async function runInstall(api: DesktopAppApi): Promise<void> {
 }
 
 export function useAppUpdate() {
+  const { i18n } = useTranslation();
   const api = getDesktopAppApi();
   const [update, setUpdate] = useState<AppUpdateInfo | null>(sharedUpdate);
   const [isChecking, setIsChecking] = useState(checking);
@@ -303,8 +311,13 @@ export function useAppUpdate() {
     void runInstall(api);
   };
 
+  const localizedUpdate = useMemo(() => update ? {
+    ...update,
+    releaseNotes: selectReleaseNotes(update.releaseNotes, update.releaseNotesByLocale, i18n.resolvedLanguage ?? i18n.language),
+  } : null, [update, i18n.resolvedLanguage, i18n.language]);
+
   return {
-    update,
+    update: localizedUpdate,
     checking: isChecking,
     error,
     checkForUpdate,

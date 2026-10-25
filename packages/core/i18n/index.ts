@@ -30,6 +30,29 @@ export function matchLocale(tag: string): SupportedLocale | null {
   );
 }
 
+export type ReleaseNotesLocales = Readonly<Partial<Record<SupportedLocale, string>>>;
+
+/** Validate optional updater metadata before it reaches the interface. */
+export function normalizeReleaseNotesLocales(value: unknown): ReleaseNotesLocales {
+  const notes: Partial<Record<SupportedLocale, string>> = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return notes;
+  for (const [tag, text] of Object.entries(value)) {
+    const locale = matchLocale(tag);
+    if (locale && typeof text === "string" && text.trim()) {
+      notes[locale] = text.trim();
+    }
+  }
+  return notes;
+}
+
+/** Follow the application language, falling back to English or legacy notes. */
+export function selectReleaseNotes(notes: unknown, localized: unknown, language: string): string | null {
+  const translations = normalizeReleaseNotesLocales(localized);
+  const locale = matchLocale(language) ?? DEFAULT_LOCALE;
+  return translations[locale] ?? translations.en ??
+    (typeof notes === "string" && notes.trim() ? notes.trim() : null);
+}
+
 /**
  * Best-effort detection of the system's preferred language from the
  * navigator's ordered language list. Falls back to DEFAULT_LOCALE when the

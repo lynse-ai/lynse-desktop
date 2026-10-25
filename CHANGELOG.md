@@ -12,6 +12,20 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.2.0 build 247 (2026-10-25)
+
+### Fixed
+
+- Restore the stable update channel so older desktop versions can find 1.2.0.
+- Show release notes in the selected interface language, including when switching languages without restarting.
+- Keep the website download alias, signed updater archive and release manifest synchronized.
+
+### 修复
+
+- 恢复正式自动更新通道，使旧版桌面应用可以发现 1.2.0。
+- 更新说明跟随所选界面语言，切换语言后立即生效。
+- 同步官网最新版入口、签名更新包与正式更新清单。
+
 ## 1.2.0 build 246 (2026-10-25)
 
 ### New Features

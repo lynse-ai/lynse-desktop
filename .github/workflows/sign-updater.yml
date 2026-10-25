@@ -1,0 +1,52 @@
+name: Sign prepared updater archive
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_url:
+        description: Verified archive under dl.lynse.cn/updates/
+        required: true
+        type: string
+      sha256:
+        description: Expected SHA-256 of the notarized archive
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Download and verify the prepared archive
+        env:
+          ARTIFACT_URL: ${{ inputs.artifact_url }}
+          EXPECTED_SHA: ${{ inputs.sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_URL" =~ ^https://dl\.lynse\.cn/updates/[A-Za-z0-9._-]+/Lynse_aarch64\.app\.tar\.gz$ ]]
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{64}$ ]]
+          curl --fail --location --proto '=https' --max-time 180 "$ARTIFACT_URL" -o Lynse_aarch64.app.tar.gz
+          printf '%s  Lynse_aarch64.app.tar.gz\n' "$EXPECTED_SHA" | sha256sum --check
+      - name: Install the pinned signing tool
+        run: npm install --prefix "$RUNNER_TEMP/signer" @tauri-apps/cli@2.11.4
+      - name: Sign without exporting the private key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$TAURI_SIGNING_PRIVATE_KEY"
+          "$RUNNER_TEMP/signer/node_modules/.bin/tauri" signer sign Lynse_aarch64.app.tar.gz --password "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: updater-signature
+          path: Lynse_aarch64.app.tar.gz.sig
+          if-no-files-found: error
+          retention-days: 3

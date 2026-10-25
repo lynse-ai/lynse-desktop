@@ -112,10 +112,18 @@ echo "manifest version=$MANIFEST_VERSION, platforms: $(manifest_query "$MANIFEST
 # ── 3. rewrite URLs to the CloudBase base, then prove every asset came along ─
 TAG_ENC="$(TAG="$TAG" node -e 'console.log(encodeURIComponent(process.env.TAG))')"
 BASE="$UPDATES_BASE/$TAG_ENC"
-MANIFEST_FILE="$MANIFEST" BASE="$BASE" node -e '
+MANIFEST_FILE="$MANIFEST" BASE="$BASE" RELEASE_NOTES_FILE="$ROOT/apps/tauri/release-notes/$MANIFEST_VERSION.json" node -e '
   const fs = require("fs");
   const file = process.env.MANIFEST_FILE;
   const m = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (fs.existsSync(process.env.RELEASE_NOTES_FILE)) {
+    const notes = JSON.parse(fs.readFileSync(process.env.RELEASE_NOTES_FILE, "utf8"));
+    for (const locale of ["en", "zh-Hans", "zh-Hant", "ja", "ko"]) {
+      if (typeof notes[locale] !== "string" || !notes[locale].trim()) throw new Error(`Missing release notes for ${locale}`);
+    }
+    m.notes_i18n = notes;
+    m.notes = notes.en;
+  }
   for (const [platform, entry] of Object.entries(m.platforms ?? {})) {
     const name = new URL(entry.url).pathname.split("/").pop();
     if (!name) throw new Error(`${platform}: cannot derive an asset name from ${entry.url}`);
@@ -161,7 +169,7 @@ tcb login --cloudbase-api-key "$CLOUDBASE_API_KEY" -e "$CLOUDBASE_ENV_ID"
 # Deploy to the encoded path so the object key always matches the URLs written
 # into latest.json — a mismatch would 404 clients onto a file that exists under
 # a different name.
-tcb hosting deploy "$DIST" "updates/$TAG_ENC" -e "$CLOUDBASE_ENV_ID" --yes
+tcb hosting deploy "$DIST" "updates/$TAG_ENC" -e "$CLOUDBASE_ENV_ID"
 
 log "Confirming each asset is live before flipping the pointer"
 while read -r url; do
@@ -180,7 +188,7 @@ if [[ "$PRERELEASE" == true ]]; then
 fi
 
 log "Flipping stable updates/latest.json"
-tcb hosting deploy "$MANIFEST" "updates/latest.json" -e "$CLOUDBASE_ENV_ID" --yes
+tcb hosting deploy "$MANIFEST" "updates/latest.json" -e "$CLOUDBASE_ENV_ID"
 
 # ── 5. post-flip read-back ───────────────────────────────────────────────────
 # The old flow never confirmed its own result: a flip that silently failed looked
@@ -213,8 +221,8 @@ STABLE_DMG="$(printf '%s\n' "$DIST"/Lynse_*_aarch64.dmg | head -1)"
 STABLE_MSI="$(printf '%s\n' "$DIST"/Lynse_*_x64_en-US.msi | head -1)"
 [[ -s "$STABLE_DMG" ]] || die "No aarch64 dmg in the release assets — cannot refresh updates/latest/."
 [[ -s "$STABLE_MSI" ]] || die "No x64 msi in the release assets — cannot refresh updates/latest/."
-tcb hosting deploy "$STABLE_DMG" "updates/latest/Lynse_aarch64.dmg" -e "$CLOUDBASE_ENV_ID" --yes
-tcb hosting deploy "$STABLE_MSI" "updates/latest/Lynse_x64_en-US.msi" -e "$CLOUDBASE_ENV_ID" --yes
+tcb hosting deploy "$STABLE_DMG" "updates/latest/Lynse_aarch64.dmg" -e "$CLOUDBASE_ENV_ID"
+tcb hosting deploy "$STABLE_MSI" "updates/latest/Lynse_x64_en-US.msi" -e "$CLOUDBASE_ENV_ID"
 for url in "$UPDATES_BASE/latest/Lynse_aarch64.dmg" "$UPDATES_BASE/latest/Lynse_x64_en-US.msi"; do
   code="$(curl -sIL -o /dev/null -w '%{http_code}' --max-time 20 "$url?cb=$(date +%s)")"
   [[ "$code" == 200 ]] || die "Stable alias not reachable after refresh (HTTP $code): $url"

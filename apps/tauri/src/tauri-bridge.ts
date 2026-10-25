@@ -8,6 +8,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { setApiTransportMode } from "@lynse/core/api/client";
+import { normalizeReleaseNotesLocales, type ReleaseNotesLocales } from "@lynse/core/i18n";
 import { installWorkBuddyBridge } from "./workbuddy-bridge";
 import { desktopMcpApi, installDesktopMcpBridge, type DesktopMcpApi } from "./mcp-bridge";
 import { hydrateSecrets, refreshSecret, registerSecretKeys, removeSecret, secureStorage, setSecret } from "./secure-storage";
@@ -85,6 +86,7 @@ export type AppUpdateInfo = {
   hasUpdate: boolean;
   releaseUrl: string;
   releaseNotes?: string | null;
+  releaseNotesByLocale?: ReleaseNotesLocales;
   publishedAt?: string | null;
 };
 
@@ -594,6 +596,7 @@ export async function installTauriBridge(): Promise<void> {
           hasUpdate: true,
           releaseUrl: RELEASES_PAGE_URL,
           releaseNotes: update.body ?? null,
+          releaseNotesByLocale: normalizeReleaseNotesLocales(update.rawJson.notes_i18n),
           publishedAt: update.date ?? null,
         };
       },

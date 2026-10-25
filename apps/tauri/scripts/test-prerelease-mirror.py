@@ -47,6 +47,41 @@ class PrereleaseMirrorTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("require --prerelease", result.stderr)
 
+    def test_stable_release_publishes_localized_notes_and_both_download_aliases(self):
+        with tempfile.TemporaryDirectory(prefix="lynse-stable-mirror-test-") as directory:
+            root = Path(directory)
+            binaries, fixtures = root / "bin", root / "fixtures"
+            binaries.mkdir()
+            fixtures.mkdir()
+            platforms = {}
+            for platform, name in [("darwin-aarch64", "Lynse.app.tar.gz"), ("windows-x86_64", "Lynse_1.2.0_x64_en-US.msi")]:
+                (fixtures / name).write_text("synthetic signed fixture")
+                platforms[platform] = {"url": f"https://example.invalid/{name}", "signature": "fixture-signature"}
+            (fixtures / "Lynse_1.2.0_aarch64.dmg").write_text("synthetic installer")
+            (fixtures / "latest.json").write_text(json.dumps({"version": "1.2.0", "platforms": platforms}))
+            scripts = {
+                "gh": '#!/bin/bash\nwhile [[ $# -gt 0 ]]; do if [[ "$1" == --dir ]]; then cp "$FIXTURES"/* "$2"; exit 0; fi; shift; done\nexit 1\n',
+                "tcb": '#!/bin/bash\nprintf "%s\\n" "$*" >> "$TCB_LOG"\n',
+                "curl": '#!/bin/bash\nwhile [[ $# -gt 0 ]]; do if [[ "$1" == -o && "$2" != /dev/null ]]; then cp "$DIST/latest.json" "$2"; exit 0; fi; shift; done\nprintf 200\n',
+            }
+            for name, content in scripts.items():
+                path = binaries / name
+                path.write_text(content)
+                path.chmod(0o755)
+            env = {**os.environ, "PATH": f"{binaries}:{os.environ['PATH']}", "FIXTURES": str(fixtures),
+                   "TCB_LOG": str(root / "calls"), "DIST": str(root / "dist"), "CLOUDBASE_API_KEY": "offline-fixture"}
+            result = subprocess.run(["bash", str(SCRIPT), "v1.2.0"], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            manifest = json.loads((root / "dist/latest.json").read_text())
+            self.assertEqual(set(manifest["notes_i18n"]), {"en", "zh-Hans", "zh-Hant", "ja", "ko"})
+            self.assertEqual(manifest["notes"], manifest["notes_i18n"]["en"])
+            deploys = [line for line in (root / "calls").read_text().splitlines() if line.startswith("hosting deploy ")]
+            self.assertEqual(len(deploys), 4)
+            self.assertIn("updates/v1.2.0 ", deploys[0])
+            self.assertIn("updates/latest.json ", deploys[1])
+            self.assertIn("updates/latest/Lynse_aarch64.dmg ", deploys[2])
+            self.assertIn("updates/latest/Lynse_x64_en-US.msi ", deploys[3])
+
 
 if __name__ == "__main__":
     unittest.main()

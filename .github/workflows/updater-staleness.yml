@@ -37,7 +37,7 @@ jobs:
           # Pre-releases deliberately ship without mirroring; only a stable
           # release that clients are not being offered is staleness.
           TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate -q '.[] | select(.draft == false and .prerelease == false) | .tag_name' \
-                  | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)"
+                  | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-build[0-9]+)?$' | sort -V | tail -n1)"
           [[ -n "$TAG" ]] || { echo "::error::no stable vN.N.N release found in this repository"; exit 1; }
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           # Age of that release: a tag published minutes ago may still be
@@ -80,7 +80,9 @@ jobs:
           MISSING: ${{ steps.served.outputs.missing }}
         run: |
           set -euo pipefail
-          WANT="${NEWEST#v}"
+          # Compare on the version part only: stable build tags look like
+          # v1.2.0-build247 while the served manifest advertises 1.2.0.
+          WANT="$(printf '%s' "${NEWEST#v}" | cut -d - -f1)"
           fail() { echo "::error::$1"; exit 1; }
 
           if [[ -n "${MISSING}" ]]; then

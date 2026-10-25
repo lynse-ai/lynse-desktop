@@ -18,6 +18,9 @@ permissions:
 jobs:
   stage:
     runs-on: ubuntu-latest
+    # GitHub only exposes draft releases to tokens with push access.
+    permissions:
+      contents: write
     steps:
       - uses: actions/setup-node@v4
         with:

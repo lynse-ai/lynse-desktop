@@ -267,6 +267,7 @@ const ko = {
     state_failed: "중단됨",
   },
   recording_mode: {
+    switch_live_failed: "오디오 소스 전환이 실패했습니다. 라이브 세션은 이전 소스를 계속 사용합니다.",
     title: "실시간 녹음",
     subtitle: "탭하여 녹음 시작 — 마이크와 시스템 오디오를 실시간으로 캡처",
     header_recording: "기기 녹음 중",

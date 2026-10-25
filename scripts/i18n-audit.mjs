@@ -12,7 +12,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import ts from "typescript";
 import { fileURLToPath } from "node:url";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, join, relative, resolve, extname, sep } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "packages", "views");
@@ -22,17 +22,27 @@ const LOCALE_DIR = join(ROOT, "locales");
 // silently shipped without them.
 const LOCALES = ["en", "zh", "zh-Hant", "ja", "ko"];
 
-/**
- * Locale files are plain nested objects with `const x = {...}; export default x;`.
- * Strip the module syntax and eval rather than pulling in a TS parser.
- */
+/** Load trusted, local locale modules with their relative imports. */
+const moduleCache = new Map();
+function loadModule(path) {
+  if (moduleCache.has(path)) return moduleCache.get(path);
+  const module = { exports: {} };
+  moduleCache.set(path, module.exports);
+  const compiled = ts.transpileModule(readFileSync(path, "utf8"), {
+    compilerOptions: { target: ts.ScriptTarget.ESNext, module: ts.ModuleKind.CommonJS },
+  }).outputText;
+  const requireLocal = (specifier) => {
+    if (!specifier.startsWith(".")) throw new Error(`Locale imports must be local: ${specifier}`);
+    const target = resolve(dirname(path), specifier);
+    return loadModule(extname(target) ? target : `${target}.ts`);
+  };
+  // Locale modules are repository code, executed only by this development audit.
+  new Function("module", "exports", "require", compiled)(module, module.exports, requireLocal);
+  moduleCache.set(path, module.exports);
+  return module.exports;
+}
 function loadLocale(name) {
-  const src = readFileSync(join(LOCALE_DIR, `${name}.ts`), "utf8")
-    .replace(/^import[\s\S]*?;\s*$/gm, "")
-    .replace(/export default \w+;?/g, "")
-    .replace(/const \w+ =/, "const __obj =");
-  // eslint-disable-next-line no-eval
-  return eval(`${src}; __obj`);
+  return loadModule(join(LOCALE_DIR, `${name}.ts`)).default;
 }
 
 function flatten(obj, prefix = "", out = new Map()) {
@@ -45,12 +55,7 @@ function flatten(obj, prefix = "", out = new Map()) {
 }
 
 // Match the runtime resource merge in packages/views/locales/index.ts.
-const workbenchSource = readFileSync(join(ROOT, "workbench", "locales.ts"), "utf8")
-  .replace("export const workbenchLocales", "const workbenchLocales");
-// eslint-disable-next-line no-eval
-const workbench = eval(`${ts.transpileModule(workbenchSource, {
-  compilerOptions: { target: ts.ScriptTarget.ESNext },
-}).outputText}; workbenchLocales`);
+const workbench = loadModule(join(ROOT, "workbench", "locales.ts")).workbenchLocales;
 const flat = Object.fromEntries(
   LOCALES.map((l) => [l, flatten({
     ...loadLocale(l),

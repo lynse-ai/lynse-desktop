@@ -29,22 +29,26 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Resolve the newest release tag
+      - name: Resolve the newest stable release tag
         id: newest
         shell: bash
         run: |
           set -euo pipefail
-          TAG="$(gh api "repos/${GITHUB_REPOSITORY}/tags" --paginate -q '.[].name' \
+          # Pre-releases deliberately ship without mirroring; only a stable
+          # release that clients are not being offered is staleness.
+          TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases" --paginate -q '.[] | select(.draft == false and .prerelease == false) | .tag_name' \
                   | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)"
-          [[ -n "$TAG" ]] || { echo "::error::no vN.N.N tag found in this repository"; exit 1; }
+          [[ -n "$TAG" ]] || { echo "::error::no stable vN.N.N release found in this repository"; exit 1; }
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           # Age of that release: a tag published minutes ago may still be
-          # building or mirroring, which is not staleness.
+          # building or mirroring, which is not staleness. The date travels as
+          # a positional arg — an env assignment after `node -e` never reaches
+          # the script and made every previous run report age=NaN.
           PUBLISHED="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$TAG" -q '.published_at')"
-          AGE_H="$(node -e 'console.log((Date.now()-Date.parse(process.env.P))/3.6e6)' P="$PUBLISHED")"
+          AGE_H="$(node -e 'const age=(Date.now()-Date.parse(process.argv[1]))/3.6e6; console.log(Number.isFinite(age)?age.toFixed(2):"unknown")' "$PUBLISHED")"
           echo "published=$PUBLISHED" >> "$GITHUB_OUTPUT"
           echo "age_hours=$AGE_H" >> "$GITHUB_OUTPUT"
-          echo "newest tag=$TAG published=$PUBLISHED age=${AGE_H}h"
+          echo "newest stable tag=$TAG published=$PUBLISHED age=${AGE_H}h"
 
       - name: Read what the updater endpoint actually serves
         id: served
@@ -85,7 +89,9 @@ jobs:
 
           if [[ "${SERVED}" != "${WANT}" ]]; then
             # Grace window: the mirror may still be running for a just-cut tag.
-            if (( $(node -e 'console.log(Number(process.env.A) < 6)' A="$NEWEST_AGE_H") )); then
+            # An unparsable age must never crash the step — treat it as stale.
+            GRACE="$(node -e 'const age=Number(process.argv[1]); console.log(Number.isFinite(age) && age < 6 ? "grace" : "stale")' "${NEWEST_AGE_H}")"
+            if [[ "${GRACE}" == "grace" ]]; then
               echo "::warning::served ${SERVED} != newest ${WANT}, but ${NEWEST} was published <6h ago — assuming the release pipeline is still running."
               exit 0
             fi

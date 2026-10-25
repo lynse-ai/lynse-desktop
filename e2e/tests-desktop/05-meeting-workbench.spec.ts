@@ -164,10 +164,63 @@ async function settings(page: import("@playwright/test").Page) {
   return panel;
 }
 
+// The topic-file memory library lives at /memory/manage; the AI Assistant
+// settings section links to it with a button labelled by the page title.
 async function openLibrary(page: import("@playwright/test").Page) {
   const dialog = await appSettings(page, "AI Assistant");
-  await dialog.getByRole("button",{name:"Memory management",exact:true}).click();
-  await page.getByRole("button",{name:"Notes and files",exact:true}).click();
+  await dialog.getByRole("button",{name:"Memory",exact:true}).click();
+}
+
+interface MemoryTopicFileSeed { path: string; title: string; folder?: string; markdown: string }
+
+/**
+ * Stateful mock for the cloud memory-file API the topic library drives
+ * (capabilities, /files, /files/read, /files/save, /files/create). Register
+ * AFTER installWorkbench: Playwright routes are LIFO, so this handler then
+ * serves every /memory/ call in the test.
+ */
+function mockMemoryTopicFiles(page: import("@playwright/test").Page, seeds: MemoryTopicFileSeed[], saveFailure: { conflict?: boolean; failSave?: boolean } = {}) {
+  const files = seeds.map(seed => ({ ...seed, revision: "rev-1", recordIds: [] as string[], pendingUpdates: [] as unknown[] }));
+  const descriptor = (file: (typeof files)[number]) => ({
+    path: file.path, title: file.title, revision: file.revision, editable: true,
+    recordIds: file.recordIds, pendingCount: 0, ...(file.folder ? { folder: file.folder } : {}),
+  });
+  const document = (file: (typeof files)[number]) => ({
+    ...descriptor(file), folder: file.folder ?? "", markdown: file.markdown,
+    members: [] as unknown[], pendingUpdates: file.pendingUpdates,
+  });
+  void page.route(/\/api\/(?:business\/ai\/)?memory\//, async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname.split("/memory/")[1]!;
+    let result: unknown;
+    if (path === "capabilities") result = { user_id: "user-e2e", available: true, protocol_version: 4, features: { memory_management: true, topic_files: true }, policy: null, projections: false, todo_four_states: false };
+    else if (path === "files") result = { files: files.map(descriptor) };
+    else if (path === "files/read") {
+      const target = new URL(request.url()).searchParams.get("path");
+      const file = files.find(item => item.path === target);
+      if (!file) { await route.fulfill({ status: 404, json: { error: { code: "not_found" } } }); return; }
+      result = document(file);
+    }
+    else if (path === "files/save") {
+      const body = request.postDataJSON() as { path: string; revision: string; markdown: string };
+      const file = files.find(item => item.path === body.path);
+      if (!file) { await route.fulfill({ status: 404, json: { error: { code: "not_found" } } }); return; }
+      if (saveFailure.conflict) { await route.fulfill({ status: 409, json: { error: { code: "revision_conflict" } } }); return; }
+      if (saveFailure.failSave) { await route.fulfill({ status: 503, json: { error: { code: "unavailable" } } }); return; }
+      file.markdown = body.markdown;
+      file.revision = `rev-${Number(file.revision.slice(4)) + 1}`;
+      result = document(file);
+    }
+    else if (path === "files/create") {
+      const body = request.postDataJSON() as { title: string };
+      const file = { path: `memory/${body.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.md`, title: body.title, folder: undefined, revision: "rev-1", recordIds: [] as string[], pendingUpdates: [] as unknown[], markdown: `# ${body.title}\n` };
+      files.push(file);
+      result = document(file);
+    }
+    else { await route.fulfill({ status: 404, json: { error: { code: "not_found" } } }); return; }
+    await route.fulfill({ status: 200, json: result });
+  });
+  return { files, saveFailure };
 }
 
 async function appSettings(page: import("@playwright/test").Page, section = "Notes Sync") {
@@ -192,104 +245,87 @@ async function updateWorkbench(page: import("@playwright/test").Page, patch: Par
 test("Markdown memory files preserve drafts, save, preview and create notes without AI consent", async ({page,mockServer}) => {
   await openWorkspace(page,mockServer.url);
   await installWorkbench(page);
+  const memory = mockMemoryTopicFiles(page, [{ path: "memory/long-term.md", title: "Long-term memory", markdown: "# Long-term memory\n\nReady to continue." }]);
   await openWiki(page);
   await openLibrary(page);
-  const library = page.getByRole("region", {name:"Lynclaw memory",exact:true});
+  const library = page.getByRole("region", {name:"Memory files",exact:true});
   const files = library.getByRole("navigation", {name:"Memory files",exact:true});
-  const document = library.getByRole("article", {name:"Memory document",exact:true});
-  await expect(document.getByRole("heading", {name:"Long-term memory",exact:true}).first()).toBeVisible();
-  await document.getByRole("button", {name:"Edit document",exact:true}).click();
-  await document.getByRole("textbox", {name:"Markdown content",exact:true}).fill("# My preferences\n\n- **Reply in Chinese**\n- Keep project context");
-  await files.getByRole("button", {name:/Memory overview/}).click();
-  await files.getByRole("button", {name:/Long-term memory/}).click();
-  await expect(document).toContainText("Reply in Chinese");
-  await document.getByRole("button", {name:"Save document",exact:true}).click();
-  await expect(document.getByRole("status")).toHaveText("Synced with Lynclaw");
-  await expect(document.locator("strong")).toHaveText("Reply in Chinese");
-  await library.getByRole("button", {name:"Create memory",exact:true}).click();
-  const dialog = page.getByRole("dialog", {name:"Create memory",exact:true});
-  await dialog.getByRole("textbox", {name:"Memory title",exact:true}).fill("Project agreements");
-  await dialog.getByRole("button", {name:"Create memory",exact:true}).click();
-  await expect(document.getByRole("heading", {name:"Project agreements",exact:true}).first()).toBeVisible();
-  await document.getByRole("button", {name:"Edit document",exact:true}).click();
-  await document.getByRole("textbox", {name:"Markdown content",exact:true}).fill("# Project agreements\n\nDraft to keep while browsing.");
-  await page.getByRole("main", {name:"Memory management",exact:true}).getByRole("button", {name:"Back",exact:true}).click();
+  await expect(files.getByRole("button", {name:/Long-term memory/})).toBeVisible();
+  await library.getByRole("button", {name:"Edit Markdown",exact:true}).click();
+  const editor = library.getByRole("textbox", {name:"Memory content",exact:true});
+  await editor.fill("# My preferences\n\n- **Reply in Chinese**\n- Keep project context");
+  // The draft survives leaving the page and coming back without a save.
+  await page.getByRole("main", {name:"Memory",exact:true}).getByRole("button", {name:"Back",exact:true}).click();
   await page.getByRole("button",{name:"E2",exact:true}).click();
   await page.getByRole("menuitem",{name:"Settings",exact:true}).click();
   await page.getByRole("dialog").getByRole("button",{name:"AI Assistant",exact:true}).click();
   await expect(page.getByRole("dialog").getByRole("button",{name:"AI Assistant",exact:true})).toHaveAttribute("aria-current","true");
   await page.keyboard.press("Escape");
   await openLibrary(page);
-  await expect(document.getByRole("textbox", {name:"Markdown content",exact:true})).toHaveValue(/Draft to keep/);
-  await document.getByRole("button", {name:"Preview",exact:true}).click();
-  await expect(document).toContainText("Draft to keep while browsing.");
-  await files.getByRole("button", {name:/Memory overview/}).click();
-  await expect(document).toContainText("Generated index");
-  await expect(document.getByRole("button", {name:"Edit document",exact:true})).toHaveCount(0);
+  // Re-entry opens in read mode; the unsaved draft is still flagged and kept.
+  await expect(library.getByRole("status")).toContainText("Unsaved changes");
+  await library.getByRole("button", {name:"Edit Markdown",exact:true}).click();
+  await expect(library.getByRole("textbox", {name:"Memory content",exact:true})).toHaveValue(/Reply in Chinese/);
+  await library.getByRole("button", {name:"Save",exact:true}).click();
+  await expect(library.getByRole("status")).toHaveText("Saved");
+  expect(memory.files[0]!.markdown).toContain("Reply in Chinese");
+  // Saving returns to the read-only Markdown view.
+  await expect(library.locator("strong")).toHaveText("Reply in Chinese");
+  await library.getByRole("button", {name:"New memory",exact:true}).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("textbox", {name:"File name (English)",exact:true}).fill("Project agreements");
+  await dialog.getByRole("button", {name:"Save",exact:true}).click();
+  const created = files.getByRole("button", {name:/Project agreements/});
+  await expect(created).toBeVisible();
+  await expect(created).toHaveAttribute("aria-current","page");
+  await expect(library.getByRole("heading", {name:"Project agreements"}).first()).toBeVisible();
   await page.setViewportSize({width:690,height:900});
   expect(await library.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
-  await files.getByRole("button", {name:/Project agreements/}).click();
   await page.screenshot({path:test.info().outputPath("markdown-memory-compact.png"),animations:"disabled"});
 });
 
 test("Markdown memory conflicts retain the draft until the saved file is explicitly loaded", async ({page,mockServer}) => {
   await openWorkspace(page,mockServer.url);
   await installWorkbench(page);
+  const memory = mockMemoryTopicFiles(page, [{ path: "memory/notes.md", title: "Notes", markdown: "# Saved version" }], { conflict: true });
   await openWiki(page);
   await openLibrary(page);
-  const library = page.getByRole("region", {name:"Lynclaw memory",exact:true});
-  const document = library.getByRole("article", {name:"Memory document",exact:true});
-  await document.getByRole("button", {name:"Edit document",exact:true}).click();
-  const editor = document.getByRole("textbox", {name:"Markdown content",exact:true});
+  const library = page.getByRole("region", {name:"Memory files",exact:true});
+  await library.getByRole("button", {name:"Edit Markdown",exact:true}).click();
+  const editor = library.getByRole("textbox", {name:"Memory content",exact:true});
   await editor.fill("# My unsaved correction");
-  await page.evaluate(async () => {
-    const runtime = window as unknown as {__TAURI_INTERNALS__:{invoke:(command:string,args:unknown)=>Promise<unknown>}};
-    await runtime.__TAURI_INTERNALS__.invoke("e2e_memory_external_edit", {path:"MEMORY.md",markdown:"# Edited outside Lynse"});
-  });
-  await document.getByRole("button", {name:"Save document",exact:true}).click();
-  await expect(document.getByRole("alert")).toContainText("Your draft has been kept");
+  await library.getByRole("button", {name:"Save",exact:true}).click();
+  await expect(library.getByRole("alert")).toContainText("changed. Refresh and preview again.");
   await expect(editor).toHaveValue("# My unsaved correction");
-  await document.getByRole("button", {name:"Load saved version",exact:true}).click();
-  const dialog = page.getByRole("dialog", {name:"Discard this draft?",exact:true});
+  await library.getByRole("button", {name:"Reload saved version",exact:true}).click();
+  const dialog = page.getByRole("dialog", {name:"Discard unsaved changes?",exact:true});
   await dialog.getByRole("button", {name:"Cancel",exact:true}).click();
   await expect(editor).toHaveValue("# My unsaved correction");
-  await document.getByRole("button", {name:"Load saved version",exact:true}).click();
-  await dialog.getByRole("button", {name:"Load saved version",exact:true}).click();
-  await expect(document.getByRole("heading", {name:"Edited outside Lynse",exact:true})).toBeVisible();
+  await library.getByRole("button", {name:"Reload saved version",exact:true}).click();
+  await page.getByRole("dialog", {name:"Discard unsaved changes?",exact:true}).getByRole("button", {name:"Reload saved version",exact:true}).click();
+  await expect(library.locator("h1")).toHaveText("Saved version");
 });
 
-test("cloud memory labels offline edits as pending and retries on reconnect", async ({page,mockServer}) => {
+test("cloud memory keeps offline edits and saves them once the connection returns", async ({page,mockServer}) => {
   await openWorkspace(page,mockServer.url);
   await installWorkbench(page);
-  await page.evaluate(() => {
-    const hook = (window as unknown as {__LYNSE_E2E__:{setCommand:(name:string,handler:(args:Record<string,unknown>)=>unknown)=>void}}).__LYNSE_E2E__;
-    let online = false;
-    const doc = {path:"MEMORY.md",title:"Shared memory",kind:"note",editable:true,markdown:"# Shared memory",revision:"cloud:1",citations:[],syncState:"synced"};
-    hook.setCommand("e2e_cloud_online", () => { online=true; });
-    hook.setCommand("workbench_memory_files", (args) => {
-      const request=args.request as {action:string;markdown:string};
-      if(request.action === "list") {
-        if(online && doc.syncState === "pending") { doc.syncState="synced";doc.revision="cloud:2"; }
-        return [{path:doc.path,title:doc.title,kind:doc.kind,editable:true}];
-      }
-      if(request.action === "save") {doc.markdown=request.markdown;doc.revision="local:draft";doc.syncState="pending";}
-      return structuredClone(doc);
-    });
-  });
+  const memory = mockMemoryTopicFiles(page, [{ path: "memory/shared.md", title: "Shared memory", markdown: "# Shared memory" }], { failSave: true });
   await openWiki(page);
   await openLibrary(page);
-  const doc = page.getByRole("article", {name:"Memory document",exact:true});
-  await doc.getByRole("button", {name:"Edit document",exact:true}).click();
-  await doc.getByRole("textbox", {name:"Markdown content",exact:true}).fill("# Offline correction");
-  await doc.getByRole("button", {name:"Save document",exact:true}).click();
-  await expect(doc.getByRole("status")).toHaveText("Saved on this device · waiting to sync");
-  await page.evaluate(async () => {
-    const runtime = window as unknown as {__TAURI_INTERNALS__:{invoke:(command:string,args:unknown)=>Promise<unknown>}};
-    await runtime.__TAURI_INTERNALS__.invoke("e2e_cloud_online", {});
-    window.dispatchEvent(new Event("online"));
-  });
-  await expect(doc.getByRole("status")).toHaveText("Synced with Lynclaw");
-  await expect(doc.getByRole("heading", {name:"Offline correction",exact:true})).toBeVisible();
+  const library = page.getByRole("region", {name:"Memory files",exact:true});
+  await library.getByRole("button", {name:"Edit Markdown",exact:true}).click();
+  const editor = library.getByRole("textbox", {name:"Memory content",exact:true});
+  await editor.fill("# Offline correction");
+  await library.getByRole("button", {name:"Save",exact:true}).click();
+  await expect(library.getByRole("alert")).toContainText("The operation could not be completed");
+  await expect(editor).toHaveValue("# Offline correction");
+  // Back online: the library refreshes itself and the retry persists the draft.
+  memory.saveFailure.failSave = false;
+  await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  await expect(library.getByRole("button", {name:"Save",exact:true})).toBeEnabled();
+  await library.getByRole("button", {name:"Save",exact:true}).click();
+  await expect(library.getByRole("status")).toHaveText("Saved");
+  expect(memory.files[0]!.markdown).toContain("Offline correction");
 });
 
 test("default embeddings can be configured, changed and disabled without losing saved choices", async ({page,mockServer}) => {
@@ -459,33 +495,29 @@ test("normal sync fills missing files and cloud refresh is an explicit action", 
 });
 
 test("Lynclaw memory clears drafts and documents when switching accounts",async({page,mockServer})=>{
-  await openWorkspace(page,mockServer.url);await installWorkbench(page);await openLibrary(page);
-  const document=page.getByRole("article",{name:"Memory document",exact:true});
-  await document.getByRole("button",{name:"Edit document",exact:true}).click();
-  await document.getByRole("textbox",{name:"Markdown content",exact:true}).fill("Previous account private draft");
+  await openWorkspace(page,mockServer.url);await installWorkbench(page);
+  mockMemoryTopicFiles(page,[{path:"memory/shared.md",title:"Shared memory",markdown:"# Shared memory"}]);await openLibrary(page);
+  const library=page.getByRole("region",{name:"Memory files",exact:true});
+  await library.getByRole("button",{name:"Edit Markdown",exact:true}).click();
+  await library.getByRole("textbox",{name:"Memory content",exact:true}).fill("Previous account private draft");
   await page.evaluate(async url=>{
     const runtime=window as unknown as {desktopAPI:{workbench:{status:()=>Promise<Record<string,unknown>>}};__LYNSE_E2E__:{setCommand:(name:string,handler:(args:Record<string,unknown>)=>unknown)=>void}};
     const status={...await runtime.desktopAPI.workbench.status(),scope:"second-account",userId:"second-user",memories:[],entries:[]};
     runtime.__LYNSE_E2E__.setCommand("workbench_bind",()=>status);
     runtime.__LYNSE_E2E__.setCommand("workbench_status",()=>status);
-    const document={path:"MEMORY.md",title:"Second account memory",kind:"note",editable:true,markdown:"# Second account only",revision:"1",citations:[]};
-    runtime.__LYNSE_E2E__.setCommand("workbench_memory_files",args=>{
-      if(args.scope!==status.scope)throw new Error("Account changed");
-      return (args.request as {action:string}).action==="list"?[document]:document;
-    });
     (await import(url)).getAuthStore().getState().setUser({id:"second-user",name:"Second user",email:"second@example.test"});
   },`/@fs${resolve(__dirname,"../../packages/core/auth/index.ts")}`);
-  await page.getByRole("button",{name:"Notes and files",exact:true}).click();
-  await expect(document.getByRole("heading",{name:"Second account only",exact:true})).toBeVisible();
+  await expect(library.getByRole("button",{name:/Shared memory/})).toBeVisible();
   await expect(page.getByText("Previous account private draft",{exact:true})).toHaveCount(0);
   const drafts=await page.evaluate(async url=>(await import(url)).useMemoryDrafts.getState().drafts,`/@fs${resolve(__dirname,"../../packages/views/workbench/memory-drafts.ts")}`);
   expect(drafts).toEqual({});
 });
 
 test("Chinese Lynclaw memory and its AI settings entry remain reachable at narrow widths and zoom",async({page,mockServer})=>{
-  await openWorkspace(page,mockServer.url);await installWorkbench(page);await openLibrary(page);
+  await openWorkspace(page,mockServer.url);await installWorkbench(page);
+  mockMemoryTopicFiles(page,[{path:"memory/shared.md",title:"Shared memory",markdown:"# Shared memory"}]);await openLibrary(page);
   await page.evaluate(async url=>{await (await import(url)).changeLanguage("zh-Hans");},`/@fs${resolve(__dirname,"../../packages/core/i18n/react.ts")}`);
-  const memory=page.getByRole("main",{name:"记忆管理",exact:true});
+  const memory=page.getByRole("main",{name:"记忆",exact:true});
   for(const zoom of ["1","2"]){
     // Browser zoom reduces the CSS viewport; CSS zoom on the root instead
     // enlarges fixed dialogs without changing viewport units.
@@ -496,7 +528,7 @@ test("Chinese Lynclaw memory and its AI settings entry remain reachable at narro
     await page.getByRole("menuitem",{name:"设置",exact:true}).click();
     await page.getByRole("dialog",{name:"设置",exact:true}).getByRole("button",{name:"AI 助手",exact:true}).click();
     const settings=page.getByRole("dialog",{name:"设置",exact:true});
-    const entry=settings.getByRole("button",{name:"记忆管理",exact:true});
+    const entry=settings.getByRole("button",{name:"记忆",exact:true});
     await expect(settings.getByRole("button",{name:"AI 助手",exact:true})).toHaveAttribute("aria-current","true");
     await entry.scrollIntoViewIfNeeded();await expect(entry).toBeInViewport();
     expect(await entry.evaluate(el=>{const bounds=el.getBoundingClientRect();return bounds.left>=0&&bounds.right<=window.innerWidth;})).toBe(true);

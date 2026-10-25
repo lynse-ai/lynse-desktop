@@ -127,8 +127,26 @@ test("WorkBuddy cloud streams, reuses tasks, answers approvals and restores hist
   expect(stats.prompts.map((entry) => entry.taskId)).toEqual(["task-1", "task-2", "task-1", "task-1"]);
   expect(stats.answers).toEqual([{ jsonrpc: "2.0", id: "approve-1", result: { outcome: { outcome: "selected", optionId: "allow" } } }]);
   await expect(page.getByRole("button", { name: /Cloud plan.md/ }).first()).toBeVisible();
+  // Markdown artifacts are direct-download cards: the native save dialog is
+  // pre-filled with the document's derived title, then Rust writes the bytes.
+  await page.evaluate(() => {
+    const hooks = (window as unknown as { __LYNSE_E2E__: { setCommand: (name: string, handler: (args: Record<string, unknown>) => unknown) => void } }).__LYNSE_E2E__;
+    const state = { paths: [] as string[], byteCounts: [] as number[] };
+    (window as unknown as { __workbuddySaves: typeof state }).__workbuddySaves = state;
+    hooks.setCommand("plugin:dialog|save", (args) => {
+      const defaultPath = String((args.options as { defaultPath?: string } | undefined)?.defaultPath ?? "");
+      state.paths.push(defaultPath);
+      return "/tmp/lynse-e2e/" + defaultPath;
+    });
+    hooks.setCommand("workbuddy_cloud_save_bytes", (args) => {
+      state.byteCounts.push(Array.isArray(args.bytes) ? args.bytes.length : 0);
+      return null;
+    });
+  });
   await page.getByRole("button", { name: /Cloud plan.md/ }).first().click();
-  await expect(page.getByRole("heading", { name: "Cloud plan", exact: true })).toBeVisible();
+  const readSaves = () => page.evaluate(() => (window as unknown as { __workbuddySaves: { paths: string[]; byteCounts: number[] } }).__workbuddySaves);
+  await expect.poll(readSaves, { timeout: 10_000 }).toEqual({ paths: ["Cloud plan.md"], byteCounts: [expect.any(Number)] });
+  expect((await readSaves()).byteCounts[0]).toBeGreaterThan(0);
   await page.keyboard.press("Escape");
   await page.screenshot({ path: "test-results/workbuddy-cloud.png" });
   await expect.poll(async () => page.evaluate(() => Object.values(localStorage).join("\n"))).toContain("task-1");

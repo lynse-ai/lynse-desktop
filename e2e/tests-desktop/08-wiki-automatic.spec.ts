@@ -11,7 +11,7 @@ test("first setup requires an explicit folder selection and starts automatic org
   await page.getByRole("button",{name:"Enable automatic organization",exact:true}).click();
   await expect(page.getByRole("alert")).toContainText("Choose at least one");
   await page.getByRole("checkbox",{name:"Work",exact:true}).check();
-  await expect(page.getByText(/sent to your configured AI service/)).toBeVisible();
+  await expect(page.getByText(/uses summaries from the selected meetings/)).toBeVisible();
   await page.getByRole("button",{name:"Enable automatic organization",exact:true}).click();
   await expect(page.getByRole("group").getByRole("button",{name:"灵光记项目",exact:true})).toBeVisible();
   expect(await page.evaluate(()=>(window as unknown as {wikiTest:{configure:unknown[]}}).wikiTest.configure)).toEqual([{enabled:false,allowAi:false,automation:{folderIds:["folder-work"],includeUnfiled:false}},{enabled:true,allowAi:true,automation:{folderIds:["folder-work"],includeUnfiled:false}}]);

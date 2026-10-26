@@ -5070,11 +5070,16 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                     .get_webview_window("live-subtitles")
                     .map(|window| window.is_visible().unwrap_or(false))
                     .unwrap_or(false);
-                if let Err(error) =
-                    live_translation::live_translation_show_subtitles(app.clone(), !visible)
-                {
-                    log::error!("Failed to toggle live subtitles: {error}");
-                }
+                // The build must run off this (main-thread) menu handler —
+                // window creation deadlocks on Windows here.
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) =
+                        live_translation::live_translation_show_subtitles(app, !visible).await
+                    {
+                        log::error!("Failed to toggle live subtitles: {error}");
+                    }
+                });
             }
             "quit" => {
                 app.exit(0);

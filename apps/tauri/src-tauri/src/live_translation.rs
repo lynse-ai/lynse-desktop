@@ -3791,6 +3791,11 @@ static ISLAND_ANIMATION_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// race the page load, so the reveal defers to the page-load hook there.
 static ISLAND_WEBVIEW_READY: AtomicBool = AtomicBool::new(false);
 static ISLAND_PENDING_REVEAL: AtomicBool = AtomicBool::new(false);
+/// Latest island visibility the app asked for. The window is built on the
+/// async runtime and can finish after a stop (a capture start that fails
+/// immediately), so the postponed reveal re-checks this instead of popping a
+/// pill for a session that is already gone.
+static ISLAND_REVEAL_WANTED: AtomicBool = AtomicBool::new(false);
 
 /// Quintic ease-out — the "scroll snaps down" curve: a fast departure that
 /// settles silky-smooth into place.
@@ -3977,6 +3982,7 @@ pub(crate) fn main_window_visible(app: &AppHandle) -> bool {
 /// the island keeps elapsed time, live mic level and pause/stop reachable,
 /// mirroring the macOS "dynamic island" interaction.
 pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
+    ISLAND_REVEAL_WANTED.store(visible, Ordering::Release);
     if let Some(window) = app.get_webview_window("recording-island") {
         if visible {
             reveal_recording_island(app, &window);
@@ -3991,14 +3997,7 @@ pub fn set_recording_island_visible(app: &AppHandle, visible: bool) {
     if !visible {
         return;
     }
-    let window = match build_recording_island_window(app) {
-        Ok(window) => window,
-        Err(error) => {
-            log::error!("Failed to create recording island window: {error}");
-            return;
-        }
-    };
-    reveal_recording_island(app, &window);
+    spawn_recording_island_build(app.clone(), "Failed to create recording island window");
 }
 
 /// Creates the island webview WITHOUT showing it. The window (once created)
@@ -4009,12 +4008,41 @@ pub fn ensure_recording_island_window(app: &AppHandle) {
     if app.get_webview_window("recording-island").is_some() {
         return;
     }
-    if let Err(error) = build_recording_island_window(app) {
-        log::error!("Failed to pre-create recording island window: {error}");
-    }
+    // Pre-creation is explicitly hidden; a later minimize flips this to true.
+    ISLAND_REVEAL_WANTED.store(false, Ordering::Release);
+    spawn_recording_island_build(app.clone(), "Failed to pre-create recording island window");
+}
+
+/// Build the island off the main thread. Callers include sync commands and
+/// window/tray event handlers, which all run on the main thread — and creating
+/// a webview window there deadlocks on Windows (the same WebView2 issue that
+/// kept the WeChat/About popups from appearing). The reveal is re-checked
+/// against the latest intent so a stop during the build cannot leave the pill.
+fn spawn_recording_island_build(app: AppHandle, failure_context: &'static str) {
+    tauri::async_runtime::spawn(async move {
+        if let Some(window) = app.get_webview_window("recording-island") {
+            if ISLAND_REVEAL_WANTED.load(Ordering::Acquire) {
+                reveal_recording_island(&app, &window);
+            }
+            return;
+        }
+        match build_recording_island_window(&app) {
+            Ok(window) => {
+                if ISLAND_REVEAL_WANTED.load(Ordering::Acquire) {
+                    reveal_recording_island(&app, &window);
+                }
+            }
+            Err(error) => log::error!("{failure_context}: {error}"),
+        }
+    });
 }
 
 fn build_recording_island_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
+    // A rebuilt island (crash recovery) is a fresh webview: clear the readiness
+    // and any pending reveal left by the destroyed one so the new page load is
+    // awaited before showing (pre-load reveals stay invisible on Windows).
+    ISLAND_WEBVIEW_READY.store(false, Ordering::Release);
+    ISLAND_PENDING_REVEAL.store(false, Ordering::Release);
     let builder = WebviewWindowBuilder::new(
         app,
         "recording-island",
@@ -4153,8 +4181,10 @@ pub fn live_translation_hide_main(
     Ok(())
 }
 
+/// MUST stay `async`: building this window from a synchronous command
+/// deadlocks on Windows (Tauri's `WebviewWindowBuilder::build` known issue).
 #[tauri::command]
-pub fn live_translation_show_subtitles(app: AppHandle, show: bool) -> CommandResult<()> {
+pub async fn live_translation_show_subtitles(app: AppHandle, show: bool) -> CommandResult<()> {
     if let Some(window) = app.get_webview_window("live-subtitles") {
         if show {
             window.show().map_err(|error| error.to_string())?;

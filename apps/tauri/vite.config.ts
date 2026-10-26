@@ -9,6 +9,10 @@ export default defineConfig({
     port: 5174,
     strictPort: true,
   },
+  optimizeDeps: {
+    // Keep dependency scanning out of Rust build artifacts and test symlinks.
+    entries: ["index.html", "onboarding-preview.html", "permission-preview.html"],
+  },
   resolve: {
     dedupe: ["react", "react-dom"],
   },

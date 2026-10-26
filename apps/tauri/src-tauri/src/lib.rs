@@ -5359,6 +5359,7 @@ pub fn run() {
             local_stt_config_get, local_stt_config_save,
             local_stt_set_locale, local_stt_default_provider,
             vault::vault_config_get, vault::vault_config_save, vault::vault_default_path, vault::vault_open_folder,
+            vault::vault_access_check, vault::vault_repair_folder_consent,
             vault::vault_write_note, vault::vault_write_notes, vault::vault_read_note,
             vault::vault_remove_note,
             storage::storage_usage, storage::storage_reveal, storage::storage_clear,

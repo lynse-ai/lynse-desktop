@@ -14,7 +14,7 @@
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::vault::{self, ContentKind, VaultConfig};
 use crate::{local_store_path, read_array, write_array, CommandResult};
@@ -252,13 +252,37 @@ pub(crate) fn relocate_user_content(
 
 /// Launch-time hook: content follows the vault folder for installs that
 /// enabled it before this feature shipped. No live session can exist yet.
+///
+/// A failure that stems from an OS privacy refusal (the macOS "Files and
+/// Folders" consent is missing/denied) must not die in the log: the app
+/// keeps running with sync silently broken, which is exactly the state
+/// upgrading users report as "sync stopped working". The refusal is
+/// re-classified and broadcast so the renderer can surface the grant
+/// hint (and poll until the user flips the switch in System Settings).
 pub(crate) fn migrate_on_launch(app: &AppHandle) -> CommandResult<()> {
     let config = vault::load_vault_config(app)?;
     if !config.enabled {
         return Ok(());
     }
-    relocate_user_content(app, &VaultConfig::default(), &config)
+    let result = relocate_user_content(app, &VaultConfig::default(), &config);
+    if let Err(error) = result.as_ref() {
+        // Probe the live folder instead of threading io::Error kinds through
+        // the merge/copy recursion: a genuine refusal reproduces here.
+        if let Ok(report) = vault::vault_access_report(app) {
+            if report.state == vault::VaultAccessState::PermissionDenied {
+                log::error!("[vault] launch migration blocked by folder permission: {error}");
+                let _ = app.emit(
+                    VAULT_ACCESS_DENIED_EVENT,
+                    json!({ "path": report.path, "detail": error }),
+                );
+            }
+        }
+    }
+    result
 }
+
+/// Broadcast when the launch migration hits a folder-consent refusal.
+pub(crate) const VAULT_ACCESS_DENIED_EVENT: &str = "vault-access-denied";
 
 #[cfg(test)]
 mod tests {

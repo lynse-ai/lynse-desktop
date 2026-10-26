@@ -30,7 +30,9 @@ import {
   usePendingRecordingStore,
 } from "../live-translation/pending-recording-store";
 import {
+  batchHasPermissionError,
   getDesktopVaultApi,
+  isVaultPermissionError,
   markVaultLastSync,
   syncAllNotesToVault,
   useVaultConfig,
@@ -476,17 +478,25 @@ export function NotesPage() {
       });
       markVaultLastSync();
       if (summary.failed > 0) {
-        toast.error(
-          t("vault.sync_partial", { written: summary.written + (summary.reused ?? 0), failed: summary.failed }),
-          { id: loadingToastId },
-        );
+        if (batchHasPermissionError(summary)) {
+          toast.error(t("vault.sync_permission_denied"), { id: loadingToastId, duration: 10000 });
+        } else {
+          toast.error(
+            t("vault.sync_partial", { written: summary.written + (summary.reused ?? 0), failed: summary.failed }),
+            { id: loadingToastId },
+          );
+        }
       } else {
         toast.success(t("vault.sync_done", { count: summary.written + (summary.reused ?? 0) }), { id: loadingToastId });
       }
     } catch (error) {
-      toast.error(t("vault.sync_failed", { error: error instanceof Error ? error.message : "" }), {
-        id: loadingToastId,
-      });
+      if (isVaultPermissionError(error)) {
+        toast.error(t("vault.sync_permission_denied"), { id: loadingToastId, duration: 10000 });
+      } else {
+        toast.error(t("vault.sync_failed", { error: error instanceof Error ? error.message : "" }), {
+          id: loadingToastId,
+        });
+      }
     } finally {
       setVaultSyncing(false);
     }

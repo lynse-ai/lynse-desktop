@@ -90,6 +90,11 @@ type DesktopAppApi = {
   /** Pre-auth compact welcome window (true, 690×450) vs dashboard size
    * (false, 960×600). No-op outside the desktop app. */
   setCompactWindowSize: (active: boolean) => Promise<void>;
+  /** Enlarge the window while the permission onboarding is up (its four
+   * rows outgrow the dashboard face) and restore the previous frame on
+   * exit. Optional — absent on web and older desktop builds. */
+  enterOnboardingWindowSize?: () => Promise<void>;
+  exitOnboardingWindowSize?: () => Promise<void>;
   /** WeChat OAuth sign-in window (desktop only). The authorize page opens in
    * an embedded window; the code+state redirect is relayed back as a URL. */
   wechat?: {

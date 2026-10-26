@@ -122,6 +122,154 @@ pub(crate) fn vault_user_dir(app: &AppHandle) -> CommandResult<Option<PathBuf>> 
     Ok(vault_root(&config).ok())
 }
 
+// ── Folder access check ─────────────────────────────────────────────────
+// macOS guards ~/Documents, ~/Desktop, ~/Downloads and removable/network
+// volumes behind the "Files and Folders" privacy consent. A vault folder
+// under one of them reads fine until the consent is missing or was denied,
+// after which every `std::fs` call fails with EPERM and the mirror/sync
+// silently stops. The check below classifies that state so the renderer
+// can send the user to the exact privacy pane instead of showing a raw
+// "Permission denied (os error 13)".
+
+/// Access state of the configured vault folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VaultAccessState {
+    /// Vault disabled or no folder configured — nothing to check.
+    NotConfigured,
+    /// Folder exists and can be listed and probed.
+    Ok,
+    /// The OS refused access (EPERM / EACCES): the Files and Folders consent
+    /// is missing or denied for this app.
+    PermissionDenied,
+    /// The folder is gone (moved, unmounted volume, deleted).
+    Missing,
+    /// Any other failure, with the raw OS error in `detail`.
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VaultAccessReport {
+    pub state: VaultAccessState,
+    pub path: Option<String>,
+    pub detail: Option<String>,
+}
+
+/// True for the io errors the OS raises when a privacy consent (not a
+/// classic mode bit) stands in the way. On macOS a TCC refusal is EPERM
+/// (`Operation not permitted`, os error 1); plain `PermissionDenied`
+/// (EACCES, os error 13) is folded in too since the user remedy — grant the
+/// folder in System Settings or pick another folder — is the same.
+pub(crate) fn is_permission_error(error: &std::io::Error) -> bool {
+    if error.kind() == std::io::ErrorKind::PermissionDenied {
+        return true;
+    }
+    matches!(error.raw_os_error(), Some(1) | Some(13))
+}
+
+/// Probe `root` the way the sync path does: list it and open one child.
+/// Listing alone can succeed from a cached directory entry while reading
+/// any file inside is refused, so the probe opens a file when there is one.
+fn probe_vault_access(root: &Path) -> Result<(), std::io::Error> {
+    let entries = fs::read_dir(root)?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            fs::File::open(&path)?;
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Classify the configured vault folder's accessibility.
+pub(crate) fn vault_access_report(app: &AppHandle) -> CommandResult<VaultAccessReport> {
+    let config = load_vault_config(app)?;
+    if !config.enabled {
+        return Ok(VaultAccessReport { state: VaultAccessState::NotConfigured, path: None, detail: None });
+    }
+    let root = match vault_root(&config) {
+        Ok(root) => root,
+        Err(_) => {
+            return Ok(VaultAccessReport { state: VaultAccessState::NotConfigured, path: None, detail: None })
+        }
+    };
+    let path = Some(root.to_string_lossy().into_owned());
+    match probe_vault_access(&root) {
+        Ok(()) => Ok(VaultAccessReport { state: VaultAccessState::Ok, path, detail: None }),
+        Err(error) if is_permission_error(&error) => Ok(VaultAccessReport {
+            state: VaultAccessState::PermissionDenied,
+            path,
+            detail: Some(error.to_string()),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(VaultAccessReport {
+            state: VaultAccessState::Missing,
+            path,
+            detail: Some(error.to_string()),
+        }),
+        Err(error) => Ok(VaultAccessReport { state: VaultAccessState::Error, path, detail: Some(error.to_string()) }),
+    }
+}
+
+/// Renderer entry point for the folder access check (settings card,
+/// permission onboarding, post-update recheck).
+#[tauri::command]
+pub fn vault_access_check(app: AppHandle) -> CommandResult<VaultAccessReport> {
+    vault_access_report(&app)
+}
+
+/// Escape hatch for the dead end where System Settings → Files and Folders
+/// shows no Lynse row at all (the TCC entry was never created, or an update
+/// left the pane lookup empty): reset this app's Documents-folder entry so
+/// the very next folder access re-triggers the macOS consent dialog. The
+/// probe right after is what fires that prompt.
+#[tauri::command]
+pub fn vault_repair_folder_consent(app: AppHandle) -> CommandResult<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        let bundle = app.config().identifier.clone();
+        // Absolute path: GUI processes run with a minimal PATH.
+        let ok = std::process::Command::new("/usr/bin/tccutil")
+            .args(["reset", "SystemPolicyDocumentsFolder", &bundle])
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        if ok {
+            // The prompt itself cannot fire for ad-hoc dev binaries (macOS
+            // auto-denies them); properly signed builds re-prompt on the
+            // next folder access — this very probe, or the next launch.
+            log::info!("[vault] tccutil reset SystemPolicyDocumentsFolder ok for {bundle}");
+        } else {
+            log::warn!("[vault] tccutil reset SystemPolicyDocumentsFolder failed for {bundle}");
+        }
+        // The probe itself is the access attempt that makes macOS pop the
+        // consent dialog again once the stale entry is cleared.
+        let _ = vault_access_report(&app);
+        return Ok(ok);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Ok(false)
+    }
+}
+
+/// Turn an io error from a vault read/write into the message shown to the
+/// user: permission refusals get a stable marker the renderer translates
+/// into a "grant folder access" hint; everything else keeps the OS text.
+pub(crate) fn describe_vault_io_error(error: &std::io::Error) -> String {
+    if is_permission_error(error) {
+        format!("{VAULT_PERMISSION_MARKER}: {error}")
+    } else {
+        error.to_string()
+    }
+}
+
+/// Stable prefix the renderer matches on to recognise a folder-consent
+/// failure inside a batch error list (see `vault.sync_permission_hint`).
+pub(crate) const VAULT_PERMISSION_MARKER: &str = "VAULT_PERMISSION_DENIED";
+
 // ── Unified user-content root ───────────────────────────────────────────
 // Once the vault folder is enabled it doubles as the root for app-managed
 // user content (inspiration memos, live recordings, audio-editor exports),
@@ -315,7 +463,7 @@ fn resolve_file_name(root: &Path, note: &VaultNote, index: &VaultIndex) -> Strin
 fn write_note_with_index(root: &Path, note: &VaultNote, index: &mut VaultIndex) -> CommandResult<()> {
     if let Some(name)=index.file_name_for(&note.file_id) {
         let existing=root.join(name);
-        if existing.exists(){let bytes=fs::read(&existing).map_err(|error|error.to_string())?;
+        if existing.exists(){let bytes=fs::read(&existing).map_err(|error|describe_vault_io_error(&error))?;
             if index.stored_hash_for(&note.file_id).is_some_and(|hash|hash!=format!("{:x}",Sha256::digest(&bytes))) && bytes!=note.markdown.as_bytes(){
                 crate::atomic_write(&existing.with_extension("incoming.md"),note.markdown.as_bytes())?;
                 return Err("Local document was edited; preserved it and saved the incoming update separately".into());
@@ -325,8 +473,8 @@ fn write_note_with_index(root: &Path, note: &VaultNote, index: &mut VaultIndex) 
     let file_name = resolve_file_name(root, note, index);
     let target = root.join(&file_name);
     let temporary = target.with_extension("md.tmp");
-    fs::write(&temporary, &note.markdown).map_err(|error| error.to_string())?;
-    fs::rename(&temporary, &target).map_err(|error| error.to_string())?;
+    fs::write(&temporary, &note.markdown).map_err(|error| describe_vault_io_error(&error))?;
+    fs::rename(&temporary, &target).map_err(|error| describe_vault_io_error(&error))?;
     let hash = format!("{:x}", Sha256::digest(note.markdown.as_bytes()));
     index.upsert(&note.file_id, &file_name, &note.title, &hash, &root.to_string_lossy());
     Ok(())
@@ -370,7 +518,7 @@ fn write_note_impl(app: &AppHandle, note: &VaultNote) -> CommandResult<()> {
         return Err("Local vault is disabled".into());
     }
     let root = vault_root(&config)?;
-    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&root).map_err(|error| describe_vault_io_error(&error))?;
     let mut index = VaultIndex::load(app)?;
     write_note_with_index(&root, note, &mut index)?;
     write_array(&local_store_path(app, VAULT_DIR)?, &index.entries)?;
@@ -383,7 +531,7 @@ fn write_notes_impl(app: &AppHandle, notes: &[VaultNote]) -> CommandResult<Vault
         return Err("Local vault is disabled".into());
     }
     let root = vault_root(&config)?;
-    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&root).map_err(|error| describe_vault_io_error(&error))?;
     let mut index = VaultIndex::load(app)?;
     let total = notes.len();
     let mut written = 0;
@@ -510,7 +658,7 @@ pub fn vault_read_note(app: AppHandle, file_id: String) -> CommandResult<Option<
     match fs::read_to_string(root.join(file_name)) {
         Ok(content) => Ok(Some(content)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.to_string()),
+        Err(error) => Err(describe_vault_io_error(&error)),
     }
 }
 
@@ -774,7 +922,7 @@ fn write_entry(app: &AppHandle, entry: &VaultEntry) -> CommandResult<()> {
     let config = load_vault_config(app)?;
     let root = entries_root(app, &config)?;
     let folder = root.join(&entry.folder);
-    fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&folder).map_err(|error| describe_vault_io_error(&error))?;
 
     for (source, relative) in &entry.attachments {
         let destination = root.join(relative);
@@ -822,8 +970,8 @@ fn write_entry(app: &AppHandle, entry: &VaultEntry) -> CommandResult<()> {
     }
     let target = folder.join(&file_name);
     let temporary = target.with_extension("md.tmp");
-    fs::write(&temporary, &entry.markdown).map_err(|error| error.to_string())?;
-    fs::rename(&temporary, &target).map_err(|error| error.to_string())?;
+    fs::write(&temporary, &entry.markdown).map_err(|error| describe_vault_io_error(&error))?;
+    fs::rename(&temporary, &target).map_err(|error| describe_vault_io_error(&error))?;
     index.upsert(&entry.file_id, &file_name, &entry.title, &hash, &root_label);
     index.save_to(app, ENTRIES_INDEX_DIR)
 }
@@ -849,14 +997,18 @@ pub(crate) fn sync_journal(app: &AppHandle, record: &Value) {
                 entry.markdown=entry.markdown.replace(&previous,target);
             }
         }
-        let _ = write_entry(app, &entry);
+        if let Err(error) = write_entry(app, &entry) {
+            log::warn!("[vault] journal mirror write failed for {}: {error}", entry.file_id);
+        }
     }
 }
 
 /// Best-effort mirror write for local todos.
 pub(crate) fn sync_task(app: &AppHandle, record: &Value) {
     if let Some(entry) = build_task_entry(record) {
-        let _ = write_entry(app, &entry);
+        if let Err(error) = write_entry(app, &entry) {
+            log::warn!("[vault] task mirror write failed for {}: {error}", entry.file_id);
+        }
     }
 }
 
@@ -1006,4 +1158,43 @@ mod tests {
         assert!(write_note_with_index(&root,&note,&mut index).is_err());assert_eq!(fs::read_to_string(&path).unwrap(),"Hand-edited text");assert_eq!(fs::read_to_string(path.with_extension("incoming.md")).unwrap(),"Cloud update");fs::remove_dir_all(root).unwrap();
     }
 
+}
+
+#[cfg(test)]
+mod access_tests {
+    use super::*;
+
+    #[test]
+    fn probe_classifies_permission_denied_and_missing() {
+        let root = std::env::temp_dir().join(format!("lynse-vault-access-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("note.md"), "hello").unwrap();
+        assert!(probe_vault_access(&root).is_ok());
+
+        // Strip all permission bits: read_dir fails with EACCES, which
+        // the classifier must fold into the permission bucket.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o000)).unwrap();
+            let err = probe_vault_access(&root).unwrap_err();
+            assert!(is_permission_error(&err), "got {err:?}");
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        fs::remove_dir_all(&root).unwrap();
+        let err = probe_vault_access(&root).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        assert!(!is_permission_error(&err));
+    }
+
+    #[test]
+    fn describe_marks_permission_errors_only() {
+        let denied = std::io::Error::from_raw_os_error(1);
+        assert!(describe_vault_io_error(&denied).starts_with(VAULT_PERMISSION_MARKER));
+        let eacces = std::io::Error::from_raw_os_error(13);
+        assert!(describe_vault_io_error(&eacces).starts_with(VAULT_PERMISSION_MARKER));
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert!(!describe_vault_io_error(&missing).contains(VAULT_PERMISSION_MARKER));
+    }
 }

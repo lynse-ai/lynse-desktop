@@ -2,18 +2,22 @@
 
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { Alert, AlertDescription, AlertTitle } from "@lynse/ui/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/ui/card";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Label } from "@lynse/ui/components/ui/label";
 import { Switch } from "@lynse/ui/components/ui/switch";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
-import { FolderOpen, Loader2 } from "../icons";
+import { FolderOpen, Loader2, ShieldAlert } from "../icons";
+import { getDesktopLiveTranslationApi } from "../live-translation/desktop-api";
+import type { VaultAccessReport } from "../live-translation/types";
 import { getWorkbenchApi, refreshWorkbench, useWorkbench, useWikiEnabled } from "../workbench/api";
 import { WorkbenchSettingsContent } from "../workbench/components";
 import { BetaBadge } from "../beta-badge";
 import {
   getDesktopVaultApi,
+  isVaultPermissionError,
   useVaultConfig,
   VAULT_CONFIG_QUERY_KEY,
   type VaultConfig,
@@ -30,6 +34,7 @@ export function VaultConfigCard({ onManageKnowledge, wikiSettings = false }: { o
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [opening, setOpening] = useState(false);
+  const [access, setAccess] = useState<VaultAccessReport | null>(null);
   const wikiEnabled = useWikiEnabled();
   const workbench = useWorkbench((state) => state.status);
   const lastSync = workbench?.initialComplete ? workbench.updatedAt : null;
@@ -37,6 +42,32 @@ export function VaultConfigCard({ onManageKnowledge, wikiSettings = false }: { o
   useEffect(() => {
     setPath(config?.path ?? null);
   }, [config?.path]);
+
+  // Probe folder access whenever the configured folder changes, and keep
+  // polling while the OS withholds it so the banner clears on its own once
+  // the user flips the grant in System Settings (same cadence as onboarding).
+  const accessBlocked = access?.state === "permissionDenied" || access?.state === "missing";
+  useEffect(() => {
+    const live = getDesktopLiveTranslationApi();
+    if (!live?.vaultAccessCheck || !config?.enabled) {
+      setAccess(null);
+      return;
+    }
+    let cancelled = false;
+    const probe = () => {
+      live.vaultAccessCheck?.()
+        .then((report) => {
+          if (!cancelled) setAccess(report);
+        })
+        .catch(() => undefined);
+    };
+    probe();
+    const timer = accessBlocked ? window.setInterval(probe, 2000) : null;
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearInterval(timer);
+    };
+  }, [config?.enabled, config?.path, accessBlocked]);
 
   if (!vaultApi) return null;
 
@@ -99,15 +130,65 @@ export function VaultConfigCard({ onManageKnowledge, wikiSettings = false }: { o
       await refreshWorkbench();
       toast.dismiss(loadingToastId);
     } catch (error) {
-      toast.error(t("vault.sync_failed", { error: error instanceof Error ? error.message : "" }), {
-        id: loadingToastId,
-      });
+      if (isVaultPermissionError(error)) {
+        toast.error(t("vault.sync_permission_denied"), { id: loadingToastId, duration: 10000 });
+      } else {
+        toast.error(t("vault.sync_failed", { error: error instanceof Error ? error.message : "" }), {
+          id: loadingToastId,
+        });
+      }
     } finally {
       setSyncing(false);
     }
   }
 
   const enabled = config?.enabled ?? false;
+
+  // Banner shown while the OS withholds the folder: the one place the user
+  // is told what to flip, with a jump straight to the pane. Polls away on
+  // its own once the grant lands.
+  const accessBanner = enabled && accessBlocked && (
+    <Alert variant="destructive" className="mt-1">
+      <ShieldAlert className="size-4" />
+      <AlertTitle className="text-xs">
+        {access?.state === "missing" ? t("vault.access_missing_title") : t("vault.access_denied_title")}
+      </AlertTitle>
+      <AlertDescription className="text-2xs leading-relaxed">
+        <p>{access?.state === "missing" ? t("vault.access_missing_hint") : t("vault.access_denied_hint")}</p>
+        {access?.state === "permissionDenied" && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={() => void getDesktopLiveTranslationApi()?.openPrivacyPane("files")}
+            >
+              {t("vault.access_open_settings")}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs text-muted-foreground"
+              onClick={() => {
+                void getDesktopLiveTranslationApi()
+                  ?.vaultRepairConsent?.()
+                  .then((reset) => {
+                    if (reset) toast.info(t("vault.access_repair_done"), { duration: 8000 });
+                    else toast.error(t("vault.access_repair_failed"));
+                  })
+                  .catch(() => toast.error(t("vault.access_repair_failed")))
+                  .then(() => getDesktopLiveTranslationApi()?.vaultAccessCheck?.())
+                  .then((report) => report && setAccess(report))
+                  .catch(() => undefined);
+              }}
+            >
+              {t("vault.access_repair")}
+            </Button>
+          </div>
+        )}
+      </AlertDescription>
+    </Alert>
+  );
 
   const localFiles = <div className="space-y-3">
     <div className="flex items-center justify-between gap-3">
@@ -122,6 +203,7 @@ export function VaultConfigCard({ onManageKnowledge, wikiSettings = false }: { o
       />
     </div>
     <p className="text-2xs leading-relaxed text-muted-foreground text-pretty">{t("vault.hint")}</p>
+    {accessBanner}
 
     {enabled && (
       <>

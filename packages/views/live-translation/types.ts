@@ -137,6 +137,23 @@ export interface LivePermissionStatus {
   restartRequired: boolean;
 }
 
+/** System Settings privacy panes the desktop can jump to. The audio/calendar
+ * kinds double as request targets; `files` and `documents` only open the
+ * Files and Folders / Documents consent panes (no request API exists). */
+export type PrivacyPaneKind = "microphone" | "systemAudio" | "calendar" | "files" | "documents";
+
+/** Accessibility of the configured local vault folder, as probed by the
+ * Rust host (listing plus opening one file — the same calls sync makes).
+ * `permissionDenied` is the macOS Files and Folders consent missing or
+ * refused: every fs call fails with EPERM and sync silently stops. */
+export type VaultAccessState = "notConfigured" | "ok" | "permissionDenied" | "missing" | "error";
+
+export interface VaultAccessReport {
+  state: VaultAccessState;
+  path: string | null;
+  detail: string | null;
+}
+
 export interface LiveConnectionDescriptor {
   source: LiveAudioSource;
   url: string;
@@ -248,8 +265,18 @@ export interface DesktopLiveTranslationApi {
   requestPermission: (kind: "microphone" | "systemAudio" | "calendar") => Promise<LivePermissionStatus>;
   /** Open the OS privacy pane for one permission kind (System Settings on
    * macOS). Backs the onboarding toggles: a request that still ends
-   * ungranted lands the user where the grant actually lives. */
-  openPrivacyPane: (kind: "microphone" | "systemAudio" | "calendar") => Promise<void>;
+   * ungranted lands the user where the grant actually lives. `files` /
+   * `documents` target the Files and Folders consent the vault folder
+   * under ~/Documents depends on. */
+  openPrivacyPane: (kind: PrivacyPaneKind) => Promise<void>;
+  /** Probe the configured vault folder's accessibility. Optional so older
+   * desktop builds (without the command) keep working — callers treat an
+   * absent method as "nothing to check". */
+  vaultAccessCheck?: () => Promise<VaultAccessReport>;
+  /** Reset this app's Documents-folder consent (macOS tccutil) so the next
+   * folder access re-fires the system dialog. Escape hatch for when the
+   * Files and Folders pane lists no Lynse row to flip. */
+  vaultRepairConsent?: () => Promise<boolean>;
   /** List selectable capture/playback endpoints (Windows). Empty lists on
    * platforms without device pickers — the UI hides the selectors then. */
   audioDevices: () => Promise<AudioDevicesSnapshot>;

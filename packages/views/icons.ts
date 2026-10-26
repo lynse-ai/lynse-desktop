@@ -114,6 +114,7 @@ export {
   LockKeyholeOpen,
   Paperclip,
   ShieldCheck,
+  ShieldAlert,      // Permission / folder access withheld
   Download,         // Download / update action
   Palette,          // Appearance / theme visual
   UserCircle,       // User profile / account

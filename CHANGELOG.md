@@ -12,6 +12,20 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.2.1 (2026-10-26)
+
+### Fixed
+
+- Re-check vault folder access after an update and guide through re-granting when macOS withholds the Documents folder, instead of sync failing silently.
+- Explain folder-permission sync failures clearly, jump straight to the matching privacy pane, and offer a consent reset as a fallback.
+- Keep the permission onboarding fully visible in every window state with a roomier layout and a photo backdrop.
+
+### 修复
+
+- 升级后自动复查知识库文件夹访问权限，当 macOS 未授权「文稿」文件夹时给出引导，不再静默同步失败。
+- 因文件夹权限导致的同步失败给出明确说明，可一键跳转对应隐私设置面板，并提供重置授权兜底。
+- 权限引导页在任意窗口状态下保持完整显示，排版更舒展并采用照片背景。
+
 ## 1.2.0 build 247 (2026-10-25)
 
 ### Fixed

@@ -4,7 +4,12 @@ import { emit } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl, openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+
+/** Window frame to restore when the permission onboarding closes. Captured
+ * at enter time so a user-resized (or maximized — untouched) frame comes
+ * back exactly as it was. */
+let savedOnboardingFrame: { width: number; height: number } | null = null;
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { setApiTransportMode } from "@lynse/core/api/client";
@@ -46,6 +51,7 @@ import type {
   LiveTranslationProviderConfig,
   LiveTranslationSnapshot,
   LiveTranslationTrayAction,
+  VaultAccessReport,
 } from "@lynse/views/live-translation";
 import type {
   DesktopMeetingDetectorApi,
@@ -453,6 +459,8 @@ export async function installTauriBridge(): Promise<void> {
       permissions: () => command<LivePermissionStatus>("live_translation_permissions"),
       requestPermission: (kind) => command<LivePermissionStatus>("live_translation_request_permission", { kind }),
       openPrivacyPane: (kind) => command<void>("live_translation_open_privacy_pane", { kind }),
+      vaultAccessCheck: () => command<VaultAccessReport>("vault_access_check"),
+      vaultRepairConsent: () => command<boolean>("vault_repair_folder_consent"),
       audioDevices: () => command<AudioDevicesSnapshot>("live_translation_audio_devices"),
       start: (request: LiveStartRequest) => command<LiveTranslationSnapshot>("live_translation_start", { request }),
       pause: () => command<LiveTranslationSnapshot>("live_translation_pause"),
@@ -511,6 +519,38 @@ export async function installTauriBridge(): Promise<void> {
     },
     appInfo: { version: "0.1.0", build: null, platform: "darwin", sandboxed: false },
     app: {
+      // The permission onboarding carries one more row than the dashboard
+      // face was sized for, so it opens with the window enlarged and hands
+      // the exact previous frame back on exit. A maximized/fullscreen window
+      // is left alone; an already-roomy frame is not shrunk either.
+      enterOnboardingWindowSize: async () => {
+        const win = getCurrentWindow();
+        try {
+          if (await win.isMaximized().catch(() => false)) return;
+          if (await win.isFullscreen().catch(() => false)) return;
+          const scale = await win.scaleFactor();
+          const outer = await win.outerSize();
+          const frame = { width: outer.width / scale, height: outer.height / scale };
+          if (frame.width >= 1100 && frame.height >= 800) return;
+          savedOnboardingFrame = frame;
+          await win.setSize(new LogicalSize(1100, 800));
+          await win.center();
+        } catch {
+          savedOnboardingFrame = null;
+        }
+      },
+      exitOnboardingWindowSize: async () => {
+        const saved = savedOnboardingFrame;
+        savedOnboardingFrame = null;
+        if (!saved) return;
+        const win = getCurrentWindow();
+        try {
+          await win.setSize(new LogicalSize(saved.width, saved.height));
+          await win.center();
+        } catch {
+          // Window gone (quit mid-onboarding) — nothing to restore.
+        }
+      },
       getInfo: () =>
         command<{
           version: string;

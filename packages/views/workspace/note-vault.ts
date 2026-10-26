@@ -42,6 +42,24 @@ export interface VaultBatchSummary {
   errors: string[];
 }
 
+/** Stable prefix the Rust vault layer puts on io errors caused by the OS
+ * withholding folder access (macOS Files and Folders consent). Must match
+ * `VAULT_PERMISSION_MARKER` in `vault.rs`. */
+export const VAULT_PERMISSION_MARKER = "VAULT_PERMISSION_DENIED";
+
+/** True when a sync error (or any error in a batch) is a folder-consent
+ * refusal rather than a plain io failure. */
+export function isVaultPermissionError(error: unknown): boolean {
+  if (error instanceof Error) return error.message.includes(VAULT_PERMISSION_MARKER);
+  if (typeof error === "string") return error.includes(VAULT_PERMISSION_MARKER);
+  return false;
+}
+
+/** True when any error in a batch summary is a folder-consent refusal. */
+export function batchHasPermissionError(summary: Pick<VaultBatchSummary, "errors">): boolean {
+  return summary.errors.some((entry) => entry.includes(VAULT_PERMISSION_MARKER));
+}
+
 export interface VaultSyncProgress {
   done: number;
   total: number;

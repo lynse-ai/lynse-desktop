@@ -1,0 +1,7 @@
+{
+  "en": "What's new\n\n• After an update, Lynse now re-checks access to your vault folder and guides you through re-granting it in System Settings when macOS withholds the Documents folder — instead of sync failing silently.\n• Folder-permission sync failures now show a clear explanation, jump straight to the matching privacy pane, and offer a consent reset as a fallback.\n• The permission welcome page has been refreshed: a larger adaptive window, a softer photo backdrop, and a roomier layout that keeps every row fully visible.",
+  "zh-Hans": "更新内容\n\n• 升级后 Lynse 会自动复查知识库文件夹的访问权限，当 macOS 未授权「文稿」文件夹时给出开启引导，不再静默同步失败。\n• 因文件夹权限导致的同步失败会显示明确说明，可一键跳转对应系统设置，并提供重置授权的兜底方式。\n• 权限引导页全面改版：更大的自适应窗口、柔和的照片背景与更舒展的排版，内容完整显示。",
+  "zh-Hant": "更新內容\n\n• 升級後 Lynse 會自動複查知識庫資料夾的存取權限，當 macOS 未授權「文件」資料夾時給出開啟引導，不再靜默同步失敗。\n• 因資料夾權限導致的同步失敗會顯示明確說明，可一鍵跳轉對應系統設定，並提供重設授權的兜底方式。\n• 權限引導頁全面改版：更大的自適應視窗、柔和的照片背景與更舒展的排版，內容完整顯示。",
+  "ja": "更新内容\n\n• アップデート後、Lynse はヴォールトフォルダへのアクセスを自動的に再確認し、macOS が「書類」フォルダを許可していない場合は案内を表示します。同期が静かに失敗することはありません。\n• フォルダ権限による同期エラーには明確な説明が表示され、対応するシステム設定へワンクリックで移動できるほか、許可のリセットも行えます。\n• 権限ウェルカムページを全面リニューアル：より大きい適応型ウィンドウ、柔らかな写真背景、ゆとりのあるレイアウトで全項目を表示します。",
+  "ko": "업데이트 내용\n\n• 업데이트 후 Lynse 는 볼트 폴더 접근 권한을 자동으로 다시 확인하고, macOS 가 ‘문서’ 폴더를 허용하지 않은 경우 안내를 표시합니다. 동기화가 조용히 실패하는 일이 없습니다.\n• 폴더 권한으로 인한 동기화 실패 시 명확한 설명을 표시하고, 해당 시스템 설정으로 바로 이동하며 권한 재설정 옵션도 제공합니다.\n• 권한 웰컴 페이지를 전면 개편: 더 큰 적응형 창, 부드러운 사진 배경, 여유로운 레이아웃으로 모든 항목이 온전하게 표시됩니다."
+}

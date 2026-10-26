@@ -790,6 +790,12 @@ pub(crate) fn open_macos_privacy_pane(kind: &str) {
     let anchor = match kind {
         "microphone" => "Privacy_Microphone",
         "calendar" => "Privacy_Calendars",
+        // The vault folder lives under ~/Documents; the per-app grant shows
+        // up under "Files and Folders", with the per-service Documents list
+        // as fallback pane (macOS moves it between releases, verified
+        // anchors on macOS 26).
+        "files" => "Privacy_FilesAndFolders",
+        "documents" => "Privacy_DocumentsFolder",
         _ => "Privacy_ScreenCapture",
     };
     let _ = Command::new("open")
@@ -800,8 +806,8 @@ pub(crate) fn open_macos_privacy_pane(kind: &str) {
 }
 
 /// Opens the OS privacy pane for one permission kind: System Settings on
-/// macOS (microphone / screen & system-audio recording / calendar), the
-/// microphone privacy page on Windows (loopback needs no consent there).
+/// macOS (microphone / screen & system-audio recording / calendar / files),
+/// the microphone privacy page on Windows (loopback needs no consent there).
 /// Backs the onboarding toggles — a permission request that still ends
 /// ungranted hands the user straight to the pane where the grant lives.
 #[tauri::command]
@@ -811,6 +817,7 @@ pub fn live_translation_open_privacy_pane(kind: String) -> CommandResult<()> {
         open_macos_privacy_pane(match kind.as_str() {
             "microphone" => "microphone",
             "calendar" => "calendar",
+            "files" => "files",
             _ => "screen",
         });
     }

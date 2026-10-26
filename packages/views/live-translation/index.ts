@@ -26,6 +26,9 @@ export type {
   LiveTranslationState,
   LiveTranslationTrayAction,
   PersistedLiveTranslationSettings,
+  PrivacyPaneKind,
+  VaultAccessReport,
+  VaultAccessState,
 } from "./types";
 export { DEFAULT_ILIVEDATA_RTVT_ENDPOINT } from "./types";
 export type {

@@ -1,29 +1,50 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { CalendarDays, ListTodo, Mic, RotateCcw, Sparkles, Volume2 } from "lucide-react";
+import { CalendarDays, FolderOpen, ListTodo, Mic, RotateCcw, Sparkles, Volume2 } from "lucide-react";
 
 import { useTranslation } from "@lynse/core/i18n/react";
+import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@lynse/ui/components/ui/alert";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Switch } from "@lynse/ui/components/ui/switch";
 import { cn } from "@lynse/ui/lib/utils";
 import { LYNSE_LOGO_SRC } from "../auth/lynse-logo";
+import { ONBOARDING_PHOTO_SRC } from "./onboarding-photo";
 import { getDesktopAppApi, getAppInfoSync } from "../app-update";
 import { getDesktopLiveTranslationApi } from "../live-translation/desktop-api";
-import type { LivePermissionStatus } from "../live-translation/types";
+import type { LivePermissionStatus, VaultAccessReport } from "../live-translation/types";
 
 /**
  * localStorage flag marking the permission onboarding as answered. Desktop
  * only — the gate is a no-op wherever the desktop bridge is absent (web),
  * so the flag is never read or written there.
+ *
+ * Value is the app version the user answered on (legacy installs hold the
+ * bare `"1"`). A version change re-opens the gate only when the vault
+ * folder probe reports a consent refusal — the exact state upgrading users
+ * land in when macOS withholds the Files and Folders grant after the
+ * bundle is replaced — so a healthy upgrade never sees the page again.
  */
 export const PERMISSION_ONBOARDING_DONE_KEY = "lynse_permission_onboarding_done";
 
 type PermissionKind = "microphone" | "systemAudio" | "calendar";
 
+function readDoneVersion(): string | null {
+  try {
+    return localStorage.getItem(PERMISSION_ONBOARDING_DONE_KEY);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * First-launch gate: until the user has answered the permission page (or
  * skipped it), the onboarding face renders instead of the dashboard. Sits
  * inside AuthGate, so it only ever shows for signed-in desktop users.
+ *
+ * Post-update recheck: when the stored answer belongs to another version
+ * and the vault folder is currently refused by the OS, the page comes back
+ * with the folder row lit red so the user is told what to flip — instead
+ * of discovering that sync silently stopped.
  */
 export function PermissionOnboardingGate({ children }: { children: ReactNode }) {
   const [needed, setNeeded] = useState(false);
@@ -31,22 +52,45 @@ export function PermissionOnboardingGate({ children }: { children: ReactNode }) 
   useEffect(() => {
     const api = getDesktopLiveTranslationApi();
     if (!api) return;
-    let done = false;
-    try {
-      done = localStorage.getItem(PERMISSION_ONBOARDING_DONE_KEY) === "1";
-    } catch {
-      done = false;
+    const done = readDoneVersion();
+    if (!done) {
+      setNeeded(true);
+      void getDesktopAppApi()?.enterOnboardingWindowSize?.();
+      return;
     }
-    if (!done) setNeeded(true);
+    const current = getAppInfoSync()?.version ?? null;
+    if (!current || done === current || !api.vaultAccessCheck) return;
+    let cancelled = false;
+    api.vaultAccessCheck()
+      .then((report) => {
+        if (cancelled) return;
+        if (report.state === "permissionDenied") {
+          setNeeded(true);
+          void getDesktopAppApi()?.enterOnboardingWindowSize?.();
+        } else {
+          // Healthy after the update: stamp the new version so the probe
+          // does not run on every launch.
+          try {
+            localStorage.setItem(PERMISSION_ONBOARDING_DONE_KEY, current);
+          } catch {
+            // Storage unavailable — re-probing next launch is harmless.
+          }
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const finish = useCallback(() => {
     try {
-      localStorage.setItem(PERMISSION_ONBOARDING_DONE_KEY, "1");
+      localStorage.setItem(PERMISSION_ONBOARDING_DONE_KEY, getAppInfoSync()?.version ?? "1");
     } catch {
       // Storage unavailable — the gate would re-show next launch, which is
       // the safe direction; never block the user over it.
     }
+    void getDesktopAppApi()?.exitOnboardingWindowSize?.();
     setNeeded(false);
   }, []);
 
@@ -71,6 +115,7 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
   const { t } = useTranslation();
   const [perms, setPerms] = useState<LivePermissionStatus | null>(null);
   const [requesting, setRequesting] = useState<PermissionKind | null>(null);
+  const [vault, setVault] = useState<VaultAccessReport | null>(null);
 
   const micGranted = perms?.microphone === "granted";
   // Windows loopback needs no OS consent (always "granted"); keep the row
@@ -90,6 +135,13 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
   // effect after a full app restart (the sidecar owns the ScreenCaptureKit
   // session), so completion means relaunching until then.
   const needsRestart = perms?.restartRequired === true;
+  // Vault folder row: only renders once the probe answered and the OS
+  // actually withholds (or is about to withhold) folder access — a healthy
+  // or unconfigured vault keeps the page identical to before. Never gates
+  // Continue: chat/notes work without the folder, only the mirror breaks.
+  const vaultVisible = vault?.state === "permissionDenied" || vault?.state === "missing";
+  const vaultGranted = vault?.state === "ok";
+  const vaultPending = vaultVisible && !vaultGranted;
 
   useEffect(() => {
     const api = getDesktopLiveTranslationApi();
@@ -98,6 +150,11 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
     api.permissions()
       .then((next) => {
         if (!cancelled) setPerms(next);
+      })
+      .catch(() => undefined);
+    api.vaultAccessCheck?.()
+      .then((report) => {
+        if (!cancelled) setVault(report);
       })
       .catch(() => undefined);
     return () => {
@@ -112,16 +169,19 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
   // light up even once the required rows are green. The status command is
   // cheap and the loop stops the moment everything visible is granted.
   useEffect(() => {
-    if (allGranted && !calendarPending) return;
+    if (allGranted && !calendarPending && !vaultPending) return;
     const api = getDesktopLiveTranslationApi();
     if (!api) return;
     const timer = window.setInterval(() => {
       api.permissions()
         .then((next) => setPerms(next))
         .catch(() => undefined);
+      api.vaultAccessCheck?.()
+        .then((report) => setVault(report))
+        .catch(() => undefined);
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [allGranted, calendarPending]);
+  }, [allGranted, calendarPending, vaultPending]);
 
   const request = useCallback(async (kind: PermissionKind) => {
     const api = getDesktopLiveTranslationApi();
@@ -170,7 +230,7 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
       <div aria-hidden data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-11" />
 
       {/* ── Left column — the setup face ── */}
-      <div className="relative z-10 flex w-full flex-col items-center justify-center overflow-y-auto px-6 py-10 min-[900px]:w-1/2 min-[900px]:shrink-0 lg:px-12">
+      <div className="relative z-10 flex w-full flex-col overflow-y-auto px-6 pb-6 pt-20 min-[900px]:w-1/2 min-[900px]:shrink-0 lg:px-14">
         {/* Single soft brand glow behind the column — the only ornament,
             kept token-based so it reads correctly in both appearances. */}
         <div
@@ -178,16 +238,16 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
           className="pointer-events-none absolute -top-32 left-1/2 size-[420px] -translate-x-1/2 rounded-full bg-primary/5 blur-3xl"
         />
 
-        <div className="relative flex w-full max-w-md animate-page-in flex-col items-center">
+        <div className="relative my-auto flex w-full max-w-md animate-page-in flex-col items-center">
           <img src={LYNSE_LOGO_SRC} alt="Lynse" className="h-5 w-auto dark:invert" />
-          <h1 className="mt-7 text-balance text-center text-2xl font-semibold tracking-tight">
+          <h1 className="mt-5 text-balance text-center text-xl font-semibold tracking-tight">
             {t("onboarding.title")}
           </h1>
           <p className="mt-3 text-balance text-center text-sm leading-relaxed text-muted-foreground">
             {t("onboarding.subtitle")}
           </p>
 
-          <div className="mt-9 w-full overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+          <div className="mt-6 w-full overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
             <PermissionRow
               icon={<Mic className="size-4" />}
               title={t("onboarding.mic_title")}
@@ -226,7 +286,58 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
                 />
               </>
             )}
+            {/* Vault folder consent (macOS Files and Folders). Appears only
+                when the OS actually withholds the folder — healthy installs
+                never see it. The toggle has no native prompt to fire (there
+                is no request API for folder consent), so flipping it jumps
+                straight to the pane; the poll loop lights it green once the
+                grant is flipped there. */}
+            {vaultVisible && (
+              <>
+                <div className="mx-5 border-t border-dashed border-border" />
+                <PermissionRow
+                  icon={<FolderOpen className="size-4" />}
+                  title={t("onboarding.files_title")}
+                  description={t("onboarding.files_desc")}
+                  hint={vault?.state === "missing" ? t("onboarding.files_missing_hint") : t("onboarding.files_denied_hint")}
+                  granted={vaultGranted}
+                  busy={vault === null}
+                  required={false}
+                  onRequest={() => void getDesktopLiveTranslationApi()?.openPrivacyPane("files")}
+                />
+              </>
+            )}
           </div>
+
+          {/* The consent-repair escape hatch: macOS sometimes shows no Lynse
+              row in the Files and Folders pane at all (entry never created
+              or lost across an update), leaving the toggle above with no
+              switch to flip anywhere. Resetting the entry makes the very
+              next folder probe re-fire the system consent dialog. */}
+          {vault?.state === "permissionDenied" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-3 h-8 text-xs text-muted-foreground"
+              onClick={() => {
+                void getDesktopLiveTranslationApi()
+                  ?.vaultRepairConsent?.()
+                  .then((reset) => {
+                    if (reset) {
+                      toast.info(t("vault.access_repair_done"), { duration: 8000 });
+                    } else {
+                      toast.error(t("vault.access_repair_failed"));
+                    }
+                  })
+                  .catch(() => toast.error(t("vault.access_repair_failed")))
+                  .then(() => getDesktopLiveTranslationApi()?.vaultAccessCheck?.())
+                  .then((report) => report && setVault(report))
+                  .catch(() => undefined);
+              }}
+            >
+              {t("onboarding.files_repair")}
+            </Button>
+          )}
 
           {needsRestart && (
             <Alert className="mt-4 w-full">
@@ -239,7 +350,7 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
           )}
 
           <Button
-            className="mt-9 h-11 w-full rounded-full text-sm"
+            className="mt-6 h-10 w-full rounded-full text-sm"
             disabled={!allGranted}
             onClick={handlePrimary}
           >
@@ -256,15 +367,26 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
         </div>
       </div>
 
-      {/* ── Right column — what the permissions unlock: a static collage of
-          the recording surface with floating outcome chips, all localized.
-          Decorative only (aria-hidden); collapses below the 900px split —
-          the packaged main window is a fixed 960×600, so the split must
-          land under it or it would never show. ── */}
+      {/* ── Right column — what the permissions unlock: the photograph as a
+          blurred bottom-layer backdrop, with the recording-surface collage
+          floating above it. Decorative only (aria-hidden); collapses below
+          the 900px split — the packaged main window is a fixed 960×600, so
+          the split must land under it or it would never show. ── */}
       <aside
         aria-hidden
-        className="relative hidden flex-1 items-center justify-center overflow-hidden border-l border-border/60 bg-gradient-to-b from-primary/10 via-transparent to-primary/5 min-[900px]:flex"
+        className="relative hidden flex-1 items-center justify-center overflow-hidden border-l border-border/60 bg-background min-[900px]:flex"
       >
+        {/* Bottom layer: the photo, softly defocused into a backdrop that
+            stays recognizable. scale-105 hides the blur's transparent-edge
+            bleed without zooming the subject away. */}
+        <img
+          src={ONBOARDING_PHOTO_SRC}
+          alt=""
+          className="absolute inset-0 size-full scale-105 object-cover blur-[3px]"
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/20 via-transparent to-transparent" />
+
+        {/* Foreground: the collage card + outcome chips. */}
         <div className="relative w-[82%] max-w-[520px] rounded-2xl border border-border/70 bg-card shadow-xl">
           <div className="flex items-center gap-3 border-b border-border/60 px-4 py-3">
             <div className="min-w-0 flex-1">
@@ -300,16 +422,35 @@ export function PermissionOnboarding({ onFinish }: { onFinish: () => void }) {
           </div>
         </div>
 
-        <div className="absolute left-[6%] top-[20%] flex items-center gap-2 rounded-xl border border-border/70 bg-card/90 px-3 py-2 shadow-lg backdrop-blur">
+        <div className="absolute left-[6%] top-[12%] flex items-center gap-2 rounded-xl border border-border/70 bg-card/90 px-3 py-2 shadow-lg backdrop-blur">
           <Sparkles className="size-3.5 shrink-0 text-primary" />
           <span className="text-xs">{t("onboarding.promo_chip_ai")}</span>
         </div>
-        <div className="absolute bottom-[16%] right-[7%] flex items-center gap-2 rounded-xl border border-border/70 bg-card/90 px-3 py-2 shadow-lg backdrop-blur">
+        <div className="absolute bottom-[10%] right-[7%] flex items-center gap-2 rounded-xl border border-border/70 bg-card/90 px-3 py-2 shadow-lg backdrop-blur">
           <ListTodo className="size-3.5 shrink-0 text-primary" />
           <span className="text-xs">{t("onboarding.promo_chip_todo")}</span>
         </div>
       </aside>
     </main>
+  );
+}
+
+function PromoLine({ name, text, tone }: { name: string; text: string; tone: string }) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <span
+        className={cn(
+          "mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-3xs font-semibold",
+          tone,
+        )}
+      >
+        {name.slice(0, 1)}
+      </span>
+      <div className="min-w-0">
+        <p className="text-xs font-medium">{name}</p>
+        <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{text}</p>
+      </div>
+    </div>
   );
 }
 
@@ -335,8 +476,8 @@ function PermissionRow({
   onRequest: () => void;
 }) {
   return (
-    <div className="flex items-start gap-3 px-5 py-4">
-      <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+    <div className="flex items-start gap-3 px-5 py-3.5">
+      <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
         {icon}
       </span>
       <div className="min-w-0 flex-1">
@@ -356,25 +497,6 @@ function PermissionRow({
         disabled={busy}
         onCheckedChange={() => onRequest()}
       />
-    </div>
-  );
-}
-
-function PromoLine({ name, text, tone }: { name: string; text: string; tone: string }) {
-  return (
-    <div className="flex items-start gap-2.5">
-      <span
-        className={cn(
-          "mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-3xs font-semibold",
-          tone,
-        )}
-      >
-        {name.slice(0, 1)}
-      </span>
-      <div className="min-w-0">
-        <p className="text-xs font-medium">{name}</p>
-        <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{text}</p>
-      </div>
     </div>
   );
 }

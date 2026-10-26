@@ -458,11 +458,9 @@ const ko = {
   settings: {
     context_inbox_title: "선제적 제안",
     context_inbox_enable: "선제적 제안 받기",
-    context_inbox_hint: "허용한 회의 자료를 바탕으로 목표 제안, 후속 작업 및 검토 알림을 알림에서 받습니다. 기본값은 꺼짐이며, 현재 계정의 이 기기에만 저장됩니다. 끄면 이 기기의 자동 동기화와 수신이 중지됩니다.",
+    context_inbox_hint: "켜면 클라우드가 동기화된 모든 회의 자료를 지속적으로 분석하여 목표 제안, 후속 작업 및 검토 알림을 알림에 전달합니다. 이 스위치가 곧 권한 부여입니다. 켜면 클라우드 분석을 허용하고, 끄면 분석을 중지하며 진행 중인 결과를 폐기합니다. 이 계정의 모든 기기에 적용됩니다.",
     context_inbox_sign_in: "선제적 제안을 켜려면 로그인하세요.",
-    context_inbox_setup_hint: "처음 사용하는 경우 백그라운드 회의 검토를 설정하고 채팅에서 분석 범위를 확인하세요. 이 기기의 수신을 꺼도 클라우드 분석 권한은 철회되지 않습니다. 클라우드 분석을 중지하려면 채팅에서 백그라운드 회의 검토 중지를 요청하세요.",
-    context_inbox_setup: "백그라운드 회의 검토 설정",
-    context_inbox_setup_prompt: "백그라운드 회의 검토를 설정해 주세요. 먼저 분석 범위를 선택하게 한 다음 권한 확인 카드를 준비해 주세요.",
+    context_inbox_service_unavailable: "선제적 제안 서비스를 아직 사용할 수 없습니다.",
     context_inbox_save_failed: "설정을 저장하지 못했습니다. 다시 시도해 주세요.",
     connections: "연동",
     beta_badge: "Beta",

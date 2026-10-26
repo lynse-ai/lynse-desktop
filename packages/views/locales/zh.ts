@@ -455,11 +455,9 @@ const zh = {
   settings: {
     context_inbox_title: "主动建议",
     context_inbox_enable: "接收主动建议",
-    context_inbox_hint: "从已授权的会议资料中接收目标建议、跟进和复盘提醒，在「通知」中查看。默认关闭，设置仅对当前账号在本机生效。关闭后停止本机的自动同步与接收。",
+    context_inbox_hint: "开启后，云端将持续分析你已同步的全部会议资料，生成目标建议、跟进和复盘提醒，在「通知」中查看。这个开关就是授权：开启即授权云端分析，关闭即停止云端分析并作废进行中的结果，对本账号的所有设备生效。",
     context_inbox_sign_in: "登录后可开启主动建议。",
-    context_inbox_setup_hint: "首次使用请设置后台会议回顾，并在聊天中确认分析范围。关闭本机接收不会撤销已确认的云端分析授权；如需停止云端分析，可在聊天中说「停止后台会议回顾」。",
-    context_inbox_setup: "设置后台会议回顾",
-    context_inbox_setup_prompt: "请帮我设置后台会议回顾，先让我选择分析范围，再准备授权确认卡。",
+    context_inbox_service_unavailable: "主动建议服务暂未开放。",
     context_inbox_save_failed: "无法保存设置，请稍后重试。",
     connections: "连接",
     beta_badge: "Beta",

@@ -148,9 +148,7 @@ export function SettingsDialog({
     icon: Bot,
     content: (
       <>
-        {!isWebPlatform() && isBetaFeaturesUnlocked() && (
-          <ContextInboxCard onOpenChat={() => onOpenChange(false)} />
-        )}
+        {!isWebPlatform() && isBetaFeaturesUnlocked() && <ContextInboxCard />}
         {isBetaFeaturesUnlocked() && <AgentServerCard />}
         {isBetaFeaturesUnlocked() && <ModelConfigCard />}
         {<Card>

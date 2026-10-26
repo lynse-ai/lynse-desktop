@@ -457,11 +457,9 @@ const en = {
   settings: {
     context_inbox_title: "Proactive suggestions",
     context_inbox_enable: "Receive proactive suggestions",
-    context_inbox_hint: "Receive goal suggestions, follow-ups and review reminders from authorized meetings in Notifications. Off by default, saved for this account on this device. Turning it off stops automatic syncing and receiving on this device.",
+    context_inbox_hint: "When on, the cloud continuously analyzes all of your synced meetings and delivers goal suggestions, follow-ups and review reminders to Notifications. This switch is the authorization: turning it on grants cloud analysis; turning it off stops it, discards in-progress results and applies to every device on this account.",
     context_inbox_sign_in: "Sign in to enable proactive suggestions.",
-    context_inbox_setup_hint: "For first-time use, set up background meeting reviews and confirm the scope in chat. Turning off receiving on this device does not revoke cloud analysis authorization. To stop cloud analysis, ask in chat: Stop background meeting reviews.",
-    context_inbox_setup: "Set up background meeting reviews",
-    context_inbox_setup_prompt: "Help me set up background meeting reviews. Let me choose the scope first, then prepare an authorization confirmation card.",
+    context_inbox_service_unavailable: "Proactive suggestions are not available yet.",
     context_inbox_save_failed: "Could not save the setting. Please try again.",
     connections: "Connections",
     beta_badge: "Beta",

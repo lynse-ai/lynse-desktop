@@ -455,11 +455,9 @@ const zhHant = {
   settings: {
     context_inbox_title: "主動建議",
     context_inbox_enable: "接收主動建議",
-    context_inbox_hint: "從已授權的會議資料中接收目標建議、跟進與復盤提醒，在「通知」中查看。預設關閉，設定僅對目前帳號在本機生效。關閉後停止本機的自動同步與接收。",
+    context_inbox_hint: "開啟後，雲端將持續分析你已同步的全部會議資料，產生目標建議、跟進與復盤提醒，在「通知」中查看。這個開關就是授權：開啟即授權雲端分析，關閉即停止雲端分析並作廢進行中的結果，對本帳號的所有裝置生效。",
     context_inbox_sign_in: "登入後可開啟主動建議。",
-    context_inbox_setup_hint: "首次使用請設定背景會議回顧，並在聊天中確認分析範圍。關閉本機接收不會撤銷已確認的雲端分析授權；如需停止雲端分析，可在聊天中說「停止背景會議回顧」。",
-    context_inbox_setup: "設定背景會議回顧",
-    context_inbox_setup_prompt: "請幫我設定背景會議回顧，先讓我選擇分析範圍，再準備授權確認卡。",
+    context_inbox_service_unavailable: "主動建議服務暫未開放。",
     context_inbox_save_failed: "無法儲存設定，請稍後重試。",
     connections: "連接",
     beta_badge: "Beta",

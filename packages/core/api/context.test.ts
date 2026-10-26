@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiClient, setApiInstance, setApiTransportMode } from "./client";
-import { actOnContextInbox, downloadContextReview, listContextInbox } from "./context";
+import {
+  GLOBAL_CONTEXT_SCOPE, actOnContextInbox, deviceTimeZone, downloadContextReview, getContextPreferences,
+  listContextInbox, setContextPreferences,
+} from "./context";
 import type { ContextInboxItem } from "./context";
 
 const item: ContextInboxItem = {
@@ -60,6 +63,53 @@ describe("context API session boundary", () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ status: "ok", changed: false, item })));
     await actOnContextInbox(item, "dismiss", "test-session", "op-1");
     expect(JSON.parse(fetchMock.mock.calls[0]?.[1].body)).toEqual({ action: "dismiss", base_version: 2, operation_id: "op-1" });
+  });
+
+  it("reads the cloud grant as the switch state and normalizes missing fields", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ status: "ok", preferences: {
+      enabled: true, scopes: [GLOBAL_CONTEXT_SCOPE], timezone: "Europe/Berlin", grant_version: 3, coverage: {} } })));
+    await expect(getContextPreferences("test-session")).resolves.toEqual({
+      enabled: true, scopes: [GLOBAL_CONTEXT_SCOPE], timezone: "Europe/Berlin", grant_version: 3 });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://agent.invalid/api/context/preferences");
+    expect(fetchMock.mock.calls[0]?.[1].headers["X-API-Key"]).toBeUndefined();
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ status: "ok", preferences: { grant_version: 0 } })));
+    await expect(getContextPreferences("test-session")).resolves.toEqual({
+      enabled: false, scopes: [], timezone: "Asia/Shanghai", grant_version: 0 });
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ status: "ok", preferences: { enabled: true } })));
+    await expect(getContextPreferences("test-session")).rejects.toThrow("unavailable");
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ status: "error", error: { code: "context_unavailable" } }), { status: 503 }));
+    await expect(getContextPreferences("test-session")).rejects.toMatchObject({ status: 503 });
+  });
+
+  it("writes the switch as an explicit grant or stop with the frozen operation ID and base version", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ status: "ok", changed: true, preferences: {
+      enabled: true, scopes: [GLOBAL_CONTEXT_SCOPE], timezone: "Europe/Berlin", grant_version: 4 } })));
+    const granted = await setContextPreferences(
+      { action: "set", enabled: true, scopes: [GLOBAL_CONTEXT_SCOPE], timezone: "Europe/Berlin" }, 3, "test-session", "switch-1");
+    expect(fetchMock.mock.calls[0]?.[1].method).toBe("POST");
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1].body)).toEqual({
+      operation_id: "switch-1", base_version: 3, action: "set", enabled: true, scopes: [GLOBAL_CONTEXT_SCOPE], timezone: "Europe/Berlin" });
+    expect(granted.grant_version).toBe(4);
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ status: "ok", changed: true, preferences: {
+      enabled: false, scopes: [GLOBAL_CONTEXT_SCOPE], timezone: "Europe/Berlin", grant_version: 5 } })));
+    const stopped = await setContextPreferences({ action: "stop" }, 4, "test-session", "switch-2");
+    expect(JSON.parse(fetchMock.mock.calls[1]?.[1].body)).toEqual({ operation_id: "switch-2", base_version: 4, action: "stop" });
+    expect(stopped.enabled).toBe(false);
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ status: "error", error: { code: "version_conflict" } }), { status: 409 }));
+    await expect(setContextPreferences({ action: "stop" }, 1, "test-session", "switch-3")).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("reports the device IANA zone and falls back to the server default", () => {
+    const resolved = vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions");
+    resolved.mockReturnValue({ timeZone: "Europe/Berlin" } as Intl.ResolvedDateTimeFormatOptions);
+    expect(deviceTimeZone()).toBe("Europe/Berlin");
+    resolved.mockReturnValue({ timeZone: "UTC" } as Intl.ResolvedDateTimeFormatOptions);
+    expect(deviceTimeZone()).toBe("UTC");
+    resolved.mockReturnValue({ timeZone: "CST" } as Intl.ResolvedDateTimeFormatOptions);
+    expect(deviceTimeZone()).toBe("Asia/Shanghai");
+    resolved.mockImplementation(() => { throw new TypeError("unsupported"); });
+    expect(deviceTimeZone()).toBe("Asia/Shanghai");
+    resolved.mockRestore();
   });
 
   it("treats HTTP200 domain failures as failures and a closed gate as a business state", async () => {

@@ -6,6 +6,14 @@ export const DEFAULT_ILIVEDATA_RTVT_ENDPOINT =
 export const DEFAULT_QWEN_ENDPOINT =
   "wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3.8-livetranslate-flash-realtime";
 
+/**
+ * Lynse-hosted realtime relay (services/realtime-relay, CloudRun
+ * ap-shanghai): same DashScope wire protocol, but the handshake
+ * authenticates the Lynse account and the DashScope key stays server-side.
+ */
+export const DEFAULT_LYNSE_QWEN_RELAY_ENDPOINT =
+  "wss://lynse-realtime-relay-319577-10-1401959758.sh.run.tcloudbase.com/realtime?model=qwen3.8-livetranslate-flash-realtime";
+
 export const DEFAULT_VOLC_AST_ENDPOINT =
   "wss://openspeech.bytedance.com/api/v4/ast/v2/translate";
 

@@ -26,6 +26,7 @@ describe("provider registry", () => {
       "lynse_backend",
       "ilivedata_direct",
       "qwen",
+      "lynse_qwen",
       "volc",
       "tencent",
       "custom",

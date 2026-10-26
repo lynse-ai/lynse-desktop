@@ -4700,7 +4700,7 @@ fn center_window_over_main(
 /// created but permanently invisible. The page-load hook stays as the fast
 /// path; this only acts when the window is still hidden after it.
 #[cfg(target_os = "windows")]
-fn ensure_window_revealed(app: &AppHandle, label: &'static str) {
+pub(crate) fn ensure_window_revealed(app: &AppHandle, label: &'static str) {
     let app = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(1200));
@@ -4874,7 +4874,7 @@ fn set_compact_window_mode(app: AppHandle, active: bool) -> CommandResult<()> {
 /// of the settings dialog. `title` is the localized window title picked by
 /// the frontend, which knows the active locale.
 #[tauri::command]
-fn open_about_window(app: AppHandle, title: Option<String>) -> CommandResult<()> {
+async fn open_about_window(app: AppHandle, title: Option<String>) -> CommandResult<()> {
     log::info!("[window:about] open requested");
     if let Some(window) = app.get_webview_window("about") {
         let revealed = window.show().and_then(|_| window.set_focus());
@@ -4930,7 +4930,7 @@ fn open_about_window(app: AppHandle, title: Option<String>) -> CommandResult<()>
 /// mirroring the About window setup. `title` is the localized window title
 /// picked by the frontend, which knows the active locale.
 #[tauri::command]
-fn open_feedback_window(app: AppHandle, title: Option<String>) -> CommandResult<()> {
+async fn open_feedback_window(app: AppHandle, title: Option<String>) -> CommandResult<()> {
     if let Some(window) = app.get_webview_window("feedback") {
         let _ = window.show();
         let _ = window.set_focus();
@@ -4975,7 +4975,7 @@ fn open_feedback_window(app: AppHandle, title: Option<String>) -> CommandResult<
 /// deadlock on Windows (see open-about.ts). `title` is the localized window
 /// title picked by the frontend, which knows the active locale.
 #[tauri::command]
-fn open_report_window(app: AppHandle, title: Option<String>) -> CommandResult<()> {
+async fn open_report_window(app: AppHandle, title: Option<String>) -> CommandResult<()> {
     log::info!("[window:report] open requested");
     if let Some(window) = app.get_webview_window("report") {
         let revealed = window.show().and_then(|_| window.set_focus());

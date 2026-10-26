@@ -35,11 +35,24 @@ const DESKTOP_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleW
 
 /// Open the WeChat authorize page in the embedded auth window. Any previous
 /// window (e.g. parked on a WeChat error page) is replaced.
+///
+/// MUST stay `async`: Tauri's window builder deadlocks inside a synchronous
+/// command on Windows (the WebView2 controller never finishes creating, so
+/// the window stays hidden and every later IPC call hangs). See
+/// `WebviewWindowBuilder::build` — "Known issues".
 #[tauri::command]
-pub(crate) fn wechat_auth_window(app: AppHandle, url: String) -> CommandResult<()> {
+pub(crate) async fn wechat_auth_window(app: AppHandle, url: String) -> CommandResult<()> {
     log::info!("[wechat-auth] opening authorize window");
     if let Some(existing) = app.get_webview_window(WINDOW_LABEL) {
         let _ = existing.close();
+        // The manager drops the label on the event loop, not on close(): wait
+        // briefly so the rebuild cannot trip over "webview label already exists".
+        for _ in 0..100 {
+            if app.get_webview_window(WINDOW_LABEL).is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
     let authorize_url: tauri::Url = url
         .parse()
@@ -77,6 +90,7 @@ pub(crate) fn wechat_auth_window(app: AppHandle, url: String) -> CommandResult<(
         .visible(false)
         .on_page_load(|window, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                log::info!("[wechat-auth] page load finished, revealing");
                 let _ = window.show();
                 let _ = window.set_focus();
             }
@@ -88,6 +102,7 @@ pub(crate) fn wechat_auth_window(app: AppHandle, url: String) -> CommandResult<(
             if callback_sent.swap(true, Ordering::SeqCst) {
                 return false;
             }
+            log::info!("[wechat-auth] callback redirect intercepted");
             let _ = app_for_nav.emit(CALLBACK_EVENT, nav.to_string());
             // Close off-thread: closing from inside the navigation policy
             // callback deadlocks on macOS (WKWebView is still inside
@@ -102,7 +117,10 @@ pub(crate) fn wechat_auth_window(app: AppHandle, url: String) -> CommandResult<(
         })
         .build()
         .map_err(|error| format!("failed to create wechat auth window: {error}"))?;
+    log::info!("[wechat-auth] window built");
     let _ = window.center();
+    #[cfg(target_os = "windows")]
+    crate::ensure_window_revealed(&app, WINDOW_LABEL);
     Ok(())
 }
 

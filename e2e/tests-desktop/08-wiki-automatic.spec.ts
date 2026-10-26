@@ -39,11 +39,14 @@ test("knowledge graph opens with 3D particles and retains rotation and mode thro
 
 test("first setup requires an explicit folder selection and starts automatic organization",async({page,mockServer})=>{
   await openWorkspace(page,mockServer.url);await installAutomaticWiki(page,false);await openWiki(page);
+  // Two mock folders + "Unfiled meetings" + the cloud memory consent box;
+  // 49f05488 folded the three memory sub-options behind that consent box.
+  await expect(page.getByRole("checkbox")).toHaveCount(4);
   for(const name of ["Work","Team","Unfiled meetings"])await expect(page.getByRole("checkbox",{name,exact:true})).not.toBeChecked();
   await page.getByRole("button",{name:"Enable automatic organization",exact:true}).click();
   await expect(page.getByRole("alert")).toContainText("Choose at least one");
   await page.getByRole("checkbox",{name:"Work",exact:true}).check();
-  await expect(page.getByText(/configured AI service uses summaries/)).toBeVisible();
+  await expect(page.getByText(/uses summaries from the selected meetings/)).toBeVisible();
   await page.getByRole("button",{name:"Enable automatic organization",exact:true}).click();
   await expect(page.getByRole("group").getByRole("button",{name:"灵光记项目",exact:true})).toBeVisible();
   expect(await page.evaluate(()=>(window as unknown as {wikiTest:{configure:unknown[]}}).wikiTest.configure)).toEqual([{enabled:false,allowAi:false,automation:{folderIds:["folder-work"],includeUnfiled:false}},{enabled:true,allowAi:true,automation:{folderIds:["folder-work"],includeUnfiled:false}}]);

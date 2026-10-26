@@ -2,6 +2,9 @@ import { test, expect, openWorkspace } from "../fixtures/desktop-fixture";
 
 test("desktop MCP settings copy configuration and serve local and signed-in cloud data", async ({page, mockServer}) => {
   mockServer.setRoute("GET /api/business/file/page", {envelope:true, body:{items:[{id:"cloud-1", originalFilename:"Cloud meeting"}]}});
+  // The eligibility gate sends every meeting id (local ones included) to the
+  // memory service before any row is returned.
+  await page.route(/\/memory\/source-eligibility$/, route => route.fulfill({ status: 200, json: { allowed_source_ids: ["local-1", "cloud-1"] } }));
   await openWorkspace(page, mockServer.url);
   await page.evaluate(() => {
     type Result = {requestId:string; result:{structuredContent?:{data:unknown}; isError:boolean}};

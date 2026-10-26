@@ -264,7 +264,7 @@ const zhHant = {
     state_failed: "已中斷",
   },
   recording_mode: {
-    switch_live_failed: "即時翻譯模式切換失敗。",
+    switch_live_failed: "切換音訊來源失敗，目前即時工作階段仍使用原有的音訊來源。",
     title: "即時錄音",
     subtitle: "點擊開始錄製，即時擷取麥克風與系統聲音",
     header_recording: "裝置錄音中",

@@ -268,7 +268,7 @@ const ja = {
     state_failed: "中断",
   },
   recording_mode: {
-    switch_live_failed: "リアルタイム翻訳モードを切り替えられませんでした。",
+    switch_live_failed: "音声ソースの切り替えに失敗しました。ライブセッションは以前のソースを使い続けます。",
     title: "リアルタイム録音",
     subtitle: "タップして録音開始。マイクとシステム音声をリアルタイム取得",
     header_recording: "録音中",

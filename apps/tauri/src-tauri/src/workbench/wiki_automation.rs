@@ -221,7 +221,8 @@ pub(super) async fn request(
     evidence: Value,
 ) -> CommandResult<Value> {
     let payload = transport_payload(task, docs, query, evidence)?;
-    let mut value = request_model(app, session, task, payload).await?;
+    // Spent tokens are surfaced on the evidence graph only for now.
+    let (mut value, _usage) = request_model(app, session, task, payload).await?;
     restore_refs(&mut value, docs)?;
     Ok(value)
 }
@@ -517,7 +518,9 @@ pub(super) async fn compile_automatic(
                 ])
                 .to_string(),
             );
-            let value = cached_compilation(
+            let value = if let Some(value) = graph::reusable_analysis(root, session, &part, manifest) {
+                value
+            } else { cached_compilation(
                 root,
                 &key,
                 &state.serial,
@@ -535,7 +538,7 @@ pub(super) async fn compile_automatic(
                     Value::Null,
                 ),
             )
-            .await.map_err(|error| WikiFailure::new(error, "analyzing", vec![doc.id.clone()]))?;
+            .await.map_err(|error| WikiFailure::new(error, "analyzing", vec![doc.id.clone()]))? };
             if value["relevant"] != false && value["insufficientEvidence"] != true {
                 evidence.push(CompilationEvidence { value, source: part });
             }

@@ -1,6 +1,12 @@
 //! Reviewed, file-backed Wiki pages. SQLite contains only rebuildable indexes and work receipts.
 #[path = "wiki_graph.rs"]
 mod graph;
+#[path = "wiki_synthesis_metrics.rs"]
+mod accounting;
+use accounting::{Accounting, SynthesisUsage};
+#[cfg(test)]
+#[path = "wiki_synthesis_transport_tests.rs"]
+mod synthesis_transport_tests;
 #[path = "wiki_topics.rs"]
 mod topic_store;
 #[path = "wiki_analysis.rs"]
@@ -210,7 +216,17 @@ fn is_session_failure(error: &str) -> bool {
 
 fn is_service_failure(error: &str) -> bool {
     is_session_failure(error)
+        || error == TEXT_MODEL_CHANGED
         || error == "Lynclaw synthesis failed (HTTP 422): Unknown synthesis task"
+}
+
+pub(super) const TEXT_MODEL_CHANGED: &str = "Text model changed; processing will resume";
+
+fn require_task_model(state: &WorkbenchState, session: &Session, task: &str) -> CommandResult<()> {
+    if task != "graph_extract" && current(state)?.model_override != session.model_override {
+        return Err(TEXT_MODEL_CHANGED.into());
+    }
+    Ok(())
 }
 
 pub(super) fn resume_session(app: &AppHandle, session: &Session, manifest: &mut Manifest) -> CommandResult<()> {
@@ -759,8 +775,20 @@ async fn request_model(
     session: &Session,
     task: &str,
     payload: Value,
+) -> CommandResult<(Value, Option<SynthesisUsage>)> {
+    let mut report = Accounting::default();
+    let result = request_model_report(app, session, task, payload, &mut report).await?;
+    Ok((result, Some(report.usage)))
+}
+
+async fn request_model_report(
+    app: &AppHandle, session: &Session, task: &str, payload: Value, report: &mut Accounting,
 ) -> CommandResult<Value> {
     let state = app.state::<WorkbenchState>();
+    require_current(&state, session)?;
+    require_task_model(&state, session, task)?;
+    let permit = state.synthesis_queue.acquire().await;
+    report.metrics.queued_ms += permit.queued_ms;
     {
         let _guard = state.serial.lock().await;
         super::require_beta(&state)?;
@@ -811,69 +839,92 @@ async fn request_model(
     let manifest = load_state(app,session)?;
     ready(&manifest)?;
     validate_request_sources(&roots(app,session)?.0,&manifest,&payload)?;
+    require_task_model(&state, session, task)?;
     let body = lynclaw_payload(session, task, payload);
     let path = if session.agent_url == session.base_url {
         "/api/business/ai/desktop/synthesize"
     } else {
         "/api/desktop/synthesize"
     };
-    let result = send_synthesis(
+    let result = send_synthesis_report(
         &client,
         &format!("{}{path}", session.agent_url),
         &session.token,
         body,
+        report,
         || {
             require_current(&state, session)?;
             super::require_beta(&state)?;
             ready(&load_state(app, session)?)
         },
     )
-    .await?;
+    .await;
+    if let Some(seconds) = report.metrics.retry_after {
+        state.synthesis_queue.rate_limited(seconds).await;
+    }
+    let result = result?;
+    require_task_model(&state, session, task)?;
     knowledge_cloud::authorize(app,session,&authority_docs,"wiki_compile").await?;
     Ok(result)
 }
+/// Spent tokens ride next to `code`/`data` so older clients that only read
+/// `data` keep parsing the result unchanged.
+#[cfg(test)]
 async fn send_synthesis(
-    client: &reqwest::Client,
-    endpoint: &str,
-    token: &str,
-    mut body: Value,
+    client: &reqwest::Client, endpoint: &str, token: &str, body: Value,
     check_current: impl Fn() -> CommandResult<()>,
+) -> CommandResult<Value> {
+    let mut report = Accounting::default();
+    send_synthesis_report(client, endpoint, token, body, &mut report, check_current).await
+}
+
+async fn send_synthesis_report(
+    client: &reqwest::Client, endpoint: &str, token: &str, mut body: Value,
+    report: &mut Accounting, check_current: impl Fn() -> CommandResult<()>,
 ) -> CommandResult<Value> {
     for attempt in 0..2 {
         check_current()?;
-        let response = client
-            .post(endpoint)
-            .header("Authorization", token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|_| "Lynclaw model service is unavailable")?;
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let detail = response.json::<Value>().await.unwrap_or(Value::Null);
+        let response = match client.post(endpoint).header("Authorization", token).json(&body).send().await {
+            Ok(response) => response,
+            Err(_) => {
+                report.metrics.unknown_calls += 1;
+                return Err("Model outcome is unknown; retry explicitly".into());
+            }
+        };
+        let status = response.status().as_u16();
+        let retry_after = response.headers().get("retry-after").and_then(|v| v.to_str().ok())
+            .map(retry_after_seconds);
+        let value: Value = match response.json().await {
+            Ok(value) => value,
+            Err(_) => {
+                report.metrics.unknown_calls += 1;
+                return Err("Lynclaw returned invalid synthesis JSON".into());
+            }
+        };
+        report.absorb(&value);
+        if !(200..300).contains(&status) {
+            if status == 429 { report.metrics.retry_after = Some(retry_after.or(report.metrics.retry_after).unwrap_or(60).max(1)); }
             if attempt == 0 && status == 422 {
-                if let Some(corrected) = corrected_synthesis_request(&body, &detail) {
+                if let Some(corrected) = corrected_synthesis_request(&body, &value) {
                     body = corrected;
                     continue;
                 }
             }
-            return Err(synthesis_error(status, &detail));
+            return Err(synthesis_error(status, &value));
         }
-        let value: Value = response
-            .json()
-            .await
-            .map_err(|_| "Lynclaw returned invalid synthesis JSON")?;
         return if value.get("code").is_some() {
-            if value["code"] != 200 {
-                return Err("Lynclaw synthesis failed".into());
-            }
+            if value["code"] != 200 { return Err("Lynclaw synthesis failed".into()); }
             Ok(value["data"].clone())
-        } else {
-            Ok(value)
-        };
+        } else { Ok(value) };
     }
     Err("Lynclaw synthesis failed".into())
 }
+
+fn retry_after_seconds(value: &str) -> u64 {
+    value.parse::<u64>().ok().or_else(|| chrono::DateTime::parse_from_rfc2822(value).ok()
+        .map(|date| (date.timestamp() - chrono::Utc::now().timestamp()).max(1) as u64)).unwrap_or(60).max(1)
+}
+
 fn corrected_synthesis_request(body: &Value, error: &Value) -> Option<Value> {
     let reason = error["detail"].as_str()?;
     if !matches!(
@@ -894,7 +945,9 @@ fn corrected_synthesis_request(body: &Value, error: &Value) -> Option<Value> {
     ) {
         return None;
     }
-    let correction = if reason == "Citation does not match source evidence" {
+    let correction = if body["task"] == "graph_extract" && body["compactGraph"] == true {
+        "Return schemaVersion 2 with a shared quotes array and 1-4 zero-based integer citation indexes on every node and relation. Every quote must be an exact contiguous source substring, at most 500 characters. Do not output source IDs or revisions. Use the allowed enum values and existing endpoint keys. timeText and dueText must be empty or copied from that node's quotes. Preserve findings and uncertainty; do not invent or drop evidence to bypass validation.".into()
+    } else if reason == "Citation does not match source evidence" {
         "Copy each citation's id, revision and kind verbatim from the supplied sources. Copy quote as one contiguous exact substring of that source's text, at most 500 characters. Keep its original punctuation, whitespace and wording; do not join separate passages or quote your own summary. Preserve the project, purpose, corrections and supported uncertainty. Every factual item still needs valid citations; do not invent or discard evidence to bypass validation.".into()
     } else if reason == "Invalid evidence graph output" {
         "Return the same graph with the exact schemaVersion 1 shape. Every node and relation keeps 1-4 citations whose quote is a contiguous exact substring of the supplied source text. Each status, modality, predicate and kind must use exactly the allowed enum values. timeText and dueText must either be empty or a contiguous substring of one of that node's citation quotes, copied without any change. Keep all endpoint keys present and confidence between 0 and 1. Do not invent or drop findings to bypass validation.".into()
@@ -961,6 +1014,10 @@ fn synthesis_error(status: u16, body: &Value) -> String {
                 | "Invalid synthesis item"
                 | "Invalid memory kind"
                 | "Irrelevant Wiki analysis must contain no claims"
+                | "Graph DeepSeek credentials are not configured"
+                | "Graph model rate limited"
+                | "Model output was truncated"
+                | "Model outcome is unknown; retry explicitly"
         )
     });
     match detail {
@@ -977,7 +1034,14 @@ fn lynclaw_payload(session: &Session, task: &str, payload: Value) -> Value {
     } else {
         payload["topic"].clone()
     };
-    json!({"task":task,"language":session.locale,"query":query,"sources":payload["sources"],"evidence":payload["evidence"],"modelOverride":session.model_override})
+    let mut body = json!({"task":task,"language":session.locale,"query":query,"sources":payload["sources"],"evidence":payload["evidence"],"modelOverride":session.model_override});
+    if task == "graph_extract" {
+        // Older servers still resolve this preset; never forward a chat endpoint or key.
+        body["modelOverride"] = json!({"preset":"deepseek-official","model":"deepseek-flash"});
+        body["includeUsage"] = json!(true);
+        body["compactGraph"] = json!(graph::compact_output());
+    }
+    body
 }
 pub(super) async fn synthesize(
     app: &AppHandle,
@@ -985,7 +1049,7 @@ pub(super) async fn synthesize(
     task: &str,
     documents: &[Document],
     query: Option<&str>,
-) -> CommandResult<Value> {
+) -> CommandResult<(Value, Option<SynthesisUsage>)> {
     let mut budget = 60_000;
     let sources:Vec<_>=documents.iter().cloned().filter_map(super::markdown::source).filter_map(|doc|{if budget==0{return None;} let text=doc.text().chars().take(budget.min(12_000)).collect::<String>();budget-=text.chars().count();Some(json!({"id":doc.id,"revision":doc.revision,"kind":doc.kind,"title":doc.title,"text":text,"segments":doc.segments}))}).collect();
     if sources.is_empty() {
@@ -1289,6 +1353,7 @@ async fn compile(
                                 Some(query),
                             )
                             .await
+                            .map(|(value, _usage)| value)
                         },
                     )
                     .await
@@ -1386,6 +1451,7 @@ async fn compile(
                     json!({"topic":page_query,"evidence":batch,"sources":sources}),
                 )
                 .await
+                .map(|(value, _usage)| value)
             },
         )
         .await?;
@@ -1798,7 +1864,7 @@ pub async fn workbench_wiki(
     // Topic edits are checked by compilation fingerprints; repeated creation cannot cancel work.
     let incremental_action = matches!(
         action,
-        "topic" | "topic_link" | "correction" | "tracking" | "tracking_retry" | "tracking_dismiss" | "tracking_restore" | "tracking_sources" | "tracking_review" | "tracking_reset" | "tracking_merge" | "tracking_unmerge" | "tracking_todo"
+        "topic" | "topic_link" | "correction" | "tracking" | "tracking_retry" | "tracking_refresh" | "tracking_dismiss" | "tracking_restore" | "tracking_sources" | "tracking_review" | "tracking_reset" | "tracking_merge" | "tracking_unmerge" | "tracking_todo"
     );
     let session = if action == "state" || incremental_action {
         current(&state)?
@@ -1822,7 +1888,7 @@ pub async fn workbench_wiki(
             automation::move_sources(&local,&mut manifest,&ids,folder)?;
             persist(&app,&session,&manifest)?;
         }
-        "tracking" | "tracking_retry" | "tracking_dismiss" | "tracking_restore" | "tracking_sources" | "tracking_review" | "tracking_reset" | "tracking_merge" | "tracking_unmerge" => {
+        "tracking" | "tracking_retry" | "tracking_refresh" | "tracking_dismiss" | "tracking_restore" | "tracking_sources" | "tracking_review" | "tracking_reset" | "tracking_merge" | "tracking_unmerge" => {
             graph::configure(&root, &request)?;
             state.discovery_requested.notify_one();
         }
@@ -2126,7 +2192,7 @@ mod tests {
             .contains("base64"));
         std::fs::remove_dir_all(root).unwrap();
     }
-    fn synthesis_server(
+    pub(super) fn synthesis_server(
         responses: Vec<(u16, Value)>,
     ) -> (String, std::thread::JoinHandle<Vec<Value>>) {
         use std::io::{Read, Write};

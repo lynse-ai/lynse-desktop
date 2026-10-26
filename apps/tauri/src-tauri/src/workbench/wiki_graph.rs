@@ -3,6 +3,14 @@ use super::*;
 use std::collections::{BTreeMap, BTreeSet};
 #[path = "wiki_graph_schema.rs"]
 mod schema;
+#[path = "wiki_graph_cache.rs"]
+mod cache;
+#[path = "wiki_graph_reuse.rs"]
+mod reuse;
+#[path = "wiki_graph_identity.rs"]
+mod identity;
+pub(super) use reuse::read as reusable_analysis;
+use futures_util::{stream, StreamExt};
 use schema::{ExtractNode, Extraction};
 pub(super) use schema::mask;
 
@@ -14,6 +22,31 @@ struct Chunk {
     extracted_at: String,
     extraction: Extraction,
     error: String,
+    identity: String,
+    profile: String,
+    in_flight: bool,
+    relation_ids: Vec<String>,
+}
+type Usage = SynthesisUsage;
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+struct RunReport {
+    input_key: String,
+    kind: String,
+    started_at: String,
+    finished_at: Option<String>,
+    elapsed_ms: u64,
+    cache_hits: usize,
+    misses: usize,
+    failed: usize,
+    accounting: Accounting,
+}
+
+fn update_elapsed(run: &mut RunReport) {
+    if let Ok(start) = chrono::DateTime::parse_from_rfc3339(&run.started_at) {
+        run.elapsed_ms = (chrono::Utc::now().timestamp_millis() - start.timestamp_millis()).max(0) as u64;
+    }
 }
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -27,6 +60,14 @@ struct Tracking {
     reviews: BTreeMap<String, Value>,
     merges: BTreeMap<String, String>,
     todo_links: BTreeMap<String, String>,
+    usage: Usage,
+    metrics: accounting::ModelMetrics,
+    layouts: BTreeMap<String, Vec<cache::Segment>>,
+    scope: String,
+    language: String,
+    refresh_legacy: bool,
+    report_requested: bool,
+    runs: Vec<RunReport>,
 }
 fn path(root: &Path) -> PathBuf {
     root.join("evidence-graph.json")
@@ -52,41 +93,23 @@ fn effective_tracking(tracking: &Tracking, manifest: &Manifest, docs: &[Document
     result
 }
 fn pending_chunks(docs: &[Document], tracking: &Tracking) -> Vec<(String, Document)> {
-    let mut pending = Vec::new();
-    for doc in docs
-        .iter()
-        .filter(|doc| doc.kind == schema::SUMMARY_KIND && tracking.selected_sources.contains(&doc.id))
-    {
-        let content_revision = schema::content_revision(doc);
-        for (index, text) in sync::split_text(&schema::evidence_text(doc), 12_000)
-            .into_iter()
-            .enumerate()
-        {
-            if text.trim().is_empty() {
-                continue;
-            }
-            let key = store::digest(
-                json!([
-                    schema::VERSION,
-                    doc.id,
-                    content_revision,
-                    index,
-                    store::digest(&text)
-                ])
-                .to_string(),
-            );
-            if tracking.chunks.contains_key(&key) {
-                continue;
-            }
-            let mut part = doc.clone();
-            part.transcript = text;
-            part.outline.clear();
-            part.conclusions.clear();
-            part.todos.clear();
-            pending.push((key, part));
-        }
-    }
-    pending
+    cache::pending(docs, tracking).into_iter().map(|work| (work.key, work.part)).collect()
+}
+pub(super) fn compact_output() -> bool {
+    std::env::var("LYNSE_GRAPH_COMPACT_OUTPUT").as_deref() != Ok("0")
+}
+fn concurrency() -> usize {
+    std::env::var("LYNSE_GRAPH_CONCURRENCY").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(3).clamp(1, 3)
+}
+fn recover_interrupted(tracking: &mut Tracking) -> u64 {
+    let interrupted = tracking.chunks.values_mut().filter(|chunk| chunk.in_flight).map(|chunk| {
+        chunk.in_flight = false;
+        chunk.error = "Graph request interrupted; retry explicitly".into();
+        1_u64
+    }).sum::<u64>();
+    tracking.metrics.unknown_calls += interrupted;
+    if let Some(run) = tracking.runs.last_mut() { run.accounting.metrics.unknown_calls += interrupted; }
+    interrupted
 }
 fn valid_node_id(id: &str) -> bool {
     (id.starts_with("entity:") || id.starts_with("relation:")) && id.len() <= 100
@@ -105,7 +128,7 @@ pub(super) fn configure(root: &Path, request: &Value) -> CommandResult<()> {
                         .extraction
                         .nodes
                         .iter()
-                        .map(move |node| (node_id(key, node), node.kind.as_str()))
+                        .map(move |node| (node_id(cache::identity(key, chunk), node), node.kind.as_str()))
                 })
                 .collect();
             let kind = kinds
@@ -149,6 +172,7 @@ pub(super) fn configure(root: &Path, request: &Value) -> CommandResult<()> {
                 .ok_or("Invalid tracking setting")?;
             tracking.paused = false;
             tracking.processing = false;
+            tracking.report_requested = tracking.enabled;
             if tracking.enabled && tracking.selected_sources.is_empty() {
                 return Err("Select graph sources before extraction".into());
             }
@@ -164,9 +188,17 @@ pub(super) fn configure(root: &Path, request: &Value) -> CommandResult<()> {
             tracking.processing = false;
             tracking.paused = false;
         }
+        Some("tracking_refresh") => {
+            tracking.refresh_legacy = true;
+            tracking.report_requested = true;
+            tracking.paused = false;
+            tracking.enabled |= !tracking.selected_sources.is_empty();
+            tracking.chunks.retain(|_, chunk| chunk.error.is_empty() || chunk.in_flight);
+        }
         Some("tracking_retry") => {
-            tracking.chunks.retain(|_, chunk| chunk.error.is_empty());
-            tracking.processing = false;
+            tracking.chunks.retain(|_, chunk| chunk.error.is_empty() || chunk.in_flight);
+            tracking.report_requested = true;
+            tracking.processing = tracking.chunks.values().any(|chunk| chunk.in_flight);
             tracking.paused = false;
         }
         Some(
@@ -233,86 +265,144 @@ pub(super) fn configure(root: &Path, request: &Value) -> CommandResult<()> {
     write_json(&path(root), &tracking)
 }
 
-pub(super) async fn run(
-    app: &AppHandle,
-    state: &WorkbenchState,
-    session: &Session,
-) -> CommandResult<bool> {
-    let (root, key, part, source_content) = {
+async fn extract(app: &AppHandle, session: &Session, work: &cache::Work) -> (CommandResult<Extraction>, Accounting) {
+    let mut accounting = Accounting::default();
+    let copy = match schema::transport(&work.part) {
+        Ok(copy) => copy,
+        Err(error) => return (Err(error), accounting),
+    };
+    let payload = json!({"sources":[{"id":copy.id,"kind":copy.kind,"revision":copy.revision,
+        "title":copy.title,"text":copy.transcript,"segments":[]}]});
+    for attempt in 0..2 {
+        let mut report = Accounting::default();
+        let result = request_model_report(app, session, "graph_extract", payload.clone(), &mut report).await;
+        let limited = report.metrics.retry_after.is_some();
+        let verified = report.metrics.model.as_deref() == Some("deepseek-flash")
+            && report.metrics.profile.as_deref() == Some(cache::PROFILE);
+        accounting.add(&report);
+        if limited && attempt == 0 { continue; }
+        if result.is_ok() && !verified {
+            return (Err("Graph service version does not confirm deepseek-flash; update Lynclaw".into()), accounting);
+        }
+        return (result.and_then(|value| schema::validate(value, &work.part)), accounting);
+    }
+    unreachable!("bounded extraction attempts")
+}
+
+pub(super) async fn run(app: &AppHandle, state: &WorkbenchState, session: &Session) -> CommandResult<bool> {
+    let started_at = crate::now();
+    // A second runner joins the same persisted results after the first batch commits.
+    let _flight = state.graph_run.lock().await;
+    let (root, work) = {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
         let manifest = load_state(app, session)?;
-        if ready(&manifest).is_err() {
-            return Ok(false);
-        }
+        if ready(&manifest).is_err() { return Ok(false); }
         let root = wiki_root(app, session)?;
-        let mut tracking: Tracking = read_json(&path(&root))?;
+        let saved: Tracking = read_json(&path(&root))?;
         let docs = summary_sources(&roots(app, session)?.0, &manifest);
-        let effective = effective_tracking(&tracking, &manifest, &docs);
-        if !effective.enabled || effective.paused {
-            return Ok(false);
-        }
-        let Some((key, part)) = pending_chunks(&docs, &effective).into_iter().next() else {
-            if tracking.processing {
+        let mut tracking = effective_tracking(&saved, &manifest, &docs);
+        // Durable claims prevent a restart from silently repeating an unknown remote outcome.
+        let interrupted = recover_interrupted(&mut tracking);
+        if !tracking.enabled || tracking.paused {
+            if interrupted > 0 {
                 tracking.processing = false;
                 write_json(&path(&root), &tracking)?;
             }
             return Ok(false);
-        };
-        let source_content = docs
-            .iter()
-            .find(|doc| doc.id == part.id)
-            .map(schema::content_revision)
-            .unwrap_or_default();
-        tracking.processing = true;
+        }
+        tracking.scope = session.scope.clone();
+        tracking.language = session.locale.clone();
+        let planned = cache::plan(&docs, &mut tracking);
+        let pending: Vec<_> = planned.iter().filter(|work| !tracking.chunks.contains_key(&work.key)).cloned().collect();
+        let input_key = store::digest(json!([session.scope, session.locale, planned.iter().map(|w| &w.key).collect::<Vec<_>>()]).to_string());
+        let start_report = tracking.report_requested || tracking.runs.last().is_none_or(|run| run.input_key != input_key);
+        if start_report {
+            if let Some(previous) = tracking.runs.last_mut() {
+                if previous.finished_at.is_none() { update_elapsed(previous); previous.finished_at = Some(crate::now()); }
+            }
+            let had_results = tracking.chunks.values().any(|chunk| chunk.profile == cache::PROFILE);
+            tracking.runs.push(RunReport {
+                input_key, kind: if pending.is_empty() { "repeat" } else if had_results { "incremental" } else { "initial" }.into(),
+                started_at,
+                cache_hits: planned.iter().filter(|w| tracking.chunks.get(&w.key).is_some_and(|c| c.error.is_empty())).count(),
+                misses: pending.len(), ..Default::default()
+            });
+            if tracking.runs.len() > 20 { tracking.runs.remove(0); }
+        }
+        tracking.report_requested = false;
+        tracking.processing = !pending.is_empty();
+        let work = pending.into_iter().take(concurrency()).collect::<Vec<_>>();
+        for item in &work {
+            tracking.chunks.insert(item.key.clone(), Chunk {
+                source_id: item.part.id.clone(), content_revision: item.content_revision.clone(),
+                identity: item.identity.clone(), profile: cache::PROFILE.into(), in_flight: true,
+                error: "Graph request interrupted; retry explicitly".into(), ..Default::default()
+            });
+        }
+        if work.is_empty() {
+            if let Some(run) = tracking.runs.last_mut() {
+                if run.finished_at.is_none() { update_elapsed(run); run.finished_at = Some(crate::now()); }
+            }
+        }
         write_json(&path(&root), &tracking)?;
         persist(app, session, &manifest)?;
-        (root, key, part, source_content)
+        (root, work)
     };
-    let copy = schema::transport(&part)?;
-    let result = synthesize(app, session, "graph_extract", &[copy], None)
-        .await
-        .and_then(|value| schema::validate(value, &part));
+    let mut results = stream::iter(work.into_iter().map(|work| async move {
+        let (result, report) = extract(app, session, &work).await;
+        (work, result, report)
+    })).buffer_unordered(concurrency());
+    while let Some((work, result, report)) = results.next().await {
+        let _guard = state.serial.lock().await;
+        require_current(state, session)?;
+        let manifest = load_state(app, session)?;
+        let mut tracking: Tracking = read_json(&path(&root))?;
+        tracking.usage.add(report.usage);
+        let mut totals = Accounting { usage: Usage::default(), metrics: tracking.metrics.clone() };
+        totals.add(&report);
+        tracking.metrics = totals.metrics;
+        let failed = result.is_err();
+        if let Some(run) = tracking.runs.last_mut() {
+            run.accounting.add(&report);
+            run.failed += usize::from(failed);
+            update_elapsed(run);
+        }
+        let current = summary_sources(&roots(app, session)?.0, &manifest).into_iter().find(|doc| doc.id == work.part.id);
+        if let Some(chunk) = tracking.chunks.get_mut(&work.key) {
+            chunk.in_flight = false;
+            chunk.error = "Source changed during graph extraction".into();
+        }
+        if ready(&manifest).is_ok() && current.as_ref().is_some_and(|doc| schema::content_revision(doc) == work.content_revision) {
+            let (mut extraction, error) = match result {
+                Ok(extraction) => (extraction, String::new()),
+                Err(error) => (Extraction::default(), error),
+            };
+            let previous = tracking.chunks.iter().filter(|(key, chunk)| chunk.error.is_empty()
+                && cache::identity(key, chunk) == work.identity).max_by_key(|(_, chunk)| &chunk.extracted_at).map(|(_, chunk)| chunk);
+            let relation_ids = if error.is_empty() { identity::stabilize(&mut extraction, previous, &work.identity) } else { Vec::new() };
+            tracking.paused |= manifest.wiki_automation.is_none() && !error.is_empty();
+            tracking.chunks.insert(work.key, Chunk { source_id: work.part.id, content_revision: work.content_revision,
+                extracted_at: crate::now(), extraction, error, identity: work.identity, profile: cache::PROFILE.into(), in_flight: false, relation_ids });
+        }
+        write_json(&path(&root), &tracking)?;
+        persist(app, session, &manifest)?;
+    }
     let _guard = state.serial.lock().await;
     require_current(state, session)?;
-    let latest = load_state(app, session)?;
-    ready(&latest)?;
-    let local = roots(app, session)?.0;
+    let manifest = load_state(app, session)?;
     let mut tracking: Tracking = read_json(&path(&root))?;
     tracking.processing = false;
-    let current = summary_sources(&local, &latest)
-        .into_iter()
-        .find(|doc| doc.id == part.id);
-    let automatic = latest.wiki_automation.is_some();
-    if (!automatic && (!tracking.enabled || !tracking.selected_sources.contains(&part.id)))
-        || current
-            .as_ref()
-            .is_none_or(|doc| schema::content_revision(doc) != source_content)
-    {
-        write_json(&path(&root), &tracking)?;
-        persist(app, session, &latest)?;
-        return Ok(automatic || (tracking.enabled && !tracking.paused));
+    let docs = summary_sources(&roots(app, session)?.0, &manifest);
+    let effective = effective_tracking(&tracking, &manifest, &docs);
+    let more = ready(&manifest).is_ok() && !effective.paused && !cache::pending(&docs, &effective).is_empty();
+    if let Some(run) = tracking.runs.last_mut() {
+        update_elapsed(run);
+        if !more { run.finished_at = Some(crate::now()); }
     }
-    let (extraction, error) = match result {
-        Ok(extraction) => (extraction, String::new()),
-        Err(error) => (Extraction::default(), error),
-    };
-    tracking.paused = !automatic && !error.is_empty();
-    tracking.chunks.insert(
-        key,
-        Chunk {
-            source_id: part.id,
-            content_revision: source_content,
-            extracted_at: crate::now(),
-            extraction,
-            error,
-        },
-    );
     write_json(&path(&root), &tracking)?;
-    persist(app, session, &latest)?;
-    let docs = summary_sources(&local, &latest);
-    let effective = effective_tracking(&tracking, &latest, &docs);
-    Ok(!effective.paused && !pending_chunks(&docs, &effective).is_empty())
+    persist(app, session, &manifest)?;
+    Ok(more)
 }
 pub(super) fn confirm_todo(
     app: &AppHandle,
@@ -519,15 +609,27 @@ pub(super) fn view(
     let docs = sources_for(local, manifest);
     let current: BTreeMap<_, _> = docs.iter().map(|doc| (doc.id.as_str(), doc)).collect();
     let summaries: Vec<_> = docs.iter().filter_map(|doc| schema::summary_source(doc, manifest)).collect();
-    let tracking = effective_tracking(&tracking, manifest, &summaries);
+    let mut tracking = effective_tracking(&tracking, manifest, &summaries);
+    let planned = cache::plan(&summaries, &mut tracking);
+    let mut desired: BTreeSet<_> = planned.iter().map(|work| work.key.clone()).collect();
+    // Keep a legacy graph readable while its explicitly requested replacement is pending or failed.
+    if tracking.refresh_legacy {
+        for work in &planned {
+            if tracking.chunks.get(&work.key).is_none_or(|chunk| !chunk.error.is_empty()) {
+                desired.extend(tracking.chunks.iter().filter(|(_, chunk)| chunk.profile.is_empty()
+                    && chunk.error.is_empty() && chunk.source_id == work.part.id
+                    && chunk.content_revision == work.content_revision).map(|(key, _)| key.clone()));
+            }
+        }
+    }
     let summary_docs: BTreeMap<_, _> = summaries.iter().map(|doc| (doc.id.as_str(), doc)).collect();
     let mut nodes = BTreeMap::<String, Value>::new();
     let mut edges = BTreeMap::new();
     let active: Vec<_> = tracking
         .chunks
         .iter()
-        .filter(|(_, chunk)| {
-            manifest.enabled
+        .filter(|(key, chunk)| {
+            desired.contains(key.as_str()) && manifest.enabled
                 && manifest.allow_ai
                 && tracking.selected_sources.contains(&chunk.source_id)
                 && summary_docs
@@ -536,6 +638,7 @@ pub(super) fn view(
         })
         .collect();
     for (key, chunk) in &active {
+        let key = cache::identity(key, chunk);
         let doc = summary_docs[chunk.source_id.as_str()];
         let mut ids = BTreeMap::new();
         for node in &chunk.extraction.nodes {
@@ -568,19 +671,8 @@ pub(super) fn view(
             ) else {
                 continue;
             };
-            let id = format!(
-                "relation:{}",
-                store::digest(
-                    json!([
-                        key,
-                        index,
-                        relation.subject,
-                        relation.target,
-                        relation.predicate
-                    ])
-                    .to_string()
-                )
-            );
+            let id = chunk.relation_ids.get(index).cloned()
+                .unwrap_or_else(|| identity::old_relation_id(key, index, relation));
             if tracking.dismissed.contains(&id) {
                 continue;
             }
@@ -656,26 +748,20 @@ pub(super) fn view(
         nodes.entry(id).or_insert(node);
     }
     let available: Vec<_> = summaries.iter().map(|doc| json!({"id":doc.id,"title":doc.title,"selected":tracking.selected_sources.contains(&doc.id)})).collect();
-    let total: usize = summaries
-        .iter()
-        .filter(|doc| tracking.selected_sources.contains(&doc.id))
-        .map(|doc| {
-            sync::split_text(&schema::evidence_text(doc), 12_000)
-                .into_iter()
-                .filter(|text| !text.trim().is_empty())
-                .count()
-        })
-        .sum();
+    let total = planned.len();
     let failed = active
         .iter()
-        .filter(|(_, chunk)| !chunk.error.is_empty())
+        .filter(|(_, chunk)| !chunk.error.is_empty() && !chunk.in_flight)
         .count();
-    let pending = pending_chunks(&summaries, &tracking).len();
+    let pending = planned.iter().filter(|work| !tracking.chunks.contains_key(&work.key)).count();
     Ok(
-        json!({"schemaVersion":schema::VERSION,"nodes":nodes.into_values().collect::<Vec<_>>(),"edges":edges.into_values().collect::<Vec<_>>(),"availableSources":available,"automaticTracking":tracking.enabled,"tracking":{"processing":tracking.processing,"paused":tracking.paused,"completed":total.saturating_sub(pending+failed),"total":total,"failed":failed,"error":active.iter().find(|(_,chunk)| !chunk.error.is_empty()).map(|(_,chunk)| chunk.error.as_str()).unwrap_or("")}}),
+        json!({"schemaVersion":schema::VERSION,"nodes":nodes.into_values().collect::<Vec<_>>(),"edges":edges.into_values().collect::<Vec<_>>(),"availableSources":available,"automaticTracking":tracking.enabled,"tracking":{"processing":tracking.processing,"paused":tracking.paused,"completed":total.saturating_sub(pending+failed+active.iter().filter(|(_, chunk)| chunk.in_flight).count()),"total":total,"failed":failed,"error":active.iter().find(|(_,chunk)| !chunk.error.is_empty() && !chunk.in_flight).map(|(_,chunk)| chunk.error.as_str()).unwrap_or(""),"usage":tracking.usage,"metrics":tracking.metrics,"runs":tracking.runs,"legacyChunks":active.iter().filter(|(_,chunk)| chunk.profile.is_empty()).count(),"model":"deepseek-flash","showUsage":std::env::var("LYNSE_GRAPH_SHOW_USAGE").as_deref()!=Ok("0")}}),
     )
 }
 
 #[cfg(test)]
 #[path = "wiki_graph_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "wiki_graph_cache_tests.rs"]
+mod cache_tests;

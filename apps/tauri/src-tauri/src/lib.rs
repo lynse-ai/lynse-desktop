@@ -5298,6 +5298,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             workbench::wiki::workbench_wiki,
             workbench::workbench_bind,
+            workbench::workbench_set_text_model,
             workbench::workbench_unbind,
             workbench::workbench_status,
             workbench::workbench_configure,

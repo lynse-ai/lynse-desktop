@@ -1,4 +1,8 @@
 export function workbenchErrorCopy(error: string): { key: string; count?: number } | null {
+  if (error.includes("Graph DeepSeek credentials are not configured")) return { key: "workbench.graph_error_credentials" };
+  if (error.includes("Model output was truncated")) return { key: "workbench.graph_error_truncated" };
+  if (error.includes("outcome is unknown") || error.includes("Graph request interrupted")) return { key: "workbench.graph_error_unknown_outcome" };
+  if (error.includes("Graph model rate limited")) return { key: "workbench.graph_error_rate_limit" };
   if (error === "Lynclaw authentication failed; sign in again") return { key: "workbench.error_session_auth" };
   if (error.includes("Discovery names do not match source evidence")) return { key: "workbench.error_discovery_names" };
   const topics = error.match(/^Wiki processing failed for (\d+) topics;/);
@@ -9,6 +13,7 @@ export function workbenchErrorCopy(error: string): { key: string; count?: number
   if (error.includes("Invalid evidence graph output") || error.includes("Graph citation")) return { key: "workbench.error_model_output" };
   if (error.includes("Invalid memory kind")) return { key: "workbench.error_memory_kind" };
   if (error.includes("Model did not return valid structured output") || error.includes("Invalid synthesis result") || /Invalid topic (match|relation|timeline)|Event date needs/.test(error) || error.includes("Irrelevant Wiki analysis must contain no claims")) return { key: "workbench.error_model_output" };
+  if (error.includes("Graph service version does not confirm deepseek-flash")) return { key: "workbench.error_service_version" };
   if (error.includes("Unknown synthesis task")) return { key: "workbench.error_service_version" };
   return null;
 }

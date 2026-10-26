@@ -5,6 +5,7 @@ mod knowledge_cloud;
 mod sources;
 mod store;
 mod sync;
+mod synthesis_scheduler;
 pub mod wiki;
 pub(crate) use store::SourceRef;
 
@@ -39,6 +40,8 @@ pub struct WorkbenchState {
     pub(super) session: Mutex<Option<Session>>,
     pub(super) worker: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pub(super) serial: tokio::sync::Mutex<()>,
+    pub(super) graph_run: tokio::sync::Mutex<()>,
+    pub(super) synthesis_queue: synthesis_scheduler::Scheduler,
     sync_requested: tokio::sync::Notify,
     wiki_requested: AtomicBool,
     refresh_existing: AtomicBool,
@@ -472,6 +475,37 @@ pub async fn workbench_unbind(state: State<'_, WorkbenchState>) -> CommandResult
     Ok(())
 }
 
+fn replace_text_model(state: &WorkbenchState, model: Option<Value>) -> CommandResult<bool> {
+    let mut active = state.session.lock().map_err(|_| "Session unavailable")?;
+    let session = active.as_mut().ok_or("Sign in to access this account's knowledge base")?;
+    if session.model_override == model { return Ok(false); }
+    session.model_override = model;
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn workbench_set_text_model(
+    app: AppHandle, state: State<'_, WorkbenchState>, model_override: Option<Value>,
+) -> CommandResult<()> {
+    let _guard = state.serial.lock().await;
+    let changed = replace_text_model(&state, model_override)?;
+    if changed {
+        let session = current(&state)?;
+        let mut manifest = load_state(&app, &session)?;
+        if wiki::ready(&manifest).is_ok() {
+            wiki::resume_session(&app, &session, &mut manifest)?;
+            manifest.phase = "processing".into();
+            manifest.error.clear();
+            persist(&app, &session, &manifest)?;
+            state.wiki_requested.store(true, Ordering::SeqCst);
+            state.sync_requested.notify_one();
+        }
+    }
+    drop(_guard);
+    if changed && crate::vault::load_vault_config(&app)?.enabled { start_worker(&app, &state); }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn workbench_status(
     app: AppHandle,
@@ -503,6 +537,10 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                     sync::run(&app, &state, &session),
                 ).await;
                 if let Err(error) = result {
+                    if error == wiki::TEXT_MODEL_CHANGED {
+                        state.wiki_requested.store(true, Ordering::SeqCst);
+                        continue;
+                    }
                     let _guard = state.serial.lock().await;
                     if is_current(&state, &session) {
                         if let Ok(mut manifest) = load_state(&app, &session) {
@@ -795,7 +833,7 @@ pub async fn workbench_review(
             json!({"summary":"","memoryItems":[],"todoSuggestions":[],"citations":[],"insufficientEvidence":true}),
         );
     }
-    let result =
+    let (result, _usage) =
         wiki::synthesize(&app, &session, "project_review", &documents, Some(&query)).await?;
     let _guard = state.serial.lock().await;
     require_current(&state, &session)?;
@@ -939,7 +977,7 @@ pub async fn workbench_regenerate(
             .ok_or("Meeting is excluded or unavailable")?;
         store::read_document(&roots(&app, &session)?.0, entry)?
     };
-    let result =
+    let (result, _usage) =
         wiki::synthesize(&app, &session, "meeting_summary", &[document.clone()], None).await?;
     let _guard = state.serial.lock().await;
     require_current(&state, &session)?;
@@ -1213,6 +1251,23 @@ pub async fn workbench_context(
 #[cfg(test)]
 mod wiki_lifecycle_tests {
     use super::*;
+    #[tokio::test]
+    async fn changing_text_model_keeps_graph_session_epoch_and_execution_gate() {
+        let state = WorkbenchState::default();
+        let session = Session { scope:"same-user".into(),user_id:"verified".into(),base_url:"https://business.invalid".into(),
+            agent_url:"https://agent.invalid".into(),token:"synthetic".into(),generation:7,locale:"zh".into(),model_override:None };
+        state.epoch.store(7, Ordering::SeqCst);
+        *state.session.lock().unwrap() = Some(session.clone());
+        let graph = state.graph_run.lock().await;
+        let model = Some(json!({"preset":"miaoyun","model":"glm-5.3-flash"}));
+        assert!(replace_text_model(&state, model.clone()).unwrap());
+        assert_eq!(state.epoch.load(Ordering::SeqCst), 7);
+        assert!(is_current(&state, &session));
+        assert_eq!(current(&state).unwrap().model_override, model);
+        assert!(!replace_text_model(&state, model).unwrap());
+        assert!(state.graph_run.try_lock().is_err());
+        drop(graph);
+    }
     #[tokio::test]
     async fn ready_wiki_retry_runs_without_waiting_for_source_sync() {
         let state = WorkbenchState::default();

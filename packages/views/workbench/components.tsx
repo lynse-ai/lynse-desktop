@@ -47,12 +47,20 @@ export function WorkbenchSupervisor() {
   const [configurationVersion, setConfigurationVersion] = useState(0);
   useEffect(() => {
     const changed = () => setConfigurationVersion((value) => value + 1);
-    const storageChanged = (event: StorageEvent) => { if (event.key === MODEL_OVERRIDE_STORAGE_KEY) changed(); };
-    window.addEventListener("lynse-chat-model-setting", changed);
+    const modelChanged = () => {
+      if (!authenticated) return;
+      const bridge = getWorkbenchApi();
+      if (!bridge?.setTextModel) { changed(); return; }
+      void bridge.setTextModel(toRequestOverride(loadChatModelSetting())).catch((error: unknown) => {
+        if (useWorkbench.getState().status) useWorkbench.getState().setError(String(error));
+      });
+    };
+    const storageChanged = (event: StorageEvent) => { if (event.key === MODEL_OVERRIDE_STORAGE_KEY) modelChanged(); };
+    window.addEventListener("lynse-chat-model-setting", modelChanged);
     window.addEventListener("lynse-test-mode-changed", changed);
     window.addEventListener("storage", storageChanged);
-    return () => { window.removeEventListener("lynse-chat-model-setting", changed); window.removeEventListener("lynse-test-mode-changed", changed); window.removeEventListener("storage", storageChanged); };
-  }, []);
+    return () => { window.removeEventListener("lynse-chat-model-setting", modelChanged); window.removeEventListener("lynse-test-mode-changed", changed); window.removeEventListener("storage", storageChanged); };
+  }, [authenticated]);
   const { i18n } = useTranslation();
   useEffect(() => {
     const bridge = getWorkbenchApi();
@@ -65,7 +73,10 @@ export function WorkbenchSupervisor() {
     if (!authenticated || !token) { void bridge.unbind(); return; }
     void bridge.bind({ baseUrl: api().getBaseUrl(), agentUrl: api().getAgentBaseUrl() ?? undefined,
       token, locale: i18n.language, betaEnabled: isWikiEnabled(), gmailPluginEnabled, modelOverride: toRequestOverride(loadChatModelSetting()) })
-      .then((status) => { if (!disposed) { boundScope = status?.scope; useWorkbench.getState().setStatus(status); } })
+      .then(async (status) => { if (!disposed) {
+        boundScope = status?.scope; useWorkbench.getState().setStatus(status);
+        await bridge.setTextModel?.(toRequestOverride(loadChatModelSetting()));
+      } })
       .catch((error: unknown) => { if (!disposed) useWorkbench.getState().setError(String(error)); });
     void bridge.onUpdate((status) => {
       if (!disposed && boundScope === status.scope) useWorkbench.getState().setStatus(status);

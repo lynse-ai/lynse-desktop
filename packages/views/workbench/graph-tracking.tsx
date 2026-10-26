@@ -7,6 +7,7 @@ import { Switch } from "@lynse/ui/components/ui/switch";
 import { useWorkbench } from "./api";
 import { useWiki } from "./wiki";
 import { workbenchErrorCopy } from "./errors";
+import { GraphProcessingStats } from "./graph-processing-stats";
 export function GraphTracking({ wiki, expanded = false }: { wiki: ReturnType<typeof useWiki>; expanded?: boolean }) {
   const { t } = useTranslation();
   const graph = wiki.data?.graph;
@@ -37,6 +38,8 @@ export function GraphTracking({ wiki, expanded = false }: { wiki: ReturnType<typ
       <Button size="sm" disabled={wiki.busy || !canProcess || !selected.length} onClick={() => void start().catch(() => undefined)}>{t("workbench.graph_start_selected", { count: selected.length })}</Button>
       {dirty && <p className="text-xs text-muted-foreground">{t("workbench.graph_selection_unsaved")}</p>}
     </div></details>
+    {tracking && tracking.showUsage !== false && <GraphProcessingStats tracking={tracking} />}
+    {!!tracking?.legacyChunks && <div className="space-y-2 text-xs text-muted-foreground"><p>{t("workbench.graph_legacy_kept")}</p><Button size="sm" variant="outline" disabled={wiki.busy || !canProcess || tracking.processing} onClick={() => void wiki.mutate({ action: "tracking_refresh" }).catch(() => undefined)}>{t("workbench.graph_refresh_legacy")}</Button></div>}
     {!canProcess && <p className="text-xs text-muted-foreground">{t(wiki.status?.enabled ? wiki.status.allowAi ? "workbench.wiki_wait_sync" : "workbench.wiki_wait_consent" : "workbench.memory_enable_hint")}</p>}
     {canProcess && graph?.automaticTracking && tracking && !tracking.paused && <p role="status" className="text-xs text-muted-foreground">{t("workbench.graph_tracking_progress", { completed: tracking.completed, total: tracking.total })}</p>}
     {!!tracking?.failed && <div className="space-y-2"><p role="alert" className="text-xs text-destructive">{t("workbench.graph_tracking_failed", { count: tracking.failed })}</p><Button size="sm" variant="outline" disabled={wiki.busy || !canProcess || !graph?.automaticTracking} onClick={() => void wiki.mutate({ action: "tracking_retry" }).catch(() => undefined)}>{t("workbench.retry")}</Button><details className="text-xs text-muted-foreground"><summary className="cursor-pointer">{t("workbench.graph_failure_reason")}</summary><p className="mt-1 break-words">{errorCopy ? t(errorCopy.key, { count: errorCopy.count }) : tracking.error}</p></details></div>}

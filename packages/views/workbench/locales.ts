@@ -152,6 +152,16 @@ const en = {
   wiki_topic_controls_hint: "Add corrections for the next draft. Pinning pauses updates; excluding stops AI from using this topic.",
   wiki_delete_hint: 'Delete “{{title}}” and its drafts and saved pages? Original meetings will be kept.',
 
+  graph_error_credentials: "The server has no DeepSeek credential for graph processing. Configure it on the AI service and retry.",
+  graph_error_truncated: "The graph output reached its limit and was not used. Completed sections are kept; retry this section explicitly.",
+  graph_error_unknown_outcome: "The last request's outcome is unknown. Completed results are kept. Retry explicitly to avoid an automatic duplicate request.",
+  graph_error_rate_limit: "DeepSeek is limiting requests. Processing has switched to a slower queue and follows the retry delay.",
+  graph_usage: "Processing usage", graph_fixed_model: "Graph model: deepseek-flash", graph_usage_unknown: "Unknown",
+  graph_run_initial: "Initial processing", graph_run_repeat: "Repeated processing", graph_run_incremental: "Incremental update",
+  graph_usage_calls: "Model calls", graph_usage_input: "Input tokens", graph_usage_output: "Output tokens", graph_usage_cached: "Cached input tokens",
+  graph_usage_local: "Results reused: {{hits}} / {{total}} sections", graph_usage_time: "Elapsed {{elapsed}}s · queued {{queued}}s · generating {{generation}}s",
+  graph_usage_partial: "≥{{value}}", graph_usage_cache_ratio: "Cached input: {{value}}%", graph_usage_partial_hint: "Some calls did not report usage. ≥ shows the known subtotal.",
+  graph_legacy_kept: "Existing graph results have been kept. You can explicitly process legacy results with the fixed model.", graph_refresh_legacy: "Process legacy results with DeepSeek",
   graph_time_unknown: "Event time not stated", graph_extracted_at: "Extracted: {{time}}",
 
   graph_todo_status: "To-do system: {{status}}", graph_todo_open: "Open", graph_view_todo: "View confirmed to-dos", graph_create_todo: "Confirm and create a to-do",
@@ -485,6 +495,16 @@ const zh: typeof en = {
   wiki_topic_controls_hint: "补充的纠正会用于下次整理。固定会暂停更新，排除后 AI 将不再使用这个专题。",
   wiki_delete_hint: "删除「{{title}}」及其草稿和已保存页面？原始会议会保留。",
 
+  graph_error_credentials: "服务端尚未配置图谱使用的 DeepSeek 密钥，请配置 AI 服务后重试。",
+  graph_error_truncated: "图谱输出达到上限，本段结果未采用。已完成的分段已保留，请明确重试本段。",
+  graph_error_unknown_outcome: "上次请求的结果未知，已完成的结果已保留。为避免自动重复请求，请明确点击重试。",
+  graph_error_rate_limit: "DeepSeek 正在限制请求，处理已切换为较慢队列，并遵守服务端的重试等待时间。",
+  graph_usage: "处理用量", graph_fixed_model: "图谱模型：deepseek-flash", graph_usage_unknown: "未知",
+  graph_run_initial: "首次整理", graph_run_repeat: "重复整理", graph_run_incremental: "增量更新",
+  graph_usage_calls: "模型调用", graph_usage_input: "输入 tokens", graph_usage_output: "输出 tokens", graph_usage_cached: "缓存输入 tokens",
+  graph_usage_local: "结果复用：{{hits}} / {{total}} 段", graph_usage_time: "总耗时 {{elapsed}} 秒 · 排队 {{queued}} 秒 · 生成 {{generation}} 秒",
+  graph_usage_partial: "≥{{value}}", graph_usage_cache_ratio: "缓存输入占比：{{value}}%", graph_usage_partial_hint: "部分调用未返回用量；≥ 表示已知消耗的合计。",
+  graph_legacy_kept: "已有图谱结果已保留。需要时可明确使用固定模型重新整理旧版结果。", graph_refresh_legacy: "使用 DeepSeek 整理旧版结果",
   graph_time_unknown: "事件发生时间未知", graph_extracted_at: "抽取时间：{{time}}",
 
   graph_todo_status: "待办系统状态：{{status}}", graph_todo_open: "未完成", graph_view_todo: "查看已确认待办", graph_create_todo: "确认并创建待办",

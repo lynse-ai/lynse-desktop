@@ -429,6 +429,7 @@ async fn local_graph_service_smoke() {
             extracted_at: crate::now(),
             extraction,
             error: String::new(),
+            ..Default::default()
         },
     );
     write_json(&path(&root), &tracking).unwrap();

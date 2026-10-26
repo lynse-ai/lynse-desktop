@@ -344,6 +344,7 @@ export async function installTauriBridge(): Promise<void> {
 
   const workbenchApi: DesktopWorkbenchApi = {
     bind: (request) => command("workbench_bind", { request }),
+    setTextModel: (modelOverride) => command("workbench_set_text_model", { modelOverride }),
     unbind: () => command("workbench_unbind"),
     status: () => command("workbench_status"),
     wiki: (request) => command("workbench_wiki", { request }),

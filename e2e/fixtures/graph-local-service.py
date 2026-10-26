@@ -34,7 +34,7 @@ def main():
         if source['kind'] != 'meeting_summary' or 'TRANSCRIPT_ONLY' in json.dumps(payload) or '张三负责A项目' not in text or '@example.com' in text or '13812345678' in text:
             raise ValueError('Expected synthetic, already masked source')
         calls.append({'task': payload['task'], 'masked': True})
-        ref = dict(id=source['id'], kind=source['kind'], revision=source['revision'], quote=text.strip())
+        ref = dict(id=source.get('id', 'compact-source'), kind=source['kind'], revision=source.get('revision', 'compact-revision'), quote=text.strip())
         if payload['task'] == 'wiki_catalog':
             return {'topics':[{'key':'a-project-budget','existingId':None,'kind':'project','title':'A项目','overview':'预算与方案进展','citations':[ref]}]}
         if payload['task'] in {'source_analysis','topic_compile'}:
@@ -49,10 +49,17 @@ def main():
         result = dict(schemaVersion=1,nodes=[node('person','person','张三'),node('recipient','person','李四'),node('project','project','A项目'),node('document','document','预算表'),node('task','task','提交预算表','planned','周五'),node('decision','decision','采用方案B'),node('risk','risk','预算超支','uncertain')],relations=[relation('person','project','responsible_for'),relation('task','person','owner','planned'),relation('task','recipient','recipient','planned'),relation('task','document','object','planned'),relation('task','project','project','planned'),relation('decision','project','project'),relation('risk','project','project'),relation('recipient','risk','concerned_about','uncertain')])
         if payload.get('query') == 'fixture-invalid-quote':
             result['relations'][0]['citations'] = [{**ref, 'quote': 'Invented source text'}]
+        if payload['task'] == 'graph_extract' and 'id' not in source:
+            quote = result['relations'][0]['citations'][0]['quote']
+            result['schemaVersion'] = 2
+            result['quotes'] = [text.strip()] if quote == text.strip() else [quote]
+            for row in result['nodes'] + result['relations']:
+                row['citations'] = [0]
         return result
 
-    def synthesize(payload, **kwargs):
-        return original(payload, **kwargs, model_call=model)
+    def authorized(payload, *, root, user_id, token, stats=None):
+        # The loopback harness has synthetic source authority and never contacts cloud services.
+        return original(payload, root=root, user_id=user_id, stats=stats, model_call=model)
 
     def identity(token, **kwargs):
         if token != 'synthetic-local-graph-token':
@@ -82,7 +89,7 @@ def main():
     listener.listen(16)
     address = f'http://127.0.0.1:{listener.getsockname()[1]}'
     args.ready_file.write_text(json.dumps({'url':address}), encoding='utf-8')
-    with patch('runtime.desktop_synthesis.synthesize', side_effect=synthesize), patch('runtime.http_identity.resolve_token_identity', side_effect=identity), patch('runtime.session_binding.bound_backend_host', return_value=None):
+    with patch('runtime.desktop_synthesis.synthesize_authorized', side_effect=authorized), patch('runtime.http_identity.resolve_token_identity', side_effect=identity), patch('runtime.session_binding.bound_backend_host', return_value=None):
         try:
             uvicorn.Server(uvicorn.Config(app, log_level='warning', access_log=False)).run(sockets=[listener])
         finally:

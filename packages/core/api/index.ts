@@ -1,4 +1,6 @@
 export { ApiClient, ApiError, api, setApiInstance } from "./client";
+export { getUsageSummary } from "./usage";
+export type { UsageSummary } from "./usage";
 export { normalizeConnectionRequest, getConnectorRequest, resumeConnectorRequest, cancelConnectorRequest } from "./connectors";
 export type { ConnectorConnectionRequest, ConnectorRequestResult, ConnectorAccount, ConnectorRequestStatus } from "./connectors";
 export { parseWithFallback } from "./schema";

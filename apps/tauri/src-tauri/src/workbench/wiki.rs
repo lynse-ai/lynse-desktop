@@ -885,7 +885,8 @@ async fn request_model_report(
     ready(&manifest)?;
     validate_request_sources(&roots(app,session)?.0,&manifest,&payload)?;
     require_task_model(&state, session, task)?;
-    let body = lynclaw_payload(session, task, payload);
+    let mut body = lynclaw_payload(session, task, payload);
+    body["operationId"] = json!(uuid::Uuid::new_v4().to_string());
     let path = if session.agent_url == session.base_url {
         "/api/business/ai/desktop/synthesize"
     } else {
@@ -910,8 +911,42 @@ async fn request_model_report(
     let result = result?;
     require_task_model(&state, session, task)?;
     knowledge_cloud::authorize(app,session,&authority_docs,"wiki_compile").await?;
+    // Keep the validated output locally before acknowledging a billable step.
+    // The service receives only its own hash and an opaque artifact reference.
+    if let Some(receipt) = &report.usage_receipt {
+        let step = receipt["step_id"].as_str().filter(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()));
+        if let Some(step) = step {
+            require_current(&state, session)?;
+            let (_, root) = roots(app, session)?;
+            write_json(&root.join("usage-results").join(format!("{step}.json")), &json!({"result":result,"receipt":receipt}))?;
+            let pending = root.join("usage-receipts").join(format!("{step}.json"));
+            write_json(&pending, &json!({"step_id":step,"result_hash":receipt["result_hash"],"artifact_ref":format!("desktop:{step}")}))?;
+            flush_usage_receipts(&client, session, &state, &root).await;
+        }
+    }
     Ok(result)
 }
+/// Bounded, idempotent delivery of body-free receipts saved on this account's disk.
+async fn flush_usage_receipts(client: &reqwest::Client, session: &Session, state: &WorkbenchState, root: &Path) {
+    let Ok(entries) = fs::read_dir(root.join("usage-receipts")) else { return; };
+    let path = if session.agent_url == session.base_url { "/api/business/ai/usage/receipts" } else { "/api/usage/receipts" };
+    for entry in entries.flatten().take(2) {
+        if require_current(state, session).is_err() { return; }
+        if entry.metadata().map(|m| m.len() > 2048).unwrap_or(true) { continue; }
+        let Ok(raw) = fs::read_to_string(entry.path()) else { continue; };
+        let Ok(value) = serde_json::from_str::<Value>(&raw) else { continue; };
+        let valid = |value: &Value| value.as_str().is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()));
+        if !valid(&value["step_id"]) || !valid(&value["result_hash"]) { continue; }
+        let step = value["step_id"].as_str().unwrap();
+        let sent = client.post(format!("{}{path}",session.agent_url))
+            .header("Authorization",&session.token).timeout(Duration::from_secs(3))
+            .json(&json!({"step_id":step,"result_hash":value["result_hash"],"artifact_ref":format!("desktop:{step}")}))
+            .send().await;
+        if require_current(state, session).is_err() { return; }
+        if sent.is_ok_and(|response| response.status().is_success()) { let _ = fs::remove_file(entry.path()); }
+    }
+}
+
 /// Decode synthesis results while retaining only operational response metadata.
 #[cfg(test)]
 async fn send_synthesis(
@@ -949,7 +984,12 @@ async fn send_synthesis_report(
             if status == 429 { report.retry_after = Some(retry_after.or(report.retry_after).unwrap_or(60).max(1)); }
             if attempt == 0 && status == 422 {
                 if let Some(corrected) = corrected_synthesis_request(&body, &value) {
+                    let parent = body.get("operationId").cloned();
                     body = corrected;
+                    if let Some(parent) = parent {
+                        body["correctionOf"] = parent;
+                        body["operationId"] = json!(uuid::Uuid::new_v4().to_string());
+                    }
                     correction_attempted = true;
                     continue;
                 }

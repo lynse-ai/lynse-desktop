@@ -37,6 +37,7 @@ import { getDesktopVaultApi } from "../workspace/note-vault";
 import { getDesktopWebdavSyncApi } from "./webdav-sync";
 import { AboutContent } from "../about/about-content";
 import { AccountCard } from "./account-card";
+import { UsageCard } from "./usage-card";
 import { StorageCard } from "./storage-card";
 import { SttSettingsSection } from "./stt-settings-section";
 import { LiveTranslationConfigCard } from "./live-translation-config-card";
@@ -120,6 +121,7 @@ export function SettingsDialog({
     content: (
       <>
         <AccountCard />
+        <UsageCard />
 
         <Card>
           <CardHeader className="pb-2">

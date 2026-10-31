@@ -6,10 +6,12 @@ pub(super) struct SynthesisControl {
     pub retry_after: Option<u64>,
     pub model: Option<String>,
     pub profile: Option<String>,
+    pub usage_receipt: Option<Value>,
 }
 
 impl SynthesisControl {
     pub fn absorb(&mut self, value: &Value) {
+        self.usage_receipt = value.get("usageReceipt").cloned();
         // Accept provenance from older services without retaining their accounting.
         let metadata = value.get("graphProfile").or_else(|| value.get("metrics"));
         if let Some(metadata) = metadata {

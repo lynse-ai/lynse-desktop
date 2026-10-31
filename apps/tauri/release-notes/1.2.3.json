@@ -1,0 +1,7 @@
+{
+  "en": "What's new\n\n• Monthly, weekly and quarterly report generation now waits as long as the server needs (up to 10 minutes) instead of timing out after about 3 minutes while the answer was still being written.",
+  "zh-Hans": "更新内容\n\n• 周报/月报/季报生成现在会等待服务端完整跑完（最长 10 分钟），不再在大约 3 分钟后、正文还在生成时就提示超时。",
+  "zh-Hant": "更新內容\n\n• 週報/月報/季報產生現在會等待伺服器完整跑完（最長 10 分鐘），不再在大約 3 分鐘後、正文還在產生時就提示逾時。",
+  "ja": "更新内容\n\n• 週次・月次・四半期レポートの生成では、サーバーが処理を完了するまで（最長10分）待つようになりました。以前は3分ほどでタイムアウトしていました。",
+  "ko": "업데이트 내용\n\n• 주간/월간/분기 보고서 생성 시 서버가 완료될 때까지(최대 10분) 기다립니다. 이전에는 약 3분 후에 시간 초과가 표시되었습니다."
+}

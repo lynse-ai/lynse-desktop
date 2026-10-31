@@ -12,6 +12,16 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.2.3 (2026-11-01)
+
+### Fixed
+
+- Let monthly, weekly and quarterly report turns run to completion: the chat poll deadline now follows the server's extended report budget (up to 10 minutes) instead of timing out after about 3 minutes while the answer was still being written.
+
+### 修复
+
+- 周报/月报/季报生成现在会等待服务端完整跑完：轮询时限跟随服务端放宽后的报告预算（最长 10 分钟），不再在大约 3 分钟后、正文还在生成时就提示超时。
+
 ## 1.2.2 (2026-10-31)
 
 ### New Features

@@ -14,7 +14,6 @@ import { getDesktopLiveTranslationApi } from "../live-translation/desktop-api";
 import type { VaultAccessReport } from "../live-translation/types";
 import { getWorkbenchApi, refreshWorkbench, useWorkbench, useWikiEnabled } from "../workbench/api";
 import { WorkbenchSettingsContent } from "../workbench/components";
-import { BetaBadge } from "../beta-badge";
 import {
   getDesktopVaultApi,
   isVaultPermissionError,
@@ -264,7 +263,7 @@ export function VaultConfigCard({ onManageKnowledge, wikiSettings = false }: { o
       {localFiles}
       {onManageKnowledge && wikiEnabled && <div className="space-y-2 border-t border-border pt-3">
         <p className="text-xs leading-relaxed text-muted-foreground">{t("workbench.memory_settings_moved")}</p>
-        <Button size="sm" variant="outline" onClick={onManageKnowledge}>{t("workbench.memory_manage")}<span aria-hidden="true"><BetaBadge /></span></Button>
+        <Button size="sm" variant="outline" onClick={onManageKnowledge}>{t("workbench.memory_manage")}</Button>
       </div>}
     </CardContent>
   </Card>;

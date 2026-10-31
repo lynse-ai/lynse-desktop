@@ -388,37 +388,35 @@ test("default embeddings can be configured, changed and disabled without losing 
   await expect.poll(() => page.evaluate(() => (window as unknown as {wikiModelRequests:Record<string, unknown>[]}).wikiModelRequests.at(-1))).toEqual({action:"models",models:{embedding:{baseUrl:"",model:""},revision:""}});
 });
 
-test("Wiki hides outside test mode and rebinds when the mode changes", async ({page,mockServer}) => {
+test("knowledge base is available without Beta labels in official mode", async ({page,mockServer}) => {
   await openWorkspace(page,mockServer.url);
-  await installWorkbench(page);
-  await openWiki(page);
-  await page.locator(".lyse-sidebar").getByRole("button",{name:"More",exact:true}).click();
-  await page.getByRole("dialog",{name:"More",exact:true}).getByRole("button",{name:"Pin Knowledge base to sidebar",exact:true}).click();
-  await expect(page.getByRole("dialog",{name:"More",exact:true}).getByRole("button",{name:"Knowledge base",exact:true})).toBeVisible();
-  await page.keyboard.press("Escape");
-  const memory = page.getByRole("main",{name:"Knowledge base",exact:true});
-  await expect(memory.getByRole("heading",{name:"Knowledge base",exact:true}).getByText("Beta",{exact:true})).toBeVisible();
-
+  const flagsUrl = `/@fs${resolve(__dirname, "../../packages/views/feature-flags.ts")}`;
   await page.evaluate(async (url) => {
     const flags = await import(url);
     flags.configureBuildChannel("official");
     flags.setTestMode(false);
-  }, `/@fs${resolve(__dirname, "../../packages/views/feature-flags.ts")}`);
-  await expect(page.locator(".lyse-sidebar").getByRole("button",{name:"More",exact:true})).toHaveCount(0);
-  await expect(page.locator(".lyse-sidebar").getByRole("button",{name:"Knowledge base",exact:true})).toHaveCount(0);
-  await expect(memory).toHaveCount(0);
-  await expect(page.getByRole("group",{name:"Knowledge graph canvas",exact:true})).toHaveCount(0);
-  await updateWorkbench(page,{enabled:true,allowAi:true,initialComplete:true,phase:"ready"});
-  await expect(page.getByRole("region",{name:"Meeting Wiki",exact:true})).toHaveCount(0);
-  const config = await appSettings(page);
-  await expect(config.getByRole("switch", {name:"Enable Wiki",exact:true})).toHaveCount(0);
-  await expect(config.getByRole("button", {name:"Open knowledge base & Wiki",exact:true})).toHaveCount(0);
-  await expect(config.locator("#vault-enable")).toBeVisible();
-  await page.evaluate(async (url) => { (await import(url)).setTestMode(true); }, `/@fs${resolve(__dirname, "../../packages/views/feature-flags.ts")}`);
-  await config.getByRole("button",{name:"Open knowledge base settings",exact:true}).click();
-  await expect(page.getByRole("main",{name:"Knowledge base settings",exact:true}).getByRole("button", {name:"Enable automatic organization",exact:true})).toBeVisible();
-  await expect(page.locator(".lyse-sidebar").getByRole("button",{name:"More",exact:true})).toBeVisible();
+  }, flagsUrl);
+  await installWorkbench(page);
+  await openWiki(page);
+  await page.locator(".lyse-sidebar").getByRole("button",{name:"More",exact:true}).click();
+  await page.getByRole("dialog",{name:"More",exact:true}).getByRole("button",{name:"Pin Knowledge base to sidebar",exact:true}).click();
+  await page.keyboard.press("Escape");
+  const memory = page.getByRole("main",{name:"Knowledge base",exact:true});
+  await expect(memory).toBeVisible();
+  await expect(memory.getByText("Beta",{exact:true})).toHaveCount(0);
   await expect(page.locator(".lyse-sidebar").getByRole("button",{name:"Knowledge base",exact:true})).toBeVisible();
+  await updateWorkbench(page,{enabled:true,allowAi:true,initialComplete:true,phase:"ready"});
+  await expect(memory).toBeVisible();
+  const config = await appSettings(page);
+  await expect(config.locator("#vault-enable")).toBeVisible();
+  await config.getByRole("button",{name:"Open knowledge base settings",exact:true}).click();
+  const settings = page.getByRole("main",{name:"Knowledge base settings",exact:true});
+  await expect(settings.getByRole("button",{name:"Enable automatic organization",exact:true})).toBeVisible();
+  await expect(settings.getByText("Beta",{exact:true})).toHaveCount(0);
+  await page.evaluate(async (url) => { (await import(url)).setTestMode(true); }, flagsUrl);
+  await expect(settings).toBeVisible();
+  await page.evaluate(async (url) => { (await import(url)).setTestMode(false); }, flagsUrl);
+  await expect(settings).toBeVisible();
 });
 
 test("opening the configured vault folder uses the native command and recovers after failure", async ({page,mockServer}) => {

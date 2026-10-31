@@ -33,7 +33,7 @@ export const featureFlags = {
 
 /**
  * Beta-exposure gate shared by the WIP surfaces marked with a Beta badge
- * (suggestions, assistant settings, models, connections, memory and Wiki). Beta surfaces stay visible in
+ * (suggestions, assistant settings, models and connections). Beta surfaces stay visible in
  * debug-channel builds and dev shells so the team can keep iterating; official
  * builds hide them from the UI entirely and the features stay off by default.
  * The runtime test mode (login-logo 5-tap) unlocks them inside an official
@@ -53,9 +53,9 @@ export function isConnectionsEnabled(): boolean {
   return featureFlags.connections && isBetaFeaturesUnlocked();
 }
 
-/** Meeting memory, Wiki and its graph share the Beta gate, including background AI. */
+/** Knowledge browsing and organization are available in every build channel. */
 export function isWikiEnabled(): boolean {
-  return isBetaFeaturesUnlocked();
+  return true;
 }
 
 /**

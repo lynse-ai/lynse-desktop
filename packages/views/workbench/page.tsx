@@ -5,7 +5,6 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
 import { ArrowLeft, Brain, BookOpen, List, Network, Settings } from "../icons";
 import { useNavigation } from "../navigation";
-import { BetaBadge } from "../beta-badge";
 import { VaultConfigCard } from "../settings/vault-config-card";
 import { getWorkbenchApi, useWorkbench, useWikiEnabled } from "./api";
 import { MemoryLibrary } from "./memory-library";
@@ -48,7 +47,7 @@ export function KnowledgePage() {
   return <main className="flex min-h-0 min-w-0 flex-1 flex-col" aria-label={title}>
     <header className={tab === "wiki" ? "flex min-h-12 shrink-0 items-center gap-3 border-b border-border px-5 py-2" : "flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4"} data-tauri-drag-region>
       <div className={tab === "wiki" ? "flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-2" : "min-w-0"} data-tauri-drag-region>
-        <h1 className={`flex shrink-0 items-center gap-2 font-semibold ${tab === "wiki" ? "text-sm" : "text-lg"}`} aria-label={title} aria-description={t("settings.beta_badge")} data-tauri-drag-region><Icon aria-hidden="true" className={tab === "wiki" ? "size-4 shrink-0" : "size-5 shrink-0"} />{title}<span aria-hidden="true"><BetaBadge /></span></h1>
+        <h1 className={`flex shrink-0 items-center gap-2 font-semibold ${tab === "wiki" ? "text-sm" : "text-lg"}`} aria-label={title} data-tauri-drag-region><Icon aria-hidden="true" className={tab === "wiki" ? "size-4 shrink-0" : "size-5 shrink-0"} />{title}</h1>
         {tab === "wiki" && <div className="flex items-center gap-1" role="group" aria-label={t("workbench.auto_views")} data-tauri-drag-region={false}>
           {[{ id: "graph", label: "workbench.graph_title", shortLabel: "workbench.auto_graph_view", icon: Network }, { id: "catalog", label: "workbench.auto_catalog", shortLabel: "workbench.auto_catalog_view", icon: List }].map(({ id, label, shortLabel, icon: ViewIcon }) => <Button key={id} size="sm" variant={view === id ? "secondary" : "ghost"} aria-label={t(label)} aria-pressed={view === id} onClick={() => navigation.replace(`/memory?tab=wiki${id === "catalog" ? "&view=catalog" : ""}`)}><ViewIcon className="size-3.5" aria-hidden="true" />{t(shortLabel)}</Button>)}
         </div>}

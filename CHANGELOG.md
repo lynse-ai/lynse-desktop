@@ -16,6 +16,7 @@
 
 ### New Features
 
+- Make the knowledge base available in the official desktop app without a Beta badge or test-mode unlock.
 - Browse broad knowledge topics, expand their issues and source meetings, and group existing issues while preserving manual choices and completed analysis.
 - Switch the knowledge graph's text model and reuse unchanged analysis when organizing or retrying material.
 - Authorize proactive suggestions directly from the assistant settings switch.
@@ -31,6 +32,7 @@
 
 ### 新功能
 
+- 知识库作为正式功能开放，移除 Beta 标记，无需开启测试模式即可使用。
 - 按大专题浏览知识库，展开内部议题和来源会议；支持归类现有议题，并保留人工选择与已完成的分析。
 - 支持切换知识图谱文本模型，整理或重试时复用未变化的分析。
 - 在助手设置中直接通过开关授权主动建议。

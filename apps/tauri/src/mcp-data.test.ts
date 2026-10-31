@@ -97,11 +97,11 @@ describe("Desktop MCP data access", () => {
 });
 
 describe("Local memory MCP consent and stale-result guards", () => {
-  it("does not call the Wiki bridge outside test mode", async () => {
+  it("reads authorized knowledge in official mode without a test unlock", async () => {
     configureBuildChannel("official");
     const { bridge } = memory();
-    await expect(readDesktopMcpTool("search_local_memory", {}, deps)).rejects.toThrow("test mode");
-    expect(bridge.status).not.toHaveBeenCalled();
+    await expect(readDesktopMcpTool("search_local_memory", {}, deps)).resolves.toMatchObject({sources:[{id:"s1"}]});
+    expect(bridge.status).toHaveBeenCalled();
   });
   function memory() {
     const status = {scope:"account-a",enabled:true,allowAi:true,initialComplete:true,updatedAt:"r1",memories:[{id:"m1",text:"Friday is a proposal",excluded:false,stale:false},{id:"private",text:"Private",excluded:true},{id:"stale",text:"Old",stale:true}],entries:[{id:"s1",status:"synced",excluded:false}]};

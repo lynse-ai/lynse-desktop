@@ -365,8 +365,8 @@ async fn commit_document_inner(
     let _guard = state.serial.lock().await;
     require_current(state, session)?;
     let mut manifest = load_state(app, session)?;
-    if !manifest.enabled {
-        return Err("Memory disabled".into());
+    if !crate::vault::load_vault_config(app)?.enabled {
+        return Err("Local knowledge-base sync is disabled".into());
     }
     let (root, _) = roots(app, session)?;
     if preserve_legacy_edit
@@ -1065,6 +1065,7 @@ mod tests {
         doc.refresh_revision();
         let entry = write_document(&root, &doc, None).unwrap();
         for error in [
+            "Memory disabled",
             "API request failed (2000)",
             "API request failed (HTTP 401)",
             "Network unavailable; retry when connected",

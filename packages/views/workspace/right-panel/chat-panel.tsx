@@ -13,7 +13,7 @@ import { useChat } from "../hooks/use-chat";
 import { ChatModelPicker } from "../model-picker";
 import { isBetaFeaturesUnlocked } from "../../feature-flags";
 import { useChatStore } from "../hooks/use-chat-store";
-import { WaitingText } from "../hooks/waiting-text";
+import { ChatActivity } from "../../chat/chat-activity";
 import { useFiles } from "../hooks/use-files";
 import { ConfirmCard } from "../confirm-card";
 import { isFreshlyRevealed } from "../chat-reveal";
@@ -190,13 +190,16 @@ export function ChatPanel() {
             // The transport types the answer out itself; `revealedAt` only
             // staggers attachments / support link in after the text lands.
             const revealed = msg.role === "assistant" && isFreshlyRevealed(msg);
+            const waitingForConfirm = !!msg.confirm && msg.confirm.resolvedChoice === undefined;
+            const messageIsStreaming = viewLoading && msg.id === viewMessages.at(-1)?.id;
+            const showActivity = messageIsStreaming && !msg.thinkingActive && !waitingForConfirm;
             return (
             <div key={msg.id} className={msg.role === "user" ? "flex justify-end" : ""}>
               {/* The poll transport replays reasoning before the answer: the
                   block pins open as "thinking", folds when the text starts. */}
               {msg.role === "assistant" && msg.thinking && (
                 <div className="mb-1.5">
-                  <ThinkingBlock text={msg.thinking} active={msg.thinkingActive} />
+                  <ThinkingBlock text={msg.thinking} active={messageIsStreaming && msg.thinkingActive && !waitingForConfirm} />
                 </div>
               )}
               <div
@@ -239,22 +242,11 @@ export function ChatPanel() {
                   // Attachment-only reply (empty body server-side): the cards
                   // render below — don't keep "typing" forever.
                   null
-                ) : msg.status ? (
-                  <span className="text-muted-foreground">
-                    <WaitingText status={msg.status} startedAt={msg.timestamp} />
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1.5">
-                    <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:0ms]" />
-                    <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:150ms]" />
-                    <span className="size-1.5 animate-bounce rounded-full bg-current [animation-delay:300ms]" />
-                  </span>
-                )}
-                {msg.role === "assistant" && msg.content && msg.status && (
-                  <div className="mt-2 flex items-center gap-1.5 text-3xs text-muted-foreground">
-                    <span className="size-1.5 animate-pulse rounded-full bg-current" />
-                    <WaitingText status={msg.status} startedAt={msg.timestamp} />
-                  </div>
+                ) : showActivity ? (
+                  <ChatActivity status={msg.status} startedAt={msg.timestamp} />
+                ) : null}
+                {msg.role === "assistant" && msg.content && msg.status && showActivity && (
+                  <ChatActivity status={msg.status} startedAt={msg.timestamp} className="mt-2 text-3xs" />
                 )}
                 {msg.role === "assistant" && msg.humanSupportLink?.url && (
                   <a

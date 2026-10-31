@@ -61,23 +61,13 @@ export function isWikiEnabled(): boolean {
 /**
  * Build channel, selected at packaging time via an env var:
  *
- *   - "official"  — the OFFICIAL build (正式版). Login page carries the full
- *                   sign-in surface: phone + SMS code and WeChat QR-code.
- *                   This is what `pnpm build` produces by default and the
- *                   only channel distributed: installers are published to
- *                   Tencent CloudBase (website download + in-app auto-update),
- *                   see apps/tauri/scripts/publish-cloudbase.sh.
- *   - "debug"     — the DEBUG channel build. No phone/WeChat login; the
- *                   API-key sign-in unlocks via the login-page logo 5-tap
- *                   (test mode), so the locked face is the "more ways"
- *                   chooser. Dev shells default to it; packaged explicitly
- *                   via the `build:debug` scripts.
+ * Legacy feature-exposure override for unfinished surfaces. This never
+ * selects a different login flow or backend. Phone, WeChat and app-scanned
+ * QR sign-in are shared; users select their server on the login page.
  *
  * Each app shell calls `configureBuildChannel` at startup with its own env
  * (`NEXT_PUBLIC_BUILD_CHANNEL` on web, `VITE_BUILD_CHANNEL` in Tauri), falling
- * back to "official" for production builds and "debug" in dev — so the same
- * source produces both channels (see the `build:official` / `build:debug`
- * scripts in apps/web and apps/tauri).
+ * back to "official". Rust debug/release profiles do not select a channel.
  */
 export type BuildChannel = "official" | "debug";
 
@@ -89,11 +79,6 @@ export function configureBuildChannel(channel: BuildChannel): void {
 
 export function getBuildChannel(): BuildChannel {
   return buildChannel;
-}
-
-/** Whether the build ships the passwordless channels (phone SMS + WeChat). */
-export function hasPasswordlessAuth(): boolean {
-  return buildChannel === "official";
 }
 
 /**

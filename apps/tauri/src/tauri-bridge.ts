@@ -138,6 +138,8 @@ type DesktopApi = {
     sandboxed: boolean;
   };
   app: {
+    enterOnboardingWindowSize?: () => Promise<void>;
+    exitOnboardingWindowSize?: () => Promise<void>;
     getInfo: () => Promise<{
       version: string;
       platform: string;

@@ -57,6 +57,16 @@ function openDialog() {
 }
 
 describe("problem report screenshot recovery", () => {
+  it("prefills organization diagnostics for review without submitting automatically", async () => {
+    render(<ReportProblemDialog />);
+    const description = "Knowledge organization failed: Launch\nquote_not_found\n2026-10-31T01:46:35Z";
+    act(() => openReportProblem(description));
+    await waitFor(() => expect((screen.getByLabelText("settings.report_problem_label") as HTMLTextAreaElement).value).toBe(description));
+    expect(mocks.submit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "settings.report_submit" }));
+    await waitFor(() => expect(mocks.submit).toHaveBeenCalledWith(expect.objectContaining({ body: expect.stringContaining(description) })));
+  });
+
   it("replaces a broken preview with a retry hint while retaining the JPEG for submission", async () => {
     openDialog();
     const image = await screen.findByRole("img", { name: "settings.report_screenshot_label" });

@@ -15,6 +15,7 @@ const mock = vi.hoisted(() => ({
     projections_enabled: false, timezone: "Asia/Shanghai",
   },
   configure: vi.fn(), save: vi.fn(), refetch: vi.fn(), invalidate: vi.fn(), setStatus: vi.fn(),
+  cloudError: null as unknown, cloudPending: false, cloudFetching: false, cloudData: true, cloudAvailable: true, cloudPolicy: true,
 }));
 
 vi.mock("@lynse/core/i18n/react", () => ({
@@ -29,7 +30,10 @@ vi.mock("../workspace/hooks/use-folders", () => ({ useFolders: () => ({
   data: [{ id: "work", folderName: "Product meetings" }], isPending: false, isError: false,
 }) }));
 vi.mock("./knowledge-policy", () => ({
-  useKnowledgePolicy: () => ({ data: { capabilities: { available: true, policy: mock.policy } }, refetch: mock.refetch }),
+  useKnowledgePolicy: () => ({
+    data: mock.cloudData ? { capabilities: { available: mock.cloudAvailable, policy: mock.cloudPolicy ? mock.policy : null } } : undefined,
+    error: mock.cloudError, isPending: mock.cloudPending, isFetching: mock.cloudFetching, refetch: mock.refetch,
+  }),
   updateKnowledgePolicy: (...args: unknown[]) => mock.save(...args),
 }));
 vi.mock("./api", () => ({
@@ -41,6 +45,7 @@ vi.mock("./api", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  Object.assign(mock, { cloudError: null, cloudPending: false, cloudFetching: false, cloudData: true, cloudAvailable: true, cloudPolicy: true });
   Object.assign(mock.policy, {
     enrolled: false, folder_ids: [], memory_consent: false, local_text_consent: false,
     extraction_paused: true, projections_enabled: false,
@@ -56,6 +61,54 @@ function submit() {
 }
 
 describe("optional AI memory settings", () => {
+  it("waits for the initial capability read before allowing organization", () => {
+    Object.assign(mock, { cloudPending: true, cloudFetching: true, cloudData: false });
+    render(<WikiAutomationSettings />);
+    expect(screen.getByText(memoryManagementEnglish.connection_loading)).toBeTruthy();
+    expect(screen.queryByText(memoryManagementEnglish.unavailable)).toBeNull();
+    submit();
+    expect(mock.configure).not.toHaveBeenCalled();
+    expect(mock.save).not.toHaveBeenCalled();
+  });
+
+  it("offers a read-only reconnect after a 503 and keeps draft choices on recovery", async () => {
+    mock.cloudError = "Cloud knowledge request failed (HTTP 503)";
+    const view = render(<WikiAutomationSettings />);
+    expect(screen.getByText(memoryManagementEnglish.connection_failed)).toBeTruthy();
+    expect(screen.queryByText(memoryManagementEnglish.unavailable)).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Product meetings" }));
+    fireEvent.click(screen.getByRole("button", { name: memoryManagementEnglish.connection_retry }));
+    await waitFor(() => expect(mock.refetch).toHaveBeenCalledOnce());
+    expect(mock.configure).not.toHaveBeenCalled();
+    expect(mock.save).not.toHaveBeenCalled();
+    mock.cloudError = null;
+    view.rerender(<WikiAutomationSettings />);
+    expect(screen.queryByText(memoryManagementEnglish.connection_failed)).toBeNull();
+    expect(screen.getByRole<HTMLInputElement>("checkbox", { name: "Product meetings" }).checked).toBe(true);
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Enable automatic organization" }).disabled).toBe(false);
+    expect(mock.save).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes incomplete and disabled service responses", () => {
+    mock.cloudPolicy = false;
+    const view = render(<WikiAutomationSettings />);
+    expect(screen.getByText(memoryManagementEnglish.connection_invalid)).toBeTruthy();
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Enable automatic organization" }).disabled).toBe(true);
+    mock.cloudAvailable = false;
+    view.rerender(<WikiAutomationSettings />);
+    expect(screen.getByText(memoryManagementEnglish.unavailable)).toBeTruthy();
+    expect(screen.queryByText(memoryManagementEnglish.connection_invalid)).toBeNull();
+  });
+
+  it("shows a translated save failure without an Error prefix or automatic write retry", async () => {
+    mock.save.mockRejectedValue(new Error("Cloud knowledge request failed (HTTP 503)"));
+    render(<WikiAutomationSettings />);
+    submit();
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toBe(memoryManagementEnglish.connection_failed));
+    expect(mock.save).toHaveBeenCalledOnce();
+    expect(mock.configure.mock.calls).toEqual([[false, false, { folderIds: ["work"], includeUnfiled: false }]]);
+  });
+
   it("lets users organize meetings without granting memory or transcript upload", async () => {
     render(<WikiAutomationSettings />);
     expect(screen.queryByRole("checkbox", { name: "Update memories automatically" })).toBeNull();

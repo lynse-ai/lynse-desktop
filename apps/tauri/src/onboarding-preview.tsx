@@ -15,8 +15,8 @@ import "./globals.css";
 const params = new URLSearchParams(window.location.search);
 
 initI18n({ locale: params.get("lng") ?? undefined, resources: RESOURCES });
-// ?channel=debug renders the DEBUG-channel face (no phone/WeChat); default
-// is official. Test mode is force-on so the preview can also show the API
+// Login methods are shared across legacy feature-exposure overrides.
+// Test mode is force-on so the preview can also show the API
 // sign-in face and the "more ways" API entry.
 configureBuildChannel(params.get("channel") === "debug" ? "debug" : "official");
 setTestMode(true);

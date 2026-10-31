@@ -33,7 +33,6 @@ import { ArrowRight, Check, ChevronRight, KeyRound, Loader2, QrCode } from "../i
 import { getDesktopAppApi, openExternalUrl } from "../app-update";
 import {
   hasDevApiAuth,
-  hasPasswordlessAuth,
   isTestMode,
   setTestMode,
 } from "../feature-flags";
@@ -111,11 +110,7 @@ function AgreementCheckbox({
  * heading and the active sign-in form, and a full-height rounded artwork
  * card on the right (LOGIN_ARTWORK_SRC, user-provided).
  *
- * Form content differs by build channel:
- *  - "official": phone + SMS code form; a "more ways to sign in" screen
- *    holds WeChat and the app-scanned QR code.
- *  - "debug": no phone/WeChat auth — while the API face is locked, the
- *    page shows the "more ways" chooser.
+ * Every build uses the same phone, WeChat and app-scanned QR sign-in flow.
  * The API form (server selection + API key, the same UI as /api-config)
  * is hidden by default in EVERY build; five taps on the logo unlock it.
  *
@@ -124,28 +119,20 @@ function AgreementCheckbox({
  */
 export function LoginPage() {
   const { t } = useTranslation();
-  const passwordless = hasPasswordlessAuth();
   const devApiAuth = hasDevApiAuth();
 
   // Active sign-in view. Phone is the default: unlike the QR flow it needs no
   // Lynse mobile app, and it also covers registration.
   const [view, setView] = useState<LoginView>("phone");
 
-  // The API sign-in face is locked until the logo 5-tap unlock in every
-  // build. A debug channel has no phone/WeChat auth to fall back on, so
-  // while locked it shows the "more ways" chooser (API entry hidden).
-  const lockedFromApi = !passwordless && !devApiAuth;
-  const effectiveView: LoginView =
-    lockedFromApi && view !== "more" ? "more" : view;
-
-  // QR channel (testflight build): create a challenge, show its QR, then
+  // Create a challenge, show its QR, then
   // poll until the Lynse mobile app scans + confirms it.
   const completeLogin = useAuthStore((s) => s.completeLogin);
   const [qrPhase, setQrPhase] = useState<QrPhase>("creating");
   const [qrPayload, setQrPayload] = useState("");
   const qrCancelledRef = useRef(false);
 
-  // Phone + SMS channel (testflight build).
+  // Phone + SMS sign-in.
   const [phone, setPhone] = useState("");
   const [smsCode, setSmsCode] = useState("");
   const [codeSending, setCodeSending] = useState(false);
@@ -154,7 +141,7 @@ export function LoginPage() {
   const [agreed, setAgreed] = useState(false);
   const [smsError, setSmsError] = useState<string | null>(null);
 
-  // WeChat channel (official build). The authorize URL comes from the
+  // WeChat sign-in. The authorize URL comes from the
   // backend's /api/auth/render; on desktop the page opens in an embedded
   // window whose code+state redirect is relayed back as an event, on web the
   // same window leaves for it and /auth/wechat receives the redirect.
@@ -208,10 +195,10 @@ export function LoginPage() {
   // without the QR channel stay silent until the user opts in).
   const qrStartedRef = useRef(false);
   useEffect(() => {
-    if (!passwordless || view !== "qr" || qrStartedRef.current) return;
+    if (view !== "qr" || qrStartedRef.current) return;
     qrStartedRef.current = true;
     startQrLogin();
-  }, [passwordless, view, startQrLogin]);
+  }, [view, startQrLogin]);
 
   useEffect(() => {
     // Stop the QR poll and the WeChat auth-window listener when the login
@@ -509,7 +496,7 @@ export function LoginPage() {
               </Button>
             </div>
           </div>
-        ) : effectiveView === "more" ? (
+        ) : view === "more" ? (
           /* ── More ways to sign in ─────────────────────── */
           <div className="space-y-4">
             <p className="text-center text-sm font-medium">
@@ -571,7 +558,7 @@ export function LoginPage() {
               )}
             </div>
           </div>
-        ) : passwordless && effectiveView !== "api" ? (
+        ) : view !== "api" ? (
           view === "phone" ? (
             <>
               {/* ── Phone number pill ──────────────────────── */}
@@ -704,8 +691,7 @@ export function LoginPage() {
              5-tap (test mode) in every build. ─────── */
           <>
             <ApiAuthPanel />
-            {passwordless && (
-              <div className="mt-2 text-center">
+            <div className="mt-2 text-center">
                 <Button
                   size="sm"
                   variant="ghost"
@@ -714,8 +700,7 @@ export function LoginPage() {
                 >
                   {t("auth.back_to_phone")}
                 </Button>
-              </div>
-            )}
+            </div>
           </>
         )}
 
@@ -724,7 +709,7 @@ export function LoginPage() {
 
         {/* ── More ways to sign in (phone view) / WeChat wait state,
             pinned to the window's bottom edge ── */}
-        {passwordless && (view === "phone" || wechatWaiting) && (
+        {(view === "phone" || wechatWaiting) && (
           <div className="mt-auto pt-3">
             {wechatWaiting ? (
               <div className="space-y-1.5 text-center">

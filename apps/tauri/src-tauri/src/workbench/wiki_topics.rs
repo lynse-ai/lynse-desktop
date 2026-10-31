@@ -145,7 +145,7 @@ pub(super) fn upsert(root: &Path, values: &mut Vec<Topic>, request: &Value) -> C
     let existing = if id.is_empty() {
         values
             .iter()
-            .position(|topic| topic.automatic_key.is_empty() && topic.collection.is_some() == (request["mode"] == "collection") && title_key(&topic.title) == title_key(title))
+            .position(|topic| topic.automatic_key.is_empty() && topic.collection.is_some() == matches!(request["mode"].as_str(),Some("collection"|"group")) && title_key(&topic.title) == title_key(title))
     } else {
         Some(
             values
@@ -158,7 +158,9 @@ pub(super) fn upsert(root: &Path, values: &mut Vec<Topic>, request: &Value) -> C
         values.push(Topic {
             id: uuid::Uuid::new_v4().to_string(),
             title: title.into(),
-            collection: (request["mode"] == "collection").then(collections::Collection::default),
+            collection: matches!(request["mode"].as_str(),Some("collection"|"group")).then(|| collections::Collection {
+                hierarchy: request["mode"] == "group", ..Default::default()
+            }),
             ..Default::default()
         });
         values.len() - 1

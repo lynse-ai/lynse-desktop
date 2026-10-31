@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { browsingGraph, browsableTopics, topicChanges, topicDetails } from "./wiki-browse";
+import { browsingGraph, browsableTopics, collectionTimeline, parentTopics, topLevelTopics, topicChanges, topicDetails } from "./wiki-browse";
 import { useWikiBrowser } from "./wiki-browser-state";
 import type { WikiTopic, KnowledgeGraph } from "./types";
 const topic = (id: string, patch: Partial<WikiTopic> = {}): WikiTopic => ({ id, title: "同名项目", purpose: "", notes: "人工补充", candidate:null, pinned: false, excluded: false, stale: false, error: "", published: { id:"v1",markdown:"正文",citations:[{id:"meeting",kind:"meeting_summary",revision:"r1",quote:"证据"}],review:"auto_validated",fingerprint:"fixture",reviewedAt:"",createdAt:"2026-10-23", changes:[{id:"change",text:"发生变化",createdAt:"2026-10-23",citations:[]}] }, ...patch });
@@ -48,4 +48,53 @@ describe("Manual topic timeline", () => {
     expect(events[0]?.dateBasis).toBe("record");
     expect(events[1]?.text).toContain("unapproved");
   });
+});
+
+describe("Source dates in grouped topics", () => {
+  const ref = (id: string) => ({ id, kind: "meeting", revision: "r1", quote: "Evidence" });
+  const sourceDates = { old: "2025-12-31", recent: "2026-10-25T23:00:00Z", invalid: "2026-02-30" };
+
+  it("dates existing undated hierarchy events from their own evidence while keeping explicit event dates", () => {
+    const grouped = topic("parent", { collection: { hierarchy: true, status: "ready", completed: 1, total: 1, links: [{
+      targetId: "child", state: "included", manual: true, reason: "", citations: [ref("recent")], fingerprint: "", error: "", events: [
+        { id: "unknown", text: "No dated evidence", date: "", dateBasis: "unknown", citations: [ref("missing"), ref("invalid")] },
+        { id: "recorded", text: "Recorded progress", date: "", dateBasis: "unknown", citations: [ref("recent")] },
+        { id: "explicit", text: "Earlier event", date: "2026-09-01", dateBasis: "event", citations: [ref("recent")] },
+        { id: "shared", text: "First recorded discussion", date: "", dateBasis: "unknown", citations: [ref("recent"), ref("old")] },
+      ],
+    }] } });
+    const before = structuredClone(grouped);
+    const events = collectionTimeline(grouped, sourceDates);
+    expect(events.map(event => [event.id, event.date, event.dateBasis])).toEqual([
+      ["recorded", "2026-10-25", "record"], ["explicit", "2026-09-01", "event"], ["shared", "2025-12-31", "record"], ["unknown", "", "unknown"],
+    ]);
+    expect(grouped).toEqual(before);
+  });
+});
+
+
+it("shows broad parents while keeping internal issues reachable and their meetings intact", () => {
+  const a=topic("a"),b=topic("b"),other=topic("other");
+  const parent=topic("parent",{collection:{hierarchy:true,links:[{targetId:"a",state:"included",manual:true,reason:"",citations:[],events:[],fingerprint:"",error:""},{targetId:"b",state:"included",manual:false,reason:"",citations:[],events:[],fingerprint:"",error:""}],status:"ready",completed:2,total:2}});
+  const all=[a,b,parent,other];
+  expect(topLevelTopics(all).map(topic=>topic.id)).toEqual(["parent","other"]);
+  expect(browsableTopics(all)).toHaveLength(4);
+  expect(parentTopics(a,all).map(topic=>topic.id)).toEqual(["parent"]);
+  const graph=browsingGraph(all,{edges:[{id:"one",source:"wiki:a",target:"wiki:other",kind:"shared_source"},{id:"two",source:"wiki:b",target:"wiki:other",kind:"shared_source"}]} as KnowledgeGraph);
+  expect(graph.nodes.map(node=>node.wikiId)).toEqual(["parent"]);
+  expect(graph.edges).toHaveLength(0);
+  expect(browsableTopics(all).map(topic=>topic.id)).toContain("other");
+  parent.published=null;
+  expect(topLevelTopics(all).map(topic=>topic.id)).toContain("a");
+});
+
+
+it("preserves shared-meeting navigation between broad parent topics", () => {
+  const a=topic("a"),b=topic("b");
+  const link=(targetId:string)=>({targetId,state:"included" as const,manual:true,reason:"",citations:[],events:[],fingerprint:"",error:""});
+  const one=topic("one",{collection:{hierarchy:true,links:[link("a")],status:"ready",completed:1,total:1}});
+  const two=topic("two",{collection:{hierarchy:true,links:[link("b")],status:"ready",completed:1,total:1}});
+  const graph=browsingGraph([a,b,one,two],{edges:[{id:"shared",source:"wiki:a",target:"wiki:b",kind:"shared_source"}]} as KnowledgeGraph);
+  expect(graph.nodes.map(node=>node.wikiId)).toEqual(["one","two"]);
+  expect(graph.edges[0]).toMatchObject({source:"wiki:one",target:"wiki:two",kind:"shared_source"});
 });

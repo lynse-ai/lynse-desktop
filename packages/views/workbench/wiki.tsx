@@ -20,6 +20,7 @@ import { useNavigation } from "../navigation";
 import { DEFAULT_EMBEDDING_MODEL, embeddingModelError } from "./embedding-model";
 import { workbenchErrorCopy } from "./errors";
 import { WikiFailures } from "./wiki-failures";
+import { WikiSourceFailures } from "./wiki-source-failures";
 import type { SourceRef, WikiModelsConfig, WikiRequest, WikiTopic } from "./types";
 
 const defaultModels: WikiModelsConfig = { embedding: DEFAULT_EMBEDDING_MODEL };
@@ -62,7 +63,8 @@ export function WikiAttention() {
   return <>
     {!!errorCount && wiki.isPending && <p role="status" className="text-xs text-muted-foreground">{t("workbench.wiki_loading_topics")}</p>}
     {!!errorCount && wiki.error && <div className="space-y-2"><p role="alert" className="text-xs text-destructive">{t("workbench.wiki_load_failed")}</p><Button size="sm" variant="outline" onClick={() => void wiki.refetch()}>{t("workbench.retry")}</Button></div>}
-    {!!errorCount && !wiki.isPending && !wiki.error && !failures.length && <div className="space-y-2"><p className="text-xs text-muted-foreground">{t("workbench.wiki_refresh_topics")}</p><Button size="sm" variant="outline" onClick={() => void Promise.all([refreshWorkbench(), wiki.refetch()]).catch(() => undefined)}>{t("workbench.retry")}</Button></div>}
+    {!!errorCount && !wiki.isPending && !wiki.error && !failures.length && !wiki.data?.sourceFailures?.length && <div className="space-y-2"><p className="text-xs text-muted-foreground">{t("workbench.wiki_refresh_topics")}</p><Button size="sm" variant="outline" onClick={() => void Promise.all([refreshWorkbench(), wiki.refetch()]).catch(() => undefined)}>{t("workbench.retry")}</Button></div>}
+    <WikiSourceFailures wiki={wiki} />
     <WikiFailures wiki={wiki} />
   </>;
 }

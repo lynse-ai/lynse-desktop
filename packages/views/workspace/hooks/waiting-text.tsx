@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { WAITING_POOL } from "./use-chat";
+import { ActivityLabel } from "@lynse/ui/components/ui/activity-indicator";
 
 type Lang = "zh" | "en" | "ja";
 
@@ -64,7 +65,7 @@ export function WaitingText({
     return () => clearInterval(timer);
   }, [startedAt]);
   return <span className={className}>
-    <span role="status">{text}</span>
+    <span role="status"><ActivityLabel text={text} /></span>
     {startedAt != null && <span aria-hidden="true" className="ml-2 tabular-nums text-muted-foreground">{t("chat.waiting_elapsed", { seconds })}</span>}
   </span>;
 }

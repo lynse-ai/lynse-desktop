@@ -26,6 +26,7 @@ import {
 } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
 import { StatusGlyph } from "@lynse/ui/components/ui/status-glyph";
+import { ActivityLabel } from "@lynse/ui/components/ui/activity-indicator";
 import type { ChatToolUse } from "../workspace/types";
 
 export type ToolKind =
@@ -131,14 +132,12 @@ export function ThinkingBlock({ text, active }: { text: string; active?: boolean
         aria-expanded={open}
         className="flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
       >
+        <Lightbulb className="size-3.5 shrink-0" />
         {active ? (
-          <StatusGlyph activity="thinking" className="size-3.5 shrink-0" />
+          <ActivityLabel text={t("chat.thinking_active")} />
         ) : (
-          <Lightbulb className="size-3.5 shrink-0" />
+          <span>{t("chat.thought_process")}</span>
         )}
-        <span className={cn(active && "status-shimmer")}>
-          {active ? t("chat.thinking_active") : t("chat.thought_process")}
-        </span>
         <ChevronDown className={cn("size-3 shrink-0 transition-transform", open && "rotate-180")} />
       </button>
       {open && (

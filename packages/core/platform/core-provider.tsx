@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import { ApiClient, setApiInstance } from "../api/client";
 import { createAuthStore, getAuthStore, registerAuthStore } from "../auth";
-import { DEFAULT_API_URL, AGENT_API_URL_STORAGE_KEY, CLOUDBASE_AGENT_URL, LEGACY_CLOUDBASE_AGENT_URL, agentUrlForApiUrl, DEFAULT_INTEGRATIONS_API_URL, INTEGRATIONS_API_URL_STORAGE_KEY } from "../config";
+import { DEFAULT_API_URL, AGENT_API_URL_STORAGE_KEY, CLOUDBASE_AGENT_URL, STAGING_CLOUDBASE_AGENT_URL, LEGACY_CLOUDBASE_AGENT_URL, agentUrlForApiUrl, DEFAULT_INTEGRATIONS_API_URL, INTEGRATIONS_API_URL_STORAGE_KEY } from "../config";
 import { defaultStorage } from "./storage";
 import { QueryProvider } from "../provider";
 import { initI18n } from "../i18n";
@@ -54,6 +54,7 @@ export function initCore(
   const agentUrl =
     !savedAgentUrl ||
     savedAgentUrl === CLOUDBASE_AGENT_URL ||
+    savedAgentUrl === STAGING_CLOUDBASE_AGENT_URL ||
     savedAgentUrl === LEGACY_CLOUDBASE_AGENT_URL
       ? agentUrlForApiUrl(effectiveUrl)
       : savedAgentUrl;

@@ -10,7 +10,7 @@ export function useKnowledgePolicy() {
   const user = useAuthStore(state => state.user);
   const authenticated = useAuthStore(state => state.isAuthenticated);
   return useQuery({
-    queryKey: ["knowledge-policy", api().getBaseUrl(), user?.id],
+    queryKey: ["knowledge-policy", api().getBaseUrl(), api().getAgentBaseUrl(), user?.id],
     queryFn: async () => {
       const native = getWorkbenchApi()?.knowledgePolicy;
       if (native) return native({ action: "read" });

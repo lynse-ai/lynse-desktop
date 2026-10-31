@@ -30,7 +30,6 @@ import {
   WorkBuddy,
 } from "../icons";
 import { Button } from "@lynse/ui/components/ui/button";
-import { DotLoader } from "@lynse/ui/components/ui/dot-loader";
 import { Textarea } from "@lynse/ui/components/ui/textarea";
 import { ChatReplyBody } from "./chat-reply-body";
 import { toast } from "sonner";
@@ -61,7 +60,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@lynse/ui/components/ui/popover";
-import { WaitingText } from "../workspace/hooks/waiting-text";
+import { ChatActivity } from "./chat-activity";
 import { ConfirmCard } from "../workspace/confirm-card";
 import { hasWorkBuddyAcpBridge, hasWorkBuddyCloudScopes } from "@lynse/core/workbuddy";
 import { isFreshlyRevealed } from "../workspace/chat-reveal";
@@ -92,67 +91,6 @@ import {
 } from "./chat-mentions";
 import { filterWorkspaceFilesByFolder } from "../workspace/middle-panel/file-list-filter";
 import type { WorkspaceItem } from "../workspace/types";
-
-/**
- * Rotating "what the assistant is doing right now" captions shown while the
- * model is thinking. WorkBuddy-style: instead of a static spinner, the wait
- * is made legible (and a little playful) by cycling through the steps a reply
- * usually goes through. Picked by UI locale, falls back to zh.
- */
-const THINKING_STEPS: Record<string, string[]> = {
-  zh: [
-    "正在理解你的问题…",
-    "检索相关资料…",
-    "梳理关键信息…",
-    "组织回答思路…",
-    "润色一下表述…",
-  ],
-  en: [
-    "Understanding your question…",
-    "Retrieving relevant material…",
-    "Highlighting key points…",
-    "Organizing the response…",
-    "Polishing the wording…",
-  ],
-  ja: [
-    "質問を理解しています…",
-    "関連資料を検索中…",
-    "重要なポイントを整理中…",
-    "回答を構成中…",
-    "表現を整えています…",
-  ],
-};
-
-function ThinkingIndicator() {
-  const { t, i18n } = useTranslation();
-  const steps: string[] =
-    THINKING_STEPS[i18n.language?.split("-")[0] ?? "zh"] ?? THINKING_STEPS.zh ?? [];
-  const [stepIndex, setStepIndex] = useState(0);
-
-  useEffect(() => {
-    setStepIndex(0);
-    const id = setInterval(() => {
-      setStepIndex((prev) => (prev + 1) % steps.length);
-    }, 1600);
-    return () => clearInterval(id);
-  }, [steps.length]);
-
-  return (
-    <div
-      className="flex h-6 items-center gap-2 text-muted-foreground"
-      aria-label={t("chat.thinking")}
-    >
-      <span className="flex items-center" aria-hidden="true">
-        {/* Neutral dots — solid-glass rule: motion says "still running", brand
-            colour is reserved for states that have stopped. */}
-        <DotLoader dotClassName="size-1" />
-      </span>
-      <span key={stepIndex} className="text-13 animate-in fade-in duration-300">
-        {steps[stepIndex]}
-      </span>
-    </div>
-  );
-}
 
 export function ChatPage() {
 
@@ -1370,6 +1308,8 @@ function AssistantMessage({
   // The poll transport types the answer out itself; `revealedAt` only drives
   // the staggered entrance of attachments / support link after the text lands.
   const revealed = isFreshlyRevealed(message);
+  const waitingForConfirm = !!message.confirm && message.confirm.resolvedChoice === undefined;
+  const showActivity = isStreaming && !message.thinkingActive && !waitingForConfirm;
 
   // Per-message actions (insert into note, copy). They render inline ahead of
   // the citation strip when one exists, else on their own row below.
@@ -1433,7 +1373,7 @@ function AssistantMessage({
         <>
           {message.thinking && (
             <div className="mb-2">
-              <ThinkingBlock text={message.thinking} active={message.thinkingActive} />
+              <ThinkingBlock text={message.thinking} active={isStreaming && message.thinkingActive && !waitingForConfirm} />
             </div>
           )}
 
@@ -1454,20 +1394,12 @@ function AssistantMessage({
             // server-side and speaks through attachment cards, which render
             // below — keep the bubble body empty instead of spinning forever.
             null
-          ) : message.status ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <span className="size-1.5 animate-pulse rounded-full bg-current" />
-              <WaitingText status={message.status} startedAt={message.timestamp} />
-            </div>
-          ) : (
-            <ThinkingIndicator />
-          )}
+          ) : showActivity ? (
+            <ChatActivity status={message.status} startedAt={message.timestamp} className="text-13" />
+          ) : null}
 
-          {message.content && message.status && (
-            <div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
-              <span className="size-1.5 animate-pulse rounded-full bg-current" />
-              <WaitingText status={message.status} startedAt={message.timestamp} />
-            </div>
+          {message.content && message.status && showActivity && (
+            <ChatActivity status={message.status} startedAt={message.timestamp} className="mt-2 text-xs" />
           )}
 
           {message.confirm && (

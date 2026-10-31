@@ -3559,9 +3559,9 @@ fn run_reprocess(
 }
 
 #[tauri::command]
-pub fn live_translation_recoveries(
+pub async fn live_translation_recoveries(
     app: AppHandle,
-    state: State<LiveTranslationManager>,
+    state: State<'_, LiveTranslationManager>,
 ) -> CommandResult<Vec<RecoverySummary>> {
     let active_session_id = state
         .session
@@ -3569,6 +3569,14 @@ pub fn live_translation_recoveries(
         .map_err(|_| "live session lock is poisoned")?
         .as_ref()
         .map(|session| session.session_id.clone());
+    // Unavailable recording volumes must not block the AppKit/IPC main thread.
+    tokio::time::timeout(Duration::from_secs(5), tauri::async_runtime::spawn_blocking(move || {
+        read_live_translation_recoveries(&app, active_session_id.as_deref())
+    })).await.map_err(|_| "Recording recovery scan timed out; check the knowledge base folder".to_owned())?
+        .map_err(|error| error.to_string())?
+}
+
+fn read_live_translation_recoveries(app: &AppHandle, active_session_id: Option<&str>) -> CommandResult<Vec<RecoverySummary>> {
     let root = recovery_root(&app)?;
     if !root.exists() {
         return Ok(Vec::new());
@@ -3587,7 +3595,7 @@ pub fn live_translation_recoveries(
         let Ok(manifest) = serde_json::from_slice::<RecoveryManifest>(&data) else {
             continue;
         };
-        if active_session_id.as_deref() == Some(manifest.session_id.as_str()) {
+        if active_session_id == Some(manifest.session_id.as_str()) {
             continue;
         }
         // A directory that already produced its `local-transcriptions` record

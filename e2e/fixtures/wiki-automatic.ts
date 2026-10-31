@@ -41,6 +41,16 @@ export async function installAutomaticWiki(page: Page, enabled = true, seed?: Pa
           if(!topic.published)topic.published={...structuredClone(topics[0]!.published),id:`retry-${topic.id}`,markdown:`# ${topic.title}\n\nRetry completed.`};
         });
       }
+      if(request.action==="topic_group") {
+        const chosen=new Set(request.ids as string[]);
+        let parent=wiki.topics.find(topic=>topic.id===request.targetId);
+        if(!parent){parent={id:`group-${serial}`,title:String(request.title),purpose:"",notes:"",pinned:false,excluded:false,stale:false,error:"",inScope:true,candidate:null,published:null,collection:{hierarchy:true,automatic:false,links:[],status:"ready",completed:0,total:0}};wiki.topics.push(parent);}
+        const selected=wiki.topics.filter(topic=>chosen.has(topic.id)&&!topic.collection);
+        for(const child of selected){child.groupingManual=true;parent.collection!.links.push({targetId:child.id,state:"included",manual:true,reason:"",citations:child.published?.citations??[],events:[],fingerprint:"",error:""});}
+        parent.collection!.hierarchy=true;
+        parent.published={id:`parent-${serial}`,markdown:`# ${parent.title}\n\n`,overview:"Combined issues",citations:selected.flatMap(topic=>topic.published?.citations??[]),fingerprint:"parent",createdAt:"2026-10-30",reviewedAt:"",review:"hierarchy"};
+        wiki.createdTopicId=parent.id;publish();
+      }
       if(request.action==="topic_link") {
         const topic=wiki.topics.find(topic=>topic.id===request.id);
         if(topic?.collection) {

@@ -3,6 +3,21 @@ use super::*;
 use std::collections::BTreeSet;
 use base64::{engine::general_purpose::STANDARD, Engine};
 
+pub(super) fn response_error(status: reqwest::StatusCode) -> String {
+    match status {
+        reqwest::StatusCode::UNAUTHORIZED => "Cloud knowledge identity verification failed".into(),
+        reqwest::StatusCode::CONFLICT => "Cloud knowledge policy changed; reload before saving".into(),
+        _ => format!("Cloud knowledge request failed (HTTP {})", status.as_u16()),
+    }
+}
+
+fn stops_dispatch(error: &str) -> bool {
+    super::knowledge_transport::transient(error)
+        || error.contains("Cloud knowledge identity")
+        || error.contains("Cloud knowledge request failed (HTTP 403)")
+        || error.contains("Cloud knowledge request failed (HTTP 5")
+}
+
 pub(super) async fn request(
     app: &AppHandle,
     session: &Session,
@@ -10,36 +25,9 @@ pub(super) async fn request(
     body: Option<Value>,
     operation: Option<&str>,
 ) -> CommandResult<Value> {
-    require_current(&app.state::<WorkbenchState>(), session)?;
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(35))
-        .redirect(reqwest::redirect::Policy::none())
-        .build().map_err(|_| "Cloud knowledge unavailable")?;
-    if session.agent_url != session.base_url {
-        let response = client.post(format!("{}/api/session/backend", session.agent_url))
-            .header("Authorization", &session.token).json(&json!({"host":session.base_url}))
-            .send().await.map_err(|_| "Cloud knowledge offline")?;
-        require_current(&app.state::<WorkbenchState>(), session)?;
-        if !response.status().is_success() { return Err("Cloud knowledge identity verification failed".into()); }
-        let binding: Value = response.json().await.map_err(|_| "Invalid knowledge identity response")?;
-        if binding["user_id"].as_str() != Some(&session.user_id)
-            || binding["host"].as_str().map(|host| host.trim_end_matches('/')) != Some(session.base_url.trim_end_matches('/')) {
-            return Err("Cloud knowledge identity mismatch".into());
-        }
-    }
-    let prefix = if session.agent_url == session.base_url { "/api/business/ai/memory" } else { "/api/memory" };
-    let url = format!("{}{prefix}{path}", session.agent_url);
-    let mut call = if body.is_some() { client.post(url) } else { client.get(url) }
-        .header("Authorization", &session.token);
-    if let Some(body) = body { call = call.json(&body); }
-    if let Some(operation) = operation { call = call.header("Operation-Id", operation); }
-    let response = call.send().await.map_err(|_| "Cloud knowledge offline")?;
-    require_current(&app.state::<WorkbenchState>(), session)?;
-    if response.status() == reqwest::StatusCode::CONFLICT { return Err("Cloud knowledge policy changed; reload before saving".into()); }
-    if !response.status().is_success() { return Err("Cloud knowledge capability unavailable or authorization rejected".into()); }
-    let value = response.json().await.map_err(|_| "Invalid cloud knowledge response")?;
-    require_current(&app.state::<WorkbenchState>(), session)?;
-    Ok(value)
+    let state = app.state::<WorkbenchState>();
+    state.knowledge_transport.request(session, path, body, operation,
+        || require_current(&state, session)).await
 }
 
 pub(super) fn source_id(id: &str) -> String {
@@ -104,6 +92,9 @@ pub(super) async fn filter_items(app: &AppHandle, session: &Session, items: Vec<
 pub(super) async fn policy_action(app: &AppHandle, session: &Session, payload: Value) -> CommandResult<Value> {
     if payload["action"] == "read" {
         let value = request(app,session,"/capabilities",None,None).await?;
+        let state = app.state::<WorkbenchState>();
+        let _guard = state.serial.lock().await;
+        require_current(&state,session)?;
         let mut manifest = load_state(app,session)?;
         if let Some(policy) = value.get("policy").filter(|policy| !policy.is_null()) {
             manifest.knowledge_policy = Some(policy.clone());
@@ -113,6 +104,9 @@ pub(super) async fn policy_action(app: &AppHandle, session: &Session, payload: V
     }
     if payload["action"] != "update" { return Err("Unsupported knowledge policy action".into()); }
     let body = payload.get("policy").filter(|body| body.is_object()).ok_or("Knowledge policy is required")?.clone();
+    let state = app.state::<WorkbenchState>();
+    let guard = state.serial.lock().await;
+    require_current(&state,session)?;
     let mut manifest = load_state(app,session)?;
     let operation = manifest.knowledge_pending.as_ref()
         .filter(|pending| pending["request"] == body)
@@ -124,8 +118,14 @@ pub(super) async fn policy_action(app: &AppHandle, session: &Session, payload: V
     }
     manifest.knowledge_pending = Some(json!({"policy":local,"request":body,"operation":operation}));
     persist(app,session,&manifest)?;
+    drop(guard);
     let result = request(app,session,"/preferences/actions",Some(json!({"knowledge":body})),Some(&operation)).await?;
+    let _guard = state.serial.lock().await;
+    require_current(&state,session)?;
     manifest = load_state(app,session)?;
+    if manifest.knowledge_pending.as_ref().and_then(|pending| pending["operation"].as_str()) != Some(operation.as_str()) {
+        return Err("Cloud knowledge policy changed; reload before saving".into());
+    }
     manifest.knowledge_policy = result.get("knowledge").cloned();
     manifest.knowledge_pending = None;
     persist(app,session,&manifest)?;
@@ -215,6 +215,9 @@ pub(super) async fn publish_events(app: &AppHandle,session: &Session,pages: Vec<
     if capability["available"] != true || policy["memory_consent"] != true || policy["extraction_paused"] == true { return Ok(()); }
     let mut failed=false;
     for page in pages {
+        require_current(&app.state::<WorkbenchState>(), session)?;
+        let manifest=load_state(app,session)?;
+        if !manifest.enabled || !manifest.allow_ai { return Ok(()); }
         let outcome: CommandResult<()> = async {
         let refs=page["citations"].as_array().ok_or("Wiki citations unavailable")?;
         let ids: BTreeSet<_>=refs.iter().filter_map(|reference|reference["id"].as_str()).map(str::to_owned).collect();
@@ -245,7 +248,10 @@ pub(super) async fn publish_events(app: &AppHandle,session: &Session,pages: Vec<
         persist(app,session,&manifest)?;
         Ok(())
         }.await;
-        failed |= outcome.is_err();
+        if let Err(error) = outcome {
+            if stops_dispatch(&error) { return Err(error); }
+            failed = true;
+        }
     }
     if failed { Err("Some Wiki memory events await retry".into()) } else { Ok(()) }
 }
@@ -253,6 +259,20 @@ pub(super) async fn publish_events(app: &AppHandle,session: &Session,pages: Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn server_failure_keeps_http_status_and_is_not_reported_as_bad_login() {
+        for status in [403,404,429,500,501,503] {
+            let message=response_error(reqwest::StatusCode::from_u16(status).unwrap());
+            assert!(message.contains(&format!("HTTP {status}")));
+            assert!(!message.contains("identity verification failed"));
+        }
+        assert_eq!(response_error(reqwest::StatusCode::UNAUTHORIZED), "Cloud knowledge identity verification failed");
+        assert_eq!(response_error(reqwest::StatusCode::CONFLICT), "Cloud knowledge policy changed; reload before saving");
+        for status in [401,429,500,503] {
+            assert!(stops_dispatch(&response_error(reqwest::StatusCode::from_u16(status).unwrap())));
+        }
+        assert!(!stops_dispatch(&response_error(reqwest::StatusCode::CONFLICT)));
+    }
     #[test]
     fn upload_chunks_count_utf8_bytes_and_preserve_text() {
         let text="中🙂".repeat(50000);

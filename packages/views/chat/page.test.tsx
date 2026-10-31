@@ -132,6 +132,42 @@ afterEach(() => {
 });
 
 describe("ChatPage", () => {
+  it("hands waiting feedback over to reasoning and retires it when the turn finishes", () => {
+    const message = { id: "a1", role: "assistant", content: "", timestamp: Date.now() };
+    chat.messages = [message];
+    chat.isLoading = true;
+    const view = render(<ChatPage />);
+    expect(screen.getByRole("status").textContent).toBe("chat.thinking_active");
+
+    chat.messages = [{ ...message, thinking: "Checking the meeting context", thinkingActive: true }];
+    view.rerender(<ChatPage />);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("button", { name: "chat.thinking_active" }).getAttribute("aria-expanded")).toBe("true");
+
+    chat.messages = [{ ...message, content: "The decision is confirmed.", thinking: "Checking the meeting context", thinkingActive: false }];
+    chat.isLoading = false;
+    view.rerender(<ChatPage />);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("button", { name: "chat.thought_process" }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getByText("The decision is confirmed.")).toBeTruthy();
+  });
+
+  it("pauses waiting feedback for an unanswered confirmation and resumes after the choice", () => {
+    const message = {
+      id: "a1", role: "assistant", content: "", timestamp: Date.now(),
+      confirm: { question: "Save this note?", options: [{ label: "Save", value: "save" }] },
+    };
+    chat.messages = [message];
+    chat.isLoading = true;
+    const view = render(<ChatPage />);
+    expect(screen.getByText("Save this note?")).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+
+    chat.messages = [{ ...message, confirm: { ...message.confirm, resolvedChoice: "save" } }];
+    view.rerender(<ChatPage />);
+    expect(screen.getByRole("status").textContent).toBe("chat.thinking_active");
+  });
+
   it("sends the message through the shared AI chat hook", () => {
     render(<ChatPage />);
 

@@ -83,7 +83,7 @@ export function VaultConfigCard({ onManageKnowledge, wikiSettings = false }: { o
       await qc.invalidateQueries({ queryKey: VAULT_CONFIG_QUERY_KEY });
       await refreshWorkbench().catch(() => undefined);
       toast.error(
-        t("vault.config_save_failed", { error: error instanceof Error ? error.message : "" }),
+        t("vault.config_save_failed", { error: error instanceof Error ? error.message : String(error) }),
       );
     } finally {
       setSaving(false);
@@ -133,7 +133,7 @@ export function VaultConfigCard({ onManageKnowledge, wikiSettings = false }: { o
       if (isVaultPermissionError(error)) {
         toast.error(t("vault.sync_permission_denied"), { id: loadingToastId, duration: 10000 });
       } else {
-        toast.error(t("vault.sync_failed", { error: error instanceof Error ? error.message : "" }), {
+        toast.error(t("vault.sync_failed", { error: error instanceof Error ? error.message : String(error) }), {
           id: loadingToastId,
         });
       }

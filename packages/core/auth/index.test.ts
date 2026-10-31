@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAuthStore } from "./index";
-import { CLOUDBASE_AGENT_URL } from "../config";
+import { CLOUDBASE_AGENT_URL, STAGING_CLOUDBASE_AGENT_URL } from "../config";
 import { ApiClient, setApiTransportMode } from "../api/client";
 import type { StorageAdapter } from "../types/storage";
 
@@ -32,7 +32,8 @@ afterEach(() => {
 
 function expectRegistration(token: string, host = "https://api.lynse.cn") {
   const request = fetchMock.mock.calls.find(([url]) => url.endsWith("/api/session/backend"));
-  expect(request?.[0]).toBe(`${CLOUDBASE_AGENT_URL}/api/session/backend`);
+  const agent = host === "https://gapp.lynse.cn" ? STAGING_CLOUDBASE_AGENT_URL : CLOUDBASE_AGENT_URL;
+  expect(request?.[0]).toBe(`${agent}/api/session/backend`);
   const options = request?.[1] as RequestInit;
   expect(JSON.parse(options.body as string)).toEqual({ host });
   expect(options.headers).toMatchObject({ Authorization: token });

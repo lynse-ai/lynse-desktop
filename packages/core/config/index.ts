@@ -74,17 +74,37 @@ export const DEV_BUILD: boolean = typeof __LYNSE_DEV__ === "boolean" ? __LYNSE_D
 export const CLOUDBASE_AGENT_URL =
   "https://lynclaw-api-319577-10-1401959758.sh.run.tcloudbase.com";
 
+export const STAGING_CLOUDBASE_AGENT_URL =
+  "https://lynclaw-api-336033-11-1401959758.sh.run.tcloudbase.com";
+
+export const CLOUDBASE_MEMORY_URL =
+  "https://lynse-memory-319577-10-1401959758.sh.run.tcloudbase.com";
+
+export const STAGING_CLOUDBASE_MEMORY_URL =
+  "https://lynse-memory-336033-11-1401959758.sh.run.tcloudbase.com";
+
 /** Pre-2026-10-10 preset host; routes to the same lynclaw-api service. */
 export const LEGACY_CLOUDBASE_AGENT_URL =
   "https://lynclaw-api-321192-9-1401959758.sh.run.tcloudbase.com";
 
 /**
- * Canonical assistant origin: the CloudBase-hosted lynclaw deployment on
- * every environment (user decision 2026-10-10 — the gateway hop is no longer
- * the default). The service derives the caller's identity from the Lynse
- * token itself, so direct connection works for both backend environments.
+ * Keep the direct CloudBase services on the selected login environment.
+ * Identity is still derived by the service from the Lynse session token.
  */
+function isTestApiUrl(apiUrl: string | null | undefined): boolean {
+  if (!apiUrl) return false;
+  try {
+    return new URL(apiUrl).origin === TEST_API_URL;
+  } catch {
+    return false;
+  }
+}
+
 export function agentUrlForApiUrl(apiUrl: string | null | undefined): string | null {
   if (!apiUrl) return null;
-  return CLOUDBASE_AGENT_URL;
+  return isTestApiUrl(apiUrl) ? STAGING_CLOUDBASE_AGENT_URL : CLOUDBASE_AGENT_URL;
+}
+
+export function memoryUrlForApiUrl(apiUrl: string | null | undefined): string {
+  return isTestApiUrl(apiUrl) ? STAGING_CLOUDBASE_MEMORY_URL : CLOUDBASE_MEMORY_URL;
 }

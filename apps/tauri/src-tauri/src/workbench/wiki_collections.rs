@@ -6,6 +6,8 @@ use std::collections::BTreeSet;
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Collection {
+    pub hierarchy: bool,
+    pub automatic: bool,
     pub links: Vec<TopicLink>,
     pub status: String,
     pub completed: usize,
@@ -355,7 +357,7 @@ pub(super) fn filter_view(
     let invalid_page = value["published"].is_object()
         && !serde_json::from_value::<Revision>(value["published"].clone())
             .is_ok_and(|page| sources.valid_page(&page));
-    if hidden_member || invalid_page {
+    if (hidden_member && value["collection"]["hierarchy"] != true) || invalid_page {
         value["published"] = Value::Null;
     }
     let Some(collection) = value.get_mut("collection").and_then(Value::as_object_mut) else {
@@ -431,6 +433,7 @@ pub(super) async fn run(
         .collect();
     for topic in values.iter().filter(|t| {
         t.collection.is_some()
+            && !t.collection.as_ref().is_some_and(|c|c.hierarchy)
             && !t.excluded
             && !t.pinned
             && !t

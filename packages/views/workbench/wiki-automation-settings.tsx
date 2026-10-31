@@ -9,6 +9,7 @@ import { useFolders } from "../workspace/hooks/use-folders";
 import { getWorkbenchApi, refreshWorkbench, useWorkbench } from "./api";
 import type { WikiAutomationConfig } from "./types";
 import { useKnowledgePolicy, updateKnowledgePolicy } from "./knowledge-policy";
+import { memoryRequestErrorKey } from "./memory-errors";
 
 export function WikiAutomationSettings({ activation = false, disabled = false }: { activation?: boolean; disabled?: boolean }) {
   const { t } = useTranslation();
@@ -18,6 +19,10 @@ export function WikiAutomationSettings({ activation = false, disabled = false }:
   const id = useId();
   const cloud = useKnowledgePolicy();
   const policy = cloud.data?.capabilities?.policy;
+  const cloudLoading = cloud.isPending || cloud.isFetching;
+  const cloudIssue = cloud.error ? memoryRequestErrorKey(cloud.error) ?? "memory_manager.connection_failed"
+    : cloud.data ? !cloud.data.capabilities?.available ? "memory_manager.unavailable"
+      : !policy ? "memory_manager.connection_invalid" : null : null;
   const [memoryConsent, setMemoryConsent] = useState(false);
   const [projections, setProjections] = useState(false);
   const [localConsent, setLocalConsent] = useState(false);
@@ -39,6 +44,7 @@ export function WikiAutomationSettings({ activation = false, disabled = false }:
   async function configure(enabled: boolean) {
     const bridge = getWorkbenchApi();
     if (!bridge || busy) return;
+    if (enabled && (cloudLoading || cloudIssue || !policy)) return;
     if (enabled && !selection.folderIds.length && !selection.includeUnfiled) {
       setError(t("workbench.auto_choose_folder"));
       document.getElementById(id)?.focus();
@@ -47,7 +53,7 @@ export function WikiAutomationSettings({ activation = false, disabled = false }:
     setBusy(true); setError("");
     try {
       if (enabled) {
-        if (!cloud.data?.capabilities?.available || !policy) throw new Error(t("memory_manager.unavailable"));
+        if (!policy) return;
         // Restrict the Native mirror before submitting a cloud scope change.
         await bridge.configure(active, active, selection);
         await updateKnowledgePolicy(policy, { enrolled: true, folder_ids: selection.folderIds,
@@ -59,7 +65,11 @@ export function WikiAutomationSettings({ activation = false, disabled = false }:
       useWorkbench.getState().setStatus(next);
       setDirty(false);
       await Promise.all([qc.invalidateQueries({ queryKey: ["vault-config"] }), qc.invalidateQueries({ queryKey: ["workbench-wiki"] })]);
-    } catch (cause) { setError(String(cause)); await refreshWorkbench(); await cloud.refetch(); }
+    } catch (cause) {
+      const key = memoryRequestErrorKey(cause);
+      setError(key ? t(key) : cause instanceof Error ? cause.message : String(cause));
+      await refreshWorkbench(); await cloud.refetch();
+    }
     finally { setBusy(false); }
   }
   const unavailable = disabled || busy || !status;
@@ -77,7 +87,7 @@ export function WikiAutomationSettings({ activation = false, disabled = false }:
     </fieldset>
     <p className="text-sm leading-relaxed text-muted-foreground">{t("workbench.auto_consent")}</p>
     <p className="text-xs text-muted-foreground">{t("memory_manager.range_hint")}</p>
-    {cloud.data?.capabilities?.available && <fieldset disabled={unavailable} className="space-y-4 rounded-lg border border-border p-4">
+    {cloud.data?.capabilities?.available && <fieldset disabled={unavailable || cloudLoading || !!cloudIssue} className="space-y-4 rounded-lg border border-border p-4">
       <legend className="px-1 text-sm font-medium">{t("memory_manager.settings_title")}</legend>
       <div className="space-y-1">
         <label className="flex min-h-10 cursor-pointer items-center gap-3 text-sm font-medium"><input type="checkbox" checked={memoryConsent} aria-describedby={`${id}-memory-hint`} onChange={event => { setMemoryConsent(event.target.checked); setDirty(true); }} className="size-4 shrink-0" />{t("memory_manager.cloud_consent")}</label>
@@ -98,10 +108,11 @@ export function WikiAutomationSettings({ activation = false, disabled = false }:
         </div>
       </div>}
     </fieldset>}
-    {(cloud.error || cloud.data && !cloud.data.capabilities?.available) && <p role="status" className="text-sm text-muted-foreground">{t("memory_manager.unavailable")}</p>}
+    {cloudLoading && <p role="status" className="text-sm text-muted-foreground">{t("memory_manager.connection_loading")}</p>}
+    {cloudIssue && <div className="space-y-2"><p role="status" className="text-sm text-muted-foreground">{t(cloudIssue)}</p><Button type="button" size="sm" variant="outline" disabled={unavailable || cloudLoading} onClick={() => { setError(""); void cloud.refetch(); }}>{t("memory_manager.connection_retry")}</Button></div>}
     {cloud.data?.pending && <p role="status" className="text-sm text-muted-foreground">{t("memory_manager.policy_pending")}</p>}
-    {error && <p id={`${id}-error`} role="alert" className="break-words text-sm text-destructive">{error}</p>}
-    <div className="flex flex-wrap items-center gap-2"><Button size="sm" disabled={unavailable || folders.isError} onClick={() => void configure(true)}>{busy && <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />}{t(active ? "workbench.auto_save_range" : "workbench.auto_enable")}</Button>{active && <Button size="sm" variant="outline" disabled={unavailable} onClick={() => void configure(false)}>{t("workbench.auto_pause")}</Button>}</div>
+    {error && (!cloudIssue || error !== t(cloudIssue)) && <p id={`${id}-error`} role="alert" className="break-words text-sm text-destructive">{error}</p>}
+    <div className="flex flex-wrap items-center gap-2"><Button size="sm" disabled={unavailable || folders.isError || cloudLoading || !!cloudIssue || !policy} onClick={() => void configure(true)}>{busy && <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />}{t(active ? "workbench.auto_save_range" : "workbench.auto_enable")}</Button>{active && <Button size="sm" variant="outline" disabled={unavailable} onClick={() => void configure(false)}>{t("workbench.auto_pause")}</Button>}</div>
     <p className="text-xs leading-relaxed text-muted-foreground">{t("workbench.auto_defaults")}</p>
   </section>;
 }

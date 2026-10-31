@@ -12,6 +12,38 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.2.2 (2026-10-31)
+
+### New Features
+
+- Browse broad knowledge topics, expand their issues and source meetings, and group existing issues while preserving manual choices and completed analysis.
+- Switch the knowledge graph's text model and reuse unchanged analysis when organizing or retrying material.
+- Authorize proactive suggestions directly from the assistant settings switch.
+
+### Fixed
+
+- Preserve source links and successful analysis after failures; explain citation problems and offer targeted retries and a prefilled problem report.
+- Let the knowledge graph fill the available window height, including when excluded topics are present.
+- Recover from knowledge-service connection and permission failures with clearer explanations and a retry action.
+- Use one login surface and route the assistant and memory services to the server selected at login, including saved service presets.
+- Show chat activity from actual response, tool and confirmation states, and keep interrupted Markdown readable.
+- Keep unavailable recording folders from blocking the desktop interface during recovery scans.
+
+### 新功能
+
+- 按大专题浏览知识库，展开内部议题和来源会议；支持归类现有议题，并保留人工选择与已完成的分析。
+- 支持切换知识图谱文本模型，整理或重试时复用未变化的分析。
+- 在助手设置中直接通过开关授权主动建议。
+
+### 修复
+
+- 整理失败后保留来源关联与成功结果；明确说明引用问题，支持只重试失败项，并预填问题反馈。
+- 知识图谱填满窗口可用高度，存在已排除专题时也不会在下方留下大片空白。
+- 知识服务连接或权限异常时显示清晰说明，并提供重试入口。
+- 统一登录界面，AI 助手与记忆服务跟随登录时所选服务器，已有预设地址也随环境切换。
+- 聊天进度跟随实际响应、工具与确认状态，中断后的 Markdown 仍正常排版。
+- 录音恢复扫描遇到不可用文件夹时不再阻塞桌面界面。
+
 ## 1.2.1 (2026-10-26)
 
 ### Fixed

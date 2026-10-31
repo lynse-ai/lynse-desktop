@@ -1,0 +1,28 @@
+export const groupingEn = {
+  hierarchy_unassigned: "Issues awaiting grouping ({{count}})", hierarchy_unassigned_help: "These issues and their meetings are kept. You can search, read or group them manually.",
+  hierarchy_issues: "Internal issues", hierarchy_overview: "{{count}} issues across {{meetings}} source meetings. Open an issue to read its evidence and history.",
+  hierarchy_parent: "Parent topic", hierarchy_parent_link: "Parent topic: {{title}}",
+  hierarchy_merge: "Group topics", hierarchy_move: "Move into a parent topic",
+  hierarchy_merge_help: "Choose topics to keep as issues inside one parent. Their source meetings, original pages and history are preserved. You can remove an issue from the parent later.",
+  hierarchy_destination: "Parent topic", hierarchy_new: "Create a parent topic", hierarchy_title_hint: "For example: Product development",
+  hierarchy_search: "Find topics to group", hierarchy_choose: "Topics to include", hierarchy_no_matches: "No matching topics.",
+  hierarchy_selected: "{{count}} issues selected · {{meetings}} source meetings", hierarchy_search_more: "Showing the first 100 matches. Search to find other topics; your selections are kept.",
+  hierarchy_confirm: "Confirm grouping", hierarchy_save_failed: "Could not group these topics. Your existing pages are kept.",
+  hierarchy_navigation: "Topic organization", hierarchy_hint: "Browse parent topics first, then open their issues and source meetings. Grouping reuses existing analysis and preserves your choices.",
+  hierarchy_auto: "Organize existing topics", hierarchy_retry: "Retry topic grouping", hierarchy_failed: "Some topics could not be grouped. Your saved topics are kept; you can group them manually or retry.",
+  home_grouping: "Organizing parent topics", home_grouping_count: "{{completed}}/{{total}} issues organized",
+};
+export const groupingZh: typeof groupingEn = {
+  hierarchy_unassigned: "待归类议题（{{count}}）", hierarchy_unassigned_help: "这些议题及来源会议都已保留，可搜索、阅读或人工归入大专题。",
+  hierarchy_issues: "内部议题", hierarchy_overview: "汇总 {{count}} 个议题，涉及 {{meetings}} 场会议。打开议题可查看对应的原文证据和历史。",
+  hierarchy_parent: "大专题", hierarchy_parent_link: "所属大专题：{{title}}",
+  hierarchy_merge: "合并专题", hierarchy_move: "归入大专题",
+  hierarchy_merge_help: "选择的专题会作为内部议题归入同一个大专题。来源会议、原有页面和历史都会保留，之后也可以将议题移出。",
+  hierarchy_destination: "归入哪个大专题", hierarchy_new: "新建大专题", hierarchy_title_hint: "例如：产品研发",
+  hierarchy_search: "搜索要合并的专题", hierarchy_choose: "选择内部议题", hierarchy_no_matches: "没有找到匹配的专题。",
+  hierarchy_selected: "已选 {{count}} 个议题，涉及 {{meetings}} 场会议", hierarchy_search_more: "当前显示前 100 个结果，可搜索其他专题；已选项会保留。",
+  hierarchy_confirm: "确认归并", hierarchy_save_failed: "暂时无法合并专题，原有页面已保留。",
+  hierarchy_navigation: "专题归类", hierarchy_hint: "先浏览大专题，再展开内部议题和来源会议。归类会复用已有分析，并保留你的人工选择。",
+  hierarchy_auto: "归类现有专题", hierarchy_retry: "重试专题归类", hierarchy_failed: "部分专题暂未完成归类，已保存的专题会保留。你可以人工合并，或重试归类。",
+  home_grouping: "正在归类大专题", home_grouping_count: "已归类 {{completed}} / {{total}} 个议题",
+};

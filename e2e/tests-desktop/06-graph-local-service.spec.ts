@@ -14,7 +14,9 @@ test("local Lynclaw catalog and compiler produce a readable native Wiki with sum
     runtime.__LYNSE_E2E__.setCommand("workbench_read",()=>record);
     runtime.wikiTest.patch({entries:[{id:record.document.id,title:record.document.title,kind:"meeting",revision:record.document.revision,status:"synced",excluded:false,error:""}]});
   },result.record);
-  await openWiki(page);await page.getByRole("group",{name:"Knowledge graph canvas",exact:true}).getByRole("button",{name:"A项目",exact:true}).click();
+  await openWiki(page);
+  await expect(page.getByText("Processing usage",{exact:true})).toHaveCount(0);
+  await page.getByRole("group",{name:"Knowledge graph canvas",exact:true}).getByRole("button",{name:"A项目",exact:true}).click();
   await page.getByRole("button",{name:"Read full topic",exact:true}).click();
   await expect(page.getByRole("heading",{name:"未解决问题",exact:true})).toBeVisible();
   await expect(page.getByText("AI organized · sources verified",{exact:false})).toBeVisible();

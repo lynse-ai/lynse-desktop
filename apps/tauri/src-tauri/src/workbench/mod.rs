@@ -2,6 +2,7 @@ mod markdown;
 mod memory;
 mod memory_cloud;
 mod knowledge_cloud;
+mod knowledge_transport;
 mod sources;
 mod store;
 mod sync;
@@ -42,6 +43,7 @@ pub struct WorkbenchState {
     pub(super) serial: tokio::sync::Mutex<()>,
     pub(super) graph_run: tokio::sync::Mutex<()>,
     pub(super) synthesis_queue: synthesis_scheduler::Scheduler,
+    pub(super) knowledge_transport: knowledge_transport::Transport,
     sync_requested: tokio::sync::Notify,
     wiki_requested: AtomicBool,
     refresh_existing: AtomicBool,
@@ -833,7 +835,7 @@ pub async fn workbench_review(
             json!({"summary":"","memoryItems":[],"todoSuggestions":[],"citations":[],"insufficientEvidence":true}),
         );
     }
-    let (result, _usage) =
+    let result =
         wiki::synthesize(&app, &session, "project_review", &documents, Some(&query)).await?;
     let _guard = state.serial.lock().await;
     require_current(&state, &session)?;
@@ -977,7 +979,7 @@ pub async fn workbench_regenerate(
             .ok_or("Meeting is excluded or unavailable")?;
         store::read_document(&roots(&app, &session)?.0, entry)?
     };
-    let (result, _usage) =
+    let result =
         wiki::synthesize(&app, &session, "meeting_summary", &[document.clone()], None).await?;
     let _guard = state.serial.lock().await;
     require_current(&state, &session)?;
@@ -1377,7 +1379,6 @@ mod wiki_lifecycle_tests {
 
 #[tauri::command]
 pub async fn workbench_knowledge_policy(app: AppHandle, state: State<'_, WorkbenchState>, request: Value) -> CommandResult<Value> {
-    let _guard = state.serial.lock().await;
     let session = current(&state)?;
     knowledge_cloud::policy_action(&app,&session,request).await
 }

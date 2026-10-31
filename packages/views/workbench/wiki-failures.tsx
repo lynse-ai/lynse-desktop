@@ -5,8 +5,9 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@lynse/ui/components/ui/dialog";
 import { useNavigation } from "../navigation";
-import { wikiFailureResolution } from "./errors";
+import { catalogIssueLocation, citationIssueLocation, wikiFailureResolution } from "./errors";
 import { GraphSourceNote } from "./graph-source-note";
+import { WikiFailureReport } from "./wiki-failure-report";
 import type { SourceRef, WikiRequest, WikiTopic } from "./types";
 import type { useWiki } from "./wiki";
 
@@ -27,6 +28,7 @@ export function WikiFailures({ wiki }: { wiki: Wiki }) {
   const [notes, setNotes] = useState("");
   const [settings, setSettings] = useState<"account" | "ai_assistant" | null>(null);
   const [actionError, setActionError] = useState("");
+  const [deferred, setDeferred] = useState<Set<string>>(() => new Set());
   const topics = wiki.data?.topics ?? [];
   const failures = topics.filter(topic => !topic.excluded && !!topic.error);
   const excluded = topics.filter(topic => topic.excluded);
@@ -58,27 +60,40 @@ export function WikiFailures({ wiki }: { wiki: Wiki }) {
       <h2 className="text-base font-semibold">{t("workbench.wiki_attention")}</h2>
       <p className="text-sm leading-relaxed text-muted-foreground">{t("workbench.wiki_failure_preserved")}</p>
       {failures.map(topic => {
-        const resolution = wikiFailureResolution(topic.error);
+        const resolution = wikiFailureResolution(topic.error, topic.failure?.validation);
+        const issue = topic.failure?.validation?.citationIssue;
+        const position = citationIssueLocation(issue) ?? catalogIssueLocation(topic.failure?.validation?.catalogIssue);
         const date = topic.failure?.occurredAt ? new Date(topic.failure.occurredAt) : null;
         const sources = sourceRows(topic);
+        if (deferred.has(topic.id)) return <article key={topic.id} aria-label={topic.title} className="min-w-0 space-y-3 border-t border-border pt-4">
+          <h3 className="break-words text-sm font-semibold">{topic.title}</h3>
+          <p className="text-sm text-muted-foreground">{t("workbench.wiki_failure_deferred")}</p>
+          <Button size="sm" variant="outline" onClick={() => setDeferred(current => { const next = new Set(current); next.delete(topic.id); return next; })}>{t("workbench.wiki_failure_continue")}</Button>
+        </article>;
         return <article key={topic.id} aria-label={topic.title} className="min-w-0 space-y-3 border-t border-border pt-4">
           <h3 className="break-words text-sm font-semibold">{topic.title}</h3>
           <p className="text-sm leading-relaxed text-destructive">{t(resolution.reason)}</p>
           <p className="text-sm leading-relaxed text-muted-foreground">{t(resolution.advice)}</p>
+          {topic.failure?.validation?.correctionAttempted && <p className="text-sm text-muted-foreground">{t("workbench.wiki_failure_correction_attempted")}</p>}
           {topic.pinned && <p className="text-sm text-muted-foreground">{t("workbench.wiki_failure_pinned")}</p>}
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" disabled={wiki.busy || !canProcess} onClick={() => void apply([...(topic.pinned ? [{ action: "topic" as const, id: topic.id, title: topic.title, purpose: topic.purpose, notes: topic.notes, pinned: false }] : []), { action: "retry", id: topic.id }])}>{t(topic.pinned ? "workbench.wiki_failure_unpin_retry" : "workbench.retry")}</Button>
-            <Button size="sm" variant="outline" disabled={wiki.busy || !canProcess || topic.pinned} onClick={() => { setActionError(""); setCorrecting(topic); setNotes(topic.notes); }}>{t("workbench.wiki_failure_correct")}</Button>
-            {resolution.settings && <Button size="sm" variant="outline" onClick={() => resolution.settings === "scope" ? navigation.push("/memory?tab=settings") : setSettings(resolution.settings === "account" ? "account" : "ai_assistant")}>{t(resolution.settings === "scope" ? "workbench.auto_settings" : resolution.settings === "account" ? "workbench.wiki_failure_account" : "workbench.wiki_failure_model")}</Button>}
+            <Button size="sm" disabled={wiki.busy || !canProcess} onClick={() => void apply([...(topic.pinned ? [{ action: "topic" as const, id: topic.id, title: topic.title, purpose: topic.purpose, notes: topic.notes, pinned: false }] : []), { action: "retry", id: topic.id }])}>{t(topic.pinned ? "workbench.wiki_failure_unpin_retry" : "workbench.wiki_failure_retry")}</Button>
+            {resolution.allowContext && <Button size="sm" variant="outline" disabled={wiki.busy || !canProcess || topic.pinned} onClick={() => { setActionError(""); setCorrecting(topic); setNotes(topic.notes); }}>{t("workbench.wiki_failure_correct")}</Button>}
+            {(resolution.citation || resolution.catalog) && <WikiFailureReport title={topic.title} message={topic.failure?.message ?? topic.error} stage={topic.failure?.stage} occurredAt={topic.failure?.occurredAt} validation={topic.failure?.validation} />}
+            {resolution.settings && <Button size="sm" variant="outline" onClick={() => (resolution.settings === "scope" || resolution.settings === "connection") ? navigation.push("/memory?tab=settings") : setSettings(resolution.settings === "account" ? "account" : "ai_assistant")}>{t(resolution.settings === "connection" ? "workbench.wiki_failure_connection_settings" : resolution.settings === "scope" ? "workbench.auto_settings" : resolution.settings === "account" ? "workbench.wiki_failure_account" : "workbench.wiki_failure_model")}</Button>}
+            <Button size="sm" variant="outline" onClick={() => setDeferred(current => new Set(current).add(topic.id))}>{t("workbench.wiki_failure_later")}</Button>
             <Button size="sm" variant="ghost" disabled={wiki.busy} onClick={() => { setActionError(""); setExcluding(topic); }}>{t("workbench.wiki_failure_exclude")}</Button>
           </div>
           {!!sources.length && <div className="space-y-1"><p className="text-xs font-medium">{t("workbench.auto_sources")}</p>{sources.map(row => <Button key={row.reference.id} size="sm" variant="ghost" className="h-auto min-h-9 max-w-full whitespace-normal text-start" onClick={() => setSource(row.reference)}>{t("workbench.wiki_failure_open_source", { title: row.title })}</Button>)}</div>}
           <details className="rounded-md bg-muted/40 p-3">
-            <summary className="cursor-pointer text-xs font-medium">{t("workbench.wiki_failure_details")}</summary>
+            <summary className="cursor-pointer text-xs font-medium">{t(resolution.citation ? "workbench.wiki_failure_citation_details" : "workbench.wiki_failure_details")}</summary>
+            {resolution.citation && !position && <p className="mt-3 text-xs text-muted-foreground">{t("workbench.wiki_citation_location_unknown")}</p>}
             <dl className="mt-3 space-y-2 text-xs">
+              {position && <div><dt className="text-muted-foreground">{t("workbench.wiki_citation_location")}</dt><dd>{t(position.key, position.values)}</dd></div>}
+              {issue?.sourceId && sources.some(row => row.reference.id === issue.sourceId) && <div><dt className="text-muted-foreground">{t("workbench.wiki_citation_source")}</dt><dd>{sources.find(row => row.reference.id === issue.sourceId)!.title}</dd></div>}
               <div><dt className="text-muted-foreground">{t("workbench.wiki_failure_stage")}</dt><dd>{t(stages[topic.failure?.stage ?? ""] ?? "workbench.wiki_failure_stage_unknown")}</dd></div>
               {date && !Number.isNaN(date.getTime()) && <div><dt className="text-muted-foreground">{t("workbench.wiki_failure_time")}</dt><dd><time dateTime={topic.failure!.occurredAt}>{date.toLocaleString(i18n.language)}</time></dd></div>}
-              <div><dt className="text-muted-foreground">{t("workbench.wiki_failure_technical")}</dt><dd className="whitespace-pre-wrap break-all font-mono">{topic.error}</dd></div>
+              <div><dt className="text-muted-foreground">{t("workbench.wiki_failure_technical")}</dt><dd className="whitespace-pre-wrap break-all font-mono">{topic.failure?.message ?? topic.error}</dd></div>
             </dl>
           </details>
         </article>;

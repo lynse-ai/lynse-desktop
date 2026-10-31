@@ -12,6 +12,7 @@ import { MemoryLibrary } from "./memory-library";
 import { MemoryManagementPage } from "./memory-management";
 import { useWiki, WikiAttention } from "./wiki";
 import { WikiWorkspace } from "./wiki-workspace";
+import { HierarchyStatus } from "./wiki-grouping";
 import { WorkbenchSettingsContent } from "./components";
 import { isWikiProcessingComplete, WorkbenchProgress } from "./progress";
 import { workbenchErrorCopy } from "./errors";
@@ -61,6 +62,7 @@ export function KnowledgePage() {
     {!available ? <p className="p-5 text-sm text-muted-foreground">{t("workbench.memory_unavailable")}</p> : <div className={"min-h-0 flex-1 overflow-y-auto px-5 py-4" + (tab === "wiki" ? " flex flex-col" : "")}>
       <div className={`mx-auto w-full space-y-4 ${tab === "wiki" ? "flex min-h-0 flex-1 flex-col " : ""}${tab === "settings" ? "max-w-4xl" : "max-w-none"}`}>
         {tab === "wiki" && <>
+          {!!wiki.data?.topics.length && !navigation.searchParams.has("topic") && <HierarchyStatus wiki={wiki} onCreated={id => navigation.replace(`/memory?${new URLSearchParams({tab:"wiki",topic:id,view})}`)} />}
           {(error || status?.error) && errorCopy?.key !== "workbench.error_topics" && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3"><p className="text-sm text-muted-foreground">{t(errorCopy?.key ?? "workbench.auto_update_failed", { count: errorCopy?.count })}</p><Button size="sm" variant="outline" disabled={wiki.busy || !automatic} onClick={() => void wiki.mutate({ action: "retry" }).catch(() => undefined)}>{t("workbench.retry")}</Button></div>}
           <WikiAttention />
           {(!status?.automation || !status.enabled || !status.allowAi) && <WorkbenchSettingsContent activation />}

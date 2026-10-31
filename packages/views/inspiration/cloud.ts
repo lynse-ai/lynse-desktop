@@ -16,6 +16,7 @@
  */
 
 import { api } from "@lynse/core/api";
+import { CLOUDBASE_MEMORY_URL, STAGING_CLOUDBASE_MEMORY_URL, memoryUrlForApiUrl } from "@lynse/core/config";
 
 import { getDesktopInspirationApi } from "./desktop-api";
 import type { InspirationCloudStatus, InspirationCloudSyncReport } from "./types";
@@ -26,11 +27,11 @@ export const LYNSE_MEMORY_API_URL_KEY = "lynse_memory_api_url";
 /**
  * Production Lynse Memory CloudBase service — the service's default domain
  * per the CloudBase console (`lynse-memory-319577-10`, user-confirmed
- * 2026-10-10). Override (or disable with an empty override) via
+ * 2026-10-10). Presets follow the selected login environment. Override
+ * (or disable with an empty override) via
  * localStorage[LYNSE_MEMORY_API_URL_KEY].
  */
-export const DEFAULT_MEMORY_API_URL =
-  "https://lynse-memory-319577-10-1401959758.sh.run.tcloudbase.com";
+export const DEFAULT_MEMORY_API_URL = CLOUDBASE_MEMORY_URL;
 
 /** Pre-2026-10-10 default host; routes to the same lynse-memory service. */
 export const LEGACY_MEMORY_API_URL =
@@ -38,16 +39,17 @@ export const LEGACY_MEMORY_API_URL =
 
 export function memoryApiBase(): string {
   if (typeof window === "undefined") return "";
+  const selectedDefault = memoryUrlForApiUrl(api().getBaseUrl());
   const configured = (window.localStorage.getItem(LYNSE_MEMORY_API_URL_KEY) ?? "").trim();
   if (configured !== "") {
     // A manual override pinned to the pre-migration host keeps working, but
     // it should ride the current default like the unset case does.
-    if (configured === LEGACY_MEMORY_API_URL) return DEFAULT_MEMORY_API_URL;
+    if ([LEGACY_MEMORY_API_URL, DEFAULT_MEMORY_API_URL, STAGING_CLOUDBASE_MEMORY_URL].includes(configured)) return selectedDefault;
     return configured;
   }
-  // Empty override = explicitly disabled; unset = production default.
+  // Empty override = explicitly disabled; unset follows the login environment.
   if (window.localStorage.getItem(LYNSE_MEMORY_API_URL_KEY) === "") return "";
-  return DEFAULT_MEMORY_API_URL;
+  return selectedDefault;
 }
 
 export function isInspirationCloudEnabled(): boolean {

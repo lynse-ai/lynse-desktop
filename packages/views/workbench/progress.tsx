@@ -71,6 +71,7 @@ export function WorkbenchProgress({ status, error, compact = false }: { status: 
   }
 
   if (status.automation && hint === "workbench.home_processing_hint") hint = "workbench.auto_progress_hint";
+  if (!busy && (failure || (progress?.failed ?? 0) > 0)) value = null;
   if (status.automation && hint === "workbench.home_create_topic_hint") hint = "workbench.auto_empty_hint";
   const current = status.initialComplete && status.phase === "processing" ? [progress?.topicTitle, progress?.currentTitle].filter(Boolean).join(" · ") : "";
   return <div className="space-y-2 text-xs" aria-live="polite">
@@ -81,7 +82,7 @@ export function WorkbenchProgress({ status, error, compact = false }: { status: 
       </p>
       {value !== null && <span aria-hidden="true" className="shrink-0 tabular-nums text-muted-foreground">{value}%</span>}
     </div>
-    <Progress
+    {(busy || (!failure && !(progress?.failed ?? 0))) && <Progress
       value={value}
       aria-label={t("workbench.home_progress_label")}
       getAriaValueText={() => counter ?? t(label)}
@@ -89,7 +90,7 @@ export function WorkbenchProgress({ status, error, compact = false }: { status: 
         value === null && "[&_[data-slot=progress-indicator]]:w-1/3",
         busy && value === null && "[&_[data-slot=progress-indicator]]:animate-pulse [&_[data-slot=progress-indicator]]:motion-reduce:animate-none",
         busy && "progress-live")}
-    />
+    />}
     {!compact && counter && <p className="tabular-nums text-muted-foreground">{counter}</p>}
     {compact && current && <p className="truncate text-muted-foreground" title={current}>{current}</p>}
     {!compact && status.initialComplete && status.phase === "processing" && progress?.topicTitle && <p className="truncate text-muted-foreground" title={progress.topicTitle}>{t("workbench.home_current_topic", { title: progress.topicTitle })}</p>}

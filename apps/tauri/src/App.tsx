@@ -42,12 +42,11 @@ import { AppThemeSync } from "@lynse/views/settings/app-theme";
 import { clearAuthSecrets, secureStorage } from "./secure-storage";
 import { setReportChannel } from "@lynse/views/diagnostics";
 
-// Build channel (official | debug), injected by Vite at build time — see
-// apps/tauri/.env.example. Unset builds are OFFICIAL when packaged (the
-// distributable default) and DEBUG in dev.
+// Legacy feature-exposure overrides do not select login methods or servers.
+// Development and packaged apps share the standard default.
 configureBuildChannel(
   (import.meta.env.VITE_BUILD_CHANNEL as BuildChannel | undefined) ??
-    (import.meta.env.PROD ? "official" : "debug"),
+    "official",
 );
 // Problem-report channel: submitted reports are filed as CNB issues by the
 // CloudBase `cnb-report` function (the CNB token lives in the function's env

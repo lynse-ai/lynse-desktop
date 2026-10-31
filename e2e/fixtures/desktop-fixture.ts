@@ -1,7 +1,7 @@
 import { test as base, expect } from "@playwright/test";
 import { startMockServer, type MockServer } from "../fixtures/mock-server";
 import type { ChatScript } from "../fixtures/chat-script";
-import { bootstrapApp } from "../fixtures/lynse-fixture";
+import { bootstrapApp as bootstrapLoggedInApp } from "../fixtures/lynse-fixture";
 
 /**
  * Desktop workspace fixtures: same mock backend as the web suite, pointed at
@@ -15,7 +15,13 @@ export const test = base.extend<{ mockServer: MockServer }>({
   },
 });
 
-export { expect, bootstrapApp };
+export { expect };
+
+/** Desktop feature scenarios explicitly opt into the runtime Beta surface. */
+export async function bootstrapApp(page: import("@playwright/test").Page, serverUrl: string) {
+  await bootstrapLoggedInApp(page, serverUrl);
+  await page.addInitScript(() => localStorage.setItem("lynse_test_mode", "1"));
+}
 
 /** Open the desktop workspace root, logged in, with a chat script attached. */
 export async function openWorkspace(page: import("@playwright/test").Page, serverUrl: string) {

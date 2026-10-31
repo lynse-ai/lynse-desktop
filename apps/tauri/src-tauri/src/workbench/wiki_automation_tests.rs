@@ -310,7 +310,7 @@ fn publication_is_idempotent_preserves_human_notes_and_keeps_legacy_drafts_in_hi
     fs::remove_dir_all(root).unwrap();
 }
 #[test]
-fn page_cache_changes_for_notes_and_scope_but_source_cache_is_incremental() {
+fn page_cache_changes_only_for_actual_topic_inputs() {
     let mut manifest = manifest();
     let mut topic = Topic::default();
     let config = Models::default();
@@ -324,15 +324,143 @@ fn page_cache_changes_for_notes_and_scope_but_source_cache_is_incremental() {
     );
     topic.notes.clear();
     manifest.wiki_automation.as_mut().unwrap().include_unfiled = true;
-    assert_ne!(
+    assert_eq!(
         page_version(&topic, &[source.clone()], &manifest, &config),
         initial
     );
     assert_eq!(input_key(&source, &config), source_key);
+    manifest.wiki_automation.as_mut().unwrap().folder_ids = vec!["other".into(), "work".into()];
+    assert_eq!(page_version(&topic, &[source.clone()], &manifest, &config), initial);
     assert_ne!(
         page_version(&topic, &[source, doc("new", "work")], &manifest, &config),
         initial
     );
+}
+
+#[tokio::test]
+async fn range_changes_reuse_compilation_and_only_changed_evidence_calls_the_model() {
+    let root = root();
+    let local = root.join("sources");
+    let mut manifest = manifest();
+    let source = doc("existing", "work");
+    add(&local, &mut manifest, &source);
+    let topic = Topic { id: "stable-topic".into(), title: "Budget".into(), source_ids: vec![source.id.clone()], ..Default::default() };
+    let config = Models::default();
+    let serial = tokio::sync::Mutex::new(());
+    let calls = std::cell::Cell::new(0);
+    for folders in [vec!["work"], vec!["work", "other"], vec!["other", "work"], vec!["work"]] {
+        manifest.wiki_automation.as_mut().unwrap().folder_ids = folders.into_iter().map(String::from).collect();
+        let version = page_version(&topic, &[source.clone()], &manifest, &config);
+        let evidence = vec![CompilationEvidence { source: source.clone(), value: json!({"relevant":true}) }];
+        let result = json!({"summary":"Saved page", "citations":[{"kind":"meeting","id":source.id,"revision":source.revision,"quote":source.text()}]});
+        cached_compilation(&root, &compilation_key(&version, &evidence), &serial,
+            |value| sync::validate_result(&[source.clone()], &manifest, value), true, async {
+                calls.set(calls.get() + 1); Ok(result)
+            }).await.unwrap();
+    }
+    assert_eq!(calls.get(), 1);
+    let mut changed = source.clone();
+    changed.transcript.push_str("预算已调整。");
+    changed.refresh_revision();
+    add(&local, &mut manifest, &changed);
+    let version = page_version(&topic, &[changed.clone()], &manifest, &config);
+    let evidence = vec![CompilationEvidence { source: changed.clone(), value: json!({"relevant":true}) }];
+    cached_compilation(&root, &compilation_key(&version, &evidence), &serial,
+        |value| sync::validate_result(&[changed.clone()], &manifest, value), true, async {
+            calls.set(calls.get() + 1);
+            Ok(json!({"summary":"Updated page", "citations":[{"kind":"meeting","id":changed.id,"revision":changed.revision,"quote":changed.text()}]}))
+        }).await.unwrap();
+    assert_eq!(calls.get(), 2);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn scoped_legacy_pages_migrate_only_when_complete_inputs_and_quotes_match() {
+    let root = root();
+    let local = root.join("sources");
+    let mut manifest = manifest();
+    let config = Models { text_revision: "same-model-language-prompt".into(), ..Default::default() };
+    let source = doc("existing", "work");
+    add(&local, &mut manifest, &source);
+    let mut catalog = Catalog::default();
+    let mut values = Vec::new();
+    apply_catalog(&mut values, &mut catalog, &source.id, &[row(&source)]);
+    let topic = &mut values[0];
+    topic.pinned = true;
+    topic.notes = "Keep this correction".into();
+    let version = scope_cache::legacy_version(topic, &[source.clone()], manifest.wiki_automation.as_ref().unwrap(), &config);
+    let mut saved = page(topic, &source, &manifest, "Saved and reviewed page");
+    // Prior gateway-only migrations advanced the completed version without rewriting this field.
+    saved.cache_key = "pre-gateway-cache-key".into();
+    saved.fingerprint = page_fingerprint_with_legacy_scope(topic, &manifest, &config, &saved.citations, manifest.wiki_automation.as_ref());
+    saved.review = "approved".into();
+    topic.published = Some(saved.clone());
+    topic.last_fingerprint = version.clone();
+    topic.last_attempt_fingerprint = version;
+    save_page(&root, topic, &saved, false).unwrap();
+    save_topics(&root, &values).unwrap();
+
+    manifest.wiki_automation.as_mut().unwrap().folder_ids.extend(["new-folder".into(), "third-folder".into()]);
+    let docs = vec![source.clone()];
+    assert_eq!(migrate_scope_cache(&root, &local, &docs, &manifest, &config).unwrap(), 1);
+    assert_eq!(migrate_scope_cache(&root, &local, &docs, &manifest, &config).unwrap(), 0);
+    let migrated = topics(&root).unwrap();
+    assert_eq!(migrated[0].last_fingerprint, page_version(&migrated[0], &docs, &manifest, &config));
+    let current = migrated[0].published.as_ref().unwrap();
+    assert_eq!(current.id, saved.id);
+    assert_eq!(current.markdown, saved.markdown);
+    assert_eq!(current.review, "approved");
+    assert_eq!(migrated[0].notes, "Keep this correction");
+    assert!(migrated[0].pinned);
+    assert_eq!(fs::read_to_string(root.join(&migrated[0].id).join("published.md")).unwrap(), saved.markdown);
+    assert!(citable(&migrated[0], &local, &manifest, &config));
+
+    for mutation in ["notes", "source", "model", "refresh", "excluded", "range-revoked", "external-edit"] {
+        let mut trial = values.clone();
+        let mut docs = vec![source.clone()];
+        let mut model = config.clone();
+        match mutation {
+            "notes" => trial[0].notes.push_str(" New instruction"),
+            "source" => { docs[0].transcript.push_str("Changed evidence"); docs[0].refresh_revision(); add(&local, &mut manifest, &docs[0]); },
+            "model" => model.text_revision = "different-model-or-language".into(),
+            "refresh" => trial[0].force_refresh = true,
+            "excluded" => manifest.entries.get_mut(&source.id).unwrap().excluded = true,
+            "range-revoked" => manifest.wiki_automation.as_mut().unwrap().folder_ids = vec!["other".into()],
+            _ => { fs::write(root.join(&trial[0].id).join("published.md"), "Manual edit").unwrap(); },
+        }
+        save_topics(&root, &trial).unwrap();
+        assert_eq!(migrate_scope_cache(&root, &local, &docs, &manifest, &model).unwrap(), 0, "{mutation}");
+        assert_eq!(topics(&root).unwrap()[0].last_fingerprint, trial[0].last_fingerprint);
+        manifest.wiki_automation.as_mut().unwrap().folder_ids = vec!["work".into(), "new-folder".into(), "third-folder".into()];
+        add(&local, &mut manifest, &source);
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn migrating_a_failed_attempt_does_not_retry_it_or_turn_it_into_success() {
+    let root = root();
+    let local = root.join("sources");
+    let mut manifest = manifest();
+    let config = Models::default();
+    let source = doc("failed", "work");
+    add(&local, &mut manifest, &source);
+    let mut catalog = Catalog::default();
+    let mut values = Vec::new();
+    apply_catalog(&mut values, &mut catalog, &source.id, &[row(&source)]);
+    values[0].error = "Invalid Wiki citations".into();
+    values[0].failure = Some(WikiFailure::new(&values[0].error, "compiling", vec![source.id.clone()]));
+    values[0].last_attempt_fingerprint = scope_cache::legacy_version(&values[0], &[source.clone()], manifest.wiki_automation.as_ref().unwrap(), &config);
+    save_topics(&root, &values).unwrap();
+    manifest.wiki_automation.as_mut().unwrap().folder_ids.push("new-folder".into());
+    assert_eq!(migrate_scope_cache(&root, &local, &[source.clone()], &manifest, &config).unwrap(), 0);
+    let restored = topics(&root).unwrap();
+    assert_eq!(restored[0].last_attempt_fingerprint, page_version(&restored[0], &[source], &manifest, &config));
+    assert_eq!(restored[0].error, values[0].error);
+    assert_eq!(restored[0].failure.as_ref().unwrap().message, values[0].failure.as_ref().unwrap().message);
+    assert!(restored[0].published.is_none());
+    assert!(restored[0].last_fingerprint.is_empty());
+    fs::remove_dir_all(root).unwrap();
 }
 #[test]
 fn graph_edges_are_shared_evidence_only_and_outside_topics_are_hidden() {
@@ -638,6 +766,133 @@ fn manual_retry_preserves_completed_pages_catalog_and_progress() {
 }
 
 #[test]
+fn failed_catalog_preserves_saved_source_links_and_does_not_compile_partial_topics() {
+    let source = doc("failed-source", "work");
+    let mut values = vec![Topic { id: "saved".into(), automatic_key: "project".into(),
+        source_ids: vec![source.id.clone()], ..Default::default() }];
+    let failed = BTreeSet::from([source.id.clone()]);
+    reconcile_sources(&mut values, &BTreeMap::new(), &failed, &[source.clone()]);
+    assert_eq!(values[0].source_ids, vec![source.id.clone()]);
+    values[0].published = Some(page(&values[0], &source, &manifest(), "Saved content"));
+    values[0].source_ids.clear();
+    reconcile_sources(&mut values, &BTreeMap::new(), &failed, &[source.clone()]);
+    assert_eq!(values[0].source_ids, vec![source.id]);
+    reconcile_sources(&mut values, &BTreeMap::new(), &failed, &[]);
+    assert!(values[0].source_ids.is_empty());
+}
+
+#[test]
+fn gateway_migration_reuses_only_matching_validated_inputs_and_completed_pages() {
+    let root = root();
+    let local = root.join("sources");
+    let mut manifest = manifest();
+    let source = preferred(doc("ready", "work"), &manifest);
+    add(&local, &mut manifest, &source);
+    let old = Models { text_revision: "old-gateway".into(), ..Default::default() };
+    let new = Models { text_revision: "same-model-new-identity".into(), ..Default::default() };
+    let mut catalog = Catalog::default();
+    let mut values = Vec::new();
+    apply_catalog(&mut values, &mut catalog, &source.id, &[row(&source)]);
+    values[0].published = Some(page(&values[0], &source, &manifest, "Saved content"));
+    values[0].last_fingerprint = page_version(&values[0], &[source.clone()], &manifest, &old);
+    let old_fingerprint = page_fingerprint(&values[0], &manifest, &old, &values[0].published.as_ref().unwrap().citations);
+    values[0].published.as_mut().unwrap().fingerprint = old_fingerprint;
+    values[0].published.as_mut().unwrap().cache_key = values[0].last_fingerprint.clone();
+    let expected = page_version(&values[0], &[source.clone()], &manifest, &new);
+    let saved_id = values[0].published.as_ref().unwrap().id.clone();
+    values[0].source_ids.clear();
+    save_topics(&root, &values).unwrap();
+    catalog.chunks.insert(format!("{}:0", input_key(&source, &old)), vec![row(&source)]);
+    migrate_catalog_revision(&root, &local, &mut catalog, &[source.clone()], &manifest, &new, &old.text_revision).unwrap();
+    assert!(catalog.chunks.contains_key(&format!("{}:0", input_key(&source, &new))));
+    let restored = topics(&root).unwrap();
+    assert_eq!(restored[0].source_ids, vec![source.id.clone()]);
+    assert_eq!(restored[0].last_fingerprint, expected);
+    assert_eq!(restored[0].published.as_ref().unwrap().id, saved_id);
+    assert_eq!(restored[0].published.as_ref().unwrap().markdown, "Saved content");
+    assert!(citable(&restored[0], &local, &manifest, &new));
+    let changed_model = Models { text_revision: "other-model".into(), ..Default::default() };
+    assert!(!catalog.chunks.contains_key(&format!("{}:0", input_key(&source, &changed_model))));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn catalog_failures_keep_actionable_diagnostics_until_a_successful_retry() {
+    let root = root();
+    let source = doc("failed-source", "work");
+    let mut catalog = Catalog::default();
+    record_failure(&mut catalog, "chunk:0", &source, "Cloud knowledge identity verification failed");
+    catalog.chunks.insert("completed:0".into(), vec![]);
+    write_json(&catalog_path(&root), &catalog).unwrap();
+    let failures = source_failures(&root).unwrap();
+    assert_eq!(failures[0]["sourceId"], source.id);
+    assert_eq!(failures[0]["message"], "Cloud knowledge identity verification failed");
+    assert_eq!(failures[0]["stage"], "analyzing");
+    retry(&root).unwrap();
+    let catalog: Catalog = read_json(&catalog_path(&root)).unwrap();
+    assert!(catalog.failed.is_empty());
+    assert!(catalog.chunks.contains_key("completed:0"));
+    let queued = source_failures(&root).unwrap();
+    assert_eq!(failures[0]["retrying"], false);
+    assert_eq!(queued[0]["retrying"], true);
+    assert_eq!(queued[0]["message"], failures[0]["message"]);
+    assert_eq!(queued[0]["occurredAt"], failures[0]["occurredAt"]);
+    assert!(is_service_failure("Cloud knowledge identity verification failed"));
+    assert!(is_service_failure("Cloud knowledge offline"));
+    let annotated = validation_failure::annotate("Citation does not match source evidence".into(),
+        &json!({"citationIssue":{"code":"quote_not_found","sourceId":source.id,"citationIndex":1,"location":"citations","quote":"PRIVATE_MODEL_QUOTE"}}),
+        &json!({"sources":[{"id":source.id}]}), true);
+    let mut catalog: Catalog = read_json(&catalog_path(&root)).unwrap();
+    record_failure(&mut catalog, "citation:1", &source, &annotated);
+    write_json(&catalog_path(&root), &catalog).unwrap();
+    let details = serde_json::to_value(&catalog.details["citation:1"]).unwrap();
+    assert_eq!(details["message"], "Citation does not match source evidence");
+    assert_eq!(details["validation"]["correctionAttempted"], true);
+    assert_eq!(details["validation"]["citationIssue"]["citationIndex"], 1);
+    assert!(!details.to_string().contains("PRIVATE_MODEL_QUOTE"));
+    assert_eq!(source_failures(&root).unwrap().as_array().unwrap().iter()
+        .find(|row| row["id"] == "citation:1").unwrap()["retrying"], false);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn transient_preflight_recovers_only_after_verification_and_keeps_completed_work() {
+    let root = root();
+    let mut catalog = Catalog::default();
+    catalog.chunks.insert("completed:0".into(), vec![]);
+    catalog.identities.insert("project".into(), "stable".into());
+    catalog.failed.insert("network:0".into(), "Cloud knowledge offline".into());
+    catalog.failed.insert("invalid:0".into(), "Invalid Wiki catalog output".into());
+    checked_preflight(&root, &mut catalog, async {Err("Cloud knowledge offline".into())}).await.unwrap_err();
+    assert!(catalog.run_failure.is_some());
+    checked_preflight(&root, &mut catalog, async {Ok(())}).await.unwrap();
+    let restored: Catalog = read_json(&catalog_path(&root)).unwrap();
+    assert!(restored.run_failure.is_none());
+    assert!(restored.chunks.contains_key("completed:0"));
+    assert_eq!(restored.identities["project"], "stable");
+    assert!(!restored.failed.contains_key("network:0"));
+    assert!(restored.failed.contains_key("invalid:0"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn auth_and_policy_failures_do_not_resume_automatically() {
+    let root = root();
+    for error in ["Cloud knowledge identity verification failed", "Cloud knowledge request failed (HTTP 403)",
+        "Cloud knowledge policy changed; reload before saving", "Cloud knowledge selected folders changed; review the organization range"] {
+        let mut catalog = Catalog::default();
+        checked_preflight(&root, &mut catalog, async {Err(error.into())}).await.unwrap_err();
+        let called = std::sync::atomic::AtomicBool::new(false);
+        assert!(checked_preflight(&root, &mut catalog, async {
+            called.store(true,std::sync::atomic::Ordering::SeqCst); Ok(())
+        }).await.is_err());
+        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(catalog.run_failure.as_ref().unwrap().message,error);
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn topic_retry_is_scoped_to_the_selected_topic_and_keeps_other_failures() {
     let root = root();
     let alias = uuid::Uuid::new_v4().to_string();
@@ -722,7 +977,7 @@ fn new_session_retries_service_failures_and_keeps_completed_work() {
     topic.published = Some(page(&topic, &source, &manifest, "Saved knowledge"));
     let saved = topic.published.clone().unwrap();
     save_topics(&root, &[topic]).unwrap();
-    resume_session_at(&root, &mut manifest).unwrap();
+    resume_session_at(Some(&root), &mut manifest).unwrap();
     let catalog: Catalog = read_json(&catalog_path(&root)).unwrap();
     assert!(!catalog.failed.contains_key("expired"));
     assert!(!catalog.failed.contains_key("version"));
@@ -785,6 +1040,36 @@ fn page_source_snapshots_reuse_reads_and_recheck_changes_on_the_next_request() {
     fs::write(store::paths(&local, &source.id).0, "Externally changed meeting").unwrap();
     assert!(sources.valid_page(&revision));
     assert!(!PageSources::new(&local, &manifest).valid_page(&revision));
+    fs::remove_dir_all(local).unwrap();
+}
+
+#[test]
+fn source_dates_use_authorized_record_metadata_without_changing_saved_pages() {
+    let local = root();
+    let mut manifest = manifest();
+    let mut topics = Vec::new();
+    for (id, folder, date) in [
+        ("dated", "work", "2025-12-31T23:00:00Z"),
+        ("outside", "other", "2026-10-25T00:00:00Z"),
+        ("unknown", "work", ""),
+        ("invalid", "work", "2026-02-30"),
+    ] {
+        let mut source = doc(id, folder);
+        source.created_at = date.into();
+        source.refresh_revision();
+        add(&local, &mut manifest, &source);
+        let mut topic = Topic::default();
+        topic.published = Some(page(&topic, &source, &manifest, "Saved knowledge"));
+        topics.push(topic);
+    }
+    let before = serde_json::to_value(&topics).unwrap();
+    let mut sources = PageSources::new(&local, &manifest);
+    assert_eq!(sources.dates(&topics), std::collections::BTreeMap::from([
+        ("dated".into(), "2025-12-31".into()),
+    ]));
+    assert_eq!(serde_json::to_value(&topics).unwrap(), before);
+    manifest.entries.get_mut("dated").unwrap().excluded = true;
+    assert!(PageSources::new(&local, &manifest).dates(&topics).is_empty());
     fs::remove_dir_all(local).unwrap();
 }
 
@@ -853,6 +1138,43 @@ fn local_wiki_state_source_reads_are_shared_across_pages() {
     assert!(pages > 0);
     assert!(sources.documents.len() < citations);
     println!("Validated {pages} pages, {citations} citations, {} source reads in {} ms", sources.documents.len(), started.elapsed().as_millis());
+}
+
+#[test]
+#[ignore = "Requires an explicitly supplied offline recovery copy; never calls a model"]
+fn local_completed_wiki_cache_recovery() {
+    let fixture = PathBuf::from(std::env::var("LYNSE_WIKI_RECOVERY_DIR").expect("Offline recovery copy"));
+    let manifest: Manifest = read_json(&fixture.join("state.json")).unwrap();
+    let local = PathBuf::from(&manifest.sync_root);
+    let root = fixture.join("wiki");
+    let docs = documents(&local, &manifest);
+    let settings: Value = read_json(&fixture.join("recovery.json")).unwrap();
+    let config = Models { text_revision: settings["textRevision"].as_str().unwrap().into(), ..Default::default() };
+    let before = topics(&root).unwrap();
+    let mut catalog: Catalog = read_json(&catalog_path(&root)).unwrap();
+    for revision in settings["previousRevisions"].as_array().unwrap() {
+        migrate_catalog_revision(&root, &local, &mut catalog, &docs, &manifest, &config, revision.as_str().unwrap()).unwrap();
+    }
+    let retained = migrate_scope_cache(&root, &local, &docs, &manifest, &config).unwrap();
+    println!("Scope cache migration retained {retained} completed pages without model requests");
+    let after = topics(&root).unwrap();
+    assert_eq!(before.len(), after.len());
+    for (old, new) in before.iter().zip(&after) {
+        assert_eq!(old.id, new.id);
+        if let Some(page) = &old.published {
+            let saved = new.published.as_ref().unwrap();
+            assert_eq!(page.id, saved.id);
+            assert_eq!(page.markdown, saved.markdown);
+            assert_eq!(page.citations, saved.citations);
+        }
+    }
+    let total: usize = docs.iter().map(|doc| sync::split_text(doc.text().trim(), 12000).len()).sum();
+    let cached = docs.iter().map(|doc| (0..sync::split_text(doc.text().trim(),12000).len()).filter(|index| catalog.chunks.contains_key(&format!("{}:{index}",input_key(doc,&config)))).count()).sum::<usize>();
+    let completed = after.iter().filter(|topic| {
+        let selected: Vec<_> = docs.iter().filter(|doc| topic.source_ids.contains(&doc.id)).cloned().collect();
+        topic.published.is_some() && topic.last_fingerprint == page_version(topic,&selected,&manifest,&config)
+    }).count();
+    println!("Offline recovery: {} sources, {cached}/{total} cached chunks, {completed} unchanged completed topics, {} restored source links",docs.len(),after.iter().filter(|topic| !topic.source_ids.is_empty()).count());
 }
 
 #[test]

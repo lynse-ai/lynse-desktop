@@ -493,7 +493,7 @@ export function NotesPage() {
       if (isVaultPermissionError(error)) {
         toast.error(t("vault.sync_permission_denied"), { id: loadingToastId, duration: 10000 });
       } else {
-        toast.error(t("vault.sync_failed", { error: error instanceof Error ? error.message : "" }), {
+        toast.error(t("vault.sync_failed", { error: error instanceof Error ? error.message : String(error) }), {
           id: loadingToastId,
         });
       }

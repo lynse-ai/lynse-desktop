@@ -18,6 +18,7 @@ import {
   getReportChannel,
   showScreenshotCaptureError,
   takePendingScreenshot,
+  takePendingReportDescription,
   useReportProblemDialog,
   type LogTail,
   type StagedScreenshot,
@@ -81,7 +82,7 @@ function ReportProblemForm({
   const { t } = useTranslation();
   const { setOpen } = useReportProblemDialog();
 
-  const [description, setDescription] = useState("");
+  const [description, setDescription] = useState(() => variant === "dialog" ? takePendingReportDescription() : "");
   const [screenshot, setScreenshot] = useState<StagedScreenshot | null>(() =>
     // The dialog's screenshot was captured before the store opened it; the
     // standalone window captures on mount (the main window stays visible).

@@ -53,30 +53,32 @@ output is a separate failure. Network timeouts and interrupted work remain
 explicit unknown outcomes until the user requests a retry. Completed chunks are
 committed individually and survive interruption.
 
-## Protocol and accounting
+## Protocol and model provenance
 
-`includeUsage: true` opts into:
+The desktop requests `includeGraphProfile: true` to verify model provenance:
 
 ```json
 {
   "code": 200,
   "data": { "schemaVersion": 1, "nodes": [], "relations": [] },
-  "usage": { "input": 100, "output": 40, "total": 140, "cachedInput": 80, "reasoning": 0 },
-  "metrics": {
-    "calls": 1, "completedCalls": 1, "queuedMs": 0, "generationMs": 50,
-    "model": "deepseek-flash", "profile": "deepseek-graph-v2",
-    "knownCalls": { "input": 1, "output": 1, "total": 1, "cachedInput": 1, "reasoning": 1 },
-    "retryAfter": null
-  }
+  "graphProfile": { "model": "deepseek-flash", "profile": "deepseek-graph-v2" }
 }
 ```
 
-Legacy requests retain their unwrapped response. Opted-in errors keep the HTTP
-status and `detail` while also returning known accounting. Missing counters are
-`null`; partial totals have per-counter known-call counts. Reasoning tokens are
-already included in output tokens and are not added twice. Request outcomes with
-missing accounting are counted separately as unknown. An incomplete call count also keeps generation
-time from being presented as a known zero.
+Graph usage collection, counters, processing reports and their UI have been
+removed. Older local tracking files remain readable; obsolete accounting fields
+are ignored and omitted on the next save without altering cached results or
+manual reviews, merges and todo links. The desktop also accepts provenance from
+an older service's `metrics` object and ignores any accompanying accounting.
+
+Requests without an envelope option retain their unwrapped response. The legacy
+`includeUsage` option is accepted for older clients but returns only model,
+profile and retry control metadata; it does not enable usage collection. New
+clients use `graphProfile`, and rate-limit delays remain in `Retry-After` headers.
+To remain compatible with the deployed previous service, the desktop also sends
+the legacy envelope option. Updated services prioritize `graphProfile`; older
+services return provenance under `metrics`. The desktop discards their usage
+counters, so compatibility needs no extra model call or local usage collection.
 
 The internal graph wire format uses schema version 2, a shared quotation table
 and integer citation indexes. The server restores source metadata and validates
@@ -85,18 +87,10 @@ coverage or evidence requirements. Model-facing source text remains untrusted
 user content; stable system instructions precede sources and dynamic corrections
 follow them. No paid cache warm-up requests are sent.
 
-The graph panel shows the last three of twenty locally saved processing reports:
-initial processing, repeated processing and incremental updates. Each report
-contains local result reuse, model calls, known token counters and timing. A
-provider cache ratio is shown only when its input and cached counters are
-complete. A partial subtotal is marked `≥`; unknown usage is never presented as
-zero. An explicitly known zero-call repeat run has zero additional model usage.
-
 ## Rollout switches and phase two
 
 | Desktop process setting | Default | Effect |
 | --- | --- | --- |
-| `LYNSE_GRAPH_SHOW_USAGE` | `1` | `0` hides the usage panel; accounting and model-profile verification remain active |
 | `LYNSE_GRAPH_CONTENT_CACHE` | `1` | `0` falls back to whole-document invalidation and fresh fixed-size boundaries |
 | `LYNSE_GRAPH_COMPACT_OUTPUT` | `1` | `0` requests the legacy citation representation with JSON output |
 | `LYNSE_GRAPH_CONCURRENCY` | `3` | Clamp between 1 and 3; use `1` for serial graph processing |
@@ -115,6 +109,30 @@ as independent source corroboration. Topic generation keeps its existing model.
 
 ## Validation and performance measurement
 
+Wiki organization retries preserve successful catalog receipts and completed pages.
+Its text identity includes the protocol, input format, language and model selection;
+changing only the API gateway does not invalidate completed work. Legacy receipts
+are adopted only when their complete prior input identity and current citations
+validate. Failed source analysis preserves existing topic associations, and topics
+with unavailable inputs keep their saved pages instead of compiling partial content.
+
+Automatic Wiki page and compilation identities use the topic's actual source
+inputs, instructions, language and model. Extending, shrinking or reordering the
+global folder selection does not invalidate a topic whose selected inputs are
+unchanged. Authorization is still checked before cached evidence is reused.
+Legacy scoped page identities are upgraded locally only after an exact prior
+input-hash match and current quotation/content validation. This migration is
+bounded, makes no model requests and preserves page IDs, reviews and Markdown;
+unverifiable legacy results remain untouched. Pausing automatic organization
+continues to preserve both these caches and ordinary local synchronization.
+
+Organization checks the selected server's current knowledge policy before model
+work. Missing enrollment or a changed folder range is reported as a setup failure;
+identity and service failures stop the run until retry instead of failing every
+chunk in sequence. Source failures retain the source, processing stage, time and
+technical cause, with links to the relevant settings or original source. Failed
+runs do not show a successful 100-percent progress indicator.
+
 Offline fixtures exercise 30 sourced graph cases through both compact expansion
 and conservative reuse, including uncertainty and verbatim evidence retention.
 They validate the protocol; they do not measure live model accuracy or billing.
@@ -123,7 +141,5 @@ desktop rendering using synthetic identity, authority and model responses.
 
 Acceptance requires zero new model calls for identical completed input, reuse of
 unchanged chunks after local edits, no invalid cross-language/scope hits, and
-preservation of manual state. Record cold, repeated and incremental run metrics
-separately. Compare live P50/P95 elapsed time, input/output tokens and cached input
-ratios on the same authorized corpus before making performance claims or enabling
-phase-two reuse. No fixed speed or token reduction percentage is assumed.
+preservation of manual state. Use separate development benchmarks on an authorized
+corpus before making performance claims or enabling phase-two reuse. No fixed speed or token reduction percentage is assumed.

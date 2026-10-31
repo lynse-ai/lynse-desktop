@@ -20,6 +20,16 @@ test("chat shows submission immediately, then live server progress and partial t
   expect(mockServer.requests().some((request) => request.path === "/api/chat/poll/slow-task")).toBe(false);
   await expect(page.getByText("Waiting for the model to respond…", { exact: true })).toBeVisible();
   await expect(page.getByText(/\d+s elapsed/)).toBeVisible();
+  const activity = page.locator('[data-slot="activity-indicator"]');
+  await expect(activity).toBeVisible();
+  await expect(activity.locator(".activity-pixel").first()).toHaveCSS("animation-name", "activity-pixel");
+  const label = page.locator(".activity-label-highlight");
+  await expect(label).toHaveCSS("animation-name", "activity-label-sweep");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect(activity.locator(".activity-pixel").first()).toHaveCSS("animation-name", "none");
+  await expect(label).toHaveCSS("display", "none");
+  await expect(page.getByText("Waiting for the model to respond…", { exact: true })).toBeVisible();
+  await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.screenshot({ path: test.info().outputPath("chat-waiting.png"), animations: "disabled" });
 
   mockServer.setRoute("GET /api/chat/poll/slow-task", { body: {
@@ -34,6 +44,7 @@ test("chat shows submission immediately, then live server progress and partial t
   } });
   await expect(page.getByText("The first decision is ready. The second decision is confirmed.", { exact: true })).toBeVisible();
   await expect(page.getByText("Waiting for the model to respond…", { exact: true })).toHaveCount(0);
+  await expect(activity).toHaveCount(0);
 });
 
 test("interrupted streamed Markdown keeps normal formatting and shows the failure separately", async ({ page, mockServer }) => {

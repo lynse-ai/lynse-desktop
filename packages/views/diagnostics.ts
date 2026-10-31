@@ -94,6 +94,13 @@ function setReportDialogOpen(open: boolean): void {
 // Screenshot captured at open time, shown in the report surface and consumed
 // once by whichever face (window or dialog) mounts.
 let pendingScreenshot: StagedScreenshot | null = null;
+let pendingReportDescription = "";
+
+export function takePendingReportDescription(): string {
+  const description = pendingReportDescription;
+  pendingReportDescription = "";
+  return description;
+}
 
 /** Consume the screenshot captured at open time (single-shot). */
 export function takePendingScreenshot(): StagedScreenshot | null {
@@ -124,9 +131,18 @@ async function openReportDialog(): Promise<void> {
 /**
  * Open the problem report flow: the standalone report window on macOS, the
  * in-app dialog everywhere else (with the GitHub prefilled form as the
- * submission fallback when the CNB channel fails).
+ * submission fallback when the CNB channel fails). Contextual reports use
+ * the in-app form so their description stays available for review.
  */
-export function openReportProblem(): void {
+export function openReportProblem(): void;
+export function openReportProblem(description: string): void;
+export function openReportProblem(description?: unknown): void {
+  if (typeof description === "string" && description) {
+    // Context stays in the shared in-app form until the user submits it.
+    pendingReportDescription = description;
+    void openReportDialog();
+    return;
+  }
   const api = getDesktopDiagnosticsApi();
   if (isMacDesktop && api?.openReportWindow) {
     const title = i18next.isInitialized ? i18next.t("settings.report_title") : "Lynse";

@@ -6,6 +6,7 @@ import { ApiClient, setApiInstance, setApiTransportMode } from "@lynse/core/api/
 import { createAuthStore, registerAuthStore } from "@lynse/core/auth";
 import { getDesktopAppApi } from "../app-update";
 import { LoginPage } from "./login-page";
+import { configureBuildChannel } from "../feature-flags";
 
 vi.mock("@lynse/core/i18n/react", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -13,8 +14,8 @@ vi.mock("@lynse/core/i18n/react", () => ({
 vi.mock("../app-update", () => ({ getDesktopAppApi: vi.fn(), openExternalUrl: vi.fn() }));
 vi.mock("../layout/app-title-bar", () => ({ WindowControls: () => null, showWindowControls: () => false }));
 vi.mock("./api-auth-panel", () => ({ ApiAuthPanel: () => null }));
-vi.mock("../feature-flags", () => ({
-  hasPasswordlessAuth: () => true,
+vi.mock("../feature-flags", async () => ({
+  ...await vi.importActual<typeof import("../feature-flags")>("../feature-flags"),
   hasDevApiAuth: () => false,
   isTestMode: () => false,
   setTestMode: vi.fn(),
@@ -29,6 +30,7 @@ let closeAuthWindow: ReturnType<typeof vi.fn>;
 let unlisten: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  configureBuildChannel("official");
   const client = new ApiClient("https://gapp.lynse.cn");
   setApiInstance(client);
   setApiTransportMode("direct");
@@ -55,6 +57,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   setApiTransportMode("proxy");
+  configureBuildChannel("official");
 });
 
 async function start() {
@@ -74,6 +77,16 @@ function deferredLogin() {
 }
 
 describe("desktop WeChat sign-in", () => {
+  it.each(["official", "debug"] as const)("keeps phone and WeChat login available with the %s feature override", async channel => {
+    configureBuildChannel(channel);
+    render(<LoginPage />);
+    expect(screen.getByPlaceholderText("auth.sms_phone_placeholder")).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "auth.more_login" }));
+    fireEvent.click(screen.getByRole("button", { name: "auth.wechat_login" }));
+    await waitFor(() => expect(openAuthWindow).toHaveBeenCalledOnce());
+    expect(fetchMock.mock.calls[0]![0]).toBe("https://gapp.lynse.cn/api/auth/render?authType=WECHAT_SCAN");
+  });
   it("opens the selected server's QR flow and exchanges each code only once", async () => {
     const finish = deferredLogin();
     await start();

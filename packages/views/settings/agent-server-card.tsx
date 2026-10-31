@@ -16,7 +16,9 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import {
   AGENT_API_URL_STORAGE_KEY,
   CLOUDBASE_AGENT_URL,
+  STAGING_CLOUDBASE_AGENT_URL,
   LEGACY_CLOUDBASE_AGENT_URL,
+  agentUrlForApiUrl,
 } from "@lynse/core/config";
 import { Sparkles } from "../icons";
 import { BetaBadge } from "../beta-badge";
@@ -28,7 +30,7 @@ type AgentServerMode = "follow" | "cloudbase" | "custom";
 
 function modeForUrl(url: string | null): AgentServerMode {
   if (!url) return "follow";
-  if (url === CLOUDBASE_AGENT_URL || url === LEGACY_CLOUDBASE_AGENT_URL)
+  if (url === CLOUDBASE_AGENT_URL || url === STAGING_CLOUDBASE_AGENT_URL || url === LEGACY_CLOUDBASE_AGENT_URL)
     return "cloudbase";
   return "custom";
 }
@@ -85,8 +87,9 @@ export function AgentServerCard() {
       applyAgentUrl("");
       setAgentUrl(null);
     } else if (next === "cloudbase") {
-      applyAgentUrl(CLOUDBASE_AGENT_URL);
-      setAgentUrl(CLOUDBASE_AGENT_URL);
+      const target = agentUrlForApiUrl(api().getBaseUrl()) ?? CLOUDBASE_AGENT_URL;
+      applyAgentUrl(target);
+      setAgentUrl(target);
     }
     // "custom" keeps the previous target until a valid URL is typed below.
   }

@@ -24,12 +24,10 @@ impl Default for Scheduler {
 pub(super) struct Permit {
     _slot: OwnedSemaphorePermit,
     _recovery: Option<OwnedMutexGuard<()>>,
-    pub queued_ms: u64,
 }
 
 impl Scheduler {
     pub async fn acquire(&self) -> Permit {
-        let started = Instant::now();
         let slot = self
             .slots
             .clone()
@@ -52,7 +50,6 @@ impl Scheduler {
         Permit {
             _slot: slot,
             _recovery: recovery,
-            queued_ms: started.elapsed().as_millis() as u64,
         }
     }
 

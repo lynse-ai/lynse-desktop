@@ -164,6 +164,71 @@
   animation: chat-text-shimmer 2.5s linear infinite;
 }
 
+/* Assistant activity: ZCode-inspired pixel orbit and a stationary text glint.
+ * Only opacity/transforms animate. The masked overlay and its text translate
+ * in opposite directions so the words stay aligned while the highlight moves.
+ * These continuous cycles indicate ongoing work; they are not UI transitions. */
+@keyframes activity-pixel {
+  0%, 55%, 100% { opacity: 0.15; }
+  15% { opacity: 1; }
+}
+
+.activity-pixel {
+  opacity: 0.15;
+  animation: activity-pixel 960ms linear infinite;
+}
+
+.activity-label {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+}
+
+@keyframes activity-label-sweep {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
+@keyframes activity-label-counter-sweep {
+  from { transform: translateX(100%); }
+  to { transform: translateX(-100%); }
+}
+
+.activity-label-highlight {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  color: var(--foreground);
+  mask-image: linear-gradient(90deg, transparent 30%, black 50%, transparent 70%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 30%, black 50%, transparent 70%);
+  animation: activity-label-sweep 2.4s linear infinite;
+}
+
+.activity-label-highlight::before {
+  content: attr(data-text);
+  display: block;
+  animation: activity-label-counter-sweep 2.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-pixel {
+    animation: none;
+    opacity: 0.6;
+  }
+
+  .activity-label-highlight {
+    display: none;
+    animation: none;
+  }
+
+  .activity-label-highlight::before {
+    animation: none;
+  }
+}
+
 /* Navigation progress bar: 2px brand-colored indeterminate sweep with a
  * right-edge glow that shows across the top of the dashboard while a
  * transition-wrapped push/replace is committing. Driven by useIsNavigating();

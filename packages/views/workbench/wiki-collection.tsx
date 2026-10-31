@@ -8,7 +8,7 @@ import { Markdown } from "@lynse/ui/markdown";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@lynse/ui/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@lynse/ui/components/ui/select";
 import { Plus, Pencil } from "../icons";
-import { collectionTimeline } from "./wiki-browse";
+import { collectionTimeline, topicSources } from "./wiki-browse";
 import type { useWiki } from "./wiki";
 import type { SourceRef, WikiTopic, WikiTopicLink } from "./types";
 
@@ -48,12 +48,13 @@ export function CollectionContent({ topic, topics, wiki, onRead, onSource }: { t
   const [error, setError] = useState("");
   const collection = topic.collection!;
   const links = collection.links;
+  const sourceDates = wiki.data?.sourceDates ?? {};
   const included = links.filter(link => link.state === "included" && !link.error);
   const failed = links.filter(link => !!link.error && link.state !== "excluded");
   const candidates = links.filter(link => link.state === "candidate" && !link.error);
   const excluded = links.filter(link => link.state === "excluded");
   const available = topics.filter(item => !item.collection && !!item.published && !item.excluded && item.inScope !== false);
-  const events = collectionTimeline(topic);
+  const events = collectionTimeline(topic, sourceDates);
   const change = (id: string, state: "included" | "excluded") => {
     setError("");
     void wiki.mutate({ action: "topic_link", id: topic.id, targetId: id, state }).catch(() => setError(t("workbench.collection_save_failed")));
@@ -74,12 +75,12 @@ export function CollectionContent({ topic, topics, wiki, onRead, onSource }: { t
     {topic.purpose && <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{topic.purpose}</p>}
     {!wiki.status?.allowAi ? <p role="status" className="text-sm text-muted-foreground">{t("workbench.collection_wait_ai")}</p> : pending ? <p role="status" aria-live="polite" className="text-sm text-muted-foreground">{t(collection.status === "matching" ? "workbench.collection_matching" : "workbench.collection_compiling", { completed: collection.completed, total: collection.total })}</p> : !topic.error && !included.length && <p role="status" className="text-sm text-muted-foreground">{t(collection.status === "ready" ? "workbench.collection_no_matches" : "workbench.collection_pending")}</p>}
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-    {topic.published && <Markdown mode="full">{topic.published.markdown.replace(/^# [^\n]+\n/, "")}</Markdown>}
-    <section className="space-y-4" aria-label={t("workbench.collection_timeline")}><h3 className="text-base font-semibold">{t("workbench.collection_timeline")}</h3>{!events.length && <p className="text-sm text-muted-foreground">{t("workbench.collection_no_events")}</p>}{events.map((event, index) => <div key={`${event.topicId}:${event.id}`} className="space-y-2 border-s-2 border-primary/20 ps-4">
-      {!event.date && (index === 0 || events[index - 1]?.date) && <h4 className="text-sm font-semibold">{t("workbench.collection_unknown_date")}</h4>}
-      <p className="text-xs text-muted-foreground">{event.date ? new Date(`${event.date}T12:00:00`).toLocaleDateString(i18n.language) : ""}{event.dateBasis === "record" && ` · ${t("workbench.collection_record_date")}`}</p><p className="text-sm leading-relaxed">{event.text}</p><div className="flex flex-wrap gap-2">{event.citations.map((ref, refIndex) => <Button key={refIndex} size="sm" variant="ghost" onClick={() => onSource(ref)}>{t("workbench.collection_evidence", { count: refIndex + 1 })}</Button>)}</div>
+    {collection.hierarchy ? <p className="text-sm text-muted-foreground">{t("workbench.hierarchy_overview", { count: included.length, meetings: topicSources(topic).length })}</p>
+      : topic.published && <Markdown mode="full">{topic.published.markdown.replace(/^# [^\n]+(?:\n|$)/, "")}</Markdown>}
+    <section className="space-y-4" aria-label={t("workbench.collection_timeline")}><h3 className="text-base font-semibold">{t("workbench.collection_timeline")}</h3>{!events.length && <p className="text-sm text-muted-foreground">{t("workbench.collection_no_events")}</p>}{events.map(event => <div key={`${event.topicId}:${event.id}`} className="space-y-2 border-s-2 border-primary/20 ps-4">
+      <h4 className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm font-semibold">{event.date ? <time dateTime={event.date}>{new Date(`${event.date}T12:00:00Z`).toLocaleDateString(i18n.language, { timeZone: "UTC" })}</time> : t("workbench.collection_unknown_date")}{event.dateBasis === "record" && <span className="text-xs font-normal text-muted-foreground">{t("workbench.collection_record_date")}</span>}</h4><p className="text-sm leading-relaxed">{event.text}</p><div className="flex flex-wrap gap-2">{event.citations.map((ref, refIndex) => <Button key={refIndex} size="sm" variant="ghost" onClick={() => onSource(ref)}>{t("workbench.collection_evidence", { count: refIndex + 1 })}</Button>)}</div>
     </div>)}</section>
-    <section className="space-y-3" aria-label={t("workbench.collection_related")}><h3 className="text-base font-semibold">{t("workbench.collection_related")}</h3><ul className="space-y-3">{included.map(row)}</ul>
+    <section className="space-y-3" aria-label={t(collection.hierarchy ? "workbench.hierarchy_issues" : "workbench.collection_related")}><h3 className="text-base font-semibold">{t(collection.hierarchy ? "workbench.hierarchy_issues" : "workbench.collection_related")}</h3><ul className="space-y-3">{included.map(row)}</ul>
       <div className="flex flex-wrap items-center gap-2"><Select value={target} onValueChange={value => setTarget(value ?? "")}><SelectTrigger className="w-full sm:w-72" aria-label={t("workbench.collection_add_existing")}><SelectValue placeholder={t("workbench.collection_add_existing")} /></SelectTrigger><SelectContent>{available.filter(item => !included.some(link => link.targetId === item.id)).map(item => <SelectItem key={item.id} value={item.id}>{item.title}</SelectItem>)}</SelectContent></Select><Button size="sm" variant="outline" disabled={!target || wiki.busy} onClick={() => { change(target, "included"); setTarget(""); }}>{t("workbench.collection_include")}</Button></div>
     </section>
     {!!failed.length && <section className="space-y-3" aria-label={t("workbench.collection_failed")}><h3 className="text-base font-semibold">{t("workbench.collection_failed")}</h3><p className="text-sm text-muted-foreground">{t("workbench.collection_failed_hint")}</p><ul className="space-y-3">{failed.map(row)}</ul></section>}

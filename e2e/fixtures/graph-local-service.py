@@ -57,9 +57,9 @@ def main():
                 row['citations'] = [0]
         return result
 
-    def authorized(payload, *, root, user_id, token, stats=None):
+    def authorized(payload, *, root, user_id, token, control=None):
         # The loopback harness has synthetic source authority and never contacts cloud services.
-        return original(payload, root=root, user_id=user_id, stats=stats, model_call=model)
+        return original(payload, root=root, user_id=user_id, control=control, model_call=model)
 
     def identity(token, **kwargs):
         if token != 'synthetic-local-graph-token':

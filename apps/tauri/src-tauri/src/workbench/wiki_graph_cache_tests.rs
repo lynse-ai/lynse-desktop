@@ -57,6 +57,30 @@ fn repeated_processing_and_restart_make_zero_new_model_calls_including_empty_gra
 }
 
 #[test]
+fn removing_usage_preserves_cached_results_and_manual_state() {
+    let document = source("Existing graph evidence".into());
+    let mut tracking = tracking();
+    complete(&mut tracking, &document);
+    tracking.reviews.insert("entity:review".into(), json!({"title":"Reviewed"}));
+    tracking.merges.insert("entity:old".into(), "entity:review".into());
+    tracking.todo_links.insert("entity:review".into(), "todo:kept".into());
+    let mut legacy = serde_json::to_value(&tracking).unwrap();
+    legacy["usage"] = json!({"input":123});
+    legacy["metrics"] = json!({"calls":4});
+    legacy["runs"] = json!([{"accounting":{"usage":{"total":200}}}]);
+    legacy["reportRequested"] = json!(true);
+    let restored: Tracking = serde_json::from_value(legacy).unwrap();
+    assert!(cache::pending(&[document], &restored).is_empty());
+    assert_eq!(restored.reviews, tracking.reviews);
+    assert_eq!(restored.merges, tracking.merges);
+    assert_eq!(restored.todo_links, tracking.todo_links);
+    let saved = serde_json::to_value(restored).unwrap();
+    for key in ["usage", "metrics", "runs", "reportRequested"] {
+        assert!(saved.get(key).is_none(), "obsolete field {key} must not be saved");
+    }
+}
+
+#[test]
 fn insertion_and_local_edit_keep_unchanged_boundaries_and_identities() {
     let mut document = source(format!(
         "{}{}{}",
@@ -235,7 +259,6 @@ fn retry_keeps_live_claims_and_restart_blocks_unknown_outcomes_until_explicit_re
     assert!(restored.chunks[&work.key].in_flight);
     assert!(!restored.chunks.contains_key("failed"));
     assert_eq!(recover_interrupted(&mut restored), 1);
-    assert_eq!(restored.metrics.unknown_calls, 1);
     assert!(!restored.chunks[&work.key].in_flight);
     assert!(cache::pending(std::slice::from_ref(&document), &restored).is_empty());
     write_json(&path(&root), &restored).unwrap();

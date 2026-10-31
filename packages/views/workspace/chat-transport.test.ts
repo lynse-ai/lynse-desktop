@@ -12,6 +12,7 @@ import {
   parseChatStreamData,
   refreshAttachmentUrl,
   safeSliceEnd,
+  turnPollDeadlineMs,
   type SendChatOptions,
 } from "./chat-transport";
 import { ApiError } from "@lynse/core/api";
@@ -58,6 +59,7 @@ beforeEach(() => {
   chatPollTiming.typewriterTickMs = 1;
   chatPollTiming.typewriterMaxMs = 1;
   chatPollTiming.deadlineMs = 190_000;
+  chatPollTiming.reportDeadlineMs = 660_000;
   // No dedicated agent backend unless a test opts in (mockReturnValue from a
   // previous test would otherwise leak past clearAllMocks).
   apiMocks.getAgentBaseUrl.mockReturnValue(null);
@@ -758,6 +760,31 @@ describe("PollChatTransport", () => {
     await new PollChatTransport().send(sendOptions({ onEvent }));
 
     expect(onEvent).toHaveBeenCalledWith({ type: "error", message: "回复生成超时，请重新发送" });
+    chatPollTiming.deadlineMs = 190_000;
+  });
+
+  it("maps report-style queries to the report poll deadline", () => {
+    expect(turnPollDeadlineMs("帮我生成10月份月报")).toBe(chatPollTiming.reportDeadlineMs);
+    expect(turnPollDeadlineMs("整理一下上周的周报")).toBe(chatPollTiming.reportDeadlineMs);
+    expect(turnPollDeadlineMs("出一份第三季度报告")).toBe(chatPollTiming.reportDeadlineMs);
+    expect(turnPollDeadlineMs("总结一下昨天那场会")).toBe(chatPollTiming.deadlineMs);
+    expect(turnPollDeadlineMs("")).toBe(chatPollTiming.deadlineMs);
+    expect(turnPollDeadlineMs(undefined)).toBe(chatPollTiming.deadlineMs);
+  });
+
+  it("report-style queries keep polling past the base deadline until the report budget", async () => {
+    // A 1ms base deadline would kill any turn; report queries must ride the
+    // report deadline instead so the server's extended budget is reachable.
+    chatPollTiming.deadlineMs = 1;
+    apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
+    apiMocks.get.mockResolvedValueOnce({ status: "pending", text: null })
+      .mockResolvedValueOnce({ status: "done", text: "十月月报全文" });
+
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent, query: "帮我生成10月份月报" }));
+
+    expect(onEvent).not.toHaveBeenCalledWith({ type: "error", message: "回复生成超时，请重新发送" });
+    expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "done" }));
     chatPollTiming.deadlineMs = 190_000;
   });
 

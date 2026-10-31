@@ -99,6 +99,13 @@ export const chatPollTiming = {
   /** How long (ms) after submit the fast cadence applies before settling. */
   fastWindowMs: 12_000,
   deadlineMs: 190_000,
+  /**
+   * Report-style turns (周报/月报/季报) pull a whole period of meetings and
+   * the server grants them a longer turn budget (600s default), so the poll
+   * deadline must cover that plus headroom — otherwise the app stops polling
+   * before the server finishes and the generated answer is lost.
+   */
+  reportDeadlineMs: 660_000,
   maxNetworkFailures: 5,
   maxSubmitRetries: 2,
   submitRetryDelayMs: 2_000,
@@ -107,6 +114,23 @@ export const chatPollTiming = {
   /** Cap on the whole typewriter playback so long answers do not crawl. */
   typewriterMaxMs: 4_800,
 };
+
+/** Report-style requests mirror the server's report turn classification
+ * (lynclaw `is_report_style_message`): they fetch a whole period of meetings
+ * and get the extended `LYNCLAW_HTTP_REPORT_TURN_TIMEOUT_SECONDS` budget. */
+const REPORT_QUERY_TOKENS = ["周报", "月报", "季报", "季度报告"] as const;
+
+/**
+ * Poll deadline for one turn: report-style queries get the extended report
+ * deadline, everything else the standard one. Keep the report value above
+ * the server's report budget plus headroom (docs: deadline ≥ timeout + 10s).
+ */
+export function turnPollDeadlineMs(query?: string | null): number {
+  const text = String(query ?? "");
+  return REPORT_QUERY_TOKENS.some((token) => text.includes(token))
+    ? chatPollTiming.reportDeadlineMs
+    : chatPollTiming.deadlineMs;
+}
 
 interface ChatPollSubmitResponse {
   /** lynclaw replies `task_id`; a Java-gateway DTO may camel-case it to `taskId`. */
@@ -583,7 +607,8 @@ export class PollChatTransport implements ChatTransport {
 
   /** Resume an existing task without submitting the user query a second time. */
   async resume(taskId: string, opts: SendChatOptions): Promise<void> {
-    await this.run(opts, () => this.pollUntilDone(taskId, Date.now(), opts.onEvent));
+    await this.run(opts, () =>
+      this.pollUntilDone(taskId, Date.now(), opts.onEvent, turnPollDeadlineMs(opts.query)));
   }
 
   private async run(opts: SendChatOptions, work: () => Promise<void>): Promise<void> {
@@ -607,7 +632,7 @@ export class PollChatTransport implements ChatTransport {
     const deadline = setTimeout(() => {
       if (!this.cancelled) opts.onEvent({ type: "error", message: "回复生成超时，请重新发送" });
       this.cancel();
-    }, chatPollTiming.deadlineMs);
+    }, turnPollDeadlineMs(opts.query));
     try { await Promise.race([work(), aborted]); }
     finally {
       clearTimeout(deadline);
@@ -642,7 +667,7 @@ export class PollChatTransport implements ChatTransport {
     if (this.cancelled) return;
 
     onEvent({ type: "status", text: "waiting" });
-    await this.pollUntilDone(taskId, startedAt, onEvent);
+    await this.pollUntilDone(taskId, startedAt, onEvent, turnPollDeadlineMs(opts.query));
   }
 
   cancel(): void {
@@ -688,6 +713,7 @@ export class PollChatTransport implements ChatTransport {
     taskId: string,
     startedAt: number,
     onEvent: SendChatOptions["onEvent"],
+    deadlineMs: number = chatPollTiming.deadlineMs,
   ): Promise<void> {
     let networkFailures = 0;
     // Sequence/timestamp cursors survive the server's rolling event window.
@@ -699,7 +725,7 @@ export class PollChatTransport implements ChatTransport {
     let wait = false;
 
     while (!this.cancelled) {
-      if (Date.now() - startedAt >= chatPollTiming.deadlineMs) {
+      if (Date.now() - startedAt >= deadlineMs) {
         onEvent({ type: "error", message: "回复生成超时，请重新发送" });
         return;
       }
@@ -1055,7 +1081,7 @@ export class StreamChatTransport implements ChatTransport {
     const deadline = setTimeout(() => {
       if (!terminal) emit({ type: "error", message: "回复生成超时，请重新发送" });
       turn.abort();
-    }, chatPollTiming.deadlineMs);
+    }, turnPollDeadlineMs(opts.query));
 
     try {
       if (turn.signal.aborted) return;

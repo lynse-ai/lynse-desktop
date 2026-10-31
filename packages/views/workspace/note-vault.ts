@@ -6,6 +6,7 @@ import { api } from "@lynse/core/api/client";
 import { useTranslation } from "@lynse/core/i18n/react";
 import TurndownService from "turndown";
 import { isLocalFileId } from "./local-transcription";
+import { normalizeSummaryTemplateName } from "./types";
 import type { FileConclusion, FileOutline } from "./types";
 
 /** Desktop-only local vault bridge (`window.desktopAPI.vault`). Absent on web. */
@@ -163,10 +164,11 @@ export function buildNoteMarkdown(input: VaultNoteContentInput): VaultNotePayloa
   }
 
   const seenNames = new Set<string>();
-  (input.conclusions ?? []).forEach((conclusion, index) => {
+  (input.conclusions ?? []).forEach((conclusion) => {
     const markdown = contentToMarkdown(conclusion.text ?? "");
     if (!markdown) return;
-    const baseName = conclusion.name?.trim() || `${labels.summary} ${index + 1}`;
+    // Auto/unnamed conclusions default to the plain label (总结); duplicates get " (n)" suffixes below
+    const baseName = conclusion.name?.trim() || labels.summary;
     let name = baseName;
     let suffix = 2;
     while (seenNames.has(name)) {
@@ -307,7 +309,7 @@ export async function collectNotePayloads(
       outlineText: outline?.content ?? null,
       conclusions: (conclusions ?? []).map((conclusion, index) => ({
         id: String(conclusion.id ?? `summary-${index}`),
-        name: conclusion.templateName ?? null,
+        name: normalizeSummaryTemplateName(conclusion.templateName),
         text: String(conclusion.conclusionText ?? ""),
       })),
       labels,

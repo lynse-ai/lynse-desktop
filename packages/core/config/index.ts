@@ -91,7 +91,7 @@ export const LEGACY_CLOUDBASE_AGENT_URL =
  * Keep the direct CloudBase services on the selected login environment.
  * Identity is still derived by the service from the Lynse session token.
  */
-function isTestApiUrl(apiUrl: string | null | undefined): boolean {
+export function isTestApiUrl(apiUrl: string | null | undefined): boolean {
   if (!apiUrl) return false;
   try {
     return new URL(apiUrl).origin === TEST_API_URL;

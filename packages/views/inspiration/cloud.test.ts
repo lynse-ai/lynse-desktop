@@ -12,8 +12,14 @@ it("moves the default and previously saved production preset to staging with the
   localStorage.setItem("lynse_memory_api_url",DEFAULT_MEMORY_API_URL);
   expect(memoryApiBase()).toBe(staging);
   localStorage.setItem("lynse_memory_api_url",staging);
+});
+it("keeps production local-only even when an override tries to re-enable cloud (2026-10-31 gate)", () => {
   fixture.host="https://api.lynse.cn";
-  expect(memoryApiBase()).toBe(DEFAULT_MEMORY_API_URL);
+  expect(memoryApiBase()).toBe("");
+  localStorage.setItem("lynse_memory_api_url",DEFAULT_MEMORY_API_URL);
+  expect(memoryApiBase()).toBe("");
+  localStorage.setItem("lynse_memory_api_url","https://custom.invalid");
+  expect(memoryApiBase()).toBe("");
 });
 it("keeps explicit custom endpoints and the disabled setting", () => {
   fixture.host="https://gapp.lynse.cn";
@@ -23,9 +29,10 @@ it("keeps explicit custom endpoints and the disabled setting", () => {
   expect(memoryApiBase()).toBe("");
 });
 it("lets native code invalidate an old account before offline identity verification", async () => {
+  fixture.host="https://gapp.lynse.cn";
   const fetch = vi.fn().mockRejectedValue(new Error("offline"));vi.stubGlobal("fetch",fetch);
   fixture.bind.mockRejectedValue(new Error("identity_unavailable"));
   await expect(bindInspirationCloud()).rejects.toThrow("identity_unavailable");
-  expect(fixture.bind).toHaveBeenCalledWith("",expect.stringContaining("https://"),"new-account-token","https://login.test");
+  expect(fixture.bind).toHaveBeenCalledWith("",expect.stringContaining("https://"),"new-account-token","https://gapp.lynse.cn");
   expect(fetch).not.toHaveBeenCalled();
 });

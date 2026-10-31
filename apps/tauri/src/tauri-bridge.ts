@@ -116,6 +116,12 @@ type DesktopApi = {
     // route as `save` — the renderer cannot reach the signed hosts itself.
     text: (url: string) => Promise<string>;
   };
+  // Stages the payload to a temp file and opens the OS share sheet for it
+  // (macOS NSSharingServicePicker). Rejects with "share_sheet_unsupported"
+  // where the platform has none — callers fall back to saving.
+  share: {
+    shareFile: (name: string, bytes: Uint8Array) => Promise<boolean>;
+  };
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
   cloudSync: DesktopCloudSyncApi;
   liveTranslation: DesktopLiveTranslationApi;
@@ -700,6 +706,18 @@ export async function installTauriBridge(): Promise<void> {
         return { path };
       },
       text: (url) => command<string>("attachment_text", { url }),
+    },
+    share: {
+      // Base64 instead of a JSON number array: a multi-megabyte PNG balloons
+      // ~5x as [137,80,…] but only ~1.35x as a base64 string.
+      shareFile: (name, bytes) => {
+        let binary = "";
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+        }
+        return command<boolean>("share_file", { name, dataBase64: btoa(binary) });
+      },
     },
     vault: {
       getConfig: () => command("vault_config_get"),

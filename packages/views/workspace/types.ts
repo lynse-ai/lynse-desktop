@@ -65,6 +65,16 @@ export interface FileConclusion {
   [key: string]: unknown;
 }
 
+/**
+ * Auto-generated conclusions carry the raw backend key "auto" as templateName.
+ * Returns null so callers fall back to the localized default label (总结 / Summary).
+ */
+export function normalizeSummaryTemplateName(name?: string | null): string | null {
+  const trimmed = name?.trim();
+  if (!trimmed || trimmed.toLowerCase() === "auto") return null;
+  return trimmed;
+}
+
 export interface FileOutline {
   id: string;
   fileId: string;

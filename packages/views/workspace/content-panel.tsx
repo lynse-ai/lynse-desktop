@@ -30,6 +30,7 @@ import { AudioPlayer } from "./audio-player";
 import type { AudioPlayerHandle } from "./audio-player";
 import { getDesktopLiveTranslationApi } from "../live-translation/desktop-api";
 import type { RecordingTrackManifest } from "./types";
+import { normalizeSummaryTemplateName } from "./types";
 import { getSpeakerColor } from "@lynse/ui/lib/speaker";
 import { getDisplayTitle, type EditedTitleState } from "./title-edit-state";
 import {
@@ -50,6 +51,8 @@ import type { SummaryTabModel } from "./hooks/use-files";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ResummarizeDialog, type SummaryTemplateDialogMode } from "./resummarize-dialog";
+import { ShareNoteMenuItem } from "./share-note/share-note-menu-item";
+import { ShareNoteDialog } from "./share-note/share-note-dialog";
 import { useNotificationStore } from "../notifications/use-notification-store";
 import {
   getDesktopLocalTranscriptionApi,
@@ -63,6 +66,7 @@ import {
 import { retryLocalTranscription } from "./local-transcription-retry";
 import { isLocalTranscriptionActive, LOCAL_STATUS_LABEL_KEY } from "./local-transcription-status";
 import { wrapCjkSpacing } from "./cjk-spacing";
+import { extractBody } from "./content-html";
 import { MilkdownViewer } from "./milkdown-viewer";
 import {
   getDesktopVaultApi,
@@ -85,128 +89,6 @@ import {
 } from "@lynse/ui/components/ui/context-menu";
 import "./content-preview.css";
 import { toast } from "sonner";
-
-function extractBody(html: string): { content: string; scopedStyles: string } {
-  const styleBlocks: string[] = [];
-
-  const headMatch = html.match(/<head[^>]*>([\s\S]*)<\/head>/i);
-  if (headMatch?.[1]) {
-    headMatch[1].replace(/<style[^>]*>([\s\S]*?)<\/style>/gi, (_, css) => {
-      styleBlocks.push(css);
-      return "";
-    });
-  }
-
-  const bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-  let content = bodyMatch?.[1] ? bodyMatch[1].trim() : html;
-
-  content = content.replace(/<style[^>]*>([\s\S]*?)<\/style>/gi, (_, css) => {
-    styleBlocks.push(css);
-    return "";
-  });
-  content = content.replace(/<link[^>]*rel=["']stylesheet["'][^>]*\/?>/gi, "");
-
-  let scopedStyles = "";
-  if (styleBlocks.length > 0) {
-    const rawCss = styleBlocks.join("\n");
-    scopedStyles = scopeCss(rawCss, ".content-preview-inner");
-  }
-
-  // Desktop override: neutralize mobile-first fixed widths from backend templates
-  // Also strip borders/backgrounds that leaked from body/html scoping.
-  // Inline margins stay centered so the reading column cap in content-preview.css holds.
-  const desktopOverride = `
-.content-preview-inner {
-  border: none !important;
-  background: transparent !important;
-  padding: 0 !important;
-  margin-block: 0 !important;
-  margin-inline: auto !important;
-}
-.content-preview-inner > *,
-.content-preview-inner * {
-  max-width: 100% !important;
-}
-.content-preview-inner img {
-  max-width: 100% !important;
-  height: auto !important;
-}
-.content-preview-inner table {
-  width: 100% !important;
-  table-layout: auto !important;
-}
-`;
-  scopedStyles += desktopOverride;
-
-  return { content, scopedStyles };
-}
-
-function scopeCss(css: string, scope: string): string {
-  const cleaned = css.replace(/\/\*[\s\S]*?\*\//g, "");
-  const parts: string[] = [];
-  let i = 0;
-  while (i < cleaned.length) {
-    while (i < cleaned.length && /\s/.test(cleaned[i] ?? "")) i++;
-    if (i >= cleaned.length) break;
-    if (cleaned[i] === "@") {
-      const braceStart = cleaned.indexOf("{", i);
-      if (braceStart === -1) break;
-      let depth = 1;
-      let j = braceStart + 1;
-      while (j < cleaned.length && depth > 0) {
-        if (cleaned[j] === "{") depth++;
-        else if (cleaned[j] === "}") depth--;
-        j++;
-      }
-      const atHeader = cleaned.slice(i, braceStart).trim();
-      const atBody = cleaned.slice(braceStart + 1, j - 1);
-
-      // Strip @page rules (page-specific styles should not leak)
-      if (/^@page\b/i.test(atHeader)) {
-        i = j;
-        continue;
-      }
-
-      // Recursively scope selectors inside @media blocks
-      if (/^@media\b/i.test(atHeader)) {
-        const scopedInner = scopeCss(atBody, scope);
-        parts.push(`${atHeader} { ${scopedInner} }`);
-        i = j;
-        continue;
-      }
-
-      // Pass through @keyframes, @supports, etc. as-is
-      parts.push(cleaned.slice(i, j));
-      i = j;
-      continue;
-    }
-    const braceStart = cleaned.indexOf("{", i);
-    if (braceStart === -1) break;
-    const selectorStr = cleaned.slice(i, braceStart).trim();
-    let depth = 1;
-    let j = braceStart + 1;
-    while (j < cleaned.length && depth > 0) {
-      if (cleaned[j] === "{") depth++;
-      else if (cleaned[j] === "}") depth--;
-      j++;
-    }
-    const body = cleaned.slice(braceStart, j);
-    const scopedSelectors = selectorStr
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((s) => {
-        // Replace global selectors with scope
-        if (/^(html|body|:root|\*)$/.test(s)) return scope;
-        // Scope each selector
-        return `${scope} ${s}`;
-      })
-      .join(", ");
-    parts.push(`${scopedSelectors} ${body}`);
-    i = j;
-  }
-  return parts.join("\n");
-}
 
 function isHtmlContent(text: string): boolean {
   const trimmed = text.trim();
@@ -333,6 +215,7 @@ export function ContentPanel() {
   const [highlightTimeMs, setHighlightTimeMs] = useState<number | null>(null);
   const [summaryEditor, setSummaryEditor] = useState<import("@milkdown/kit/core").Editor | null>(null);
   const [resummarizeOpen, setResummarizeOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [summaryDialogMode, setSummaryDialogMode] = useState<SummaryTemplateDialogMode>("add");
   const [selectedConclusionIdForTemplate, setSelectedConclusionIdForTemplate] = useState<string | null>(null);
   const [resummaryErrorFileId, setResummaryErrorFileId] = useState<string | null>(null);
@@ -413,8 +296,11 @@ export function ContentPanel() {
         const obj = c as Record<string, unknown>;
         const text = String(obj.conclusionText ?? "");
         const id = String(obj.id ?? "");
-        // templateName is the conclusion template name from the API
-        const name = String(obj.templateName ?? obj.conclusionName ?? obj.title ?? obj.name ?? "").trim();
+        // templateName is the conclusion template name from the API; "auto" falls back to the default label
+        const name =
+          normalizeSummaryTemplateName(
+            String(obj.templateName ?? obj.conclusionName ?? obj.title ?? obj.name ?? ""),
+          ) ?? "";
         return text ? { key: id || `summary-${i}`, text, id, name, status: "ready" as const } : null;
       })
       .filter(Boolean) as SummaryTabModel[];
@@ -958,6 +844,17 @@ export function ContentPanel() {
                 fileId={selectedItemId}
                 disabled={currentFileSummarizing || !activeSummary?.id}
               />
+              <DropdownMenuSeparator />
+              {/* Share the whole note as markdown / PDF / themed image. The
+                  dialog renders at panel level — see ShareNoteMenuItem doc. */}
+              <ShareNoteMenuItem
+                onOpen={() => setShareOpen(true)}
+                disabled={
+                  currentFileSummarizing ||
+                  isLocalSelectedItem ||
+                  (!outlineRaw && conclusionTexts.length === 0)
+                }
+              />
             </DropdownMenuContent>
           </DropdownMenu>
         )}
@@ -1296,6 +1193,18 @@ export function ContentPanel() {
         mode={summaryDialogMode}
         onStarted={handleResummaryStarted}
         onFinished={handleResummaryFinished}
+      />
+
+      {/* Outside the dropdown tree: closing the ⋯ menu unmounts its subtree,
+          which would kill a dialog mounted inside it. */}
+      <ShareNoteDialog
+        open={shareOpen}
+        onOpenChange={setShareOpen}
+        fileId={selectedItemId}
+        title={displayTitle}
+        createdAt={selectedCreatedAt}
+        outlineText={outlineRaw}
+        conclusions={conclusionTexts}
       />
 
       <DeleteConfirmDialog

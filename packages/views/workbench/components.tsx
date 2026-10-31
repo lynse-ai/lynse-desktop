@@ -17,6 +17,7 @@ import { AudioPlayer, type AudioPlayerHandle } from "../workspace/audio-player";
 import { useTodoStore } from "../todo/use-todos";
 import { useFileAudioUrl } from "../workspace/hooks/use-files";
 import { DeleteConfirmDialog } from "../workspace/delete-confirm-dialog";
+import { normalizeSummaryTemplateName } from "../workspace/types";
 import { getWorkbenchApi, refreshWorkbench, useWorkbench, useWikiEnabled } from "./api";
 import type { MemoryItem, SourceRef, SynthesisResult, TodoSuggestion, WorkbenchReadResult } from "./types";
 import { isWikiEnabled, featureFlags } from "../feature-flags";
@@ -303,7 +304,7 @@ function MeetingReader({ id }: { id: string }) {
         {segment.speakerName && <strong className="mr-2">{segment.speakerName}</strong>}{segment.text || segment.recognizedText}
       </button>) : <p className="whitespace-pre-wrap text-sm leading-relaxed"><QuotedText text={document.transcript} quote={selectedSource?.quote} /></p>}
     </section>
-    {document.conclusions.map((summary, index) => <section key={summary.id ?? index}><h3 className="mb-2 text-sm font-medium">{summary.templateName || t("workbench.summary")}</h3><Markdown mode="full">{summary.conclusionText}</Markdown></section>)}
+    {document.conclusions.map((summary, index) => <section key={summary.id ?? index}><h3 className="mb-2 text-sm font-medium">{normalizeSummaryTemplateName(summary.templateName) ?? t("workbench.summary")}</h3><Markdown mode="full">{summary.conclusionText}</Markdown></section>)}
     {latest && result.artifacts && result.artifacts.summaries.length > 1 && <details><summary className="cursor-pointer text-xs text-muted-foreground">{t("workbench.summary")} · {result.artifacts.summaries.length}</summary>
       {result.artifacts.summaries.slice(0, -1).map((summary) => <section key={summary.id} className="mt-4"><p className="text-xs text-muted-foreground">{new Date(summary.createdAt).toLocaleString(i18n.language)}</p><Markdown>{summary.markdown}</Markdown></section>)}
     </details>}

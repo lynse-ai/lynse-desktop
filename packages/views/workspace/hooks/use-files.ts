@@ -25,6 +25,7 @@ import type {
   AiTaskResultVO,
   RecordingMode,
 } from "../types";
+import { normalizeSummaryTemplateName } from "../types";
 import {
   getDesktopLocalTranscriptionApi,
   isLocalFileId,
@@ -289,7 +290,7 @@ export function mergePendingSummaryTab({
     return {
       key: conclusion.id,
       id: conclusion.id,
-      name: String(conclusion.templateName ?? tab.name ?? ""),
+      name: normalizeSummaryTemplateName(conclusion.templateName) ?? tab.name ?? "",
       text: conclusion.conclusionText,
       status: "ready",
     };

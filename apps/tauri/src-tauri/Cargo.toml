@@ -71,10 +71,12 @@ objc2 = "0.6"
 # NSWorkspace/NSRunningApplication power the meeting detector's coarse
 # fallback path (see meeting_detector/macos.rs). NSWindow/NSView walk the
 # hierarchy to reach the WKWebView for the problem-report screenshot
-# (see report_screenshot.rs).
-objc2-app-kit = { version = "0.3", features = ["NSBitmapImageRep", "NSImage", "NSPasteboard", "NSResponder", "NSRunningApplication", "NSView", "NSWindow", "NSWorkspace"] }
+# (see report_screenshot.rs). NSSharingService gates both the service and
+# the picker classes for the note share sheet (see share_file in lib.rs);
+# NSApplication reaches the key window to anchor the picker.
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSBitmapImageRep", "NSImage", "NSPasteboard", "NSResponder", "NSRunningApplication", "NSSharingService", "NSView", "NSWindow", "NSWorkspace"] }
 # NSNumber is ungated in objc2-foundation 0.3 (no feature of its own).
-objc2-foundation = { version = "0.3", features = ["NSArray", "NSData", "NSDictionary", "NSString"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSData", "NSDictionary", "NSString", "NSURL"] }
 # Microphone TCC prompt from the main app process (see mic_permission.rs):
 # the grant must be attributed to the Lynse bundle, not the capture sidecar,
 # to survive App Store / TestFlight packaging.

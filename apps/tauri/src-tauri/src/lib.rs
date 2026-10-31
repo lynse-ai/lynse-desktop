@@ -4583,6 +4583,99 @@ async fn attachment_text(url: String) -> CommandResult<String> {
         .map_err(|error| format!("read attachment: {error}"))
 }
 
+/// Stage the note share payload into a temp file and open the macOS share
+/// sheet (NSSharingServicePicker) for it, so the export can be handed to any
+/// app with a share extension (Mail, Messages, AirDrop, …). Resolves true
+/// once the sheet is shown. Platforms without a system share sheet return
+/// `share_sheet_unsupported` — the frontend falls back to the save flow.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn share_file(app: AppHandle, name: String, data_base64: String) -> CommandResult<bool> {
+    let staged =
+        tauri::async_runtime::spawn_blocking(move || stage_share_file(&name, &data_base64))
+            .await
+            .map_err(|error| error.to_string())??;
+
+    // The picker is AppKit — it must be driven from the main thread.
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(unsafe { show_share_sheet(&staged) });
+    })
+    .map_err(|error| error.to_string())?;
+    rx.recv().map_err(|_| "share sheet channel closed".to_owned())?
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+async fn share_file(_app: AppHandle, _name: String, _data_base64: String) -> CommandResult<bool> {
+    Err("share_sheet_unsupported".to_string())
+}
+
+/// Decode the base64 payload and write it under `temp/LynseShare/`; stale
+/// files from earlier shares are removed first so the folder never grows.
+#[cfg(target_os = "macos")]
+fn stage_share_file(name: &str, data_base64: &str) -> CommandResult<PathBuf> {
+    use base64::Engine as _;
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64)
+        .map_err(|error| format!("decode share payload: {error}"))?;
+
+    let dir = std::env::temp_dir().join("LynseShare");
+    fs::create_dir_all(&dir).map_err(|error| format!("create share dir: {error}"))?;
+    if let Ok(entries) = fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let _ = fs::remove_file(entry.path());
+        }
+    }
+    // Keep the payload out of path traversal; separators become underscores.
+    let safe_name = name.replace(['/', '\\', ':'], "_");
+    if safe_name.trim().is_empty() || safe_name.starts_with('.') {
+        return Err("invalid share file name".to_string());
+    }
+    let path = dir.join(safe_name);
+    atomic_write(&path, &bytes)?;
+    Ok(path)
+}
+
+/// Show the NSSharingServicePicker for a file URL, anchored to the key
+/// window. The picker object is intentionally leaked (a few dozen bytes per
+/// explicit share action): AppKit requires it to stay alive while the panel
+/// is open and there is no cheap dismissal callback to hook from Rust.
+#[cfg(target_os = "macos")]
+unsafe fn show_share_sheet(path: &Path) -> CommandResult<bool> {
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2::{AnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSSharingServicePicker};
+    use objc2_foundation::{NSArray, NSString, NSURL, NSRectEdge};
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return Err("share sheet must run on the main thread".to_string());
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    let Some(window) = app.keyWindow() else {
+        return Err("no key window to anchor the share sheet".to_string());
+    };
+    let Some(content_view) = window.contentView() else {
+        return Err("no content view to anchor the share sheet".to_string());
+    };
+
+    let url: Retained<NSURL> = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+    // NSSharingServicePicker takes generic ids (`NSArray` of AnyObject); upcast.
+    let item: Retained<AnyObject> = unsafe { Retained::cast_unchecked(url) };
+    let items = NSArray::<AnyObject>::from_slice(&[&item]);
+
+    let picker = NSSharingServicePicker::initWithItems(NSSharingServicePicker::alloc(), &items);
+    picker.showRelativeToRect_ofView_preferredEdge(
+        content_view.bounds(),
+        &content_view,
+        NSRectEdge::MinY,
+    );
+    std::mem::forget(picker);
+    Ok(true)
+}
+
 const TRAY_ELAPSED_ID: &str = "tray_elapsed";
 const TRAY_START_ID: &str = "start_live_recording";
 const TRAY_PAUSE_ID: &str = "pause_live_recording";
@@ -5395,7 +5488,7 @@ pub fn run() {
             open_logs_folder,
             wechat_auth::wechat_auth_window, wechat_auth::wechat_auth_window_close,
             diagnostics_read_logs, diagnostics_prepare_report, attachment_save,
-            attachment_text,
+            attachment_text, share_file,
             live_translation::live_translation_permissions,
             live_translation::live_translation_request_permission,
             live_translation::live_translation_open_privacy_pane,

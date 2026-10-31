@@ -16,7 +16,7 @@
  */
 
 import { api } from "@lynse/core/api";
-import { CLOUDBASE_MEMORY_URL, STAGING_CLOUDBASE_MEMORY_URL, memoryUrlForApiUrl } from "@lynse/core/config";
+import { CLOUDBASE_MEMORY_URL, STAGING_CLOUDBASE_MEMORY_URL, isTestApiUrl, memoryUrlForApiUrl } from "@lynse/core/config";
 
 import { getDesktopInspirationApi } from "./desktop-api";
 import type { InspirationCloudStatus, InspirationCloudSyncReport } from "./types";
@@ -39,7 +39,14 @@ export const LEGACY_MEMORY_API_URL =
 
 export function memoryApiBase(): string {
   if (typeof window === "undefined") return "";
-  const selectedDefault = memoryUrlForApiUrl(api().getBaseUrl());
+  const baseUrl = api().getBaseUrl();
+  // TEMP (2026-10-31): inspiration cloud sync is beta-only for now. The
+  // backend's single-session policy keeps invalidating production tokens,
+  // which 401s every sync pass and pauses the queue right after re-login,
+  // so production stays local-only until the server side is fixed. Manual
+  // overrides cannot re-enable it there; the beta backend is unaffected.
+  if (!isTestApiUrl(baseUrl)) return "";
+  const selectedDefault = memoryUrlForApiUrl(baseUrl);
   const configured = (window.localStorage.getItem(LYNSE_MEMORY_API_URL_KEY) ?? "").trim();
   if (configured !== "") {
     // A manual override pinned to the pre-migration host keeps working, but

@@ -61,7 +61,7 @@ describe("buildNoteMarkdown", () => {
       ...baseInput,
       conclusions: [{ id: "c1", text: "<h1>结论</h1><p>正文内容</p>" }],
     });
-    expect(payload!.markdown).toContain("## Summary 1");
+    expect(payload!.markdown).toContain("## Summary");
     expect(payload!.markdown).toContain("# 结论");
     expect(payload!.markdown).toContain("正文内容");
     expect(payload!.markdown).not.toContain("<p>");
@@ -100,7 +100,7 @@ describe("buildNoteMarkdown", () => {
       labels: { outline: "大纲", summary: "总结" },
     });
     expect(payload!.markdown).toContain("## 大纲\n\n大纲正文");
-    expect(payload!.markdown).toContain("## 总结 1\n\n总结正文");
+    expect(payload!.markdown).toContain("## 总结\n\n总结正文");
     expect(VAULT_DEFAULT_SECTION_LABELS.outline).toBe("Outline");
   });
 });

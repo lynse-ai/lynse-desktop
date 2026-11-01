@@ -179,7 +179,21 @@ interface ChatPollTaskResponse {
   humanSupportLink?: unknown;
   confirmation?: unknown;
   connection_requests?: unknown;
+  /** Follow-up questions the backend suggests (aliases matched like the SSE done frame). */
+  suggestions?: unknown;
+  follow_ups?: unknown;
+  followUps?: unknown;
   error?: string | null;
+}
+
+/** Extract cleaned follow-up suggestions from a poll done payload. */
+function pollSuggestions(data: ChatPollTaskResponse): string[] | undefined {
+  const raw = [data.suggestions, data.follow_ups, data.followUps].find((v) => Array.isArray(v));
+  if (!Array.isArray(raw)) return undefined;
+  const cleaned = raw
+    .map((s) => (typeof s === "string" ? s.trim() : ""))
+    .filter((s) => s.length > 0);
+  return cleaned.length ? cleaned : undefined;
 }
 
 /** Keep stream, busy retries and poll recovery on the same authenticated turn. */
@@ -903,6 +917,7 @@ export class PollChatTransport implements ChatTransport {
         data.human_support_link ?? data.humanSupportLink,
       ),
       connectionRequests: connectionRequests(data.connection_requests),
+      suggestions: pollSuggestions(data),
     });
     const confirm = normalizePollConfirmation(data.confirmation);
     if (confirm) onEvent({ type: "confirm", confirm });
@@ -1015,6 +1030,13 @@ export function parseChatStreamData(payload: string): ChatStreamEvent[] {
       const attachments = (Array.isArray(p.attachments) ? p.attachments : [])
         .map(normalizePollAttachment)
         .filter((a): a is ChatAttachment => a != null);
+      // Follow-up suggestions: lynclaw-native `suggestions`, plus the common
+      // snake_case / react-style aliases so a server field alone lights the UI.
+      const suggestions = [
+        p.suggestions,
+        p.follow_ups,
+        p.followUps,
+      ].find((v): v is unknown[] => Array.isArray(v));
       const events: ChatStreamEvent[] = [
         {
           type: "done",
@@ -1025,6 +1047,9 @@ export function parseChatStreamData(payload: string): ChatStreamEvent[] {
           attachments,
           humanSupportLink: normalizeHumanSupportLink(p.human_support_link ?? p.humanSupportLink),
           connectionRequests: connectionRequests(p.connection_requests),
+          suggestions: suggestions
+            ?.map((s) => (typeof s === "string" ? s.trim() : ""))
+            .filter((s) => s.length > 0),
         },
       ];
       const confirm = normalizePollConfirmation(p.confirmation);

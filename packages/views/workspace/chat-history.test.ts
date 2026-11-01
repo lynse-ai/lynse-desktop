@@ -84,6 +84,7 @@ describe("AI chat history", () => {
               timestamp: 2,
               status: "正在运行",
               revealedAt: 999,
+              thinkingStartedAt: 888,
             },
             { id: "assistant-2", role: "assistant", content: "", timestamp: 3, status: "处理中" },
           ],
@@ -102,6 +103,7 @@ describe("AI chat history", () => {
             expect.not.objectContaining({
               status: expect.anything(),
               revealedAt: expect.anything(),
+              thinkingStartedAt: expect.anything(),
             }),
           ],
         }),

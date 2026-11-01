@@ -323,6 +323,19 @@ describe("PollChatTransport", () => {
     ]);
   });
 
+  it("passes follow-up suggestions from the poll done payload", async () => {
+    apiMocks.post.mockResolvedValue({ task_id: "task-followups", status: "pending" });
+    apiMocks.get.mockResolvedValueOnce({ status: "done", text: "答案", follow_ups: [" 展开讲讲 ", ""] });
+
+    const onEvent = vi.fn();
+    await new PollChatTransport().send(sendOptions({ onEvent }));
+
+    const done = onEvent.mock.calls
+      .map((call) => call[0] as Record<string, unknown>)
+      .find((event) => event.type === "done")!;
+    expect(done.suggestions).toEqual(["展开讲讲"]);
+  });
+
   it("submits, polls pending, then emits done plus the confirmation card", async () => {
     apiMocks.post.mockResolvedValue({ task_id: "task-1", status: "pending" });
     apiMocks.get
@@ -1057,6 +1070,25 @@ describe("parseChatStreamData", () => {
     ]);
     expect(parseChatStreamData("普通文本增量")).toEqual([{ type: "content", delta: "普通文本增量" }]);
     expect(parseChatStreamData('{"type":"unknown"}')).toEqual([]);
+  });
+
+  it("parses follow-up suggestions from the done frame with aliases and cleaning", () => {
+    const done = parseChatStreamData(
+      JSON.stringify({ type: "done", text: "答案", suggestions: [" 展开讲讲 ", "", 42, "翻译成英文"] }),
+    )[0] as { type: string; suggestions?: string[] };
+    expect(done.suggestions).toEqual(["展开讲讲", "翻译成英文"]);
+
+    // snake_case / react-style aliases light the same field.
+    for (const key of ["follow_ups", "followUps"]) {
+      const aliased = parseChatStreamData(JSON.stringify({ type: "done", text: "a", [key]: ["继续"] }))[0] as { suggestions?: string[] };
+      expect(aliased.suggestions).toEqual(["继续"]);
+    }
+
+    // Absent or all-junk suggestions stay undefined so the UI renders nothing.
+    expect((parseChatStreamData('{"type":"done","text":"a"}')[0] as { suggestions?: string[] }).suggestions).toBeUndefined();
+    expect(
+      (parseChatStreamData(JSON.stringify({ type: "done", text: "a", suggestions: [1, null] }))[0] as { suggestions?: string[] }).suggestions,
+      ).toEqual([]);
   });
 });
 

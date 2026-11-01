@@ -273,6 +273,8 @@ describe("reasoning and tool activity", () => {
     let message = store.getState().messages.at(-1)!;
     expect(message.thinking).toBe("先想想再想想");
     expect(message.thinkingActive).toBe(true);
+    // First reasoning delta stamps the elapsed-timer anchor.
+    expect(message.thinkingStartedAt).toEqual(expect.any(Number));
 
     emit(run, { type: "thinking", delta: "" });
     message = store.getState().messages.at(-1)!;
@@ -293,20 +295,42 @@ describe("reasoning and tool activity", () => {
     emit(run, { type: "tool", name: "search_meetings", id: "t1" });
     let message = store.getState().messages.at(-1)!;
     expect(message.toolUses).toEqual([
-      { id: "t1", name: "search_meetings", state: "running" },
+      { id: "t1", name: "search_meetings", state: "running", startedAt: expect.any(Number) },
     ]);
 
     // A status tick announcing the next tool closes the previous one.
     emit(run, { type: "status", text: "调用工具: get_meeting" });
     message = store.getState().messages.at(-1)!;
     expect(message.toolUses).toEqual([
-      { id: "t1", name: "search_meetings", state: "done" },
-      { id: "get_meeting", name: "get_meeting", state: "running" },
+      { id: "t1", name: "search_meetings", state: "done", startedAt: expect.any(Number) },
+      { id: "get_meeting", name: "get_meeting", state: "running", startedAt: expect.any(Number) },
     ]);
 
     emit(run, { type: "tool", name: "get_meeting", state: "done" });
     message = store.getState().messages.at(-1)!;
     expect(message.toolUses?.every((t) => t.state === "done")).toBe(true);
+  });
+
+  it("stores backend follow-up suggestions from the done frame", async () => {
+    const { sendMessage } = store.getState();
+    sendMessage("hello");
+    const run = fake.runs[0]!;
+
+    emit(run, { type: "content", delta: "答案" });
+    // Transports deliver cleaned suggestions; the store passes them through.
+    emit(run, { type: "done", text: "答案", suggestions: ["展开讲讲", "翻译成英文"] });
+    let message = store.getState().messages.at(-1)!;
+    expect(message.followUps).toEqual(["展开讲讲", "翻译成英文"]);
+
+    // No suggestions field (today's backend) → nothing stored, UI stays quiet.
+    run.cancel();
+    await Promise.resolve();
+    sendMessage("again");
+    const run2 = fake.runs[1]!;
+    emit(run2, { type: "content", delta: "答复" });
+    emit(run2, { type: "done", text: "答复" });
+    message = store.getState().messages.at(-1)!;
+    expect(message.followUps).toBeUndefined();
   });
 
   it("closes running tools when the turn completes", () => {

@@ -75,54 +75,102 @@ const KIND_ICON: Record<ToolKind, React.ComponentType<{ className?: string }>> =
   execute: Wrench,
 };
 
-/** Compact running/done rows for every tool call in the current turn. */
+/** Compact running/done chip rows for every tool call in the current turn. */
 export function ToolActivity({ tools }: { tools: ChatToolUse[] }) {
-  const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-1">
-      {tools.map((tool) => {
-        const kind = toolKind(tool.name);
-        const Icon = KIND_ICON[kind];
-        return (
-          <div
-            key={tool.id}
-            className="flex items-center gap-2 text-xs text-muted-foreground"
-            aria-label={t("chat.tool_activity", { tool: tool.name })}
-          >
-            <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted/60">
-              <Icon className="size-3" />
-            </span>
-            <span className="shrink-0 font-medium text-foreground/80">{t(`chat.tool_${kind}`)}</span>
-            <span className="min-w-0 truncate font-mono">{tool.name}</span>
-            {tool.state === "running" ? (
-              <StatusGlyph activity="running" className="size-3 shrink-0" />
-            ) : tool.state === "error" ? (
-              <AlertCircle className="size-3 shrink-0 text-destructive" aria-label={t("chat.tool_failed")} />
-            ) : (
-              <Check className="size-3 shrink-0 text-success" />
-            )}
-          </div>
-        );
-      })}
+      {tools.map((tool) => (
+        <ToolChip key={tool.id} tool={tool} />
+      ))}
+    </div>
+  );
+}
+
+/** One bordered tool chip: icon tile + kind label + mono name + live state. */
+function ToolChip({ tool }: { tool: ChatToolUse }) {
+  const { t } = useTranslation();
+  const kind = toolKind(tool.name);
+  const Icon = KIND_ICON[kind];
+  const running = tool.state === "running";
+  const elapsed = useElapsedSeconds(tool.startedAt, running);
+  return (
+    <div
+      className="flex items-center gap-2 rounded-lg border border-border/60 bg-card/40 px-2 py-1.5 text-xs text-muted-foreground"
+      aria-label={t("chat.tool_activity", { tool: tool.name })}
+    >
+      <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted/60">
+        <Icon className="size-3" />
+      </span>
+      <span className="shrink-0 font-medium text-foreground/80">{t(`chat.tool_${kind}`)}</span>
+      <span className="min-w-0 flex-1 truncate font-mono">{tool.name}</span>
+      {running ? (
+        <span className="flex shrink-0 items-center gap-1.5 tabular-nums">
+          {elapsed != null && <span>{t("chat.elapsed_seconds", { seconds: elapsed })}</span>}
+          <StatusGlyph activity="running" className="size-3" />
+        </span>
+      ) : tool.state === "error" ? (
+        <AlertCircle className="size-3 shrink-0 text-destructive" aria-label={t("chat.tool_failed")} />
+      ) : (
+        <Check className="size-3 shrink-0 text-success" />
+      )}
     </div>
   );
 }
 
 /**
- * Collapsible chain-of-thought trace. While reasoning is streaming the block
- * is pinned open with a live label; when the answer starts it folds away
- * (ZCode behavior) and the user can reopen it manually.
+ * Live "running Ns" counter for a tool call. Ticks once a second while the
+ * call is running; returns null when there is no anchor or the call ended.
  */
-export function ThinkingBlock({ text, active }: { text: string; active?: boolean }) {
+function useElapsedSeconds(startedAt: number | undefined, running: boolean): number | null {
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (!running || startedAt == null) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [running, startedAt]);
+  if (startedAt == null || !running) return null;
+  return Math.max(0, Math.floor((now - startedAt) / 1000));
+}
+
+/**
+ * Collapsible chain-of-thought trace. While reasoning is streaming the block
+ * is pinned open with a live label and an elapsed counter; when the answer
+ * starts it folds away (ZCode behavior) showing "已思考 N 秒", and the user
+ * can reopen it manually. Without a `startedAt` anchor (persisted history) it
+ * falls back to the static labels.
+ */
+export function ThinkingBlock({
+  text,
+  active,
+  startedAt,
+}: {
+  text: string;
+  active?: boolean;
+  startedAt?: number;
+}) {
   const { t } = useTranslation();
   const [open, setOpen] = React.useState(Boolean(active));
   const wasActive = React.useRef(Boolean(active));
+  // Elapsed seconds, frozen the moment reasoning ends so the folded label
+  // keeps the final duration instead of drifting with the wall clock.
+  const [frozenSeconds, setFrozenSeconds] = React.useState<number | null>(null);
 
   React.useEffect(() => {
-    if (active) setOpen(true);
-    else if (wasActive.current) setOpen(false);
+    if (active) {
+      setOpen(true);
+      setFrozenSeconds(null);
+    } else if (wasActive.current) {
+      setOpen(false);
+      if (startedAt != null) {
+        setFrozenSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+      }
+    }
     wasActive.current = Boolean(active);
-  }, [active]);
+  }, [active, startedAt]);
+
+  const liveSeconds = useElapsedSeconds(startedAt, Boolean(active) && startedAt != null);
+  const elapsed = active ? liveSeconds : null;
 
   return (
     <div className="w-full">
@@ -134,7 +182,16 @@ export function ThinkingBlock({ text, active }: { text: string; active?: boolean
       >
         <Lightbulb className="size-3.5 shrink-0" />
         {active ? (
-          <ActivityLabel text={t("chat.thinking_active")} />
+          <>
+            <ActivityLabel text={t("chat.thinking_active")} />
+            {elapsed != null && (
+              <span aria-hidden="true" className="tabular-nums">
+                · {t("chat.elapsed_seconds", { seconds: elapsed })}
+              </span>
+            )}
+          </>
+        ) : frozenSeconds != null ? (
+          <span>{t("chat.thinking_elapsed_done", { seconds: frozenSeconds })}</span>
         ) : (
           <span>{t("chat.thought_process")}</span>
         )}

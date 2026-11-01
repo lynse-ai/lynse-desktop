@@ -160,6 +160,7 @@ export function upsertToolUse(
   name: string,
   id: string | undefined,
   state: ChatToolUse["state"],
+  now: number = Date.now(),
 ): ChatToolUse[] {
   const list = uses ? [...uses] : [];
   const key = id || name;
@@ -168,7 +169,7 @@ export function upsertToolUse(
   if (state === "running") {
     const closed = list.map((t) => (t.state === "running" ? { ...t, state: "done" as const } : t));
     if (index >= 0) closed[index] = { ...closed[index]!, name, state: "running" };
-    else closed.push({ id: key, name, state: "running" });
+    else closed.push({ id: key, name, state: "running", startedAt: now });
     return closed;
   }
 
@@ -452,6 +453,9 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           ...m,
           thinking: evt.delta ? (m.thinking ?? "") + evt.delta : m.thinking,
           thinkingActive: evt.delta ? true : false,
+          // Stamp the timer on the first reasoning delta so the block can show
+          // "思考 N 秒" while live and "已思考 N 秒" once folded.
+          thinkingStartedAt: evt.delta ? (m.thinkingStartedAt ?? Date.now()) : m.thinkingStartedAt,
         }));
         break;
       case "tool":
@@ -489,6 +493,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
           attachments: evt.attachments ?? m.attachments,
           humanSupportLink: evt.humanSupportLink,
           connectionRequests: evt.connectionRequests ?? m.connectionRequests,
+          followUps: evt.suggestions?.length ? evt.suggestions : undefined,
           // Poll delivers the whole answer at once — let the UI play its
           // two-phase reveal (text first, attachments/cards after).
           revealedAt: Date.now(),

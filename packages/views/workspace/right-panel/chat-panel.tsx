@@ -22,12 +22,15 @@ import { ChatAttachments } from "../../chat/chat-attachments";
 import { ChatImagePicker, ChatImageTray, UserImagePreviews, imageAttachments, attachmentInput, imageCopy, useChatImages } from "../../chat/chat-images";
 import { ChatConnectionCards } from "../../chat/chat-connection-cards";
 import { ChatHistorySidebar } from "../../chat/chat-history-sidebar";
-import { ThinkingBlock } from "../../chat/chat-reasoning";
+import { ThinkingBlock, ToolActivity } from "../../chat/chat-reasoning";
+import { FollowUpChips } from "../../chat/chat-follow-ups";
+import { ChatSources } from "../../chat/chat-sources";
 
 export function ChatPanel() {
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
   const selectedItemTitle = useWorkspaceStore((s) => s.selectedItemTitle);
   const toggleChatPanel = useWorkspaceStore((s) => s.toggleChatPanel);
+  const selectItem = useWorkspaceStore((s) => s.selectItem);
   const {
     messages,
     isLoading,
@@ -107,6 +110,27 @@ export function ChatPanel() {
     });
     images.clear();
     setInput("");
+  };
+
+  // Citation strip: resolve ids/titles against the loaded file list; a click
+  // selects the cited note in the workspace when it resolves, no-op otherwise.
+  const resolveSourceLabel = (source: string): string =>
+    files?.find((f) => f.id === source)?.title ?? source;
+
+  const handleOpenSource = (source: string) => {
+    const match = files?.find((f) => f.id === source || f.title === source);
+    if (match) selectItem(match.id, "file", match.title);
+  };
+
+  // Backend-suggested follow-up: sent as the next user turn, same channel and
+  // file scoping as the composer.
+  const sendFollowUp = (question: string) => {
+    if (!selectedItemId || viewLoading) return;
+    if (getWorkspaceState().selectedItemId !== selectedItemId) return;
+    sendMessage(question, selectedItemId, true, undefined, {
+      assistant: "lynse",
+      contextFileId: selectedItemId,
+    });
   };
 
   return (
@@ -199,7 +223,16 @@ export function ChatPanel() {
                   block pins open as "thinking", folds when the text starts. */}
               {msg.role === "assistant" && msg.thinking && (
                 <div className="mb-1.5">
-                  <ThinkingBlock text={msg.thinking} active={messageIsStreaming && msg.thinkingActive && !waitingForConfirm} />
+                  <ThinkingBlock
+                    text={msg.thinking}
+                    active={messageIsStreaming && msg.thinkingActive && !waitingForConfirm}
+                    startedAt={msg.thinkingStartedAt}
+                  />
+                </div>
+              )}
+              {msg.role === "assistant" && !!msg.toolUses?.length && (
+                <div className="mb-1.5">
+                  <ToolActivity tools={msg.toolUses} />
                 </div>
               )}
               <div
@@ -285,6 +318,27 @@ export function ChatPanel() {
                   <ChatAttachments attachments={msg.attachments} compact />
                 )}
               </div>
+              {msg.role === "assistant" && (
+                <>
+                  {!!msg.sources?.length && (
+                    <div className="mt-1.5">
+                      <ChatSources
+                        sources={msg.sources}
+                        resolveLabel={resolveSourceLabel}
+                        content={msg.content}
+                        onOpen={handleOpenSource}
+                      />
+                    </div>
+                  )}
+                  {!!msg.followUps?.length && (
+                    <FollowUpChips
+                      suggestions={msg.followUps}
+                      onPick={sendFollowUp}
+                      className="mt-1.5"
+                    />
+                  )}
+                </>
+              )}
             </div>
             );
           })}

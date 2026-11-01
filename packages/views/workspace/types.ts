@@ -289,6 +289,8 @@ export interface ChatToolUse {
   /** Raw backend tool name, e.g. "search_meetings". */
   name: string;
   state: "running" | "done" | "error";
+  /** When the call was announced (drives the live "running Ns" elapsed). */
+  startedAt?: number;
 }
 
 export interface ChatMessage {
@@ -302,10 +304,14 @@ export interface ChatMessage {
   thinking?: string;
   /** True while reasoning deltas are still arriving (block shows live state). */
   thinkingActive?: boolean;
+  /** When the first reasoning delta landed (drives the thinking elapsed timer). */
+  thinkingStartedAt?: number;
   /** Tool calls announced during the turn, in call order. */
   toolUses?: ChatToolUse[];
   /** Sources (meeting titles / ids) referenced by the answer. */
   sources?: string[];
+  /** Follow-up questions suggested by the backend on the done frame. */
+  followUps?: string[];
   /** Report / visual-card / image attachments. */
   attachments?: ChatAttachment[];
   /** Marks an incomplete or failed reply; answer text keeps normal formatting. */
@@ -472,6 +478,8 @@ export type ChatStreamEvent =
       humanSupportLink?: ChatHumanSupportLink;
       connectionRequests?: ConnectorConnectionRequest[];
       workbuddyStopReason?: string;
+      /** Follow-up questions the backend suggests after this answer. */
+      suggestions?: string[];
     }
   | { type: "error"; message: string; /** True when the fix is re-authorizing WorkBuddy. */ workbuddyAuthRequired?: boolean }
   | { type: "workbuddy_session"; session: WorkBuddyCloudSession }

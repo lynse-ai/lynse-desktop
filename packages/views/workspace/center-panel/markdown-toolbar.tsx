@@ -15,6 +15,7 @@ import {
   ListChecks,
   Quote,
   Image,
+  Sparkles,
   Undo,
 } from "../../icons";
 import type { Editor } from "@milkdown/kit/core";
@@ -22,6 +23,10 @@ import { editorViewCtx } from "@milkdown/kit/core";
 import { TextSelection } from "@milkdown/kit/prose/state";
 import { resolveCommand, type MarkdownEditorAction } from "./editor-actions";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { getAuthStore } from "@lynse/core/auth";
+import { getWorkspaceState } from "../store";
+import { useChatStore } from "../hooks/use-chat-store";
+import { buildSelectionPrompt, SELECTION_AI_ACTIONS, type SelectionAiActionId } from "./selection-ai";
 
 interface FloatingMarkdownToolbarProps {
   /** The active Milkdown editor instance. Toolbar is hidden when null. */
@@ -35,7 +40,7 @@ interface CursorPos {
 }
 
 /** Which submenu is currently open (null = none). */
-type OpenMenu = "heading" | "text" | "list" | null;
+type OpenMenu = "heading" | "text" | "list" | "ai" | null;
 
 /** How long the toolbar lingers after the selection/focus is lost, so a
  *  quick hover can seamlessly re-open it. (Ported from tolaria.) */
@@ -244,6 +249,48 @@ export function FloatingMarkdownToolbar({ editor }: FloatingMarkdownToolbarProps
     setImageOpen(false);
   }, []);
 
+  /**
+   * Hand a built prompt to 小灵 in the side panel: open the panel when hidden,
+   * make sure the chat store is hydrated for this user (the panel mounts its
+   * own useChat only while visible), then send scoped to the selected note —
+   * the same channel and file scoping the panel composer uses.
+   */
+  const sendSelectionPrompt = useCallback((prompt: string) => {
+    const fileId = getWorkspaceState().selectedItemId;
+    if (!fileId) return;
+    const ws = getWorkspaceState();
+    if (!ws.chatPanelVisible) ws.toggleChatPanel();
+    const chat = useChatStore.getState();
+    chat.setUserId(getAuthStore()?.getState().user?.id ?? "user");
+    chat.hydrate();
+    chat.setActiveAssistant("lynse");
+    // Self-guarding: no-op when the active conversation is already this file.
+    chat.openFileChat(fileId);
+    chat.sendMessage(prompt, fileId, true, undefined, { assistant: "lynse", contextFileId: fileId });
+  }, []);
+
+  /** Read the saved selection and dispatch the picked AI action as a prompt. */
+  const runAiAction = useCallback(
+    (actionId: SelectionAiActionId) => {
+      setOpenMenu(null);
+      if (!editor) return;
+      let selection = "";
+      editor.action((ctx) => {
+        const v = ctx.get(editorViewCtx) as unknown as EditorViewLike;
+        try {
+          const { from, to } = savedSelRef.current;
+          if (from !== to) selection = v.state.doc.textBetween(from, to, "\n");
+        } catch {
+          // Stale positions after an edit — treat as no selection.
+        }
+      });
+      const passage = selection.trim();
+      if (!passage) return;
+      sendSelectionPrompt(buildSelectionPrompt(t(`toolbar.ai_prompt_${actionId}`), passage));
+    },
+    [editor, t, sendSelectionPrompt],
+  );
+
   if (!editor || !isOpen) return null;
 
   return createPortal(
@@ -331,6 +378,29 @@ export function FloatingMarkdownToolbar({ editor }: FloatingMarkdownToolbarProps
               onInsert={(url, alt) => run("image", { url, alt })}
               onCancel={() => setImageOpen(false)}
             />
+          </div>
+        )}
+      </div>
+
+      {/* ✨ — Selection AI actions (hands the passage to 小灵 in the side panel) */}
+      <div className="mx-0.5 h-5 w-px bg-border/50" />
+      <div className="relative">
+        <button className="toolbar-btn" onClick={() => toggleMenu("ai")} title={t("toolbar.ai_menu")}>
+          <Sparkles className="size-3.5" />
+        </button>
+        {openMenu === "ai" && (
+          <div className="floating-toolbar absolute bottom-full left-0 mb-2 z-50 flex flex-col items-stretch rounded-lg border border-border/30 glass-overlay p-1.5 whitespace-nowrap">
+            {SELECTION_AI_ACTIONS.map((actionId) => (
+              <button
+                key={actionId}
+                type="button"
+                className="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent/60"
+                onClick={() => runAiAction(actionId)}
+              >
+                <Sparkles className="size-3 shrink-0 text-primary/70" />
+                {t(`toolbar.ai_${actionId}`)}
+              </button>
+            ))}
           </div>
         )}
       </div>

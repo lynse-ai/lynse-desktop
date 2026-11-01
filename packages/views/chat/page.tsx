@@ -55,11 +55,6 @@ import {
   isLocalFileId,
   LOCAL_TRANSCRIPTION_FOLDER_ID,
 } from "../workspace/local-transcription";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@lynse/ui/components/ui/popover";
 import { ChatActivity } from "./chat-activity";
 import { ConfirmCard } from "../workspace/confirm-card";
 import { hasWorkBuddyAcpBridge, hasWorkBuddyCloudScopes } from "@lynse/core/workbuddy";
@@ -68,6 +63,8 @@ import { ChatAttachments } from "./chat-attachments";
 import { ChatImagePicker, ChatImageTray, UserImagePreviews, imageAttachments, attachmentInput, imageCopy, useChatImages } from "./chat-images";
 import { ChatConnectionCards } from "./chat-connection-cards";
 import { ThinkingBlock, ToolActivity } from "./chat-reasoning";
+import { FollowUpChips } from "./chat-follow-ups";
+import { ChatSources } from "./chat-sources";
 import {
   mergeContextFileIds,
   type AttachmentDraft,
@@ -815,6 +812,7 @@ export function ChatPage() {
                       onConfirmDismiss={dismissConfirm}
                       resolveSourceLabel={resolveSourceLabel}
                       onOpenSource={handleOpenSource}
+                      onPickFollowUp={(question) => handleSend(question)}
                     />
                   </div>
                 </article>
@@ -1167,102 +1165,9 @@ function EmptyChat({
 }
 
 /**
- * Meeting titles from the reply's own markdown table (`| # | 日期 | 时长 |
- * 分类 | 主题 |`). Older lynclaw builds emit one empty string per meeting in
- * `sources`, so on those turns the table's topic column is the only
- * client-side source for row labels.
+ * Collapsed citation strip lives in `chat-sources.tsx` (shared with the side
+ * panel); this page wires its label resolution and open-jump behavior.
  */
-function meetingTitlesFromReply(content: string): string[] {
-  const titles: string[] = [];
-  for (const line of content.split("\n")) {
-    const cells = line.split("|").map((cell) => cell.trim());
-    if (cells.length < 7) continue;
-    // Only rows whose second cell is a MM-DD date count as meeting rows;
-    // header and separator rows fail this check.
-    if (!/^\d{1,2}-\d{1,2}$/.test(cells[2] ?? "")) continue;
-    const title = cells[cells.length - 2] ?? "";
-    if (title) titles.push(title);
-  }
-  return titles;
-}
-
-/**
- * Collapsed citation strip: one icon chip carrying the source count, which
- * opens a popover listing the cited meetings. The poll payload may carry
- * meeting IDs/titles (resolved via `resolveLabel`) or, from older backends,
- * empty placeholders — those fall back to titles parsed from the reply's
- * meeting table. `onOpen` receives the best key available for the jump.
- */
-function ChatSources({
-  sources,
-  resolveLabel,
-  content,
-  onOpen,
-}: {
-  sources: string[];
-  resolveLabel: (source: string) => string;
-  content?: string;
-  onOpen?: (source: string) => void;
-}) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const rescuedTitles = useMemo(
-    () => (content ? meetingTitlesFromReply(content) : []),
-    [content],
-  );
-
-  return (
-    <div className="flex items-center gap-1.5">
-      <span className="text-2xs uppercase tracking-[0.08em] text-muted-foreground/70">
-        {t("chat.sources")}
-      </span>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger
-          className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/60 px-2 py-0.5 text-3xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent data-popup-open:border-primary/30 data-popup-open:bg-accent"
-          aria-label={t("chat.sources")}
-        >
-          <FileText className="size-3 shrink-0 text-primary/70" />
-          <span>{sources.length}</span>
-        </PopoverTrigger>
-        <PopoverContent
-          side="bottom"
-          align="start"
-          sideOffset={6}
-          className="w-[360px] gap-0 p-1"
-        >
-          <div className="max-h-64 overflow-y-auto">
-            {sources.map((source, index) => {
-              // Empty placeholders fall back to the reply-table topic, then
-              // resolveLabel upgrades it to the full note title (with its
-              // date prefix) when the matching note exists.
-              const label = source.trim()
-                ? resolveLabel(source)
-                : rescuedTitles[index]
-                  ? resolveLabel(rescuedTitles[index])
-                  : source;
-              return (
-                <button
-                  key={`${source}-${index}`}
-                  type="button"
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-accent"
-                  title={label}
-                  onClick={() => {
-                    setOpen(false);
-                    onOpen?.(source.trim() || label);
-                  }}
-                >
-                  <FileText className="size-3.5 shrink-0 text-primary/70" />
-                  <span className="min-w-0 flex-1 truncate">{label}</span>
-                  <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
-                </button>
-              );
-            })}
-          </div>
-        </PopoverContent>
-      </Popover>
-    </div>
-  );
-}
 
 interface AssistantMessageProps {
   message: ReturnType<typeof useChat>["messages"][number];
@@ -1288,6 +1193,8 @@ interface AssistantMessageProps {
   resolveSourceLabel: (source: string) => string;
   /** Opens a cited source's note. */
   onOpenSource?: (source: string) => void;
+  /** Sends a backend-suggested follow-up question as the next user message. */
+  onPickFollowUp?: (question: string) => void;
 }
 
 function AssistantMessage({
@@ -1303,6 +1210,7 @@ function AssistantMessage({
   onConfirmDismiss,
   resolveSourceLabel,
   onOpenSource,
+  onPickFollowUp,
 }: AssistantMessageProps) {
   const { t } = useTranslation();
   // The poll transport types the answer out itself; `revealedAt` only drives
@@ -1373,7 +1281,11 @@ function AssistantMessage({
         <>
           {message.thinking && (
             <div className="mb-2">
-              <ThinkingBlock text={message.thinking} active={isStreaming && message.thinkingActive && !waitingForConfirm} />
+              <ThinkingBlock
+                text={message.thinking}
+                active={isStreaming && message.thinkingActive && !waitingForConfirm}
+                startedAt={message.thinkingStartedAt}
+              />
             </div>
           )}
 
@@ -1451,6 +1363,14 @@ function AssistantMessage({
           <Headphones className="size-3.5 shrink-0 text-primary/70" />
           {message.humanSupportLink.label?.trim() || t("chat.contact_support")}
         </a>
+      )}
+
+      {!!message.followUps?.length && onPickFollowUp && (
+        <FollowUpChips
+          suggestions={message.followUps}
+          onPick={onPickFollowUp}
+          className="mt-2"
+        />
       )}
 
       {message.content && !message.error && !message.sources?.length && (

@@ -4,6 +4,7 @@
 @import "../../../packages/ui/styles/fonts.css";
 @import "../../../packages/ui/styles/tokens.css";
 @import "../../../packages/ui/styles/base.css";
+@import "../../../packages/ui/styles/solid-glass-status.css";
 
 @custom-variant dark (&:is(.dark *));
 

@@ -109,6 +109,7 @@ export {
   ArrowUp,          // Sort ascending
   Clock,            // Time-based sort
   MessageCircle,    // Feedback
+  MessageCircleQuestion, // Follow-up question chips (chat)
   Bell,             // Update reminder
   LockKeyhole,
   LockKeyholeOpen,

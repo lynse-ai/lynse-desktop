@@ -57,8 +57,9 @@ function messagesForStorage(messages: ChatMessage[]): ChatMessage[] {
     .filter((message) => message.role !== "assistant" || !!message.content || !!message.error || !!message.connectionRequests?.length || !!message.attachments?.length || !!message.workbuddyStopReason
       || !!message.confirm && (!message.confirm.workbuddy || message.confirm.resolvedChoice !== undefined))
     // `status` is transient progress; `revealedAt` is the one-shot reveal
-    // marker — neither belongs in persisted history.
-    .map(({ status: _status, revealedAt: _revealedAt, ...message }) => ({
+    // marker and `thinkingStartedAt` the live elapsed anchor — none belong in
+    // persisted history.
+    .map(({ status: _status, revealedAt: _revealedAt, thinkingStartedAt: _thinkingStartedAt, ...message }) => ({
       ...message,
       attachments: message.attachments?.map(attachment => attachment.inputAttachment
         ? { id: attachment.id, name: attachment.name, type: attachment.type, inputAttachment: true }

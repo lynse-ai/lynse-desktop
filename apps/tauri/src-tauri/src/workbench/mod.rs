@@ -17,7 +17,7 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Mutex,
     },
 };
@@ -43,6 +43,8 @@ pub struct WorkbenchState {
     pub(super) serial: tokio::sync::Mutex<()>,
     pub(super) graph_run: tokio::sync::Mutex<()>,
     pub(super) synthesis_queue: synthesis_scheduler::Scheduler,
+    pub(super) synthesis_http: tokio::sync::Mutex<Option<(String, reqwest::Client)>>,
+    pub(super) pending_receipts: std::sync::atomic::AtomicUsize,
     pub(super) knowledge_transport: knowledge_transport::Transport,
     sync_requested: tokio::sync::Notify,
     wiki_requested: AtomicBool,

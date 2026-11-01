@@ -7,17 +7,25 @@ use tokio::sync::{Mutex, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 
 pub(crate) struct Scheduler {
     slots: Arc<Semaphore>,
+    capacity: usize,
     recovery: Arc<Mutex<()>>,
     limits: Mutex<(Instant, Instant)>,
 }
 
+/// Model concurrency for Wiki compilation and graph discovery. Configurable so
+/// a first-run organization over hundreds of meetings is not pinned to one
+/// in-flight request; the provider rate-limit recovery below still applies.
+fn configured_slots() -> usize {
+    std::env::var("LYNSE_WIKI_CONCURRENCY")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .map(|slots| slots.clamp(1, 8))
+        .unwrap_or(4)
+}
+
 impl Default for Scheduler {
     fn default() -> Self {
-        Self {
-            slots: Arc::new(Semaphore::new(3)),
-            recovery: Arc::new(Mutex::new(())),
-            limits: Mutex::new((Instant::now(), Instant::now())),
-        }
+        Self::with_slots(configured_slots())
     }
 }
 
@@ -27,6 +35,22 @@ pub(super) struct Permit {
 }
 
 impl Scheduler {
+    pub fn with_slots(slots: usize) -> Self {
+        let capacity = slots.max(1);
+        Self {
+            slots: Arc::new(Semaphore::new(capacity)),
+            capacity,
+            recovery: Arc::new(Mutex::new(())),
+            limits: Mutex::new((Instant::now(), Instant::now())),
+        }
+    }
+
+    /// Configured queue size; callers batch work in waves of this width so
+    /// fan-out fills the queue without over-subscribing the model provider.
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
     pub async fn acquire(&self) -> Permit {
         let slot = self
             .slots
@@ -66,7 +90,7 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn shared_queue_is_bounded_without_holding_a_commit_lock() {
-        let scheduler = Scheduler::default();
+        let scheduler = Scheduler::with_slots(3);
         let a = scheduler.acquire().await;
         let b = scheduler.acquire().await;
         let c = scheduler.acquire().await;
@@ -85,7 +109,7 @@ mod tests {
     }
     #[tokio::test]
     async fn recovery_mode_serializes_new_calls() {
-        let scheduler = Scheduler::default();
+        let scheduler = Scheduler::with_slots(3);
         scheduler.limits.lock().await.1 = Instant::now() + Duration::from_secs(60);
         let first = scheduler.acquire().await;
         assert!(

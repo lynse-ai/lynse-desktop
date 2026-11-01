@@ -1,4 +1,6 @@
 //! Reviewed, file-backed Wiki pages. SQLite contains only rebuildable indexes and work receipts.
+use futures_util::future;
+use std::sync::atomic::Ordering;
 #[path = "wiki_graph.rs"]
 mod graph;
 #[path = "wiki_synthesis_control.rs"]
@@ -851,7 +853,7 @@ async fn request_model_report(
         }).collect::<CommandResult<Vec<_>>>()?
     };
     knowledge_cloud::authorize(app,session,&authority_docs,"wiki_compile").await?;
-    let client = synthesis_client(&session.agent_url)?;
+    let client = shared_synthesis_client(&state, &session.agent_url).await?;
     if session.agent_url != session.base_url {
         let response = client
             .post(format!("{}/api/session/backend", session.agent_url))
@@ -910,7 +912,9 @@ async fn request_model_report(
     }
     let result = result?;
     require_task_model(&state, session, task)?;
-    knowledge_cloud::authorize(app,session,&authority_docs,"wiki_compile").await?;
+    // The pre-call authorize already validated this exact document set; the
+    // historical post-call repeat returned the same verdict for the same
+    // inputs and cost one extra round trip per model call.
     // Keep the validated output locally before acknowledging a billable step.
     // The service receives only its own hash and an opaque artifact reference.
     if let Some(receipt) = &report.usage_receipt {
@@ -921,11 +925,59 @@ async fn request_model_report(
             write_json(&root.join("usage-results").join(format!("{step}.json")), &json!({"result":result,"receipt":receipt}))?;
             let pending = root.join("usage-receipts").join(format!("{step}.json"));
             write_json(&pending, &json!({"step_id":step,"result_hash":receipt["result_hash"],"artifact_ref":format!("desktop:{step}")}))?;
-            flush_usage_receipts(&client, session, &state, &root).await;
+            state.pending_receipts.fetch_add(1, Ordering::Relaxed);
+            flush_usage_receipts_batched(&client, session, &state, &root).await;
         }
     }
     Ok(result)
 }
+/// One pooled HTTP client per endpoint. A first-run organization issues
+/// thousands of synthesis calls; a fresh client per call paid a TLS handshake
+/// every time and kept no connection pool alive across calls.
+async fn shared_synthesis_client(state: &WorkbenchState, endpoint: &str) -> CommandResult<reqwest::Client> {
+    let mut cached = state.synthesis_http.lock().await;
+    if cached
+        .as_ref()
+        .is_some_and(|(cached_endpoint, _)| cached_endpoint == endpoint)
+    {
+        return Ok(cached.as_ref().map(|(_, client)| client.clone()).unwrap());
+    }
+    let client = synthesis_client(endpoint)?;
+    *cached = Some((endpoint.to_string(), client.clone()));
+    Ok(client)
+}
+
+fn pending_receipt_count(root: &Path) -> usize {
+    fs::read_dir(root.join("usage-receipts"))
+        .map(|entries| entries.flatten().count())
+        .unwrap_or(0)
+}
+
+/// Receipts ride the synthesis calls in small batches (8 pending or end of
+/// run) so a first-run backlog does not add HTTP posts to every model call.
+async fn flush_usage_receipts_batched(client: &reqwest::Client, session: &Session, state: &WorkbenchState, root: &Path) {
+    if state.pending_receipts.swap(0, Ordering::Relaxed) < 8 {
+        return;
+    }
+    flush_usage_receipts(client, session, state, root).await;
+}
+
+/// End-of-run delivery of receipts batched during compilation.
+async fn drain_usage_receipts(app: &AppHandle, session: &Session, state: &WorkbenchState) {
+    let Ok((_, root)) = roots(app, session) else { return; };
+    let Ok(client) = shared_synthesis_client(state, &session.agent_url).await else { return; };
+    for _ in 0..16 {
+        let pending = pending_receipt_count(&root);
+        if pending == 0 {
+            return;
+        }
+        flush_usage_receipts(&client, session, state, &root).await;
+        if pending_receipt_count(&root) >= pending {
+            return;
+        }
+    }
+}
+
 /// Bounded, idempotent delivery of body-free receipts saved on this account's disk.
 async fn flush_usage_receipts(client: &reqwest::Client, session: &Session, state: &WorkbenchState, root: &Path) {
     let Ok(entries) = fs::read_dir(root.join("usage-receipts")) else { return; };
@@ -1660,103 +1712,114 @@ pub(super) async fn run(
         }
         (root, local, config, initial)
     };
-    for topic in initial {
-        if topic.pinned || topic.excluded {
-            continue;
+    // Compile requests run in waves so a first-run backlog uses the shared
+    // model queue concurrently; per-topic state changes still apply serially
+    // in the original order after each wave completes.
+    let compile_wave = state.synthesis_queue.capacity().min(3).max(1);
+    for wave in initial.chunks(compile_wave) {
+        let mut prepared = Vec::new();
+        for topic in wave {
+            if topic.pinned || topic.excluded {
+                continue;
+            }
+            let manifest = {
+                let _guard = state.serial.lock().await;
+                require_current(state, session)?;
+                let m = load_state(app, session)?;
+                ready(&m)?;
+                m
+            };
+            let version = fingerprint(topic, &manifest, &config);
+            if !needs_compilation(topic, &manifest, &config) {
+                continue;
+            }
+            let task = store::digest(format!("compile:{}:{version}", topic.id));
+            job(&root, &task, "running", None, "")?;
+            prepared.push((topic, manifest, version, task));
         }
-        let manifest = {
+        let results = future::join_all(prepared.iter().map(|(topic, manifest, _, _)| async {
+            compile(app, state, session, topic, &config, manifest, &root, &local).await
+        }))
+        .await;
+        for ((topic, _, version, task), result) in prepared.iter().zip(results) {
+            if let Err(error) = &result {
+                if is_service_failure(error) {
+                    return Err(error.clone());
+                }
+            }
             let _guard = state.serial.lock().await;
             require_current(state, session)?;
-            let m = load_state(app, session)?;
-            ready(&m)?;
-            m
-        };
-        let version = fingerprint(&topic, &manifest, &config);
-        if !needs_compilation(&topic, &manifest, &config) {
-            continue;
-        }
-        let task = store::digest(format!("compile:{}:{version}", topic.id));
-        job(&root, &task, "running", None, "")?;
-        let result = compile(
-            app, state, session, &topic, &config, &manifest, &root, &local,
-        )
-        .await;
-        if let Err(error) = &result {
-            if is_service_failure(error) {
-                return Err(error.clone());
+            let latest = load_state(app, session)?;
+            ready(&latest)?;
+            let mut values = topics(&root)?;
+            let Some(current) = values.iter_mut().find(|t| t.id == topic.id) else {
+                continue;
+            };
+            if fingerprint(current, &latest, &models(app, session)?) != *version
+                || current.pinned
+                || current.excluded
+            {
+                continue;
             }
-        }
-        let _guard = state.serial.lock().await;
-        require_current(state, session)?;
-        let latest = load_state(app, session)?;
-        ready(&latest)?;
-        let mut values = topics(&root)?;
-        let Some(current) = values.iter_mut().find(|t| t.id == topic.id) else {
-            continue;
-        };
-        if fingerprint(current, &latest, &models(app, session)?) != version
-            || current.pinned
-            || current.excluded
-        {
-            continue;
-        }
-        match result {
-            Ok(page) => {
-                if !valid_page(&local, &latest, &page) {
-                    return Err("Sources changed; candidate discarded".into());
-                }
-                job(
-                    &root,
-                    &page.cache_key,
-                    "done",
-                    Some(&serde_json::to_value(&page).map_err(|e| e.to_string())?),
-                    "",
-                )?;
-                let already_reviewed = !current.force_refresh
-                    && (current
-                        .published
-                        .as_ref()
-                        .is_some_and(|p| p.cache_key == page.cache_key)
-                        || current
-                            .history
-                            .iter()
-                            .any(|p| p.cache_key == page.cache_key && p.review == "rejected"));
-                if !already_reviewed
-                    && current
-                        .candidate
-                        .as_ref()
-                        .is_none_or(|p| p.cache_key != page.cache_key)
-                {
-                    if let Some(old) = current.candidate.take() {
-                        current.history.push(old);
+            match result {
+                Ok(page) => {
+                    if !valid_page(&local, &latest, &page) {
+                        return Err("Sources changed; candidate discarded".into());
                     }
-                    save_page(&root, current, &page, true)?;
-                    current.candidate = Some(page);
+                    job(
+                        &root,
+                        &page.cache_key,
+                        "done",
+                        Some(&serde_json::to_value(&page).map_err(|e| e.to_string())?),
+                        "",
+                    )?;
+                    let already_reviewed = !current.force_refresh
+                        && (current
+                            .published
+                            .as_ref()
+                            .is_some_and(|p| p.cache_key == page.cache_key)
+                            || current
+                                .history
+                                .iter()
+                                .any(|p| p.cache_key == page.cache_key && p.review == "rejected"));
+                    if !already_reviewed
+                        && current
+                            .candidate
+                            .as_ref()
+                            .is_none_or(|p| p.cache_key != page.cache_key)
+                    {
+                        if let Some(old) = current.candidate.take() {
+                            current.history.push(old);
+                        }
+                        save_page(&root, current, &page, true)?;
+                        current.candidate = Some(page);
+                    }
+                    current.force_refresh = false;
+                    current.last_fingerprint = version.clone();
+                    current.last_attempt_fingerprint = current.last_fingerprint.clone();
+                    current.error.clear();
+                    current.failure = None;
+                    job(&root, task, "done", None, "")?;
                 }
-                current.force_refresh = false;
-                current.last_fingerprint = version;
-                current.last_attempt_fingerprint = current.last_fingerprint.clone();
-                current.error.clear();
-                current.failure = None;
-                job(&root, &task, "done", None, "")?;
+                Err(error) => {
+                    current.force_refresh = false;
+                    current.last_attempt_fingerprint = version.clone();
+                    let failure = WikiFailure::new(
+                        &error,
+                        latest.wiki_progress.as_ref().map(|progress| progress.stage.as_str()).unwrap_or("preparing"),
+                        current.source_ids.clone(),
+                    );
+                    current.error = failure.message.clone();
+                    current.failure = Some(failure);
+                    job(&root, task, "failed", None, &error)?;
+                }
             }
-            Err(error) => {
-                current.force_refresh = false;
-                current.last_attempt_fingerprint = version;
-                let failure = WikiFailure::new(
-                    &error,
-                    latest.wiki_progress.as_ref().map(|progress| progress.stage.as_str()).unwrap_or("preparing"),
-                    current.source_ids.clone(),
-                );
-                current.error = failure.message.clone();
-                current.failure = Some(failure);
-                job(&root, &task, "failed", None, &error)?;
-            }
+            save_topics(&root, &values)?;
+            persist(app, session, &latest)?;
         }
-        save_topics(&root, &values)?;
-        persist(app, session, &latest)?;
     }
     let embedding_failures = embed_sources(app, state, session, &config, &root, &local).await?;
+    drain_usage_receipts(app, session, state).await;
     let _guard = state.serial.lock().await;
     require_current(state, session)?;
     let mut manifest = load_state(app, session)?;

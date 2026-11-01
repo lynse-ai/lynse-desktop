@@ -1,5 +1,6 @@
 //! Automatic, folder-scoped Wiki cataloguing and validated publication.
 use super::*;
+use futures_util::future;
 use std::collections::{BTreeMap, BTreeSet};
 #[path = "wiki_scope_cache.rs"]
 mod scope_cache;
@@ -962,13 +963,21 @@ pub(super) async fn run(
         .iter()
         .map(|doc| sync::split_text(doc.text().trim(), 12000).len())
         .sum();
-    let mut catalog_completed = 0;
+    // Catalog requests are fanned out in waves sized to the shared model
+    // queue; each wave's results then apply serially so topic identity,
+    // progress and persisted state keep their original single-stream order.
+    struct CatalogJob<'a> {
+        doc: &'a Document,
+        key: String,
+        text: String,
+    }
+    let mut jobs: Vec<CatalogJob<'_>> = Vec::new();
+    let mut applied = 0usize;
     for doc in &docs {
         for (index, text) in sync::split_text(doc.text().trim(), 12000).into_iter().enumerate() {
-            let completed = catalog_completed;
-            catalog_completed += 1;
             let key = format!("{}:{index}", input_key(doc, &config));
             if catalog.failed.contains_key(&key) {
+                applied += 1;
                 catalog_failures += 1;
                 failed_sources.insert(doc.id.clone());
                 if !catalog.details.contains_key(&key) {
@@ -977,105 +986,114 @@ pub(super) async fn run(
                 }
                 continue;
             }
-            let mut existing = topics(&root)?;
-            let rows = if let Some(rows) = catalog.chunks.get(&key) {
-                rows.clone()
-            } else {
-                report_progress(
-                    app,
-                    state,
-                    session,
-                    WikiProgress {
-                        stage: "analyzing".into(),
-                        completed,
-                        total: catalog_total,
-                        current_title: doc.title.clone(),
-                        ..Default::default()
-                    },
-                )
-                .await?;
-                let mut parts = vec![analysis::part(doc, text)];
-                let mut anchors = Vec::new();
-                for topic in &existing {
-                    if topic.collection.is_some() { continue; }
-                    if anchors.len() >= 12 {
-                        break;
-                    }
-                    if !topic.source_ids.contains(&doc.id) && !doc.text().contains(&topic.title) {
-                        continue;
-                    }
-                    let Some(anchor) = docs
-                        .iter()
-                        .find(|source| topic.source_ids.contains(&source.id))
-                    else {
-                        continue;
-                    };
-                    if !parts.iter().any(|part| part.id == anchor.id) {
-                        if parts.len() >= 4 {
-                            continue;
-                        }
-                        parts.push(analysis::part(
-                            anchor,
-                            sync::split_text(anchor.text().trim(), 12000)
-                                .into_iter()
-                                .next()
-                                .unwrap_or_default(),
-                        ));
-                    }
-                    let source_ids: Vec<_> = parts
-                        .iter()
-                        .filter(|part| topic.source_ids.contains(&part.id))
-                        .map(|part| &part.id)
-                        .collect();
-                    anchors.push(json!({"id":topic.id,"title":topic.title,"kind":topic.topic_kind,"excluded":topic.excluded,"sourceIds":source_ids}));
+            jobs.push(CatalogJob { doc, key, text });
+        }
+    }
+    let wave_size = state.synthesis_queue.capacity().max(1);
+    for wave in jobs.chunks(wave_size) {
+        report_progress(
+            app,
+            state,
+            session,
+            WikiProgress {
+                stage: "analyzing".into(),
+                completed: applied,
+                total: catalog_total,
+                current_title: wave
+                    .first()
+                    .map(|job| job.doc.title.clone())
+                    .unwrap_or_default(),
+                ..Default::default()
+            },
+        )
+        .await?;
+        let results: Vec<CommandResult<Vec<CatalogTopic>>> = future::join_all(wave.iter().map(|job| async {
+            let existing = topics(&root)?;
+            if let Some(rows) = catalog.chunks.get(&job.key) {
+                return Ok(rows.clone());
+            }
+            let mut parts = vec![analysis::part(job.doc, job.text.clone())];
+            let mut anchors = Vec::new();
+            for topic in &existing {
+                if topic.collection.is_some() { continue; }
+                if anchors.len() >= 12 {
+                    break;
                 }
-                let query = json!({"existingTopics":anchors,"newSourceId":doc.id}).to_string();
-                let result = request(app, session, "wiki_catalog", &parts, &query, Value::Null)
-                    .await
-                    .and_then(|value| validate_catalog(&value, &parts, &manifest, &existing));
-                let _guard = state.serial.lock().await;
-                require_current(state, session)?;
-                match result {
-                    Ok(rows) => {
-                        catalog.chunks.insert(key.clone(), rows.clone());
-                        catalog.failed.remove(&key);
-                        catalog.details.remove(&key);
-                        rows
-                    }
-                    // Service failures apply to the whole run, never to an individual source.
-                    Err(error) if is_service_failure(&error) => {
-                        record_failure(&mut catalog, &key, doc, &error);
-                        write_json(&catalog_path(&root), &catalog)?;
-                        return Err(error);
-                    },
-                    Err(error) => {
-                        record_failure(&mut catalog, &key, doc, &error);
-                        failed_sources.insert(doc.id.clone());
-                        catalog_failures += 1;
-                        write_json(&catalog_path(&root), &catalog)?;
-                        continue;
-                    }
-                }
-            };
-            catalog.details.remove(&key);
-            let _guard = state.serial.lock().await;
-            require_current(state, session)?;
-            existing = topics(&root)?;
-            let ids = apply_catalog(&mut existing, &mut catalog, &doc.id, &rows);
-            for (id, row) in ids.iter().zip(&rows) {
-                if id.is_empty() {
+                if !topic.source_ids.contains(&job.doc.id) && !job.doc.text().contains(&topic.title) {
                     continue;
                 }
-                active.entry(id.clone()).or_default().extend(
-                    row.citations
-                        .iter()
-                        .filter(|reference| docs.iter().any(|doc| doc.id == reference.id))
-                        .map(|reference| reference.id.clone()),
-                );
-                active.entry(id.clone()).or_default().insert(doc.id.clone());
+                let Some(anchor) = docs
+                    .iter()
+                    .find(|source| topic.source_ids.contains(&source.id))
+                else {
+                    continue;
+                };
+                if !parts.iter().any(|part| part.id == anchor.id) {
+                    if parts.len() >= 4 {
+                        continue;
+                    }
+                    parts.push(analysis::part(
+                        anchor,
+                        sync::split_text(anchor.text().trim(), 12000)
+                            .into_iter()
+                            .next()
+                            .unwrap_or_default(),
+                    ));
+                }
+                let source_ids: Vec<_> = parts
+                    .iter()
+                    .filter(|part| topic.source_ids.contains(&part.id))
+                    .map(|part| &part.id)
+                    .collect();
+                anchors.push(json!({"id":topic.id,"title":topic.title,"kind":topic.topic_kind,"excluded":topic.excluded,"sourceIds":source_ids}));
             }
-            save_topics(&root, &existing)?;
-            write_json(&catalog_path(&root), &catalog)?;
+            let query = json!({"existingTopics":anchors,"newSourceId":job.doc.id}).to_string();
+            request(app, session, "wiki_catalog", &parts, &query, Value::Null)
+                .await
+                .and_then(|value| validate_catalog(&value, &parts, &manifest, &existing))
+        }))
+        .await;
+        for (job, result) in wave.iter().zip(results) {
+            applied += 1;
+            let _guard = state.serial.lock().await;
+            require_current(state, session)?;
+            match result {
+                Ok(rows) => {
+                    catalog.chunks.insert(job.key.clone(), rows.clone());
+                    catalog.failed.remove(&job.key);
+                    catalog.details.remove(&job.key);
+                    let mut existing = topics(&root)?;
+                    let ids = apply_catalog(&mut existing, &mut catalog, &job.doc.id, &rows);
+                    for (id, row) in ids.iter().zip(&rows) {
+                        if id.is_empty() {
+                            continue;
+                        }
+                        active.entry(id.clone()).or_default().extend(
+                            row.citations
+                                .iter()
+                                .filter(|reference| docs.iter().any(|doc| doc.id == reference.id))
+                                .map(|reference| reference.id.clone()),
+                        );
+                        active.entry(id.clone()).or_default().insert(job.doc.id.clone());
+                    }
+                    save_topics(&root, &existing)?;
+                    write_json(&catalog_path(&root), &catalog)?;
+                }
+                // Service failures apply to the whole run, never to an individual source.
+                Err(error) if is_service_failure(&error) => {
+                    catalog.details.remove(&job.key);
+                    record_failure(&mut catalog, &job.key, job.doc, &error);
+                    write_json(&catalog_path(&root), &catalog)?;
+                    return Err(error);
+                }
+                Err(error) => {
+                    catalog.details.remove(&job.key);
+                    record_failure(&mut catalog, &job.key, job.doc, &error);
+                    failed_sources.insert(job.doc.id.clone());
+                    catalog_failures += 1;
+                    write_json(&catalog_path(&root), &catalog)?;
+                }
+            }
         }
     }
     let initial = {
@@ -1121,7 +1139,11 @@ pub(super) async fn run(
             }
         })
         .collect();
-    for (topic, selected, version) in pending {
+    // Compile requests run in waves so a first-run backlog uses the shared
+    // model queue concurrently; per-topic state changes still apply serially
+    // in the original order after each wave completes.
+    let compile_wave = state.synthesis_queue.capacity().min(3).max(1);
+    for wave in pending.chunks(compile_wave) {
         report_progress(
             app,
             state,
@@ -1130,71 +1152,77 @@ pub(super) async fn run(
                 stage: "compiling".into(),
                 completed,
                 total: total_topics,
-                topic_title: topic.title.clone(),
+                topic_title: wave
+                    .first()
+                    .map(|(topic, _, _)| topic.title.clone())
+                    .unwrap_or_default(),
                 ..Default::default()
             },
         )
         .await?;
-        let result = compile_automatic(
-            app, state, session, &topic, &selected, &manifest, &root, &version,
-        )
+        let results = future::join_all(wave.iter().map(|(topic, selected, version)| async {
+            compile_automatic(app, state, session, topic, selected, &manifest, &root, version).await
+        }))
         .await;
-        if let Err(error) = &result {
-            if is_service_failure(&error.message) {
-                return Err(error.message.clone());
-            }
-        }
-        let _guard = state.serial.lock().await;
-        require_current(state, session)?;
-        let latest = load_state(app, session)?;
-        ready(&latest)?;
-        let mut values = topics(&root)?;
-        let Some(current) = values
-            .iter_mut()
-            .find(|current| current.id == topic.id && !current.excluded && !current.pinned)
-        else {
-            continue;
-        };
-        if current
-            .published
-            .as_ref()
-            .is_some_and(|page| page.content_hash != store::digest(&page.markdown))
-        {
-            continue;
-        }
-        let latest_docs: Vec<_> = documents(&local, &latest)
-            .into_iter()
-            .filter(|doc| current.source_ids.contains(&doc.id))
-            .collect();
-        if page_version(current, &latest_docs, &latest, &models(app, session)?) != version {
-            continue;
-        }
-        match result {
-            Ok(mut page) => {
-                page.fingerprint = page_fingerprint(current, &latest, &config, &page.citations);
-                if !valid_page(&local, &latest, &page) {
-                    current.error = "Sources changed; automatic page discarded".into();
-                    current.failure = Some(WikiFailure::new(&current.error, "validating", current.source_ids.clone()));
-                } else {
-                    publish_automatic(&root, current, page, &version)?;
-                    current.error.clear();
-                    current.failure = None;
-                    current.last_fingerprint = version.clone();
-                    completed += 1;
+        for ((topic, _, version), result) in wave.iter().zip(results) {
+            if let Err(error) = &result {
+                if is_service_failure(&error.message) {
+                    return Err(error.message.clone());
                 }
             }
-            Err(failure) => {
-                current.error = failure.message.clone();
-                current.failure = Some(failure);
+            let _guard = state.serial.lock().await;
+            require_current(state, session)?;
+            let latest = load_state(app, session)?;
+            ready(&latest)?;
+            let mut values = topics(&root)?;
+            let Some(current) = values
+                .iter_mut()
+                .find(|current| current.id == topic.id && !current.excluded && !current.pinned)
+            else {
+                continue;
+            };
+            if current
+                .published
+                .as_ref()
+                .is_some_and(|page| page.content_hash != store::digest(&page.markdown))
+            {
+                continue;
             }
+            let latest_docs: Vec<_> = documents(&local, &latest)
+                .into_iter()
+                .filter(|doc| current.source_ids.contains(&doc.id))
+                .collect();
+            if page_version(current, &latest_docs, &latest, &models(app, session)?) != *version {
+                continue;
+            }
+            match result {
+                Ok(mut page) => {
+                    page.fingerprint = page_fingerprint(current, &latest, &config, &page.citations);
+                    if !valid_page(&local, &latest, &page) {
+                        current.error = "Sources changed; automatic page discarded".into();
+                        current.failure = Some(WikiFailure::new(&current.error, "validating", current.source_ids.clone()));
+                    } else {
+                        publish_automatic(&root, current, page, version)?;
+                        current.error.clear();
+                        current.failure = None;
+                        current.last_fingerprint = version.clone();
+                        completed += 1;
+                    }
+                }
+                Err(failure) => {
+                    current.error = failure.message.clone();
+                    current.failure = Some(failure);
+                }
+            }
+            current.last_attempt_fingerprint = version.clone();
+            current.force_refresh = false;
+            save_topics(&root, &values)?;
+            persist(app, session, &latest)?;
         }
-        current.last_attempt_fingerprint = version;
-        current.force_refresh = false;
-        save_topics(&root, &values)?;
-        persist(app, session, &latest)?;
     }
     collections::run(app, state, session).await?;
     let embedding_failures = embed_sources(app, state, session, &config, &root, &local).await?;
+    super::drain_usage_receipts(app, session, state).await;
     let _guard = state.serial.lock().await;
     require_current(state, session)?;
     let mut latest = load_state(app, session)?;

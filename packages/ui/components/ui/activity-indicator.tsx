@@ -32,12 +32,11 @@ export function ActivityIndicator({ className }: { className?: string }) {
   );
 }
 
-/** The highlight moves over stationary text; assistive technology reads it once. */
+/** Plain stationary status text next to the pixel orbit. */
 export function ActivityLabel({ text, className }: { text: string; className?: string }) {
   return (
     <span className={cn("activity-label", className)}>
       {text}
-      <span className="activity-label-highlight" data-text={text} aria-hidden="true" />
     </span>
   );
 }

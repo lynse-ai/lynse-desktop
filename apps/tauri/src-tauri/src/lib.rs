@@ -508,13 +508,30 @@ fn ensure_python_venv(app: &AppHandle, env_var: &str, development_relative: &str
     }
     // Windows ships no `python3.12`-style names: the installer puts `python` on
     // PATH and the `py` launcher covers versioned selection.
-    let candidates: &[&str] = if cfg!(windows) {
-        &["python", "py", "python3"]
+    let mut candidates: Vec<String> = if cfg!(windows) {
+        vec!["python".into(), "py".into(), "python3".into()]
     } else {
-        &["python3.12", "python3.11", "python3.13", "python3"]
+        vec!["python3.12".into(), "python3.11".into(), "python3.13".into()]
     };
+    // macOS GUI apps run with a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin)
+    // where only the CLT `python3` is visible — often 3.9, too old for some
+    // engines (mlx-qwen3-asr needs >=3.10). Probe the common interpreter
+    // install locations by absolute path before falling back to `python3`.
+    if cfg!(target_os = "macos") {
+        let home = env::var("HOME").unwrap_or_default();
+        let bases = [
+            "/opt/homebrew/bin".to_owned(),
+            "/usr/local/bin".to_owned(),
+            format!("{home}/.local/bin"),
+        ];
+        for base in &bases {
+            for version in ["3.12", "3.11", "3.13"] {
+                candidates.push(format!("{base}/python{version}"));
+            }
+        }
+    }
     let interpreter = candidates
-        .into_iter()
+        .iter()
         .find(|candidate| Command::new(candidate).arg("--version").output().map(|output| output.status.success()).unwrap_or(false))
         .ok_or("未找到可用的 python3 解释器")?;
     log::info!("[stt] 创建 {directory_name} 虚拟环境（{interpreter}）：{}", venv.display());
@@ -733,40 +750,35 @@ pub(crate) fn detect_net_region() -> &'static str {
     })
 }
 
-/// Ensure a usable MLX venv exists, creating one (and `pip install`-ing
-/// `mlx-whisper` + `imageio-ffmpeg`) on first use. Returns the python path.
+/// Ensure a usable MLX venv exists, creating one on first use and lazily
+/// `pip install`-ing `mlx-whisper` + `imageio-ffmpeg` whenever they are
+/// missing (venvs created before a package was added heal here too).
+/// Returns the python path. Venv creation goes through [`ensure_python_venv`]
+/// so the interpreter selection matches the sherpa venv: a bare `python3` may
+/// be the macOS CLT 3.9, which is too old for mlx-qwen3-asr (requires >=3.10).
 pub(crate) fn ensure_mlx_venv(app: &AppHandle) -> CommandResult<String> {
-    if let Ok(value) = env::var("LYNSE_MLX_PYTHON") {
-        return Ok(value);
+    let python = ensure_python_venv(app, "LYNSE_MLX_PYTHON", "../../../.venv-mlx", "mlx-venv")?;
+    let check = Command::new(&python)
+        .args(["-c", "import mlx_whisper, imageio_ffmpeg"])
+        .env("HF_HUB_OFFLINE", "1")
+        .output()
+        .map_err(|error| format!("无法运行 MLX Python：{error}"))?;
+    if check.status.success() {
+        return Ok(python);
     }
-    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../.venv-mlx/bin/python");
-    if development.exists() {
-        return Ok(development.to_string_lossy().into_owned());
-    }
-    let venv = app_data_dir(app)?.join("mlx-venv");
-    let python = venv.join("bin/python");
-    if python.exists() {
-        return Ok(python.to_string_lossy().into_owned());
-    }
-
-    log::info!("[stt] 创建 MLX 虚拟环境：{}", venv.display());
-    fs::create_dir_all(&venv).map_err(|error| error.to_string())?;
-    let status = Command::new("python3")
-        .args(["-m", "venv", venv.to_string_lossy().as_ref()])
-        .status()
-        .map_err(|error| format!("无法创建 MLX 虚拟环境（python3 不可用）：{error}"))?;
-    if !status.success() {
-        return Err("创建 MLX 虚拟环境失败".to_owned());
-    }
-    let pip = venv.join("bin/pip");
+    log::info!("[stt] 安装 mlx-whisper 依赖到 MLX 虚拟环境…");
+    let pip = PathBuf::from(&python)
+        .parent()
+        .map(|directory| directory.join("pip"))
+        .unwrap_or_else(|| PathBuf::from("pip"));
     let install = Command::new(&pip)
         .args(["install", "--quiet", "--disable-pip-version-check", "mlx-whisper", "imageio-ffmpeg"])
         .status()
         .map_err(|error| format!("安装 mlx-whisper 失败：{error}"))?;
     if !install.success() {
-        return Err("安装 mlx-whisper 失败（请检查网络，或手动安装到 .venv-mlx）".to_owned());
+        return Err("安装 mlx-whisper 失败（请检查网络，或手动安装到 MLX 虚拟环境）".to_owned());
     }
-    Ok(python.to_string_lossy().into_owned())
+    Ok(python)
 }
 
 /// Ensure a usable WhisperX venv exists, creating one (and `pip install`-ing
@@ -3208,6 +3220,32 @@ async fn todo_add_to_calendar(
 #[tauri::command]
 fn local_transcription_get(app: AppHandle, id: String) -> CommandResult<Option<Value>> { get_store_value(&app, "local-transcriptions", &id) }
 
+/// Persist the agent-service deep summary (lynclaw meeting-pipeline) onto the
+/// record. An empty `markdown` clears the fields — that is the retry path
+/// after a failed generation.
+#[tauri::command]
+fn local_transcription_save_summary(
+    app: AppHandle,
+    id: String,
+    title: Option<String>,
+    markdown: String,
+) -> CommandResult<()> {
+    let mut patch = Map::new();
+    if markdown.trim().is_empty() {
+        patch.insert("summaryMarkdown".to_owned(), Value::Null);
+        patch.insert("summaryTitle".to_owned(), Value::Null);
+        patch.insert("summaryGeneratedAt".to_owned(), Value::Null);
+    } else {
+        patch.insert("summaryMarkdown".to_owned(), json!(markdown));
+        patch.insert("summaryTitle".to_owned(), json!(title.filter(|value| !value.trim().is_empty())));
+        patch.insert("summaryGeneratedAt".to_owned(), json!(now()));
+    }
+    patch.insert("updatedAt".to_owned(), json!(now()));
+    update_store_value(&app, "local-transcriptions", &id, patch)?
+        .ok_or("Local transcription not found")?;
+    Ok(())
+}
+
 #[tauri::command]
 fn local_transcription_delete(app: AppHandle, id: String) -> CommandResult<()> {
     // The record row is the last reference to a live session's directory, so
@@ -5414,6 +5452,7 @@ pub fn run() {
             workbench::workbench_resolve_conflict,
             desktop_mcp::desktop_mcp_get, desktop_mcp::desktop_mcp_configure, desktop_mcp::desktop_mcp_complete,
             local_transcription_list, local_transcription_get, local_transcription_delete, local_transcription_audio_url,
+            local_transcription_save_summary,
             local_transcription_track_audio_url,
             sync_upload::sync_upload_audio_size, sync_upload::sync_upload_put_signed_file,
             todo_list, todo_save, todo_delete, todo_add_to_calendar, todo_status_action, todo_capabilities,

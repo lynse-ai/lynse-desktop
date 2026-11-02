@@ -79,8 +79,11 @@ fn setup_requires_an_explicit_nonempty_range_and_keeps_unfiled_separate() {
     assert!(validate_automation(manifest.wiki_automation.as_ref().unwrap()).is_ok());
 }
 #[test]
-fn model_output_failures_retry_per_run_but_session_failures_stay_latched() {
-    // Nondeterministic model rejections deserve a fresh attempt every run.
+fn model_output_failures_retry_per_session_but_stay_latched_within_a_session() {
+    // Nondeterministic model rejections get one fresh attempt per session:
+    // retry_service_failures (bind time) clears them; heartbeat runs keep
+    // them latched so a deterministic rejection cannot burn model calls
+    // every two minutes.
     assert!(is_model_output_failure(
         "Lynclaw synthesis failed (HTTP 422): Invalid Wiki catalog output\n[lynse-validation] {\"catalogIssue\":{\"code\":\"missing_new_source\"}}"
     ));
@@ -994,7 +997,8 @@ fn new_session_retries_service_failures_and_keeps_completed_work() {
     let catalog: Catalog = read_json(&catalog_path(&root)).unwrap();
     assert!(!catalog.failed.contains_key("expired"));
     assert!(!catalog.failed.contains_key("version"));
-    assert!(catalog.failed.contains_key("evidence"));
+    // Model-output rejections are nondeterministic: one fresh attempt per session.
+    assert!(!catalog.failed.contains_key("evidence"));
     assert!(catalog.chunks.contains_key("completed"));
     assert_eq!(catalog.identities["project"], "stable-identity");
     let topics = topics(&root).unwrap();

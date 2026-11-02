@@ -865,7 +865,10 @@ pub(super) fn retry_service_failures(root: &Path) -> CommandResult<bool> {
     let previous = catalog.failed.len();
     let run_recovered = catalog.run_failure.as_ref().is_some_and(|failure| is_service_failure(&failure.message));
     if run_recovered { catalog.run_failure = None; }
-    catalog.failed.retain(|_, error| !is_service_failure(error));
+    // Model-output rejections are nondeterministic: give them one fresh
+    // attempt per session (bind), not per heartbeat, so a deterministic
+    // validation failure cannot burn model calls every two minutes.
+    catalog.failed.retain(|_, error| !is_service_failure(error) && !is_model_output_failure(error));
     let changed = run_recovered || previous != catalog.failed.len();
     if changed {
         write_json(&path, &catalog)?;
@@ -899,7 +902,7 @@ pub(super) async fn run(
     state: &WorkbenchState,
     session: &Session,
 ) -> CommandResult<()> {
-    let (root, local, config, manifest, docs) = {
+    let (root, local, config, mut manifest, docs) = {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
         let manifest = load_state(app, session)?;
@@ -917,13 +920,6 @@ pub(super) async fn run(
         )
     };
     let mut catalog: Catalog = read_json(&catalog_path(&root))?;
-    // Topic failures from earlier passes stay visible in progress reports
-    // instead of being silently reset to zero by the next stage update.
-    let carried_failures = manifest
-        .wiki_progress
-        .as_ref()
-        .map(|progress| progress.failed)
-        .unwrap_or(0);
     if let Some(failure) = &catalog.run_failure {
         if failure.stage != "preparing" || !super::super::knowledge_transport::transient(&failure.message) {
             return Err(failure.message.clone());
@@ -935,6 +931,20 @@ pub(super) async fn run(
         migrate_catalog_revision(&root, &local, &mut catalog, &docs, &manifest, &config, &config.legacy_text_revision)?;
         migrate_scope_cache(&root, &local, &docs, &manifest, &config)?;
     }
+    // An idle vault must not sweep the whole catalog on every worker wakeup:
+    // the heartbeat re-enters this run every two minutes, and the sweep alone
+    // (one topics() parse per chunk) keeps the UI in "organizing" for minutes
+    // with zero model work to show for it.
+    if !needs_processing(&mut manifest, &topics(&root)?, &config) {
+        return Ok(());
+    }
+    // Topic failures from earlier passes stay visible in progress reports
+    // instead of being silently reset to zero by the next stage update.
+    let carried_failures = manifest
+        .wiki_progress
+        .as_ref()
+        .map(|progress| progress.failed)
+        .unwrap_or(0);
     let current_keys: BTreeSet<_> = docs.iter().flat_map(|doc| {
         let prefix = input_key(doc, &config);
         (0..sync::split_text(doc.text().trim(), 12000).len()).map(move |index| format!("{prefix}:{index}"))
@@ -992,12 +1002,12 @@ pub(super) async fn run(
     for doc in &docs {
         for (index, text) in sync::split_text(doc.text().trim(), 12000).into_iter().enumerate() {
             let key = format!("{}:{index}", input_key(doc, &config));
-            let failed_error = catalog.failed.get(&key).cloned();
-            if let Some(error) = failed_error.filter(|error| !is_model_output_failure(error)) {
+            if catalog.failed.contains_key(&key) {
                 applied += 1;
                 catalog_failures += 1;
                 failed_sources.insert(doc.id.clone());
                 if !catalog.details.contains_key(&key) {
+                    let error = catalog.failed[&key].clone();
                     record_failure(&mut catalog, &key, doc, &error);
                 }
                 continue;

@@ -1229,6 +1229,13 @@ pub(super) async fn run(
                         // previous page and recompile on the next pass against
                         // the settled sources instead of latching an error no
                         // automatic path ever retries.
+                        log::warn!(
+                            "[wiki-apply] discarded page for topic {} ({}): citations={:?} sources={:?}",
+                            current.title,
+                            current.id,
+                            page.citations.iter().map(|c| (&c.id, &c.kind, c.revision.as_str())).collect::<Vec<_>>(),
+                            current.source_ids
+                        );
                         discarded = true;
                         current.error.clear();
                         current.failure = None;

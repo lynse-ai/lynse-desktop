@@ -13,8 +13,10 @@ import { useLiveTranslation } from "./use-live-translation";
 import type { LiveAudioSource, LivePermissionStatus } from "./types";
 
 /** One source selector shared by the recording page and the floating window.
- * Native snapshots, rather than optimistic clicks, own the live icon state. */
-export function AudioSourceControls({ compact = false, statusOnly = false, onPreferenceChange }: { compact?: boolean; statusOnly?: boolean; onPreferenceChange?: (mode: "mic" | "system" | "both") => void }) {
+ * Native snapshots, rather than optimistic clicks, own the live icon state.
+ * `inline` fits the unified title bar: small icons with the warning text
+ * beside them instead of below. */
+export function AudioSourceControls({ compact = false, inline = false, statusOnly = false, onPreferenceChange }: { compact?: boolean; inline?: boolean; statusOnly?: boolean; onPreferenceChange?: (mode: "mic" | "system" | "both") => void }) {
   const { api, view } = useLiveTranslation();
   const { t } = useTranslation();
   const [preferred, setPreferred] = useState<LiveAudioSource[]>([]);
@@ -95,10 +97,12 @@ export function AudioSourceControls({ compact = false, statusOnly = false, onPre
 
   if (statusOnly) return notice ? <p role="status" className="px-3 py-1 text-2xs text-warning-text">{notice}</p> : null;
 
+  const small = compact || inline;
+
   return (
     <TooltipProvider delay={200}>
-      <div className={cn("flex min-w-0 flex-col gap-1", !compact && "px-5 py-2")}>
-        <div role="group" aria-label={t("recording_sources.label")} className="flex items-center gap-1">
+      <div className={cn("flex min-w-0 gap-1.5", inline ? "flex-row items-center" : "flex-col gap-1", !compact && !inline && "px-5 py-2")}>
+        <div role="group" aria-label={t("recording_sources.label")} className={cn("flex items-center", inline ? "gap-0.5" : "gap-1")}>
           {(["system", "mic"] as const).map((source) => {
             const enabled = sources.includes(source);
             const error = messages.find((message) => message.source === source);
@@ -117,23 +121,25 @@ export function AudioSourceControls({ compact = false, statusOnly = false, onPre
                 <TooltipTrigger render={
                   <button type="button" role="switch" aria-checked={enabled && !unavailable} aria-label={label}
                     aria-busy={pending === source} disabled={disabled} onClick={() => void toggle(source)}
-                    className={cn("relative flex shrink-0 items-center justify-center rounded-full outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50", compact ? "size-6" : "size-9", enabled ? "text-foreground" : "text-muted-foreground")}>
+                    className={cn("relative flex shrink-0 items-center justify-center rounded-full outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50", small ? "size-6" : "size-9", enabled ? "text-foreground" : "text-muted-foreground")}>
                     <span className="relative" aria-hidden="true">
-                      <Icon className={compact ? "size-3.5" : "size-4"} />
+                      <Icon className={small ? "size-3.5" : "size-4"} />
                       {off && <svg viewBox="0 0 24 24" className="absolute inset-0 size-full overflow-visible" fill="none"><path d="M3 21 21 3" className="stroke-background" strokeWidth="5" /><path d="M3 21 21 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>}
                     </span>
                     {pending === source && <Loader2 aria-hidden="true" className="absolute -right-0.5 -top-0.5 size-3 animate-spin" />}
                     {unavailable && pending !== source && <AlertCircle aria-hidden="true" className="absolute -right-0.5 -top-0.5 size-3 text-warning-text" />}
-                    {!compact && <span aria-hidden="true" className="absolute inset-x-2 bottom-0.5 h-0.5 overflow-hidden rounded-full bg-muted"><span className="block h-full origin-left bg-primary" style={{ transform: `scaleX(${Math.min(1, Math.max(0, level))})` }} /></span>}
+                    {!small && <span aria-hidden="true" className="absolute inset-x-2 bottom-0.5 h-0.5 overflow-hidden rounded-full bg-muted"><span className="block h-full origin-left bg-primary" style={{ transform: `scaleX(${Math.min(1, Math.max(0, level))})` }} /></span>}
                   </button>
                 } />
                 <TooltipContent>{enabled && sources.length === 1 ? `${label}。${t("recording_sources.last_source")}` : label}</TooltipContent>
               </Tooltip>
             );
           })}
-          {!compact && active && view.aecActive && !showAecWarning && <span className="ml-2 text-2xs text-muted-foreground">{t("recording_sources.aec")}</span>}
+          {!small && active && view.aecActive && !showAecWarning && <span className="ml-2 text-2xs text-muted-foreground">{t("recording_sources.aec")}</span>}
         </div>
-        {!compact && notice && <p role="status" className="text-2xs text-warning-text">{notice}</p>}
+        {notice && !compact && (
+          <p role="status" className={cn("text-2xs text-warning-text", inline && "max-w-56 truncate")}>{notice}</p>
+        )}
       </div>
     </TooltipProvider>
   );

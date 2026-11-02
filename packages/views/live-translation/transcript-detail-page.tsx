@@ -210,6 +210,7 @@ export function TranscriptDetailPage() {
               )}
             </span>
           }
+          actions={<AudioSourceControls inline />}
         />
         {/* ═══ Header (functional controls) ═══ */}
         <header
@@ -603,12 +604,6 @@ function RecordingStage({
           className="min-h-0 w-full flex-1"
         />
       </motion.div>
-
-      {/* Recording-source toggles sit under the time ruler, centred on the
-          same axis as the timer and transport below them. */}
-      <div className="flex shrink-0 justify-center">
-        <AudioSourceControls />
-      </div>
 
       {/* Large centisecond timer + status */}
       <motion.div className="mt-6 shrink-0 text-center" {...enter(0.06, 10)}>

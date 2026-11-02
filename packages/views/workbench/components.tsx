@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Markdown } from "@lynse/ui/markdown";
 import { BookOpen, Loader2, RefreshCw, Search } from "../icons";
 import { toast } from "sonner";
+import { BetaBadge } from "../beta-badge";
 import { getDesktopLocalTranscriptionApi } from "../workspace/local-transcription";
 import { AudioPlayer, type AudioPlayerHandle } from "../workspace/audio-player";
 import { useTodoStore } from "../todo/use-todos";
@@ -150,7 +151,7 @@ export function WorkbenchHomeCard() {
   if (!status?.enabled || !wikiEnabled) return null;
   if (isWikiProcessingComplete(status, error)) return null;
   return <Card role="region" aria-label={t("workbench.home_progress_label")} className="mt-5 shrink-0">
-    <CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="flex items-center gap-2 text-sm"><BookOpen aria-hidden="true" className="size-4" />{t("workbench.home_progress_label")}</CardTitle><Button variant="ghost" size="sm" onClick={() => navigation.push("/memory")}>{t("workbench.home_view")}</Button></CardHeader>
+    <CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="flex items-center gap-2 text-sm"><BookOpen aria-hidden="true" className="size-4" />{t("workbench.home_progress_label")}<span aria-hidden="true"><BetaBadge /></span></CardTitle><Button variant="ghost" size="sm" onClick={() => navigation.push("/memory")}>{t("workbench.home_view")}</Button></CardHeader>
     <CardContent className="space-y-3">
       <Progress />
     </CardContent>
@@ -336,7 +337,7 @@ export function WorkbenchDialog() {
   if (!bridge || !wikiEnabled) return null;
   return <Dialog open={panel.open} onOpenChange={(open) => { if (!open) panel.close(); }}>
     <DialogContent className="flex h-[min(88vh,850px)] max-w-5xl flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
-      <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12"><DialogTitle className="flex items-center gap-2">{t("workbench.title")}</DialogTitle><DialogDescription>{t("workbench.brief_hint")}</DialogDescription></DialogHeader>
+      <DialogHeader className="shrink-0 border-b border-border px-5 py-4 pr-12"><DialogTitle className="flex items-center gap-2">{t("workbench.title")}<span aria-hidden="true"><BetaBadge /></span></DialogTitle><DialogDescription>{t("workbench.brief_hint")}</DialogDescription></DialogHeader>
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border p-3">
         <Search className="size-4 text-muted-foreground" /><Input aria-label={t("workbench.search")} placeholder={t("workbench.search")} value={query} onChange={(event) => { setQuery(event.target.value); setBrief(null); }} className="min-w-40 flex-1" />
         <Button size="sm" disabled={reviewing || !panel.status?.initialComplete || !panel.status.allowAi || !query.trim()} onClick={() => void review()}>{reviewing && <Loader2 className="size-3.5 animate-spin" />}{t("workbench.review")}</Button>

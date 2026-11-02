@@ -466,6 +466,7 @@ pub(super) async fn run(
             continue;
         }
         let mut first_failure: Option<WikiFailure> = None;
+        let mut discarded = false;
         for (index, member) in members.iter().enumerate() {
             let selected = member_docs(member, &docs);
             if selected.is_empty() {
@@ -687,26 +688,30 @@ pub(super) async fn run(
                     target.last_fingerprint = version;
                 }
                 Ok(_) => {
-                    first_failure = Some(WikiFailure::new(
-                        "Sources changed; automatic page discarded",
-                        "validating",
-                        target.source_ids.clone(),
-                    ))
+                    // Sources moved mid-compile; keep the previous page and
+                    // let the next pass recompile without latching a permanent
+                    // error no automatic path retries.
+                    discarded = true;
                 }
                 Err(error) => first_failure = Some(error),
             }
         }
-        if selected.is_empty() && first_failure.is_none() {
+        if selected.is_empty() && first_failure.is_none() && !discarded {
             if let Some(page) = target.published.take() {
                 target.history.push(page);
             }
         }
-        target.error = first_failure
-            .as_ref()
-            .map(|f| f.message.clone())
-            .unwrap_or_default();
-        target.failure = first_failure;
-        target.last_attempt_fingerprint = input;
+        if discarded {
+            target.error.clear();
+            target.failure = None;
+        } else {
+            target.error = first_failure
+                .as_ref()
+                .map(|f| f.message.clone())
+                .unwrap_or_default();
+            target.failure = first_failure;
+            target.last_attempt_fingerprint = input;
+        }
         target.force_refresh = false;
         if let Some(c) = &mut target.collection {
             c.status = if target.error.is_empty() {

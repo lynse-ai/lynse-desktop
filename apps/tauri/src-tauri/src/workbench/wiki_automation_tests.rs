@@ -79,6 +79,19 @@ fn setup_requires_an_explicit_nonempty_range_and_keeps_unfiled_separate() {
     assert!(validate_automation(manifest.wiki_automation.as_ref().unwrap()).is_ok());
 }
 #[test]
+fn model_output_failures_retry_per_run_but_session_failures_stay_latched() {
+    // Nondeterministic model rejections deserve a fresh attempt every run.
+    assert!(is_model_output_failure(
+        "Lynclaw synthesis failed (HTTP 422): Invalid Wiki catalog output\n[lynse-validation] {\"catalogIssue\":{\"code\":\"missing_new_source\"}}"
+    ));
+    assert!(is_model_output_failure("Lynclaw returned invalid synthesis JSON"));
+    assert!(is_model_output_failure("Lynclaw synthesis failed (HTTP 500): Invalid Wiki catalog output"));
+    // Session, transport and compile-stage validation errors latch as before.
+    assert!(!is_model_output_failure("Lynclaw synthesis failed (HTTP 401)"));
+    assert!(!is_model_output_failure("Lynclaw synthesis failed (HTTP 503): Model outcome is unknown; retry explicitly"));
+    assert!(!is_model_output_failure("Insufficient evidence must not contain factual output"));
+}
+#[test]
 fn source_selection_covers_new_meetings_movement_exclusion_and_unavailable_sources() {
     let local = root();
     let mut manifest = manifest();

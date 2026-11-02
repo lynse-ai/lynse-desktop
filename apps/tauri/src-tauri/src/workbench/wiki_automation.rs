@@ -311,6 +311,15 @@ struct CatalogFailure {
     validation: Option<ValidationDetails>,
 }
 
+// Model-output rejections are nondeterministic (validation, malformed JSON),
+// unlike session or transport failures; they deserve a fresh attempt per run
+// instead of latching until a manual retry.
+fn is_model_output_failure(error: &str) -> bool {
+    error.contains("[lynse-validation]")
+        || error.contains("invalid synthesis JSON")
+        || error.contains("Invalid Wiki catalog output")
+}
+
 fn record_failure(catalog: &mut Catalog, key: &str, doc: &Document, error: &str) {
     catalog.failed.insert(key.into(), error.into());
     let (message, validation) = validation_failure::split(error.into());
@@ -908,6 +917,13 @@ pub(super) async fn run(
         )
     };
     let mut catalog: Catalog = read_json(&catalog_path(&root))?;
+    // Topic failures from earlier passes stay visible in progress reports
+    // instead of being silently reset to zero by the next stage update.
+    let carried_failures = manifest
+        .wiki_progress
+        .as_ref()
+        .map(|progress| progress.failed)
+        .unwrap_or(0);
     if let Some(failure) = &catalog.run_failure {
         if failure.stage != "preparing" || !super::super::knowledge_transport::transient(&failure.message) {
             return Err(failure.message.clone());
@@ -976,12 +992,12 @@ pub(super) async fn run(
     for doc in &docs {
         for (index, text) in sync::split_text(doc.text().trim(), 12000).into_iter().enumerate() {
             let key = format!("{}:{index}", input_key(doc, &config));
-            if catalog.failed.contains_key(&key) {
+            let failed_error = catalog.failed.get(&key).cloned();
+            if let Some(error) = failed_error.filter(|error| !is_model_output_failure(error)) {
                 applied += 1;
                 catalog_failures += 1;
                 failed_sources.insert(doc.id.clone());
                 if !catalog.details.contains_key(&key) {
-                    let error = catalog.failed[&key].clone();
                     record_failure(&mut catalog, &key, doc, &error);
                 }
                 continue;
@@ -999,6 +1015,7 @@ pub(super) async fn run(
                 stage: "analyzing".into(),
                 completed: applied,
                 total: catalog_total,
+                failed: carried_failures + catalog_failures,
                 current_title: wave
                     .first()
                     .map(|job| job.doc.title.clone())
@@ -1133,12 +1150,18 @@ pub(super) async fn run(
                 completed += 1;
                 None
             } else if !topic.force_refresh && topic.last_attempt_fingerprint == version {
+                // Attempted and settled for this version; count it so the
+                // progress bar can actually reach 100% while the failure is
+                // reported separately.
+                completed += 1;
                 None
             } else {
                 Some((topic, selected, version))
             }
         })
         .collect();
+    let had_work = !jobs.is_empty() || !pending.is_empty();
+    let mut topic_failures_run = 0usize;
     // Compile requests run in waves so a first-run backlog uses the shared
     // model queue concurrently; per-topic state changes still apply serially
     // in the original order after each wave completes.
@@ -1152,6 +1175,7 @@ pub(super) async fn run(
                 stage: "compiling".into(),
                 completed,
                 total: total_topics,
+                failed: carried_failures + catalog_failures + topic_failures_run,
                 topic_title: wave
                     .first()
                     .map(|(topic, _, _)| topic.title.clone())
@@ -1195,12 +1219,19 @@ pub(super) async fn run(
             if page_version(current, &latest_docs, &latest, &models(app, session)?) != *version {
                 continue;
             }
+            let mut discarded = false;
             match result {
                 Ok(mut page) => {
                     page.fingerprint = page_fingerprint(current, &latest, &config, &page.citations);
                     if !valid_page(&local, &latest, &page) {
-                        current.error = "Sources changed; automatic page discarded".into();
-                        current.failure = Some(WikiFailure::new(&current.error, "validating", current.source_ids.clone()));
+                        // Sources moved mid-compile (e.g. a deferred meeting
+                        // finished transcribing during this wave). Keep the
+                        // previous page and recompile on the next pass against
+                        // the settled sources instead of latching an error no
+                        // automatic path ever retries.
+                        discarded = true;
+                        current.error.clear();
+                        current.failure = None;
                     } else {
                         publish_automatic(&root, current, page, version)?;
                         current.error.clear();
@@ -1212,15 +1243,23 @@ pub(super) async fn run(
                 Err(failure) => {
                     current.error = failure.message.clone();
                     current.failure = Some(failure);
+                    topic_failures_run += 1;
                 }
             }
-            current.last_attempt_fingerprint = version.clone();
+            if !discarded {
+                current.last_attempt_fingerprint = version.clone();
+            }
             current.force_refresh = false;
             save_topics(&root, &values)?;
             persist(app, session, &latest)?;
         }
     }
-    collections::run(app, state, session).await?;
+    // An idle pass (every chunk cached and every topic settled) must not
+    // regroup and re-validate every published topic; skip the sweep and just
+    // normalize the completion state below.
+    if had_work {
+        collections::run(app, state, session).await?;
+    }
     let embedding_failures = embed_sources(app, state, session, &config, &root, &local).await?;
     super::drain_usage_receipts(app, session, state).await;
     let _guard = state.serial.lock().await;

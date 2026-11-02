@@ -12,6 +12,28 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.2.5 (2026-11-02)
+
+### New Features
+
+- Local recordings that were saved without cloud sync gain in-app recovery paths: transcribe locally, upload to the cloud later (live-session recordings), and a prominent retry button below a failed summary — retrying a summary on a never-transcribed local recording now runs local transcription instead of failing again.
+- After a local transcription completes, a deep summary is generated automatically through the AI assistant backend and shown as a new "Deep summary" tab on the recording (editable, regenerable, deletable).
+
+### Fixed
+
+- Offline transcription provisions its MLX engine environment with a compatible Python interpreter (3.12/3.11/3.13 preferred, GUI PATH fallbacks), fixing the silent first-time `mlx-qwen3-asr` install failure on the system Python 3.9; existing environments self-heal via lazy installs.
+- HTML and image-text report requests reuse the extended report polling deadline instead of timing out early.
+
+### 新功能
+
+- 未上传云端的本地录音补齐恢复入口：本地模型转写、事后上传到云端（实时录音），总结失败提示下方新增醒目重试按钮——对从未转写的本地录音，重试会先跑本地转写而不是再次失败。
+- 本地转写完成后自动经 AI 助手后端生成深度总结，录音详情页新增「深度总结」页签（可编辑、可重新生成、可删除）。
+
+### 修复
+
+- 离线转写的 MLX 引擎环境改用兼容的 Python 解释器装配（优先 3.12/3.11/3.13，并兜底 GUI 应用的最小 PATH），修复系统 Python 3.9 下首次安装 mlx-qwen3-asr 静默失败的问题；旧环境通过懒安装自愈。
+- HTML / 图文报告请求复用加长的报告轮询时限，不再提前超时。
+
 ## 1.2.4 (2026-11-02)
 
 ### New Features

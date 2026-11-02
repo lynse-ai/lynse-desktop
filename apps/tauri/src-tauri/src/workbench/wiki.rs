@@ -1239,7 +1239,14 @@ impl<'a> PageSources<'a> {
             .or_insert_with(|| {
                 manifest.entries.get(&reference.id)
                     .and_then(|entry| store::read_document(root, entry).ok())
+                    // The compiler only saw documents filtered by
+                    // markdown::source (automation::documents). Validate
+                    // against the same representation, or a citation spanning
+                    // a section that source() removed (e.g. a rendered HTML
+                    // outline) fails against the raw document and every such
+                    // page is discarded on every run.
                     .map(|doc| automation::citation_document(doc, manifest, &reference.kind))
+                    .and_then(super::markdown::source)
                     .filter(|doc| automation::allows(doc, manifest))
             }).as_ref()
     }
@@ -2241,6 +2248,50 @@ pub async fn workbench_wiki(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn page_validation_sees_the_compiler_markdown_filtered_documents() {
+        let local = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let mut manifest = Manifest::default();
+        let mut doc = Document {
+            id: "meeting".into(),
+            kind: "meeting".into(),
+            title: "Rendered outline".into(),
+            transcript: "# Notes\n\nLine A remains.".into(),
+            ai_context_enabled: true,
+            ..Default::default()
+        };
+        // The outline is a rendered page, not markdown: the compiler drops it,
+        // so citations may legally span transcript → todos directly.
+        doc.outline = "<!DOCTYPE html><html><body>Visual</body></html>".into();
+        doc.todos = vec![json!({"title": "Ship it"})];
+        doc.refresh_revision();
+        let entry = store::write_document(&local, &doc, None).unwrap();
+        manifest.entries.insert("meeting".into(), entry);
+        let reference = |quote: &str| store::SourceRef {
+            kind: "meeting".into(),
+            id: "meeting".into(),
+            revision: doc.revision.clone(),
+            quote: quote.into(),
+            ..Default::default()
+        };
+        let page = |quote: &str| {
+            let markdown = "# Topic\n\nBody".into();
+            Revision {
+                content_hash: store::digest(&markdown),
+                markdown,
+                review: "auto_validated".into(),
+                citations: vec![reference(quote)],
+                ..Default::default()
+            }
+        };
+        // The compiler's text joins transcript → todos across the removed
+        // outline; validation must accept exactly that citation.
+        let spanned = format!("{}\n\n\n\nTask: Ship it · completed: false", doc.transcript);
+        assert!(valid_page(&local, &manifest, &page(&spanned)));
+        // The dropped outline itself was never model input and must stay rejected.
+        assert!(!valid_page(&local, &manifest, &page("<!DOCTYPE html><html><body>Visual</body></html>")));
+        fs::remove_dir_all(local).unwrap();
+    }
     #[test]
     fn page_batches_share_one_title_without_changing_facts_or_code_blocks() {
         let summaries = vec![

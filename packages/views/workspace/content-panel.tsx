@@ -13,6 +13,8 @@ import {
   RefreshCw,
   Loader2,
   Trash2,
+  Upload,
+  Cpu,
   ChevronLeft,
   ChevronRight,
 } from "../icons";
@@ -65,6 +67,8 @@ import {
 } from "../live-translation/pending-recording-store";
 import { retryLocalTranscription } from "./local-transcription-retry";
 import { isLocalTranscriptionActive, LOCAL_STATUS_LABEL_KEY } from "./local-transcription-status";
+import { useRecordingCloudSync } from "../live-translation/use-recording-cloud-sync";
+import { triggerLocalAutoSummary, LOCAL_SUMMARY_TAB_ID } from "./local-auto-summary";
 import { wrapCjkSpacing } from "./cjk-spacing";
 import { extractBody } from "./content-html";
 import { MilkdownViewer } from "./milkdown-viewer";
@@ -257,6 +261,9 @@ export function ContentPanel() {
   }, [selectedItemId, files, pendingRecording]);
 
   const isLocalSelectedItem = isLocalFileId(selectedItemId);
+  // Only live-session records can upload: the Rust finalize / cloud-file-id
+  // commands address the store by `local:live:<sessionId>`.
+  const isLiveLocalSelectedItem = !!selectedItemId && selectedItemId.startsWith("local:live:");
   const localStatus = selectedFile?.localStatus;
   const selectedLocalRetrying = !!selectedItemId && retryingLocalFileIds.has(selectedItemId);
   const effectiveLocalStatus: LocalTranscriptionStatus | undefined = selectedLocalRetrying
@@ -266,6 +273,9 @@ export function ContentPanel() {
     status: localStatus,
     retrying: selectedLocalRetrying,
   });
+  // Audio-only record: the engine never ran (or produced nothing) and no job
+  // is active — the point where the user must pick local vs. cloud transcribe.
+  const isRecordedLocal = isLocalSelectedItem && localStatus === "recorded";
 
   const selectedCreatedAt = useMemo(() => {
     if (!selectedItemId || !files) return null;
@@ -307,7 +317,22 @@ export function ContentPanel() {
   }, [conclusions]);
   const currentFileSummariesCleared = !!selectedItemId && clearedSummaryFileIds.has(selectedItemId);
   const pendingSummaryTabs = selectedItemId ? (pendingSummaryTabsByFile[selectedItemId] ?? []) : [];
-  const visibleConclusionTexts = currentFileSummariesCleared ? [] : [...conclusionTexts, ...pendingSummaryTabs];
+  // Local recordings carry their agent-service deep summary on the record
+  // itself (no cloud conclusion) — surface it as the first summary tab.
+  const localSummaryTab = useMemo<SummaryTabModel | null>(() => {
+    const markdown = isLocalSelectedItem ? String((transcription as Record<string, unknown> | undefined)?.summaryMarkdown ?? "").trim() : "";
+    if (!markdown) return null;
+    return {
+      key: LOCAL_SUMMARY_TAB_ID,
+      text: markdown,
+      id: LOCAL_SUMMARY_TAB_ID,
+      name: t("workspace.deep_summary_tab"),
+      status: "ready" as const,
+    };
+  }, [isLocalSelectedItem, transcription, t]);
+  const visibleConclusionTexts = currentFileSummariesCleared
+    ? []
+    : [...(localSummaryTab ? [localSummaryTab] : []), ...conclusionTexts, ...pendingSummaryTabs];
 
   useEffect(() => {
     if (!selectedItemId || pendingSummaryTabs.length === 0 || conclusionTexts.length === 0) return;
@@ -413,11 +438,20 @@ export function ContentPanel() {
     const existing = conclusionSaveTimers.current.get(conclusionId);
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
-      updateConclusion.mutate({ conclusionId, conclusionText: markdown });
+      // The local deep summary has no cloud conclusion behind it — edits go
+      // straight to the record store instead of conclusion/update.
+      if (isLocalSelectedItem && conclusionId === LOCAL_SUMMARY_TAB_ID) {
+        void getDesktopLocalTranscriptionApi()
+          ?.saveSummary(selectedItemId!, null, markdown)
+          .then(() => qc.invalidateQueries({ queryKey: ["file-transcription", selectedItemId] }))
+          .catch(() => undefined);
+      } else {
+        updateConclusion.mutate({ conclusionId, conclusionText: markdown });
+      }
       conclusionSaveTimers.current.delete(conclusionId);
     }, 1500);
     conclusionSaveTimers.current.set(conclusionId, timer);
-  }, [updateConclusion]);
+  }, [updateConclusion, isLocalSelectedItem, selectedItemId, qc]);
 
   const scrollToHeading = useCallback((id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -452,6 +486,60 @@ export function ContentPanel() {
       },
     });
   }, [refreshLocalQueries, selectedItemId]);
+
+  // A recording that stayed local (the completion dialog's "保存到云" was
+  // skipped) had no way back to the cloud — the sync chain only ever ran from
+  // the completion dialog. Route it through the same upload+transcribe chain,
+  // addressing the store by the record's live session id.
+  const { syncLocalRecord } = useRecordingCloudSync();
+  const [uploadingLocalRecording, setUploadingLocalRecording] = useState(false);
+  const handleUploadLocalRecording = useCallback(async () => {
+    const localApi = getDesktopLocalTranscriptionApi();
+    if (!selectedItemId || !localApi || uploadingLocalRecording) return;
+    setUploadingLocalRecording(true);
+    setLocalRetryError(null);
+    try {
+      const record = await localApi.get(selectedItemId);
+      if (!record?.liveSessionId) {
+        setLocalRetryError(t("workspace.upload_needs_live_session"));
+        return;
+      }
+      await syncLocalRecord({
+        id: record.id,
+        liveSessionId: record.liveSessionId,
+        sourcePath: record.sourcePath,
+        durationMs: record.durationMs,
+        startedAt: record.startedAt,
+      });
+      refreshLocalQueries(selectedItemId);
+    } catch (error) {
+      setLocalRetryError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setUploadingLocalRecording(false);
+    }
+  }, [selectedItemId, uploadingLocalRecording, syncLocalRecord, refreshLocalQueries, t]);
+
+  // Regenerate the local deep summary through the agent service. The record's
+  // transcript stays as-is; { force: true } overwrites the stored summary.
+  const [regeneratingLocalSummary, setRegeneratingLocalSummary] = useState(false);
+  const handleRegenerateLocalSummary = useCallback(async () => {
+    if (!selectedItemId || regeneratingLocalSummary) return;
+    const record = await getDesktopLocalTranscriptionApi()?.get(selectedItemId);
+    if (!record?.transcriptText?.trim()) return;
+    setRegeneratingLocalSummary(true);
+    try {
+      const saved = await triggerLocalAutoSummary(
+        { id: selectedItemId, status: "completed", title: record.title },
+        { force: true, t: (key) => t(key) },
+      );
+      if (saved) {
+        await qc.invalidateQueries({ queryKey: ["file-transcription", selectedItemId] });
+        setContentTab("summary-0");
+      }
+    } finally {
+      setRegeneratingLocalSummary(false);
+    }
+  }, [selectedItemId, regeneratingLocalSummary, qc, t, setContentTab]);
 
   const handleReprocessRecording = useCallback(async () => {
     if (!selectedItemId || !selectedLiveSessionId) return;
@@ -705,6 +793,17 @@ export function ContentPanel() {
   const confirmDeleteSummary = useCallback(() => {
     if (!pendingDeleteSummary) return;
     const { conclusionId, idx } = pendingDeleteSummary;
+    // The local deep summary has no cloud conclusion — clearing the record's
+    // summary fields is the delete. A 重新总结 regenerates from scratch.
+    if (conclusionId === LOCAL_SUMMARY_TAB_ID && isLocalSelectedItem) {
+      void getDesktopLocalTranscriptionApi()
+        ?.saveSummary(selectedItemId!, null, "")
+        .then(() => refreshLocalQueries(selectedItemId))
+        .catch(() => undefined);
+      setPendingDeleteSummary(null);
+      if (contentTab === `summary-${idx}`) setContentTab("outline");
+      return;
+    }
     deleteConclusion.mutate(conclusionId, {
       onSuccess: () => {
         setPendingDeleteSummary(null);
@@ -715,7 +814,7 @@ export function ContentPanel() {
       },
       onError: () => setPendingDeleteSummary(null),
     });
-  }, [pendingDeleteSummary, deleteConclusion, contentTab, setContentTab, visibleConclusionTexts.length]);
+  }, [pendingDeleteSummary, deleteConclusion, contentTab, setContentTab, visibleConclusionTexts.length, isLocalSelectedItem, selectedItemId, refreshLocalQueries]);
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col bg-background">
@@ -748,24 +847,36 @@ export function ContentPanel() {
                 </TabButton>
               </ContextMenuTrigger>
               <ContextMenuContent>
-                <ContextMenuItem
-                  onClick={() => {
-                    setSelectedConclusionIdForTemplate(block.id);
-                    setSummaryDialogMode("replace");
-                    setResummarizeOpen(true);
-                  }}
-                  disabled={currentFileSummarizing || !block.id}
-                >
-                  <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
-                  <span>{text("summary_tab.replace_template", summaryTabFallback.replaceTemplate)}</span>
-                </ContextMenuItem>
-                <ContextMenuItem
-                  onClick={handleAutoRerun}
-                  disabled={!selectedItemId || currentFileSummarizing || !defaultTemplateId}
-                >
-                  <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
-                  <span>{t("resummarize.button")}</span>
-                </ContextMenuItem>
+                {block.id !== LOCAL_SUMMARY_TAB_ID && (
+                  <ContextMenuItem
+                    onClick={() => {
+                      setSelectedConclusionIdForTemplate(block.id);
+                      setSummaryDialogMode("replace");
+                      setResummarizeOpen(true);
+                    }}
+                    disabled={currentFileSummarizing || !block.id}
+                  >
+                    <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
+                    <span>{text("summary_tab.replace_template", summaryTabFallback.replaceTemplate)}</span>
+                  </ContextMenuItem>
+                )}
+                {block.id === LOCAL_SUMMARY_TAB_ID ? (
+                  <ContextMenuItem
+                    onClick={() => void handleRegenerateLocalSummary()}
+                    disabled={regeneratingLocalSummary}
+                  >
+                    <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
+                    <span>{t("resummarize.button")}</span>
+                  </ContextMenuItem>
+                ) : (
+                  <ContextMenuItem
+                    onClick={handleAutoRerun}
+                    disabled={!selectedItemId || currentFileSummarizing || !defaultTemplateId}
+                  >
+                    <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
+                    <span>{t("resummarize.button")}</span>
+                  </ContextMenuItem>
+                )}
               </ContextMenuContent>
             </ContextMenu>
           ))}
@@ -790,7 +901,7 @@ export function ContentPanel() {
               setSummaryDialogMode("add");
               setResummarizeOpen(true);
             }}
-            disabled={!selectedItemId || currentFileSummarizing}
+            disabled={!selectedItemId || currentFileSummarizing || isLocalSelectedItem}
             className="ml-0.5 flex shrink-0 items-center justify-center rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-accent/50 hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50"
             title={t("add_summary.button")}
           >
@@ -806,18 +917,20 @@ export function ContentPanel() {
               <MoreHorizontal className="size-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52">
-              <DropdownMenuItem
-                onClick={() => {
-                  if (!activeSummary?.id) return;
-                  setSelectedConclusionIdForTemplate(activeSummary.id);
-                  setSummaryDialogMode("replace");
-                  setResummarizeOpen(true);
-                }}
-                disabled={currentFileSummarizing || !activeSummary?.id}
-              >
-                <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
-                <span>{text("summary_tab.replace_template", summaryTabFallback.replaceTemplate)}</span>
-              </DropdownMenuItem>
+              {activeSummary?.id !== LOCAL_SUMMARY_TAB_ID && (
+                <DropdownMenuItem
+                  onClick={() => {
+                    if (!activeSummary?.id) return;
+                    setSelectedConclusionIdForTemplate(activeSummary.id);
+                    setSummaryDialogMode("replace");
+                    setResummarizeOpen(true);
+                  }}
+                  disabled={currentFileSummarizing || !activeSummary?.id}
+                >
+                  <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
+                  <span>{text("summary_tab.replace_template", summaryTabFallback.replaceTemplate)}</span>
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 variant="destructive"
                 onClick={() => {
@@ -831,8 +944,8 @@ export function ContentPanel() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
-                onClick={handleAutoRerun}
-                disabled={!selectedItemId || currentFileSummarizing || !defaultTemplateId}
+                onClick={() => (isLocalSelectedItem ? void handleRegenerateLocalSummary() : handleAutoRerun())}
+                disabled={!selectedItemId || currentFileSummarizing || (!isLocalSelectedItem && !defaultTemplateId) || regeneratingLocalSummary}
               >
                 <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
                 <span>{t("resummarize.button")}</span>
@@ -900,6 +1013,25 @@ export function ContentPanel() {
                       {t("workspace.retry")}
                     </button>
                   )}
+                  {/* Live-session recordings can still join the cloud after the
+                      fact — the completion dialog's "保存到云" is not the last
+                      chance. Hidden once the record reports "synced". */}
+                  {isLiveLocalSelectedItem &&
+                    selectedFile?.cloudSyncStatus !== "synced" && (
+                      <button
+                        type="button"
+                        disabled={uploadingLocalRecording}
+                        onClick={handleUploadLocalRecording}
+                        className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+                      >
+                        {uploadingLocalRecording ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          <Upload className="size-3" />
+                        )}
+                        {t("workspace.upload_to_cloud")}
+                      </button>
+                    )}
                   <button
                     type="button"
                     onClick={handleDeleteLocalTranscription}
@@ -925,7 +1057,24 @@ export function ContentPanel() {
                 {currentFileRerunning ? (
                   <ResummaryPendingState />
                 ) : currentFileResummaryError ? (
-                  <ResummaryErrorState />
+                  <ResummaryErrorState
+                    action={
+                      isLocalSelectedItem && (localStatus === "recorded" || localStatus === "failed")
+                        ? // No transcript exists — a summary rerun would fail the
+                          // same way. The actual recovery is transcribing first.
+                          {
+                            label: t("workspace.transcribe_locally"),
+                            onAction: () => void handleRetryLocalTranscription(),
+                            busy: selectedLocalRetrying,
+                          }
+                        : {
+                            label: t("workspace.regenerate"),
+                            onAction: () => void handleAutoRerun(),
+                            busy: currentFileSummarizing,
+                            disabled: !defaultTemplateId,
+                          }
+                    }
+                  />
                 ) : (
                   <>
                     {outlineStyles && contentTab === "outline" && (
@@ -944,6 +1093,13 @@ export function ContentPanel() {
                            "暂无大纲" would read as a failure while a local job is
                            still running. Same predicate as the 转写 tab. */
                         <LocalTranscriptionPendingState retrying={selectedLocalRetrying} />
+                      ) : isRecordedLocal ? (
+                        <RecordedLocalActions
+                          onLocalTranscribe={() => void handleRetryLocalTranscription()}
+                          onUpload={() => void handleUploadLocalRecording()}
+                          localBusy={selectedLocalRetrying}
+                          uploadBusy={uploadingLocalRecording}
+                        />
                       ) : (
                         <NoContentState label={t("workspace.no_outline")} />
                       )
@@ -1102,7 +1258,16 @@ export function ContentPanel() {
                             </div>
                           </div>
                         ) : isLocalSelectedItem ? (
-                          <NoContentState label={t("workspace.no_transcription")} />
+                          isRecordedLocal ? (
+                            <RecordedLocalActions
+                              onLocalTranscribe={() => void handleRetryLocalTranscription()}
+                              onUpload={() => void handleUploadLocalRecording()}
+                              localBusy={selectedLocalRetrying}
+                              uploadBusy={uploadingLocalRecording}
+                            />
+                          ) : (
+                            <NoContentState label={t("workspace.no_transcription")} />
+                          )
                         ) : (
                           <TranscriptionGeneratePrompt
                             hint={t("workspace.transcription_generate_hint")}
@@ -1233,12 +1398,30 @@ function ResummaryPendingState() {
   );
 }
 
-function ResummaryErrorState() {
+function ResummaryErrorState({
+  action,
+}: {
+  /** Prominent recovery button rendered under the failure text. Callers pick
+   *  the right recovery: rerun the summary, or — for a local recording with no
+   *  transcript — transcribe first, since a rerun would only fail again. */
+  action?: { label: string; onAction: () => void; busy?: boolean; disabled?: boolean };
+}) {
   const { t } = useTranslation();
   return (
     <div className="flex min-h-[320px] flex-col items-center justify-center gap-2 text-center">
       <p className="text-sm font-medium text-foreground">{t("resummarize.error_title")}</p>
       <p className="text-xs text-muted-foreground">{t("resummarize.error_description")}</p>
+      {action && (
+        <button
+          type="button"
+          onClick={action.onAction}
+          disabled={action.busy || action.disabled}
+          className="mt-3 inline-flex items-center justify-center gap-2 rounded-full bg-foreground px-6 py-2.5 text-sm font-medium text-background transition-colors hover:bg-foreground/90 disabled:pointer-events-none disabled:opacity-50"
+        >
+          {action.busy ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+          <span>{action.label}</span>
+        </button>
+      )}
     </div>
   );
 }
@@ -1659,6 +1842,53 @@ function NoContentState({ label }: { label: string }) {
   return (
     <div className="flex items-center justify-center py-12">
       <p className="text-xs text-muted-foreground">{label}</p>
+    </div>
+  );
+}
+
+/** Audio-only local recording (`recorded`): no transcript exists and nothing
+ *  is running. Offers the two ways forward — run the local engine, or upload
+ *  to the cloud and let the server pipeline transcribe (spends credits). */
+function RecordedLocalActions({
+  onLocalTranscribe,
+  onUpload,
+  localBusy,
+  uploadBusy,
+}: {
+  onLocalTranscribe: () => void;
+  onUpload: () => void;
+  localBusy: boolean;
+  uploadBusy: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 py-10 text-center">
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+        <FileAudio className="size-6" />
+      </div>
+      <p className="max-w-xs text-sm text-muted-foreground">
+        {t("workspace.recorded_no_transcription_hint")}
+      </p>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <button
+          type="button"
+          onClick={onLocalTranscribe}
+          disabled={localBusy || uploadBusy}
+          className="inline-flex items-center justify-center gap-2 rounded-full bg-foreground px-5 py-2 text-sm font-medium text-background transition-colors hover:bg-foreground/90 disabled:pointer-events-none disabled:opacity-50"
+        >
+          {localBusy ? <Loader2 className="size-4 animate-spin" /> : <Cpu className="size-4" />}
+          <span>{t("workspace.transcribe_locally")}</span>
+        </button>
+        <button
+          type="button"
+          onClick={onUpload}
+          disabled={localBusy || uploadBusy}
+          className="inline-flex items-center justify-center gap-2 rounded-full border border-border px-5 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent/50 disabled:pointer-events-none disabled:opacity-50"
+        >
+          {uploadBusy ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+          <span>{t("workspace.upload_and_transcribe")}</span>
+        </button>
+      </div>
     </div>
   );
 }

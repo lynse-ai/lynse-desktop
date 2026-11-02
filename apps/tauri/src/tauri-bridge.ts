@@ -400,6 +400,8 @@ export async function installTauriBridge(): Promise<void> {
       start: (audioPath: string, options?: unknown) => command("local_transcription_start", { audioPath, options }),
       list: () => command("local_transcription_list"),
       get: (id: string) => command("local_transcription_get", { id }),
+      saveSummary: (id: string, title: string | null, markdown: string) =>
+        command("local_transcription_save_summary", { id, title, markdown }),
       retry: (id: string, options?: { track?: "mic" | "system" }) =>
         command("local_transcription_retry", { id, options }),
       getTrackAudioUrl: (id: string, file: string) =>

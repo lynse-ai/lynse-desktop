@@ -24,6 +24,9 @@ export interface WorkspaceItem {
    *  progress pill and retry affordance — list cards show a local-recording
    *  badge instead of encoding this in `tags`. */
   localStatus?: LocalTranscriptionStatus;
+  /** Local transcriptions only: "pending" until the recording uploads to the
+   *  cloud (see live_translation_finalize_local). Drives the upload affordance. */
+  cloudSyncStatus?: string;
   /** Cloud files only: owning team (needed by team-scoped write endpoints). */
   teamId?: string;
 }
@@ -95,6 +98,10 @@ export interface FileTranscription {
   fileId: string;
   taskId: string;
   content: string;
+  /** Local transcriptions only: agent-service deep summary fields. */
+  summaryMarkdown?: string | null;
+  summaryTitle?: string | null;
+  summaryGeneratedAt?: string | null;
   [key: string]: unknown;
 }
 
@@ -175,6 +182,8 @@ export interface LocalTranscriptionRecord {
   /** Wall-clock time the transcription took, in ms (batch engines only). */
   elapsedMs?: number;
   expectedSpeakers?: number;
+  /** Audio language tag persisted with the recording (e.g. "zh"). */
+  language?: string;
   hotwordPackageId?: string;
   engine: "qwen3" | "funasr" | "whisper" | "vibeasr" | "mlx" | "moss" | "ilivedata_rtvt";
   modelId?: string;
@@ -197,6 +206,11 @@ export interface LocalTranscriptionRecord {
   /** Present on recordings captured by the live-translation sidecar; needed
    *  for the detail panel's reprocess entry. */
   liveSessionId?: string;
+  /** Deep summary produced by the agent service (lynclaw meeting-pipeline)
+   *  after local transcription completed; cleared (null) while regenerating. */
+  summaryMarkdown?: string | null;
+  summaryTitle?: string | null;
+  summaryGeneratedAt?: string | null;
 }
 
 export interface LocalTranscriptionOptions {

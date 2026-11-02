@@ -32,6 +32,7 @@ import {
   localRecordToTranscription,
   mergeCloudAndLocalFiles,
 } from "../local-transcription";
+import { triggerLocalAutoSummary } from "../local-auto-summary";
 import { getWorkbenchApi } from "../../workbench/api";
 import { removeNotesFromVault } from "../note-vault";
 import { transcribeWithCreditsToast } from "../transcription-credits";
@@ -1152,6 +1153,14 @@ export function useLocalTranscriptionUpdates() {
         // submitted would be noise.
         if (update.status === "completed") {
           toast.success(t("workspace.local_transcribe_done", { title: update.title }));
+          // Deep summary via the agent service runs unattended right after the
+          // transcript lands; refresh the note once it is stored.
+          void triggerLocalAutoSummary(update, { t }).then((saved) => {
+            if (saved) {
+              void qc.invalidateQueries({ queryKey: ["file-transcription", update.id] });
+              void qc.invalidateQueries({ queryKey: ["notes"] });
+            }
+          });
         } else if (update.status === "failed") {
           toast.error(t("workspace.local_transcribe_failed", { title: update.title }), {
             description: update.error ?? undefined,

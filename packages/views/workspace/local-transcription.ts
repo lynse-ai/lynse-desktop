@@ -199,6 +199,8 @@ export interface DesktopLocalTranscriptionApi {
   start: (audioPath: string, options?: LocalTranscriptionOptions) => Promise<LocalTranscriptionRecord>;
   list: () => Promise<LocalTranscriptionRecord[]>;
   get: (id: string) => Promise<LocalTranscriptionRecord | null>;
+  /** Persist the agent-service deep summary (empty markdown clears it). */
+  saveSummary: (id: string, title: string | null, markdown: string) => Promise<void>;
   retry: (id: string, options?: { track?: "mic" | "system" }) => Promise<unknown>;
   /** Audio URL for one track file of a dual-channel recording. */
   getTrackAudioUrl: (id: string, file: string) => Promise<string>;
@@ -264,6 +266,7 @@ export function localRecordToWorkspaceItem(record: LocalTranscriptionRecord): Wo
     // tag; the status lives here for the detail panel's progress pill.
     localStatus: status,
     transcriptionCompleted: status === "completed",
+    ...(record.syncStatus !== undefined ? { cloudSyncStatus: record.syncStatus } : {}),
     ...(record.durationMs !== undefined ? { durationSeconds: record.durationMs / 1000 } : {}),
   };
 }
@@ -287,6 +290,9 @@ export function localRecordToTranscription(record: LocalTranscriptionRecord): Fi
     aecDegraded: record.aecDegraded,
     trackStatuses: record.trackStatuses,
     liveSessionId: record.liveSessionId,
+    summaryMarkdown: record.summaryMarkdown ?? null,
+    summaryTitle: record.summaryTitle ?? null,
+    summaryGeneratedAt: record.summaryGeneratedAt ?? null,
     records: segments.map((segment) => ({
       id: segment.id,
       speakerName: normalizeLocalSpeakerName(segment.speakerName ?? segment.speaker, segment.rawSpeaker),

@@ -50,6 +50,18 @@ interface SyncTarget {
   existingFileId?: string;
 }
 
+/** The subset of a stored local transcription record the upload path needs.
+ *  Only live-session records carry `liveSessionId` — the Rust finalize /
+ *  cloud-file-id commands address the store by `local:live:<sessionId>`, so
+ *  imported-audio records (no live session) must not use this path. */
+export interface LocalRecordSyncInput {
+  id: string;
+  liveSessionId: string;
+  sourcePath: string;
+  durationMs?: number;
+  startedAt?: string;
+}
+
 async function runCloudSync(target: SyncTarget): Promise<void> {
   const desktopApi = getDesktopLiveTranslationApi();
   if (!desktopApi) throw new Error("desktop live translation api unavailable");
@@ -137,5 +149,19 @@ export function useRecordingCloudSync() {
     [syncTarget],
   );
 
-  return { syncCompletedSession };
+  // Upload a recording that finished earlier and stayed local (the completion
+  // dialog's "保存到云" was skipped — the app has no other later-upload entry).
+  const syncLocalRecord = useCallback(
+    (record: LocalRecordSyncInput) =>
+      syncTarget({
+        sessionId: record.liveSessionId,
+        recordId: record.id,
+        filename: deriveFilename({ playbackPath: record.sourcePath }),
+        durationMs: record.durationMs ?? 0,
+        startedAt: record.startedAt,
+      }),
+    [syncTarget],
+  );
+
+  return { syncCompletedSession, syncLocalRecord };
 }

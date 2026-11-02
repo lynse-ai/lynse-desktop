@@ -66,6 +66,9 @@ describe("local transcription helpers", () => {
       fileId: "local:abc",
       taskId: "local-funasr",
       content: "大家好，今天讨论离线转写。",
+      summaryMarkdown: null,
+      summaryTitle: null,
+      summaryGeneratedAt: null,
       records: [
         {
           id: "seg-1",
@@ -76,6 +79,19 @@ describe("local transcription helpers", () => {
           text: "大家好，今天讨论离线转写。",
         },
       ],
+    });
+  });
+
+  it("carries the record's deep summary fields through to the transcription shape", () => {
+    expect(localRecordToTranscription({
+      ...localRecord,
+      summaryMarkdown: "## 要点",
+      summaryTitle: "离线转写讨论",
+      summaryGeneratedAt: "2026-07-04T08:06:00.000Z",
+    })).toMatchObject({
+      summaryMarkdown: "## 要点",
+      summaryTitle: "离线转写讨论",
+      summaryGeneratedAt: "2026-07-04T08:06:00.000Z",
     });
   });
 

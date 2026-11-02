@@ -117,8 +117,10 @@ export const chatPollTiming = {
 
 /** Report-style requests mirror the server's report turn classification
  * (lynclaw `is_report_style_message`): they fetch a whole period of meetings
- * and get the extended `LYNCLAW_HTTP_REPORT_TURN_TIMEOUT_SECONDS` budget. */
-const REPORT_QUERY_TOKENS = ["周报", "月报", "季报", "季度报告"] as const;
+ * and get the extended `LYNCLAW_HTTP_REPORT_TURN_TIMEOUT_SECONDS` budget.
+ * HTML / 图文报告 render through generate_visual_summary (Chromium) and are
+ * equally slow, so they ride the same extended deadline. */
+const REPORT_QUERY_TOKENS = ["周报", "月报", "季报", "季度报告", "HTML", "html", "图文报告"] as const;
 
 /**
  * Poll deadline for one turn: report-style queries get the extended report

@@ -780,6 +780,11 @@ describe("PollChatTransport", () => {
     expect(turnPollDeadlineMs("帮我生成10月份月报")).toBe(chatPollTiming.reportDeadlineMs);
     expect(turnPollDeadlineMs("整理一下上周的周报")).toBe(chatPollTiming.reportDeadlineMs);
     expect(turnPollDeadlineMs("出一份第三季度报告")).toBe(chatPollTiming.reportDeadlineMs);
+    expect(turnPollDeadlineMs("请汇总10月20号到10月29号我参加的所有会议与笔记，生成一份 HTML 格式的报告")).toBe(
+      chatPollTiming.reportDeadlineMs,
+    );
+    expect(turnPollDeadlineMs("生成一份html页面展示会议要点")).toBe(chatPollTiming.reportDeadlineMs);
+    expect(turnPollDeadlineMs("把10月的会议生成一份图文报告")).toBe(chatPollTiming.reportDeadlineMs);
     expect(turnPollDeadlineMs("总结一下昨天那场会")).toBe(chatPollTiming.deadlineMs);
     expect(turnPollDeadlineMs("")).toBe(chatPollTiming.deadlineMs);
     expect(turnPollDeadlineMs(undefined)).toBe(chatPollTiming.deadlineMs);

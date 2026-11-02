@@ -1,0 +1,7 @@
+{
+  "en": "What's new\n\n• Chat can suggest follow-up questions, show the sources behind an answer, and present tool activity as status chips.\n• The first knowledge-base organization is much faster thanks to parallel model calls.\n• Recording source toggles (system audio / microphone) moved below the timeline.\n• Waiting labels are now plain text without the shimmer effect.",
+  "zh-Hans": "更新内容\n\n• 聊天支持追问建议、来源展示与工具调用状态芯片。\n• 知识库首次整理大幅提速（模型调用并行化）。\n• 录音来源开关（电脑声音 / 麦克风）移到时间进度条下方。\n• 等待状态文字改为纯文本，去掉流光效果。",
+  "zh-Hant": "更新內容\n\n• 聊天支援追問建議、來源顯示與工具呼叫狀態晶片。\n• 知識庫首次整理大幅提速（模型呼叫並行化）。\n• 錄音來源開關（電腦聲音 / 麥克風）移到時間進度條下方。\n• 等待狀態文字改為純文字，去掉流光效果。",
+  "ja": "更新内容\n\n• チャットに質問の候補表示、出典表示、ツール実行状況のステータスチップを追加。\n• ナレッジベースの初回整理が大幅に高速化（モデル呼び出しの並列化）。\n• 録音ソースの切り替え（システム音声 / マイク）をタイムラインの下に移動。\n• 待機中のテキストからシマー効果を除去しました。",
+  "ko": "업데이트 내용\n\n• 채팅에 후속 질문 제안, 출처 표시, 도구 상태 칩을 추가했습니다.\n• 지식 베이스 첫 정리가 훨씬 빨라졌습니다(모델 호출 병렬화).\n• 녹음 소스 전환(시스템 오디오 / 마이크) 버튼을 타임라인 아래로 이동했습니다.\n• 대기 상태 텍스트에서 반짝임 효과를 제거했습니다."
+}

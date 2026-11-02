@@ -12,6 +12,23 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.2.4 (2026-11-02)
+
+### New Features
+
+- Chat answers can suggest follow-up questions, show the sources behind an answer, and present tool activity as compact status chips.
+- The first knowledge-base organization now runs its model calls concurrently (configurable via `LYNSE_WIKI_CONCURRENCY`, default 4) and reuses one connection pool, cutting a large first run from hours to roughly a quarter of the time.
+
+### Fixed
+
+- Recording source toggles (system audio / microphone) now sit under the timeline instead of the window's top-left corner.
+- Waiting-state labels render as plain text without the shimmer sweep.
+
+### 修复
+
+- 录音来源开关（电脑声音 / 麦克风）从窗口左上角移到时间进度条下方。
+- 等待状态文字不再带流光扫过效果。
+
 ## 1.2.3 (2026-11-01)
 
 ### Fixed

@@ -29,6 +29,11 @@ export const featureFlags = {
    * the exact pre-plugin behavior — so this flag alone rolls back the whole
    * plugin system (PRD: docs/plugin-architecture-prd.md). */
   pluginMarketplace: true,
+  /** Workbench knowledge base (Wiki): sidebar entry, /memory page, home
+   * progress card, desktop chat context and the Rust synthesis worker. The
+   * pipeline is still under release hold — exposure follows the beta gate
+   * below (debug-channel builds, dev shells and the runtime test mode). */
+  wiki: true,
 } as const;
 
 /**
@@ -53,9 +58,15 @@ export function isConnectionsEnabled(): boolean {
   return featureFlags.connections && isBetaFeaturesUnlocked();
 }
 
-/** Knowledge browsing and organization are available in every build channel. */
+/**
+ * Whether the knowledge base (Wiki) is exposed. The single gate every entry
+ * point reads: the flag above AND the beta channel gate — debug-channel
+ * builds, dev shells and the runtime test mode show it; official builds hide
+ * the sidebar entry, the /memory page, the home card and the desktop chat
+ * context, and the Rust worker stays disabled (bind sends betaEnabled=false).
+ */
 export function isWikiEnabled(): boolean {
-  return true;
+  return featureFlags.wiki && isBetaFeaturesUnlocked();
 }
 
 /**

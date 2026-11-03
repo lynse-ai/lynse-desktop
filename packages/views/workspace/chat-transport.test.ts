@@ -1314,8 +1314,12 @@ describe("knowledge base chat context", () => {
     apiMocks.get.mockResolvedValue({status:"done",text:"Done"});
     await new PollChatTransport().send(sendOptions());
     const body = apiMocks.post.mock.calls[0]?.[1];
-    if (["official", "test", "exit-during-recall"].includes(mode)) expect(body).toHaveProperty("desktopContext",evidence);
+    // Official builds hide the knowledge base entirely: the wiki-enabled gate
+    // now requires the beta unlock, so only test mode sends desktop context.
+    // "exit-during-recall" exits test mode between the two gate checks, so the
+    // recall runs once but the result is discarded.
+    if (mode === "test") expect(body).toHaveProperty("desktopContext",evidence);
     else expect(body).not.toHaveProperty("desktopContext");
-    expect(context).toHaveBeenCalledTimes(["disabled", "consent-revoked"].includes(mode) ? 0 : 1);
+    expect(context).toHaveBeenCalledTimes(["disabled", "consent-revoked", "official"].includes(mode) ? 0 : 1);
   });
 });

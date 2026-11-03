@@ -12,6 +12,28 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.2.6 (2026-11-03)
+
+### Fixed
+
+- Knowledge base auto-organization could discard freshly compiled pages on every pass and never reach "completed": page validation compared citations against the raw meeting document, while the compiler only ever saw the markdown-filtered version (meetings with a rendered HTML outline failed for every citation that spanned the removed section). Validation now reads the same filtered documents the compiler sees, so those pages publish normally.
+- Failed knowledge pages are retried automatically on the next pass instead of latching as permanent errors, and transient model-service failures recover within the run instead of stopping it.
+- Idle passes no longer rescan the whole catalog every two minutes; the "organizing" banner now clears once everything is processed, and real per-topic failures are reported honestly instead of being masked by a perpetual progress bar.
+
+### Changed
+
+- The knowledge base (Wiki) feature is hidden in official builds while its release quality is being stabilized: the sidebar entry, the page, the home progress card and the desktop chat context are gated to debug-channel builds, development shells and the runtime test mode (five taps on the login logo). Existing knowledge bases stay intact on disk and the feature reappears unchanged for the team under test mode.
+
+### 修复
+
+- 知识库自动整理可能每一轮都丢弃刚编译完成的页面、永远到不了"完成"：页面校验对比的是原始会议文档，而编译时模型只看到经过 markdown 过滤的版本（带 HTML 可视化摘要大纲的会议，凡引用跨越被过滤段落的引文全部失败）。现在校验与编译使用同一份过滤后的文档，这类页面正常发布。
+- 编译失败的专题改为下一轮自动重试，不再永久记为错误；模型服务的瞬态故障在运行内自动恢复，不再中断整轮整理。
+- 空闲轮次不再每两分钟全量扫描目录；全部处理完后"整理中"横幅会正常消失，真实的专题级失败如实展示，不再被常驻进度条掩盖。
+
+### 变更
+
+- 正式版构建暂时隐藏知识库（Wiki）功能：侧边栏入口、页面、首页进度卡与桌面聊天上下文统一收进调试渠道门控（调试构建、开发环境与运行时测试模式可见，登录页 logo 五击开启）。已有知识库数据完整保留在本地磁盘，团队在测试模式下功能原样恢复。
+
 ## 1.2.5 (2026-11-02)
 
 ### New Features

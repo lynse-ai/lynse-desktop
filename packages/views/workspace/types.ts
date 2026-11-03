@@ -91,6 +91,19 @@ export interface RecordingAudioSourceInterval {
   reason: string;
 }
 
+/** One rendered transcript row in the detail panel (localRecordToTranscription
+ *  output shape; cloud transcriptions map server rows onto the same shape). */
+export interface TranscriptionRecordRow {
+  id: string;
+  speakerName: string;
+  beginTimeStr: string;
+  beginTime?: number;
+  endTime?: number;
+  text: string;
+  translatedText?: string;
+  source?: "mic" | "system";
+}
+
 export interface FileTranscription {
   audioSourceIntervals?: RecordingAudioSourceInterval[];
   waveformPeaks?: number[];
@@ -98,10 +111,16 @@ export interface FileTranscription {
   fileId: string;
   taskId: string;
   content: string;
+  /** Playback-ordered transcript rows (the 转写 tab list and chapters source). */
+  records?: TranscriptionRecordRow[];
   /** Local transcriptions only: agent-service deep summary fields. */
   summaryMarkdown?: string | null;
   summaryTitle?: string | null;
   summaryGeneratedAt?: string | null;
+  /** Local transcriptions only: AI semantic chapter document (see ChapterDocument). */
+  chaptersDocument?: ChapterDocument | null;
+  chaptersStatus?: ChaptersStatus;
+  chaptersError?: string | null;
   [key: string]: unknown;
 }
 
@@ -123,6 +142,39 @@ export interface LocalTranscriptionSegment {
   /** @deprecated compatibility with first local records */
   speaker?: string;
 }
+
+/** One AI-proposed semantic chapter. Timestamps are always mapped from the
+ *  record's real segments — the model only proposes segment-id boundaries. */
+export interface SemanticChapter {
+  id: string;
+  order: number;
+  /** Audio timeline, milliseconds; null when the anchor segment lacks timestamps. */
+  startMs: number | null;
+  endMs: number | null;
+  /** Inclusive transcript segment boundaries (from the record's segments). */
+  startSegmentId: string;
+  endSegmentId: string;
+  title: string;
+  summary: string;
+  keywords: string[];
+  /** Set when the user edited title/summary; regeneration must not silently overwrite. */
+  manuallyEdited?: boolean;
+}
+
+/** Versioned chapter document persisted on the local record. */
+export interface ChapterDocument {
+  schemaVersion: 1;
+  /** Hash of the transcript the chapters were generated from; a mismatch ⇒ stale. */
+  transcriptHash: string;
+  model?: string;
+  promptVersion: string;
+  generatedAt: string;
+  chapters: SemanticChapter[];
+}
+
+/** chaptersStatus lives next to the document: the document itself only ever
+ *  holds generated content, while the status tracks the generation task. */
+export type ChaptersStatus = "idle" | "generating" | "ready" | "error" | "stale";
 
 export type LocalTranscriptionStatus =
   | "queued"
@@ -211,6 +263,10 @@ export interface LocalTranscriptionRecord {
   summaryMarkdown?: string | null;
   summaryTitle?: string | null;
   summaryGeneratedAt?: string | null;
+  /** AI semantic chapters (lynclaw /api/chapters/generate); see ChapterDocument. */
+  chaptersDocument?: ChapterDocument | null;
+  chaptersStatus?: ChaptersStatus;
+  chaptersError?: string | null;
 }
 
 export interface LocalTranscriptionOptions {

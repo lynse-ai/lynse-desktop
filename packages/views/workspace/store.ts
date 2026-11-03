@@ -49,7 +49,7 @@ function saveNoteTabs(tabs: NoteTab[]) {
   if (typeof window !== "undefined") localStorage.setItem(NOTE_TABS_KEY, JSON.stringify(tabs));
 }
 
-type ContentTab = "outline" | "transcription" | `summary-${number}` | `note-${string}`;
+type ContentTab = "outline" | "transcription" | "chapters" | `summary-${number}` | `note-${string}`;
 type FileSortField = "updatedAt" | "createdAt";
 type FileSortDir = "desc" | "asc";
 

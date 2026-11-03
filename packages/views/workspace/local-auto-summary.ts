@@ -66,11 +66,18 @@ export async function triggerLocalAutoSummary(
 
   const localApi = getDesktopLocalTranscriptionApi();
   if (!localApi) return false;
-  const client = api();
-  // The summarize endpoint lives on the agent service only — without an
-  // agent endpoint the business base would just 404.
-  if (!client.getAgentBaseUrl()) return false;
-  const sessionToken = client.getToken();
+  // An uninitialized API client (tests, odd embed contexts) must degrade to a
+  // quiet skip — this runs unattended and an unhandled rejection here would
+  // contradict the no-nag contract below.
+  let sessionToken: string | null = null;
+  try {
+    // The summarize endpoint lives on the agent service only — without an
+    // agent endpoint the business base would just 404.
+    if (!api().getAgentBaseUrl()) return false;
+    sessionToken = api().getToken();
+  } catch {
+    return false;
+  }
   if (!sessionToken) return false;
 
   inFlight.add(update.id);

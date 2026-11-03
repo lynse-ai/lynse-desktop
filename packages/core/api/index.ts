@@ -8,3 +8,5 @@ export { getContextIdentity, listContextInbox, getContextInboxItem, actOnContext
 export type { ContextInboxItem, ContextInboxResponse, ContextInboxDisabledResponse, ContextInboxResult, ContextInboxAction, ContextScope, ContextPreferences, ContextPreferencesChange } from "./context";
 export { summarizeTranscript, SUMMARY_HTML_STYLES } from "./summarize";
 export type { SummarizeTranscriptInput, SummarizeTranscriptResult, SummaryHtmlStyle } from "./summarize";
+export { generateChapters } from "./chapters";
+export type { GenerateChaptersInput, GenerateChaptersResult, GeneratedChapter, ChapterUtterance } from "./chapters";

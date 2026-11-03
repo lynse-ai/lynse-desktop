@@ -69,6 +69,9 @@ describe("local transcription helpers", () => {
       summaryMarkdown: null,
       summaryTitle: null,
       summaryGeneratedAt: null,
+      chaptersDocument: null,
+      chaptersStatus: undefined,
+      chaptersError: null,
       records: [
         {
           id: "seg-1",

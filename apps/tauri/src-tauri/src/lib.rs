@@ -3246,6 +3246,35 @@ fn local_transcription_save_summary(
     Ok(())
 }
 
+/// Persist the AI semantic chapter document (lynclaw /api/chapters/generate)
+/// onto the record. `document: null` clears it — that is the reset path after
+/// a failed generation or an explicit "discard chapters". The status travels
+/// separately so the UI can show generating/ready/error without touching the
+/// stored chapters, and manual edits ride in the document itself.
+#[tauri::command]
+fn local_transcription_save_chapters(
+    app: AppHandle,
+    id: String,
+    document: Option<Value>,
+    status: String,
+    error: Option<String>,
+) -> CommandResult<()> {
+    let mut patch = Map::new();
+    patch.insert(
+        "chaptersDocument".to_owned(),
+        document.unwrap_or(Value::Null),
+    );
+    patch.insert("chaptersStatus".to_owned(), json!(status));
+    patch.insert(
+        "chaptersError".to_owned(),
+        json!(error.filter(|value| !value.trim().is_empty())),
+    );
+    patch.insert("updatedAt".to_owned(), json!(now()));
+    update_store_value(&app, "local-transcriptions", &id, patch)?
+        .ok_or("Local transcription not found")?;
+    Ok(())
+}
+
 #[tauri::command]
 fn local_transcription_delete(app: AppHandle, id: String) -> CommandResult<()> {
     // The record row is the last reference to a live session's directory, so
@@ -5452,7 +5481,7 @@ pub fn run() {
             workbench::workbench_resolve_conflict,
             desktop_mcp::desktop_mcp_get, desktop_mcp::desktop_mcp_configure, desktop_mcp::desktop_mcp_complete,
             local_transcription_list, local_transcription_get, local_transcription_delete, local_transcription_audio_url,
-            local_transcription_save_summary,
+            local_transcription_save_summary, local_transcription_save_chapters,
             local_transcription_track_audio_url,
             sync_upload::sync_upload_audio_size, sync_upload::sync_upload_put_signed_file,
             todo_list, todo_save, todo_delete, todo_add_to_calendar, todo_status_action, todo_capabilities,

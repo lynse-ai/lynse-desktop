@@ -1,4 +1,6 @@
 import type {
+  ChapterDocument,
+  ChaptersStatus,
   FileTranscription,
   LocalHotwordPackage,
   LocalTranscriptionOptions,
@@ -201,6 +203,8 @@ export interface DesktopLocalTranscriptionApi {
   get: (id: string) => Promise<LocalTranscriptionRecord | null>;
   /** Persist the agent-service deep summary (empty markdown clears it). */
   saveSummary: (id: string, title: string | null, markdown: string) => Promise<void>;
+  /** Persist the AI chapter document / status (null document clears it). */
+  saveChapters: (id: string, document: ChapterDocument | null, status: ChaptersStatus, error?: string | null) => Promise<void>;
   retry: (id: string, options?: { track?: "mic" | "system" }) => Promise<unknown>;
   /** Audio URL for one track file of a dual-channel recording. */
   getTrackAudioUrl: (id: string, file: string) => Promise<string>;
@@ -293,6 +297,9 @@ export function localRecordToTranscription(record: LocalTranscriptionRecord): Fi
     summaryMarkdown: record.summaryMarkdown ?? null,
     summaryTitle: record.summaryTitle ?? null,
     summaryGeneratedAt: record.summaryGeneratedAt ?? null,
+    chaptersDocument: record.chaptersDocument ?? null,
+    chaptersStatus: record.chaptersStatus,
+    chaptersError: record.chaptersError ?? null,
     records: segments.map((segment) => ({
       id: segment.id,
       speakerName: normalizeLocalSpeakerName(segment.speakerName ?? segment.speaker, segment.rawSpeaker),

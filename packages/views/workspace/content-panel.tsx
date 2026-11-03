@@ -17,6 +17,7 @@ import {
   Cpu,
   ChevronLeft,
   ChevronRight,
+  Clock,
 } from "../icons";
 import { useWorkspaceStore } from "./store";
 import { SummaryExportMenuItem } from "../connections/summary-export-menu-item";
@@ -30,6 +31,10 @@ import { FloatingMarkdownToolbar } from "./center-panel/markdown-toolbar";
 import { DeleteConfirmDialog } from "./delete-confirm-dialog";
 import { AudioPlayer } from "./audio-player";
 import type { AudioPlayerHandle } from "./audio-player";
+import { ChaptersPanel } from "./chapter-panel";
+import { runChapterGeneration, saveChapterEdits } from "./local-chapters";
+import type { ChapterSegment } from "./semantic-chapters";
+import type { ChapterDocument, SemanticChapter } from "./types";
 import { getDesktopLiveTranslationApi } from "../live-translation/desktop-api";
 import type { RecordingTrackManifest } from "./types";
 import { normalizeSummaryTemplateName } from "./types";
@@ -175,6 +180,24 @@ export function ContentPanel() {
     | undefined;
   const selectedLiveSessionId =
     (transcription as { liveSessionId?: string } | undefined)?.liveSessionId ?? null;
+
+  // AI semantic chapters (local recordings only): document/status ride on the
+  // transcription query; segments reuse the exact view rows the 转写 tab
+  // renders so the panel's staleness hash matches the generation-time hash.
+  const chapterSegments: ChapterSegment[] = useMemo(
+    () =>
+      (transcription?.records ?? []).map((row) => ({
+        id: row.id,
+        text: row.text,
+        startMs: row.beginTime,
+        endMs: row.endTime,
+        speaker: row.speakerName ?? null,
+      })),
+    [transcription],
+  );
+  const chaptersDocument = (transcription?.chaptersDocument as ChapterDocument | null | undefined) ?? null;
+  const chaptersStatus = transcription?.chaptersStatus;
+  const chaptersError = transcription?.chaptersError ?? null;
 
   useEffect(() => {
     setTrackFilter("all");
@@ -541,8 +564,48 @@ export function ContentPanel() {
     }
   }, [selectedItemId, regeneratingLocalSummary, qc, t, setContentTab]);
 
-  const handleReprocessRecording = useCallback(async () => {
-    if (!selectedItemId || !selectedLiveSessionId) return;
+  // AI semantic chapters — an independent task from the deep summary: one
+  // failing must never block the other. `force` bypasses the manual-edit guard
+  // only after the panel's confirm step.
+  const [chapterBusy, setChapterBusy] = useState(false);
+  const handleGenerateChapters = useCallback(
+    async (force: boolean) => {
+      if (!selectedItemId || chapterBusy) return;
+      setChapterBusy(true);
+      try {
+        const saved = await runChapterGeneration(selectedItemId, { force, t: (key) => t(key) });
+        if (saved) {
+          await qc.invalidateQueries({ queryKey: ["file-transcription", selectedItemId] });
+        }
+      } finally {
+        setChapterBusy(false);
+      }
+    },
+    [selectedItemId, chapterBusy, qc, t],
+  );
+
+  const handleSaveChapterEdits = useCallback(
+    async (document: ChapterDocument) => {
+      if (!selectedItemId) return false;
+      const ok = await saveChapterEdits(selectedItemId, document, { t: (key) => t(key) });
+      if (ok) {
+        await qc.invalidateQueries({ queryKey: ["file-transcription", selectedItemId] });
+      }
+      return ok;
+    },
+    [selectedItemId, qc, t],
+  );
+
+  const handleSeekChapter = useCallback(
+    (chapter: SemanticChapter) => {
+      if (chapter.startMs == null) return;
+      audioPlayerRef.current?.seekTo(chapter.startMs / 1000);
+      setHighlightTimeMs(chapter.startMs);
+    },
+    [],
+  );
+
+  const handleReprocessRecording = useCallback(async () => {    if (!selectedItemId || !selectedLiveSessionId) return;
     setReprocessing(true);
     try {
       await getDesktopLiveTranslationApi()?.reprocess(selectedLiveSessionId);
@@ -835,6 +898,13 @@ export function ContentPanel() {
             <FileAudio className="size-3.5" />
             <span>{t("workspace.transcription")}</span>
           </TabButton>
+          <TabButton
+            active={contentTab === "chapters"}
+            onClick={() => setContentTab("chapters")}
+          >
+            <Clock className="size-3.5" />
+            <span>{t("workspace.chapters")}</span>
+          </TabButton>
           {visibleConclusionTexts.map((block, idx) => (
             <ContextMenu key={block.key}>
               <ContextMenuTrigger>
@@ -1053,7 +1123,7 @@ export function ContentPanel() {
                 </div>
               )}
 
-              <div ref={contentPreviewRef} className={`content-preview mt-2 flex-1 min-h-0 ${contentTab === "transcription" ? "lyse-transcription-preview flex flex-col flex-1 min-h-0" : ""}`}>
+              <div ref={contentPreviewRef} className={`content-preview mt-2 flex-1 min-h-0 ${contentTab === "transcription" || contentTab === "chapters" ? "lyse-transcription-preview flex flex-col flex-1 min-h-0" : ""}`}>
                 {currentFileRerunning ? (
                   <ResummaryPendingState />
                 ) : currentFileResummaryError ? (
@@ -1105,10 +1175,10 @@ export function ContentPanel() {
                       )
                     )}
 
-                    {contentTab === "transcription" && (
+                    {(contentTab === "transcription" || contentTab === "chapters") && (
                       <div className="flex flex-col flex-1 min-h-0 space-y-3">
                         {/* Per-track listening for dual-channel recordings */}
-                        {isLocalSelectedItem && selectedTrackManifest && playerAudioUrl && (
+                        {contentTab === "transcription" && isLocalSelectedItem && selectedTrackManifest && playerAudioUrl && (
                           <div className="flex w-full shrink-0 flex-wrap items-center gap-1.5">
                             {([
                               ["all", t("workspace.track_all")],
@@ -1131,7 +1201,7 @@ export function ContentPanel() {
                           </div>
                         )}
                         {/* Echo-cancellation degraded: honest status + repair entry */}
-                        {isLocalSelectedItem && selectedAecDegraded && (
+                        {contentTab === "transcription" && isLocalSelectedItem && selectedAecDegraded && (
                           <div className="flex w-full shrink-0 flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-foreground">
                             <span>{t("workspace.aec_degraded_banner")}</span>
                             {selectedLiveSessionId && (
@@ -1147,7 +1217,7 @@ export function ContentPanel() {
                           </div>
                         )}
                         {/* A track's offline transcription failed: targeted retry */}
-                        {isLocalSelectedItem &&
+                        {contentTab === "transcription" && isLocalSelectedItem &&
                           (["mic", "system"] as const)
                             .filter((track) => selectedTrackStatuses?.[track]?.status === "failed")
                             .map((track) => (
@@ -1162,7 +1232,9 @@ export function ContentPanel() {
                                   t("workspace.retry_track")}
                               </button>
                             ))}
-                        {/* Audio player — always visible when audio URL exists */}
+                        {/* Audio player — shared by the 转写 and 章节 tabs; it
+                            lives above tab-specific content so switching tabs
+                            never unmounts it and chapter seeks keep working */}
                         {playerAudioUrl && (
                           <div className="w-full shrink-0">
                             <AudioPlayer
@@ -1171,12 +1243,26 @@ export function ContentPanel() {
                               recordId={trackFilter === "all" ? selectedItemId : undefined}
                               sourceIntervals={transcription?.audioSourceIntervals}
                               highlightTimeMs={highlightTimeMs}
-                              onEdit={isLocalSelectedItem ? handleEditSelectedAudio : undefined}
+                              onEdit={isLocalSelectedItem && contentTab === "transcription" ? handleEditSelectedAudio : undefined}
                             />
                           </div>
                         )}
+                        {contentTab === "chapters" && (
+                          <ChaptersPanel
+                            segments={chapterSegments}
+                            document={chaptersDocument}
+                            status={chaptersStatus}
+                            error={chaptersError}
+                            isLocal={isLocalSelectedItem}
+                            busy={chapterBusy}
+                            hasTranscript={!!transcription?.content?.trim()}
+                            onGenerate={handleGenerateChapters}
+                            onSeekChapter={handleSeekChapter}
+                            onSaveEdits={handleSaveChapterEdits}
+                          />
+                        )}
                         {/* Transcription segments or empty state */}
-                        {localTranscriptionActive ? (
+                        {contentTab === "transcription" && (localTranscriptionActive ? (
                           <LocalTranscriptionPendingState retrying={selectedLocalRetrying} />
                         ) : transSegments && transSegments.length > 0 ? (
                           <div className="lyse-transcription-list flex-1 min-h-0 overflow-y-auto space-y-1 text-sm leading-relaxed pb-4">
@@ -1275,7 +1361,7 @@ export function ContentPanel() {
                             onGenerate={handleAutoRerun}
                             disabled={currentFileSummarizing || !defaultTemplateId}
                           />
-                        )}
+                        ))}
                       </div>
                     )}
 

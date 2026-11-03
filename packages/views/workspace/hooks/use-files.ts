@@ -33,6 +33,7 @@ import {
   mergeCloudAndLocalFiles,
 } from "../local-transcription";
 import { triggerLocalAutoSummary } from "../local-auto-summary";
+import { triggerLocalAutoChapters } from "../local-chapters";
 import { getWorkbenchApi } from "../../workbench/api";
 import { removeNotesFromVault } from "../note-vault";
 import { transcribeWithCreditsToast } from "../transcription-credits";
@@ -1159,6 +1160,13 @@ export function useLocalTranscriptionUpdates() {
             if (saved) {
               void qc.invalidateQueries({ queryKey: ["file-transcription", update.id] });
               void qc.invalidateQueries({ queryKey: ["notes"] });
+            }
+          });
+          // Semantic chapters are an independent task with its own in-flight
+          // guard: a summary failure never blocks chapters and vice versa.
+          void triggerLocalAutoChapters(update, { t }).then((saved) => {
+            if (saved) {
+              void qc.invalidateQueries({ queryKey: ["file-transcription", update.id] });
             }
           });
         } else if (update.status === "failed") {

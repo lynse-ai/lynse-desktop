@@ -402,6 +402,8 @@ export async function installTauriBridge(): Promise<void> {
       get: (id: string) => command("local_transcription_get", { id }),
       saveSummary: (id: string, title: string | null, markdown: string) =>
         command("local_transcription_save_summary", { id, title, markdown }),
+      saveChapters: (id: string, document: unknown, status: string, error?: string | null) =>
+        command("local_transcription_save_chapters", { id, document, status, error: error ?? null }),
       retry: (id: string, options?: { track?: "mic" | "system" }) =>
         command("local_transcription_retry", { id, options }),
       getTrackAudioUrl: (id: string, file: string) =>

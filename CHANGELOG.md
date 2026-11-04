@@ -12,6 +12,30 @@
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
 
+## 1.3.0 (2026-11-04)
+
+### New Features
+
+- Recording details now include AI semantic chapters. Chapters are generated from the transcript after transcription completes, support local and cloud recordings, and can be edited or regenerated while keeping manually edited content protected as stale rather than silently overwritten.
+- Chapter playback is tightly linked to the transcript: timestamps always use hours, minutes and seconds, click through to the chapter start, and speaker mentions expand the matching transcript lines without inventing unattributed content.
+- Added Apple on-device speech recognition for supported macOS versions and richer persisted live meeting notes.
+
+### Fixed
+
+- Long recordings now clearly show that waveform generation is intentionally skipped when they exceed the browser decode limit, instead of showing the same failure message and an ineffective retry.
+- Completed locale parity for chapter, Apple speech and live-notes strings across all shipped languages.
+
+### 新功能
+
+- 录音详情新增 AI 语义章节：转写完成后基于原文自动划分章节，支持本地与云端录音；章节可编辑或重新生成，手动编辑会被保留并标记过期，不会被静默覆盖。
+- 章节与播放联动增强：时间统一显示时、分、秒，点击可跳到章节开头；发言人名称可点击展开对应转写内容，不虚构无法确认的发言人。
+- 新增受支持 macOS 版本的 Apple 端上语音识别，并增强实时会议纪要的持久化与呈现。
+
+### 修复
+
+- 超过浏览器解码上限的长录音会明确提示“暂不生成波形”，不再误显示为失败或提供无效重试。
+- 补齐章节、Apple 语音识别和实时纪要文案在全部发布语言中的翻译一致性。
+
 ## 1.2.6 (2026-11-03)
 
 ### Fixed

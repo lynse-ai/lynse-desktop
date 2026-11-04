@@ -1,0 +1,7 @@
+{
+  "en": "What's new\n\n• Recording details now include AI semantic chapters. Chapters are generated from the transcript, support cloud recordings, and keep timestamps linked to playback.\n• Chapter timestamps always show hours, minutes and seconds, seek directly to the chapter start, and speaker mentions can expand the matching transcript lines.\n• Added Apple on-device speech recognition and richer persisted live meeting notes.\n• Long recordings now clearly show that waveform generation is intentionally skipped instead of reporting it as a failure.",
+  "zh-Hans": "更新内容\n\n• 录音详情新增 AI 语义章节：基于转写内容自动划分章节，支持云端录音，章节时间可直接跳转播放。\n• 章节时间统一显示时、分、秒，点击可跳到章节开头；发言人名称可点击展开对应转写内容。\n• 新增 Apple 端上语音识别，并增强实时会议纪要的持久化与呈现。\n• 超长音频会明确提示暂不生成波形，不再误显示为失败或提示重试。",
+  "zh-Hant": "更新內容\n\n• 錄音詳情新增 AI 語義章節：基於轉寫內容自動劃分章節，支援雲端錄音，章節時間可直接跳轉播放。\n• 章節時間統一顯示時、分、秒，點擊可跳到章節開頭；發言人名稱可點擊展開對應轉寫內容。\n• 新增 Apple 端上語音辨識，並增強即時會議紀要的持久化與呈現。\n• 超長音訊會明確提示暫不產生波形，不再誤顯示為失敗或提示重試。",
+  "ja": "更新内容\n\n• 録音詳細にAIセマンティックチャプターを追加しました。文字起こしに基づいて章を自動生成し、クラウド録音にも対応し、タイムスタンプから再生位置に移動できます。\n• チャプター時間は時・分・秒で表示され、クリックすると章の先頭へ移動します。話者名をクリックすると該当する文字起こし行を展開できます。\n• Appleのオンデバイス音声認識を追加し、ライブ会議メモの保存と表示を強化しました。\n• 長時間録音では波形を意図的に生成しないことを明確に表示し、失敗として誤表示しません。",
+  "ko": "업데이트 내용\n\n• 녹음 상세에 AI 시맨틱 챕터를 추가했습니다. 전사 내용을 기반으로 챕터를 자동 생성하고, 클라우드 녹음을 지원하며, 타임스탬프에서 재생 위치로 이동할 수 있습니다.\n• 챕터 시간은 시·분·초로 표시되고 클릭하면 챕터 시작 위치로 이동합니다. 발화자 이름을 클릭하면 관련 전사 줄을 펼칠 수 있습니다.\n• Apple 온디바이스 음성 인식을 추가하고 실시간 회의 노트 저장과 표시를 강화했습니다.\n• 긴 녹음에서는 파형을 의도적으로 생성하지 않는다고 명확히 표시하며, 실패로 잘못 표시하지 않습니다."
+}

@@ -27,6 +27,7 @@ import {
   Loader2,
   Mic,
   Monitor,
+  NotebookPen,
   Pause,
   Play,
   RefreshCw,
@@ -35,6 +36,9 @@ import {
   Volume2,
 } from "../icons";
 import { realtimeEngineLabel, requestRealtimeSession } from "./api";
+import { disposeLiveNotes, finalizeLiveNotes, useLiveNotes } from "./notes/engine";
+import { LiveNotesPanel } from "./notes/notes-panel";
+import { needsTranslationService, translateSegment } from "./translation-service";
 import { ProviderSettings } from "./provider-settings";
 import { isProviderConfigured, resolveProvider } from "./providers";
 import { useNavigation } from "../navigation";
@@ -69,6 +73,10 @@ export function LiveTranslationPage() {
   const [subtitlesVisible, setSubtitlesVisible] = useState(false);
   const [settingsCollapsed, setSettingsCollapsed] = useState(false);
   const [completed, setCompleted] = useState<CompletedLiveSession | null>(null);
+  // AI notes side panel; opens itself once the first notes revision lands so
+  // the feature is discoverable without stealing width before then.
+  const [notesOpen, setNotesOpen] = useState(false);
+  const notesAutoOpenedRef = useRef(false);
   // Empty until the bridge loads; field defaults are applied by the provider
   // plugins at connection time, so there is nothing to seed here.
   const [providerConfig, setProviderConfig] = useState<LiveTranslationProviderConfig>({
@@ -122,7 +130,20 @@ export function LiveTranslationPage() {
     if (!api || !completedEventSession) return;
     setCompleted(completedEventSession);
     void api.finalizeLocal(completedEventSession.sessionId, true).catch(() => undefined);
+    // Record persisted → run the notes engine's final pass (all lines, no
+    // draft conditioning) and attach the result to the record.
+    finalizeLiveNotes(completedEventSession.sessionId);
   }, [api, completedEventSession]);
+
+  // Stop the notes engine timers when the page unmounts. Deliberately NOT on
+  // session-id change: the final notes pass races the post-stop snapshot that
+  // may clear the id, and the panel must keep rendering the finished notes.
+  useEffect(() => {
+    return () => {
+      const sessionId = notesSessionRef.current;
+      if (sessionId) disposeLiveNotes(sessionId);
+    };
+  }, []);
 
   // Follow the live transcript only while the user is already at the bottom —
   // never yank the view back if they scrolled up to read. Partials arrive
@@ -159,6 +180,72 @@ export function LiveTranslationPage() {
     [transcriptOnly, view.segments],
   );
   const active = Boolean(view.sessionId) && view.state !== "idle";
+  // Incremental structured notes (lynclaw /api/notes): the engine runs outside
+  // React on a 45s cadence; this only feeds it final lines and reads state.
+  // Latch the session id: the post-stop snapshot may clear it, and the panel
+  // must keep rendering the finished notes through that transition.
+  const [notesSessionId, setNotesSessionId] = useState<string | null>(null);
+  const notesSessionRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!view.sessionId) return;
+    notesSessionRef.current = view.sessionId;
+    setNotesSessionId(view.sessionId);
+  }, [view.sessionId]);
+  const notes = useLiveNotes({
+    sessionId: notesSessionId,
+    segments: visibleSegments,
+    language: sourceLanguage,
+    active,
+  });
+  // Auto-open the panel once so the user notices notes are being built.
+  useEffect(() => {
+    if (notesAutoOpenedRef.current) return;
+    if (notes.notes && active) {
+      notesAutoOpenedRef.current = true;
+      setNotesOpen(true);
+    }
+  }, [active, notes.notes]);
+
+  // Translation service layer: when the attached provider has no translation
+  // leg (Apple on-device, Tencent ASR), finalized segments come back without
+  // a translation — run them through the configured chain and patch the view.
+  const activeProviderId = providerConfig.activeProvider;
+  useEffect(() => {
+    if (!active || !needsTranslationService(activeProviderId)) return;
+    if (transcriptOnly) return;
+    const pending = view.segments.filter(
+      (segment) =>
+        !segment.echoOf
+        && segment.isFinal
+        && segment.recognizedText.trim()
+        && !segment.translatedText.trim(),
+    );
+    if (pending.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const segment of pending.slice(-3)) {
+        if (cancelled) return;
+        const translated = await translateSegment(
+          segment.recognizedText,
+          sourceLanguage === "auto" ? "zh" : sourceLanguage,
+          targetLanguage,
+          providerConfig,
+        );
+        if (cancelled) return;
+        if (translated) {
+          // Patch through the same event channel the reducer consumes.
+          window.dispatchEvent(
+            new CustomEvent("lynse:local-translation-patch", {
+              detail: { sessionId: view.sessionId, segmentId: segment.id, text: translated },
+            }),
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [active, activeProviderId, transcriptOnly, sourceLanguage, targetLanguage, providerConfig, view.segments, view.sessionId]);
   // The active provider plugin decides whether its credentials are complete;
   // the Lynse backend relay needs no local configuration.
   const providerReady =
@@ -552,6 +639,22 @@ export function LiveTranslationPage() {
               <span className="text-2xs tabular-nums text-muted-foreground">
                 {visibleSegments.length} {t("live_translation.segments")}
               </span>
+              <button
+                type="button"
+                onClick={() => setNotesOpen((open) => !open)}
+                title={notesOpen ? t("live_translation.notes_hide") : t("live_translation.notes_title")}
+                className={`flex h-6 items-center gap-1 rounded-full border px-2 text-2xs font-medium transition-colors ${
+                  notesOpen
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-border bg-background/40 text-muted-foreground hover:bg-background/70 hover:text-foreground"
+                }`}
+              >
+                <NotebookPen className="size-3" />
+                {t("live_translation.notes_show")}
+                {!notesOpen && notes.notes && (
+                  <span className="size-1.5 rounded-full bg-primary" aria-hidden />
+                )}
+              </button>
             </div>
             <Popover open={langOpen} onOpenChange={setLangOpen}>
               <PopoverTrigger
@@ -693,6 +796,43 @@ export function LiveTranslationPage() {
             </div>
           </footer>
         </section>
+
+        {/* AI structured notes rail: builds during the session, survives the
+            stop transition so the final version stays readable. */}
+        <AnimatePresence initial={false}>
+          {notesOpen && (
+            <motion.aside
+              key="notes-rail"
+              initial={{ width: 0, opacity: 0 }}
+              animate={{ width: 320, opacity: 1 }}
+              exit={{ width: 0, opacity: 0 }}
+              transition={reduceMotion ? { duration: 0 } : { type: "spring", bounce: 0, duration: 0.3 }}
+              className="relative shrink-0 overflow-hidden border-l border-border"
+            >
+              <button
+                type="button"
+                onClick={() => setNotesOpen(false)}
+                title={t("live_translation.notes_hide")}
+                aria-label={t("live_translation.notes_hide")}
+                className="absolute left-0 top-1/2 z-20 flex size-8 -translate-y-1/2 -translate-x-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition-[color,background-color] hover:bg-muted hover:text-foreground"
+              >
+                <ChevronRight className="size-4" />
+              </button>
+              <div className="flex h-full w-80 flex-col">
+                <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border px-4">
+                  <NotebookPen className="size-3.5 text-primary" />
+                  <span className="text-xs font-semibold">{t("live_translation.notes_title")}</span>
+                  {notes.freshTopicIds.length > 0 && (
+                    <span className="ml-auto rounded-sm bg-primary/15 px-1 py-px text-2xs font-medium text-primary">
+                      {t("live_translation.notes_fresh")}
+                    </span>
+                  )}
+                </div>
+                <LiveNotesPanel state={notes} />
+              </div>
+            </motion.aside>
+          )}
+        </AnimatePresence>
       </main>
     </div>
   );

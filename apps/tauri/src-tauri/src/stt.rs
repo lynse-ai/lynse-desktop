@@ -100,6 +100,8 @@ impl WhisperModel {
 /// handled specially (the MLX-family Python bridges).
 pub fn model_file_name(provider: &str, model_id: &str) -> Option<String> {
     match provider {
+        // Apple on-device assets are OS-managed; nothing to download here.
+        "applespeech" => None,
         "whisper" => WhisperModel::from_model_id(model_id).map(|model| model.file_name().to_owned()),
         // VibeVoice ships two GGUF weights (VAE + LM); readiness is checked per-file.
         "vibeasr" => None,
@@ -262,6 +264,15 @@ pub enum ProviderConfig {
     Moss(MossProviderConfig),
     #[serde(rename = "whisperx")]
     WhisperX(WhisperXProviderConfig),
+    /// Apple on-device transcription (SpeechAnalyzer/SpeechTranscriber). macOS
+    /// 26+ only; no downloadable model — the OS ships and manages the assets.
+    Applespeech(ApplespeechProviderConfig),
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ApplespeechProviderConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hotword_package_id: Option<String>,
 }
 
 impl Default for ProviderConfig {
@@ -311,6 +322,7 @@ impl ProviderConfig {
             ProviderConfig::Qwen3(_) => "qwen3",
             ProviderConfig::Moss(_) => "moss",
             ProviderConfig::WhisperX(_) => "whisperx",
+            ProviderConfig::Applespeech(_) => "applespeech",
         }
     }
 
@@ -323,6 +335,7 @@ impl ProviderConfig {
             ProviderConfig::Qwen3(config) => config.hotword_package_id.as_deref(),
             ProviderConfig::Moss(config) => config.hotword_package_id.as_deref(),
             ProviderConfig::WhisperX(config) => config.hotword_package_id.as_deref(),
+            ProviderConfig::Applespeech(config) => config.hotword_package_id.as_deref(),
         }
     }
 
@@ -335,6 +348,7 @@ impl ProviderConfig {
             ProviderConfig::Qwen3(_) => None,
             ProviderConfig::Moss(_) => None,
             ProviderConfig::WhisperX(config) => config.expected_speakers,
+            ProviderConfig::Applespeech(_) => None,
         }
     }
 
@@ -370,6 +384,7 @@ impl ProviderConfig {
             ProviderConfig::Qwen3(config) => config.model.as_deref().unwrap_or(QWEN3_DEFAULT_MODEL_ID),
             ProviderConfig::Moss(config) => config.model.as_deref().unwrap_or(MOSS_DEFAULT_MODEL_ID),
             ProviderConfig::WhisperX(_) => WHISPERX_DEFAULT_MODEL_ID,
+            ProviderConfig::Applespeech(_) => APPLE_SPEECH_MODEL_ID,
         }
     }
 
@@ -381,7 +396,7 @@ impl ProviderConfig {
             ProviderConfig::Whisper(config) => config.expected_speakers = expected,
             ProviderConfig::WhisperX(config) => config.expected_speakers = expected,
             ProviderConfig::VibeVoice(_) | ProviderConfig::Mlx(_) | ProviderConfig::Qwen3(_)
-            | ProviderConfig::Moss(_) => {}
+            | ProviderConfig::Moss(_) | ProviderConfig::Applespeech(_) => {}
         }
     }
 
@@ -396,6 +411,7 @@ impl ProviderConfig {
             ProviderConfig::Qwen3(config) => config.hotword_package_id = package_id,
             ProviderConfig::Moss(config) => config.hotword_package_id = package_id,
             ProviderConfig::WhisperX(config) => config.hotword_package_id = package_id,
+            ProviderConfig::Applespeech(config) => config.hotword_package_id = package_id,
         }
     }
 
@@ -408,6 +424,7 @@ impl ProviderConfig {
             ProviderConfig::Qwen3(_) => &Qwen3Adapter,
             ProviderConfig::Moss(_) => &MossAdapter,
             ProviderConfig::WhisperX(_) => &WhisperXAdapter,
+            ProviderConfig::Applespeech(_) => &AppleSpeechAdapter,
         }
     }
 }
@@ -786,6 +803,35 @@ pub(crate) fn runtime_dir(app: &tauri::AppHandle, version: &str) -> PathBuf {
 /// 3. on-demand shared runtime in the app data dir (downloaded at model-install
 ///    time, shared across every offline engine),
 /// 4. otherwise a clear error asking the user to download the offline runtime.
+/// AppHandle-free variant for contexts outside the Tauri runtime (translation
+/// sidecar calls from async commands). Same resolution order as sidecar_path.
+pub(crate) fn sidecar_path_for(base: &str) -> CommandResult<PathBuf> {
+    let name = sidecar_binary_name(base);
+    #[cfg(debug_assertions)]
+    if development_exists(&name) {
+        return Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("resources/sidecars")
+            .join(&name));
+    }
+    if let Ok(exe_dir) = std::env::current_exe() {
+        let candidate = exe_dir
+            .parent()
+            .map(|dir| dir.join(&name))
+            .unwrap_or_else(|| PathBuf::from(&name));
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+        // macOS bundle layout: Contents/MacOS/exe → Contents/Resources.
+        if let Some(resources) = exe_dir.parent().map(|dir| dir.parent()).flatten() {
+            let candidate = resources.join("Resources").join(&name);
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err(format!("sidecar {name} not found — reinstall the app"))
+}
+
 pub(crate) fn sidecar_path(app: &tauri::AppHandle, base: &str) -> CommandResult<PathBuf> {
     let name = sidecar_binary_name(base);
 
@@ -2033,6 +2079,130 @@ impl BatchSttAdapter for WhisperXAdapter {
             request,
             WHISPERX_DEFAULT_MODEL_ID,
         )
+    }
+}
+
+/// Catalog id for the Apple on-device engine (OS-managed assets, no files).
+pub const APPLE_SPEECH_MODEL_ID: &str = "applespeech-os";
+/// The on-device recognizer ships with macOS 26 (SpeechAnalyzer APIs).
+pub const APPLE_SPEECH_MIN_MACOS: u32 = 26;
+
+/// Major macOS version from `sw_vers`, e.g. 26 for "26.2". `None` when the
+/// version cannot be parsed (non-macOS, unexpected output) — callers treat it
+/// as "feature unavailable", never as a bypass.
+pub(crate) fn macos_major_version() -> Option<u32> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("/usr/bin/sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        text.trim().split('.').next()?.parse::<u32>().ok()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+/// Map a UI locale to the closest BCP-47 tag SpeechTranscriber accepts.
+fn applespeech_locale(language: Option<&str>) -> String {
+    let raw = language.unwrap_or("").trim().to_lowercase();
+    let tag = match raw.as_str() {
+        "zh" | "zh-cn" | "zh-hans" | "chinese" => "zh-CN",
+        "zh-tw" | "zh-hant" | "zh-hk" | "yue" => "zh-Hant",
+        "en" | "english" => "en-US",
+        "ja" | "ja-jp" | "japanese" => "ja-JP",
+        "ko" | "ko-kr" | "korean" => "ko-KR",
+        "de" => "de-DE",
+        "fr" => "fr-FR",
+        "es" => "es-ES",
+        "pt" => "pt-BR",
+        "it" => "it-IT",
+        other if other.starts_with("zh") => "zh-CN",
+        other if other.starts_with("en") => "en-US",
+        other if other.starts_with("ja") => "ja-JP",
+        other if other.starts_with("ko") => "ko-KR",
+        other if !other.is_empty() && other.len() >= 2 => other,
+        _ => "zh-CN",
+    };
+    tag.to_owned()
+}
+
+/// Apple on-device transcription via the `apple-transcribe` Swift sidecar
+/// (SpeechAnalyzer/SpeechTranscriber, macOS 26+). No model management: the OS
+/// owns the per-locale assets and downloads them on first use inside the
+/// sidecar. Single-speaker output; the engine-agnostic voiceprint post-pass
+/// still runs like for every other engine.
+pub struct AppleSpeechAdapter;
+
+impl BatchSttAdapter for AppleSpeechAdapter {
+    fn engine(&self) -> &'static str {
+        "applespeech"
+    }
+
+    fn transcribe(&self, app: &tauri::AppHandle, request: &SttRequest) -> CommandResult<SttOutput> {
+        if std::env::consts::OS != "macos" {
+            return Err("Apple 原生转写引擎仅支持 macOS。请在设置中改用其他引擎。".to_owned());
+        }
+        if macos_major_version().is_none_or(|major| major < APPLE_SPEECH_MIN_MACOS) {
+            return Err("Apple 原生转写引擎需要 macOS 26 或更高版本。请改用其他引擎。".to_owned());
+        }
+        let ProviderConfig::Applespeech(_) = &request.provider else {
+            return Err("AppleSpeech 适配器收到非 applespeech 配置".to_owned());
+        };
+        let locale = applespeech_locale(request.language.as_deref());
+        let output_json = std::env::temp_dir().join(format!(
+            "lynse-applespeech-{}.json",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let sidecar = sidecar_path(app, "apple-transcribe")?;
+        let output = std::process::Command::new(&sidecar)
+            .arg(&request.audio_path)
+            .arg("--locale")
+            .arg(&locale)
+            .arg("--output")
+            .arg(&output_json)
+            .output()
+            .map_err(|error| format!("failed to run apple-transcribe: {error}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let parsed: Option<Value> = std::fs::read_to_string(&output_json)
+                .ok()
+                .and_then(|content| serde_json::from_str(&content).ok());
+            let detail = parsed
+                .as_ref()
+                .and_then(|value| value.get("error").and_then(Value::as_str))
+                .map(str::to_owned)
+                .unwrap_or_else(|| stderr.lines().last().unwrap_or("transcription failed").to_owned());
+            return Err(format!("Apple 原生转写失败：{detail}"));
+        }
+        let content = std::fs::read_to_string(&output_json)
+            .map_err(|error| format!("apple-transcribe output unreadable: {error}"))?;
+        let _ = std::fs::remove_file(&output_json);
+        let parsed: Value =
+            serde_json::from_str(&content).map_err(|error| format!("apple-transcribe output invalid: {error}"))?;
+        let mut segments = normalize_whisper_output(&parsed);
+        // v1: single-speaker; voiceprint enrichment runs engine-agnostically.
+        for segment in &mut segments {
+            if let Some(object) = segment.as_object_mut() {
+                object.insert("speakerId".to_owned(), json!("spk-1"));
+                object.insert("speakerName".to_owned(), json!("发言人1"));
+                object.insert("rawSpeaker".to_owned(), json!("0"));
+            }
+        }
+        let text = parsed
+            .get("text")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                segments
+                    .iter()
+                    .filter_map(|segment| segment.get("text").and_then(Value::as_str))
+                    .collect::<String>()
+            });
+        Ok(SttOutput { text, segments })
     }
 }
 

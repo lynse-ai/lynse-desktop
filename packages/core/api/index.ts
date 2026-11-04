@@ -10,3 +10,15 @@ export { summarizeTranscript, SUMMARY_HTML_STYLES } from "./summarize";
 export type { SummarizeTranscriptInput, SummarizeTranscriptResult, SummaryHtmlStyle } from "./summarize";
 export { generateChapters } from "./chapters";
 export type { GenerateChaptersInput, GenerateChaptersResult, GeneratedChapter, ChapterUtterance } from "./chapters";
+export { updateMeetingNotes, normalizeMeetingNotes } from "./notes";
+export type {
+  MeetingNotes,
+  NoteTopic,
+  NotePoint,
+  NoteFishbone,
+  NoteFishboneBranch,
+  NoteItem,
+  NoteTerm,
+  NotesUpdateInput,
+  NotesUpdateResult,
+} from "./notes";

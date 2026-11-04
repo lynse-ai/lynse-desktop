@@ -177,6 +177,11 @@ export {
   Wand2,            // Voice enhancement
   Crop,             // Zoom the view to the trim selection
   ArrowLeft,        // Back to previous page
+  NotebookPen,      // AI live notes
+  ListTodo,         // Notes todos
+  Tag,              // Notes glossary terms
+  Fish,             // Fishbone (Ishikawa) diagram
+  ChevronUp,        // Collapse upward
 } from "lucide-react";
 
 // ── Custom icons ─────────────────────────────────────────

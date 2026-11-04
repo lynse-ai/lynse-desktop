@@ -29,6 +29,11 @@ let package = Package(
             publicHeadersPath: "include"
         ),
         .executableTarget(
+            name: "lynse-apple-transcribe",
+            dependencies: ["AudioCaptureCore"],
+            path: "Sources/lynse-apple-transcribe"
+        ),
+        .executableTarget(
             name: "audio-capture-core-tests",
             dependencies: ["AudioCaptureCore"],
             path: "SelfTests"

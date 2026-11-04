@@ -63,7 +63,8 @@
       "resources/whisperx_transcribe.py": "whisperx_transcribe.py",
       "resources/sherpa_voiceprint.py": "sherpa_voiceprint.py",
       "resources/moss_mlx": "moss_mlx",
-      "resources/sidecars/audio-capture": "audio-capture"
+      "resources/sidecars/audio-capture": "audio-capture",
+      "resources/sidecars/apple-transcribe": "apple-transcribe"
     },
     "macOS": {
       "minimumSystemVersion": "15.0",

@@ -462,6 +462,125 @@ private final class LevelState {
 }
 
 // ───────────────────────────────────────────────────────────────
+// Local on-device ASR (--analyzer): Apple SpeechAnalyzer per source,
+// results emitted on stdout as JSON control lines for the Rust side.
+// Availability-erased holder so the capture pipeline (deployment target 15)
+// can hold and feed recognizers without #available gymnastics everywhere.
+// ───────────────────────────────────────────────────────────────
+@available(macOS 26.0, *)
+private final class AsrSourceStream {
+    let sourceLabel: String
+    let stream: AppleSpeechStream
+    let queue: DispatchQueue
+
+    init(source: UInt8, localeID: String) {
+        // No [weak self] here: capturing self mid-initialization is illegal,
+        // and the callback only needs the source label — use free functions.
+        let label = source == 0 ? "mic" : "system"
+        sourceLabel = label
+        queue = DispatchQueue(label: "app.lynse.capture.asr.\(label)")
+        stream = AppleSpeechStream(
+            localeID: localeID,
+            onResult: { result in
+                emitAsrResult(
+                    sourceLabel: label,
+                    text: result.text,
+                    isFinal: result.isFinal,
+                    startMs: result.startMs,
+                    endMs: result.endMs
+                )
+            },
+            onStatus: { message in
+                emit([
+                    "event": "asrStatus",
+                    "source": label,
+                    "message": message,
+                ])
+            }
+        )
+    }
+
+    func feed(samples: [Int16], startElapsedMs: UInt64) {
+        queue.async { [stream] in
+            Task { await stream.feed(samples: samples, startElapsedMs: startElapsedMs) }
+        }
+    }
+
+    func finish() {
+        queue.sync {
+            let semaphore = DispatchSemaphore(value: 0)
+            Task {
+                await stream.finish()
+                semaphore.signal()
+            }
+            semaphore.wait()
+        }
+    }
+
+}
+
+private func emitAsrResult(sourceLabel: String, text: String, isFinal: Bool, startMs: UInt64, endMs: UInt64) {
+    emit([
+        "event": "asr",
+        "source": sourceLabel,
+        "text": text,
+        "interim": !isFinal,
+        "startMs": Int(startMs),
+        "endMs": Int(endMs),
+    ])
+}
+
+/// Owns one analyzer stream per capture source; no-op when unsupported.
+private final class AsrBridge {
+    private var sources: [UInt8: Any] = [:]
+    private let lock = NSLock()
+    private(set) var failed = false
+
+    init(localeID: String, sources sourcesArg: [UInt8]) {
+        if !AppleSpeechAvailability.isSupported() {
+            emit(["event": "asrStatus", "message": "on-device transcription requires macOS 26 or newer"])
+            failed = true
+            return
+        }
+        if #available(macOS 26.0, *) {
+            for source in sourcesArg {
+                let sourceStream = AsrSourceStream(source: source, localeID: localeID)
+                sources[source] = sourceStream
+                // Assets download on first use; kick it off now so the first
+                // utterance is not delayed by a model download.
+                let assetStream = sourceStream.stream
+                let sourceTag = source == 0 ? "mic" : "system"
+                Task.detached {
+                    do {
+                        let status = try await assetStream.ensureAssets()
+                        emit(["event": "asrStatus", "source": sourceTag, "message": "assets: \(status)"])
+                    } catch {
+                        emitError("on-device transcription unavailable: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+    }
+
+    func feed(source: UInt8, samples: [Int16], startElapsedMs: UInt64) {
+        lock.lock(); defer { lock.unlock() }
+        if failed { return }
+        guard #available(macOS 26.0, *), let sourceStream = sources[source] as? AsrSourceStream else { return }
+        sourceStream.feed(samples: samples, startElapsedMs: startElapsedMs)
+    }
+
+    func finishAll() {
+        lock.lock(); defer { lock.unlock() }
+        guard #available(macOS 26.0, *) else { return }
+        for (_, sourceStream) in sources {
+            (sourceStream as? AsrSourceStream)?.finish()
+        }
+    }
+}
+
+private var asrBridge: AsrBridge?
+
+// ───────────────────────────────────────────────────────────────
 // Recognition output: 16 kHz WAV + recognition socket, 20 ms frames.
 // ───────────────────────────────────────────────────────────────
 private final class RecognitionSink {
@@ -483,6 +602,7 @@ private final class RecognitionSink {
             self.wav.write(samples: samples, firstFrameElapsedMs: firstFrameElapsedMs)
             let frames = self.assembler.append(samples: samples, chunkStartMs: firstFrameElapsedMs)
             self.send(frames)
+            asrBridge?.feed(source: self.source, samples: samples, startElapsedMs: firstFrameElapsedMs)
         }
     }
 
@@ -945,6 +1065,16 @@ do {
     exit(3)
 }
 
+// Local on-device ASR (--analyzer): results ride stdout control lines.
+let analyzerEnabled = arguments.contains("--analyzer")
+if analyzerEnabled {
+    let analyzerLocale = argumentValue("--analyzer-locale") ?? "zh-CN"
+    var analyzerSources: [UInt8] = []
+    if captureMic { analyzerSources.append(0) }
+    if captureSystem { analyzerSources.append(1) }
+    asrBridge = AsrBridge(localeID: analyzerLocale, sources: analyzerSources)
+}
+
 @MainActor
 private enum CaptureLifecycle {}
 
@@ -1399,6 +1529,9 @@ shutdownHandler = shutdown
 private func finishAndExit() {
     micEngine?.stop()
     processor.flush()
+    // Analyzer tails first: results are control lines, not file writes, but
+    // they must be emitted before the process exits.
+    asrBridge?.finishAll()
     micRecognition.close()
     if dualChannel || captureSystem {
         systemRecognition.close()

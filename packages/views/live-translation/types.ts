@@ -26,7 +26,10 @@ export type LiveTranslationProtocol =
   | "dashscope"
   | "qwen"
   | "volc"
-  | "tencent";
+  | "tencent"
+  /** Apple on-device recognition: no wire protocol — recognition runs inside
+   *  the capture sidecar; Rust skips the websocket loop for this tag. */
+  | "applespeech_local";
 
 /** Which capture streams the sidecar records. "both" keeps the legacy
  * dual-stream behaviour; "system" is the transcribe-a-playing-video case
@@ -66,6 +69,10 @@ export interface PersistedLiveTranslationSettings {
   targetLanguage?: string;
   /** Non-secret field values per plugin id. */
   fields: Record<string, Record<string, string>>;
+  /** Set once the user explicitly saves a provider choice. Absent on blobs
+   *  written by defaults/migration — those are "never configured", and the
+   *  local-first default (Apple on-device ASR on macOS 26+) applies. */
+  providerChosen?: boolean;
 }
 
 export type LiveTranslationState =
@@ -290,6 +297,24 @@ export interface DesktopLiveTranslationApi {
    *  later via the `completed` event once the sidecar drain and local
    *  persistence finish. */
   marker?: (kind: RecordingMarker["kind"], note?: string, id?: string, remove?: boolean) => Promise<LiveTranslationSnapshot>;
+  /** Checkpoint the incremental structured-notes document into the live
+   * session directory (crash safety). Optional so older desktop builds keep
+   * working — the notes engine treats an absent method as "skip persisting". */
+  saveNotes?: (sessionId: string, notes: unknown) => Promise<void>;
+  /** Major macOS version (26 for macOS 26) for capability gating; null when
+   *  unknown or not macOS. Optional so older desktop builds keep working. */
+  macosMajorVersion?: () => Promise<number | null>;
+  /** Standalone translation service (for providers without a translation
+   *  leg). Optional so older desktop builds degrade to no translation. */
+  translate?: (args: {
+    text: string;
+    source: string;
+    target: string;
+    kind: "draft" | "sentence" | "speak";
+    providers: string[];
+    lingKey?: string | null;
+  }) => Promise<{ text: string; provider: string; attempts: unknown[] }>;
+  checkLingKey?: (key: string) => Promise<{ ok: boolean; ms: number }>;
   stop: () => Promise<void>;
   getState: () => Promise<LiveTranslationSnapshot>;
   finalizeLocal: (sessionId: string, synced: boolean) => Promise<void>;

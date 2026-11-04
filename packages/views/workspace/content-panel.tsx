@@ -25,6 +25,7 @@ import { useAudioEditorStore } from "../audio-editor/store";
 import { useNavigation } from "../navigation";
 import { TAB_BAR_HEIGHT } from "./layout-constants";
 import { api } from "@lynse/core/api/client";
+import type { MeetingNotes } from "@lynse/core/api";
 import { emitPluginEvent } from "../plugins";
 import { SummaryMarkdownEditor } from "./summary-editor";
 import { FloatingMarkdownToolbar } from "./center-panel/markdown-toolbar";
@@ -73,6 +74,8 @@ import {
 import { retryLocalTranscription } from "./local-transcription-retry";
 import { isLocalTranscriptionActive, LOCAL_STATUS_LABEL_KEY } from "./local-transcription-status";
 import { useRecordingCloudSync } from "../live-translation/use-recording-cloud-sync";
+import { LiveNotesPanel } from "../live-translation/notes/notes-panel";
+import type { LiveNotesState } from "../live-translation/notes/engine";
 import { triggerLocalAutoSummary, LOCAL_SUMMARY_TAB_ID } from "./local-auto-summary";
 import { wrapCjkSpacing } from "./cjk-spacing";
 import { extractBody } from "./content-html";
@@ -196,6 +199,8 @@ export function ContentPanel() {
     [transcription],
   );
   const chaptersDocument = (transcription?.chaptersDocument as ChapterDocument | null | undefined) ?? null;
+  // Structured live meeting notes (lynclaw /api/notes) — recorded live sessions only.
+  const liveNotes = (transcription?.notesJson as MeetingNotes | null | undefined) ?? null;
   const chaptersStatus = transcription?.chaptersStatus;
   const chaptersError = transcription?.chaptersError ?? null;
 
@@ -905,6 +910,15 @@ export function ContentPanel() {
             <Clock className="size-3.5" />
             <span>{t("workspace.chapters")}</span>
           </TabButton>
+          {liveNotes && (
+            <TabButton
+              active={contentTab === "notes"}
+              onClick={() => setContentTab("notes")}
+            >
+              <Sparkles className="size-3.5" />
+              <span>{t("live_translation.notes_title")}</span>
+            </TabButton>
+          )}
           {visibleConclusionTexts.map((block, idx) => (
             <ContextMenu key={block.key}>
               <ContextMenuTrigger>
@@ -1175,7 +1189,7 @@ export function ContentPanel() {
                       )
                     )}
 
-                    {(contentTab === "transcription" || contentTab === "chapters") && (
+                    {(contentTab === "transcription" || contentTab === "chapters" || contentTab === "notes") && (
                       <div className="flex flex-col flex-1 min-h-0 space-y-3">
                         {/* Per-track listening for dual-channel recordings */}
                         {contentTab === "transcription" && isLocalSelectedItem && selectedTrackManifest && playerAudioUrl && (
@@ -1260,6 +1274,11 @@ export function ContentPanel() {
                             onSeekChapter={handleSeekChapter}
                             onSaveEdits={handleSaveChapterEdits}
                           />
+                        )}
+                        {contentTab === "notes" && liveNotes && (
+                          <div className="flex-1 min-h-0 overflow-y-auto">
+                            <LiveNotesRecordView notes={liveNotes} />
+                          </div>
                         )}
                         {/* Transcription segments or empty state */}
                         {contentTab === "transcription" && (localTranscriptionActive ? (
@@ -2018,4 +2037,19 @@ function formatDate(dateStr: string, locale: string): string {
       hour: "2-digit", minute: "2-digit", second: "2-digit",
     });
   } catch { return dateStr; }
+}
+
+/** Read-only rendering of a recorded session's structured notes (the record's
+ *  notesJson). Reuses the live panel presentation with an idle state — no
+ *  engine, no timers, no fresh badges. */
+function LiveNotesRecordView({ notes }: { notes: MeetingNotes }) {
+  const state: LiveNotesState = {
+    sessionId: null,
+    notes,
+    status: "done",
+    freshTopicIds: [],
+    error: null,
+    updatedAt: null,
+  };
+  return <LiveNotesPanel state={state} />;
 }

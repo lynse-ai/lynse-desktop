@@ -263,11 +263,29 @@ function toProviderConfig(settings: PersistedLiveTranslationSettings): LiveTrans
   };
 }
 
+/** Local-first default: on macOS 26+ a user who never explicitly chose a
+ *  provider gets Apple on-device ASR (free, private, no relay cost). Everyone
+ *  who has ever saved a provider choice keeps theirs. */
+async function localFirstActiveProvider(settings: PersistedLiveTranslationSettings): Promise<string> {
+  if (settings.providerChosen) return settings.activeProvider;
+  try {
+    const version = await command<number | null>("macos_major_version");
+    if (typeof version === "number" && version >= 26 && getProvider("apple")) {
+      return "apple";
+    }
+  } catch {
+    // Older desktop build without the command — keep the stored default.
+  }
+  return settings.activeProvider;
+}
+
 async function getLiveTranslationProviderConfig(): Promise<LiveTranslationProviderConfig> {
   // Re-read secrets from the OS keychain on every fetch so a key changed
   // outside the app (or after startup) takes effect without a restart.
   await Promise.all(listSecretVaultKeys().map((key) => refreshSecret(key)));
-  return toProviderConfig(loadPersistedLiveTranslationSettings());
+  const settings = loadPersistedLiveTranslationSettings();
+  const provider = await localFirstActiveProvider(settings);
+  return toProviderConfig({ ...settings, activeProvider: provider });
 }
 
 async function saveLiveTranslationProviderConfig(
@@ -304,6 +322,9 @@ async function saveLiveTranslationProviderConfig(
     sourceLanguage: config.sourceLanguage?.trim() || undefined,
     targetLanguage: config.targetLanguage?.trim() || undefined,
     fields,
+    // Any explicit save is a user choice — the local-first default no longer
+    // applies to this blob afterwards.
+    providerChosen: true,
   };
   window.localStorage.setItem(LIVE_TRANSLATION_SETTINGS_V2_KEY, JSON.stringify(normalized));
   // The legacy console is no longer supported; drop any App Key left behind.
@@ -404,6 +425,8 @@ export async function installTauriBridge(): Promise<void> {
         command("local_transcription_save_summary", { id, title, markdown }),
       saveChapters: (id: string, document: unknown, status: string, error?: string | null) =>
         command("local_transcription_save_chapters", { id, document, status, error: error ?? null }),
+      saveNotes: (id: string, notes: unknown) =>
+        command("local_transcription_save_notes", { id, notes: notes ?? null }),
       retry: (id: string, options?: { track?: "mic" | "system" }) =>
         command("local_transcription_retry", { id, options }),
       getTrackAudioUrl: (id: string, file: string) =>
@@ -482,6 +505,12 @@ export async function installTauriBridge(): Promise<void> {
       setSources: (request) => command<LiveTranslationSnapshot>("live_translation_set_sources", { request }),
       waveformPeaks: (src, recordId) => command<{ peaks: number[]; durationMs: number }>("local_audio_waveform", { src, recordId }),
       marker: (kind, note, id, remove) => command<LiveTranslationSnapshot>("live_translation_marker", { kind, note, id, remove }),
+      saveNotes: (sessionId: string, notes: unknown) =>
+        command<void>("live_notes_save", { sessionId, notes: notes ?? null }),
+      macosMajorVersion: () => command<number | null>("macos_major_version"),
+      translate: (args: { text: string; source: string; target: string; kind: "draft" | "sentence" | "speak"; providers: string[]; lingKey?: string | null }) =>
+        command<{ text: string; provider: string; attempts: unknown[] }>("translation_translate", args),
+      checkLingKey: (key: string) => command<{ ok: boolean; ms: number }>("translation_check_key", { key }),
       stop: () => command<void>("live_translation_stop"),
       getState: () => command<LiveTranslationSnapshot>("live_translation_state"),
       finalizeLocal: (sessionId, synced) => command<void>("live_translation_finalize_local", { sessionId, synced }),

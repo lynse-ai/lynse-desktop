@@ -46,6 +46,13 @@ cp "$SOURCE_DIR/.build/release/lynse-audio-capture" "$DEST"
 chmod +x "$DEST"
 xattr -cr "$DEST" || true
 
+# Batch on-device transcription sidecar (Apple SpeechAnalyzer, macOS 26+).
+# Same ad-hoc signing treatment as the capture sidecar below.
+TRANSCRIBE_DEST="$DEST_DIR/apple-transcribe"
+cp "$SOURCE_DIR/.build/release/lynse-apple-transcribe" "$TRANSCRIBE_DEST"
+chmod +x "$TRANSCRIBE_DEST"
+xattr -cr "$TRANSCRIBE_DEST" || true
+
 # Ad-hoc signature only. The release pipeline Developer ID-signs this binary
 # in a dedicated workflow step (release.yml): codesign cannot see the
 # certificate here — tauri imports it into a temporary keychain only during
@@ -55,6 +62,7 @@ xattr -cr "$DEST" || true
 # Entitlements-sidecar-direct.plist).
 SIGNING_IDENTITY="${CODESIGN_IDENTITY:--}"
 codesign --force --options runtime --sign "$SIGNING_IDENTITY" "$DEST"
+codesign --force --options runtime --sign "$SIGNING_IDENTITY" "$TRANSCRIBE_DEST"
 
 printf '%s\n' "$SOURCE_HASH" > "$STAMP"
 echo "built $DEST"

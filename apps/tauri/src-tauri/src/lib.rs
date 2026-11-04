@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 #[cfg(target_os = "macos")]
-use highlandcows_eventkit::{CalendarEvent, CalendarStore, EkAuthStatus, EventKitError};
+use highlandcows_eventkit::{
+    CalendarEvent, CalendarFullAccessToken, CalendarStore, EkAuthStatus, EventKitError,
+};
 use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -37,6 +39,7 @@ mod feishu;
 mod bots;
 mod audio_editor;
 mod stt;
+mod translation;
 // Microphone TCC prompt from the main app process (macOS); stubs elsewhere.
 mod mic_permission;
 // Wire codec for the Volcengine AST provider used by `live_translation`. Kept
@@ -357,6 +360,68 @@ fn calendar_event_times(start_at: &str, end_at: &str) -> CommandResult<(DateTime
 }
 
 #[cfg(target_os = "macos")]
+const CALENDAR_PERMISSION_DENIED_MESSAGE: &str =
+    "系统日历权限已被拒绝，请在 系统设置 → 隐私与安全性 → 日历 中允许 Lynse";
+
+/// Request EventKit full access with the thread discipline the permission
+/// prompt requires. macOS suppresses the full-access prompt and returns
+/// granted=false when the request is issued from a background thread — the
+/// status stays NotDetermined, which a plain "denied" wording misreports
+/// (observed 2026-11-03: three save attempts, all NotDetermined + instant
+/// failure, no prompt, while System Settings already showed the toggle on).
+/// Settled statuses need no prompt and are settled inline; the NotDetermined
+/// request is dispatched to the main thread while the calling spawn_blocking
+/// worker blocks on a channel.
+#[cfg(target_os = "macos")]
+fn authorize_calendar_full_access(
+    app: &AppHandle,
+    store: &CalendarStore,
+) -> Result<CalendarFullAccessToken, String> {
+    let status_before = CalendarStore::authorization_status();
+    log::info!("[calendar] EventKit authorization status: {status_before:?}");
+    match status_before {
+        EkAuthStatus::Denied => return Err(CALENDAR_PERMISSION_DENIED_MESSAGE.to_owned()),
+        EkAuthStatus::Restricted => return Err("日历访问被系统策略限制".to_owned()),
+        _ => {}
+    }
+
+    // Sync Tauri commands run on the main thread (the onboarding path), and
+    // dispatching back to the main thread from itself would deadlock — request
+    // directly there. The system prompt renders in its own process, so
+    // blocking the runloop while waiting for the answer is safe (the onboarding
+    // path has always done this).
+    let on_main_thread = std::thread::current().name() == Some("main");
+    let result = if on_main_thread {
+        store.authorize()
+    } else {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let store = store.clone();
+        app.run_on_main_thread(move || {
+            let _ = tx.send(store.authorize());
+        })
+        .map_err(|error| format!("无法调度日历授权请求：{error}"))?;
+        rx.recv().map_err(|error| format!("日历授权请求中断：{error}"))?
+    };
+
+    match result {
+        Ok(access) => Ok(access),
+        Err(EventKitError::AuthorizationDenied) => {
+            // granted=false has two shapes: a real "Don't Allow" flips the
+            // status to Denied, while a suppressed request leaves it at
+            // NotDetermined — only the first deserves the "已被拒绝" wording.
+            let status_after = CalendarStore::authorization_status();
+            log::error!("[calendar] authorization denied; status {status_before:?} -> {status_after:?}");
+            match status_after {
+                EkAuthStatus::Denied => Err(CALENDAR_PERMISSION_DENIED_MESSAGE.to_owned()),
+                _ => Err("未能弹出日历授权窗口，请重试；若反复失败，请完全退出 Lynse 后重新打开，或在 系统设置 → 隐私与安全性 → 日历 中手动允许 Lynse".to_owned()),
+            }
+        }
+        Err(EventKitError::AuthorizationRestricted) => Err("日历访问被系统策略限制".to_owned()),
+        Err(other) => Err(format!("无法获取日历权限：{other}")),
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn add_todo_to_system_calendar(
     app: &AppHandle,
     todo_id: &str,
@@ -388,17 +453,7 @@ fn add_todo_to_system_calendar(
     // Full access, not write-only: on macOS 14+ defaultCalendarForNewEvents
     // only resolves under full access — under write-only it returns nil and
     // every save fails with "no default Calendar configured".
-    log::info!("[calendar] EventKit authorization status: {:?}", CalendarStore::authorization_status());
-    let access = store.authorize().map_err(|error| {
-        log::error!("[calendar] EventKit authorization failed: {error}");
-        match error {
-            EventKitError::AuthorizationDenied => {
-                "系统日历权限已被拒绝，请在 系统设置 → 隐私与安全性 → 日历 中允许 Lynse".to_owned()
-            }
-            EventKitError::AuthorizationRestricted => "日历访问被系统策略限制".to_owned(),
-            other => format!("无法获取日历权限：{other}"),
-        }
-    })?;
+    let access = authorize_calendar_full_access(app, &store)?;
     // defaultCalendarForNewEvents can still be nil under full access when no
     // default is configured in Calendar.app; fall back to the first writable
     // calendar instead of failing the save.
@@ -471,10 +526,10 @@ pub(crate) fn calendar_permission_state() -> &'static str {
 /// an error here — callers re-read `calendar_permission_state` afterwards so
 /// the UI can show its denied hint instead.
 #[cfg(target_os = "macos")]
-pub(crate) fn request_calendar_permission() {
+pub(crate) fn request_calendar_permission(app: &AppHandle) {
     match CalendarStore::builder().connect() {
         Ok(store) => {
-            if let Err(error) = store.authorize() {
+            if let Err(error) = authorize_calendar_full_access(app, &store) {
                 log::error!("[calendar] onboarding authorization failed: {error}");
             }
         }
@@ -1028,6 +1083,15 @@ pub const FUNASR_NANO_FILES: &[SttModelFile] = &[
 ];
 
 pub const STT_MODELS: &[SttModelEntry] = &[
+    SttModelEntry {
+        provider: "applespeech",
+        id: stt::APPLE_SPEECH_MODEL_ID,
+        label: "Apple 原生语音识别（macOS 26+ · 本地免费 · 语言资产由系统管理）",
+        size_bytes: 0,
+        download_url: "",
+        sha256: "",
+        files: &[],
+    },
     SttModelEntry {
         provider: "funasr",
         id: stt::FUNASR_DEFAULT_MODEL_ID,
@@ -3275,6 +3339,69 @@ fn local_transcription_save_chapters(
     Ok(())
 }
 
+/// Translate one string through the configured provider chain (Ling →
+/// Google → Apple on-device, order given by the caller). Stateless: the Ling
+/// key rides in per call from the frontend's keychain vault.
+#[tauri::command]
+async fn translation_translate(
+    text: String,
+    source: String,
+    target: String,
+    kind: String,
+    providers: Vec<String>,
+    lingKey: Option<String>,
+) -> CommandResult<Value> {
+    let parsed_kind = match kind.as_str() {
+        "draft" => translation::TranslateKind::Draft,
+        "speak" => translation::TranslateKind::Speak,
+        _ => translation::TranslateKind::Sentence,
+    };
+    let outcome = translation::translate(
+        &text,
+        &source,
+        &target,
+        parsed_kind,
+        &providers,
+        lingKey.as_deref(),
+    )
+    .await?;
+    Ok(json!({
+        "text": outcome.text,
+        "provider": outcome.provider,
+        "attempts": outcome.attempts,
+    }))
+}
+
+/// Validate a Ling API key with the cheapest possible request; returns the
+/// round-trip in ms (a 429 counts as valid — the key works, the account is
+/// just busy).
+#[tauri::command]
+async fn translation_check_key(key: String) -> CommandResult<Value> {
+    let ms = translation::check_ling_key(&key).await?;
+    Ok(json!({ "ok": true, "ms": ms }))
+}
+
+/// Major macOS version for frontend capability gating (Apple native ASR needs
+/// 26+). `None` = unknown/not macOS — callers hide the feature, never show it.
+#[tauri::command]
+fn macos_major_version() -> Option<u32> {
+    stt::macos_major_version()
+}
+
+/// Attach the structured meeting-notes document (lynclaw /api/notes) onto the
+/// record. `notes: null` clears it. The final notes pass runs after the live
+/// session's record already exists (persist_session embeds only the last
+/// session-dir checkpoint), so this patches the stored record directly.
+#[tauri::command]
+fn local_transcription_save_notes(app: AppHandle, id: String, notes: Option<Value>) -> CommandResult<()> {
+    let mut patch = Map::new();
+    patch.insert("notesJson".to_owned(), notes.unwrap_or(Value::Null));
+    patch.insert("updatedAt".to_owned(), json!(now()));
+    update_store_value(&app, "local-transcriptions", &id, patch)?
+        .ok_or("Local transcription not found")?;
+    Ok(())
+}
+
 #[tauri::command]
 fn local_transcription_delete(app: AppHandle, id: String) -> CommandResult<()> {
     // The record row is the last reference to a live session's directory, so
@@ -5481,7 +5608,8 @@ pub fn run() {
             workbench::workbench_resolve_conflict,
             desktop_mcp::desktop_mcp_get, desktop_mcp::desktop_mcp_configure, desktop_mcp::desktop_mcp_complete,
             local_transcription_list, local_transcription_get, local_transcription_delete, local_transcription_audio_url,
-            local_transcription_save_summary, local_transcription_save_chapters,
+            local_transcription_save_summary, local_transcription_save_chapters, local_transcription_save_notes,
+            translation_translate, translation_check_key, macos_major_version,
             local_transcription_track_audio_url,
             sync_upload::sync_upload_audio_size, sync_upload::sync_upload_put_signed_file,
             todo_list, todo_save, todo_delete, todo_add_to_calendar, todo_status_action, todo_capabilities,
@@ -5582,7 +5710,7 @@ pub fn run() {
             live_translation::live_translation_set_mode,
             live_translation::live_translation_set_sources,
             local_audio_waveform,
-            live_translation::live_translation_marker,
+            live_translation::live_translation_marker, live_translation::live_notes_save,
             meeting_detector::meeting_detector_set_config,
             meeting_detector::meeting_detector_get_state,
             window_effects::window_effects_mode,

@@ -31,6 +31,14 @@ export function useLiveTranslation() {
       .catch((error: unknown) => {
         if (!disposed) dispatch({ type: "error", message: String(error) });
       });
+    // Local translation-service patches (Apple on-device ASR has no
+    // translation leg; the page translates finals and reports back here).
+    const patchListener = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId: string; segmentId: string; text: string }>).detail;
+      if (!detail?.segmentId) return;
+      dispatch({ type: "segment", segment: { id: detail.segmentId, translatedText: detail.text } as never });
+    };
+    window.addEventListener("lynse:local-translation-patch", patchListener);
     api.onEvent((event) => {
       if (event.type === "state") stateRef.current = event.snapshot.state;
       // Capture-layer failures (no audio device, wedged engine) happen while
@@ -52,6 +60,7 @@ export function useLiveTranslation() {
     return () => {
       disposed = true;
       unlisten?.();
+      window.removeEventListener("lynse:local-translation-patch", patchListener);
     };
   }, [api]);
 

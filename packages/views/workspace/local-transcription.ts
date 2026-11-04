@@ -11,7 +11,7 @@ import type {
   WorkspaceItem,
 } from "./types";
 
-export type SttEngine = "qwen3" | "funasr" | "whisper" | "whisperx" | "vibeasr" | "mlx" | "moss" | "sherpa";
+export type SttEngine = "qwen3" | "funasr" | "whisper" | "whisperx" | "vibeasr" | "mlx" | "moss" | "sherpa" | "applespeech";
 
 /** Engines selectable outside macOS. Defined once because the engine list and
  *  the model cards must agree — they used to each keep a private copy of this
@@ -134,7 +134,8 @@ export type SttProviderConfig =
     }
   | { provider: "vibeasr"; hotword_package_id?: string | null }
   | { provider: "mlx"; model?: string; hotword_package_id?: string | null }
-  | { provider: "moss"; model?: MossModel | string; hotword_package_id?: string | null };
+  | { provider: "moss"; model?: MossModel | string; hotword_package_id?: string | null }
+  | { provider: "applespeech"; hotword_package_id?: string | null };
 
 export type TranscribeConfig = {
   default?: SttProviderConfig | null;
@@ -205,6 +206,9 @@ export interface DesktopLocalTranscriptionApi {
   saveSummary: (id: string, title: string | null, markdown: string) => Promise<void>;
   /** Persist the AI chapter document / status (null document clears it). */
   saveChapters: (id: string, document: ChapterDocument | null, status: ChaptersStatus, error?: string | null) => Promise<void>;
+  /** Attach the structured meeting-notes document (null clears it). Optional
+   *  so older desktop builds keep working — callers degrade to no-op. */
+  saveNotes?: (id: string, notes: unknown) => Promise<void>;
   retry: (id: string, options?: { track?: "mic" | "system" }) => Promise<unknown>;
   /** Audio URL for one track file of a dual-channel recording. */
   getTrackAudioUrl: (id: string, file: string) => Promise<string>;
@@ -482,6 +486,9 @@ export function providerModelId(config: SttProviderConfig): string {
       return config.model ?? "whisper-large-v3-turbo";
     case "moss":
       return config.model ?? DEFAULT_MOSS_MODEL;
+    case "applespeech":
+      // OS-managed assets — the catalog entry's placeholder id.
+      return "applespeech-os";
   }
 }
 

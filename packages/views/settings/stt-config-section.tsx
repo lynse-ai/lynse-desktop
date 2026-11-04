@@ -38,6 +38,7 @@ import { isMacDesktop } from "../layout/use-maximized";
  *  Model download lives in the plugin community (Settings → Plugins) — this
  *  section only configures which engine runs and with what options. */
 const ENGINE_OPTIONS: { value: SttEngine; labelKey: string }[] = [
+  { value: "applespeech", labelKey: "settings.stt_engine_applespeech" },
   { value: "funasr", labelKey: "settings.stt_engine_funasr" },
   { value: "qwen3", labelKey: "settings.stt_engine_qwen3" },
   { value: "moss", labelKey: "settings.stt_engine_moss" },
@@ -107,6 +108,11 @@ function providerForEngine(engine: SttEngine, prev?: SttProviderConfig): SttProv
         provider: "moss",
         model: prev?.provider === "moss" ? prev.model ?? DEFAULT_MOSS_MODEL : DEFAULT_MOSS_MODEL,
         hotword_package_id: prev?.provider === "moss" ? prev.hotword_package_id ?? null : null,
+      };
+    case "applespeech":
+      return {
+        provider: "applespeech",
+        hotword_package_id: prev?.provider === "applespeech" ? prev.hotword_package_id ?? null : null,
       };
     case "sherpa":
       // Voiceprint-model provider, not a transcription engine — absent from

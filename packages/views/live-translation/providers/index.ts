@@ -14,6 +14,8 @@ import { qwenPlugin } from "./qwen";
 import { volcPlugin } from "./volc";
 import { tencentPlugin } from "./tencent";
 import { customRealtimePlugin } from "./custom-realtime";
+import { applePlugin } from "./apple";
+import { isAppleLiveAsrSupported } from "./apple-support";
 
 registerProvider(lynseBackendPlugin);
 registerProvider(iliveDataDirectPlugin);
@@ -21,6 +23,10 @@ registerProvider(qwenPlugin);
 registerProvider(volcPlugin);
 registerProvider(tencentPlugin);
 registerProvider(customRealtimePlugin);
+// macOS 26+ only — registered late so the settings dropdown lists it last.
+if (isAppleLiveAsrSupported()) {
+  registerProvider(applePlugin);
+}
 
 export {
   effectiveValues,

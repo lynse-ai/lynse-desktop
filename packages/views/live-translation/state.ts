@@ -66,8 +66,13 @@ export function reduceLiveTranslationEvent(
   if (event.type === "segment") {
     const segments = [...current.segments];
     const index = segments.findIndex((segment) => segment.id === event.segment.id);
-    if (index >= 0) segments[index] = event.segment;
-    else segments.push(event.segment);
+    if (index >= 0) {
+      // Merge, not replace: local translation-service patches arrive as
+      // partial segments (id + translatedText) over a complete Rust segment.
+      segments[index] = { ...segments[index], ...event.segment };
+    } else {
+      segments.push(event.segment);
+    }
     segments.sort(compareSegments);
     return { ...current, segments };
   }

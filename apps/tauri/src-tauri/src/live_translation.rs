@@ -348,6 +348,31 @@ pub fn live_translation_marker(
     Ok(snapshot)
 }
 
+/// Persist incremental structured meeting notes (the frontend notes engine
+/// talking to lynclaw /api/notes) into the live session directory. Written
+/// continuously during the session as a crash checkpoint — like markers.json —
+/// and embedded into the record by `persist_session`; the final notes pass
+/// lands after the record exists, so it patches the record directly through
+/// `local_transcription_save_notes`.
+#[tauri::command]
+pub async fn live_notes_save(app: AppHandle, session_id: String, notes: Value) -> CommandResult<()> {
+    if !valid_session_id(&session_id) {
+        return Err("Invalid session id".into());
+    }
+    if notes.as_object().map(|map| map.len()).unwrap_or(0) > 512 {
+        return Err("Notes payload is too large".into());
+    }
+    let directory = recovery_root(&app)?.join(&session_id);
+    if !directory.is_dir() {
+        return Err("Live session directory not found".into());
+    }
+    crate::atomic_write(
+        &directory.join("notes.json"),
+        &serde_json::to_vec_pretty(&notes).map_err(|error| error.to_string())?,
+    )?;
+    Ok(())
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompletedSession {
@@ -752,7 +777,7 @@ pub fn live_translation_request_permission(
         // Denials surface through the re-read status (denied + UI hint), not
         // as an error — same contract as the microphone arm above.
         "calendar" => {
-            crate::request_calendar_permission();
+            crate::request_calendar_permission(&app);
             return read_permission_status(&app);
         }
         _ => {
@@ -1205,6 +1230,9 @@ pub async fn live_translation_start(
 
     // Computed before `request.connections` is moved into spawn_connections.
     let sources_argument = request.sources_argument();
+    // Local on-device ASR rides the capture process itself; the flag must be
+    // known BEFORE the sidecar spawns, so peek at the request's connections.
+    let local_asr = connections_provider(&request.connections).as_deref() == Some("applespeech_local");
     spawn_connections(&app, &session, request.epoch, 0, request.connections)?;
 
     #[cfg(target_os = "macos")]
@@ -1221,6 +1249,14 @@ pub async fn live_translation_start(
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if session.dual_channel { command.arg("--switchable-sources"); }
+        if local_asr {
+            // The locale follows the session's source language; the analyzer
+            // downloads its assets on first use inside the sidecar.
+            command
+                .arg("--analyzer")
+                .arg("--analyzer-locale")
+                .arg(session.source_language.read().expect("live source language").clone());
+        }
         if session.dual_channel && aec_enabled() {
             command.arg("--aec");
             if session.voice_enhancement {
@@ -1435,6 +1471,41 @@ fn spawn_control_reader(
                     }
                     let _ = app.emit(LIVE_EVENT, json!({ "type": "levels", "mic": mic, "system": system, "elapsedMs": elapsed, "micSuppressed": mic_suppressed, "recordingLevel": recording, "aecDegraded": aec_degraded, "sourceRevision": revision, "sessionId": session.session_id }));
                 }
+                Some("asr") => {
+                    // Local on-device recognition (applespeech_local): the
+                    // sidecar's SpeechTranscriber emitted interim/final text.
+                    let text = value.get("text").and_then(Value::as_str).unwrap_or("");
+                    if text.trim().is_empty() { continue; }
+                    if !matches!(session.state.lock().expect("live state lock").as_str(), "recording" | "paused") { continue; }
+                    let source = match value.get("source").and_then(Value::as_str) {
+                        Some("system") => AudioSource::System,
+                        _ => AudioSource::Mic,
+                    };
+                    let routes = session.routes.read().map_err(|_| "live routes lock is poisoned");
+                    if routes.as_ref().map(|r| !r.is_empty()).unwrap_or(true) {
+                        // A cloud provider is also attached — local results are
+                        // not expected; ignore rather than duplicate segments.
+                        continue;
+                    }
+                    drop(routes);
+                    let interim = value.get("interim").and_then(Value::as_bool).unwrap_or(false);
+                    let start_ms = value.get("startMs").and_then(Value::as_u64).unwrap_or(session.last_elapsed_ms.load(Ordering::Relaxed));
+                    let end_ms = value.get("endMs").and_then(Value::as_u64);
+                    let emission = ingest_provider_text(
+                        &session,
+                        source,
+                        session.epoch.load(Ordering::Relaxed),
+                        Some("apple".to_owned()),
+                        start_ms,
+                        end_ms,
+                        true,
+                        !interim,
+                        format!("apple-{source:?}"),
+                        None,
+                        text,
+                    );
+                    emit_provider_emission(&app, emission);
+                }
                 Some("error") => emit_error(
                     &app,
                     None,
@@ -1528,6 +1599,12 @@ fn spawn_connections(
             .expect("live provider lock") = Some(provider);
     }
     for connection in connections {
+        // Local on-device recognition consumes the sidecar's own audio (the
+        // capture process runs the analyzer); results arrive as `asr` control
+        // lines on stdout. No websocket loop and no audio routing.
+        if connections_provider(std::slice::from_ref(&connection)).as_deref() == Some("applespeech_local") {
+            continue;
+        }
         let (sender, receiver) = unbounded_channel();
         routes.insert(connection.source, sender);
         let app = app.clone();
@@ -1594,6 +1671,11 @@ fn validate_connections(connections: &[ConnectionDescriptor]) -> CommandResult<(
                 "duplicate {:?} translation connection",
                 connection.source
             ));
+        }
+        // Local on-device recognition: recognition runs inside the capture
+        // sidecar (--analyzer); there is no websocket to validate.
+        if connections_provider(std::slice::from_ref(connection)).as_deref() == Some("applespeech_local") {
+            continue;
         }
         if !connection.url.starts_with("wss://")
             && !connection.url.starts_with("ws://127.0.0.1")
@@ -3023,6 +3105,12 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
     // recognized) persists as `recorded` so the UI never shows a transcription
     // badge for audio-only records.
     let status = if transcript_text.trim().is_empty() { "recorded" } else { "completed" };
+    // Structured notes checkpoint (frontend notes engine → live_notes_save);
+    // absent (null) for sessions that never produced notes.
+    let notes_json = fs::read(session.directory.join("notes.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .unwrap_or(Value::Null);
     save_store_value(
         app,
         "local-transcriptions",
@@ -3047,6 +3135,7 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
             "saved": false,
             "segments": local_segments,
             "markers": session.markers.lock().expect("recording markers lock").clone(),
+            "notesJson": notes_json,
             "workbenchScope": crate::workbench::current_scope(app),
             "trackManifest": tracks_value.clone().unwrap_or(Value::Null),
             "audioSourceIntervals": source_intervals,

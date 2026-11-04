@@ -2,7 +2,7 @@ export type ItemType = "recording" | "meeting" | "note" | "file";
 export type RecordingMode = "meeting" | "call" | "import";
 
 import type { SttProviderConfig } from "./local-transcription";
-import type { ConnectorConnectionRequest } from "@lynse/core/api";
+import type { ConnectorConnectionRequest, MeetingNotes } from "@lynse/core/api";
 
 export interface WorkspaceItem {
   id: string;
@@ -267,6 +267,8 @@ export interface LocalTranscriptionRecord {
   chaptersDocument?: ChapterDocument | null;
   chaptersStatus?: ChaptersStatus;
   chaptersError?: string | null;
+  /** Structured live meeting notes (lynclaw /api/notes); see MeetingNotes. */
+  notesJson?: MeetingNotes | null;
 }
 
 export interface LocalTranscriptionOptions {

@@ -113,11 +113,11 @@ export interface FileTranscription {
   content: string;
   /** Playback-ordered transcript rows (the 转写 tab list and chapters source). */
   records?: TranscriptionRecordRow[];
-  /** Local transcriptions only: agent-service deep summary fields. */
+  /** Agent-service deep summary fields; local records persist these inline. */
   summaryMarkdown?: string | null;
   summaryTitle?: string | null;
   summaryGeneratedAt?: string | null;
-  /** Local transcriptions only: AI semantic chapter document (see ChapterDocument). */
+  /** Persisted AI semantic chapter document (cloud documents live in cache). */
   chaptersDocument?: ChapterDocument | null;
   chaptersStatus?: ChaptersStatus;
   chaptersError?: string | null;

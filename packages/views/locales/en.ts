@@ -22,6 +22,7 @@ const en = {
     aec: "Automatic echo cancellation is enabled",
     waveform_loading: "Generating waveform…",
     waveform_failed: "Waveform unavailable",
+    waveform_skipped: "Waveform is not generated for long recordings",
     retry: "Retry",
   },
   app_name: "Lynse",
@@ -725,6 +726,7 @@ const en = {
     chapters_invalid: "Chapter result could not be parsed. Try again",
     chapters_no_agent: "AI service is not connected — cannot generate chapters",
     chapters_logged_out: "Sign in to generate chapters",
+    chapters_seek: "Click to seek to chapter start",
 
     track_all: "All",
     track_local: "Mic",

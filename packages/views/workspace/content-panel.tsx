@@ -33,8 +33,19 @@ import { DeleteConfirmDialog } from "./delete-confirm-dialog";
 import { AudioPlayer } from "./audio-player";
 import type { AudioPlayerHandle } from "./audio-player";
 import { ChaptersPanel } from "./chapter-panel";
-import { runChapterGeneration, saveChapterEdits } from "./local-chapters";
-import type { ChapterSegment } from "./semantic-chapters";
+import {
+  cloudChaptersQueryKey,
+  cloudTranscriptionToChapterSegments,
+  useCloudChapterDocument,
+} from "./cloud-chapters";
+import { formatRecordingTime, runChapterGeneration, saveChapterEdits } from "./local-chapters";
+import {
+  buildChapterDocument,
+  buildUtterances,
+  computeTranscriptHash,
+  type ChapterSegment,
+} from "./semantic-chapters";
+import { generateChapters } from "@lynse/core/api";
 import type { ChapterDocument, SemanticChapter } from "./types";
 import { getDesktopLiveTranslationApi } from "../live-translation/desktop-api";
 import type { RecordingTrackManifest } from "./types";
@@ -57,7 +68,7 @@ import {
 } from "./hooks/use-files";
 import type { SummaryTabModel } from "./hooks/use-files";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ResummarizeDialog, type SummaryTemplateDialogMode } from "./resummarize-dialog";
 import { ShareNoteMenuItem } from "./share-note/share-note-menu-item";
 import { ShareNoteDialog } from "./share-note/share-note-dialog";
@@ -184,21 +195,27 @@ export function ContentPanel() {
   const selectedLiveSessionId =
     (transcription as { liveSessionId?: string } | undefined)?.liveSessionId ?? null;
 
-  // AI semantic chapters (local recordings only): document/status ride on the
-  // transcription query; segments reuse the exact view rows the 转写 tab
-  // renders so the panel's staleness hash matches the generation-time hash.
+  const isCloudSelectedItem = !!selectedItemId && !selectedItemId.startsWith("local:");
+
+  // AI semantic chapters use the same playback-ordered rows the 转写 tab
+  // renders. Cloud rows use the flexible API envelope, so normalize them into
+  // one canonical segment shape before generation and staleness hashing.
   const chapterSegments: ChapterSegment[] = useMemo(
     () =>
-      (transcription?.records ?? []).map((row) => ({
-        id: row.id,
-        text: row.text,
-        startMs: row.beginTime,
-        endMs: row.endTime,
-        speaker: row.speakerName ?? null,
-      })),
-    [transcription],
+      !isCloudSelectedItem
+        ? (transcription?.records ?? []).map((row) => ({
+            id: row.id,
+            text: row.text,
+            startMs: row.beginTime,
+            endMs: row.endTime,
+            speaker: row.speakerName ?? null,
+          }))
+        : cloudTranscriptionToChapterSegments(transcription),
+    [isCloudSelectedItem, transcription],
   );
-  const chaptersDocument = (transcription?.chaptersDocument as ChapterDocument | null | undefined) ?? null;
+  const localChaptersDocument = (transcription?.chaptersDocument as ChapterDocument | null | undefined) ?? null;
+  const { data: cloudChaptersDocument } = useCloudChapterDocument(isCloudSelectedItem ? selectedItemId : null);
+  const chaptersDocument = isCloudSelectedItem ? cloudChaptersDocument ?? null : localChaptersDocument;
   // Structured live meeting notes (lynclaw /api/notes) — recorded live sessions only.
   const liveNotes = (transcription?.notesJson as MeetingNotes | null | undefined) ?? null;
   const chaptersStatus = transcription?.chaptersStatus;
@@ -573,11 +590,41 @@ export function ContentPanel() {
   // failing must never block the other. `force` bypasses the manual-edit guard
   // only after the panel's confirm step.
   const [chapterBusy, setChapterBusy] = useState(false);
+  const cloudChaptersMutation = useMutation({
+    mutationFn: async ({ fileId, force }: { fileId: string; force: boolean }) => {
+      const existing = qc.getQueryData<ChapterDocument>(cloudChaptersQueryKey(fileId));
+      const transcriptHash = await computeTranscriptHash(chapterSegments);
+      if (!force && existing?.transcriptHash === transcriptHash) return existing;
+
+      const client = api();
+      if (!client.getAgentBaseUrl()) throw new Error("AI service unavailable");
+      const sessionToken = client.getToken();
+      if (!sessionToken) throw new Error("Login required");
+
+      const result = await generateChapters(
+        {
+          utterances: buildUtterances(chapterSegments),
+          language: (transcription as Record<string, unknown> | undefined)?.language as string | undefined,
+          recordingTime: formatRecordingTime(selectedCreatedAt ?? undefined),
+        },
+        sessionToken,
+      );
+      return buildChapterDocument(result, chapterSegments, transcriptHash);
+    },
+    onSuccess: (document, { fileId }) => {
+      qc.setQueryData(cloudChaptersQueryKey(fileId), document);
+    },
+  });
+  const cloudChapterGenerationMatches = cloudChaptersMutation.variables?.fileId === selectedItemId;
   const handleGenerateChapters = useCallback(
     async (force: boolean) => {
       if (!selectedItemId || chapterBusy) return;
       setChapterBusy(true);
       try {
+        if (!isLocalSelectedItem) {
+          await cloudChaptersMutation.mutateAsync({ fileId: selectedItemId, force });
+          return;
+        }
         const saved = await runChapterGeneration(selectedItemId, { force, t: (key) => t(key) });
         if (saved) {
           await qc.invalidateQueries({ queryKey: ["file-transcription", selectedItemId] });
@@ -586,19 +633,23 @@ export function ContentPanel() {
         setChapterBusy(false);
       }
     },
-    [selectedItemId, chapterBusy, qc, t],
+    [selectedItemId, chapterBusy, isLocalSelectedItem, cloudChaptersMutation, qc, t],
   );
 
   const handleSaveChapterEdits = useCallback(
     async (document: ChapterDocument) => {
       if (!selectedItemId) return false;
+      if (!isLocalSelectedItem) {
+        qc.setQueryData(cloudChaptersQueryKey(selectedItemId), document);
+        return true;
+      }
       const ok = await saveChapterEdits(selectedItemId, document, { t: (key) => t(key) });
       if (ok) {
         await qc.invalidateQueries({ queryKey: ["file-transcription", selectedItemId] });
       }
       return ok;
     },
-    [selectedItemId, qc, t],
+    [selectedItemId, isLocalSelectedItem, qc, t],
   );
 
   const handleSeekChapter = useCallback(
@@ -1265,11 +1316,24 @@ export function ContentPanel() {
                           <ChaptersPanel
                             segments={chapterSegments}
                             document={chaptersDocument}
-                            status={chaptersStatus}
-                            error={chaptersError}
-                            isLocal={isLocalSelectedItem}
+                            status={
+                              isLocalSelectedItem
+                                ? chaptersStatus
+                                : cloudChapterGenerationMatches && cloudChaptersMutation.isError
+                                  ? "error"
+                                  : undefined
+                            }
+                            error={
+                              isLocalSelectedItem
+                                ? chaptersError
+                                : cloudChapterGenerationMatches && cloudChaptersMutation.error instanceof Error
+                                  ? cloudChaptersMutation.error.message
+                                  : cloudChaptersMutation.error
+                                    ? String(cloudChaptersMutation.error)
+                                    : null
+                            }
                             busy={chapterBusy}
-                            hasTranscript={!!transcription?.content?.trim()}
+                            hasTranscript={chapterSegments.some((segment) => segment.text.trim())}
                             onGenerate={handleGenerateChapters}
                             onSeekChapter={handleSeekChapter}
                             onSaveEdits={handleSaveChapterEdits}

@@ -39,7 +39,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.platform == 'windows' && '["windows-latest"]' || inputs.platform == 'macos' && '["macos-latest"]' || '["windows-latest","macos-latest"]') }}
+        # xcode-27 provides the macOS 27 SpeechAnalyzer APIs used by the
+        # Apple on-device transcription sidecar.
+        os: ${{ fromJSON(inputs.platform == 'windows' && '["windows-latest"]' || inputs.platform == 'macos' && '["xcode-27"]' || '["windows-latest","xcode-27"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout

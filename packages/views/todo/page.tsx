@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
-import { Plus, Calendar, Trash2, X, RefreshCw, Loader2, Upload, List } from "../icons";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { Plus, Calendar, Trash2, X, RefreshCw, Loader2, Upload, List, User } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { Button } from "@lynse/ui/components/ui/button";
@@ -63,13 +63,28 @@ function formatDueDisplay(todo: TodoItem): string {
   } catch { return ""; }
 }
 
-function formatSourceTime(seconds: number | undefined): string {
-  if (!seconds || seconds <= 0) return "";
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  return `${m}:${String(s).padStart(2, "0")}`;
+/** True when the todo carries a resolvable extraction source. */
+function hasTodoSource(todo: TodoItem): boolean {
+  return Boolean(todo.sourceRef || todo.sourceFileId);
+}
+
+/**
+ * Jump to the note a todo was extracted from. Capture-sheet todos carry a
+ * workbench sourceRef; cloud ones only a fileId whose display title was
+ * resolved against the notes list on load. Returns false when there is
+ * nothing to open — callers keep their chip hidden in that case.
+ */
+function openTodoSource(todo: TodoItem, push: (path: string) => void): boolean {
+  if (todo.sourceRef) {
+    useWorkbench.getState().showSource(todo.sourceRef);
+    return true;
+  }
+  if (todo.sourceFileId) {
+    getWorkspaceState().selectItem(todo.sourceFileId, "meeting", todo.sourceTitle);
+    push("/notes");
+    return true;
+  }
+  return false;
 }
 
 /** Section render order; overdue is flagged so its label renders in danger color. */
@@ -146,72 +161,198 @@ function AddTodoTrigger({ onOpen }: { onOpen: () => void }) {
   );
 }
 
-function TodoItemRow({
+/**
+ * One todo as a card in the responsive grid. A plain div with role=button so
+ * the source chip (a real button), the checkboxes and the inline title
+ * editor can nest inside without invalid button-in-button markup.
+ *
+ * The title edits in place on double-click (same entry point as the edit
+ * panel; both persist through saveTodo).
+ */
+function TodoItemCard({
   todo,
   active,
+  overdue = false,
   onSelect,
   onToggle,
+  onRename,
   selectable = false,
   isChecked = false,
   onCheck,
 }: {
   todo: TodoItem;
   active: boolean;
+  /** Set for the overdue section — the due date renders in danger color. */
+  overdue?: boolean;
   onSelect: () => void;
   onToggle: () => void;
-  /** Export mode: a second checkbox appears and the row click selects. */
+  /** Persist a new title (optimistic patch + saveTodo). */
+  onRename: (todo: TodoItem, title: string) => void;
+  /** Export mode: a second checkbox appears and the card click selects. */
   selectable?: boolean;
   isChecked?: boolean;
   onCheck?: () => void;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigation();
   const dueText = formatDueDisplay(todo);
+  const closed = todoClosed(todo);
+  const selectAction = selectable ? (onCheck ?? onSelect) : onSelect;
+
+  // ── Inline title editing ──
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(todo.title);
+  // Set when Escape backs out, so the blur-triggered commit keeps the old title.
+  const skipCommitRef = useRef(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Follow store-side title changes (edit panel saves) while not editing.
+  useEffect(() => {
+    if (!editing) setDraft(todo.title);
+  }, [todo.title, editing]);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.select();
+  }, [editing]);
+
+  const startEdit = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDraft(todo.title);
+    skipCommitRef.current = false;
+    setEditing(true);
+  }, [todo.title]);
+
+  const commitEdit = useCallback(() => {
+    setEditing(false);
+    if (skipCommitRef.current) {
+      skipCommitRef.current = false;
+      setDraft(todo.title);
+      return;
+    }
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== todo.title) onRename(todo, trimmed);
+  }, [draft, todo, onRename]);
+
+  const handleSourceClick = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      openTodoSource(todo, (path) => navigate.push(path));
+    },
+    [todo, navigate],
+  );
 
   return (
-    <button
-      onClick={selectable ? (onCheck ?? onSelect) : onSelect}
-      className={`flex w-full items-center gap-3 rounded-lg px-6 py-2.5 text-left transition-colors ${
-        active ? "bg-accent/60" : "hover:bg-accent/30"
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={selectAction}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          selectAction();
+        }
+      }}
+      className={`flex cursor-pointer flex-col gap-2 rounded-xl border p-3 text-left transition-colors ${
+        active
+          ? "border-ring/40 bg-accent/50"
+          : "border-border/60 bg-card/40 hover:border-ring/40 hover:bg-accent/30"
       }`}
     >
-      {selectable && (
+      <div className="flex items-start gap-2">
+        {selectable && (
+          <input
+            type="checkbox"
+            checked={isChecked}
+            onChange={() => onCheck?.()}
+            className="size-4 shrink-0 rounded border-border accent-primary"
+            onClick={(e) => e.stopPropagation()}
+            aria-label={t("todo.export_select_item")}
+          />
+        )}
         <input
           type="checkbox"
-          checked={isChecked}
-          onChange={() => onCheck?.()}
-          className="size-4 shrink-0 rounded border-border accent-primary"
+          checked={todo.completed}
+          onChange={(e) => { e.stopPropagation(); onToggle(); }}
+          className="mt-0.5 size-4 shrink-0 rounded border-border accent-primary"
           onClick={(e) => e.stopPropagation()}
-          aria-label={t("todo.export_select_item")}
+          aria-label={t("todo.completed_toggle")}
         />
-      )}
-      <input
-        type="checkbox"
-        checked={todo.completed}
-        onChange={(e) => { e.stopPropagation(); onToggle(); }}
-        className="size-4 shrink-0 rounded border-border accent-primary"
-        onClick={(e) => e.stopPropagation()}
-        aria-label={t("todo.completed_toggle")}
-      />
-      <span
-        className={`flex-1 truncate text-sm leading-tight ${
-          todoClosed(todo) ? "line-through text-muted-foreground" : "text-foreground"
-        }`}
-      >
-        {todo.title}
-      </span>
-      {todo.status && <span className="text-xs text-muted-foreground">{t(`memory_manager.todo_${todoStatus(todo)}`)}</span>}
-      {dueText && (
-        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{dueText}</span>
-      )}
-      {todo.owner && (
-        <span className="shrink-0 text-xs text-muted-foreground/70">
-          {todo.owner}
+        {editing ? (
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commitEdit}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                e.preventDefault();
+                inputRef.current?.blur();
+              } else if (e.key === "Escape") {
+                skipCommitRef.current = true;
+                inputRef.current?.blur();
+              }
+            }}
+            className="mt-px min-w-0 flex-1 rounded-md bg-muted/50 px-1 py-0.5 text-sm leading-snug text-foreground outline-none focus:ring-2 focus:ring-ring/30"
+            aria-label={t("todo.rename_hint")}
+          />
+        ) : (
+          <span
+            onDoubleClick={startEdit}
+            title={t("todo.rename_hint")}
+            className={`line-clamp-2 min-w-0 flex-1 cursor-text text-sm leading-snug ${
+              closed ? "line-through text-muted-foreground" : "text-foreground"
+            }`}
+          >
+            {todo.title}
+          </span>
+        )}
+      </div>
+
+      {/* Meta chips: date + owner pinned to one line, source and status follow. */}
+      <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+        <span className="flex min-w-0 items-center gap-1.5">
+          {dueText && (
+            <span
+              className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 tabular-nums ${
+                overdue && !closed ? "bg-destructive/10 text-destructive" : "bg-muted/60"
+              }`}
+            >
+              <Calendar className="size-3 shrink-0" />
+              {dueText}
+            </span>
+          )}
+          {todo.owner && (
+            <span
+              className="inline-flex min-w-0 items-center gap-1 rounded-full bg-muted/60 px-2 py-0.5"
+              title={todo.owner}
+            >
+              <User className="size-3 shrink-0" />
+              <span className="truncate">{todo.owner}</span>
+            </span>
+          )}
         </span>
-      )}
-      {!todo.calendarEventId && (
-        <Calendar className="size-4 shrink-0 text-muted-foreground/40" />
-      )}
-    </button>
+        {hasTodoSource(todo) && (
+          <button
+            type="button"
+            onClick={handleSourceClick}
+            title={`${t("todo.source_from")}${todo.sourceTitle ?? t("todo.source_note")}`}
+            className="inline-flex max-w-full items-center truncate rounded-full bg-muted/60 px-2 py-0.5 text-left underline-offset-2 transition-colors hover:bg-accent hover:text-foreground hover:underline"
+          >
+            {t("todo.source_from")}{todo.sourceTitle ?? t("todo.source_note")}
+          </button>
+        )}
+        {todo.status && (
+          <span className="shrink-0 rounded-full bg-muted/60 px-2 py-0.5">
+            {t(`memory_manager.todo_${todoStatus(todo)}`)}
+          </span>
+        )}
+        {!todo.calendarEventId && (
+          <Calendar className="ml-auto size-3.5 shrink-0 text-muted-foreground/40" />
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -384,6 +525,13 @@ function TodoEditPanelContent({
   const [pendingStart, setPendingStart] = useState<Date | null>(null);
   const [savingCalendar, setSavingCalendar] = useState(false);
   const [calendarError, setCalendarError] = useState<string | null>(null);
+
+  // Title can also be renamed from the card's inline editor while this panel
+  // is open — follow the store entry so a later close doesn't overwrite it
+  // with a stale title. An in-progress edit here wins (dirty skips the sync).
+  useEffect(() => {
+    if (!titleDirty) setTitle(todo.title);
+  }, [todo.id, todo.title, titleDirty]);
 
   const handleNotesChange = useCallback((value: string) => {
     setNotes(value);
@@ -562,18 +710,12 @@ function TodoEditPanelContent({
           {/* Source / owner */}
           {todo.sourceTitle && (
             <button type="button" className="text-left text-xs text-muted-foreground underline-offset-4 hover:underline" onClick={() => {
-              if (todo.sourceRef) useWorkbench.getState().showSource(todo.sourceRef);
-              else if (todo.sourceFileId) {
-                getWorkspaceState().selectItem(todo.sourceFileId, "meeting", todo.sourceTitle);
-                sourceNavigation.push("/notes");
-                handleClose();
-              }
+              if (openTodoSource(todo, (path) => sourceNavigation.push(path))) handleClose();
             }}>
               {t("todo.source_from")}{todo.sourceTitle}
-              {todo.sourceMeetingTime && (
+              {todo.sourceMeetingTime && !isNaN(new Date(todo.sourceMeetingTime).getTime()) && (
                 <span className="ml-2 tabular-nums text-muted-foreground/70">
-                  {new Date(todo.sourceMeetingTime).toLocaleDateString("zh-CN")}{" "}
-                  {formatSourceTime(Number(todo.sourceMeetingTime))}
+                  {new Date(todo.sourceMeetingTime).toLocaleDateString("zh-CN")}
                 </span>
               )}
             </button>
@@ -659,6 +801,20 @@ export function TodoPage() {
       if (todo) toggle(todo);
     },
     [todos, toggle],
+  );
+
+  /** Inline card rename: optimistic patch, then persist (cloud todos send
+   *  todoContent through the update endpoint). Reload reconciles on failure. */
+  const handleRename = useCallback(
+    (todo: TodoItem, title: string) => {
+      const updated = { ...todo, title, updatedAt: new Date().toISOString() };
+      patchLocal(updated);
+      void saveTodo(updated).catch((e) => {
+        console.error("[Todo] rename failed:", e);
+        void load({ force: true });
+      });
+    },
+    [patchLocal, load],
   );
 
   const handleDelete = useCallback(
@@ -770,7 +926,7 @@ export function TodoPage() {
               onToggle={handleToggle}
             />
           ) : (
-            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="@container flex-1 min-h-0 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {loading ? (
                 <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">…</div>
               ) : todos.length === 0 ? (
@@ -789,16 +945,28 @@ export function TodoPage() {
                       count={items.length}
                       labelClassName={danger ? "text-destructive" : undefined}
                     >
-                      {items.map((todo) => (
-                        <TodoItemRow
-                          key={todo.id}
-                          todo={todo}
-                          active={selectedId === todo.id}
-                          onSelect={() => setSelectedId(todo.id)}
-                          onToggle={() => handleToggle(todo.id)}
-                          {...rowSelectionProps(todo)}
-                        />
-                      ))}
+                      {/* Card grid — container queries (not viewport
+                          breakpoints) respond to this column's width. While
+                          the edit panel is open the list collapses to one
+                          focused column regardless of width. */}
+                      <div
+                        className={`grid grid-cols-1 gap-2${
+                          selected ? "" : " @min-[24rem]:grid-cols-2 @min-[72rem]:grid-cols-3"
+                        }`}
+                      >
+                        {items.map((todo) => (
+                          <TodoItemCard
+                            key={todo.id}
+                            todo={todo}
+                            active={selectedId === todo.id}
+                            overdue={key === "overdue"}
+                            onSelect={() => setSelectedId(todo.id)}
+                            onToggle={() => handleToggle(todo.id)}
+                            onRename={handleRename}
+                            {...rowSelectionProps(todo)}
+                          />
+                        ))}
+                      </div>
                     </GroupSection>
                   );
                 })

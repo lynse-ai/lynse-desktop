@@ -176,12 +176,17 @@ export function noteTitleMapFromItems(items: WorkspaceItem[]): Map<string, strin
   return map;
 }
 
-/** Toggle a cloud todo's completed state (server-side update). */
+/** Toggle a cloud todo's completed state and/or persist its title. The
+ *  update endpoint treats each present key as "change this field" (contract
+ *  per lynse-cli `todos update`), so todoContent is only sent when non-empty
+ *  — the server rejects empty content, and omitting it means "no change". */
 export async function updateCloudTodo(todo: TodoItem): Promise<void> {
+  const content = todo.title.trim();
   await api().post("/api/business/file/todo/update", {
     todoUpdateList: [
       {
         todoId: todo.id,
+        ...(content ? { todoContent: content } : {}),
         isCompleted: todo.completed ? 1 : 0,
       },
     ],

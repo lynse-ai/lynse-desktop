@@ -119,6 +119,7 @@ export {
   Download,         // Download / update action
   Palette,          // Appearance / theme visual
   UserCircle,       // User profile / account
+  User,             // Todo owner / person chip
   Link,             // Share / copy link
   Share,            // Share action
 

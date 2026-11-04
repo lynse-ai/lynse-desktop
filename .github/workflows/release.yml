@@ -256,7 +256,11 @@ jobs:
           codesign --force --options runtime --timestamp \
             --entitlements apps/tauri/src-tauri/Entitlements-sidecar-direct.plist \
             --sign "$APPLE_SIGNING_IDENTITY" apps/tauri/src-tauri/resources/sidecars/audio-capture
+          codesign --force --options runtime --timestamp \
+            --entitlements apps/tauri/src-tauri/Entitlements-sidecar-direct.plist \
+            --sign "$APPLE_SIGNING_IDENTITY" apps/tauri/src-tauri/resources/sidecars/apple-transcribe
           codesign --verify --strict --verbose=1 apps/tauri/src-tauri/resources/sidecars/audio-capture
+          codesign --verify --strict --verbose=1 apps/tauri/src-tauri/resources/sidecars/apple-transcribe
           security delete-keychain "$KEYCHAIN"
 
       - name: Stamp build number (macOS)

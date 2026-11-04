@@ -11,30 +11,42 @@
 > Entries since 1.1.7 ship in both English and Chinese (New Features/Fixed plus
 > 新功能/修复). The release pipeline extracts the whole version section
 > verbatim, so the in-app update notes render both languages.
+>
+> The 1.3.0 numbering was retired on 2026-11-04 before the updater channel ever
+> advertised it (its manifest mirror failed and the rollout was cancelled), so
+> that work plus the todo card redesign shipped together as 1.2.7.
 
-## 1.3.0 (2026-11-04)
+## 1.2.7 (2026-11-04)
 
 ### New Features
 
 - Recording details now include AI semantic chapters. Chapters are generated from the transcript after transcription completes, support local and cloud recordings, and can be edited or regenerated while keeping manually edited content protected as stale rather than silently overwritten.
 - Chapter playback is tightly linked to the transcript: timestamps always use hours, minutes and seconds, click through to the chapter start, and speaker mentions expand the matching transcript lines without inventing unattributed content.
 - Added Apple on-device speech recognition for supported macOS versions and richer persisted live meeting notes.
+- The todo page now presents items as a responsive card grid instead of a single-column list. Each card shows its due date and owner as icon chips on one line, plus a source chip that jumps straight to the note the todo was extracted from.
+- Todo titles can be renamed in place on the card (double-click), kept in sync with the edit panel; due dates turn red on overdue cards.
+- When the edit panel opens, the list collapses to a focused single column and springs back to the multi-column grid on close.
 
 ### Fixed
 
 - Long recordings now clearly show that waveform generation is intentionally skipped when they exceed the browser decode limit, instead of showing the same failure message and an ineffective retry.
 - Completed locale parity for chapter, Apple speech and live-notes strings across all shipped languages.
+- Renaming a cloud todo now actually persists: the update request previously omitted the title field, so the renamed title reverted on the next refresh.
 
 ### 新功能
 
 - 录音详情新增 AI 语义章节：转写完成后基于原文自动划分章节，支持本地与云端录音；章节可编辑或重新生成，手动编辑会被保留并标记过期，不会被静默覆盖。
 - 章节与播放联动增强：时间统一显示时、分、秒，点击可跳到章节开头；发言人名称可点击展开对应转写内容，不虚构无法确认的发言人。
 - 新增受支持 macOS 版本的 Apple 端上语音识别，并增强实时会议纪要的持久化与呈现。
+- 待办页由单列列表改为响应式卡片网格：每张卡片以带图标的胶囊同行展示日期与负责人，并提供来源胶囊，点击直达提取该待办的笔记。
+- 待办标题支持在卡片上双击行内改名，与右侧编辑面板联动；已过期卡片上的到期时间红色高亮。
+- 打开右侧编辑面板时列表自动切为单列聚焦，关闭后恢复多列排布。
 
 ### 修复
 
 - 超过浏览器解码上限的长录音会明确提示“暂不生成波形”，不再误显示为失败或提供无效重试。
 - 补齐章节、Apple 语音识别和实时纪要文案在全部发布语言中的翻译一致性。
+- 修复云端待办改名不生效的问题：更新请求此前缺少标题字段，刷新后名称会被打回。
 
 ## 1.2.6 (2026-11-03)
 

@@ -9,6 +9,7 @@ DEST="$DEST_DIR/audio-capture"
 if [[ "$(uname -s)" != "Darwin" ]]; then
   mkdir -p "$DEST_DIR"
   printf '%s\n' 'audio-capture is available on macOS only' > "$DEST"
+  printf '%s\n' 'apple-transcribe is available on macOS only' > "$DEST_DIR/apple-transcribe"
   echo "audio-capture sidecar is macOS-only; created packaging placeholder"
   exit 0
 fi

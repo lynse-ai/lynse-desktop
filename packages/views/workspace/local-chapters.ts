@@ -33,7 +33,7 @@ function chaptersSignal(): AbortSignal {
 
 /** "2026-11-02T02:30:01.989Z" → "202611021030" (local wall clock, GMT+8) —
  *  mirrors local-auto-summary's stamp that anchors relative dates. */
-function formatRecordingTime(startedAt: string | undefined): string | undefined {
+export function formatRecordingTime(startedAt: string | undefined): string | undefined {
   if (!startedAt) return undefined;
   const date = new Date(startedAt);
   if (Number.isNaN(date.getTime())) return undefined;

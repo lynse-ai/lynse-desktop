@@ -224,8 +224,8 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
 
             {(waveformLoading || waveformError || waveformSkipped) && (
               <div role="status" className="flex items-center gap-2 text-2xs text-muted-foreground">
-                <span>{t(waveformLoading ? "recording_sources.waveform_loading" : "recording_sources.waveform_failed")}</span>
-                {!waveformLoading && <button type="button" onClick={retryWaveform} className="underline underline-offset-2 hover:text-foreground">{t("recording_sources.retry")}</button>}
+                <span>{t(waveformLoading ? "recording_sources.waveform_loading" : waveformSkipped ? "recording_sources.waveform_skipped" : "recording_sources.waveform_failed")}</span>
+                {!waveformLoading && !waveformSkipped && <button type="button" onClick={retryWaveform} className="underline underline-offset-2 hover:text-foreground">{t("recording_sources.retry")}</button>}
               </div>
             )}
 

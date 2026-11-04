@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertCircle, Check, Clock, Loader2, Pencil, Play, RefreshCw, X } from "../icons";
 import { Button } from "@lynse/ui/components/ui/button";
@@ -20,7 +20,60 @@ function formatChapterTime(ms: number | null): string {
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
   const pad = (value: number) => String(value).padStart(2, "0");
-  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
+  return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function chapterSegments(chapter: SemanticChapter, allSegments: ChapterSegment[]): ChapterSegment[] {
+  const start = allSegments.findIndex((segment) => segment.id === chapter.startSegmentId);
+  const end = allSegments.findIndex((segment) => segment.id === chapter.endSegmentId);
+  if (start < 0 || end < start) return [];
+  return allSegments.slice(start, end + 1);
+}
+
+function renderSpeakerMentions(
+  text: string,
+  speakers: string[],
+  expandedKey: string,
+  onToggleSpeaker: (key: string) => void,
+): ReactNode[] {
+  if (!text) return [];
+  const [speaker, ...remainingSpeakers] = speakers;
+  if (!speaker) return [text];
+
+  const boundary = String.raw`(^|[^\p{L}\p{N}_])`;
+  const trailingBoundary = String.raw`(?=$|[^\p{L}\p{N}_])`;
+  const pattern = new RegExp(`${boundary}(${escapeRegExp(speaker)})${trailingBoundary}`, "gu");
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  let mentionIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text)) !== null) {
+    const prefix = match[1] ?? "";
+    const mentionStart = match.index + prefix.length;
+    nodes.push(text.slice(cursor, mentionStart));
+    const mentionKey = `${expandedKey}:${mentionStart}`;
+    nodes.push(
+      <button
+        key={mentionKey}
+        type="button"
+        onClick={() => onToggleSpeaker(mentionKey)}
+        className="text-primary underline decoration-primary/50 underline-offset-2 transition-colors hover:decoration-primary"
+      >
+        {speaker}
+      </button>,
+    );
+    cursor = mentionStart + speaker.length;
+    mentionIndex += 1;
+    if (match.index === pattern.lastIndex) pattern.lastIndex += 1;
+  }
+  const remaining = text.slice(cursor);
+  nodes.push(...renderSpeakerMentions(remaining, remainingSpeakers, `${expandedKey}:${mentionIndex}`, onToggleSpeaker));
+  return nodes;
 }
 
 export interface ChaptersPanelProps {
@@ -30,7 +83,6 @@ export interface ChaptersPanelProps {
   document: ChapterDocument | null;
   status: ChaptersStatus | undefined;
   error: string | null;
-  isLocal: boolean;
   /** True while a generation request is in flight (drives button spinners). */
   busy: boolean;
   hasTranscript: boolean;
@@ -49,7 +101,6 @@ export function ChaptersPanel({
   document,
   status,
   error,
-  isLocal,
   busy,
   hasTranscript,
   onGenerate,
@@ -63,11 +114,16 @@ export function ChaptersPanel({
   const [editSummary, setEditSummary] = useState("");
   const [confirmingRegenerate, setConfirmingRegenerate] = useState(false);
   const [savingEdits, setSavingEdits] = useState(false);
+  const [expandedSpeakers, setExpandedSpeakers] = useState<Record<string, boolean>>({});
+
+  const toggleSpeaker = (key: string) => {
+    setExpandedSpeakers((current) => ({ ...current, [key]: !current[key] }));
+  };
 
   // Staleness is derived, not stored: hash the live segments and compare.
   useEffect(() => {
     let cancelled = false;
-    if (!isLocal || !hasTranscript) {
+    if (!hasTranscript) {
       setCurrentHash(null);
       return;
     }
@@ -77,7 +133,7 @@ export function ChaptersPanel({
     return () => {
       cancelled = true;
     };
-  }, [segments, isLocal, hasTranscript]);
+  }, [segments, hasTranscript]);
 
   const stale = useMemo(
     () => isChapterDocumentStale(document, currentHash ?? document?.transcriptHash ?? ""),
@@ -87,9 +143,6 @@ export function ChaptersPanel({
   const generating = busy || status === "generating";
   const manualEdits = hasManualEdits(document);
 
-  if (!isLocal) {
-    return <CloudUnsupportedState label={t("workspace.chapters_cloud_unsupported")} />;
-  }
   if (!hasTranscript) {
     return <CloudUnsupportedState label={t("workspace.chapters_need_transcript")} />;
   }
@@ -192,6 +245,7 @@ export function ChaptersPanel({
         )}
       </div>
       <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pb-4">
+        <div className="space-y-7">
         {chapters.map((chapter) => {
           const seekable = chapter.startMs != null;
           const editing = editingId === chapter.id;
@@ -242,35 +296,30 @@ export function ChaptersPanel({
               </div>
             );
           }
+          const spanSegments = chapterSegments(chapter, segments);
+          const speakers = [...new Set(
+            spanSegments
+              .map((segment) => segment.speaker?.trim())
+              .filter((speaker): speaker is string => !!speaker && speaker.length > 0),
+          )].sort((left, right) => right.length - left.length);
           return (
-            <div
-              key={chapter.id}
-              role={seekable ? "button" : undefined}
-              tabIndex={seekable ? 0 : undefined}
-              onClick={() => {
-                if (seekable && chapter.startMs != null) onSeekChapter(chapter);
-              }}
-              onKeyDown={(event) => {
-                if (seekable && (event.key === "Enter" || event.key === " ")) {
-                  event.preventDefault();
-                  onSeekChapter(chapter);
-                }
-              }}
-              className={`group rounded-lg border border-border/60 bg-card/60 p-3 transition-colors ${
-                seekable ? "cursor-pointer hover:border-primary/40 hover:bg-accent/40" : ""
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted text-2xs font-semibold tabular-nums text-muted-foreground">
-                  {chapter.order + 1}
-                </span>
-                <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">
-                  {formatChapterTime(chapter.startMs)}
-                </span>
-                <p className="min-w-0 flex-1 truncate text-sm font-medium">{chapter.title || t("workspace.chapters_untitled")}</p>
-                {seekable && (
-                  <Play className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
-                )}
+            <section key={chapter.id} className="group">
+              <button
+                type="button"
+                disabled={!seekable}
+                onClick={() => {
+                  if (seekable && chapter.startMs != null) onSeekChapter(chapter);
+                }}
+                className="inline-flex items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-2xs font-medium tabular-nums text-primary transition-colors hover:bg-primary/15 disabled:cursor-default disabled:opacity-70"
+                title={seekable ? t("workspace.chapters_seek") : undefined}
+              >
+                <Play className="size-2.5" />
+                {formatChapterTime(chapter.startMs)}
+              </button>
+              <div className="mt-1 flex items-center gap-1">
+                <h3 className="inline rounded bg-primary/10 px-1 text-base font-semibold leading-7 decoration-primary/40 underline-offset-4">
+                  {chapter.title || t("workspace.chapters_untitled")}
+                </h3>
                 <button
                   type="button"
                   onClick={(event) => {
@@ -286,20 +335,30 @@ export function ChaptersPanel({
                 </button>
               </div>
               {chapter.summary && (
-                <p className="mt-1 pl-7 text-xs leading-relaxed text-muted-foreground">{chapter.summary}</p>
+                <p className="mt-2 text-sm leading-7 text-foreground">
+                  {renderSpeakerMentions(chapter.summary, speakers, chapter.id, toggleSpeaker)}
+                </p>
               )}
-              {chapter.keywords.length > 0 && (
-                <div className="mt-1.5 flex flex-wrap gap-1 pl-7">
-                  {chapter.keywords.map((keyword) => (
-                    <span key={keyword} className="rounded-full bg-muted/70 px-1.5 py-0.5 text-2xs text-muted-foreground">
-                      {keyword}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
+              {Object.entries(expandedSpeakers)
+                .filter(([key, expanded]) => expanded && key.startsWith(`${chapter.id}:`) && speakers.some((speaker) => key.endsWith(`:${speaker}`)))
+                .map(([key]) => {
+                  const speaker = speakers.find((item) => key.endsWith(`:${item}`));
+                  if (!speaker) return null;
+                  const speakerLines = spanSegments.filter((segment) => segment.speaker?.trim() === speaker);
+                  return (
+                    <div key={key} className="mt-3 space-y-2 border-l-2 border-primary/30 pl-3">
+                      {speakerLines.map((segment) => (
+                        <p key={segment.id} className="text-xs leading-6 text-muted-foreground">
+                          {segment.text}
+                        </p>
+                      ))}
+                    </div>
+                  );
+                })}
+            </section>
           );
         })}
+        </div>
       </div>
     </div>
   );

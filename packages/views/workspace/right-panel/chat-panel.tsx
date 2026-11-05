@@ -1,9 +1,10 @@
 "use client";
 
-import { useRef, useEffect, useLayoutEffect, useState, useMemo } from "react";
+import { useRef, useLayoutEffect, useState, useMemo } from "react";
 import { X, Send, FileText, Plus, Square, Clock, Image as ImageIcon, Headphones } from "../../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
+import { useAutoScroll } from "@lynse/ui/hooks/use-auto-scroll";
 import { ChatReplyBody } from "../../chat/chat-reply-body";
 import { AssistantAvatar } from "../../assistant";
 import { useTranslation } from "@lynse/core/i18n/react";
@@ -80,23 +81,7 @@ export function ChatPanel() {
     return listedTitle || selectedItemTitle;
   }, [selectedItemId, files, selectedItemTitle]);
 
-  // Stick-to-bottom: follow the newest message while the user is parked near
-  // the bottom, and never yank the view if they scrolled up to re-read.
-  const stickToBottomRef = useRef(true);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el && stickToBottomRef.current) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [viewMessages, viewLoading]);
-
-  const handleListScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    stickToBottomRef.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-  };
+  useAutoScroll(scrollRef, { resetKey: viewActiveId });
 
   const handleSend = () => {
     if (!selectedItemId || (!input.trim() && !images.drafts.length) || images.reading || viewLoading) return;
@@ -198,8 +183,7 @@ export function ChatPanel() {
       {/* Messages */}
       <div
         ref={scrollRef}
-        onScroll={handleListScroll}
-        className="flex-1 overflow-y-auto overscroll-contain"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
         style={{ padding: 12 }}
       >
         {viewMessages.length === 0 && !viewLoading && (

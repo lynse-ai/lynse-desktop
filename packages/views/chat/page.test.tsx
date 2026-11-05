@@ -89,16 +89,24 @@ vi.mock("@lynse/ui/markdown", () => ({
 vi.mock("../layout/app-title-bar", () => ({
   TitleBarSlot: (props: {
     actions?: React.ReactNode;
-    middleToggle?: { collapsed: boolean; onToggle: () => void; label?: string };
+    middleToggle?: {
+      collapsed: boolean;
+      onToggle: () => void;
+      label?: string;
+      controls?: string;
+      triggerRef?: React.Ref<HTMLButtonElement>;
+    };
   }) => (
     <div>
       {props.actions}
       {props.middleToggle && (
         <button
+          ref={props.middleToggle.triggerRef}
           type="button"
           onClick={props.middleToggle.onToggle}
           aria-label={props.middleToggle.label}
-          aria-pressed={!props.middleToggle.collapsed}
+          aria-expanded={!props.middleToggle.collapsed}
+          aria-controls={props.middleToggle.controls}
         />
       )}
     </div>
@@ -213,12 +221,31 @@ describe("ChatPage", () => {
     ];
     render(<ChatPage />);
 
-    expect(screen.queryByText("8 月会议")).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "chat.history" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "chat.history" }));
     fireEvent.click(screen.getByText("8 月会议"));
 
     expect(chat.selectConversation).toHaveBeenCalledWith("conversation-1");
     chat.conversations = [];
+  });
+
+  it("keeps the composer and draft through history updates and returns focus on Escape", () => {
+    chat.conversations = [{ id: "conversation-1", title: "Saved meeting", messages: [], provider: "cloud", createdAt: 1, updatedAt: 2 }];
+    const view = render(<ChatPage />);
+    const input = screen.getByPlaceholderText("chat.page_placeholder") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "Draft to keep" } });
+    const toggle = screen.getByRole("button", { name: "chat.history" });
+    fireEvent.click(toggle);
+    expect(screen.getByRole("button", { name: "chat.close" })).toBe(document.activeElement);
+    chat.conversations = [...chat.conversations, { id: "conversation-2", title: "Updated in background", messages: [], provider: "cloud", createdAt: 2, updatedAt: 3 }];
+    view.rerender(<ChatPage />);
+    expect(screen.getByText("Updated in background")).toBeTruthy();
+    expect(screen.getByPlaceholderText("chat.page_placeholder")).toBe(input);
+    expect(input.value).toBe("Draft to keep");
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(toggle).toBe(document.activeElement);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(input.value).toBe("Draft to keep");
   });
 
   it("references a note via @ and sends its id as fileIds", () => {

@@ -1,66 +1,91 @@
-import { type RefObject, useEffect, useRef, useCallback } from "react"
+"use client"
+
+import { type RefObject, useLayoutEffect, useRef, useCallback, useState } from "react"
 
 /**
  * Auto-scrolls a scroll container to the bottom when its inner content grows,
  * as long as the user hasn't scrolled up to read older content.
  *
- * Returns a `lockRef` that can be set to `true` to temporarily suppress
- * auto-scroll (e.g. during history prepend operations).
+ * Keeps the reader's position until they ask for the latest message. Changing
+ * resetKey starts at the new conversation's bottom. suppressAutoScroll can
+ * temporarily pause following during history prepend operations.
  */
-export function useAutoScroll(ref: RefObject<HTMLElement | null>) {
+export function useAutoScroll(
+  ref: RefObject<HTMLElement | null>,
+  { resetKey }: { resetKey?: string | null } = {},
+) {
   const stickRef = useRef(true)
   const lockRef = useRef(false)
+  const [pinnedToBottom, setPinnedToBottom] = useState(true)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
 
-    const scrollToBottom = () => {
-      el.scrollTo({ top: el.scrollHeight })
-    }
+    // Switching conversations follows the new thread even if the previous
+    // one was scrolled up. Background updates never reset the reader's choice.
+    stickRef.current = true
+    setPinnedToBottom(true)
+    el.scrollTop = el.scrollHeight
+    let frame = 0
 
     const onScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = el
-      stickRef.current = scrollHeight - scrollTop - clientHeight < 50
+      const pinned = scrollHeight - scrollTop - clientHeight < 48
+      stickRef.current = pinned
+      setPinnedToBottom((previous) => previous === pinned ? previous : pinned)
     }
 
     const onContentChange = () => {
-      if (lockRef.current) return
-      if (stickRef.current) {
-        scrollToBottom()
-      }
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        if (!lockRef.current && stickRef.current) el.scrollTop = el.scrollHeight
+      })
     }
 
-    // Watch child element resizes (content growth, image loads, streaming)
-    const ro = new ResizeObserver(onContentChange)
-    for (const child of el.children) {
-      ro.observe(child)
-    }
-
-    // Watch for added/removed child nodes (new messages rendered)
-    const mo = new MutationObserver((mutations) => {
-      // Also observe newly added elements
-      for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
-          if (node instanceof Element) {
-            ro.observe(node)
-          }
-        }
+    // Observe the content as well as the viewport: images, streamed text and
+    // a resized drawer can all change the bottom without a new message.
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(onContentChange)
+    const observed = new Set<Element>()
+    const observeChildren = () => {
+      for (const child of observed) {
+        if (child.parentElement !== el) { ro?.unobserve(child); observed.delete(child) }
       }
+      for (const child of el.children) {
+        if (!observed.has(child)) { ro?.observe(child); observed.add(child) }
+      }
+    }
+    ro?.observe(el)
+    observeChildren()
+
+    // Top-level changes only. The content's ResizeObserver already covers
+    // nested Markdown updates without observing every streamed text node.
+    const mo = new MutationObserver(() => {
+      observeChildren()
       onContentChange()
     })
-    mo.observe(el, { childList: true, subtree: true })
+    mo.observe(el, { childList: true })
 
     el.addEventListener("scroll", onScroll, { passive: true })
-
-    // Initial scroll to bottom
-    scrollToBottom()
+    window.addEventListener("resize", onContentChange)
 
     return () => {
       el.removeEventListener("scroll", onScroll)
-      ro.disconnect()
+      window.removeEventListener("resize", onContentChange)
+      if (frame) cancelAnimationFrame(frame)
+      ro?.disconnect()
       mo.disconnect()
     }
+  }, [ref, resetKey])
+
+  const scrollToBottom = useCallback(() => {
+    const el = ref.current
+    if (!el) return
+    stickRef.current = true
+    setPinnedToBottom(true)
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    el.scrollTo({ top: el.scrollHeight, behavior: reduceMotion ? "auto" : "smooth" })
   }, [ref])
 
   /** Temporarily suppress auto-scroll during prepend operations */
@@ -69,5 +94,5 @@ export function useAutoScroll(ref: RefObject<HTMLElement | null>) {
     return () => { lockRef.current = false }
   }, [])
 
-  return { suppressAutoScroll }
+  return { suppressAutoScroll, pinnedToBottom, scrollToBottom }
 }

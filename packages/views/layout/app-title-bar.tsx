@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, type ReactNode, type Ref } from "react";
 import { create } from "zustand";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cn } from "@lynse/ui/lib/utils";
@@ -9,6 +9,8 @@ import { useNavigation } from "../navigation";
 import { isTauri, isMacDesktop, useMaximized } from "./use-maximized";
 import { ArrowLeft, ArrowRight, PanelLeft, PanelRight, Minus, Square, Copy, X } from "../icons";
 import { RecordingTitleBarPill, useRecordingPillVisible } from "./recording-title-pill";
+import { isWebPlatform } from "../platform";
+import { DESKTOP_SIDEBAR_WIDTH, WEB_SIDEBAR_WIDTH } from "./sidebar-metrics";
 
 export const TITLE_BAR_HEIGHT = 34;
 
@@ -35,6 +37,9 @@ export interface MiddlePanelToggle {
   onToggle: () => void;
   /** Accessible label / tooltip for the toggle button. */
   label?: string;
+  /** Connect a disclosure to its panel and return focus when it closes. */
+  controls?: string;
+  triggerRef?: Ref<HTMLButtonElement>;
   /**
    * The panel's current width in px (content-area local). While open, the bar
    * pins its divider at rail + this width and starts the title zone there, so
@@ -125,12 +130,12 @@ export function AppTitleBar() {
   // stretches so the divider after it lands exactly on the panel's right
   // edge, and the title zone starts there. Deterministic: the page declares
   // the panel width, no DOM measurement.
-  // List edge in window coords = icon rail (52) + content-card margin (5) +
-  // border (1) under vibrancy; without vibrancy the card is full-bleed (52).
+  // The divider uses the actual sidebar width (desktop rail or web sidebar)
+  // plus the card's 5px margin and 1px border under native vibrancy.
   const vibrant =
     typeof document !== "undefined" &&
     document.documentElement.dataset.windowEffects === "vibrancy";
-  const railOffset = vibrant ? 58 : 52;
+  const railOffset = (isWebPlatform() ? WEB_SIDEBAR_WIDTH : DESKTOP_SIDEBAR_WIDTH) + (vibrant ? 6 : 0);
   const panelWidth = middleToggle && middleToggle.side !== "right" && !middleToggle.collapsed ? middleToggle.panelWidth ?? 0 : 0;
   const panelEdge = panelWidth > 0 ? railOffset + panelWidth : null;
   // The zone divider carries the bar's gap-1 (4px) plus its own mx-1 (4px)
@@ -153,6 +158,7 @@ export function AppTitleBar() {
         !showWindowControls && "pr-2",
       )}
       style={{ height: TITLE_BAR_HEIGHT }}
+      data-slot="app-title-bar"
       data-tauri-drag-region
       onDoubleClick={handleDoubleClick}
     >
@@ -191,6 +197,8 @@ export function AppTitleBar() {
             label={middleToggle.label}
             active={!middleToggle.collapsed}
             onClick={middleToggle.onToggle}
+            controls={middleToggle.controls}
+            buttonRef={middleToggle.triggerRef}
           >
             <PanelLeft className="size-4" />
           </BarButton>
@@ -236,6 +244,8 @@ export function AppTitleBar() {
             label={middleToggle.label}
             active={!middleToggle.collapsed}
             onClick={middleToggle.onToggle}
+            controls={middleToggle.controls}
+            buttonRef={middleToggle.triggerRef}
           >
             <PanelRight className="size-4" />
           </BarButton>
@@ -252,20 +262,27 @@ function BarButton({
   active,
   disabled,
   onClick,
+  controls,
+  buttonRef,
   children,
 }: {
   label?: string;
   active?: boolean;
   disabled?: boolean;
   onClick: () => void;
+  controls?: string;
+  buttonRef?: Ref<HTMLButtonElement>;
   children: React.ReactNode;
 }) {
   return (
     <button
+      ref={buttonRef}
       type="button"
       title={label}
       aria-label={label}
-      aria-pressed={active}
+      aria-pressed={controls ? undefined : active}
+      aria-expanded={controls ? active : undefined}
+      aria-controls={controls}
       disabled={disabled}
       onClick={onClick}
       className={cn(
@@ -282,7 +299,7 @@ function BarButton({
 }
 
 function ZoneDivider() {
-  return <div className="mx-1 h-[18px] w-px shrink-0 bg-border/60" aria-hidden="true" />;
+  return <div data-slot="title-bar-divider" className="mx-1 h-[18px] w-px shrink-0 bg-border/60" aria-hidden="true" />;
 }
 
 /**

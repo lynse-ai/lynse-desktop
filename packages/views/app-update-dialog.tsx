@@ -11,7 +11,9 @@ import {
 } from "@lynse/ui/components/ui/dialog";
 import { Button } from "@lynse/ui/components/ui/button";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { ArrowUp, Download, Loader2, RefreshCw } from "./icons";
+import { Download, RefreshCw } from "./icons";
+import { ActivityIndicator } from "@lynse/ui/components/ui/activity-indicator";
+import { ReleaseNotesContent } from "./release-notes-content";
 import { DOWNLOAD_URL } from "./about/links";
 import {
   getAppInfoSync,
@@ -84,113 +86,123 @@ export function AppUpdateDialog() {
         setOpen(next);
       }}
     >
-      <DialogContent className="sm:max-w-md" showCloseButton={!busy}>
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            {hasUpdate ? (
-              <>
-                <ArrowUp className="size-4 text-warning" strokeWidth={2.5} />
-                {t("settings.update_available")}
-              </>
-            ) : (
-              t("settings.up_to_date")
-            )}
+      <DialogContent
+        className={`flex max-h-[85dvh] w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden p-0 ${hasUpdate ? "sm:max-w-3xl" : "sm:max-w-md"}`}
+        showCloseButton={!busy}
+      >
+        <DialogHeader className="shrink-0 gap-1.5 border-b border-border/70 px-6 py-5 pr-12">
+          <DialogTitle className="text-lg leading-6 font-semibold">
+            {hasUpdate
+              ? t("settings.update_to_version", { version: update?.latestVersion })
+              : checking
+                ? t("settings.checking_update")
+                : error
+                  ? t("settings.update_check_failed")
+                  : update
+                    ? t("settings.up_to_date")
+                    : t("settings.check_update")}
           </DialogTitle>
           <DialogDescription>
-            {hasUpdate ? (
-              <span className="inline-flex items-center gap-1.5 tabular-nums">
-                <span className="rounded bg-muted px-1.5 py-0.5 text-xs">v{update?.currentVersion}</span>
-                <span aria-hidden>→</span>
-                <span className="rounded bg-warning/15 px-1.5 py-0.5 text-xs font-semibold text-warning-text">
-                  v{update?.latestVersion}
-                </span>
-              </span>
-            ) : (
-              `${t("settings.version")}: v${currentVersion}`
-            )}
+            <span className="tabular-nums">
+              {currentVersion === "—" ? `${t("settings.version")}: —` : t("settings.update_current_version", { version: currentVersion })}
+            </span>
           </DialogDescription>
         </DialogHeader>
 
-        {hasUpdate && update?.releaseNotes ? (
-          <div className="max-h-44 overflow-y-auto rounded-md border bg-muted/40 p-2.5">
-            <p className="mb-1 text-2xs font-medium text-muted-foreground">
-              {t("settings.update_release_notes")}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-5 [scrollbar-gutter:stable]" data-slot="update-notes-body">
+          {hasUpdate && update?.releaseNotes?.trim() ? (
+            <>
+              <p className="mb-5 text-xs text-muted-foreground">
+                {t("settings.update_notes_this_version")}
+              </p>
+              <ReleaseNotesContent notes={update.releaseNotes} />
+            </>
+          ) : hasUpdate ? (
+            <p className="text-sm leading-6 text-muted-foreground">
+              {t("settings.update_notes_missing")}
             </p>
-            <p className="whitespace-pre-wrap text-xs leading-relaxed text-foreground/80">
-              {update.releaseNotes}
+          ) : null}
+
+          {hasUpdate && sandboxed && (
+            <p className="mt-4 text-xs leading-5 text-muted-foreground">
+              {t("settings.update_website_migration_desc")}
             </p>
-          </div>
-        ) : hasUpdate ? (
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            {t("settings.update_available_desc")}
-          </p>
-        ) : null}
+          )}
 
-        {hasUpdate && sandboxed && (
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            {t("settings.update_website_migration_desc")}
-          </p>
-        )}
-
-        {checking && (
-          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 shrink-0 animate-spin" />
-            {t("settings.checking_update")}
-          </p>
-        )}
-
-        {progressLabel && (
-          <div className="space-y-1.5 rounded-md border border-primary/30 bg-primary/5 p-2.5">
-            <p className="flex items-center gap-1.5 text-xs font-medium">
-              <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
-              {progressLabel}
+          {checking && (
+            <p role="status" className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+              <ActivityIndicator />
+              {t("settings.checking_update")}
             </p>
-            {installState.phase === "downloading" && (
-              <div className="h-1.5 w-full overflow-hidden rounded-full bg-primary/15">
+          )}
+
+          {progressLabel && (
+            <div className="mt-5 space-y-2 rounded-lg bg-muted/50 px-3 py-3">
+              <p role="status" className="flex items-center gap-2 text-sm font-medium">
+                <ActivityIndicator className="text-primary" />
+                {progressLabel}
+              </p>
+              {installState.phase === "downloading" && (
                 <div
-                  className="h-full rounded-full bg-primary transition-[width]"
-                  style={{ width: `${percent}%` }}
-                />
-              </div>
-            )}
-          </div>
-        )}
+                  role="progressbar"
+                  aria-label={progressLabel}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={installState.total > 0 ? percent : undefined}
+                  className="h-1.5 w-full overflow-hidden rounded-full bg-primary/15"
+                >
+                  <div
+                    className="h-full rounded-full bg-primary transition-[width] duration-150 motion-reduce:transition-none"
+                    style={{ width: `${percent}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
 
-        {failed && (
-          <p className="text-xs text-destructive">
-            {t("settings.update_install_failed", { error: installState.error ?? "" })}
-          </p>
-        )}
-        {!hasUpdate && error && !busy && (
-          <p className="text-xs text-destructive">{t("settings.update_check_failed")}</p>
-        )}
+          {failed && (
+            <p role="alert" className="mt-4 text-sm leading-6 text-destructive">
+              {t("settings.update_install_failed", { error: installState.error ?? "" })}
+            </p>
+          )}
+          {!hasUpdate && error && !busy && (
+            <p role="alert" className="mt-4 text-sm text-destructive">{t("settings.update_check_failed")}</p>
+          )}
+        </div>
 
-        <DialogFooter>
-          <Button variant="outline" size="sm" onClick={() => setOpen(false)} disabled={busy}>
+        <DialogFooter className="mx-0 mb-0 shrink-0 flex-row flex-wrap justify-end gap-3 rounded-none border-border/70 bg-transparent px-6 py-4">
+          <Button variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
             {hasUpdate ? t("settings.update_later") : t("settings.update_close")}
           </Button>
           {hasUpdate ? (
             sandboxed ? (
-              <Button size="sm" onClick={() => openExternalUrl(DOWNLOAD_URL)}>
+              <Button className="h-auto min-h-8 whitespace-normal" onClick={() => openExternalUrl(DOWNLOAD_URL)}>
                 <Download className="size-3.5" />
                 {t("settings.update_download_website")}
               </Button>
             ) : (
-              <Button size="sm" onClick={install} disabled={busy || checking}>
-                {failed ? (
+              <Button className="h-auto min-h-8 whitespace-normal" onClick={install} disabled={busy || checking}>
+                {busy ? (
+                  <ActivityIndicator />
+                ) : failed ? (
                   <RefreshCw className="size-3.5" />
                 ) : (
                   <Download className="size-3.5" />
                 )}
-                {failed ? t("settings.update_retry") : t("settings.install_update")}
+                {busy ? progressLabel : failed ? t("settings.update_retry") : t("settings.install_update")}
               </Button>
             )
+          ) : error || !update ? (
+            <Button onClick={checkForUpdate} disabled={checking}>
+              <RefreshCw className="size-3.5" />
+              {t("settings.check_update")}
+            </Button>
           ) : (
             <Button
               size="sm"
               variant="ghost"
               onClick={() => openExternalUrl(update?.releaseUrl ?? "")}
-              disabled={checking}
+              disabled={checking || !update?.releaseUrl}
             >
               {t("settings.view_release")}
             </Button>

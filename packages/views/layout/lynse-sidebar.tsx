@@ -24,6 +24,7 @@ import { SettingsDialog } from "../settings/settings-dialog";
 import { openAppUpdateDialog, useAppUpdate } from "../app-update";
 import { UserProfileDropdown } from "./user-profile-dropdown";
 import { useSidebarPreferences } from "./sidebar-preferences";
+import { DESKTOP_SIDEBAR_WIDTH, WEB_SIDEBAR_WIDTH } from "./sidebar-metrics";
 import {
   Bell,
   Download,
@@ -169,9 +170,10 @@ export function LynseSidebar() {
         className={cn(
           "lyse-sidebar flex h-full shrink-0 flex-col bg-sidebar",
           isWeb
-            ? "w-[208px] items-stretch px-3 pt-4 pb-2"
-            : "w-[48px] items-center pl-1 pt-4 pb-4",
+            ? "items-stretch px-3 pt-4 pb-2"
+            : "items-center pl-1 pt-4 pb-4",
         )}
+        style={{ width: isWeb ? WEB_SIDEBAR_WIDTH : DESKTOP_SIDEBAR_WIDTH }}
         data-tauri-drag-region
       >
       {isWeb && (

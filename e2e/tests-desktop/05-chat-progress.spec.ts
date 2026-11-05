@@ -23,11 +23,12 @@ test("chat shows submission immediately, then live server progress and partial t
   const activity = page.locator('[data-slot="activity-indicator"]');
   await expect(activity).toBeVisible();
   await expect(activity.locator(".activity-pixel").first()).toHaveCSS("animation-name", "activity-pixel");
-  const label = page.locator(".activity-label-highlight");
-  await expect(label).toHaveCSS("animation-name", "activity-label-sweep");
+  // Waiting words remain stationary; only the pixel indicator animates.
+  const label = page.locator(".activity-label").filter({ hasText: "Waiting for the model to respond…" });
+  await expect(label).toHaveCSS("animation-name", "none");
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(activity.locator(".activity-pixel").first()).toHaveCSS("animation-name", "none");
-  await expect(label).toHaveCSS("display", "none");
+  await expect(label).toBeVisible();
   await expect(page.getByText("Waiting for the model to respond…", { exact: true })).toBeVisible();
   await page.emulateMedia({ reducedMotion: "no-preference" });
   await page.screenshot({ path: test.info().outputPath("chat-waiting.png"), animations: "disabled" });

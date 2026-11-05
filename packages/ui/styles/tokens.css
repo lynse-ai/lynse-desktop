@@ -140,6 +140,11 @@
     --destructive-foreground: oklch(0.985 0 0);
     --border: oklch(0.929 0.003 285.8);                /* ≈#e7e7e9 */
     --input: oklch(0.918 0.004 285.8);                 /* ≈#e3e3e6 */
+    /* Large input surfaces keep their own shallow elevation. */
+    --shadow-input: 0 1px 2px color-mix(in srgb, var(--foreground) 4%, transparent),
+        0 4px 14px color-mix(in srgb, var(--foreground) 3.5%, transparent);
+    --shadow-input-focus: var(--shadow-input),
+        0 0 0 3px color-mix(in srgb, var(--ring) 12%, transparent);
     --ring: #5f67d8;
     /* Stroke hierarchy — descending strength */
     --stroke-primary: oklch(0.78 0.005 285.8);         /* ≈#b7b7ba */
@@ -224,6 +229,7 @@
 }
 
 .dark {
+    --shadow-input: 0 10px 35px rgb(0 0 0 / 28%);
     /* Soft charcoal canvas + warm gold accents. Lifted off pure black so the
        window reads as a dark grey surface rather than a void; the surface
        hierarchy (canvas < sidebar < card < popover < input) keeps the original

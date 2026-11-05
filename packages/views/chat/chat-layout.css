@@ -1,0 +1,59 @@
+/* The drawer and both content regions share one clock and reverse from their
+   current position. Keeping the drawer mounted also keeps its reading place. */
+.chat-page {
+  --history-width: 14rem;
+  --history-offset: 0px;
+}
+
+.chat-page[data-history-open="true"][data-history-overlay="false"] {
+  --history-offset: var(--history-width);
+}
+
+.chat-history-drawer {
+  width: min(var(--history-width), 100%);
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition:
+    transform var(--duration-standard) var(--ease-drawer),
+    visibility 0s var(--duration-standard);
+}
+
+.chat-page[data-history-open="true"] .chat-history-drawer {
+  transform: translateX(0);
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+.chat-page[data-history-open="false"] .chat-history-drawer * {
+  animation-play-state: paused;
+}
+
+.chat-page[data-history-overlay="true"] .chat-history-drawer {
+  box-shadow: var(--shadow-overlay);
+}
+
+.chat-history-offset {
+  margin-inline-start: var(--history-offset);
+  transition: margin-inline-start var(--duration-standard) var(--ease-drawer);
+}
+
+.chat-composer {
+  border-color: var(--input);
+  background: var(--card);
+  box-shadow: var(--shadow-input);
+  transition:
+    border-color var(--duration-quick) var(--ease-out),
+    box-shadow var(--duration-quick) var(--ease-out);
+}
+
+.chat-composer:focus-within {
+  border-color: var(--ring);
+  box-shadow: var(--shadow-input-focus);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-history-drawer,
+  .chat-history-offset {
+    transition: none;
+  }
+}

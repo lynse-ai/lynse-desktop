@@ -14,6 +14,7 @@ import {
 } from "../app-update";
 import { openLogsFolder, openReportProblem } from "../diagnostics";
 import { LYNSE_APP_ICON_SRC } from "./app-icon";
+import { ReleaseNotesContent } from "../release-notes-content";
 import { WEBSITE_URL, privacyUrl, termsUrl } from "./links";
 
 /** Open a URL in the system browser, falling back to a new tab on web. */
@@ -105,16 +106,18 @@ export function AboutContent() {
       {/* What's new in the published release, straight from the updater
           manifest on CloudBase. Hidden silently when unreachable. */}
       {latestNotes && (
-        <div className="mt-4 w-full max-w-xs rounded-lg border border-border/60 bg-muted/30 px-3.5 py-3 text-left">
-          <p className="text-2xs font-semibold uppercase tracking-[0.08em] text-muted-foreground/80">
+        <div className="mt-4 w-full max-w-md rounded-lg border border-border/60 bg-muted/30 px-4 py-4 text-left">
+          <h2 className="text-xs font-semibold text-muted-foreground">
             {t("about.release_notes")}
             <span className="ms-1.5 font-normal tabular-nums tracking-normal">
               v{latestNotes.version}
             </span>
-          </p>
-          <p className="mt-1.5 whitespace-pre-line text-2xs leading-5 text-muted-foreground">
-            {selectReleaseNotes(latestNotes.notes, latestNotes.notesByLocale, i18n.resolvedLanguage ?? i18n.language)}
-          </p>
+          </h2>
+          <ReleaseNotesContent
+            compact
+            className="mt-4"
+            notes={selectReleaseNotes(latestNotes.notes, latestNotes.notesByLocale, i18n.resolvedLanguage ?? i18n.language) ?? ""}
+          />
         </div>
       )}
 

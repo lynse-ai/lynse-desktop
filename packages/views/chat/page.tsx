@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   ArrowDown,
@@ -31,6 +31,7 @@ import {
 } from "../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Textarea } from "@lynse/ui/components/ui/textarea";
+import { useAutoScroll } from "@lynse/ui/hooks/use-auto-scroll";
 import { ChatReplyBody } from "./chat-reply-body";
 import { toast } from "sonner";
 import { AssistantAvatar } from "../assistant";
@@ -88,6 +89,7 @@ import {
 } from "./chat-mentions";
 import { filterWorkspaceFilesByFolder } from "../workspace/middle-panel/file-list-filter";
 import type { WorkspaceItem } from "../workspace/types";
+import "./chat-layout.css";
 
 export function ChatPage() {
 
@@ -100,6 +102,10 @@ export function ChatPage() {
   const [insertingMessageId, setInsertingMessageId] = useState<string | null>(null);
   const [insertedMessageId, setInsertedMessageId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyOverlay, setHistoryOverlay] = useState(false);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const historyRef = useRef<HTMLElement>(null);
+  const historyTriggerRef = useRef<HTMLButtonElement>(null);
   const reduceMotion = useReducedMotion();
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -125,6 +131,47 @@ export function ChatPage() {
   const images = useChatImages(`${activeAssistant}:${activeConversationId ?? "new"}`);
   const isWorkBuddyCloud = isWorkBuddy && hasWorkBuddyAcpBridge();
   const showHistory = historyOpen && (!isWorkBuddy || isWorkBuddyCloud);
+  const { pinnedToBottom, scrollToBottom } = useAutoScroll(scrollRef, { resetKey: activeConversationId });
+
+  useLayoutEffect(() => {
+    const page = pageRef.current;
+    if (!page) return;
+    const measure = () => setHistoryOverlay(page.clientWidth > 0 && page.clientWidth < 672);
+    measure();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(page);
+    window.addEventListener("resize", measure);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
+  }, []);
+
+  const closeHistory = useCallback(() => {
+    historyTriggerRef.current?.focus({ preventScroll: true });
+    setHistoryOpen(false);
+  }, []);
+
+  const selectHistoryConversation = useCallback((id: string) => {
+    selectConversation(id);
+    if (historyOverlay) {
+      setHistoryOpen(false);
+      textareaRef.current?.focus({ preventScroll: true });
+    }
+  }, [selectConversation, historyOverlay]);
+
+  useEffect(() => {
+    if (!showHistory) return;
+    const panel = historyRef.current;
+    panel?.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
+  }, [showHistory]);
+
+  useEffect(() => {
+    if (!showHistory || !historyOverlay) return;
+    const dismiss = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) return;
+      if (!historyRef.current?.contains(event.target) && !historyTriggerRef.current?.contains(event.target)) setHistoryOpen(false);
+    };
+    document.addEventListener("pointerdown", dismiss);
+    return () => document.removeEventListener("pointerdown", dismiss);
+  }, [showHistory, historyOverlay]);
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
   const isLegacyWorkBuddy = isWorkBuddyCloud && activeConversation?.provider === "workbuddy" && !activeConversation.workbuddySession;
   // Active conversation's provider drives the per-message label/avatar (one
@@ -453,41 +500,6 @@ export function ChatPage() {
     });
   };
 
-  // Stick-to-bottom: follow the newest message (including streaming tokens)
-  // only while the user is parked near the bottom — never yank the view if
-  // they scrolled up to re-read mid-answer.
-  const stickToBottomRef = useRef(true);
-  const [pinnedToBottom, setPinnedToBottom] = useState(true);
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el && stickToBottomRef.current) {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [messages, isLoading]);
-
-  const handleListScroll = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-    stickToBottomRef.current = pinned;
-    setPinnedToBottom((prev) => (prev === pinned ? prev : pinned));
-  };
-
-  const scrollToBottom = () => {
-    const el = scrollRef.current;
-    if (!el) return;
-    stickToBottomRef.current = true;
-    setPinnedToBottom(true);
-    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  };
-
-  // Switching conversations always lands on the newest message.
-  useEffect(() => {
-    stickToBottomRef.current = true;
-    setPinnedToBottom(true);
-  }, [activeConversationId]);
-
   const handleSend = (content = input) => {
     const trimmedContent = content.trim();
     if ((!trimmedContent && !images.drafts.length) || isLoading || images.reading) return;
@@ -607,7 +619,18 @@ export function ChatPage() {
   };
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
+    <div
+      ref={pageRef}
+      className="chat-page relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background"
+      data-history-open={showHistory}
+      data-history-overlay={historyOverlay}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && !event.defaultPrevented && showHistory) {
+          event.preventDefault();
+          closeHistory();
+        }
+      }}
+    >
       {/* Page chrome lives in the unified app title bar via the slot:
           assistant switcher centered (like the original chat header), the
           history-drawer toggle on the left of the bar, new-chat on the right. */}
@@ -628,10 +651,12 @@ export function ChatPage() {
         middleToggle={
           (!isWorkBuddy || isWorkBuddyCloud)
             ? {
-                collapsed: !historyOpen,
+                collapsed: !showHistory,
                 onToggle: () => setHistoryOpen((open) => !open),
                 label: t("chat.history"),
-                panelWidth: 224, // w-56 history drawer
+                panelWidth: historyOverlay ? 0 : 224,
+                controls: "chat-history",
+                triggerRef: historyTriggerRef,
               }
             : undefined
         }
@@ -651,32 +676,27 @@ export function ChatPage() {
         }
       />
 
-      <AnimatePresence initial={false}>
-        {showHistory && (
-          <motion.aside
-            key="history"
-            initial={reduceMotion ? false : { x: "-100%" }}
-            animate={{ x: 0 }}
-            exit={reduceMotion ? { opacity: 0 } : { x: "-100%" }}
-            transition={{ duration: 0.18, ease: "easeOut" }}
-            className="absolute bottom-0 left-0 top-0 z-20 flex w-56 flex-col border-r border-border/60"
-          >
-            <ChatHistorySidebar
-              conversations={conversations.filter((c) => isWorkBuddy ? c.provider === "workbuddy" : c.provider !== "workbuddy")}
-              activeConversationId={activeConversationId}
-              workingConversationIds={workingConversationIds}
-              onSelect={selectConversation}
-              onClose={() => setHistoryOpen(false)}
-            />
-          </motion.aside>
-        )}
-      </AnimatePresence>
+      <aside
+        ref={historyRef}
+        id="chat-history"
+        aria-label={t("chat.history")}
+        aria-hidden={!showHistory}
+        inert={!showHistory}
+        className="chat-history-drawer absolute bottom-0 left-0 top-0 z-20 flex flex-col border-r border-border/60 bg-background"
+      >
+        <ChatHistorySidebar
+          conversations={conversations.filter((c) => isWorkBuddy ? c.provider === "workbuddy" : c.provider !== "workbuddy")}
+          activeConversationId={activeConversationId}
+          workingConversationIds={workingConversationIds}
+          onSelect={selectHistoryConversation}
+          onClose={closeHistory}
+        />
+      </aside>
 
-      <div className="relative min-h-0 flex-1">
+      <div className="chat-history-offset relative min-h-0 min-w-0 flex-1">
         <main
           ref={scrollRef}
-          onScroll={handleListScroll}
-          className={`${showHistory ? "ml-56" : "ml-0"} h-full overflow-y-auto overscroll-contain transition-[margin] duration-150`}
+          className="h-full overflow-y-auto overscroll-contain [scrollbar-gutter:stable]"
         >
         {isLegacyWorkBuddy && <p className="mx-auto max-w-4xl px-6 py-3 text-sm text-muted-foreground">{t("workbuddy.cloud_legacy_history")}</p>}
         {isWorkBuddy && wbAuth !== "ok" && (
@@ -827,9 +847,9 @@ export function ChatPage() {
             <motion.button
               type="button"
               onClick={scrollToBottom}
-              initial={{ opacity: 0, y: 8, x: "-50%" }}
+              initial={{ opacity: 0, y: reduceMotion ? 0 : 8, x: "-50%" }}
               animate={{ opacity: 1, y: 0, x: "-50%" }}
-              exit={{ opacity: 0, y: 8, x: "-50%" }}
+              exit={{ opacity: 0, y: reduceMotion ? 0 : 8, x: "-50%" }}
               transition={{ duration: 0.15, ease: "easeOut" }}
               className="absolute bottom-4 left-1/2 z-10 flex size-8 items-center justify-center rounded-full border border-border/70 bg-background/95 text-muted-foreground shadow-md backdrop-blur transition-colors hover:border-primary/30 hover:text-foreground"
               aria-label={t("chat.scroll_to_bottom")}
@@ -841,7 +861,7 @@ export function ChatPage() {
       </div>
 
       <div
-        className={`${showHistory ? "ml-56" : "ml-0"} pointer-events-none shrink-0 bg-background/95 pb-3 pt-2 transition-[margin] duration-150 dark:bg-background/75 dark:backdrop-blur-xl`}
+        className="chat-history-offset pointer-events-none shrink-0 bg-background/95 pb-3 pt-2 dark:bg-background/75 dark:backdrop-blur-xl"
       >
         <div className="lyse-chat-column pointer-events-auto mx-auto w-full max-w-4xl px-6">
           {!isWorkBuddy && (
@@ -860,7 +880,7 @@ export function ChatPage() {
               disabled={isLoading}
             />
           )}
-          <div className="relative rounded-xl border border-input bg-white p-2 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_4px_14px_rgba(0,0,0,0.035)] transition-[border-color,box-shadow] duration-150 focus-within:border-neutral-400 focus-within:shadow-[0_1px_2px_rgba(0,0,0,0.04),0_0_0_3px_rgba(0,0,0,0.04)] dark:bg-card dark:shadow-[0_10px_35px_rgba(0,0,0,0.28)] dark:focus-within:border-white/20 dark:focus-within:shadow-[0_10px_35px_rgba(0,0,0,0.28),0_0_0_3px_rgba(255,255,255,0.05)]">
+          <div className="chat-composer relative rounded-xl border p-2">
             {!isWorkBuddy && mentionDetection && (
               <div className="absolute bottom-full left-0 right-0 z-30 mb-2">
                 <MentionPicker

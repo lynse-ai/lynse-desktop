@@ -7,7 +7,6 @@ import {
   DialogTitle,
 } from "@lynse/ui/components/ui/dialog";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { AppUpdateDialog } from "../app-update-dialog";
 import { ReportProblemDialog } from "../report-problem-dialog";
 import { AboutContent } from "./about-content";
 import { useAboutDialog } from "./open-about";
@@ -34,8 +33,7 @@ export function AboutDialog() {
           </div>
         </DialogContent>
       </Dialog>
-      {/* Hosted here so the update + report flows open from the fallback too. */}
-      <AppUpdateDialog />
+      {/* The report flow is available from this fallback surface too. */}
       <ReportProblemDialog />
     </>
   );

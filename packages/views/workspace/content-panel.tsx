@@ -19,7 +19,7 @@ import {
   ChevronRight,
   Clock,
 } from "../icons";
-import { useWorkspaceStore } from "./store";
+import { getWorkspaceState, useWorkspaceStore } from "./store";
 import { SummaryExportMenuItem } from "../connections/summary-export-menu-item";
 import { useAudioEditorStore } from "../audio-editor/store";
 import { useNavigation } from "../navigation";
@@ -30,6 +30,9 @@ import { emitPluginEvent } from "../plugins";
 import { SummaryMarkdownEditor } from "./summary-editor";
 import { FloatingMarkdownToolbar } from "./center-panel/markdown-toolbar";
 import { DeleteConfirmDialog } from "./delete-confirm-dialog";
+import { TaskState, type TaskRecoveryAction } from "./task-state";
+import { Button } from "@lynse/ui/components/ui/button";
+import { ActivityIndicator } from "@lynse/ui/components/ui/activity-indicator";
 import { AudioPlayer } from "./audio-player";
 import type { AudioPlayerHandle } from "./audio-player";
 import { ChaptersPanel } from "./chapter-panel";
@@ -270,12 +273,13 @@ export function ContentPanel() {
   const [resummaryErrorFileId, setResummaryErrorFileId] = useState<string | null>(null);
   const [clearedSummaryFileIds, setClearedSummaryFileIds] = useState<Set<string>>(() => new Set());
   const [pendingSummaryTabsByFile, setPendingSummaryTabsByFile] = useState<Record<string, SummaryTabModel[]>>({});
+  const [summaryRetryTarget, setSummaryRetryTarget] = useState<{ fileId: string; key: string } | null>(null);
   const [retryingLocalFileIds, setRetryingLocalFileIds] = useState<Set<string>>(() => new Set());
   const [localRetryError, setLocalRetryError] = useState<string | null>(null);
   const [voiceprintDraft, setVoiceprintDraft] = useState<{ segmentId: string; name: string } | null>(null);
   // Summary tab staged for deletion behind the themed confirm dialog.
   const [pendingDeleteSummary, setPendingDeleteSummary] = useState<{ conclusionId: string; idx: number } | null>(null);
-  const summaryCountBeforeResummary = useRef(0);
+  const summaryCountBeforeResummary = useRef<{ fileId: string; count: number } | null>(null);
 
   const selectedTitle = useMemo(() => {
     if (!selectedItemId) return null;
@@ -361,7 +365,10 @@ export function ContentPanel() {
       .filter(Boolean) as SummaryTabModel[];
   }, [conclusions]);
   const currentFileSummariesCleared = !!selectedItemId && clearedSummaryFileIds.has(selectedItemId);
-  const pendingSummaryTabs = selectedItemId ? (pendingSummaryTabsByFile[selectedItemId] ?? []) : [];
+  const pendingSummaryTabs = useMemo(
+    () => selectedItemId ? (pendingSummaryTabsByFile[selectedItemId] ?? []) : [],
+    [pendingSummaryTabsByFile, selectedItemId],
+  );
   // Local recordings carry their agent-service deep summary on the record
   // itself (no cloud conclusion) — surface it as the first summary tab.
   const localSummaryTab = useMemo<SummaryTabModel | null>(() => {
@@ -375,9 +382,18 @@ export function ContentPanel() {
       status: "ready" as const,
     };
   }, [isLocalSelectedItem, transcription, t]);
-  const visibleConclusionTexts = currentFileSummariesCleared
-    ? []
-    : [...(localSummaryTab ? [localSummaryTab] : []), ...conclusionTexts, ...pendingSummaryTabs];
+  const visibleConclusionTexts = useMemo(
+    () => currentFileSummariesCleared
+      ? []
+      : [
+          ...(localSummaryTab ? [localSummaryTab] : []),
+          ...conclusionTexts,
+          // The task reply and query refresh can arrive in either order.
+          // Never draw the same completed summary twice between those renders.
+          ...pendingSummaryTabs.filter((tab) => !tab.id || !conclusionTexts.some((saved) => saved.id === tab.id)),
+        ],
+    [currentFileSummariesCleared, localSummaryTab, conclusionTexts, pendingSummaryTabs],
+  );
 
   useEffect(() => {
     if (!selectedItemId || pendingSummaryTabs.length === 0 || conclusionTexts.length === 0) return;
@@ -569,18 +585,23 @@ export function ContentPanel() {
   const [regeneratingLocalSummary, setRegeneratingLocalSummary] = useState(false);
   const handleRegenerateLocalSummary = useCallback(async () => {
     if (!selectedItemId || regeneratingLocalSummary) return;
-    const record = await getDesktopLocalTranscriptionApi()?.get(selectedItemId);
-    if (!record?.transcriptText?.trim()) return;
+    const fileId = selectedItemId;
+    const requestedTab = getWorkspaceState().contentTab;
     setRegeneratingLocalSummary(true);
     try {
+      const record = await getDesktopLocalTranscriptionApi()?.get(fileId);
+      if (!record?.transcriptText?.trim()) return;
       const saved = await triggerLocalAutoSummary(
-        { id: selectedItemId, status: "completed", title: record.title },
+        { id: fileId, status: "completed", title: record.title },
         { force: true, t: (key) => t(key) },
       );
       if (saved) {
-        await qc.invalidateQueries({ queryKey: ["file-transcription", selectedItemId] });
-        setContentTab("summary-0");
+        await qc.invalidateQueries({ queryKey: ["file-transcription", fileId] });
+        const current = getWorkspaceState();
+        if (current.selectedItemId === fileId && current.contentTab === requestedTab) setContentTab("summary-0");
       }
+    } catch (error) {
+      toast.error(t("workspace.local_summary_failed"), { description: error instanceof Error ? error.message : String(error) });
     } finally {
       setRegeneratingLocalSummary(false);
     }
@@ -763,11 +784,18 @@ export function ContentPanel() {
 
   useEffect(() => {
     if (!selectedItemId || summarizingFileIds.has(selectedItemId)) return;
-    const previousCount = summaryCountBeforeResummary.current;
-    if (previousCount === 0 || visibleConclusionTexts.length <= previousCount) return;
+    const previous = summaryCountBeforeResummary.current;
+    if (!previous || previous.fileId !== selectedItemId) return;
+    // Completing a background task must not take the reader away from the
+    // transcript or another summary they selected while it was running.
+    if (contentTab !== `summary-${previous.count}`) {
+      summaryCountBeforeResummary.current = null;
+      return;
+    }
+    if (visibleConclusionTexts.length <= previous.count) return;
     setContentTab(`summary-${visibleConclusionTexts.length - 1}`);
-    summaryCountBeforeResummary.current = 0;
-  }, [visibleConclusionTexts.length, selectedItemId, setContentTab, summarizingFileIds]);
+    summaryCountBeforeResummary.current = null;
+  }, [contentTab, visibleConclusionTexts.length, selectedItemId, setContentTab, summarizingFileIds]);
 
   const currentFileSummarizing = !!selectedItemId && summarizingFileIds.has(selectedItemId);
   const currentFileRerunning = currentFileSummarizing && currentFileSummariesCleared;
@@ -778,8 +806,8 @@ export function ContentPanel() {
     mode: SummaryTemplateDialogMode,
     options?: { pendingId?: string; templateName?: string },
   ) => {
-    summaryCountBeforeResummary.current = mode === "add" ? visibleConclusionTexts.length : 0;
-    setResummaryErrorFileId(null);
+    summaryCountBeforeResummary.current = mode === "add" ? { fileId, count: visibleConclusionTexts.length } : null;
+    setResummaryErrorFileId((current) => current === fileId ? null : current);
     if (mode === "add" && options?.pendingId) {
       const pendingTab: SummaryTabModel = {
         key: options.pendingId,
@@ -789,11 +817,18 @@ export function ContentPanel() {
         status: "pending",
         pendingId: options.pendingId,
       };
-      setPendingSummaryTabsByFile((current) => ({
-        ...current,
-        [fileId]: [...(current[fileId] ?? []), pendingTab],
-      }));
-      setContentTab(`summary-${visibleConclusionTexts.length}`);
+      const retryKey = summaryRetryTarget?.fileId === fileId ? summaryRetryTarget.key : null;
+      const retryIndex = pendingSummaryTabs.findIndex((tab) => tab.key === retryKey && tab.status === "error");
+      setPendingSummaryTabsByFile((current) => {
+        const tabs = current[fileId] ?? [];
+        return {
+          ...current,
+          [fileId]: retryIndex < 0
+            ? [...tabs, pendingTab]
+            : tabs.map((tab) => tab.key === retryKey ? { ...pendingTab, key: tab.key } : tab),
+        };
+      });
+      setContentTab(`summary-${retryIndex < 0 ? visibleConclusionTexts.length : visibleConclusionTexts.length - pendingSummaryTabs.length + retryIndex}`);
     }
     if (mode === "rerun") {
       setClearedSummaryFileIds((current) => {
@@ -804,7 +839,7 @@ export function ContentPanel() {
       setContentTab("outline");
     }
     setFileSummarizing(fileId, true);
-  }, [setContentTab, setFileSummarizing, t, visibleConclusionTexts.length]);
+  }, [setContentTab, setFileSummarizing, t, visibleConclusionTexts.length, pendingSummaryTabs, summaryRetryTarget]);
 
   const handleResummaryFinished = useCallback((
     fileId: string,
@@ -813,7 +848,11 @@ export function ContentPanel() {
     options?: { pendingId?: string; conclusion?: import("./types").FileConclusion },
   ) => {
     setFileSummarizing(fileId, false);
-    setResummaryErrorFileId(success ? null : fileId);
+    // Add/replace failures belong to that summary. The transcript and saved
+    // summaries remain available; only a full rerun needs the file-wide error.
+    if (mode === "rerun") {
+      setResummaryErrorFileId((current) => success ? (current === fileId ? null : current) : fileId);
+    }
     if (success) {
       // Generation can take minutes and the user may have navigated away — the
       // toast alone is too easy to miss, so also record a notification-center
@@ -851,7 +890,7 @@ export function ContentPanel() {
         next.delete(fileId);
         return next;
       });
-      setContentTab("summary-0");
+      if (getWorkspaceState().selectedItemId === fileId) setContentTab("summary-0");
     }
   }, [setContentTab, setFileSummarizing, displayTitle]);
 
@@ -896,6 +935,7 @@ export function ContentPanel() {
     selectedItemId,
     defaultTemplateId,
     currentFileSummarizing,
+    fileDetail,
     handleResummaryStarted,
     handleResummaryFinished,
     rerunSummary,
@@ -1204,9 +1244,9 @@ export function ContentPanel() {
                           }
                         : {
                             label: t("workspace.regenerate"),
-                            onAction: () => void handleAutoRerun(),
-                            busy: currentFileSummarizing,
-                            disabled: !defaultTemplateId,
+                            onAction: () => void (isLocalSelectedItem ? handleRegenerateLocalSummary() : handleAutoRerun()),
+                            busy: currentFileSummarizing || regeneratingLocalSummary,
+                            disabled: !isLocalSelectedItem && !defaultTemplateId,
                           }
                     }
                   />
@@ -1451,8 +1491,20 @@ export function ContentPanel() {
                     {/* Single summary tab */}
                     {activeSummaryIdx >= 0 && visibleConclusionTexts[activeSummaryIdx] && (() => {
                       const block = visibleConclusionTexts[activeSummaryIdx]!;
-                      if (block.status === "pending") return <SummaryTabPendingState />;
-                      if (block.status === "error") return <SummaryTabErrorState />;
+                      if (block.status === "pending") return <ResummaryPendingState />;
+                      if (block.status === "error") return (
+                        <ResummaryErrorState action={{
+                          label: t("workspace.retry"),
+                          disabled: currentFileSummarizing,
+                          onAction: () => {
+                            if (!selectedItemId) return;
+                            setSummaryRetryTarget({ fileId: selectedItemId, key: block.key });
+                            setSelectedConclusionIdForTemplate(null);
+                            setSummaryDialogMode("add");
+                            setResummarizeOpen(true);
+                          },
+                        }} />
+                      );
                       if (sourceViewVisible) {
                         return <SourceView code={block.text} language={isHtmlContent(block.text) ? "html" : "markdown"} />;
                       }
@@ -1521,7 +1573,10 @@ export function ContentPanel() {
 
       <ResummarizeDialog
         open={resummarizeOpen}
-        onOpenChange={setResummarizeOpen}
+        onOpenChange={(open) => {
+          setResummarizeOpen(open);
+          if (!open) setSummaryRetryTarget(null);
+        }}
         fileId={selectedItemId}
         conclusionId={selectedConclusionIdForTemplate}
         mode={summaryDialogMode}
@@ -1557,13 +1612,11 @@ export function ContentPanel() {
 function ResummaryPendingState() {
   const { t } = useTranslation();
   return (
-    <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 text-center">
-      <Loader2 className="size-6 animate-spin text-muted-foreground" />
-      <div>
-        <p className="text-sm font-medium text-foreground">{t("resummarize.generating_title")}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{t("resummarize.generating_description")}</p>
-      </div>
-    </div>
+    <TaskState
+      pending
+      title={t("resummarize.generating_title")}
+      description={t("resummarize.generating_description")}
+    />
   );
 }
 
@@ -1573,48 +1626,15 @@ function ResummaryErrorState({
   /** Prominent recovery button rendered under the failure text. Callers pick
    *  the right recovery: rerun the summary, or — for a local recording with no
    *  transcript — transcribe first, since a rerun would only fail again. */
-  action?: { label: string; onAction: () => void; busy?: boolean; disabled?: boolean };
+  action?: TaskRecoveryAction;
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex min-h-[320px] flex-col items-center justify-center gap-2 text-center">
-      <p className="text-sm font-medium text-foreground">{t("resummarize.error_title")}</p>
-      <p className="text-xs text-muted-foreground">{t("resummarize.error_description")}</p>
-      {action && (
-        <button
-          type="button"
-          onClick={action.onAction}
-          disabled={action.busy || action.disabled}
-          className="mt-3 inline-flex items-center justify-center gap-2 rounded-full bg-foreground px-6 py-2.5 text-sm font-medium text-background transition-colors hover:bg-foreground/90 disabled:pointer-events-none disabled:opacity-50"
-        >
-          {action.busy ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-          <span>{action.label}</span>
-        </button>
-      )}
-    </div>
-  );
-}
-
-function SummaryTabPendingState() {
-  const { t } = useTranslation();
-  return (
-    <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 text-center">
-      <Loader2 className="size-5 animate-spin text-muted-foreground" />
-      <div>
-        <p className="text-sm font-medium text-foreground">{t("resummarize.generating_title")}</p>
-        <p className="mt-1 text-xs text-muted-foreground">{t("resummarize.generating_description")}</p>
-      </div>
-    </div>
-  );
-}
-
-function SummaryTabErrorState() {
-  const { t } = useTranslation();
-  return (
-    <div className="flex min-h-[320px] flex-col items-center justify-center gap-2 text-center">
-      <p className="text-sm font-medium text-foreground">{t("resummarize.error_title")}</p>
-      <p className="text-xs text-muted-foreground">{t("resummarize.error_description")}</p>
-    </div>
+    <TaskState
+      title={t("resummarize.error_title")}
+      description={t("resummarize.error_description")}
+      action={action}
+    />
   );
 }
 
@@ -1987,23 +2007,11 @@ function OfflineVaultView({ markdown }: { markdown: string }) {
 function LocalTranscriptionPendingState({ retrying }: { retrying: boolean }) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-1 items-center justify-center py-12">
-      <div className="flex flex-col items-center gap-3 text-center">
-        <div className="relative flex size-12 items-center justify-center">
-          <span className="absolute size-12 rounded-full border border-primary/20" />
-          <span className="absolute size-10 animate-ping rounded-full bg-primary/10" />
-          <Loader2 className="relative size-5 animate-spin text-primary" />
-        </div>
-        <div>
-          <p className="text-sm font-medium">
-            {t(retrying ? "workspace.local_retranscribing" : "workspace.local_transcribing")}
-          </p>
-          {/* No engine name here: this panel serves every offline engine, and
-              naming one aged badly the moment it was retired. */}
-          <p className="mt-1 text-xs text-muted-foreground">{t("workspace.local_transcribing_hint")}</p>
-        </div>
-      </div>
-    </div>
+    <TaskState
+      pending
+      title={t(retrying ? "workspace.local_retranscribing" : "workspace.local_transcribing")}
+      description={t("workspace.local_transcribing_hint")}
+    />
   );
 }
 
@@ -2039,24 +2047,30 @@ function RecordedLocalActions({
         {t("workspace.recorded_no_transcription_hint")}
       </p>
       <div className="flex flex-wrap items-center justify-center gap-2">
-        <button
+        <Button
+          variant="contrast"
+          size="lg"
           type="button"
           onClick={onLocalTranscribe}
           disabled={localBusy || uploadBusy}
-          className="inline-flex items-center justify-center gap-2 rounded-full bg-foreground px-5 py-2 text-sm font-medium text-background transition-colors hover:bg-foreground/90 disabled:pointer-events-none disabled:opacity-50"
+          aria-busy={localBusy || undefined}
+          className="gap-2 px-5"
         >
-          {localBusy ? <Loader2 className="size-4 animate-spin" /> : <Cpu className="size-4" />}
+          {localBusy ? <ActivityIndicator className="size-4" /> : <Cpu className="size-4" />}
           <span>{t("workspace.transcribe_locally")}</span>
-        </button>
-        <button
+        </Button>
+        <Button
+          variant="outline"
+          size="lg"
           type="button"
           onClick={onUpload}
           disabled={localBusy || uploadBusy}
-          className="inline-flex items-center justify-center gap-2 rounded-full border border-border px-5 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent/50 disabled:pointer-events-none disabled:opacity-50"
+          aria-busy={uploadBusy || undefined}
+          className="gap-2 px-5"
         >
-          {uploadBusy ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+          {uploadBusy ? <ActivityIndicator className="size-4" /> : <Upload className="size-4" />}
           <span>{t("workspace.upload_and_transcribe")}</span>
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -2079,15 +2093,17 @@ function TranscriptionGeneratePrompt({
         <MessageSquare className="size-6" />
       </div>
       <p className="text-sm text-muted-foreground">{hint}</p>
-      <button
+      <Button
+        variant="contrast"
+        size="lg"
         type="button"
         onClick={onGenerate}
         disabled={disabled}
-        className="inline-flex items-center justify-center gap-2 rounded-full bg-foreground px-6 py-2.5 text-sm font-medium text-background transition-colors hover:bg-foreground/90 disabled:pointer-events-none disabled:opacity-50"
+        className="gap-2 px-6"
       >
         <Sparkles className="size-4" />
         <span>{buttonText}</span>
-      </button>
+      </Button>
     </div>
   );
 }

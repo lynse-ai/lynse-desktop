@@ -61,9 +61,15 @@ fn removing_usage_preserves_cached_results_and_manual_state() {
     let document = source("Existing graph evidence".into());
     let mut tracking = tracking();
     complete(&mut tracking, &document);
-    tracking.reviews.insert("entity:review".into(), json!({"title":"Reviewed"}));
-    tracking.merges.insert("entity:old".into(), "entity:review".into());
-    tracking.todo_links.insert("entity:review".into(), "todo:kept".into());
+    tracking
+        .reviews
+        .insert("entity:review".into(), json!({"title":"Reviewed"}));
+    tracking
+        .merges
+        .insert("entity:old".into(), "entity:review".into());
+    tracking
+        .todo_links
+        .insert("entity:review".into(), "todo:kept".into());
     let mut legacy = serde_json::to_value(&tracking).unwrap();
     legacy["usage"] = json!({"input":123});
     legacy["metrics"] = json!({"calls":4});
@@ -76,7 +82,10 @@ fn removing_usage_preserves_cached_results_and_manual_state() {
     assert_eq!(restored.todo_links, tracking.todo_links);
     let saved = serde_json::to_value(restored).unwrap();
     for key in ["usage", "metrics", "runs", "reportRequested"] {
-        assert!(saved.get(key).is_none(), "obsolete field {key} must not be saved");
+        assert!(
+            saved.get(key).is_none(),
+            "obsolete field {key} must not be saved"
+        );
     }
 }
 

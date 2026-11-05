@@ -33,10 +33,11 @@ export function useWiki() {
   const scope = status?.scope;
   const queryKey = ["workbench-wiki", scope];
   const enabled = wikiEnabled && !!bridge?.wiki && !!scope;
+  const contentRevision = status?.wikiRevision ?? status?.updatedAt;
   const query = useQuery({ queryKey, queryFn: () => bridge!.wiki({ action: "state" }), enabled, networkMode: "always" });
   useEffect(() => {
     if (enabled) void qc.invalidateQueries({ queryKey: ["workbench-wiki", scope], exact: true }, { cancelRefetch: false });
-  }, [enabled, qc, scope, status?.updatedAt]);
+  }, [enabled, qc, scope, contentRevision]);
   async function mutate(request: WikiRequest) {
     if (!bridge || busy) return;
     setBusy(true);

@@ -62,6 +62,14 @@ export interface SynthesisResult {
 }
 export interface WikiAutomationConfig { folderIds: string[]; includeUnfiled: boolean }
 
+export interface KnowledgePolicyState {
+  capabilities?: import("@lynse/core/api/memory").MemoryCapabilities;
+  policy?: import("@lynse/core/api/memory").KnowledgePolicy;
+  pending: boolean;
+  pendingStatus?: "retry" | "conflict";
+  pendingError?: string;
+}
+
 export interface WorkbenchStatus {
   scope: string;
   userId: string;
@@ -70,6 +78,7 @@ export interface WorkbenchStatus {
   initialComplete: boolean;
   phase: "disabled" | "pending" | "discovering" | "syncing" | "ready" | "failed" | "incomplete" | "processing" | "waiting_configuration";
   updatedAt: string;
+  wikiRevision?: string;
   error: string;
   wikiProgress?: WikiProgress | null;
   automation?: WikiAutomationConfig | null;
@@ -120,7 +129,7 @@ export interface DesktopContext {
   sources: SearchResult["items"];
 }
 export interface DesktopWorkbenchApi {
-  knowledgePolicy?(request: { action: "read" | "update"; policy?: Record<string, unknown> }): Promise<{ capabilities?: import("@lynse/core/api/memory").MemoryCapabilities; policy?: import("@lynse/core/api/memory").KnowledgePolicy; pending: boolean }>;
+  knowledgePolicy?(request: { action: "read" | "update"; policy?: Record<string, unknown> }): Promise<KnowledgePolicyState>;
   bind(request: { baseUrl: string; agentUrl?: string; token: string; locale: string; betaEnabled?: boolean; gmailPluginEnabled?: boolean; modelOverride?: RequestModelOverride | null }): Promise<WorkbenchStatus>;
   unbind(): Promise<void>;
   setTextModel?(modelOverride: RequestModelOverride | null): Promise<void>;

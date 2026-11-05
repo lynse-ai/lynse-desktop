@@ -3,6 +3,7 @@ use super::*;
 use std::path::Path;
 
 pub(super) fn prepare_sync(root: &Path, manifest: &mut Manifest) -> CommandResult<bool> {
+    store::recover_document_writes(root, manifest)?;
     recover_entries(root, manifest)?;
     let has_local = manifest
         .entries
@@ -50,6 +51,10 @@ pub(super) fn recover_entries(root: &Path, manifest: &mut Manifest) -> CommandRe
         }
         let doc: Document = serde_json::from_slice(&fs::read(&path).map_err(|e| e.to_string())?)
             .map_err(|_| "Local knowledge source is unreadable; original preserved")?;
+        if manifest.source_tombstones.contains_key(&doc.id) {
+            store::remove_document(root, &doc.id, manifest.entries.get(&doc.id))?;
+            continue;
+        }
         if name != format!("{}.source.json", store::digest(&doc.id)) {
             return Err("Local source identity does not match its file; original preserved".into());
         }
@@ -108,12 +113,18 @@ pub(super) fn cached_meeting(
     };
     let (markdown, source) = store::paths(root, id);
     if entry.status == "conflict" {
+        store::ensure_incoming(root, entry)?;
         return Err("Local document has an unresolved sync conflict; original preserved".into());
     }
     if !markdown.exists() || !source.exists() {
         return Ok(None);
     }
-    let doc = store::read_document(root, entry)?;
+    let doc = store::read_document(root, entry).map_err(|error| {
+        // Legacy conflicts did not always have an incoming pair. The last
+        // verified source remains an offline resolution option.
+        let _ = store::ensure_incoming(root, entry);
+        error
+    })?;
     Ok(doc.has_meeting_text().then_some(doc))
 }
 
@@ -196,15 +207,28 @@ pub(super) async fn load_meeting(
         None => cloud_document(session, row, todos).await,
     }
 }
-pub(super) fn needs_automatic_refresh(manifest: &Manifest, cached: &Document, row: &Value, remote_revision: &str) -> bool {
-    let current = restrict_context(cached.clone(),row);
-    manifest.enabled && manifest.allow_ai && super::super::wiki::in_automatic_scope(&current,manifest)
+pub(super) fn needs_automatic_refresh(
+    manifest: &Manifest,
+    cached: &Document,
+    row: &Value,
+    remote_revision: &str,
+) -> bool {
+    let current = restrict_context(cached.clone(), row);
+    manifest.enabled
+        && manifest.allow_ai
+        && super::super::wiki::in_automatic_scope(&current, manifest)
         && current.ai_context_enabled
-        && manifest.entries.get(&cached.id).is_some_and(|entry| !entry.excluded
-            && if entry.remote_revision.is_empty() {
-                let updated = string(row,&["updatedAt","updateTime"]);
-                !updated.is_empty() && !cached.updated_at.is_empty() && updated != cached.updated_at
-            } else { entry.remote_revision != remote_revision })
+        && manifest.entries.get(&cached.id).is_some_and(|entry| {
+            !entry.excluded
+                && if entry.remote_revision.is_empty() {
+                    let updated = string(row, &["updatedAt", "updateTime"]);
+                    !updated.is_empty()
+                        && !cached.updated_at.is_empty()
+                        && updated != cached.updated_at
+                } else {
+                    entry.remote_revision != remote_revision
+                }
+        })
 }
 
 #[cfg(test)]
@@ -396,11 +420,22 @@ mod folder_scope_tests {
     use super::*;
     #[test]
     fn cached_text_adopts_cloud_folder_moves_without_downloading_or_losing_notes() {
-        let mut doc=Document {id:"one".into(),kind:"meeting".into(),folder_id:"work".into(),transcript:"Preserved local text".into(),..Default::default()};doc.refresh_revision();
-        let version=doc.revision.clone();let moved=restrict_context(doc.clone(),&json!({"folderId":"team"}));
-        assert_eq!(moved.transcript,doc.transcript);assert_eq!(moved.folder_id,"team");assert_ne!(moved.revision,version);
-        let unfiled=restrict_context(moved,&json!({"folderId":null}));assert!(unfiled.folder_id.is_empty());
-        assert_eq!(restrict_context(doc,&json!({})).folder_id,"work");
+        let mut doc = Document {
+            id: "one".into(),
+            kind: "meeting".into(),
+            folder_id: "work".into(),
+            transcript: "Preserved local text".into(),
+            ..Default::default()
+        };
+        doc.refresh_revision();
+        let version = doc.revision.clone();
+        let moved = restrict_context(doc.clone(), &json!({"folderId":"team"}));
+        assert_eq!(moved.transcript, doc.transcript);
+        assert_eq!(moved.folder_id, "team");
+        assert_ne!(moved.revision, version);
+        let unfiled = restrict_context(moved, &json!({"folderId":null}));
+        assert!(unfiled.folder_id.is_empty());
+        assert_eq!(restrict_context(doc, &json!({})).folder_id, "work");
     }
 }
 
@@ -409,16 +444,52 @@ mod automatic_refresh_tests {
     use super::*;
     #[test]
     fn only_changed_selected_sources_refresh_automatically_and_resume_catches_up() {
-        let mut manifest=Manifest {enabled:true,allow_ai:true,wiki_automation:Some(store::WikiAutomation {folder_ids:vec!["work".into()],include_unfiled:false}),..Default::default()};
-        let doc=Document {id:"one".into(),kind:"meeting".into(),folder_id:"work".into(),updated_at:"v1".into(),ai_context_enabled:true,..Default::default()};
-        manifest.entries.insert(doc.id.clone(),Entry {id:doc.id.clone(),remote_revision:"old".into(),..Default::default()});
-        let row=json!({"folderId":"work","updatedAt":"v2"});
-        assert!(needs_automatic_refresh(&manifest,&doc,&row,"new"));
-        assert!(!needs_automatic_refresh(&manifest,&doc,&row,"old"));
-        assert!(!needs_automatic_refresh(&manifest,&doc,&json!({"folderId":"team"}),"new"));
-        manifest.enabled=false;assert!(!needs_automatic_refresh(&manifest,&doc,&row,"new"));
-        manifest.enabled=true;assert!(needs_automatic_refresh(&manifest,&doc,&row,"new"));
-        manifest.entries.get_mut(&doc.id).unwrap().remote_revision.clear();assert!(needs_automatic_refresh(&manifest,&doc,&row,"new"));
-        manifest.entries.get_mut(&doc.id).unwrap().excluded=true;assert!(!needs_automatic_refresh(&manifest,&doc,&row,"new"));
+        let mut manifest = Manifest {
+            enabled: true,
+            allow_ai: true,
+            wiki_automation: Some(store::WikiAutomation {
+                folder_ids: vec!["work".into()],
+                include_unfiled: false,
+            }),
+            ..Default::default()
+        };
+        let doc = Document {
+            id: "one".into(),
+            kind: "meeting".into(),
+            folder_id: "work".into(),
+            updated_at: "v1".into(),
+            ai_context_enabled: true,
+            ..Default::default()
+        };
+        manifest.entries.insert(
+            doc.id.clone(),
+            Entry {
+                id: doc.id.clone(),
+                remote_revision: "old".into(),
+                ..Default::default()
+            },
+        );
+        let row = json!({"folderId":"work","updatedAt":"v2"});
+        assert!(needs_automatic_refresh(&manifest, &doc, &row, "new"));
+        assert!(!needs_automatic_refresh(&manifest, &doc, &row, "old"));
+        assert!(!needs_automatic_refresh(
+            &manifest,
+            &doc,
+            &json!({"folderId":"team"}),
+            "new"
+        ));
+        manifest.enabled = false;
+        assert!(!needs_automatic_refresh(&manifest, &doc, &row, "new"));
+        manifest.enabled = true;
+        assert!(needs_automatic_refresh(&manifest, &doc, &row, "new"));
+        manifest
+            .entries
+            .get_mut(&doc.id)
+            .unwrap()
+            .remote_revision
+            .clear();
+        assert!(needs_automatic_refresh(&manifest, &doc, &row, "new"));
+        manifest.entries.get_mut(&doc.id).unwrap().excluded = true;
+        assert!(!needs_automatic_refresh(&manifest, &doc, &row, "new"));
     }
 }

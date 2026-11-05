@@ -170,7 +170,10 @@ async fn request(
         require_beta(&state)?;
         let binding = binding.map_err(|_| "Cloud memory offline")?;
         if let Err(error) = check_status(binding.status()) {
-            log::warn!("[cloud-memory] session binding failed: HTTP {}", binding.status().as_u16());
+            log::warn!(
+                "[cloud-memory] session binding failed: HTTP {}",
+                binding.status().as_u16()
+            );
             return Err(error);
         }
         let binding: Value = binding
@@ -211,8 +214,15 @@ async fn request(
         require_beta(&state)?;
         // Log only known error codes, never the response body or caller credentials.
         let code = match failure.pointer("/error/code").and_then(Value::as_str) {
-            Some(code @ ("reauthentication_required" | "missing_token" | "invalid_token"
-                | "identity_unavailable" | "context_unavailable" | "http_401" | "http_403")) => code,
+            Some(
+                code @ ("reauthentication_required"
+                | "missing_token"
+                | "invalid_token"
+                | "identity_unavailable"
+                | "context_unavailable"
+                | "http_401"
+                | "http_403"),
+            ) => code,
             _ => "unclassified",
         };
         log::warn!("[cloud-memory] memory files request failed: HTTP {status}, code={code}");

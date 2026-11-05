@@ -22,6 +22,7 @@ import {
   Puzzle,
   Bot,
   Plug,
+  Palette,
 } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
 import { isWebPlatform } from "../platform";
@@ -69,6 +70,7 @@ export const SETTINGS_BODY_CLASS = "min-h-0 min-w-0 flex-1 overflow-y-auto";
 
 type SettingsSectionId =
   | "account"
+  | "appearance"
   | "ai_assistant"
   | "live_translation"
   | "auto_record"
@@ -113,7 +115,7 @@ export function SettingsDialog({
   // availability checks mirror the ones the config cards use internally.
   const sections: SettingsSection[] = [];
 
-  // Account & Storage: identity + quota, appearance, and local disk usage.
+  // Account & Storage: identity + quota, and local disk usage.
   sections.push({
     id: "account",
     label: t("settings.account_storage"),
@@ -123,18 +125,18 @@ export function SettingsDialog({
         <AccountCard />
         <UsageCard />
 
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-xs">{t("settings.appearance")}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <AppearanceSection />
-          </CardContent>
-        </Card>
-
         <StorageCard onManageModels={hasLocalTranscription ? () => setActiveSectionId("stt") : undefined} />
       </>
     ),
+  });
+
+  // Appearance is its own first-class section, following the desktop settings
+  // information architecture instead of being nested in account storage.
+  sections.push({
+    id: "appearance",
+    label: t("settings.appearance"),
+    icon: Palette,
+    content: <AppearanceSection />,
   });
 
   // AI assistant: where lynclaw connects (route B direct agent backend) plus

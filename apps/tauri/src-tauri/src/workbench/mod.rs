@@ -1,8 +1,8 @@
+mod knowledge_cloud;
+mod knowledge_transport;
 mod markdown;
 mod memory;
 mod memory_cloud;
-mod knowledge_cloud;
-mod knowledge_transport;
 mod sources;
 mod store;
 mod sync;
@@ -41,12 +41,16 @@ pub struct WorkbenchState {
     pub(super) session: Mutex<Option<Session>>,
     pub(super) worker: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pub(super) serial: tokio::sync::Mutex<()>,
+    pub(super) wiki_run: tokio::sync::Mutex<()>,
     pub(super) graph_run: tokio::sync::Mutex<()>,
     pub(super) synthesis_queue: synthesis_scheduler::Scheduler,
     pub(super) synthesis_http: tokio::sync::Mutex<Option<(String, reqwest::Client)>>,
     pub(super) pending_receipts: std::sync::atomic::AtomicUsize,
     pub(super) knowledge_transport: knowledge_transport::Transport,
+    pub(super) knowledge_capabilities: tokio::sync::Mutex<Option<(u64, u64, Value)>>,
     sync_requested: tokio::sync::Notify,
+    wiki_wakeup: tokio::sync::Notify,
+    pub(super) cloud_wakeup: tokio::sync::Notify,
     wiki_requested: AtomicBool,
     refresh_existing: AtomicBool,
     discovery_requested: tokio::sync::Notify,
@@ -135,6 +139,15 @@ pub(super) fn load_state(app: &AppHandle, session: &Session) -> CommandResult<Ma
         ("local-todos", "task:"),
     ] {
         let rows = crate::list_store(app, directory)?;
+        let mut rows_by_id = std::collections::BTreeMap::new();
+        for row in &rows {
+            if let Some(id) = row["id"].as_str() {
+                rows_by_id.entry(id).or_insert(row);
+            }
+        }
+        let inspiration_owner = (prefix == "inspiration:")
+            .then(|| crate::inspiration_private::scope(app).ok())
+            .flatten();
         let ids: Vec<String> = state
             .entries
             .values()
@@ -149,7 +162,15 @@ pub(super) fn load_state(app: &AppHandle, session: &Session) -> CommandResult<Ma
             .collect();
         for id in ids {
             let raw = id.strip_prefix(prefix).unwrap_or(&id);
-            let row = rows.iter().find(|row| row["id"].as_str() == Some(raw));
+            let row = rows_by_id.get(raw).copied().or_else(|| {
+                if prefix != "inspiration:" {
+                    return None;
+                }
+                let (owner, id) = raw.rsplit_once(':')?;
+                (owner == session.scope || inspiration_owner.as_deref() == Some(owner))
+                    .then(|| rows_by_id.get(id).copied())
+                    .flatten()
+            });
             let allowed = row.is_some_and(|row| {
                 row.get("aiContextEnabled").and_then(Value::as_bool) != Some(false)
                     && !matches!(
@@ -195,6 +216,52 @@ pub(crate) fn refresh_local_policy(app: &AppHandle) {
         }
     });
 }
+fn wiki_content_revision(
+    memory: &std::path::Path,
+    settings: &std::path::Path,
+    state: &Manifest,
+) -> String {
+    let files = [
+        memory.join("wiki/topics.json"),
+        memory.join("wiki/automatic-catalog.json"),
+        memory.join("wiki/topic-hierarchy.json"),
+        memory.join("wiki/evidence-graph.json"),
+        memory.join("derived.json"),
+        settings.join("wiki-models.json"),
+        settings.join("wiki-sources.json"),
+    ]
+    .into_iter()
+    .map(|path| {
+        fs::metadata(path).ok().map(|meta| {
+            (
+                meta.len(),
+                meta.modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|time| time.as_nanos().to_string()),
+            )
+        })
+    })
+    .collect::<Vec<_>>();
+    let sources = state
+        .entries
+        .values()
+        .map(|entry| json!([entry.id, entry.revision, entry.status, entry.excluded]))
+        .collect::<Vec<_>>();
+    store::digest(
+        json!([
+            files,
+            sources,
+            state.enabled,
+            state.allow_ai,
+            state.wiki_automation,
+            state.knowledge_policy,
+            state.knowledge_pending
+        ])
+        .to_string(),
+    )
+}
+
 pub(super) fn persist(app: &AppHandle, session: &Session, state: &Manifest) -> CommandResult<()> {
     let mut manifest = state.clone();
     manifest.updated_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
@@ -210,10 +277,18 @@ pub(super) fn persist(app: &AppHandle, session: &Session, state: &Manifest) -> C
             crate::atomic_write(&memory.join("derived.json"), &bytes)?;
             store::write_memory_views(&memory, state)?;
         }
+        manifest.wiki_revision = wiki_content_revision(
+            &memory,
+            state_path(app, session)?
+                .parent()
+                .ok_or("Invalid workbench state path")?,
+            state,
+        );
     }
     store::save(&state_path(app, session)?, &manifest)?;
     let mut published = state.clone();
     published.updated_at = manifest.updated_at.clone();
+    published.wiki_revision = manifest.wiki_revision.clone();
     let _ = app.emit("workbench-updated", public_status(session, &published));
     Ok(())
 }
@@ -238,11 +313,13 @@ pub(super) fn is_current(state: &WorkbenchState, session: &Session) -> bool {
             .and_then(|s| s.clone())
             .is_some_and(|s| s.scope == session.scope && s.generation == session.generation)
 }
+pub(super) const SESSION_CHANGED: &str = "Account or consent changed; processing will resume";
+
 pub(super) fn require_current(state: &WorkbenchState, session: &Session) -> CommandResult<()> {
     if is_current(state, session) {
         Ok(())
     } else {
-        Err("Account or consent changed; result discarded".into())
+        Err(SESSION_CHANGED.into())
     }
 }
 fn public_status(session: &Session, state: &Manifest) -> Value {
@@ -252,7 +329,7 @@ fn public_status(session: &Session, state: &Manifest) -> Value {
         .filter(|entry| entry.kind == "meeting")
         .collect();
     json!({"scope":session.scope,"userId":session.user_id,"enabled":state.enabled,"allowAi":state.allow_ai,
-        "initialComplete":state.initial_complete,"phase":state.phase,"updatedAt":state.updated_at,"error":state.error,"wikiProgress":state.wiki_progress,"automation":state.wiki_automation,
+        "initialComplete":state.initial_complete,"phase":state.phase,"updatedAt":state.updated_at,"wikiRevision":state.wiki_revision,"error":if state.error.is_empty() { &state.source_error } else { &state.error },"wikiProgress":state.wiki_progress,"automation":state.wiki_automation,
         "discovered":meetings.len(),"synced":meetings.iter().filter(|e|e.status=="synced").count(),
         "awaitingTranscription":meetings.iter().filter(|e|e.status=="awaiting_transcription").count(),
         "failed":meetings.iter().filter(|e|e.status=="failed").count(),"conflicts":meetings.iter().filter(|e|e.status=="conflict").count(),
@@ -481,15 +558,21 @@ pub async fn workbench_unbind(state: State<'_, WorkbenchState>) -> CommandResult
 
 fn replace_text_model(state: &WorkbenchState, model: Option<Value>) -> CommandResult<bool> {
     let mut active = state.session.lock().map_err(|_| "Session unavailable")?;
-    let session = active.as_mut().ok_or("Sign in to access this account's knowledge base")?;
-    if session.model_override == model { return Ok(false); }
+    let session = active
+        .as_mut()
+        .ok_or("Sign in to access this account's knowledge base")?;
+    if session.model_override == model {
+        return Ok(false);
+    }
     session.model_override = model;
     Ok(true)
 }
 
 #[tauri::command]
 pub async fn workbench_set_text_model(
-    app: AppHandle, state: State<'_, WorkbenchState>, model_override: Option<Value>,
+    app: AppHandle,
+    state: State<'_, WorkbenchState>,
+    model_override: Option<Value>,
 ) -> CommandResult<()> {
     let _guard = state.serial.lock().await;
     let changed = replace_text_model(&state, model_override)?;
@@ -501,12 +584,14 @@ pub async fn workbench_set_text_model(
             manifest.phase = "processing".into();
             manifest.error.clear();
             persist(&app, &session, &manifest)?;
-            state.wiki_requested.store(true, Ordering::SeqCst);
+            request_wiki(&state);
             state.sync_requested.notify_one();
         }
     }
     drop(_guard);
-    if changed && crate::vault::load_vault_config(&app)?.enabled { start_worker(&app, &state); }
+    if changed && crate::vault::load_vault_config(&app)?.enabled {
+        start_worker(&app, &state);
+    }
     Ok(())
 }
 
@@ -520,59 +605,143 @@ pub async fn workbench_status(
     Ok(public_status(&session, &load_state(&app, &session)?))
 }
 
+pub(super) fn request_wiki(state: &WorkbenchState) {
+    state.wiki_requested.store(true, Ordering::SeqCst);
+    state.wiki_wakeup.notify_one();
+}
+
+fn worker_is_current(app: &AppHandle, state: &WorkbenchState, session: &Session) -> bool {
+    is_current(state, session)
+        && crate::vault::load_vault_config(app)
+            .map(|config| config.enabled)
+            .unwrap_or(false)
+}
+
+fn record_source_error(manifest: &mut Manifest, error: String) {
+    manifest.source_error = error;
+    if manifest.phase != "processing" {
+        manifest.phase = "failed".into();
+    }
+}
+
+async fn record_worker_error(
+    app: &AppHandle,
+    state: &WorkbenchState,
+    session: &Session,
+    error: String,
+    source: bool,
+) {
+    let _guard = state.serial.lock().await;
+    if is_current(state, session) {
+        if let Ok(mut manifest) = load_state(app, session) {
+            if source {
+                record_source_error(&mut manifest, error);
+            } else {
+                manifest.phase = "failed".into();
+                manifest.error = error;
+            }
+            let _ = persist(app, session, &manifest);
+        }
+    }
+}
+
+async fn run_worker_lanes(
+    sources: impl std::future::Future<Output = ()>,
+    wiki: impl std::future::Future<Output = ()>,
+    graph: impl std::future::Future<Output = ()>,
+    cloud: impl std::future::Future<Output = ()>,
+) {
+    tokio::select! { _ = sources => {}, _ = wiki => {}, _ = graph => {}, _ = cloud => {} }
+}
+
 pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
     let Ok(mut worker) = state.worker.lock() else {
         return;
     };
-    if worker.as_ref().is_some_and(|handle| !handle.inner().is_finished()) {
+    if worker
+        .as_ref()
+        .is_some_and(|handle| !handle.inner().is_finished())
+    {
         return;
     }
     let app = app.clone();
     *worker = Some(tauri::async_runtime::spawn(async move {
-        let sync_loop = async {
+        let source_loop = async {
             loop {
                 let state = app.state::<WorkbenchState>();
                 let Ok(session) = current(&state) else {
                     return;
                 };
-                let result = run_requested_work(
-                    state.wiki_requested.swap(false, Ordering::SeqCst),
-                    wiki::run(&app, &state, &session),
-                    sync::run(&app, &state, &session),
-                ).await;
-                if let Err(error) = result {
-                    if error == wiki::TEXT_MODEL_CHANGED {
-                        state.wiki_requested.store(true, Ordering::SeqCst);
-                        continue;
-                    }
-                    let _guard = state.serial.lock().await;
-                    if is_current(&state, &session) {
-                        if let Ok(mut manifest) = load_state(&app, &session) {
-                            manifest.phase = "failed".into();
-                            manifest.error = error;
-                            let _ = persist(&app, &session, &manifest);
-                            let _ =
-                                app.emit("workbench-updated", public_status(&session, &manifest));
+                // Older UI callers wake this lane for edits; forward that intent
+                // without making a long Wiki pass block source discovery.
+                if state.wiki_requested.load(Ordering::SeqCst) {
+                    state.wiki_wakeup.notify_one();
+                }
+                match sync::run(&app, &state, &session).await {
+                    Err(error) => record_worker_error(&app, &state, &session, error, true).await,
+                    Ok(()) => {
+                        let _guard = state.serial.lock().await;
+                        if is_current(&state, &session) {
+                            if let Ok(mut manifest) = load_state(&app, &session) {
+                                if !manifest.source_error.is_empty() {
+                                    manifest.source_error.clear();
+                                    if manifest.phase == "failed" && manifest.error.is_empty() {
+                                        manifest.phase = if manifest.initial_complete {
+                                            "ready"
+                                        } else {
+                                            "incomplete"
+                                        }
+                                        .into();
+                                    }
+                                    let _ = persist(&app, &session, &manifest);
+                                }
+                            }
                         }
                     }
                 }
                 tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {}
-                    _ = state.sync_requested.notified() => {}
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {},
+                    _ = state.sync_requested.notified() => {},
                 }
-                if !is_current(&state, &session) {
-                    return;
-                }
-                if !crate::vault::load_vault_config(&app)
-                    .map(|c| c.enabled)
-                    .unwrap_or(false)
-                {
+                if !worker_is_current(&app, &state, &session) {
                     return;
                 }
             }
         };
-        // Discovery runs alongside Wiki compilation without blocking the source worker.
-        // Both futures belong to this worker and are cancelled together on scope changes.
+        let wiki_loop = async {
+            loop {
+                let state = app.state::<WorkbenchState>();
+                let Ok(session) = current(&state) else {
+                    return;
+                };
+                state.wiki_requested.store(false, Ordering::SeqCst);
+                if let Err(error) = knowledge_cloud::refresh_capabilities(&app, &session).await {
+                    log::warn!("Knowledge profile refresh pending: {error}");
+                }
+                let result = {
+                    let _flight = state.wiki_run.lock().await;
+                    Box::pin(wiki::run(&app, &state, &session)).await
+                };
+                if let Err(error) = result {
+                    if error == wiki::TEXT_MODEL_CHANGED {
+                        request_wiki(&state);
+                        continue;
+                    }
+                    if error == SESSION_CHANGED {
+                        request_wiki(&state);
+                        continue;
+                    }
+                    record_worker_error(&app, &state, &session, error, false).await;
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {},
+                    _ = state.wiki_wakeup.notified() => {},
+                }
+                if !worker_is_current(&app, &state, &session) {
+                    return;
+                }
+            }
+        };
         let discovery_loop = async {
             loop {
                 let state = app.state::<WorkbenchState>();
@@ -590,26 +759,42 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                     tokio::task::yield_now().await;
                 } else {
                     tokio::select! {
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {}
-                        _ = state.discovery_requested.notified() => {}
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {},
+                        _ = state.discovery_requested.notified() => {},
                     }
                 }
-                if !is_current(&state, &session)
-                    || !crate::vault::load_vault_config(&app)
-                        .map(|c| c.enabled)
-                        .unwrap_or(false)
-                {
+                if !worker_is_current(&app, &state, &session) {
                     return;
                 }
             }
         };
-        tokio::select! {
-            _ = sync_loop => {}
-            _ = discovery_loop => {}
-        }
+        let cloud_loop = async {
+            loop {
+                let state = app.state::<WorkbenchState>();
+                let Ok(session) = current(&state) else {
+                    return;
+                };
+                let more = match knowledge_cloud::background(&app, &session).await {
+                    Ok(more) => more,
+                    Err(error) => {
+                        log::warn!("Knowledge cloud synchronization pending: {error}");
+                        false
+                    }
+                };
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(if more { 3 } else { 120 })) => {},
+                    _ = state.cloud_wakeup.notified() => {},
+                }
+                if !worker_is_current(&app, &state, &session) {
+                    return;
+                }
+            }
+        };
+        run_worker_lanes(source_loop, wiki_loop, discovery_loop, cloud_loop).await;
     }));
 }
 
+#[cfg(test)]
 async fn run_requested_work(
     wiki_requested: bool,
     wiki: impl std::future::Future<Output = CommandResult<()>>,
@@ -760,7 +945,11 @@ pub async fn workbench_search(
         }
     }
     require_current(&state, &session)?;
-    if ai_only.unwrap_or(false) { items = knowledge_cloud::filter_items(&app,&session,items).await.unwrap_or_default(); }
+    if ai_only.unwrap_or(false) {
+        items = knowledge_cloud::filter_items(&app, &session, items)
+            .await
+            .unwrap_or_default();
+    }
     Ok(json!({"items":items,"initialComplete":complete}))
 }
 
@@ -791,7 +980,13 @@ pub async fn workbench_read(
     } else {
         store::read_document(&root, entry)?
     };
-    if wiki::ai_manifest(&root, &manifest).entries.get(actual).is_none_or(|entry| entry.excluded) { document.ai_context_enabled = false; }
+    if wiki::ai_manifest(&root, &manifest)
+        .entries
+        .get(actual)
+        .is_none_or(|entry| entry.excluded)
+    {
+        document.ai_context_enabled = false;
+    }
     Ok(
         json!({"document":document,"markdown":fs::read_to_string(markdown).map_err(|e|e.to_string())?,
         "artifacts":if manifest.enabled {manifest.artifacts.get(actual).cloned().unwrap_or(Value::Null)}else{Value::Null}}),
@@ -843,10 +1038,9 @@ pub async fn workbench_review(
     require_current(&state, &session)?;
     let manifest = load_state(&app, &session)?;
     let (root, _) = roots(&app, &session)?;
-    if documents
-        .iter()
-        .any(|document| !store::is_current_document(&root, &wiki::ai_manifest(&root, &manifest), document))
-    {
+    if documents.iter().any(|document| {
+        !store::is_current_document(&root, &wiki::ai_manifest(&root, &manifest), document)
+    }) {
         return Err("Sources changed; prepare the brief again".into());
     }
     sync::validate_result(&documents, &manifest, &result)?;
@@ -874,18 +1068,29 @@ pub async fn workbench_exclude(
         sync::forget_source(&mut manifest, &id);
     }
     persist(&app, &session, &manifest)?;
-    if crate::vault::load_vault_config(&app)?.enabled { start_worker(&app,&state); }
+    // Cloud policy updates acquire the same commit lock internally.
+    drop(_guard);
+    if crate::vault::load_vault_config(&app)?.enabled {
+        start_worker(&app, &state);
+    }
     if let Some(policy) = manifest.knowledge_policy.as_ref() {
-        let key=knowledge_cloud::source_id(&id);
-        let mut exclusions=policy["excluded_source_ids"].as_array().cloned().unwrap_or_default();
-        exclusions.retain(|value|value.as_str()!=Some(&key));
-        if excluded { exclusions.push(json!(key)); }
+        let key = knowledge_cloud::source_id(&id);
+        let mut exclusions = policy["excluded_source_ids"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        exclusions.retain(|value| value.as_str() != Some(&key));
+        if excluded {
+            exclusions.push(json!(key));
+        }
         knowledge_cloud::policy_action(&app,&session,json!({"action":"update","policy":{
             "excluded_source_ids":exclusions,"base_range_version":policy["range_version"],
             "base_grant_version":policy["grant_version"],"base_processing_version":policy["processing_version"]
         }})).await?;
     } else {
-        return Err("Local exclusion saved; confirm the shared cloud source range to synchronize it".into());
+        return Err(
+            "Local exclusion saved; confirm the shared cloud source range to synchronize it".into(),
+        );
     }
     Ok(())
 }
@@ -930,7 +1135,9 @@ pub async fn workbench_memory_files(
 ) -> CommandResult<Value> {
     require_beta(&state)?;
     let session = current(&state)?;
-    if session.scope != scope { return Err("Account changed; reopen memory files".into()); }
+    if session.scope != scope {
+        return Err("Account changed; reopen memory files".into());
+    }
     memory_cloud::handle(&app, &session, request).await
 }
 
@@ -987,7 +1194,11 @@ pub async fn workbench_regenerate(
     require_current(&state, &session)?;
     let mut manifest = load_state(&app, &session)?;
     wiki::ready(&manifest)?;
-    if !store::is_current_document(&roots(&app, &session)?.0, &wiki::ai_manifest(&roots(&app, &session)?.0, &manifest), &document) {
+    if !store::is_current_document(
+        &roots(&app, &session)?.0,
+        &wiki::ai_manifest(&roots(&app, &session)?.0, &manifest),
+        &document,
+    ) {
         return Err("Source changed; retry the summary".into());
     }
     sync::validate_result(&[document.clone()], &manifest, &result)?;
@@ -1002,24 +1213,44 @@ pub async fn workbench_regenerate(
 /// Withdraw app-managed plaintext copies after the private record is durable.
 pub(crate) async fn revoke_private_inspiration(app: &AppHandle, id: &str) -> CommandResult<()> {
     let state = app.state::<WorkbenchState>();
-    let session = match invalidate_runtime(&state) { Ok(session)=>session, Err(_)=>return Ok(()) };
+    let session = match invalidate_runtime(&state) {
+        Ok(session) => session,
+        Err(_) => return Ok(()),
+    };
     let _guard = state.serial.lock().await;
-    require_current(&state,&session)?;
-    let mut manifest=load_state(app,&session)?;
-    let uuid=id.trim_start_matches("inspiration:");
-    let owner=crate::inspiration_private::scope(app)?;
-    let aliases=[id.to_owned(),format!("inspiration:{id}"),format!("inspiration:{owner}:{uuid}")];
-    let (root,_)=roots(app,&session)?;
-    for alias in aliases {
-        manifest.entries.remove(&alias);
-        sync::forget_source(&mut manifest,&alias);
-        manifest.knowledge_uploads.remove(&alias);
-        let (markdown,source)=store::paths(&root,&alias);
-        for path in [markdown.with_extension("incoming.md"),markdown,source] {
-            match fs::remove_file(path) { Ok(())=>{},Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},Err(_)=>return Err("private_source_cleanup_failed".into()) }
+    require_current(&state, &session)?;
+    let mut manifest = load_state(app, &session)?;
+    let uuid = id.trim_start_matches("inspiration:");
+    let owner = crate::inspiration_private::scope(app)?;
+    let aliases = [
+        id.to_owned(),
+        format!("inspiration:{id}"),
+        format!("inspiration:{owner}:{uuid}"),
+    ];
+    let (root, _) = roots(app, &session)?;
+    for alias in &aliases {
+        manifest
+            .source_tombstones
+            .insert(alias.clone(), format!("private:{}", crate::now()));
+        if let Some(entry) = manifest.entries.get_mut(alias) {
+            entry.excluded = true;
+            entry.status = "deleted".into();
         }
+        sync::forget_source(&mut manifest, alias);
     }
-    persist(app,&session,&manifest)
+    persist(app, &session, &manifest)?;
+    for alias in aliases {
+        store::purge_private_document(&root, &alias)
+            .map_err(|_| "private_source_cleanup_failed")?;
+        manifest.entries.remove(&alias);
+        manifest.knowledge_uploads.remove(&alias);
+    }
+    persist(app, &session, &manifest)?;
+    drop(_guard);
+    if crate::vault::load_vault_config(app)?.enabled {
+        start_worker(app, &state);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1029,12 +1260,12 @@ pub async fn workbench_remove_source(
     id: String,
 ) -> CommandResult<()> {
     let _guard = state.serial.lock().await;
-    let session = current(&state)?;
+    let session = invalidate_runtime(&state)?;
     let mut manifest = load_state(&app, &session)?;
     let actual = manifest.aliases.get(&id).cloned().unwrap_or(id);
-    if !manifest.entries.contains_key(&actual) {
-        return Ok(());
-    }
+    manifest
+        .source_tombstones
+        .insert(actual.clone(), format!("removed:{}", crate::now()));
     if let Some(entry) = manifest.entries.get_mut(&actual) {
         entry.excluded = true;
         entry.status = "deleted".into();
@@ -1042,16 +1273,14 @@ pub async fn workbench_remove_source(
     sync::forget_source(&mut manifest, &actual);
     persist(&app, &session, &manifest)?;
     let (root, _) = roots(&app, &session)?;
-    let (md, source) = store::paths(&root, &actual);
-    for path in [md, source] {
-        match fs::remove_file(path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.to_string()),
-        }
-    }
+    store::remove_document(&root, &actual, manifest.entries.get(&actual))?;
     manifest.entries.remove(&actual);
-    persist(&app, &session, &manifest)
+    persist(&app, &session, &manifest)?;
+    drop(_guard);
+    if crate::vault::load_vault_config(&app)?.enabled {
+        start_worker(&app, &state);
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -1073,35 +1302,10 @@ pub async fn workbench_resolve_conflict(
     let (root, _) = roots(&app, &session)?;
     let (md, source) = store::paths(&root, &id);
     let incoming = source.with_extension("incoming.json");
-    let mut document: Document =
-        serde_json::from_slice(&fs::read(&incoming).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-    let local = fs::read(&md).map_err(|e| e.to_string())?;
-    crate::atomic_write(&md.with_extension("local-backup.md"), &local)?;
-    let mut next = if keep_local {
-        let accepted_revision = document.revision.clone();
-        document.transcript =
-            String::from_utf8(local.clone()).map_err(|_| "Local document must be UTF-8")?;
-        document.segments.clear();
-        document.outline.clear();
-        document.conclusions.clear();
-        document.refresh_revision();
-        crate::atomic_write(
-            &source,
-            &serde_json::to_vec_pretty(&document).map_err(|e| e.to_string())?,
-        )?;
-        store::Entry {
-            revision: document.revision.clone(),
-            accepted_revision,
-            markdown_hash: store::digest(&local),
-            status: "synced".into(),
-            synthesis_revision: String::new(),
-            failed_synthesis_revision: String::new(),
-            ..entry
-        }
-    } else {
-        store::write_document(&root, &document, None)?
-    };
+    if manifest.source_tombstones.contains_key(&id) {
+        return Err("Source was removed; its conflict cannot be published".into());
+    }
+    let mut next = store::resolve_document_conflict(&root, &entry, keep_local)?;
     next.excluded = manifest.excluded_sources.contains(&id)
         || manifest.entries.get(&id).is_some_and(|e| e.excluded);
     next.remote_revision = manifest
@@ -1199,7 +1403,15 @@ pub async fn workbench_confirm_todos(
             .and_then(|v| v.first())
             .cloned()
             .unwrap_or_else(|| json!(document.reference()));
-        saved.push(save_confirmed_todo(&app, &session, &document, proposal_id, title, suggestion.get("dueDate").cloned().unwrap_or(Value::Null), source)?);
+        saved.push(save_confirmed_todo(
+            &app,
+            &session,
+            &document,
+            proposal_id,
+            title,
+            suggestion.get("dueDate").cloned().unwrap_or(Value::Null),
+            source,
+        )?);
     }
     if let Some(array) = manifest
         .artifacts
@@ -1223,14 +1435,32 @@ pub async fn workbench_confirm_todos(
 }
 
 pub(super) fn confirmed_todo_id(session: &Session, source_id: &str, proposal_id: &str) -> String {
-    format!("todo:workbench:{}", store::digest(format!("{}\n{}\n{}", session.scope, source_id, proposal_id)))
+    format!(
+        "todo:workbench:{}",
+        store::digest(format!("{}\n{}\n{}", session.scope, source_id, proposal_id))
+    )
 }
-pub(super) fn save_confirmed_todo(app: &AppHandle, session: &Session, document: &Document, proposal_id: &str, title: &str, due_date: Value, source: Value) -> CommandResult<Value> {
-    if title.trim().is_empty() || title.chars().count() > 500 { return Err("Todo title is required".into()); }
+pub(super) fn save_confirmed_todo(
+    app: &AppHandle,
+    session: &Session,
+    document: &Document,
+    proposal_id: &str,
+    title: &str,
+    due_date: Value,
+    source: Value,
+) -> CommandResult<Value> {
+    if title.trim().is_empty() || title.chars().count() > 500 {
+        return Err("Todo title is required".into());
+    }
     let todo_id = confirmed_todo_id(session, &document.id, proposal_id);
     // The durable todo is the idempotency record, even when recording the graph link fails.
-    if let Some(existing) = crate::get_store_value(app, "local-todos", &todo_id)? { return Ok(existing); }
-    crate::save_todo(app, json!({"id":todo_id,"title":title.trim(),"completed":false,"createdAt":crate::now(),"updatedAt":crate::now(),"sourceFileId":document.id,"sourceTitle":document.title,"sourceRef":source,"workbenchScope":session.scope,"dueDate":due_date}))
+    if let Some(existing) = crate::get_store_value(app, "local-todos", &todo_id)? {
+        return Ok(existing);
+    }
+    crate::save_todo(
+        app,
+        json!({"id":todo_id,"title":title.trim(),"completed":false,"createdAt":crate::now(),"updatedAt":crate::now(),"sourceFileId":document.id,"sourceTitle":document.title,"sourceRef":source,"workbenchScope":session.scope,"dueDate":due_date}),
+    )
 }
 
 #[tauri::command]
@@ -1248,9 +1478,16 @@ pub async fn workbench_context(
     let (root, _) = roots(&app, &session)?;
     let mut sources = store::search(&root, &wiki::ai_manifest(&root, &manifest), &query, 3);
     sources.extend(wiki::context(&app, &session, &manifest, &query)?);
-    let sources = knowledge_cloud::filter_items(&app,&session,sources).await.unwrap_or_default();
+    drop(_guard);
+    let sources = knowledge_cloud::filter_items(&app, &session, sources)
+        .await
+        .unwrap_or_default();
     Ok(json!({"version":1,"sources":sources,"scope":session.scope}))
 }
+
+#[cfg(test)]
+#[path = "wiki_content_revision_tests.rs"]
+mod content_revision_tests;
 
 #[cfg(test)]
 mod wiki_lifecycle_tests {
@@ -1258,8 +1495,16 @@ mod wiki_lifecycle_tests {
     #[tokio::test]
     async fn changing_text_model_keeps_graph_session_epoch_and_execution_gate() {
         let state = WorkbenchState::default();
-        let session = Session { scope:"same-user".into(),user_id:"verified".into(),base_url:"https://business.invalid".into(),
-            agent_url:"https://agent.invalid".into(),token:"synthetic".into(),generation:7,locale:"zh".into(),model_override:None };
+        let session = Session {
+            scope: "same-user".into(),
+            user_id: "verified".into(),
+            base_url: "https://business.invalid".into(),
+            agent_url: "https://agent.invalid".into(),
+            token: "synthetic".into(),
+            generation: 7,
+            locale: "zh".into(),
+            model_override: None,
+        };
         state.epoch.store(7, Ordering::SeqCst);
         *state.session.lock().unwrap() = Some(session.clone());
         let graph = state.graph_run.lock().await;
@@ -1278,19 +1523,35 @@ mod wiki_lifecycle_tests {
         state.wiki_requested.store(true, Ordering::SeqCst);
         let wiki_calls = std::cell::Cell::new(0);
         let sync_calls = std::cell::Cell::new(0);
-        let result = tokio::time::timeout(std::time::Duration::from_millis(250), run_requested_work(
-            state.wiki_requested.swap(false, Ordering::SeqCst),
-            async { wiki_calls.set(wiki_calls.get() + 1); Ok(()) },
-            async { sync_calls.set(sync_calls.get() + 1); std::future::pending().await },
-        )).await.unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            run_requested_work(
+                state.wiki_requested.swap(false, Ordering::SeqCst),
+                async {
+                    wiki_calls.set(wiki_calls.get() + 1);
+                    Ok(())
+                },
+                async {
+                    sync_calls.set(sync_calls.get() + 1);
+                    std::future::pending().await
+                },
+            ),
+        )
+        .await
+        .unwrap();
         result.unwrap();
         assert_eq!(wiki_calls.get(), 1);
         assert_eq!(sync_calls.get(), 0);
         assert!(!state.wiki_requested.load(Ordering::SeqCst));
-        let result = run_requested_work(false,
+        let result = run_requested_work(
+            false,
             async { panic!("A normal source sync must not start Wiki first") },
-            async { sync_calls.set(sync_calls.get() + 1); Err("Sync unavailable".into()) },
-        ).await;
+            async {
+                sync_calls.set(sync_calls.get() + 1);
+                Err("Sync unavailable".into())
+            },
+        )
+        .await;
         assert_eq!(result.unwrap_err(), "Sync unavailable");
         assert_eq!(sync_calls.get(), 1);
     }
@@ -1380,24 +1641,68 @@ mod wiki_lifecycle_tests {
 }
 
 #[tauri::command]
-pub async fn workbench_knowledge_policy(app: AppHandle, state: State<'_, WorkbenchState>, request: Value) -> CommandResult<Value> {
+pub async fn workbench_knowledge_policy(
+    app: AppHandle,
+    state: State<'_, WorkbenchState>,
+    request: Value,
+) -> CommandResult<Value> {
     let session = current(&state)?;
-    knowledge_cloud::policy_action(&app,&session,request).await
+    knowledge_cloud::policy_action(&app, &session, request).await
 }
 
 #[tauri::command]
-pub async fn workbench_read_for_ai(app: AppHandle, state: State<'_, WorkbenchState>, id: String) -> CommandResult<Value> {
-    if crate::inspiration_private::source_is_protected(&app, &id) { return Err("Encrypted inspirations are unavailable to AI".into()); }
+pub async fn workbench_read_for_ai(
+    app: AppHandle,
+    state: State<'_, WorkbenchState>,
+    id: String,
+) -> CommandResult<Value> {
+    if crate::inspiration_private::source_is_protected(&app, &id) {
+        return Err("Encrypted inspirations are unavailable to AI".into());
+    }
     let session = current(&state)?;
-    let value = workbench_read(app.clone(),state,id).await?;
-    let authorized = knowledge_cloud::filter_items(&app,&session,vec![value.clone()]).await?;
-    if authorized.is_empty() { return Err("Source stopped from automatic AI use".into()); }
+    let value = workbench_read(app.clone(), state, id).await?;
+    let authorized = knowledge_cloud::filter_items(&app, &session, vec![value.clone()]).await?;
+    if authorized.is_empty() {
+        return Err("Source stopped from automatic AI use".into());
+    }
     Ok(value)
 }
 
 #[tauri::command]
-pub async fn workbench_sync_memory_source(app: AppHandle,state: State<'_,WorkbenchState>,id:String) -> CommandResult<Value> {
-    let _guard=state.serial.lock().await;
-    let session=current(&state)?;
-    knowledge_cloud::upload_local(&app,&session,&id).await
+pub async fn workbench_sync_memory_source(
+    app: AppHandle,
+    state: State<'_, WorkbenchState>,
+    id: String,
+) -> CommandResult<Value> {
+    let session = current(&state)?;
+    knowledge_cloud::upload_local(&app, &session, &id).await
+}
+
+#[cfg(test)]
+mod worker_lane_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn source_lane_keeps_progressing_while_wiki_and_cloud_are_waiting() {
+        let progressed = std::sync::Arc::new(AtomicUsize::new(0));
+        let source_progress = progressed.clone();
+        let source = async move {
+            for _ in 0..3 {
+                tokio::task::yield_now().await;
+                source_progress.fetch_add(1, Ordering::SeqCst);
+            }
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            run_worker_lanes(
+                source,
+                std::future::pending(),
+                std::future::pending(),
+                std::future::pending(),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(progressed.load(Ordering::SeqCst), 3);
+    }
 }

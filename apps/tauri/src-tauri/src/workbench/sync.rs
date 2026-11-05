@@ -4,6 +4,9 @@ use std::time::Duration;
 use store::{eligible, read_document, write_document, Entry};
 #[path = "local_sources.rs"]
 mod local_sources;
+#[cfg(test)]
+#[path = "source_sync_safety_tests.rs"]
+mod source_sync_safety_tests;
 
 fn client() -> CommandResult<reqwest::Client> {
     let builder = reqwest::Client::builder();
@@ -157,6 +160,64 @@ fn absent_text(error: &str) -> bool {
     error.contains("not.ready")
         || error.contains("not ready")
         || error == "API request failed (1001)"
+}
+
+fn cloud_source_revision(row: &Value, todos: &[Value]) -> String {
+    let id = string(row, &["id", "fileId"]);
+    let mut tags: Vec<_> = row["tags"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    tags.sort_unstable();
+    tags.dedup();
+    let mut tasks: Vec<_> = todos
+        .iter()
+        .filter(|todo| string(todo, &["fileId"]) == id)
+        .map(|todo| {
+            json!([
+                string(todo, &["id", "todoId"]),
+                string(todo, &["title", "todoContent"]),
+                todo.get("completed").or_else(|| todo.get("isCompleted")),
+                todo.get("dueDate"),
+                todo.get("notes"),
+                todo.get("priority")
+            ])
+        })
+        .collect();
+    tasks.sort_by_key(Value::to_string);
+    let versions: BTreeMap<_, _> = [
+        "revision",
+        "version",
+        "transcriptionRevision",
+        "transcriptVersion",
+        "outlineVersion",
+        "conclusionVersion",
+    ]
+    .into_iter()
+    .filter_map(|field| row.get(field).map(|value| (field, value)))
+    .collect();
+    // List counters, signed URLs and UI flags do not describe source changes.
+    store::digest(
+        json!([
+            "cloud-source-v2",
+            id,
+            string(row, &["originalFilename", "title", "name"]),
+            string(row, &["createdAt", "createTime"]),
+            string(row, &["updatedAt", "updateTime"]),
+            string(row, &["folderId"]),
+            string(row, &["folderName"]),
+            tags,
+            row.get("aiContextEnabled")
+                .or_else(|| row.get("ai_context_enabled")),
+            row.get("sensitivity"),
+            row.get("status"),
+            versions,
+            tasks
+        ])
+        .to_string(),
+    )
 }
 
 async fn enumerate(session: &Session) -> CommandResult<Vec<Value>> {
@@ -365,6 +426,9 @@ async fn commit_document_inner(
     let _guard = state.serial.lock().await;
     require_current(state, session)?;
     let mut manifest = load_state(app, session)?;
+    if manifest.source_tombstones.contains_key(&document.id) {
+        return Ok(());
+    }
     if !crate::vault::load_vault_config(app)?.enabled {
         return Err("Local knowledge-base sync is disabled".into());
     }
@@ -390,8 +454,16 @@ async fn commit_document_inner(
         return Ok(());
     }
     let changed = old.is_some_and(|old| old.revision != document.revision);
+    let previous_document = old
+        .filter(|entry| eligible(entry))
+        .and_then(|entry| read_document(&root, entry).ok());
     let mut entry = write_document(&root, &document, old)?;
     entry.excluded = entry.excluded || manifest.excluded_sources.contains(&document.id);
+    if entry.status != "conflict" {
+        if let Some(previous) = previous_document {
+            store::preserve_summary_revision(&mut manifest, &previous, &document);
+        }
+    }
     if entry.status == "conflict" || !document.ai_context_enabled {
         forget_source(&mut manifest, &document.id);
     } else if changed {
@@ -499,6 +571,18 @@ pub(super) async fn run(
         for row in &cloud {
             let id = string(row, &["id", "fileId"]);
             active.insert(id.clone());
+            if manifest
+                .source_tombstones
+                .get(&id)
+                .is_some_and(|reason| reason.starts_with("absent:"))
+            {
+                // A later complete enumeration can restore a server-side
+                // withdrawal. Explicit user deletions remain tombstoned.
+                manifest.source_tombstones.remove(&id);
+            }
+            if manifest.source_tombstones.contains_key(&id) {
+                continue;
+            }
             manifest.entries.entry(id.clone()).or_insert_with(|| Entry {
                 id,
                 kind: "meeting".into(),
@@ -631,15 +715,13 @@ pub(super) async fn run(
         }
         require_current(state, session)?;
         let id = string(row, &["id", "fileId"]);
-        let related: Vec<&Value> = cloud_todos
-            .iter()
-            .filter(|todo| string(todo, &["fileId"]) == id)
-            .collect();
-        let remote_revision =
-            store::digest(serde_json::to_vec(&json!([row, related])).map_err(|e| e.to_string())?);
+        let remote_revision = cloud_source_revision(row, &cloud_todos);
         let cached = {
             let _guard = state.serial.lock().await;
             let manifest = load_state(app, session)?;
+            if manifest.source_tombstones.contains_key(&id) {
+                continue;
+            }
             local_sources::cached_meeting(&roots(app, session)?.0, &manifest, &id)
         };
         let (cached, imported_legacy) = match cached {
@@ -651,10 +733,28 @@ pub(super) async fn run(
                 true,
             ),
             Err(error) => {
+                let (root, _) = roots(app, session)?;
+                let has_incoming = store::paths(&root, &id)
+                    .1
+                    .with_extension("incoming.json")
+                    .exists();
+                let replacement = if refresh_existing || !has_incoming {
+                    local_sources::load_meeting(session, row, &cloud_todos, None)
+                        .await
+                        .ok()
+                } else {
+                    None
+                };
                 let _guard = state.serial.lock().await;
                 require_current(state, session)?;
                 let mut manifest = load_state(app, session)?;
-                if let Some(entry) = manifest.entries.get_mut(&id) {
+                if manifest.source_tombstones.contains_key(&id) {
+                    continue;
+                }
+                if let Some(document) = replacement {
+                    let entry = write_document(&root, &document, manifest.entries.get(&id))?;
+                    manifest.entries.insert(id.clone(), entry);
+                } else if let Some(entry) = manifest.entries.get_mut(&id) {
                     entry.status = "conflict".into();
                     entry.error = error;
                 }
@@ -665,16 +765,29 @@ pub(super) async fn run(
         };
         let automatic_refresh = if let Some(doc) = &cached {
             let _guard = state.serial.lock().await;
-            local_sources::needs_automatic_refresh(&load_state(app,session)?,doc,row,&remote_revision)
-        } else { false };
+            local_sources::needs_automatic_refresh(
+                &load_state(app, session)?,
+                doc,
+                row,
+                &remote_revision,
+            )
+        } else {
+            false
+        };
         if !refresh_existing && !automatic_refresh && cached.is_some() {
             let document = local_sources::load_meeting(session, row, &cloud_todos, cached).await?;
             commit_document_inner(app, state, session, document, !imported_legacy).await?;
             let _guard = state.serial.lock().await;
-            require_current(state,session)?;
-            let mut manifest = load_state(app,session)?;
-            if let Some(entry) = manifest.entries.get_mut(&id).filter(|entry| entry.remote_revision.is_empty()) { entry.remote_revision = remote_revision; }
-            persist(app,session,&manifest)?;
+            require_current(state, session)?;
+            let mut manifest = load_state(app, session)?;
+            if let Some(entry) = manifest
+                .entries
+                .get_mut(&id)
+                .filter(|entry| entry.remote_revision.is_empty())
+            {
+                entry.remote_revision = remote_revision;
+            }
+            persist(app, session, &manifest)?;
             continue;
         }
         let (unchanged, unavailable) = {
@@ -703,11 +816,9 @@ pub(super) async fn run(
         {
             let _guard = state.serial.lock().await;
             let manifest = load_state(app, session)?;
-            if manifest
-                .entries
-                .get(&id)
-                .is_some_and(|entry| entry.failed_download_revision == remote_revision && !absent_text(&entry.error))
-            {
+            if manifest.entries.get(&id).is_some_and(|entry| {
+                entry.failed_download_revision == remote_revision && !absent_text(&entry.error)
+            }) {
                 continue;
             }
         }
@@ -750,21 +861,31 @@ pub(super) async fn run(
     // Journal records remain in their existing local store; the knowledge-base
     // record is an indexed view used by the same retrieval path as meetings.
     for row in crate::list_store(app, "local-inspirations")? {
-        if crate::inspiration_private::protected(&row) || row.get("deletedAt").is_some() { continue; }
+        if crate::inspiration_private::protected(&row) || row.get("deletedAt").is_some() {
+            continue;
+        }
         if let Some(owner) = row.get("workbenchScope").and_then(Value::as_str) {
             if owner != session.scope {
                 continue;
             }
         } else {
             let known_owner = crate::inspiration_private::scope(app).ok();
-            if row.get("account_scope").and_then(Value::as_str) != known_owner.as_deref() || known_owner.is_none() { continue; }
+            if row.get("account_scope").and_then(Value::as_str) != known_owner.as_deref()
+                || known_owner.is_none()
+            {
+                continue;
+            }
         }
         let raw_id = string(&row, &["id"]);
         if raw_id.is_empty() {
             continue;
         }
         let mut document = Document {
-            id: format!("inspiration:{}:{}", crate::inspiration_private::scope(app)?, raw_id.strip_prefix("inspiration:").unwrap_or(&raw_id)),
+            id: format!(
+                "inspiration:{}:{}",
+                crate::inspiration_private::scope(app)?,
+                raw_id.strip_prefix("inspiration:").unwrap_or(&raw_id)
+            ),
             kind: "inspiration".into(),
             title: string(&row, &["text"]).chars().take(80).collect(),
             transcript: string(&row, &["text", "transcript"]),
@@ -838,7 +959,8 @@ pub(super) async fn run(
             };
             if has_local {
                 state.discovery_requested.notify_one();
-                return super::wiki::run(app, state, session).await;
+                super::request_wiki(state);
+                return Ok(());
             }
         }
         return Err(error);
@@ -885,12 +1007,24 @@ pub(super) async fn run(
             .map(|entry| entry.id.clone())
             .collect();
         let (root, _) = roots(app, session)?;
+        for id in &deleted {
+            // Commit the withdrawal before touching files so interrupted
+            // cleanup and late writers cannot resurrect the source.
+            manifest
+                .source_tombstones
+                .insert(id.clone(), format!("absent:{}", crate::now()));
+            if let Some(entry) = manifest.entries.get_mut(id) {
+                entry.excluded = true;
+                entry.status = "deleted".into();
+            }
+            forget_source(&mut manifest, id);
+        }
+        if !deleted.is_empty() {
+            persist(app, session, &manifest)?;
+        }
         for id in deleted {
+            store::remove_document(&root, &id, manifest.entries.get(&id))?;
             manifest.entries.remove(&id);
-            forget_source(&mut manifest, &id);
-            let (md, source) = store::paths(&root, &id);
-            let _ = fs::remove_file(md);
-            let _ = fs::remove_file(source);
         }
         store::rebuild_index(&root, &manifest)?;
         let complete = finish_sync(&root, &mut manifest);
@@ -901,7 +1035,7 @@ pub(super) async fn run(
     }
     // Optional backfill cannot delay the first Wiki pass over complete meetings.
     state.discovery_requested.notify_one();
-    super::wiki::run(app, state, session).await?;
+    super::request_wiki(state);
     let mut transcriptions_ready = false;
     for (row, remote_revision) in deferred_meetings {
         require_current(state, session)?;
@@ -923,10 +1057,10 @@ pub(super) async fn run(
         transcriptions_ready |= ready;
     }
     if transcriptions_ready {
-        super::wiki::run(app, state, session).await?;
+        super::request_wiki(state);
     }
     if super::sources::sync_optional(app, state, session).await? {
-        super::wiki::run(app, state, session).await?;
+        super::request_wiki(state);
     }
     Ok(())
 }
@@ -937,7 +1071,14 @@ fn finish_sync(root: &std::path::Path, manifest: &mut Manifest) -> bool {
     if complete {
         manifest.completed_round = manifest.sync_round.clone();
     }
-    manifest.phase = if complete { "ready" } else { "incomplete" }.into();
+    let wiki_running = manifest.phase == "processing"
+        && manifest
+            .wiki_progress
+            .as_ref()
+            .is_some_and(|progress| progress.stage != "complete");
+    if !wiki_running {
+        manifest.phase = if complete { "ready" } else { "incomplete" }.into();
+    }
     // Source sync recovers independently of AI consent and Wiki processing.
     let wiki_error = manifest.error.starts_with("Wiki processing failed for ")
         || manifest.error.starts_with("Embedding failed for ");
@@ -1245,9 +1386,10 @@ mod tests {
         );
         waiting.transcript = "Transcription is now available".into();
         waiting.refresh_revision();
+        let previous = manifest.entries.get(&waiting.id).cloned();
         manifest.entries.insert(
             waiting.id.clone(),
-            write_document(&root, &waiting, None).unwrap(),
+            write_document(&root, &waiting, previous.as_ref()).unwrap(),
         );
         assert_eq!(
             manifest
@@ -1331,7 +1473,9 @@ mod tests {
             let worker = std::thread::spawn(move || {
                 for _ in 0..3 {
                     let (mut socket, _) = server.accept().unwrap();
-                    socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    socket
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
                     let mut bytes = [0u8; 4096];
                     let count = socket.read(&mut bytes).unwrap();
                     let header = String::from_utf8_lossy(&bytes[..count]);
@@ -1341,16 +1485,26 @@ mod tests {
                         json!({"code":200,"data":{}})
                     } else {
                         json!({"code":1001,"msg":"TASK_PROCESSING","data":null})
-                    }.to_string();
+                    }
+                    .to_string();
                     write!(socket,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
                 }
             });
-            let doc = cloud_document(&session, &json!({"id":"processing","status":2}), &[]).await.unwrap();
+            let doc = cloud_document(&session, &json!({"id":"processing","status":2}), &[])
+                .await
+                .unwrap();
             assert_eq!(doc.has_meeting_text(), has_transcript);
             assert!(doc.conclusions.is_empty());
             let local = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
             let entry = write_document(&local, &doc, None).unwrap();
-            assert_eq!(entry.status, if has_transcript { "synced" } else { "awaiting_transcription" });
+            assert_eq!(
+                entry.status,
+                if has_transcript {
+                    "synced"
+                } else {
+                    "awaiting_transcription"
+                }
+            );
             assert_eq!(eligible(&entry), has_transcript);
             worker.join().unwrap();
             std::fs::remove_dir_all(local).unwrap();
@@ -1361,7 +1515,8 @@ mod tests {
     async fn optional_text_does_not_hide_authentication_or_other_business_errors() {
         for code in [2000, 2013, 500, 10010] {
             let (session, worker) = mock_pages(vec![json!({"code":code,"msg":"Failure"})]);
-            let result = optional_detail(&session, "/api/business/file/conclusion/list", "one", true).await;
+            let result =
+                optional_detail(&session, "/api/business/file/conclusion/list", "one", true).await;
             assert_eq!(result.unwrap_err(), format!("API request failed ({code})"));
             worker.join().unwrap();
         }

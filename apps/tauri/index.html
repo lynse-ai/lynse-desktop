@@ -15,36 +15,59 @@
     </script>
     <script>
       // Pre-paint pass of the appearance customization (packages/views/settings/
-      // app-theme-boot.ts APP_THEME_BOOT_SNIPPET — keep the two in sync). Colors
-      // only: the full preset surface pass runs in bootstrap via initAppTheme().
+      // app-theme-boot.ts APP_THEME_BOOT_SNIPPET — keep the two in sync).
       (function () {
         try {
           var raw = JSON.parse(localStorage.getItem("lynse-theme-custom") || "{}");
-          var t = localStorage.getItem("theme");
-          var dark;
-          if (t === "dark" || t === "light") dark = t === "dark";
-          else dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-          var canonical = dark
-            ? { a: "#e0b15c", b: "#17181b", f: "#f5f3ee" }
-            : { a: "#5f67d8", b: "#fafafa", f: "#202023" };
-          // Authored preset trios — mirror APP_THEME_PRESETS in app-theme.ts.
-          var trios = {
-            linear: { light: { a: "#5e6ad2", b: "#fcfcfd", f: "#1b1b1b" }, dark: { a: "#5e6ad2", b: "#08090a", f: "#f7f8f8" } },
-            notion: { light: { a: "#2383e2", b: "#ffffff", f: "#37352f" }, dark: { a: "#2383e2", b: "#191919", f: "#d4d4d4" } },
+          var mode = localStorage.getItem("theme");
+          var dark = mode === "dark" || mode === "light"
+            ? mode === "dark"
+            : window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var pairs = {
+            lynse: ["#5f67d8", "#fafafa", "#202023", "#e0b15c", "#17181b", "#f5f3ee"],
+            chatgpt: ["#10a37f", "#ffffff", "#0d0d0d", "#19c37d", "#212121", "#ececec"],
+            absolutely: ["#f97316", "#fff7ed", "#431407", "#cc7d5e", "#2d2d2b", "#f9f9f7"],
+            ayu: ["#ff9940", "#faf8f5", "#575653", "#e6b673", "#0b0e14", "#bfbdb6"],
+            catppuccin: ["#8839ef", "#eff1f5", "#4c4f69", "#f5bde6", "#1e2030", "#cad3f5"],
+            dracula: ["#7c3aed", "#f8f8f2", "#282a36", "#bd93f9", "#282a36", "#f8f8f2"],
+            everforest: ["#8da101", "#fdf6e3", "#47523d", "#a7c080", "#2f383e", "#d3c6aa"],
+            github: ["#0969da", "#ffffff", "#1f2328", "#4493f8", "#0d1117", "#e6edf3"],
+            gruvbox: ["#b16286", "#fbf1c7", "#3c3836", "#d3869b", "#282828", "#ebdbb2"],
+            linear: ["#5e6ad2", "#fcfcfd", "#1b1b1b", "#5e6ad2", "#08090a", "#f7f8f8"],
+            lobster: ["#e8425a", "#fff5f4", "#44121a", "#ff6b81", "#231014", "#ffe8ea"],
+            notion: ["#2383e2", "#ffffff", "#37352f", "#2383e2", "#191919", "#d4d4d4"],
+            oscurange: ["#ff8a3d", "#141210", "#f4ede7", "#ffa060", "#0e0d0b", "#f4ede7"]
           };
-          var trio = trios[raw.preset] ? trios[raw.preset][dark ? "dark" : "light"] : canonical;
-          var a = raw.accent || trio.a;
-          var st = document.documentElement.style;
-          ["--primary", "--ring", "--brand", "--info", "--waveform-active", "--sidebar-primary", "--sidebar-ring", "--chart-1"].forEach(function (v) { st.setProperty(v, a); });
-          var lin = function (v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
-          var hx = a.slice(1); if (hx.length === 3) hx = hx[0] + hx[0] + hx[1] + hx[1] + hx[2] + hx[2];
-          var lum = 0.2126 * lin(parseInt(hx.slice(0, 2), 16)) + 0.7152 * lin(parseInt(hx.slice(2, 4), 16)) + 0.0722 * lin(parseInt(hx.slice(4, 6), 16));
-          st.setProperty("--primary-foreground", lum > 0.45 ? "#15110a" : "#ffffff");
-          if (trio !== canonical) {
-            st.setProperty("--background", trio.b);
-            ["--foreground", "--card-foreground", "--popover-foreground", "--sidebar-foreground", "--secondary-foreground", "--accent-foreground"].forEach(function (v) { st.setProperty(v, trio.f); });
-          }
-        } catch (e) {}
+          var pair = pairs[raw.preset] || pairs.lynse;
+          var accent = raw.accent || pair[dark ? 3 : 0];
+          var background = raw.background || pair[dark ? 4 : 1];
+          var foreground = raw.foreground || pair[dark ? 5 : 2];
+          var style = document.documentElement.style;
+          ["--primary", "--ring", "--brand", "--info", "--waveform-active", "--sidebar-primary", "--sidebar-ring", "--chart-1"].forEach(function (name) {
+            style.setProperty(name, accent);
+          });
+          style.setProperty("--background", background);
+          ["--foreground", "--card-foreground", "--popover-foreground", "--sidebar-foreground", "--secondary-foreground", "--accent-foreground"].forEach(function (name) {
+            style.setProperty(name, foreground);
+          });
+          var linear = function (value) {
+            value /= 255;
+            return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+          };
+          var hex = accent.slice(1);
+          if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+          var luminance = 0.2126 * linear(parseInt(hex.slice(0, 2), 16))
+            + 0.7152 * linear(parseInt(hex.slice(2, 4), 16))
+            + 0.0722 * linear(parseInt(hex.slice(4, 6), 16));
+          style.setProperty("--primary-foreground", luminance > 0.45 ? "#15110a" : "#ffffff");
+          var fonts = {
+            sans: '"Inter", "OPPO Sans", "OPPO Sans 4.0", ui-sans-serif, system-ui, sans-serif',
+            serif: '"Noto Serif SC Variable", "Songti SC", "SimSun", serif',
+            mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+            geist: '"Geist Variable", "Inter", "OPPO Sans", "OPPO Sans 4.0", ui-sans-serif, system-ui, sans-serif'
+          };
+          if (fonts[raw.font]) style.setProperty("--font-sans", fonts[raw.font]);
+        } catch (error) {}
       })();
     </script>
   </head>

@@ -16,6 +16,7 @@ const mock = vi.hoisted(() => ({
   },
   configure: vi.fn(), save: vi.fn(), refetch: vi.fn(), invalidate: vi.fn(), setStatus: vi.fn(),
   cloudError: null as unknown, cloudPending: false, cloudFetching: false, cloudData: true, cloudAvailable: true, cloudPolicy: true,
+  pendingStatus: undefined as "retry" | "conflict" | undefined,
 }));
 
 vi.mock("@lynse/core/i18n/react", () => ({
@@ -31,7 +32,7 @@ vi.mock("../workspace/hooks/use-folders", () => ({ useFolders: () => ({
 }) }));
 vi.mock("./knowledge-policy", () => ({
   useKnowledgePolicy: () => ({
-    data: mock.cloudData ? { capabilities: { available: mock.cloudAvailable, policy: mock.cloudPolicy ? mock.policy : null } } : undefined,
+    data: mock.cloudData ? { capabilities: { available: mock.cloudAvailable, policy: mock.cloudPolicy ? mock.policy : null }, pending: !!mock.pendingStatus, pendingStatus: mock.pendingStatus } : undefined,
     error: mock.cloudError, isPending: mock.cloudPending, isFetching: mock.cloudFetching, refetch: mock.refetch,
   }),
   updateKnowledgePolicy: (...args: unknown[]) => mock.save(...args),
@@ -46,6 +47,7 @@ vi.mock("./api", () => ({
 beforeEach(() => {
   vi.clearAllMocks();
   Object.assign(mock, { cloudError: null, cloudPending: false, cloudFetching: false, cloudData: true, cloudAvailable: true, cloudPolicy: true });
+  mock.pendingStatus = undefined;
   Object.assign(mock.policy, {
     enrolled: false, folder_ids: [], memory_consent: false, local_text_consent: false,
     extraction_paused: true, projections_enabled: false,
@@ -61,6 +63,15 @@ function submit() {
 }
 
 describe("optional AI memory settings", () => {
+  it("explains policy conflicts and reloads without silently saving a new grant", async () => {
+    mock.pendingStatus = "conflict";
+    render(<WikiAutomationSettings />);
+    expect(screen.getByRole("alert").textContent).toBe(memoryManagementEnglish.policy_conflict);
+    fireEvent.click(screen.getByRole("button", { name: memoryManagementEnglish.policy_reload }));
+    await waitFor(() => expect(mock.refetch).toHaveBeenCalledOnce());
+    expect(mock.save).not.toHaveBeenCalled();
+    expect(mock.configure).not.toHaveBeenCalled();
+  });
   it("waits for the initial capability read before allowing organization", () => {
     Object.assign(mock, { cloudPending: true, cloudFetching: true, cloudData: false });
     render(<WikiAutomationSettings />);

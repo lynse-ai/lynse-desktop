@@ -2,8 +2,17 @@
 use super::*;
 use futures_util::future;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+#[path = "wiki_batch_layout.rs"]
+mod batch_layout;
+#[path = "wiki_cache_upgrade.rs"]
+mod cache_upgrade;
+#[path = "wiki_catalog_retrieval.rs"]
+mod retrieval;
 #[path = "wiki_scope_cache.rs"]
 mod scope_cache;
+#[path = "wiki_source_layout.rs"]
+mod source_layout;
 pub(super) use scope_cache::migrate as migrate_scope_cache;
 
 pub(in crate::workbench) fn validate_automation(
@@ -22,7 +31,9 @@ pub(in crate::workbench) fn validate_automation(
 }
 
 pub(super) fn allows(doc: &Document, manifest: &Manifest) -> bool {
-    if !knowledge_cloud::local_allows(doc,manifest) { return false; }
+    if !knowledge_cloud::local_allows(doc, manifest) {
+        return false;
+    }
     manifest.wiki_automation.as_ref().is_none_or(|config| {
         if doc.kind == "gmail" {
             return true;
@@ -66,9 +77,13 @@ pub(super) fn move_sources(
         if doc.kind != "meeting" || doc.folder_id == folder {
             continue;
         }
+        let previous = doc.clone();
         doc.folder_id = folder.into();
         doc.refresh_revision();
         let next = store::write_document(local, &doc, Some(&entry))?;
+        if next.status != "conflict" {
+            store::preserve_summary_revision(manifest, &previous, &doc);
+        }
         manifest.entries.insert(id.clone(), next);
         if !allows(&doc, manifest) {
             sync::forget_source(manifest, id);
@@ -267,7 +282,10 @@ pub(super) fn transport_payload(
         }
     }
     mask_value(&mut evidence);
-    let query = if matches!(task, "wiki_catalog" | "wiki_topic_match" | "wiki_topic_group") {
+    let query = if matches!(
+        task,
+        "wiki_catalog" | "wiki_topic_match" | "wiki_topic_group"
+    ) {
         let mut data: Value =
             serde_json::from_str(query).map_err(|_| "Invalid Wiki catalog context")?;
         mask_value(&mut data);
@@ -297,6 +315,9 @@ struct Catalog {
     identities: BTreeMap<String, String>,
     details: BTreeMap<String, CatalogFailure>,
     run_failure: Option<CatalogFailure>,
+    deleted: BTreeSet<String>,
+    #[serde(skip)]
+    layouts: BTreeMap<String, Vec<String>>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -323,15 +344,27 @@ fn is_model_output_failure(error: &str) -> bool {
 fn record_failure(catalog: &mut Catalog, key: &str, doc: &Document, error: &str) {
     catalog.failed.insert(key.into(), error.into());
     let (message, validation) = validation_failure::split(error.into());
-    catalog.details.insert(key.into(), CatalogFailure {
-        id: key.into(), source_id: doc.id.clone(), title: doc.title.clone(),
-        stage: "analyzing".into(), message, validation, occurred_at: crate::now(),
-    });
+    catalog.details.insert(
+        key.into(),
+        CatalogFailure {
+            id: key.into(),
+            source_id: doc.id.clone(),
+            title: doc.title.clone(),
+            stage: "analyzing".into(),
+            message,
+            validation,
+            occurred_at: crate::now(),
+        },
+    );
 }
 
 pub(super) fn source_failures(root: &Path) -> CommandResult<Value> {
     let catalog: Catalog = read_json(&catalog_path(root))?;
-    let mut failures: Vec<Value> = catalog.run_failure.iter().map(|failure| json!(failure)).collect();
+    let mut failures: Vec<Value> = catalog
+        .run_failure
+        .iter()
+        .map(|failure| json!(failure))
+        .collect();
     failures.extend(catalog.details.values().map(|failure| {
         let mut value = json!(failure);
         value["retrying"] = json!(!catalog.failed.contains_key(&failure.id));
@@ -342,89 +375,180 @@ pub(super) fn source_failures(root: &Path) -> CommandResult<Value> {
 
 // Only adopt receipts whose complete old input identity and current citations match.
 fn migrate_catalog_revision(
-    root: &Path, local: &Path, catalog: &mut Catalog, docs: &[Document],
-    manifest: &Manifest, config: &Models, previous: &str,
+    root: &Path,
+    local: &Path,
+    catalog: &mut Catalog,
+    docs: &[Document],
+    manifest: &Manifest,
+    config: &Models,
+    previous: &str,
 ) -> CommandResult<()> {
-    if previous.is_empty() || previous == config.text_revision { return Ok(()); }
+    if previous.is_empty() || previous == config.text_revision {
+        return Ok(());
+    }
     let mut old = config.clone();
     old.text_revision = previous.into();
     migrate_scope_cache(root, local, docs, manifest, &old)?;
     let mut values = topics(root)?;
     let mut page_sources = PageSources::new(local, manifest);
+    let mut catalog_changed = false;
+    let mut topics_changed = false;
     for doc in docs {
-        for index in 0..sync::split_text(doc.text().trim(), 12000).len() {
-            let key = format!("{}:{index}", input_key(doc, config));
-            let old_key = format!("{}:{index}", input_key(doc, &old));
-            if catalog.chunks.contains_key(&key) { continue; }
-            let Some(rows) = catalog.chunks.get(&old_key).cloned() else { continue; };
-            if rows.iter().all(|row| row.citations.iter().any(|r| r.id == doc.id)
-                && sync::validate_result(docs, manifest, &json!({"citations":row.citations})).is_ok()) {
+        for text in source_chunks(doc, catalog) {
+            let key = catalog_chunk_key(doc, &text, config);
+            let old_key = catalog_chunk_key(doc, &text, &old);
+            if catalog.chunks.contains_key(&key) {
+                continue;
+            }
+            let Some(rows) = catalog.chunks.get(&old_key).cloned() else {
+                continue;
+            };
+            if rows.iter().all(|row| {
+                row.citations.iter().any(|r| r.id == doc.id)
+                    && sync::validate_result(docs, manifest, &json!({"citations":row.citations}))
+                        .is_ok()
+            }) {
                 catalog.chunks.insert(key.clone(), rows);
                 catalog.failed.remove(&key);
                 catalog.details.remove(&key);
                 catalog.failed.remove(&old_key);
                 catalog.details.remove(&old_key);
+                catalog_changed = true;
             }
         }
     }
     // Recover associations from validated receipts, including state damaged by older retries.
     let mut links: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for doc in docs {
-        for index in 0..sync::split_text(doc.text().trim(), 12000).len() {
-            if let Some(rows) = catalog.chunks.get(&format!("{}:{index}", input_key(doc, config))) {
+        for text in source_chunks(doc, catalog) {
+            if let Some(rows) = catalog.chunks.get(&catalog_chunk_key(doc, &text, config)) {
                 for row in rows {
                     let identity = format!("{}:{}:{}", row.kind, doc.id, normalize(&row.key));
-                    if let Some(id) = row.existing_id.as_ref().or_else(|| catalog.identities.get(&identity)) {
+                    if let Some(id) = row
+                        .existing_id
+                        .as_ref()
+                        .or_else(|| catalog.identities.get(&identity))
+                    {
                         links.entry(id.clone()).or_default().insert(doc.id.clone());
-                        links.entry(id.clone()).or_default().extend(row.citations.iter().map(|r| r.id.clone()));
+                        links
+                            .entry(id.clone())
+                            .or_default()
+                            .extend(row.citations.iter().map(|r| r.id.clone()));
                     }
                 }
             }
         }
     }
     for topic in &mut values {
-        if topic.collection.is_some() { continue; }
-        if topic.source_ids.is_empty() {
-            if let Some(ids) = links.get(&topic.id) { topic.source_ids = ids.iter().cloned().collect(); }
+        if topic.collection.is_some() {
+            continue;
         }
-        let selected: Vec<_> = docs.iter().filter(|doc| topic.source_ids.contains(&doc.id)).cloned().collect();
-        if !selected.is_empty() && !topic.force_refresh && topic.error.is_empty()
-            && topic.published.as_ref().is_some_and(|page| page_sources.valid_page(page)
-                && page.content_hash == store::digest(&page.markdown))
-            && (topic.last_fingerprint == page_version(topic, &selected, manifest, &old)
-                || manifest.wiki_automation.as_ref().is_some_and(|scope|
-                    topic.last_fingerprint == scope_cache::legacy_version(topic, &selected, scope, &old))) {
-            let expected = page_fingerprint(topic, manifest, &old, &topic.published.as_ref().unwrap().citations);
-            let legacy_expected = manifest.wiki_automation.as_ref().map(|scope|
-                page_fingerprint_with_legacy_scope(topic, manifest, &old, &topic.published.as_ref().unwrap().citations, Some(scope)));
-            let replacement = page_fingerprint(topic, manifest, config, &topic.published.as_ref().unwrap().citations);
-            if !topic.published.as_ref().is_some_and(|page|
-                page.fingerprint == expected || legacy_expected.as_ref() == Some(&page.fingerprint)) { continue; }
-            topic.last_fingerprint = page_version(topic, &selected, manifest, config);
+        if topic.source_ids.is_empty() {
+            if let Some(ids) = links.get(&topic.id).filter(|ids| !ids.is_empty()) {
+                topic.source_ids = ids.iter().cloned().collect();
+                topics_changed = true;
+            }
+        }
+        let selected: Vec<_> = docs
+            .iter()
+            .filter(|doc| topic.source_ids.contains(&doc.id))
+            .cloned()
+            .collect();
+        if selected.is_empty() || topic.force_refresh || !topic.error.is_empty() {
+            continue;
+        }
+        let current_version = page_version(topic, &selected, manifest, config);
+        if topic.last_fingerprint == current_version {
+            continue;
+        }
+        if (topic.last_fingerprint == page_version(topic, &selected, manifest, &old)
+            || manifest.wiki_automation.as_ref().is_some_and(|scope| {
+                topic.last_fingerprint == scope_cache::legacy_version(topic, &selected, scope, &old)
+            }))
+            && topic.published.as_ref().is_some_and(|page| {
+                page_sources.valid_page(page) && page.content_hash == store::digest(&page.markdown)
+            })
+        {
+            let expected = page_fingerprint(
+                topic,
+                manifest,
+                &old,
+                &topic.published.as_ref().unwrap().citations,
+            );
+            let legacy_expected = manifest.wiki_automation.as_ref().map(|scope| {
+                page_fingerprint_with_legacy_scope(
+                    topic,
+                    manifest,
+                    &old,
+                    &topic.published.as_ref().unwrap().citations,
+                    Some(scope),
+                )
+            });
+            let replacement = page_fingerprint(
+                topic,
+                manifest,
+                config,
+                &topic.published.as_ref().unwrap().citations,
+            );
+            if !topic.published.as_ref().is_some_and(|page| {
+                page.fingerprint == expected || legacy_expected.as_ref() == Some(&page.fingerprint)
+            }) {
+                continue;
+            }
+            topic.last_fingerprint = current_version;
             topic.last_attempt_fingerprint = topic.last_fingerprint.clone();
             if let Some(page) = topic.published.as_mut() {
                 page.fingerprint = replacement;
                 page.cache_key = topic.last_fingerprint.clone();
                 write_json(&root.join(&topic.id).join("published.json"), page)?;
             }
+            topics_changed = true;
         }
     }
-    save_topics(root, &values)?;
-    write_json(&catalog_path(root), catalog)
+    if topics_changed {
+        save_topics(root, &values)?;
+    }
+    if catalog_changed {
+        write_json(&catalog_path(root), catalog)?;
+    }
+    Ok(())
 }
 
-fn reconcile_sources(values: &mut [Topic], active: &BTreeMap<String, BTreeSet<String>>,
-    failed: &BTreeSet<String>, docs: &[Document]) {
+fn reconcile_sources(
+    values: &mut [Topic],
+    active: &BTreeMap<String, BTreeSet<String>>,
+    failed: &BTreeSet<String>,
+    docs: &[Document],
+) -> bool {
     let available: BTreeSet<_> = docs.iter().map(|doc| &doc.id).collect();
+    let mut changed = false;
     for topic in values {
-        if topic.collection.is_some() || (topic.automatic_key.is_empty() && !active.contains_key(&topic.id)) { continue; }
+        if topic.collection.is_some()
+            || (topic.automatic_key.is_empty() && !active.contains_key(&topic.id))
+        {
+            continue;
+        }
+        let previous = topic.source_ids.clone();
         let mut ids = active.get(&topic.id).cloned().unwrap_or_default();
-        ids.extend(topic.source_ids.iter().filter(|id| failed.contains(*id) && available.contains(id)).cloned());
+        ids.extend(
+            topic
+                .source_ids
+                .iter()
+                .filter(|id| failed.contains(*id) && available.contains(id))
+                .cloned(),
+        );
         if let Some(page) = &topic.published {
-            ids.extend(page.citations.iter().filter(|r| failed.contains(&r.id) && available.contains(&r.id)).map(|r| r.id.clone()));
+            ids.extend(
+                page.citations
+                    .iter()
+                    .filter(|r| failed.contains(&r.id) && available.contains(&r.id))
+                    .map(|r| r.id.clone()),
+            );
         }
         topic.source_ids = ids.into_iter().collect();
+        changed |= topic.source_ids != previous;
     }
+    changed
 }
 fn catalog_path(root: &Path) -> PathBuf {
     root.join("automatic-catalog.json")
@@ -434,7 +558,7 @@ fn validate_catalog(
     value: &Value,
     docs: &[Document],
     manifest: &Manifest,
-    existing: &[Topic],
+    existing: &[CatalogExisting],
 ) -> CommandResult<Vec<CatalogTopic>> {
     if value
         .as_object()
@@ -472,9 +596,11 @@ fn validate_catalog(
         if let Some(id) = &row.existing_id {
             let old = existing
                 .iter()
-                .find(|topic| &topic.id == id)
+                .find(|topic| topic.id == *id)
                 .ok_or("Unknown Wiki catalog topic")?;
-            if old.collection.is_some() { return Err("Catalog cannot change a manual topic definition".into()); }
+            if old.manual {
+                return Err("Catalog cannot change a manual topic definition".into());
+            }
             if !old.topic_kind.is_empty() && old.topic_kind != row.kind {
                 return Err("Wiki catalog changed topic identity".into());
             }
@@ -489,6 +615,32 @@ fn validate_catalog(
         }
     }
     Ok(rows)
+}
+
+/// Keep only identity facts needed to validate a catalog response. Full Topic
+/// values contain page bodies and must not be held across a model request;
+/// a wave of these oversized futures can exhaust the async worker stack.
+#[derive(Clone)]
+struct CatalogExisting {
+    id: String,
+    topic_kind: String,
+    manual: bool,
+    source_ids: Vec<String>,
+}
+
+impl From<&Topic> for CatalogExisting {
+    fn from(topic: &Topic) -> Self {
+        Self {
+            id: topic.id.clone(),
+            topic_kind: topic.topic_kind.clone(),
+            manual: topic.collection.is_some(),
+            source_ids: topic.source_ids.clone(),
+        }
+    }
+}
+
+fn existing_catalog(values: &[Topic]) -> Vec<CatalogExisting> {
+    values.iter().map(Into::into).collect()
 }
 
 fn normalize(text: &str) -> String {
@@ -512,6 +664,10 @@ fn apply_catalog(
             .or_else(|| catalog.identities.get(&key).cloned())
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         catalog.identities.insert(key.clone(), id.clone());
+        if catalog.deleted.contains(&id) {
+            ids.push(String::new());
+            continue;
+        }
         if let Some(topic) = topics.iter_mut().find(|topic| topic.id == id) {
             if topic.excluded {
                 ids.push(String::new());
@@ -543,6 +699,78 @@ fn apply_catalog(
         ids.push(id);
     }
     ids
+}
+
+fn apply_catalog_sources(
+    topics: &mut Vec<Topic>,
+    catalog: &mut Catalog,
+    source: &str,
+    rows: &[CatalogTopic],
+    docs: &[Document],
+    active: &mut BTreeMap<String, BTreeSet<String>>,
+) {
+    let ids = apply_catalog(topics, catalog, source, rows);
+    for (id, row) in ids.iter().zip(rows) {
+        if id.is_empty() {
+            continue;
+        }
+        let sources = active.entry(id.clone()).or_default();
+        sources.extend(
+            row.citations
+                .iter()
+                .filter(|reference| docs.iter().any(|doc| doc.id == reference.id))
+                .map(|reference| reference.id.clone()),
+        );
+        sources.insert(source.to_owned());
+    }
+}
+
+struct CatalogJob<'a> {
+    doc: &'a Document,
+    key: String,
+    text: String,
+}
+
+struct CatalogPlan<'a> {
+    jobs: Vec<CatalogJob<'a>>,
+    active: BTreeMap<String, BTreeSet<String>>,
+    failed_sources: BTreeSet<String>,
+    applied: usize,
+    failures: usize,
+}
+
+fn prepare_catalog<'a>(
+    topics: &mut Vec<Topic>,
+    catalog: &mut Catalog,
+    docs: &'a [Document],
+    config: &Models,
+) -> CatalogPlan<'a> {
+    let mut plan = CatalogPlan {
+        jobs: Vec::new(),
+        active: BTreeMap::new(),
+        failed_sources: BTreeSet::new(),
+        applied: 0,
+        failures: 0,
+    };
+    for doc in docs {
+        for text in source_chunks(doc, catalog) {
+            let key = catalog_chunk_key(doc, &text, config);
+            if let Some(error) = catalog.failed.get(&key).cloned() {
+                plan.applied += 1;
+                plan.failures += 1;
+                plan.failed_sources.insert(doc.id.clone());
+                if !catalog.details.contains_key(&key) {
+                    record_failure(catalog, &key, doc, &error);
+                }
+            } else if let Some(rows) = catalog.chunks.get(&key).cloned() {
+                apply_catalog_sources(topics, catalog, &doc.id, &rows, docs, &mut plan.active);
+                plan.applied += 1;
+            } else {
+                plan.jobs.push(CatalogJob { doc, key, text });
+            }
+        }
+    }
+    plan
 }
 
 fn adopt_legacy_sources(topics: &mut [Topic]) -> bool {
@@ -577,7 +805,40 @@ fn citations_key(value: &Value) -> Vec<Value> {
         .collect()
 }
 
+fn source_content_key(id: &str, kind: &str, title: &str, text: &str, config: &Models) -> String {
+    store::digest(
+        json!([
+            "wiki-auto-source-v3",
+            id,
+            kind,
+            title,
+            text.trim(),
+            config.text_revision
+        ])
+        .to_string(),
+    )
+}
+
 pub(super) fn input_key(doc: &Document, config: &Models) -> String {
+    source_content_key(&doc.id, &doc.kind, &doc.title, &doc.text(), config)
+}
+
+fn source_chunks(doc: &Document, catalog: &Catalog) -> Vec<String> {
+    catalog
+        .layouts
+        .get(&doc.id)
+        .cloned()
+        .unwrap_or_else(|| sync::split_text(doc.text().trim(), 12000))
+}
+
+fn catalog_chunk_key(doc: &Document, text: &str, config: &Models) -> String {
+    format!(
+        "{}:0",
+        source_content_key(&doc.id, &doc.kind, &doc.title, text, config)
+    )
+}
+
+fn legacy_input_key(doc: &Document, config: &Models) -> String {
     store::digest(
         json!([
             "wiki-auto-source-v2",
@@ -593,7 +854,39 @@ pub(super) fn input_key(doc: &Document, config: &Models) -> String {
 
 fn page_version(topic: &Topic, docs: &[Document], _manifest: &Manifest, config: &Models) -> String {
     // Authorization selects docs before this point; unrelated range settings are not model inputs.
-    let mut sources: Vec<_> = docs.iter().map(|doc| input_key(doc, config)).collect();
+    let sources: Vec<_> = docs.iter().map(|doc| input_key(doc, config)).collect();
+    page_version_keys(topic, sources, &config.text_revision)
+}
+
+fn page_version_keys(topic: &Topic, mut sources: Vec<String>, text_revision: &str) -> String {
+    sources.sort();
+    store::digest(
+        json!([
+            "wiki-auto-page-v3",
+            topic.id,
+            topic.title,
+            topic.purpose,
+            topic.notes,
+            sources,
+            text_revision
+        ])
+        .to_string(),
+    )
+}
+
+fn legacy_page_version(topic: &Topic, docs: &[Document], config: &Models) -> String {
+    let sources: Vec<_> = docs
+        .iter()
+        .map(|doc| legacy_input_key(doc, config))
+        .collect();
+    legacy_page_version_keys(topic, sources, &config.text_revision)
+}
+
+fn legacy_page_version_keys(
+    topic: &Topic,
+    mut sources: Vec<String>,
+    text_revision: &str,
+) -> String {
     sources.sort();
     store::digest(
         json!([
@@ -603,10 +896,192 @@ fn page_version(topic: &Topic, docs: &[Document], _manifest: &Manifest, config: 
             topic.purpose,
             topic.notes,
             sources,
-            config.text_revision
+            text_revision
         ])
         .to_string(),
     )
+}
+
+fn source_evidence_key(doc: &Document, config: &Models) -> String {
+    store::digest(json!(["wiki-source-evidence-v1", input_key(doc, config)]).to_string())
+}
+
+fn batch_compilation_key(topic: &Topic, config: &Models, batch: &[CompilationEvidence]) -> String {
+    store::digest(
+        json!([
+            "wiki-auto-compile-v2",
+            topic.id,
+            topic.title,
+            topic.purpose,
+            topic.notes,
+            config.text_revision,
+            batch
+                .iter()
+                .map(|item| json!([
+                    input_key(&item.source, config),
+                    content_cache::canonical(&item.value)
+                ]))
+                .collect::<Vec<_>>()
+        ])
+        .to_string(),
+    )
+}
+
+fn processing_inputs(docs: &[Document], topics: &[Topic], config: &Models) -> String {
+    let mut sources: Vec<_> = docs.iter().map(|doc| input_key(doc, config)).collect();
+    sources.sort();
+    // Collection edits must still wake aggregation when every source is cached.
+    let collections: BTreeMap<_, _> = topics
+        .iter()
+        .filter_map(|topic| {
+            let collection = topic
+                .collection
+                .as_ref()
+                .filter(|collection| !collection.hierarchy)?;
+            Some((
+                &topic.id,
+                json!([
+                    topic.title,
+                    topic.purpose,
+                    topic.notes,
+                    topic.pinned,
+                    topic.excluded,
+                    collection
+                        .links
+                        .iter()
+                        .filter(|link| link.manual)
+                        .map(|link| (&link.target_id, &link.state))
+                        .collect::<BTreeMap<_, _>>()
+                ]),
+            ))
+        })
+        .collect();
+    let members: BTreeMap<_, _> = if collections.is_empty() {
+        BTreeMap::new()
+    } else {
+        topics
+            .iter()
+            .filter(|topic| topic.collection.is_none())
+            .map(|topic| {
+                (
+                    &topic.id,
+                    json!([topic.title, topic.excluded, topic.published]),
+                )
+            })
+            .collect()
+    };
+    store::digest(json!(["wiki-auto-run-v1", sources, config, collections, members]).to_string())
+}
+
+fn pending_compilation(
+    topic: &Topic,
+    docs: &[Document],
+    manifest: &Manifest,
+    config: &Models,
+    failed_sources: &BTreeSet<String>,
+    source_keys: Option<&BTreeMap<String, String>>,
+) -> Option<(Vec<Document>, String)> {
+    if topic.collection.is_some()
+        || topic.excluded
+        || topic.pinned
+        || topic.source_ids.is_empty()
+        || topic
+            .source_ids
+            .iter()
+            .any(|id| failed_sources.contains(id))
+        || topic
+            .published
+            .as_ref()
+            .is_some_and(|page| page.content_hash != store::digest(&page.markdown))
+    {
+        return None;
+    }
+    let selected: Vec<_> = docs
+        .iter()
+        .filter(|doc| topic.source_ids.contains(&doc.id))
+        .cloned()
+        .collect();
+    let version = match source_keys {
+        Some(keys) => {
+            let selected_keys: Vec<_> = topic
+                .source_ids
+                .iter()
+                .filter_map(|id| keys.get(id).cloned())
+                .collect();
+            page_version_keys(topic, selected_keys, &config.text_revision)
+        }
+        None => page_version(topic, &selected, manifest, config),
+    };
+    // Older layouts rejected an entire topic when one oversized item arrived.
+    // The repaired splitter can recover those topics without changing source
+    // identity, so give this specific persisted failure one bounded retry.
+    let legacy_batch_failure = topic.error
+        == "Topic evidence exceeds one compilation batch; shorten this topic or retry"
+        && topic.last_attempt_fingerprint == version;
+    (topic.force_refresh
+        || legacy_batch_failure
+        || (topic.last_fingerprint != version && topic.last_attempt_fingerprint != version))
+        .then_some((selected, version))
+}
+
+fn needs_automatic_processing(
+    manifest: &Manifest,
+    topics: &[Topic],
+    docs: &[Document],
+    config: &Models,
+    catalog: &Catalog,
+) -> bool {
+    if manifest.wiki_attempted_fingerprint != processing_inputs(docs, topics, config) {
+        return true;
+    }
+    let mut failed_sources = BTreeSet::new();
+    for doc in docs {
+        for text in source_chunks(doc, catalog) {
+            let key = catalog_chunk_key(doc, &text, config);
+            if catalog.failed.contains_key(&key) {
+                failed_sources.insert(doc.id.clone());
+            } else if !catalog.chunks.contains_key(&key) {
+                return true;
+            }
+        }
+    }
+    topics.iter().any(|topic| {
+        pending_compilation(topic, docs, manifest, config, &failed_sources, None).is_some()
+    })
+}
+
+fn finish_idle_grouping(
+    manifest: &mut Manifest,
+    topics: &[Topic],
+    catalog_failures: usize,
+) -> bool {
+    let Some(progress) = manifest
+        .wiki_progress
+        .as_ref()
+        .filter(|progress| progress.stage == "grouping")
+    else {
+        return false;
+    };
+    let active: Vec<_> = topics
+        .iter()
+        .filter(|topic| {
+            !topic.excluded && (topic.automatic_key.is_empty() || !topic.source_ids.is_empty())
+        })
+        .collect();
+    let topic_failures = active
+        .iter()
+        .filter(|topic| !topic.error.is_empty())
+        .count();
+    manifest.wiki_progress = Some(WikiProgress {
+        stage: "complete".into(),
+        completed: active.len() - topic_failures,
+        total: active.len(),
+        failed: progress.failed.max(topic_failures + catalog_failures),
+        ..Default::default()
+    });
+    // Grouping shares the progress slot but must not erase earlier processing errors.
+    manifest.phase = "ready".into();
+    true
 }
 
 fn compilation_key(version: &str, batch: &[CompilationEvidence]) -> String {
@@ -620,8 +1095,11 @@ fn compilation_parts(evidence: &[CompilationEvidence]) -> CommandResult<Vec<Docu
             let source = &evidence
                 .iter()
                 .find(|item| value["id"] == item.source.id)
-                .ok_or("Invalid Wiki compilation source")?.source;
-            let text = value["text"].as_str().ok_or("Invalid Wiki compilation text")?;
+                .ok_or("Invalid Wiki compilation source")?
+                .source;
+            let text = value["text"]
+                .as_str()
+                .ok_or("Invalid Wiki compilation text")?;
             Ok(analysis::part(source, text.into()))
         })
         .collect()
@@ -637,33 +1115,52 @@ pub(super) async fn compile_automatic(
     root: &Path,
     version: &str,
 ) -> Result<Revision, WikiFailure> {
+    let config = models(app, session)?;
+    tasks::profile_scope(
+        config.server_profile.clone(),
+        compile_automatic_profile(
+            app, state, session, topic, docs, manifest, root, version, &config,
+        ),
+    )
+    .await
+}
+
+async fn compile_automatic_profile(
+    app: &AppHandle,
+    state: &WorkbenchState,
+    session: &Session,
+    topic: &Topic,
+    docs: &[Document],
+    manifest: &Manifest,
+    root: &Path,
+    version: &str,
+    config: &Models,
+) -> Result<Revision, WikiFailure> {
     let query = format!("{}\n{}\nUser corrections (user-provided context, not verified meeting evidence): {}\nWrite Current situation, Important changes and Open questions in the requested language. Preserve source uncertainty. Do not treat unsupported user notes as meeting facts.",topic.title,topic.purpose,topic.notes);
     let mut evidence = Vec::new();
-    let config = models(app, session)?;
     for doc in docs {
-        for (index, text) in sync::split_text(doc.text().trim(), 12000).into_iter().enumerate() {
+        let chunks = {
+            let _guard = state.serial.lock().await;
+            require_current(state, session)?;
+            source_layout::prepare(root, doc)?
+        };
+        for text in chunks {
             let part = analysis::part(doc, text);
-            let key = store::digest(
-                json!([
-                    "wiki-auto-analysis-v1",
-                    topic.id,
-                    topic.title,
-                    topic.purpose,
-                    topic.notes,
-                    input_key(&part, &config),
-                    index
-                ])
-                .to_string(),
-            );
-            let value = if let Some(value) = graph::reusable_analysis(root, session, &part, manifest) {
+            let key = source_evidence_key(&part, &config);
+            let value = if let Some(value) =
+                graph::reusable_analysis(root, session, &part, manifest)
+            {
                 value
-            } else { cached_compilation(
+            } else {
+                cached_compilation_prepared(
                 root,
                 &key,
                 &state.serial,
                 |value| {
                     require_current(state, session)?;
-                    sync::validate_result(std::slice::from_ref(&part), manifest, value)
+                    let value = content_cache::rebind(value, std::slice::from_ref(&part), manifest)?;
+                    sync::validate_result(std::slice::from_ref(&part), manifest, &value)?;
+                    Ok(value)
                 },
                 true,
                 request(
@@ -671,54 +1168,41 @@ pub(super) async fn compile_automatic(
                     session,
                     "source_analysis",
                     std::slice::from_ref(&part),
-                    &query,
+                    "Extract the complete supported meeting evidence, independent of any one project or topic. Preserve substantive decisions, proposals, changes, commitments, conflicts and unresolved questions across all subjects, with exact original-source citations and their uncertainty. Do not invent missing owners, dates or conclusions. This shared evidence will be filtered for each topic later; retain relevant facts from every subject. The complete bounded original text remains available to the final compiler.",
                     Value::Null,
                 ),
             )
-            .await.map_err(|error| WikiFailure::new(error, "analyzing", vec![doc.id.clone()]))? };
-            if value["relevant"] != false && value["insufficientEvidence"] != true {
-                evidence.push(CompilationEvidence { value, source: part });
-            }
+            .await.map_err(|error| WikiFailure::new(error, "analyzing", vec![doc.id.clone()]))?
+            };
+            // Shared extraction is auxiliary, never a topical relevance gate.
+            // The final compiler must still see every authorized original chunk,
+            // including one for which the extractor found no structured claims.
+            evidence.push(CompilationEvidence {
+                value,
+                source: part,
+            });
         }
     }
     if evidence.is_empty() {
         return Err("No relevant source evidence found for this topic".into());
     }
-    let mut batches: Vec<Vec<CompilationEvidence>> = Vec::new();
-    let mut batch = Vec::new();
-    for item in evidence {
-        let mut trial = batch.clone();
-        trial.push(item.clone());
-        if !batch.is_empty()
-            && (trial.len() > 100
-                || serde_json::to_string(&trial)
-                    .map_err(|e| e.to_string())?
-                    .len()
-                    > 50000
-                || compile_sources(&trial).is_err())
-        {
-            batches.push(std::mem::take(&mut batch));
-        }
-        batch.push(item);
-        compile_sources(&batch)?;
-    }
-    if !batch.is_empty() {
-        batches.push(batch);
-    }
+    let batches = batch_layout::plan(root, topic, evidence, &config)?;
     let mut bodies = Vec::new();
     let mut refs = Vec::new();
     let mut changes = Vec::new();
     let mut overview = String::new();
     for batch in batches {
         let parts = compilation_parts(&batch)?;
-        let key = compilation_key(version, &batch);
-        let value = cached_compilation(
+        let key = batch_compilation_key(topic, &config, &batch);
+        let value = cached_compilation_prepared(
             root,
             &key,
             &state.serial,
             |value| {
                 require_current(state, session)?;
-                sync::validate_result(&parts, manifest, value)
+                let value = content_cache::rebind(value, &parts, manifest)?;
+                sync::validate_result(&parts, manifest, &value)?;
+                Ok(value)
             },
             !topic.force_refresh,
             request(
@@ -730,7 +1214,14 @@ pub(super) async fn compile_automatic(
                 json!(batch),
             ),
         )
-        .await.map_err(|error| WikiFailure::new(error, "compiling", parts.iter().map(|part| part.id.clone()).collect()))?;
+        .await
+        .map_err(|error| {
+            WikiFailure::new(
+                error,
+                "compiling",
+                parts.iter().map(|part| part.id.clone()).collect(),
+            )
+        })?;
         if value["insufficientEvidence"] == true {
             continue;
         }
@@ -863,12 +1354,19 @@ pub(super) fn retry_service_failures(root: &Path) -> CommandResult<bool> {
     }
     let mut catalog: Catalog = read_json(&path)?;
     let previous = catalog.failed.len();
-    let run_recovered = catalog.run_failure.as_ref().is_some_and(|failure| is_service_failure(&failure.message));
-    if run_recovered { catalog.run_failure = None; }
+    let run_recovered = catalog
+        .run_failure
+        .as_ref()
+        .is_some_and(|failure| is_service_failure(&failure.message));
+    if run_recovered {
+        catalog.run_failure = None;
+    }
     // Model-output rejections are nondeterministic: give them one fresh
     // attempt per session (bind), not per heartbeat, so a deterministic
     // validation failure cannot burn model calls every two minutes.
-    catalog.failed.retain(|_, error| !is_service_failure(error) && !is_model_output_failure(error));
+    catalog
+        .failed
+        .retain(|_, error| !is_service_failure(error) && !is_model_output_failure(error));
     let changed = run_recovered || previous != catalog.failed.len();
     if changed {
         write_json(&path, &catalog)?;
@@ -877,23 +1375,35 @@ pub(super) fn retry_service_failures(root: &Path) -> CommandResult<bool> {
 }
 
 async fn checked_preflight(
-    root: &Path, catalog: &mut Catalog,
+    root: &Path,
+    catalog: &mut Catalog,
     verify: impl std::future::Future<Output = CommandResult<()>>,
 ) -> CommandResult<()> {
     if let Some(failure) = &catalog.run_failure {
-        if failure.stage != "preparing" || !super::super::knowledge_transport::transient(&failure.message) {
+        if failure.stage != "preparing"
+            || !super::super::knowledge_transport::transient(&failure.message)
+        {
             return Err(failure.message.clone());
         }
     }
     if let Err(error) = verify.await {
-        catalog.run_failure = Some(CatalogFailure { id: "organization".into(), source_id: String::new(),
-            title: String::new(), stage: "preparing".into(), message: error.clone(), occurred_at: crate::now(), validation: None });
+        catalog.run_failure = Some(CatalogFailure {
+            id: "organization".into(),
+            source_id: String::new(),
+            title: String::new(),
+            stage: "preparing".into(),
+            message: error.clone(),
+            occurred_at: crate::now(),
+            validation: None,
+        });
         write_json(&catalog_path(root), catalog)?;
         return Err(error);
     }
     // Only a successful authorization check releases a transient connection latch.
     catalog.run_failure = None;
-    catalog.failed.retain(|_, error| !super::super::knowledge_transport::transient(error));
+    catalog
+        .failed
+        .retain(|_, error| !super::super::knowledge_transport::transient(error));
     write_json(&catalog_path(root), catalog)
 }
 
@@ -920,24 +1430,97 @@ pub(super) async fn run(
         )
     };
     let mut catalog: Catalog = read_json(&catalog_path(&root))?;
+    catalog.deleted.extend(topic_store::deleted(&root)?);
+    tasks::recover_abandoned(&root)?;
+    if tasks::release_due(&root)? {
+        let _guard = state.serial.lock().await;
+        require_current(state, session)?;
+        let mut values = topics(&root)?;
+        for topic in &mut values {
+            if tasks::Outcome::classify(&topic.error) == tasks::Outcome::Retryable {
+                topic.error.clear();
+                topic.failure = None;
+                topic.last_attempt_fingerprint.clear();
+            }
+        }
+        save_topics(&root, &values)?;
+        catalog
+            .failed
+            .retain(|_, error| tasks::Outcome::classify(error) != tasks::Outcome::Retryable);
+        write_json(&catalog_path(&root), &catalog)?;
+        manifest = load_state(app, session)?;
+        manifest.wiki_attempted_fingerprint.clear();
+        persist(app, session, &manifest)?;
+    }
     if let Some(failure) = &catalog.run_failure {
-        if failure.stage != "preparing" || !super::super::knowledge_transport::transient(&failure.message) {
+        if failure.stage != "preparing"
+            || !super::super::knowledge_transport::transient(&failure.message)
+        {
             return Err(failure.message.clone());
         }
     }
     {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
-        migrate_catalog_revision(&root, &local, &mut catalog, &docs, &manifest, &config, &config.legacy_text_revision)?;
+        for doc in &docs {
+            catalog
+                .layouts
+                .insert(doc.id.clone(), source_layout::prepare(&root, doc)?);
+        }
+        for previous in compatible_legacy_models(session, &config) {
+            migrate_catalog_revision(
+                &root,
+                &local,
+                &mut catalog,
+                &docs,
+                &manifest,
+                &config,
+                &previous.text_revision,
+            )?;
+        }
         migrate_scope_cache(&root, &local, &docs, &manifest, &config)?;
+        cache_upgrade::refresh(
+            &root,
+            &mut catalog,
+            &docs,
+            &manifest,
+            &config,
+            &compatible_legacy_models(session, &config),
+        )?;
     }
     // An idle vault must not sweep the whole catalog on every worker wakeup:
     // the heartbeat re-enters this run every two minutes, and the sweep alone
     // (one topics() parse per chunk) keeps the UI in "organizing" for minutes
     // with zero model work to show for it.
-    if !needs_processing(&mut manifest, &topics(&root)?, &config) {
+    let initial_topics = {
+        let _guard = state.serial.lock().await;
+        require_current(state, session)?;
+        topics(&root)?
+    };
+    if !needs_automatic_processing(&manifest, &initial_topics, &docs, &config, &catalog) {
+        let _guard = state.serial.lock().await;
+        require_current(state, session)?;
+        let mut latest = load_state(app, session)?;
+        let catalog_failures = docs
+            .iter()
+            .map(|doc| {
+                source_chunks(doc, &catalog)
+                    .iter()
+                    .filter(|text| {
+                        catalog
+                            .failed
+                            .contains_key(&catalog_chunk_key(doc, text, &config))
+                    })
+                    .count()
+            })
+            .sum();
+        if finish_idle_grouping(&mut latest, &initial_topics, catalog_failures) {
+            persist(app, session, &latest)?;
+        }
         return Ok(());
     }
+    // Save the inputs actually attempted, so a change during this pass remains pending.
+    let attempted_inputs = processing_inputs(&docs, &initial_topics, &config);
     // Topic failures from earlier passes stay visible in progress reports
     // instead of being silently reset to zero by the next stage update.
     let carried_failures = manifest
@@ -945,77 +1528,91 @@ pub(super) async fn run(
         .as_ref()
         .map(|progress| progress.failed)
         .unwrap_or(0);
-    let current_keys: BTreeSet<_> = docs.iter().flat_map(|doc| {
-        let prefix = input_key(doc, &config);
-        (0..sync::split_text(doc.text().trim(), 12000).len()).map(move |index| format!("{prefix}:{index}"))
-    }).collect();
+    let current_keys: BTreeSet<_> = docs
+        .iter()
+        .flat_map(|doc| {
+            source_chunks(doc, &catalog)
+                .into_iter()
+                .map(|text| catalog_chunk_key(doc, &text, &config))
+                .collect::<Vec<_>>()
+        })
+        .collect();
     if let Some(error) = catalog.failed.iter().find_map(|(key, error)| {
-        (current_keys.contains(key) && is_service_failure(error)
-            && !super::super::knowledge_transport::transient(error)).then_some(error)
-    }) { return Err(error.clone()); }
+        (current_keys.contains(key)
+            && is_service_failure(error)
+            && !super::super::knowledge_transport::transient(error))
+        .then_some(error)
+    }) {
+        return Err(error.clone());
+    }
     // Refresh this server's policy before using persisted settings from an earlier route.
     let preflight = checked_preflight(&root, &mut catalog, async {
-        let capabilities = knowledge_cloud::request(app, session, "/capabilities", None, None).await?;
-        if capabilities["available"] != true { return Err("Cloud knowledge capability unavailable or authorization rejected".into()); }
-        let policy = capabilities.get("policy").ok_or("Cloud source eligibility unavailable")?;
-        if policy["enrolled"] != true { return Err("Cloud knowledge organization is not enabled on this server".into()); }
+        let capabilities =
+            knowledge_cloud::request(app, session, "/capabilities", None, None).await?;
+        if capabilities["available"] != true {
+            return Err("Cloud knowledge capability unavailable or authorization rejected".into());
+        }
+        let policy = capabilities
+            .get("policy")
+            .ok_or("Cloud source eligibility unavailable")?;
+        if policy["enrolled"] != true {
+            return Err("Cloud knowledge organization is not enabled on this server".into());
+        }
         // A changed range requires review instead of silently dropping saved source links.
-        if docs.iter().any(|doc| !knowledge_cloud::local_allows(doc, &Manifest {
-            knowledge_policy: Some(policy.clone()), knowledge_pending: None, ..manifest.clone()
-        })) { return Err("Cloud knowledge selected folders changed; review the organization range".into()); }
+        if docs.iter().any(|doc| {
+            !knowledge_cloud::local_allows(
+                doc,
+                &Manifest {
+                    knowledge_policy: Some(policy.clone()),
+                    knowledge_pending: None,
+                    ..manifest.clone()
+                },
+            )
+        }) {
+            return Err(
+                "Cloud knowledge selected folders changed; review the organization range".into(),
+            );
+        }
         Ok::<(), String>(())
-    }).await;
+    })
+    .await;
     if let Err(error) = preflight {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
         let mut latest = load_state(app, session)?;
-        latest.wiki_progress = Some(WikiProgress { stage: "preparing".into(), ..Default::default() });
+        latest.wiki_progress = Some(WikiProgress {
+            stage: "preparing".into(),
+            ..Default::default()
+        });
         persist(app, session, &latest)?;
         return Err(error);
     }
-    {
+    let CatalogPlan {
+        jobs,
+        mut active,
+        mut failed_sources,
+        mut applied,
+        failures: mut catalog_failures,
+    } = {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
         backup_legacy(app, session)?;
         let mut values = topics(&root)?;
-        if adopt_legacy_sources(&mut values) {
-            save_topics(&root, &values)?;
-        }
-    }
-    let mut active: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut catalog_failures = 0;
-    let mut failed_sources = BTreeSet::new();
-    let catalog_total: usize = docs
-        .iter()
-        .map(|doc| sync::split_text(doc.text().trim(), 12000).len())
-        .sum();
+        adopt_legacy_sources(&mut values);
+        // Restore cached identities and source links in one pass without
+        // re-entering the model queue or reporting analysis for cached text.
+        let plan = prepare_catalog(&mut values, &mut catalog, &docs, &config);
+        save_topics(&root, &values)?;
+        write_json(&catalog_path(&root), &catalog)?;
+        plan
+    };
+    let catalog_total = applied + jobs.len();
     // Catalog requests are fanned out in waves sized to the shared model
     // queue; each wave's results then apply serially so topic identity,
     // progress and persisted state keep their original single-stream order.
-    struct CatalogJob<'a> {
-        doc: &'a Document,
-        key: String,
-        text: String,
-    }
-    let mut jobs: Vec<CatalogJob<'_>> = Vec::new();
-    let mut applied = 0usize;
-    for doc in &docs {
-        for (index, text) in sync::split_text(doc.text().trim(), 12000).into_iter().enumerate() {
-            let key = format!("{}:{index}", input_key(doc, &config));
-            if catalog.failed.contains_key(&key) {
-                applied += 1;
-                catalog_failures += 1;
-                failed_sources.insert(doc.id.clone());
-                if !catalog.details.contains_key(&key) {
-                    let error = catalog.failed[&key].clone();
-                    record_failure(&mut catalog, &key, doc, &error);
-                }
-                continue;
-            }
-            jobs.push(CatalogJob { doc, key, text });
-        }
-    }
     let wave_size = state.synthesis_queue.capacity().max(1);
+    let shared_manifest = Arc::new(manifest.clone());
+    let shared_docs = Arc::new(docs.clone());
     for wave in jobs.chunks(wave_size) {
         report_progress(
             app,
@@ -1034,21 +1631,20 @@ pub(super) async fn run(
             },
         )
         .await?;
-        let results: Vec<CommandResult<Vec<CatalogTopic>>> = future::join_all(wave.iter().map(|job| async {
-            let existing = topics(&root)?;
-            if let Some(rows) = catalog.chunks.get(&job.key) {
-                return Ok(rows.clone());
-            }
+        let results: Vec<CommandResult<Vec<CatalogTopic>>> = future::join_all(wave.iter().map(|job| {
+            let root = root.clone();
+            let docs = Arc::clone(&shared_docs);
+            let manifest = Arc::clone(&shared_manifest);
+            let server_profile = config.server_profile.clone();
+            Box::pin(async move {
             let mut parts = vec![analysis::part(job.doc, job.text.clone())];
             let mut anchors = Vec::new();
-            for topic in &existing {
-                if topic.collection.is_some() { continue; }
-                if anchors.len() >= 12 {
-                    break;
-                }
-                if !topic.source_ids.contains(&job.doc.id) && !job.doc.text().contains(&topic.title) {
-                    continue;
-                }
+            let existing = {
+                let _guard=state.serial.lock().await;
+                require_current(state,session)?;
+                topics(&root)?
+            };
+            for topic in retrieval::candidates(&existing, job.doc, 12) {
                 let Some(anchor) = docs
                     .iter()
                     .find(|source| topic.source_ids.contains(&source.id))
@@ -1074,12 +1670,19 @@ pub(super) async fn run(
                     .collect();
                 anchors.push(json!({"id":topic.id,"title":topic.title,"kind":topic.topic_kind,"excluded":topic.excluded,"sourceIds":source_ids}));
             }
+            let existing = existing_catalog(&existing);
             let query = json!({"existingTopics":anchors,"newSourceId":job.doc.id}).to_string();
-            request(app, session, "wiki_catalog", &parts, &query, Value::Null)
-                .await
-                .and_then(|value| validate_catalog(&value, &parts, &manifest, &existing))
+            let value = cached_compilation_prepared(&root, &format!("catalog-{}", job.key), &state.serial,
+                |value| {
+                    let value = content_cache::rebind(value, &parts, &manifest)?;
+                    validate_catalog(&value, &parts, &manifest, &existing)?;
+                    Ok(value)
+                }, true, tasks::profile_scope(server_profile.clone(),request(app, session, "wiki_catalog", &parts, &query, Value::Null))).await?;
+            validate_catalog(&value, &parts, &manifest, &existing)
+            })
         }))
         .await;
+        let mut wave_error = None;
         for (job, result) in wave.iter().zip(results) {
             applied += 1;
             let _guard = state.serial.lock().await;
@@ -1090,19 +1693,14 @@ pub(super) async fn run(
                     catalog.failed.remove(&job.key);
                     catalog.details.remove(&job.key);
                     let mut existing = topics(&root)?;
-                    let ids = apply_catalog(&mut existing, &mut catalog, &job.doc.id, &rows);
-                    for (id, row) in ids.iter().zip(&rows) {
-                        if id.is_empty() {
-                            continue;
-                        }
-                        active.entry(id.clone()).or_default().extend(
-                            row.citations
-                                .iter()
-                                .filter(|reference| docs.iter().any(|doc| doc.id == reference.id))
-                                .map(|reference| reference.id.clone()),
-                        );
-                        active.entry(id.clone()).or_default().insert(job.doc.id.clone());
-                    }
+                    apply_catalog_sources(
+                        &mut existing,
+                        &mut catalog,
+                        &job.doc.id,
+                        &rows,
+                        &docs,
+                        &mut active,
+                    );
                     save_topics(&root, &existing)?;
                     write_json(&catalog_path(&root), &catalog)?;
                 }
@@ -1111,7 +1709,7 @@ pub(super) async fn run(
                     catalog.details.remove(&job.key);
                     record_failure(&mut catalog, &job.key, job.doc, &error);
                     write_json(&catalog_path(&root), &catalog)?;
-                    return Err(error);
+                    wave_error.get_or_insert(error);
                 }
                 Err(error) => {
                     catalog.details.remove(&job.key);
@@ -1122,19 +1720,26 @@ pub(super) async fn run(
                 }
             }
         }
+        // Every response in this wave has already completed. Preserve its
+        // successful work before stopping new requests on a service failure.
+        if let Some(error) = wave_error {
+            return Err(error);
+        }
     }
     let initial = {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
         let mut values = topics(&root)?;
-        reconcile_sources(&mut values, &active, &failed_sources, &docs);
-        save_topics(&root, &values)?;
+        if reconcile_sources(&mut values, &active, &failed_sources, &docs) {
+            save_topics(&root, &values)?;
+        }
         values
     };
     let active_topics: Vec<_> = initial
         .into_iter()
         .filter(|topic| {
-            topic.collection.is_none() && !topic.excluded
+            topic.collection.is_none()
+                && !topic.excluded
                 && !topic.pinned
                 && !topic.source_ids.is_empty()
                 && !topic
@@ -1145,28 +1750,35 @@ pub(super) async fn run(
         .collect();
     let total_topics = active_topics.len();
     let mut completed = 0;
+    // Full source text is immutable during this pass. Hash it once, then use
+    // those identities to decide which topics still need compilation.
+    let source_keys: BTreeMap<String, String> = docs
+        .iter()
+        .map(|doc| (doc.id.clone(), input_key(doc, &config)))
+        .collect();
     let pending: Vec<_> = active_topics
         .into_iter()
         .filter_map(|topic| {
-            // A failed source is unavailable input, not evidence that old content disappeared.
-            if topic.source_ids.iter().any(|id| failed_sources.contains(id)) { return None; }
-            let selected: Vec<_> = docs
+            if topic
+                .source_ids
                 .iter()
-                .filter(|doc| topic.source_ids.contains(&doc.id))
-                .cloned()
-                .collect();
-            let version = page_version(&topic, &selected, &manifest, &config);
-            if !topic.force_refresh && topic.last_fingerprint == version {
-                completed += 1;
-                None
-            } else if !topic.force_refresh && topic.last_attempt_fingerprint == version {
-                // Attempted and settled for this version; count it so the
-                // progress bar can actually reach 100% while the failure is
-                // reported separately.
-                completed += 1;
-                None
-            } else {
-                Some((topic, selected, version))
+                .any(|id| failed_sources.contains(id))
+            {
+                return None;
+            }
+            match pending_compilation(
+                &topic,
+                &docs,
+                &manifest,
+                &config,
+                &failed_sources,
+                Some(&source_keys),
+            ) {
+                Some((selected, version)) => Some((topic, selected, version)),
+                None => {
+                    completed += 1;
+                    None
+                }
             }
         })
         .collect();
@@ -1194,14 +1806,23 @@ pub(super) async fn run(
             },
         )
         .await?;
-        let results = future::join_all(wave.iter().map(|(topic, selected, version)| async {
-            compile_automatic(app, state, session, topic, selected, &manifest, &root, version).await
+        let results = future::join_all(wave.iter().map(|(topic, selected, version)| {
+            let manifest = Arc::clone(&shared_manifest);
+            let root = root.clone();
+            Box::pin(async move {
+                compile_automatic(
+                    app, state, session, topic, selected, &manifest, &root, version,
+                )
+                .await
+            })
         }))
         .await;
+        let mut wave_error = None;
         for ((topic, _, version), result) in wave.iter().zip(results) {
             if let Err(error) = &result {
                 if is_service_failure(&error.message) {
-                    return Err(error.message.clone());
+                    wave_error.get_or_insert(error.message.clone());
+                    continue;
                 }
             }
             let _guard = state.serial.lock().await;
@@ -1270,11 +1891,21 @@ pub(super) async fn run(
             save_topics(&root, &values)?;
             persist(app, session, &latest)?;
         }
+        if let Some(error) = wave_error {
+            return Err(error);
+        }
     }
     // An idle pass (every chunk cached and every topic settled) must not
     // regroup and re-validate every published topic; skip the sweep and just
     // normalize the completion state below.
-    if had_work {
+    if had_work
+        || initial_topics.iter().any(|topic| {
+            topic
+                .collection
+                .as_ref()
+                .is_some_and(|collection| !collection.hierarchy)
+        })
+    {
         collections::run(app, state, session).await?;
     }
     let embedding_failures = embed_sources(app, state, session, &config, &root, &local).await?;
@@ -1287,6 +1918,7 @@ pub(super) async fn run(
         .into_iter()
         .filter(|topic| topic.automatic_key.is_empty() || !topic.source_ids.is_empty())
         .collect();
+    latest.wiki_attempted_fingerprint = attempted_inputs;
     complete_processing(&mut latest, &active, embedding_failures);
     if catalog_failures > 0 {
         if let Some(progress) = &mut latest.wiki_progress {
@@ -1305,39 +1937,45 @@ pub(super) fn topic_graph(topics: &[Topic], items: &[Value]) -> Value {
         .filter(|topic| {
             !topic.excluded
                 && topic.published.is_some()
-                && items
-                    .iter()
-                    .any(|item| item["id"] == topic.id && item["inScope"] != false && item["published"].is_object())
+                && items.iter().any(|item| {
+                    item["id"] == topic.id
+                        && item["inScope"] != false
+                        && item["published"].is_object()
+                })
         })
         .collect();
     let nodes: Vec<_> = visible.iter().map(|topic| json!({"id":format!("wiki:{}",topic.id),"wikiId":topic.id,"kind":"wiki",
         "subtype":topic.topic_kind,"title":topic.title,"description":topic.published.as_ref().map(|page| &page.overview),"status":"published","citations":[],"updates":[]})).collect();
-    let mut edges = Vec::new();
-    for (index, a) in visible.iter().enumerate() {
-        for b in visible.iter().skip(index + 1) {
-            let source_ids = |topic: &Topic| -> BTreeSet<String> {
-                topic
-                    .source_ids
-                    .iter()
-                    .cloned()
-                    .chain(topic.published.iter().flat_map(|page| {
-                        page.citations.iter().map(|reference| reference.id.clone())
-                    }))
-                    .collect()
-            };
-            let sources: Vec<_> = source_ids(a)
-                .intersection(&source_ids(b))
-                .cloned()
-                .collect();
-            if !sources.is_empty() {
-                edges.push(json!({"id":format!("shared:{}:{}",a.id,b.id),"source":format!("wiki:{}",a.id),"target":format!("wiki:{}",b.id),"kind":"shared_source","sourceIds":sources}));
+    let mut by_source: BTreeMap<&str, BTreeSet<usize>> = BTreeMap::new();
+    for (index, topic) in visible.iter().enumerate() {
+        for id in topic.source_ids.iter().map(String::as_str).chain(
+            topic
+                .published
+                .iter()
+                .flat_map(|page| page.citations.iter().map(|reference| reference.id.as_str())),
+        ) {
+            by_source.entry(id).or_default().insert(index);
+        }
+    }
+    let mut pairs: BTreeMap<(usize, usize), Vec<&str>> = BTreeMap::new();
+    for (source, members) in by_source {
+        let members: Vec<_> = members.into_iter().collect();
+        for (offset, a) in members.iter().enumerate() {
+            for b in &members[offset + 1..] {
+                pairs.entry((*a, *b)).or_default().push(source);
             }
         }
     }
+    let mut edges: Vec<_> = pairs.into_iter().map(|((a,b),sources)| {
+        let (a,b) = (visible[a],visible[b]);
+        json!({"id":format!("shared:{}:{}",a.id,b.id),"source":format!("wiki:{}",a.id),"target":format!("wiki:{}",b.id),"kind":"shared_source","sourceIds":sources})
+    }).collect();
     for topic in &visible {
         if let Some(collection) = &topic.collection {
             for link in &collection.links {
-                if link.state == "included" && visible.iter().any(|member| member.id == link.target_id) {
+                if link.state == "included"
+                    && visible.iter().any(|member| member.id == link.target_id)
+                {
                     edges.push(json!({"id":format!("contains:{}:{}",topic.id,link.target_id),"source":format!("wiki:{}",topic.id),"target":format!("wiki:{}",link.target_id),"kind":"contains_topic"}));
                 }
             }
@@ -1349,3 +1987,7 @@ pub(super) fn topic_graph(topics: &[Topic], items: &[Value]) -> Value {
 #[cfg(test)]
 #[path = "wiki_automation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "wiki_incremental_tests.rs"]
+mod incremental_tests;

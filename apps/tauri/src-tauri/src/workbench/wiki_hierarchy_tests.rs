@@ -1,5 +1,50 @@
 use super::*;
 
+#[test]
+fn legacy_unknown_grouping_blocks_are_snapshotted_and_only_block_the_same_topic_input() {
+    let mut topic = Topic {
+        id: "topic".into(),
+        title: "Release".into(),
+        published: Some(Revision {
+            overview: "Confirmed scope".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let config = Models {
+        text_revision: "model-v1".into(),
+        ..Default::default()
+    };
+    let mut state: GroupState =
+        serde_json::from_value(json!({"blocked":["topic"],"inflight":["old-batch"]})).unwrap();
+    snapshot_legacy_blocks(&mut state, &[topic.clone()], "zh", &config);
+    assert!(blocked(&state, &topic, "zh", &config));
+    let restored: GroupState = serde_json::from_value(json!(state)).unwrap();
+    assert!(blocked(&restored, &topic, "zh", &config));
+
+    // Parent grouping context is absent from this identity, so changing it
+    // cannot silently replay an unknown model outcome for this topic.
+    let mut parent = Topic {
+        title: "Different navigation group".into(),
+        ..Default::default()
+    };
+    parent.purpose = "Changed parent context".into();
+    snapshot_legacy_blocks(&mut state, &[topic.clone(), parent], "zh", &config);
+    assert!(blocked(&state, &topic, "zh", &config));
+    topic.title = "Release decisions".into();
+    assert!(!blocked(&state, &topic, "zh", &config));
+    topic.title = "Release".into();
+    topic.published.as_mut().unwrap().overview = "Updated scope".into();
+    assert!(!blocked(&state, &topic, "zh", &config));
+    topic.published.as_mut().unwrap().overview = "Confirmed scope".into();
+    let changed = Models {
+        text_revision: "model-v2".into(),
+        ..config.clone()
+    };
+    assert!(!blocked(&state, &topic, "zh", &changed));
+    assert!(blocked(&state, &topic, "zh", &config));
+}
+
 fn fixture() -> (PathBuf, PathBuf, Manifest, Vec<Topic>) {
     let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
     let local = root.join("sources");

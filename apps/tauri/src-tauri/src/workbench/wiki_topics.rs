@@ -1,5 +1,9 @@
 //! Canonical topic identity and lossless repair of legacy duplicate topics.
 use super::*;
+
+pub(super) fn deleted(root: &Path) -> CommandResult<std::collections::BTreeSet<String>> {
+    read_json(&root.join("deleted-topics.json"))
+}
 use std::collections::{BTreeMap, BTreeSet};
 
 fn title_key(title: &str) -> String {
@@ -143,9 +147,12 @@ pub(super) fn upsert(root: &Path, values: &mut Vec<Topic>, request: &Value) -> C
     }
     let id = request["id"].as_str().unwrap_or_default();
     let existing = if id.is_empty() {
-        values
-            .iter()
-            .position(|topic| topic.automatic_key.is_empty() && topic.collection.is_some() == matches!(request["mode"].as_str(),Some("collection"|"group")) && title_key(&topic.title) == title_key(title))
+        values.iter().position(|topic| {
+            topic.automatic_key.is_empty()
+                && topic.collection.is_some()
+                    == matches!(request["mode"].as_str(), Some("collection" | "group"))
+                && title_key(&topic.title) == title_key(title)
+        })
     } else {
         Some(
             values
@@ -158,9 +165,12 @@ pub(super) fn upsert(root: &Path, values: &mut Vec<Topic>, request: &Value) -> C
         values.push(Topic {
             id: uuid::Uuid::new_v4().to_string(),
             title: title.into(),
-            collection: matches!(request["mode"].as_str(),Some("collection"|"group")).then(|| collections::Collection {
-                hierarchy: request["mode"] == "group", ..Default::default()
-            }),
+            collection: matches!(request["mode"].as_str(), Some("collection" | "group")).then(
+                || collections::Collection {
+                    hierarchy: request["mode"] == "group",
+                    ..Default::default()
+                },
+            ),
             ..Default::default()
         });
         values.len() - 1
@@ -216,6 +226,11 @@ pub(super) fn delete(root: &Path, values: &mut Vec<Topic>, request: &Value) -> C
         .iter()
         .position(|topic| matches_id(topic, id))
         .ok_or("Topic not found")?;
+    let topic = &values[index];
+    let mut tombstones = deleted(root)?;
+    tombstones.insert(topic.id.clone());
+    tombstones.extend(topic.merged_ids.iter().cloned());
+    write_json(&root.join("deleted-topics.json"), &tombstones)?;
     let topic = values.remove(index);
     // A deleted topic must stop resolving through other topics' merge history.
     for other in values.iter_mut() {
@@ -224,10 +239,11 @@ pub(super) fn delete(root: &Path, values: &mut Vec<Topic>, request: &Value) -> C
             .retain(|alias| alias != &topic.id && !topic.merged_ids.contains(alias));
     }
     let dir = root.join(&topic.id);
+    save_topics(root, values)?;
     if dir.exists() {
         fs::remove_dir_all(&dir).map_err(|error| error.to_string())?;
     }
-    save_topics(root, values)
+    Ok(())
 }
 
 pub(super) fn reconcile_progress(manifest: &mut Manifest, topics: &[Topic]) -> bool {
@@ -479,7 +495,11 @@ mod tests {
         original.last_fingerprint = "previous-success".into();
         original.last_attempt_fingerprint = fingerprint(&original, &manifest, &config);
         original.error = "Citation does not match source evidence".into();
-        original.failure = Some(WikiFailure::new(&original.error, "analyzing", vec!["meeting".into()]));
+        original.failure = Some(WikiFailure::new(
+            &original.error,
+            "analyzing",
+            vec!["meeting".into()],
+        ));
         let mut values = vec![original.clone()];
         save_topics(&root, &values).unwrap();
         let stored = topics(&root).unwrap();
@@ -489,13 +509,17 @@ mod tests {
         for excluded in [true, false] {
             upsert(&root, &mut values, &json!({"id":original.id,"title":original.title,"purpose":original.purpose,"excluded":excluded})).unwrap();
             assert_eq!(values[0].excluded, excluded);
-            assert_eq!(values[0].published.as_ref().unwrap().markdown, "Saved knowledge");
+            assert_eq!(
+                values[0].published.as_ref().unwrap().markdown,
+                "Saved knowledge"
+            );
             assert_eq!(values[0].last_fingerprint, "previous-success");
             assert!(values[0].failure.is_none());
         }
         assert!(values[0].last_attempt_fingerprint.is_empty());
         assert!(needs_compilation(&values[0], &manifest, &config));
-        let legacy: Topic = serde_json::from_value(json!({"title":"Legacy topic","error":"Old failure"})).unwrap();
+        let legacy: Topic =
+            serde_json::from_value(json!({"title":"Legacy topic","error":"Old failure"})).unwrap();
         assert!(legacy.failure.is_none());
         fs::remove_dir_all(root).unwrap();
     }

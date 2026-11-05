@@ -30,10 +30,13 @@ fn graph_inputs_use_only_existing_summaries_without_transcript_fallback() {
     ];
     document.refresh_revision();
     let mut manifest = Manifest::default();
-    manifest.artifacts.insert(document.id.clone(), json!({"summaries":[
-        {"markdown":"本地已编辑总结。","sourceRevision":document.revision},
-        {"markdown":"STALE_SUMMARY_ONLY","sourceRevision":"old"}
-    ]}));
+    manifest.artifacts.insert(
+        document.id.clone(),
+        json!({"summaries":[
+            {"markdown":"本地已编辑总结。","sourceRevision":document.revision},
+            {"markdown":"STALE_SUMMARY_ONLY","sourceRevision":"old"}
+        ]}),
+    );
     let source = schema::summary_source(&document, &manifest).unwrap();
     assert!(source.transcript.contains("本地已编辑总结"));
     let copy = schema::transport(&source).unwrap();
@@ -44,7 +47,10 @@ fn graph_inputs_use_only_existing_summaries_without_transcript_fallback() {
     assert!(copy.segments.is_empty());
     assert_eq!(copy.kind, "meeting_summary");
     assert!(schema::transport(&document).is_err());
-    let tracking = Tracking { selected_sources: BTreeSet::from([document.id.clone()]), ..Default::default() };
+    let tracking = Tracking {
+        selected_sources: BTreeSet::from([document.id.clone()]),
+        ..Default::default()
+    };
     assert!(pending_chunks(&[document.clone()], &tracking).is_empty());
     document.conclusions.clear();
     assert!(schema::summary_source(&document, &Manifest::default()).is_none());
@@ -56,7 +62,10 @@ fn graph_inputs_use_only_existing_summaries_without_transcript_fallback() {
 fn summary_quotes_never_gain_audio_positions_and_only_summary_edits_invalidate_extraction() {
     let mut document = doc();
     let source = summary(&document);
-    let reference = SourceRef { quote: source.transcript.clone(), ..source.reference() };
+    let reference = SourceRef {
+        quote: source.transcript.clone(),
+        ..source.reference()
+    };
     // Even a summary that happens to match a spoken segment is summary evidence only.
     let located = schema::locate(&reference, &source);
     assert_eq!(located["kind"], "meeting_summary");
@@ -64,9 +73,15 @@ fn summary_quotes_never_gain_audio_positions_and_only_summary_edits_invalidate_e
     assert!(located["positions"].as_array().unwrap().is_empty());
     document.transcript.push_str("新转写文本");
     document.refresh_revision();
-    assert_eq!(schema::content_revision(&summary(&document)), schema::content_revision(&source));
+    assert_eq!(
+        schema::content_revision(&summary(&document)),
+        schema::content_revision(&source)
+    );
     document.conclusions[0]["conclusionText"] = json!("修改后的总结");
-    assert_ne!(schema::content_revision(&summary(&document)), schema::content_revision(&source));
+    assert_ne!(
+        schema::content_revision(&summary(&document)),
+        schema::content_revision(&source)
+    );
 }
 fn output(doc: &Document) -> Value {
     let reference = json!(SourceRef {
@@ -124,7 +139,8 @@ fn entity_and_topic_titles_are_model_labels_backed_by_verbatim_citations() {
 #[test]
 fn privacy_mask_keeps_character_offsets_and_restores_only_local_quotes() {
     let mut doc = doc();
-    doc.conclusions = vec![json!({"conclusionText":"张三邮箱 zhang@example.com，电话 13812345678。"})];
+    doc.conclusions =
+        vec![json!({"conclusionText":"张三邮箱 zhang@example.com，电话 13812345678。"})];
     doc.refresh_revision();
     let doc = summary(&doc);
     let masked = schema::mask(&doc.transcript);
@@ -193,9 +209,10 @@ fn projection_invalidates_revoked_content_but_rebinds_metadata_and_scopes_names(
     doc.title = "Renamed".into();
     doc.playback_path = "/new/path".into();
     doc.refresh_revision();
+    let previous = manifest.entries.get(&doc.id).cloned();
     manifest.entries.insert(
         doc.id.clone(),
-        store::write_document(&local, &doc, None).unwrap(),
+        store::write_document(&local, &doc, previous.as_ref()).unwrap(),
     );
     manifest.allow_ai = false;
     assert!(projection(&manifest)["nodes"]
@@ -445,7 +462,10 @@ async fn local_graph_service_smoke() {
     assert_eq!(task["modality"], "planned");
     assert_eq!(task["citations"][0]["kind"], "meeting_summary");
     assert!(task["citations"][0].get("startMs").is_none());
-    assert!(task["citations"][0]["positions"].as_array().unwrap().is_empty());
+    assert!(task["citations"][0]["positions"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert!(manifest.artifacts.is_empty());
     let record = json!({"document":document,"markdown":document.markdown(),"artifacts":null});
     let artifact = std::env::var("LYNSE_GRAPH_LOCAL_RESULT").expect("local graph result path");
@@ -463,11 +483,21 @@ async fn local_graph_service_smoke() {
 
 #[test]
 fn automatic_details_follow_folder_scope_without_overwriting_legacy_selections() {
-    let mut manifest=Manifest::default();
-    manifest.wiki_automation=Some(store::WikiAutomation {folder_ids:vec!["work".into()],include_unfiled:false});
-    let original=Tracking {selected_sources:BTreeSet::from(["legacy".into()]),..Default::default()};
-    let effective=effective_tracking(&original,&manifest,&[summary(&doc())]);
-    assert!(effective.enabled); assert!(effective.selected_sources.contains("one"));
-    assert_eq!(original.selected_sources,BTreeSet::from(["legacy".into()])); assert!(!original.enabled);
-    assert!(effective_tracking(&original,&manifest,&[]).selected_sources.is_empty());
+    let mut manifest = Manifest::default();
+    manifest.wiki_automation = Some(store::WikiAutomation {
+        folder_ids: vec!["work".into()],
+        include_unfiled: false,
+    });
+    let original = Tracking {
+        selected_sources: BTreeSet::from(["legacy".into()]),
+        ..Default::default()
+    };
+    let effective = effective_tracking(&original, &manifest, &[summary(&doc())]);
+    assert!(effective.enabled);
+    assert!(effective.selected_sources.contains("one"));
+    assert_eq!(original.selected_sources, BTreeSet::from(["legacy".into()]));
+    assert!(!original.enabled);
+    assert!(effective_tracking(&original, &manifest, &[])
+        .selected_sources
+        .is_empty());
 }

@@ -29,12 +29,13 @@ def main():
     def model(messages):
         payload = json.loads(messages[1]['content'])
         source = payload['sources'][0]
-        text = source['text']
+        passages = source.get('passages')
+        text = ''.join(passage['text'] for passage in passages) if passages else source['text']
         # The fixture must never silently send unexpected evidence to any provider.
         if source['kind'] != 'meeting_summary' or 'TRANSCRIPT_ONLY' in json.dumps(payload) or '张三负责A项目' not in text or '@example.com' in text or '13812345678' in text:
             raise ValueError('Expected synthetic, already masked source')
         calls.append({'task': payload['task'], 'masked': True})
-        ref = dict(id=source.get('id', 'compact-source'), kind=source['kind'], revision=source.get('revision', 'compact-revision'), quote=text.strip())
+        ref = passages[0]['citation'] if passages else dict(id=source.get('id', 'compact-source'), kind=source['kind'], revision=source.get('revision', 'compact-revision'), quote=text.strip())
         if payload['task'] == 'wiki_catalog':
             return {'topics':[{'key':'a-project-budget','existingId':None,'kind':'project','title':'A项目','overview':'预算与方案进展','citations':[ref]}]}
         if payload['task'] in {'source_analysis','topic_compile'}:
@@ -59,7 +60,12 @@ def main():
 
     def authorized(payload, *, root, user_id, token, control=None):
         # The loopback harness has synthetic source authority and never contacts cloud services.
-        return original(payload, root=root, user_id=user_id, control=control, model_call=model)
+        try:
+            return original(payload, root=root, user_id=user_id, control=control, model_call=model)
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise
 
     def identity(token, **kwargs):
         if token != 'synthetic-local-graph-token':
@@ -89,7 +95,7 @@ def main():
     listener.listen(16)
     address = f'http://127.0.0.1:{listener.getsockname()[1]}'
     args.ready_file.write_text(json.dumps({'url':address}), encoding='utf-8')
-    with patch('runtime.desktop_synthesis.synthesize_authorized', side_effect=authorized), patch('runtime.http_identity.resolve_token_identity', side_effect=identity), patch('runtime.session_binding.bound_backend_host', return_value=None):
+    with patch('runtime.desktop_synthesis.synthesize_authorized', side_effect=authorized), patch('runtime.http_identity.resolve_token_identity', side_effect=identity), patch('runtime.session_binding.bound_backend_host', return_value=None), patch('runtime.usage.service.get_store', return_value=None):
         try:
             uvicorn.Server(uvicorn.Config(app, log_level='warning', access_log=False)).run(sockets=[listener])
         finally:

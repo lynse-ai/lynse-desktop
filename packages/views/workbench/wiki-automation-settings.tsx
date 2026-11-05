@@ -110,7 +110,12 @@ export function WikiAutomationSettings({ activation = false, disabled = false }:
     </fieldset>}
     {cloudLoading && <p role="status" className="text-sm text-muted-foreground">{t("memory_manager.connection_loading")}</p>}
     {cloudIssue && <div className="space-y-2"><p role="status" className="text-sm text-muted-foreground">{t(cloudIssue)}</p><Button type="button" size="sm" variant="outline" disabled={unavailable || cloudLoading} onClick={() => { setError(""); void cloud.refetch(); }}>{t("memory_manager.connection_retry")}</Button></div>}
-    {cloud.data?.pending && <p role="status" className="text-sm text-muted-foreground">{t("memory_manager.policy_pending")}</p>}
+    {cloud.data?.pending && (cloud.data.pendingStatus === "conflict" ? <div className="space-y-2">
+      <p role="alert" className="text-sm text-destructive">{t("memory_manager.policy_conflict")}</p>
+      <Button type="button" size="sm" variant="outline" disabled={unavailable || cloudLoading} onClick={() => {
+        setDirty(false); setError(""); void cloud.refetch();
+      }}>{t("memory_manager.policy_reload")}</Button>
+    </div> : <p role="status" className="text-sm text-muted-foreground">{t("memory_manager.policy_pending")}</p>)}
     {error && (!cloudIssue || error !== t(cloudIssue)) && <p id={`${id}-error`} role="alert" className="break-words text-sm text-destructive">{error}</p>}
     <div className="flex flex-wrap items-center gap-2"><Button size="sm" disabled={unavailable || folders.isError || cloudLoading || !!cloudIssue || !policy} onClick={() => void configure(true)}>{busy && <Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />}{t(active ? "workbench.auto_save_range" : "workbench.auto_enable")}</Button>{active && <Button size="sm" variant="outline" disabled={unavailable} onClick={() => void configure(false)}>{t("workbench.auto_pause")}</Button>}</div>
     <p className="text-xs leading-relaxed text-muted-foreground">{t("workbench.auto_defaults")}</p>

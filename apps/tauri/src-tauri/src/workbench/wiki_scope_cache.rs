@@ -7,7 +7,9 @@ const MAX_LEGACY_SCOPE_PROBES: usize = 16_384;
 fn legacy_inputs(topic: &Topic, docs: &[Document], config: &Models) -> Value {
     legacy_inputs_with_keys(
         topic,
-        docs.iter().map(|doc| input_key(doc, config)).collect(),
+        docs.iter()
+            .map(|doc| legacy_input_key(doc, config))
+            .collect(),
         config,
     )
 }
@@ -58,7 +60,7 @@ impl LegacyScopes {
             probes: MAX_LEGACY_SCOPE_PROBES,
             source_keys: docs
                 .iter()
-                .map(|doc| (doc.id.clone(), input_key(doc, config)))
+                .map(|doc| (doc.id.clone(), legacy_input_key(doc, config)))
                 .collect(),
         }
     }
@@ -76,7 +78,7 @@ impl LegacyScopes {
                 self.source_keys
                     .get(&doc.id)
                     .cloned()
-                    .unwrap_or_else(|| input_key(doc, config))
+                    .unwrap_or_else(|| legacy_input_key(doc, config))
             })
             .collect();
         let mut inputs = legacy_inputs_with_keys(topic, keys, config);

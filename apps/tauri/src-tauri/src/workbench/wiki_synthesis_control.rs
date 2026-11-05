@@ -34,7 +34,9 @@ mod tests {
         assert_eq!(control.model.as_deref(), Some("deepseek-flash"));
         assert_eq!(control.profile.as_deref(), Some("deepseek-graph-v2"));
         assert_eq!(control.retry_after, Some(7));
-        control.absorb(&json!({"graphProfile":{"model":"deepseek-flash","profile":"deepseek-graph-v2"}}));
+        control.absorb(
+            &json!({"graphProfile":{"model":"deepseek-flash","profile":"deepseek-graph-v2"}}),
+        );
         assert_eq!(control.profile.as_deref(), Some("deepseek-graph-v2"));
         assert_eq!(control.retry_after, None);
     }

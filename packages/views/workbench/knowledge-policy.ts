@@ -5,13 +5,14 @@ import { api } from "@lynse/core/api";
 import { useAuthStore } from "@lynse/core/auth";
 import { memoryApi, memoryOperationId, type KnowledgePolicy } from "@lynse/core/api/memory";
 import { getWorkbenchApi } from "./api";
+import type { KnowledgePolicyState } from "./types";
 
 export function useKnowledgePolicy() {
   const user = useAuthStore(state => state.user);
   const authenticated = useAuthStore(state => state.isAuthenticated);
   return useQuery({
     queryKey: ["knowledge-policy", api().getBaseUrl(), api().getAgentBaseUrl(), user?.id],
-    queryFn: async () => {
+    queryFn: async (): Promise<KnowledgePolicyState> => {
       const native = getWorkbenchApi()?.knowledgePolicy;
       if (native) return native({ action: "read" });
       return { capabilities: await memoryApi.capabilities(), pending: false };

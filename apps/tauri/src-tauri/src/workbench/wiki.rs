@@ -1,4 +1,4 @@
-//! Reviewed, file-backed Wiki pages. SQLite contains only rebuildable indexes and work receipts.
+//! Reviewed Wiki pages, recoverable exports, and durable model work independent of rebuildable indexes.
 use futures_util::future;
 use std::sync::atomic::Ordering;
 #[path = "wiki_graph.rs"]
@@ -9,27 +9,35 @@ use synthesis_control::SynthesisControl;
 #[path = "wiki_validation_failure.rs"]
 mod validation_failure;
 pub use validation_failure::ValidationDetails;
-#[cfg(test)]
-#[path = "wiki_synthesis_transport_tests.rs"]
-mod synthesis_transport_tests;
-#[path = "wiki_topics.rs"]
-mod topic_store;
 #[path = "wiki_analysis.rs"]
 mod analysis;
 #[path = "wiki_automation.rs"]
 mod automation;
 #[path = "wiki_collections.rs"]
 mod collections;
+#[path = "wiki_content_cache.rs"]
+mod content_cache;
 #[path = "wiki_hierarchy.rs"]
 mod hierarchy;
+#[path = "wiki_page_commits.rs"]
+mod page_commits;
+#[cfg(test)]
+#[path = "wiki_synthesis_transport_tests.rs"]
+mod synthesis_transport_tests;
+#[path = "wiki_tasks.rs"]
+mod tasks;
+#[path = "wiki_topic_archive.rs"]
+mod topic_archive;
+#[path = "wiki_topics.rs"]
+mod topic_store;
 pub(super) use automation::{ai_manifest, validate_automation};
 pub(super) fn in_automatic_scope(doc: &Document, manifest: &Manifest) -> bool {
-    manifest.wiki_automation.is_some() && automation::allows(doc,manifest)
+    manifest.wiki_automation.is_some() && automation::allows(doc, manifest)
 }
 use super::store::WikiProgress;
 use super::{
-    current, invalidate_runtime, load_state, persist, require_current, roots, start_worker, store,
-    sync, knowledge_cloud, Document, Manifest, Session, SourceRef, WorkbenchState,
+    current, invalidate_runtime, knowledge_cloud, load_state, persist, require_current, roots,
+    start_worker, store, sync, Document, Manifest, Session, SourceRef, WorkbenchState,
 };
 use crate::CommandResult;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -59,6 +67,8 @@ pub struct Models {
     pub legacy_text_revision: String,
     pub embedding: Model,
     pub revision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_profile: Option<Value>,
 }
 impl Default for Models {
     fn default() -> Self {
@@ -71,6 +81,7 @@ impl Default for Models {
                 model: "qwen3.7-text-embedding".into(),
             },
             revision: String::new(),
+            server_profile: None,
         }
     }
 }
@@ -111,14 +122,24 @@ pub struct WikiFailure {
 impl WikiFailure {
     fn new(message: impl Into<String>, stage: &str, source_ids: Vec<String>) -> Self {
         let (message, validation) = validation_failure::split(message.into());
-        Self { message, stage: stage.into(), source_ids, occurred_at: crate::now(), validation }
+        Self {
+            message,
+            stage: stage.into(),
+            source_ids,
+            occurred_at: crate::now(),
+            validation,
+        }
     }
 }
 impl From<String> for WikiFailure {
-    fn from(message: String) -> Self { Self::new(message, "preparing", Vec::new()) }
+    fn from(message: String) -> Self {
+        Self::new(message, "preparing", Vec::new())
+    }
 }
 impl From<&str> for WikiFailure {
-    fn from(message: &str) -> Self { Self::from(message.to_owned()) }
+    fn from(message: &str) -> Self {
+        Self::from(message.to_owned())
+    }
 }
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -162,10 +183,11 @@ fn read_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> CommandResu
 }
 fn write_json(path: &Path, value: &impl Serialize) -> CommandResult<()> {
     fs::create_dir_all(path.parent().ok_or("Invalid Wiki path")?).map_err(|e| e.to_string())?;
-    crate::atomic_write(
-        path,
-        &serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?,
-    )
+    let bytes = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
+    if fs::read(path).is_ok_and(|previous| previous == bytes) {
+        return Ok(());
+    }
+    crate::atomic_write(path, &bytes)
 }
 fn read_models(path: &Path) -> CommandResult<Models> {
     let mut config: Models = read_json(path)?;
@@ -190,13 +212,125 @@ fn models(app: &AppHandle, session: &Session) -> CommandResult<Models> {
         .to_string(),
     );
     // Routing changes do not change the model input or invalidate completed work.
-    config.text_revision = store::digest(json!([
-        "lynclaw-wiki-v3", super::markdown::INPUT_VERSION, session.locale, session.model_override
-    ]).to_string());
+    config.text_revision = text_model_revision(session, config.server_profile.as_ref());
     Ok(config)
 }
+
+fn model_cache_identity(value: &Value) -> Value {
+    match value {
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .filter(|(key, _)| !matches!(key.as_str(), "apiKey" | "api_key" | "token"))
+                .map(|(key, value)| (key.clone(), model_cache_identity(value)))
+                .collect(),
+        ),
+        Value::Array(rows) => json!(rows.iter().map(model_cache_identity).collect::<Vec<_>>()),
+        _ => value.clone(),
+    }
+}
+
+fn text_model_revision(session: &Session, profile: Option<&Value>) -> String {
+    let processor = profile
+        .and_then(|profile| profile["processorVersion"].as_str())
+        .unwrap_or("desktop-evidence-v2");
+    let selected = session
+        .model_override
+        .as_ref()
+        .map(model_cache_identity)
+        .unwrap_or_else(|| {
+            profile
+                .map(|profile| json!({"model":profile["model"],"provider":profile["provider"]}))
+                .unwrap_or(Value::Null)
+        });
+    store::digest(
+        json!([
+            "lynclaw-wiki-v4",
+            super::markdown::INPUT_VERSION,
+            session.locale,
+            processor,
+            selected
+        ])
+        .to_string(),
+    )
+}
+
+pub(super) fn update_server_profile(
+    app: &AppHandle,
+    session: &Session,
+    profile: &Value,
+) -> CommandResult<bool> {
+    if profile["schemaVersion"] != 1
+        || ["processorVersion", "model", "provider"].iter().any(|key| {
+            profile[*key]
+                .as_str()
+                .is_none_or(|value| value.is_empty() || value.len() > 2048)
+        })
+    {
+        return Ok(false);
+    }
+    let mut profile = json!({"schemaVersion":1,"processorVersion":profile["processorVersion"],"model":profile["model"],"provider":profile["provider"]});
+    let path = models_path(app, session)?;
+    let mut config = read_models(&path)?;
+    if config.server_profile.as_ref().is_some_and(|saved| {
+        ["schemaVersion", "processorVersion", "model", "provider"]
+            .iter()
+            .all(|key| saved[*key] == profile[*key])
+    }) {
+        return Ok(false);
+    }
+    if config.server_profile.is_none() && profile["processorVersion"] == "desktop-evidence-v2" {
+        // The first verified profile establishes the baseline for legacy work;
+        // later model/provider/processor changes must never adopt that work again.
+        profile["legacyTextRevision"] = json!(text_model_revision(session, None));
+    }
+    config.server_profile = Some(profile);
+    write_json(&path, &config)?;
+    Ok(true)
+}
+
+fn compatible_legacy_models(session: &Session, config: &Models) -> Vec<Models> {
+    if config.server_profile.as_ref().is_some_and(|profile| {
+        profile["processorVersion"] != "desktop-evidence-v2"
+            || (session.model_override.is_none() && profile.get("legacyTextRevision").is_none())
+    }) {
+        return Vec::new();
+    }
+    [
+        store::digest(
+            json!([
+                "lynclaw-wiki-v3",
+                super::markdown::INPUT_VERSION,
+                session.locale,
+                session.model_override
+            ])
+            .to_string(),
+        ),
+        config.legacy_text_revision.clone(),
+        config
+            .server_profile
+            .as_ref()
+            .and_then(|profile| profile["legacyTextRevision"].as_str())
+            .unwrap_or_default()
+            .into(),
+    ]
+    .into_iter()
+    .filter(|revision| !revision.is_empty())
+    .map(|revision| {
+        let mut old = config.clone();
+        old.text_revision = revision;
+        old
+    })
+    .collect()
+}
 fn topics(root: &Path) -> CommandResult<Vec<Topic>> {
-    let mut result: Vec<Topic> = read_json(&root.join("topics.json"))?;
+    let mut result = topic_archive::load(root)?;
+    let deleted = topic_store::deleted(root)?;
+    result.retain(|topic| !deleted.contains(&topic.id));
+    if page_commits::recover(root, &mut result)? {
+        save_topics(root, &result)?;
+    }
+    page_commits::clear_completed(root, &result)?;
     for topic in &mut result {
         uuid::Uuid::parse_str(&topic.id)
             .map_err(|_| "Invalid Wiki topic ID; original file was preserved")?;
@@ -220,11 +354,13 @@ fn topics(root: &Path) -> CommandResult<Vec<Topic>> {
     Ok(result)
 }
 fn save_topics(root: &Path, values: &[Topic]) -> CommandResult<()> {
-    write_json(&root.join("topics.json"), &values)
+    topic_archive::save(root, values)?;
+    page_commits::clear_completed(root, values)
 }
 fn is_session_failure(error: &str) -> bool {
     let error = error.split(" [stage: ").next().unwrap_or(error);
-    matches!(error,
+    matches!(
+        error,
         "Lynclaw could not verify this server"
             | "Lynclaw did not confirm this server identity"
             | "Lynclaw returned an invalid server binding"
@@ -238,24 +374,40 @@ fn is_session_failure(error: &str) -> bool {
 
 fn is_service_failure(error: &str) -> bool {
     is_session_failure(error)
+        || error == super::SESSION_CHANGED
+        || error == "Account or consent changed; result discarded"
         || super::knowledge_transport::transient(error)
         || error == TEXT_MODEL_CHANGED
         || error == "Lynclaw synthesis failed (HTTP 422): Unknown synthesis task"
-        || matches!(error, "Cloud knowledge offline" | "Cloud knowledge unavailable"
-            | "Cloud knowledge capability unavailable or authorization rejected"
-            | "Cloud knowledge organization is not enabled on this server")
+        || matches!(
+            error,
+            "Cloud knowledge offline"
+                | "Cloud knowledge unavailable"
+                | "Cloud knowledge capability unavailable or authorization rejected"
+                | "Cloud knowledge organization is not enabled on this server"
+        )
 }
 
 pub(super) const TEXT_MODEL_CHANGED: &str = "Text model changed; processing will resume";
 
 fn require_task_model(state: &WorkbenchState, session: &Session, task: &str) -> CommandResult<()> {
-    if task != "graph_extract" && current(state)?.model_override != session.model_override {
+    if task != "graph_extract"
+        && current(state)?
+            .model_override
+            .as_ref()
+            .map(model_cache_identity)
+            != session.model_override.as_ref().map(model_cache_identity)
+    {
         return Err(TEXT_MODEL_CHANGED.into());
     }
     Ok(())
 }
 
-pub(super) fn resume_session(app: &AppHandle, session: &Session, manifest: &mut Manifest) -> CommandResult<()> {
+pub(super) fn resume_session(
+    app: &AppHandle,
+    session: &Session,
+    manifest: &mut Manifest,
+) -> CommandResult<()> {
     let root = crate::vault::vault_user_dir(app)?
         .map(|root| root.join("Memory").join(&session.scope).join("wiki"));
     resume_session_at(root.as_deref(), manifest)?;
@@ -263,8 +415,18 @@ pub(super) fn resume_session(app: &AppHandle, session: &Session, manifest: &mut 
         if manifest.wiki_automation.is_some() {
             let local = roots(app, session)?.0;
             let docs = automation::documents(&local, manifest);
-            let retained = automation::migrate_scope_cache(&root, &local, &docs, manifest, &models(app, session)?)?;
-            if retained > 0 { log::info!("[wiki-cache] retained {retained} completed topics after scope-cache migration"); }
+            let retained = automation::migrate_scope_cache(
+                &root,
+                &local,
+                &docs,
+                manifest,
+                &models(app, session)?,
+            )?;
+            if retained > 0 {
+                log::info!(
+                    "[wiki-cache] retained {retained} completed topics after scope-cache migration"
+                );
+            }
         }
     }
     Ok(())
@@ -272,7 +434,9 @@ pub(super) fn resume_session(app: &AppHandle, session: &Session, manifest: &mut 
 
 fn resume_session_at(root: Option<&Path>, manifest: &mut Manifest) -> CommandResult<()> {
     // Account binding must also work before the first vault folder is selected.
-    let Some(root) = root.filter(|root| root.exists()) else { return Ok(()); };
+    let Some(root) = root.filter(|root| root.exists()) else {
+        return Ok(());
+    };
     let mut recovered = automation::retry_service_failures(root)?;
     let mut values = topics(root)?;
     let mut changed = false;
@@ -281,7 +445,14 @@ fn resume_session_at(root: Option<&Path>, manifest: &mut Manifest) -> CommandRes
             topic.error.clear();
             topic.last_attempt_fingerprint.clear();
             topic.failure = None;
-            if let Some(collection) = &mut topic.collection { for link in &mut collection.links { if is_service_failure(&link.error) {link.error.clear();link.fingerprint.clear();} } }
+            if let Some(collection) = &mut topic.collection {
+                for link in &mut collection.links {
+                    if is_service_failure(&link.error) {
+                        link.error.clear();
+                        link.fingerprint.clear();
+                    }
+                }
+            }
             changed = true;
         }
     }
@@ -304,6 +475,7 @@ fn resume_session_at(root: Option<&Path>, manifest: &mut Manifest) -> CommandRes
 
 fn save_page(root: &Path, topic: &Topic, page: &Revision, candidate: bool) -> CommandResult<()> {
     uuid::Uuid::parse_str(&topic.id).map_err(|_| "Invalid Wiki topic ID")?;
+    page_commits::prepare(root, topic, page, candidate)?;
     let dir = root.join(&topic.id);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let name = if candidate { "candidate" } else { "published" };
@@ -599,15 +771,23 @@ fn retry_failed_work(
     manifest: &mut Manifest,
     id: Option<&str>,
 ) -> CommandResult<()> {
-    if id.is_some_and(|id| !topics.iter().any(|topic| topic_store::matches_id(topic, id))) {
+    if id.is_some_and(|id| {
+        !topics
+            .iter()
+            .any(|topic| topic_store::matches_id(topic, id))
+    }) {
         return Err("Topic not found".into());
     }
+    tasks::retry_unknown(root)?;
     if id.is_none() {
         automation::retry(root)?;
         graph::configure(root, &json!({"action":"tracking_retry"}))?;
     }
     if let Some(id) = id {
-        if let Some(topic) = topics.iter_mut().find(|t| topic_store::matches_id(t,id) && t.collection.is_some()) {
+        if let Some(topic) = topics
+            .iter_mut()
+            .find(|t| topic_store::matches_id(t, id) && t.collection.is_some())
+        {
             topic.last_attempt_fingerprint.clear();
         }
     }
@@ -621,7 +801,12 @@ fn retry_failed_work(
             // Retry failed work with its validated receipts and completed revision intact.
             topic.force_refresh = false;
             if let Some(collection) = &mut topic.collection {
-                for link in &mut collection.links { if !link.error.is_empty() { link.fingerprint.clear(); link.error.clear(); } }
+                for link in &mut collection.links {
+                    if !link.error.is_empty() {
+                        link.fingerprint.clear();
+                        link.error.clear();
+                    }
+                }
             }
             topic.last_attempt_fingerprint.clear();
             topic.error.clear();
@@ -714,10 +899,32 @@ fn page_fingerprint_with_legacy_scope(
             )
         })
         .collect();
-    let model_input = if manifest.wiki_automation.is_some() { json!(config.text_revision) } else { json!(config) };
-    let mut inputs = json!([topic.title, topic.purpose, topic.notes, model_input, manifest.sync_root, versions]);
+    let model_input = if manifest.wiki_automation.is_some() {
+        json!(config.text_revision)
+    } else {
+        json!(config)
+    };
+    let mut inputs = json!([
+        topic.title,
+        topic.purpose,
+        topic.notes,
+        model_input,
+        manifest.sync_root,
+        versions
+    ]);
     if manifest.wiki_automation.is_some() {
-        let summaries: Vec<_> = citations.iter().map(|reference| json!([reference.id, manifest.artifacts.get(&reference.id).map(|artifact| &artifact["summaries"])] )).collect();
+        let summaries: Vec<_> = citations
+            .iter()
+            .map(|reference| {
+                json!([
+                    reference.id,
+                    manifest
+                        .artifacts
+                        .get(&reference.id)
+                        .map(|artifact| &artifact["summaries"])
+                ])
+            })
+            .collect();
         inputs.as_array_mut().unwrap().push(match legacy_scope {
             Some(policy) => json!([policy, summaries]),
             None => json!(["wiki-auto-evidence-v2", summaries]),
@@ -761,6 +968,7 @@ fn updated_models(current: &Models, mut next: Models) -> CommandResult<Models> {
         uuid::Uuid::new_v4().to_string()
     };
     next.text_revision = current.text_revision.clone();
+    next.server_profile = current.server_profile.clone();
     Ok(next)
 }
 fn embedding_configured(model: &Model) -> bool {
@@ -804,15 +1012,32 @@ fn synthesis_client(endpoint: &str) -> CommandResult<reqwest::Client> {
     if loopback {
         builder = builder.no_proxy();
     }
-    builder.build().map_err(|_| "Network client unavailable".into())
+    builder
+        .build()
+        .map_err(|_| "Network client unavailable".into())
 }
-fn validate_request_sources(local: &Path, manifest: &Manifest, payload: &Value) -> CommandResult<()> {
-    let sources = payload["sources"].as_array().ok_or("AI request has no sources")?;
+fn validate_request_sources(
+    local: &Path,
+    manifest: &Manifest,
+    payload: &Value,
+) -> CommandResult<()> {
+    let sources = payload["sources"]
+        .as_array()
+        .ok_or("AI request has no sources")?;
     for source in sources {
-        let id = source["id"].as_str().ok_or("AI request has no source identity")?;
-        let entry = manifest.entries.get(id).filter(|entry| store::eligible(entry)).ok_or("Source changed or was excluded; AI request cancelled")?;
-        let doc = store::read_document(local,entry)?;
-        if !doc.ai_context_enabled || !automation::allows(&doc,manifest) || source["revision"] != doc.revision {
+        let id = source["id"]
+            .as_str()
+            .ok_or("AI request has no source identity")?;
+        let entry = manifest
+            .entries
+            .get(id)
+            .filter(|entry| store::eligible(entry))
+            .ok_or("Source changed or was excluded; AI request cancelled")?;
+        let doc = store::read_document(local, entry)?;
+        if !doc.ai_context_enabled
+            || !automation::allows(&doc, manifest)
+            || source["revision"] != doc.revision
+        {
             return Err("Source changed or was excluded; AI request cancelled".into());
         }
     }
@@ -830,7 +1055,11 @@ async fn request_model(
 }
 
 async fn request_model_report(
-    app: &AppHandle, session: &Session, task: &str, payload: Value, report: &mut SynthesisControl,
+    app: &AppHandle,
+    session: &Session,
+    task: &str,
+    payload: Value,
+    report: &mut SynthesisControl,
 ) -> CommandResult<Value> {
     let state = app.state::<WorkbenchState>();
     require_current(&state, session)?;
@@ -840,19 +1069,27 @@ async fn request_model_report(
         let _guard = state.serial.lock().await;
         super::require_beta(&state)?;
         require_current(&state, session)?;
-        let manifest = load_state(app,session)?;
+        let manifest = load_state(app, session)?;
         ready(&manifest)?;
-        validate_request_sources(&roots(app,session)?.0,&manifest,&payload)?;
+        validate_request_sources(&roots(app, session)?.0, &manifest, &payload)?;
     }
     let authority_docs = {
-        let manifest=load_state(app,session)?;
-        let (root,_)=roots(app,session)?;
-        payload["sources"].as_array().ok_or("Model sources unavailable")?.iter().map(|source| {
-            let entry=manifest.entries.get(source["id"].as_str().ok_or("Invalid model source")?).ok_or("Model source unavailable")?;
-            store::read_document(&root,entry)
-        }).collect::<CommandResult<Vec<_>>>()?
+        let manifest = load_state(app, session)?;
+        let (root, _) = roots(app, session)?;
+        payload["sources"]
+            .as_array()
+            .ok_or("Model sources unavailable")?
+            .iter()
+            .map(|source| {
+                let entry = manifest
+                    .entries
+                    .get(source["id"].as_str().ok_or("Invalid model source")?)
+                    .ok_or("Model source unavailable")?;
+                store::read_document(&root, entry)
+            })
+            .collect::<CommandResult<Vec<_>>>()?
     };
-    knowledge_cloud::authorize(app,session,&authority_docs,"wiki_compile").await?;
+    knowledge_cloud::authorize(app, session, &authority_docs, "wiki_compile").await?;
     let client = shared_synthesis_client(&state, &session.agent_url).await?;
     if session.agent_url != session.base_url {
         let response = client
@@ -883,17 +1120,35 @@ async fn request_model_report(
     }
     require_current(&state, session)?;
     super::require_beta(&state)?;
-    let manifest = load_state(app,session)?;
+    let manifest = load_state(app, session)?;
     ready(&manifest)?;
-    validate_request_sources(&roots(app,session)?.0,&manifest,&payload)?;
+    validate_request_sources(&roots(app, session)?.0, &manifest, &payload)?;
     require_task_model(&state, session, task)?;
     let mut body = lynclaw_payload(session, task, payload);
-    body["operationId"] = json!(uuid::Uuid::new_v4().to_string());
+    if task != "graph_extract" {
+        body["modelOverride"] = json!(current(&state)?.model_override);
+    }
+    if task != "graph_extract" {
+        let profile = if tasks::profile_bound() {
+            tasks::current_profile()
+        } else {
+            models(app, session)?.server_profile
+        };
+        if let Some(profile) = profile {
+            body["expectedSynthesisProfile"] = json!({"schemaVersion":1,
+                "processorVersion":profile["processorVersion"],"model":profile["model"],"provider":profile["provider"]});
+        }
+    }
+    body["operationId"] =
+        json!(tasks::current_operation().unwrap_or_else(|| uuid::Uuid::new_v4().to_string()));
     let path = if session.agent_url == session.base_url {
         "/api/business/ai/desktop/synthesize"
     } else {
         "/api/desktop/synthesize"
     };
+    if let Some(operation) = tasks::current_operation() {
+        tasks::dispatched(&wiki_root(app, session)?, &operation)?;
+    }
     let result = send_synthesis_report(
         &client,
         &format!("{}{path}", session.agent_url),
@@ -910,6 +1165,10 @@ async fn request_model_report(
     if let Some(seconds) = report.retry_after {
         state.synthesis_queue.rate_limited(seconds).await;
     }
+    if result.as_ref().err().is_some_and(|error| error == "Lynclaw synthesis failed (HTTP 409): Synthesis processor changed; refresh capabilities") {
+        *state.knowledge_capabilities.lock().await = None;
+        return Err(TEXT_MODEL_CHANGED.into());
+    }
     let result = result?;
     require_task_model(&state, session, task)?;
     // The pre-call authorize already validated this exact document set; the
@@ -918,13 +1177,21 @@ async fn request_model_report(
     // Keep the validated output locally before acknowledging a billable step.
     // The service receives only its own hash and an opaque artifact reference.
     if let Some(receipt) = &report.usage_receipt {
-        let step = receipt["step_id"].as_str().filter(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()));
+        let step = receipt["step_id"]
+            .as_str()
+            .filter(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()));
         if let Some(step) = step {
             require_current(&state, session)?;
             let (_, root) = roots(app, session)?;
-            write_json(&root.join("usage-results").join(format!("{step}.json")), &json!({"result":result,"receipt":receipt}))?;
+            write_json(
+                &root.join("usage-results").join(format!("{step}.json")),
+                &json!({"result":result,"receipt":receipt}),
+            )?;
             let pending = root.join("usage-receipts").join(format!("{step}.json"));
-            write_json(&pending, &json!({"step_id":step,"result_hash":receipt["result_hash"],"artifact_ref":format!("desktop:{step}")}))?;
+            write_json(
+                &pending,
+                &json!({"step_id":step,"result_hash":receipt["result_hash"],"artifact_ref":format!("desktop:{step}")}),
+            )?;
             state.pending_receipts.fetch_add(1, Ordering::Relaxed);
             flush_usage_receipts_batched(&client, session, &state, &root).await;
         }
@@ -934,7 +1201,10 @@ async fn request_model_report(
 /// One pooled HTTP client per endpoint. A first-run organization issues
 /// thousands of synthesis calls; a fresh client per call paid a TLS handshake
 /// every time and kept no connection pool alive across calls.
-async fn shared_synthesis_client(state: &WorkbenchState, endpoint: &str) -> CommandResult<reqwest::Client> {
+async fn shared_synthesis_client(
+    state: &WorkbenchState,
+    endpoint: &str,
+) -> CommandResult<reqwest::Client> {
     let mut cached = state.synthesis_http.lock().await;
     if cached
         .as_ref()
@@ -955,7 +1225,12 @@ fn pending_receipt_count(root: &Path) -> usize {
 
 /// Receipts ride the synthesis calls in small batches (8 pending or end of
 /// run) so a first-run backlog does not add HTTP posts to every model call.
-async fn flush_usage_receipts_batched(client: &reqwest::Client, session: &Session, state: &WorkbenchState, root: &Path) {
+async fn flush_usage_receipts_batched(
+    client: &reqwest::Client,
+    session: &Session,
+    state: &WorkbenchState,
+    root: &Path,
+) {
     if state.pending_receipts.swap(0, Ordering::Relaxed) < 8 {
         return;
     }
@@ -964,8 +1239,12 @@ async fn flush_usage_receipts_batched(client: &reqwest::Client, session: &Sessio
 
 /// End-of-run delivery of receipts batched during compilation.
 async fn drain_usage_receipts(app: &AppHandle, session: &Session, state: &WorkbenchState) {
-    let Ok((_, root)) = roots(app, session) else { return; };
-    let Ok(client) = shared_synthesis_client(state, &session.agent_url).await else { return; };
+    let Ok((_, root)) = roots(app, session) else {
+        return;
+    };
+    let Ok(client) = shared_synthesis_client(state, &session.agent_url).await else {
+        return;
+    };
     for _ in 0..16 {
         let pending = pending_receipt_count(&root);
         if pending == 0 {
@@ -979,30 +1258,62 @@ async fn drain_usage_receipts(app: &AppHandle, session: &Session, state: &Workbe
 }
 
 /// Bounded, idempotent delivery of body-free receipts saved on this account's disk.
-async fn flush_usage_receipts(client: &reqwest::Client, session: &Session, state: &WorkbenchState, root: &Path) {
-    let Ok(entries) = fs::read_dir(root.join("usage-receipts")) else { return; };
-    let path = if session.agent_url == session.base_url { "/api/business/ai/usage/receipts" } else { "/api/usage/receipts" };
+async fn flush_usage_receipts(
+    client: &reqwest::Client,
+    session: &Session,
+    state: &WorkbenchState,
+    root: &Path,
+) {
+    let Ok(entries) = fs::read_dir(root.join("usage-receipts")) else {
+        return;
+    };
+    let path = if session.agent_url == session.base_url {
+        "/api/business/ai/usage/receipts"
+    } else {
+        "/api/usage/receipts"
+    };
     for entry in entries.flatten().take(2) {
-        if require_current(state, session).is_err() { return; }
-        if entry.metadata().map(|m| m.len() > 2048).unwrap_or(true) { continue; }
-        let Ok(raw) = fs::read_to_string(entry.path()) else { continue; };
-        let Ok(value) = serde_json::from_str::<Value>(&raw) else { continue; };
-        let valid = |value: &Value| value.as_str().is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()));
-        if !valid(&value["step_id"]) || !valid(&value["result_hash"]) { continue; }
+        if require_current(state, session).is_err() {
+            return;
+        }
+        if entry.metadata().map(|m| m.len() > 2048).unwrap_or(true) {
+            continue;
+        }
+        let Ok(raw) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        let valid = |value: &Value| {
+            value
+                .as_str()
+                .is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+        };
+        if !valid(&value["step_id"]) || !valid(&value["result_hash"]) {
+            continue;
+        }
         let step = value["step_id"].as_str().unwrap();
         let sent = client.post(format!("{}{path}",session.agent_url))
             .header("Authorization",&session.token).timeout(Duration::from_secs(3))
             .json(&json!({"step_id":step,"result_hash":value["result_hash"],"artifact_ref":format!("desktop:{step}")}))
             .send().await;
-        if require_current(state, session).is_err() { return; }
-        if sent.is_ok_and(|response| response.status().is_success()) { let _ = fs::remove_file(entry.path()); }
+        if require_current(state, session).is_err() {
+            return;
+        }
+        if sent.is_ok_and(|response| response.status().is_success()) {
+            let _ = fs::remove_file(entry.path());
+        }
     }
 }
 
 /// Decode synthesis results while retaining only operational response metadata.
 #[cfg(test)]
 async fn send_synthesis(
-    client: &reqwest::Client, endpoint: &str, token: &str, body: Value,
+    client: &reqwest::Client,
+    endpoint: &str,
+    token: &str,
+    body: Value,
     check_current: impl Fn() -> CommandResult<()>,
 ) -> CommandResult<Value> {
     let mut report = SynthesisControl::default();
@@ -1010,20 +1321,33 @@ async fn send_synthesis(
 }
 
 async fn send_synthesis_report(
-    client: &reqwest::Client, endpoint: &str, token: &str, mut body: Value,
-    report: &mut SynthesisControl, check_current: impl Fn() -> CommandResult<()>,
+    client: &reqwest::Client,
+    endpoint: &str,
+    token: &str,
+    mut body: Value,
+    report: &mut SynthesisControl,
+    check_current: impl Fn() -> CommandResult<()>,
 ) -> CommandResult<Value> {
     let mut correction_attempted = false;
     for attempt in 0..2 {
         check_current()?;
-        let response = match client.post(endpoint).header("Authorization", token).json(&body).send().await {
+        let response = match client
+            .post(endpoint)
+            .header("Authorization", token)
+            .json(&body)
+            .send()
+            .await
+        {
             Ok(response) => response,
             Err(_) => {
                 return Err("Model outcome is unknown; retry explicitly".into());
             }
         };
         let status = response.status().as_u16();
-        let retry_after = response.headers().get("retry-after").and_then(|v| v.to_str().ok())
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
             .map(retry_after_seconds);
         let value: Value = match response.json().await {
             Ok(value) => value,
@@ -1033,7 +1357,9 @@ async fn send_synthesis_report(
         };
         report.absorb(&value);
         if !(200..300).contains(&status) {
-            if status == 429 { report.retry_after = Some(retry_after.or(report.retry_after).unwrap_or(60).max(1)); }
+            if status == 429 {
+                report.retry_after = Some(retry_after.or(report.retry_after).unwrap_or(60).max(1));
+            }
             if attempt == 0 && status == 422 {
                 if let Some(corrected) = corrected_synthesis_request(&body, &value) {
                     let parent = body.get("operationId").cloned();
@@ -1046,24 +1372,43 @@ async fn send_synthesis_report(
                     continue;
                 }
             }
-            return Err(validation_failure::annotate(synthesis_error(status, &value), &value, &body, correction_attempted));
+            return Err(validation_failure::annotate(
+                synthesis_error(status, &value),
+                &value,
+                &body,
+                correction_attempted,
+            ));
         }
         return if value.get("code").is_some() {
-            if value["code"] != 200 { return Err("Lynclaw synthesis failed".into()); }
+            if value["code"] != 200 {
+                return Err("Lynclaw synthesis failed".into());
+            }
             Ok(value["data"].clone())
-        } else { Ok(value) };
+        } else {
+            Ok(value)
+        };
     }
     Err("Lynclaw synthesis failed".into())
 }
 
 fn retry_after_seconds(value: &str) -> u64 {
-    value.parse::<u64>().ok().or_else(|| chrono::DateTime::parse_from_rfc2822(value).ok()
-        .map(|date| (date.timestamp() - chrono::Utc::now().timestamp()).max(1) as u64)).unwrap_or(60).max(1)
+    value
+        .parse::<u64>()
+        .ok()
+        .or_else(|| {
+            chrono::DateTime::parse_from_rfc2822(value)
+                .ok()
+                .map(|date| (date.timestamp() - chrono::Utc::now().timestamp()).max(1) as u64)
+        })
+        .unwrap_or(60)
+        .max(1)
 }
 
 fn corrected_synthesis_request(body: &Value, error: &Value) -> Option<Value> {
     // Do not repeat a repair already owned or attempted by the server.
-    if body["task"] == "wiki_catalog" || error["correctionAttempted"] == true { return None; }
+    if body["task"] == "wiki_catalog" || error["correctionAttempted"] == true {
+        return None;
+    }
     let reason = error["detail"].as_str()?;
     if !matches!(
         reason,
@@ -1162,6 +1507,7 @@ fn synthesis_error(status: u16, body: &Value) -> String {
                 | "Graph model rate limited"
                 | "Model output was truncated"
                 | "Model outcome is unknown; retry explicitly"
+                | "Synthesis processor changed; refresh capabilities"
         )
     });
     match detail {
@@ -1229,15 +1575,22 @@ struct PageSources<'a> {
 
 impl<'a> PageSources<'a> {
     fn new(root: &'a Path, manifest: &'a Manifest) -> Self {
-        Self { root, manifest, documents: Default::default() }
+        Self {
+            root,
+            manifest,
+            documents: Default::default(),
+        }
     }
 
     fn document(&mut self, reference: &SourceRef) -> Option<&Document> {
         let root = self.root;
         let manifest = self.manifest;
-        self.documents.entry((reference.id.clone(), reference.kind.clone()))
+        self.documents
+            .entry((reference.id.clone(), reference.kind.clone()))
             .or_insert_with(|| {
-                manifest.entries.get(&reference.id)
+                manifest
+                    .entries
+                    .get(&reference.id)
                     .and_then(|entry| store::read_document(root, entry).ok())
                     // The compiler only saw documents filtered by
                     // markdown::source (automation::documents). Validate
@@ -1248,16 +1601,23 @@ impl<'a> PageSources<'a> {
                     .map(|doc| automation::citation_document(doc, manifest, &reference.kind))
                     .and_then(super::markdown::source)
                     .filter(|doc| automation::allows(doc, manifest))
-            }).as_ref()
+            })
+            .as_ref()
     }
 
     fn dates(&mut self, topics: &[Topic]) -> std::collections::BTreeMap<String, String> {
-        topics.iter()
+        topics
+            .iter()
             .filter(|topic| !topic.excluded)
             .filter_map(|topic| topic.published.as_ref())
             .flat_map(|page| &page.citations)
             .filter_map(|reference| {
-                if !self.manifest.entries.get(&reference.id).is_some_and(store::eligible) {
+                if !self
+                    .manifest
+                    .entries
+                    .get(&reference.id)
+                    .is_some_and(store::eligible)
+                {
                     return None;
                 }
                 let doc = self.document(reference)?;
@@ -1278,7 +1638,12 @@ impl<'a> PageSources<'a> {
         let manifest = self.manifest;
         page.citations.iter().all(|reference| {
             self.document(reference).is_some_and(|doc| {
-                sync::validate_result(std::slice::from_ref(doc), manifest, &json!({"citations":[reference]})).is_ok()
+                sync::validate_result(
+                    std::slice::from_ref(doc),
+                    manifest,
+                    &json!({"citations":[reference]}),
+                )
+                .is_ok()
             })
         })
     }
@@ -1313,10 +1678,14 @@ pub(super) fn context(
     Ok(pages)
 }
 fn citable(topic: &Topic, local: &Path, manifest: &Manifest, config: &Models) -> bool {
-    !topic.excluded && topic.candidate.is_none() && topic.error.is_empty()
-        && topic.published.as_ref().is_some_and(|page| matches!(page.review.as_str(), "approved" | "auto_validated")
-            && page.fingerprint == page_fingerprint(topic,manifest,config,&page.citations)
-            && valid_page(local,manifest,page))
+    !topic.excluded
+        && topic.candidate.is_none()
+        && topic.error.is_empty()
+        && topic.published.as_ref().is_some_and(|page| {
+            matches!(page.review.as_str(), "approved" | "auto_validated")
+                && page.fingerprint == page_fingerprint(topic, manifest, config, &page.citations)
+                && valid_page(local, manifest, page)
+        })
 }
 pub(super) fn read_page(app: &AppHandle, session: &Session, id: &str) -> CommandResult<Value> {
     let topic = topics(&wiki_root(app, session)?)?
@@ -1417,27 +1786,53 @@ async fn cached_compilation(
     use_cache: bool,
     generate: impl std::future::Future<Output = CommandResult<Value>>,
 ) -> CommandResult<Value> {
+    cached_compilation_prepared(
+        root,
+        key,
+        serial,
+        |value| {
+            validate(&value)?;
+            Ok(value)
+        },
+        use_cache,
+        generate,
+    )
+    .await
+}
+
+async fn cached_compilation_prepared(
+    root: &Path,
+    key: &str,
+    serial: &tokio::sync::Mutex<()>,
+    prepare: impl Fn(Value) -> CommandResult<Value>,
+    use_cache: bool,
+    generate: impl std::future::Future<Output = CommandResult<Value>>,
+) -> CommandResult<Value> {
     if use_cache {
         let _guard = serial.lock().await;
         if let Some(value) = receipt(root, key)? {
-            if validate(&value).is_ok() {
+            if let Ok(value) = prepare(value) {
                 return Ok(value);
             }
+            tasks::invalidate_completed(root, key)?;
         }
     }
-    job(root, key, "running", None, "")?;
-    let response = generate.await;
+    let response = tasks::execute(root, key, use_cache, async {
+        job(root, key, "running", None, "")?;
+        let value = generate.await?;
+        let _guard = serial.lock().await;
+        prepare(value)
+    })
+    .await;
     let _guard = serial.lock().await;
-    let result = response.and_then(|value| {
-        validate(&value)?;
-        Ok(value)
-    });
+    let result = response.and_then(prepare);
     match result {
         Ok(value) => {
             job(root, key, "done", Some(&value), "")?;
             Ok(value)
         }
         Err(error) => {
+            tasks::invalidate_completed(root, key)?;
             job(root, key, "failed", None, &error)?;
             Err(error)
         }
@@ -1445,6 +1840,23 @@ async fn cached_compilation(
 }
 
 async fn compile(
+    app: &AppHandle,
+    state: &WorkbenchState,
+    session: &Session,
+    topic: &Topic,
+    config: &Models,
+    manifest: &Manifest,
+    root: &Path,
+    local: &Path,
+) -> CommandResult<Revision> {
+    tasks::profile_scope(
+        config.server_profile.clone(),
+        compile_profile(app, state, session, topic, config, manifest, root, local),
+    )
+    .await
+}
+
+async fn compile_profile(
     app: &AppHandle,
     state: &WorkbenchState,
     session: &Session,
@@ -1662,12 +2074,17 @@ pub(super) async fn run(
     session: &Session,
 ) -> CommandResult<()> {
     if load_state(app, session)?.wiki_automation.is_some() {
-        hierarchy::run(app,state,session).await?;
-        automation::run(app,state,session).await?;
-        if publish_memory_events(app,state,session).await.is_err() { log::warn!("[knowledge-memory] candidate dispatch pending; Wiki publication preserved"); }
+        // These orchestration futures contain very large state. Keep their
+        // coroutine state on the heap so nested model-task work does not
+        // exhaust the runtime worker stack.
+        Box::pin(hierarchy::run(app, state, session)).await?;
+        Box::pin(automation::run(app, state, session)).await?;
+        if publish_memory_events(app, state, session).await.is_err() {
+            log::warn!("[knowledge-memory] candidate dispatch pending; Wiki publication preserved");
+        }
         return Ok(());
     }
-    collections::run(app,state,session).await?;
+    Box::pin(collections::run(app, state, session)).await?;
     let (root, local, config, initial) = {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
@@ -1696,7 +2113,11 @@ pub(super) async fn run(
             return Ok(());
         }
         manifest.phase = "processing".into();
-        if manifest.wiki_progress.as_ref().is_none_or(|progress| progress.stage == "complete") {
+        if manifest
+            .wiki_progress
+            .as_ref()
+            .is_none_or(|progress| progress.stage == "complete")
+        {
             manifest.wiki_progress = Some(WikiProgress {
                 stage: "preparing".into(),
                 ..Default::default()
@@ -1744,8 +2165,13 @@ pub(super) async fn run(
             job(&root, &task, "running", None, "")?;
             prepared.push((topic, manifest, version, task));
         }
-        let results = future::join_all(prepared.iter().map(|(topic, manifest, _, _)| async {
-            compile(app, state, session, topic, &config, manifest, &root, &local).await
+        let results = future::join_all(prepared.iter().map(|(topic, manifest, _, _)| {
+            let config = config.clone();
+            let root = root.clone();
+            let local = local.clone();
+            Box::pin(async move {
+                compile(app, state, session, topic, &config, manifest, &root, &local).await
+            })
         }))
         .await;
         for ((topic, _, version, task), result) in prepared.iter().zip(results) {
@@ -1813,7 +2239,11 @@ pub(super) async fn run(
                     current.last_attempt_fingerprint = version.clone();
                     let failure = WikiFailure::new(
                         &error,
-                        latest.wiki_progress.as_ref().map(|progress| progress.stage.as_str()).unwrap_or("preparing"),
+                        latest
+                            .wiki_progress
+                            .as_ref()
+                            .map(|progress| progress.stage.as_str())
+                            .unwrap_or("preparing"),
                         current.source_ids.clone(),
                     );
                     current.error = failure.message.clone();
@@ -2006,8 +2436,16 @@ async fn embed_sources(
             },
         )
         .await?;
-        let latest = load_state(app,session)?;
-        if validate_request_sources(local,&latest,&json!({"sources":[{"id":doc.id,"revision":doc.revision}]})).is_err() { continue; }
+        let latest = load_state(app, session)?;
+        if validate_request_sources(
+            local,
+            &latest,
+            &json!({"sources":[{"id":doc.id,"revision":doc.revision}]}),
+        )
+        .is_err()
+        {
+            continue;
+        }
         let vector = match embedding(app, state, session, config, &doc.text(), key.as_deref()).await
         {
             Ok(vector) => vector,
@@ -2049,7 +2487,22 @@ pub async fn workbench_wiki(
     // Topic edits are checked by compilation fingerprints; repeated creation cannot cancel work.
     let incremental_action = matches!(
         action,
-        "topic" | "topic_link" | "topic_group" | "topic_groups_retry" | "correction" | "tracking" | "tracking_retry" | "tracking_refresh" | "tracking_dismiss" | "tracking_restore" | "tracking_sources" | "tracking_review" | "tracking_reset" | "tracking_merge" | "tracking_unmerge" | "tracking_todo"
+        "topic"
+            | "topic_link"
+            | "topic_group"
+            | "topic_groups_retry"
+            | "correction"
+            | "tracking"
+            | "tracking_retry"
+            | "tracking_refresh"
+            | "tracking_dismiss"
+            | "tracking_restore"
+            | "tracking_sources"
+            | "tracking_review"
+            | "tracking_reset"
+            | "tracking_merge"
+            | "tracking_unmerge"
+            | "tracking_todo"
     );
     let session = if action == "state" || incremental_action {
         current(&state)?
@@ -2059,29 +2512,46 @@ pub async fn workbench_wiki(
     let _guard = state.serial.lock().await;
     require_current(&state, &session)?;
     let root = wiki_root(&app, &session)?;
-    let manifest = load_state(&app,&session)?;
-    if action == "state" {hierarchy::refresh(&root,&roots(&app,&session)?.0,&manifest,&session.locale)?;}
+    let manifest = load_state(&app, &session)?;
+    if action == "state" {
+        hierarchy::refresh(&root, &roots(&app, &session)?.0, &manifest, &session.locale)?;
+    }
     let mut values = topics(&root)?;
     let mut config = models(&app, &session)?;
     let mut created_topic_id: Option<String> = None;
     match action {
         "state" => {}
         "source_folders" => {
-            let ids: Vec<String> = serde_json::from_value(request["ids"].clone()).map_err(|_| "Invalid moved meetings")?;
-            let folder = request["folderId"].as_str().filter(|id| id.len() <= 250).ok_or("Invalid destination folder")?;
-            if ids.len() > 1000 { return Err("Too many moved meetings".into()); }
-            let local = roots(&app,&session)?.0;
-            let mut manifest = load_state(&app,&session)?;
-            automation::move_sources(&local,&mut manifest,&ids,folder)?;
-            persist(&app,&session,&manifest)?;
+            let ids: Vec<String> = serde_json::from_value(request["ids"].clone())
+                .map_err(|_| "Invalid moved meetings")?;
+            let folder = request["folderId"]
+                .as_str()
+                .filter(|id| id.len() <= 250)
+                .ok_or("Invalid destination folder")?;
+            if ids.len() > 1000 {
+                return Err("Too many moved meetings".into());
+            }
+            let local = roots(&app, &session)?.0;
+            let mut manifest = load_state(&app, &session)?;
+            automation::move_sources(&local, &mut manifest, &ids, folder)?;
+            persist(&app, &session, &manifest)?;
         }
-        "tracking" | "tracking_retry" | "tracking_refresh" | "tracking_dismiss" | "tracking_restore" | "tracking_sources" | "tracking_review" | "tracking_reset" | "tracking_merge" | "tracking_unmerge" => {
+        "tracking" | "tracking_retry" | "tracking_refresh" | "tracking_dismiss"
+        | "tracking_restore" | "tracking_sources" | "tracking_review" | "tracking_reset"
+        | "tracking_merge" | "tracking_unmerge" => {
             graph::configure(&root, &request)?;
             state.discovery_requested.notify_one();
         }
         "tracking_todo" => {
             let manifest = load_state(&app, &session)?;
-            graph::confirm_todo(&app, &session, &root, &roots(&app, &session)?.0, &manifest, request["id"].as_str().ok_or("Invalid graph task")?)?;
+            graph::confirm_todo(
+                &app,
+                &session,
+                &root,
+                &roots(&app, &session)?.0,
+                &manifest,
+                request["id"].as_str().ok_or("Invalid graph task")?,
+            )?;
         }
         "sources" => {
             super::sources::configure(&app, &session, &request["sources"])?;
@@ -2111,22 +2581,43 @@ pub async fn workbench_wiki(
         }
         "topic" => {
             topic_store::upsert(&root, &mut values, &request)?;
-            created_topic_id = values.iter().find(|topic| {
-                request["id"].as_str().is_some_and(|id| topic_store::matches_id(topic,id))
-                    || (request["id"].is_null() && topic.title == request["title"].as_str().unwrap_or_default().trim()
-                        && topic.collection.is_some() == matches!(request["mode"].as_str(),Some("collection"|"group")))
-            }).map(|topic| topic.id.clone());
+            created_topic_id = values
+                .iter()
+                .find(|topic| {
+                    request["id"]
+                        .as_str()
+                        .is_some_and(|id| topic_store::matches_id(topic, id))
+                        || (request["id"].is_null()
+                            && topic.title == request["title"].as_str().unwrap_or_default().trim()
+                            && topic.collection.is_some()
+                                == matches!(request["mode"].as_str(), Some("collection" | "group")))
+                })
+                .map(|topic| topic.id.clone());
         }
-        "topic_group" => { created_topic_id = Some(hierarchy::group(&root,&mut values,&request)?); }
-        "topic_groups_retry" => { hierarchy::retry(&root)?; }
+        "topic_group" => {
+            created_topic_id = Some(hierarchy::group(&root, &mut values, &request)?);
+        }
+        "topic_groups_retry" => {
+            hierarchy::retry(&root)?;
+        }
         "topic_link" => {
             collections::edit_link(&mut values, &request)?;
-            hierarchy::manual_link(&mut values,&request)?;
+            hierarchy::manual_link(&mut values, &request)?;
             save_topics(&root, &values)?;
         }
         "correction" => {
-            let notes = request["notes"].as_str().filter(|notes| notes.chars().count() <= 20000).ok_or("Correction is too long")?;
-            let topic = values.iter_mut().find(|topic| request["id"].as_str().is_some_and(|id| topic_store::matches_id(topic, id))).ok_or("Topic not found")?;
+            let notes = request["notes"]
+                .as_str()
+                .filter(|notes| notes.chars().count() <= 20000)
+                .ok_or("Correction is too long")?;
+            let topic = values
+                .iter_mut()
+                .find(|topic| {
+                    request["id"]
+                        .as_str()
+                        .is_some_and(|id| topic_store::matches_id(topic, id))
+                })
+                .ok_or("Topic not found")?;
             topic.notes = notes.to_owned();
             topic.force_refresh = true;
             topic.last_attempt_fingerprint.clear();
@@ -2205,17 +2696,24 @@ pub async fn workbench_wiki(
     if action != "state" || reconciled {
         persist(&app, &session, &manifest)?;
         if action != "state" && crate::vault::load_vault_config(&app)?.enabled {
-            if matches!(action, "retry" | "topic" | "topic_link" | "topic_groups_retry" | "correction") && ready(&manifest).is_ok() {
-                state.wiki_requested.store(true, std::sync::atomic::Ordering::SeqCst);
+            if matches!(
+                action,
+                "retry" | "topic" | "topic_link" | "topic_groups_retry" | "correction"
+            ) && ready(&manifest).is_ok()
+            {
+                super::request_wiki(&state);
             }
             start_worker(&app, &state);
-            if matches!(action, "retry" | "topic" | "topic_link" | "topic_groups_retry" | "correction") {
+            if matches!(
+                action,
+                "retry" | "topic" | "topic_link" | "topic_groups_retry" | "correction"
+            ) {
                 state.sync_requested.notify_one();
             }
         }
     }
     if action != "state" {
-        hierarchy::refresh(&root,&local,&manifest,&session.locale)?;
+        hierarchy::refresh(&root, &local, &manifest, &session.locale)?;
         values = topics(&root)?;
     }
     // Rendering a snapshot must not hold the worker's mutation lock while reading sources.
@@ -2226,13 +2724,25 @@ pub async fn workbench_wiki(
         .map(|topic| {
             let mut value = serde_json::to_value(topic).unwrap_or_default();
             collections::filter_view(&mut value, &values, &mut page_sources, &manifest);
-            value["inScope"] = json!(topic.collection.is_some() || manifest.wiki_automation.is_none() || topic.published.as_ref().is_some_and(|page| !page.citations.is_empty() && page.citations.iter().all(|reference| page_sources.document(reference).is_some())));
+            value["inScope"] = json!(
+                topic.collection.is_some()
+                    || manifest.wiki_automation.is_none()
+                    || topic
+                        .published
+                        .as_ref()
+                        .is_some_and(|page| !page.citations.is_empty()
+                            && page
+                                .citations
+                                .iter()
+                                .all(|reference| page_sources.document(reference).is_some()))
+            );
             value["stale"] = json!(topic.published.as_ref().is_some_and(|p| topic
                 .candidate
                 .is_some()
                 || !topic.error.is_empty()
-                || (!topic.collection.as_ref().is_some_and(|c|c.hierarchy)
-                    && p.fingerprint != page_fingerprint(topic, &manifest, &config, &p.citations))
+                || (!topic.collection.as_ref().is_some_and(|c| c.hierarchy)
+                    && p.fingerprint
+                        != page_fingerprint(topic, &manifest, &config, &p.citations))
                 || !page_sources.valid_page(p)));
             value
         })
@@ -2242,7 +2752,9 @@ pub async fn workbench_wiki(
     let topic_graph = automation::topic_graph(&values, &items);
     let source_dates = page_sources.dates(&values);
     require_current(&state, &session)?;
-    Ok(json!({"topics":items,"sourceDates":source_dates,"hierarchy":hierarchy::status(&root)?,"sourceFailures":automation::source_failures(&root)?,"models":config,"sources":super::sources::config(&app,&session)?,"graph":graph,"topicGraph":topic_graph,"automation":manifest.wiki_automation,"createdTopicId":created_topic_id}))
+    Ok(
+        json!({"topics":items,"sourceDates":source_dates,"hierarchy":hierarchy::status(&root)?,"sourceFailures":automation::source_failures(&root)?,"models":config,"sources":super::sources::config(&app,&session)?,"graph":graph,"topicGraph":topic_graph,"automation":manifest.wiki_automation,"createdTopicId":created_topic_id}),
+    )
 }
 
 #[cfg(test)]
@@ -2289,7 +2801,11 @@ mod tests {
         let spanned = format!("{}\n\n\n\nTask: Ship it · completed: false", doc.transcript);
         assert!(valid_page(&local, &manifest, &page(&spanned)));
         // The dropped outline itself was never model input and must stay rejected.
-        assert!(!valid_page(&local, &manifest, &page("<!DOCTYPE html><html><body>Visual</body></html>")));
+        assert!(!valid_page(
+            &local,
+            &manifest,
+            &page("<!DOCTYPE html><html><body>Visual</body></html>")
+        ));
         fs::remove_dir_all(local).unwrap();
     }
     #[test]
@@ -2511,15 +3027,26 @@ mod tests {
     }
     #[tokio::test]
     async fn citation_correction_preserves_original_sources_and_compilation_evidence() {
-        let reference = json!({"id":"one","revision":"r1","kind":"meeting","quote":"Friday is a proposal."});
+        let reference =
+            json!({"id":"one","revision":"r1","kind":"meeting","quote":"Friday is a proposal."});
         let output = json!({"summary":"Friday remains tentative.","citations":[reference],"insufficientEvidence":false});
         let body = json!({"task":"topic_compile","query":"Keep dates tentative","sources":[{"id":"one","revision":"r1","kind":"meeting","text":"Friday is a proposal."}],"evidence":[output.clone()]});
         let (endpoint, server) = synthesis_server(vec![
-            (422, json!({"detail":"Citation does not match source evidence"})),
+            (
+                422,
+                json!({"detail":"Citation does not match source evidence"}),
+            ),
             (200, output.clone()),
         ]);
         let client = synthesis_client(&endpoint).unwrap();
-        assert_eq!(send_synthesis(&client, &endpoint, "synthetic-token", body.clone(), || Ok(())).await.unwrap(), output);
+        assert_eq!(
+            send_synthesis(&client, &endpoint, "synthetic-token", body.clone(), || Ok(
+                ()
+            ))
+            .await
+            .unwrap(),
+            output
+        );
         let requests = server.join().unwrap();
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[1]["sources"], body["sources"]);
@@ -2599,10 +3126,20 @@ mod tests {
             !synthesis_error(422, &json!({"detail":"PRIVATE_INPUT synthetic-secret"}))
                 .contains("PRIVATE_INPUT")
         );
-        for reason in ["Invalid Wiki catalog output", "Invalid Wiki publication metadata"] {
+        for reason in [
+            "Invalid Wiki catalog output",
+            "Invalid Wiki publication metadata",
+        ] {
             let (endpoint, server) = synthesis_server(vec![(422, json!({"detail":reason}))]);
-            let error = send_synthesis(&client, &endpoint, "synthetic-token",
-                json!({"task":"wiki_catalog","sources":[]}), || Ok(())).await.unwrap_err();
+            let error = send_synthesis(
+                &client,
+                &endpoint,
+                "synthetic-token",
+                json!({"task":"wiki_catalog","sources":[]}),
+                || Ok(()),
+            )
+            .await
+            .unwrap_err();
             assert!(error.contains(reason));
             assert_eq!(server.join().unwrap().len(), 1);
         }
@@ -2643,6 +3180,7 @@ mod tests {
             revision: "existing-vector-version".into(),
             text_revision: "existing-text-version".into(),
             legacy_text_revision: String::new(),
+            server_profile: None,
         };
         let request = json!({
             "embedding":{"baseUrl":" http://localhost:11434/v1/ ","model":" local-embedding "},
@@ -2848,7 +3386,10 @@ mod tests {
         assert!(sources[0]["segments"][0].get("startMs").is_none());
         assert_eq!(sources[0]["segments"][1]["startMs"], 1000);
         let excessive = vec![CompilationEvidence {
-            source: Document { transcript: "x".repeat(12001), ..source },
+            source: Document {
+                transcript: "x".repeat(12001),
+                ..source
+            },
             value: json!({"citations":[{"id":"a","quote":"x"}]}),
         }];
         assert!(compile_sources(&excessive).is_err());
@@ -2927,16 +3468,24 @@ mod tests {
         }
         assert!(compile_sources(&evidence).is_err());
         let repeated = vec![evidence[0].clone(), evidence[0].clone()];
-        assert_eq!(compile_sources(&repeated).unwrap()[0]["text"], "甲".repeat(12000));
-        assert_eq!(serde_json::to_value(&evidence[0]).unwrap(), evidence[0].value);
+        assert_eq!(
+            compile_sources(&repeated).unwrap()[0]["text"],
+            "甲".repeat(12000)
+        );
+        assert_eq!(
+            serde_json::to_value(&evidence[0]).unwrap(),
+            evidence[0].value
+        );
         let mut changed = evidence[0].clone();
         changed.source.revision = "r2".into();
         assert!(compile_sources(&[evidence[0].clone(), changed]).is_err());
-        let many: Vec<_> = (0..6).map(|index| {
-            let mut item = evidence[0].clone();
-            item.source.id = index.to_string();
-            item
-        }).collect();
+        let many: Vec<_> = (0..6)
+            .map(|index| {
+                let mut item = evidence[0].clone();
+                item.source.id = index.to_string();
+                item
+            })
+            .collect();
         assert!(compile_sources(&many).is_err());
     }
     #[tokio::test]
@@ -2986,15 +3535,29 @@ mod tests {
         let mut retry_manifest = manifest.clone();
         retry_failed_work(&root, &mut topics, &mut retry_manifest, Some(&id)).unwrap();
         assert_eq!(
-            cached_compilation(&root, "first", &serial, &validate, !topics[0].force_refresh, generate())
-                .await
-                .unwrap(),
+            cached_compilation(
+                &root,
+                "first",
+                &serial,
+                &validate,
+                !topics[0].force_refresh,
+                generate()
+            )
+            .await
+            .unwrap(),
             result
         );
         assert_eq!(calls.get(), 1);
-        cached_compilation(&root, "second", &serial, &validate, !topics[0].force_refresh, generate())
-            .await
-            .unwrap();
+        cached_compilation(
+            &root,
+            "second",
+            &serial,
+            &validate,
+            !topics[0].force_refresh,
+            generate(),
+        )
+        .await
+        .unwrap();
         assert_eq!(calls.get(), 2);
         cached_compilation(&root, "first", &serial, &validate, false, generate())
             .await
@@ -3137,11 +3700,16 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("topics.json"), "[]").unwrap();
         let mut values: Vec<Topic> = Vec::new();
-        topic_store::upsert(&root, &mut values, &json!({"title": "出海营销", "purpose": "p"}))
-            .unwrap();
+        topic_store::upsert(
+            &root,
+            &mut values,
+            &json!({"title": "出海营销", "purpose": "p"}),
+        )
+        .unwrap();
         let id = values[0].id.clone();
         values[0].merged_ids.push("legacy".into());
         let mut other = Topic {
+            id: uuid::Uuid::new_v4().to_string(),
             title: "Other".into(),
             ..Default::default()
         };
@@ -3289,13 +3857,18 @@ mod tests {
         assert!(!manifest.allow_ai);
         let restored = topics(&root).unwrap();
         assert_eq!(restored[0].notes, topic.notes);
-        assert_eq!(restored[0].published.as_ref().unwrap().markdown,
-            topic.published.as_ref().unwrap().markdown);
+        assert_eq!(
+            restored[0].published.as_ref().unwrap().markdown,
+            topic.published.as_ref().unwrap().markdown
+        );
         assert!(restored[0].error.is_empty());
 
         fs::write(root.join("topics.json"), "invalid JSON").unwrap();
         assert!(resume_session_at(Some(&root), &mut manifest).is_err());
-        assert_eq!(fs::read_to_string(root.join("topics.json")).unwrap(), "invalid JSON");
+        assert_eq!(
+            fs::read_to_string(root.join("topics.json")).unwrap(),
+            "invalid JSON"
+        );
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -3352,19 +3925,69 @@ mod tests {
     }
 }
 
-pub(super) fn memory_source(doc: Document,manifest: &Manifest) -> Document {
-    automation::citation_document(doc,manifest,"meeting_summary")
+pub(super) fn memory_source(doc: Document, manifest: &Manifest) -> Document {
+    automation::citation_document(doc, manifest, "meeting_summary")
 }
-pub(super) fn mask_memory_text(text: &str) -> String { graph::mask(text) }
-pub(super) async fn publish_memory_events(app: &AppHandle,state: &WorkbenchState,session: &Session) -> CommandResult<()> {
+pub(super) fn mask_memory_text(text: &str) -> String {
+    graph::mask(text)
+}
+pub(super) async fn publish_memory_events(
+    app: &AppHandle,
+    state: &WorkbenchState,
+    session: &Session,
+) -> CommandResult<()> {
     let pages = {
-        let _guard=state.serial.lock().await;
-        require_current(state,session)?;
-        let manifest=load_state(app,session)?;
-        if !manifest.enabled || !manifest.allow_ai { return Ok(()); }
-        let (local,_)=roots(app,session)?;
-        topics(&wiki_root(app,session)?)?.into_iter().filter(|topic| topic.collection.is_none()).filter(|topic|citable(topic,&local,&manifest,&models(app,session).unwrap_or_default()))
-            .filter_map(|topic|topic.published.map(|page|json!({"topic_id":topic.id,"topic_title":topic.title,"fingerprint":page.fingerprint,"citations":page.citations}))).collect()
+        let _guard = state.serial.lock().await;
+        require_current(state, session)?;
+        let manifest = load_state(app, session)?;
+        if !manifest.enabled || !manifest.allow_ai {
+            return Ok(());
+        }
+        let (local, _) = roots(app, session)?;
+        let config = models(app, session)?;
+        topics(&wiki_root(app, session)?)?
+            .into_iter()
+            .filter(|topic| {
+                topic.collection.is_none() && citable(topic, &local, &manifest, &config)
+            })
+            .filter_map(|topic| {
+                topic.published.map(|page| {
+                    json!({"topic_id":topic.id,"topic_title":topic.title,
+                "fingerprint":page.fingerprint,"citations":page.citations})
+                })
+            })
+            .collect()
     };
-    knowledge_cloud::publish_events(app,session,pages).await
+    knowledge_cloud::enqueue_events(app, session, pages).await
+}
+
+pub(super) async fn memory_events_current(
+    app: &AppHandle,
+    session: &Session,
+    pages: &[Value],
+) -> CommandResult<std::collections::BTreeSet<String>> {
+    let state = app.state::<WorkbenchState>();
+    let _guard = state.serial.lock().await;
+    require_current(&state, session)?;
+    let manifest = load_state(app, session)?;
+    let (local, _) = roots(app, session)?;
+    let config = models(app, session)?;
+    let current = topics(&wiki_root(app, session)?)?
+        .into_iter()
+        .filter(|topic| {
+            topic.collection.is_none()
+                && pages.iter().any(|page| {
+                    page["topic_id"] == topic.id
+                        && page["topic_title"] == topic.title
+                        && topic.published.as_ref().is_some_and(|published| {
+                            page["fingerprint"] == published.fingerprint
+                                && page["citations"] == json!(published.citations)
+                        })
+                })
+                && citable(topic, &local, &manifest, &config)
+        })
+        .map(|topic| topic.id)
+        .collect();
+    require_current(&state, session)?;
+    Ok(current)
 }

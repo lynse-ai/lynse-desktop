@@ -25,8 +25,265 @@ fn manifest() -> Manifest {
         ..Default::default()
     }
 }
+
+#[test]
+fn automatic_scheduler_keeps_completed_work_idle_after_reloading_saved_state() {
+    let root = root();
+    let source = doc("completed", "work");
+    let docs = vec![source.clone()];
+    let config = Models::default();
+    let mut manifest = manifest();
+    let mut catalog = Catalog::default();
+    let mut values = Vec::new();
+    let rows = vec![row(&source)];
+    apply_catalog(&mut values, &mut catalog, &source.id, &rows);
+    catalog
+        .chunks
+        .insert(format!("{}:0", input_key(&source, &config)), rows);
+    let version = page_version(&values[0], &docs, &manifest, &config);
+    values[0].published = Some(page(&values[0], &source, &manifest, "Saved knowledge"));
+    values[0].last_fingerprint = version.clone();
+    values[0].last_attempt_fingerprint = version;
+    manifest.wiki_attempted_fingerprint = processing_inputs(&docs, &values, &config);
+    complete_processing(&mut manifest, &values, 0);
+    write_json(&root.join("state.json"), &manifest).unwrap();
+    write_json(&catalog_path(&root), &catalog).unwrap();
+    save_topics(&root, &values).unwrap();
+
+    let restored: Manifest = read_json(&root.join("state.json")).unwrap();
+    let restored_topics = topics(&root).unwrap();
+    let restored_catalog = read_json(&catalog_path(&root)).unwrap();
+    assert!(!needs_automatic_processing(
+        &restored,
+        &restored_topics,
+        &docs,
+        &config,
+        &restored_catalog
+    ));
+    assert!(pending_compilation(
+        &restored_topics[0],
+        &docs,
+        &restored,
+        &config,
+        &BTreeSet::new(),
+        None,
+    )
+    .is_none());
+
+    let mut retried = restored.clone();
+    retry_failed_work(&root, &mut values, &mut retried, None).unwrap();
+    assert!(needs_automatic_processing(
+        &retried, &values, &docs, &config, &catalog
+    ));
+    assert!(
+        pending_compilation(&values[0], &docs, &retried, &config, &BTreeSet::new(), None).is_none()
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn automatic_scheduler_only_recompiles_topics_with_changed_inputs() {
+    let sources = vec![doc("first", "work"), doc("second", "work")];
+    let config = Models::default();
+    let mut manifest = manifest();
+    let mut catalog = Catalog::default();
+    let mut values = Vec::new();
+    for source in &sources {
+        let rows = vec![row(source)];
+        apply_catalog(&mut values, &mut catalog, &source.id, &rows);
+        catalog
+            .chunks
+            .insert(format!("{}:0", input_key(source, &config)), rows);
+    }
+    for topic in &mut values {
+        let selected: Vec<_> = sources
+            .iter()
+            .filter(|doc| topic.source_ids.contains(&doc.id))
+            .cloned()
+            .collect();
+        topic.last_fingerprint = page_version(topic, &selected, &manifest, &config);
+    }
+    manifest.wiki_attempted_fingerprint = processing_inputs(&sources, &values, &config);
+    assert!(!needs_automatic_processing(
+        &manifest, &values, &sources, &config, &catalog
+    ));
+
+    let mut changed = sources.clone();
+    changed[0].transcript.push_str("新增预算讨论。");
+    changed[0].refresh_revision();
+    assert!(needs_automatic_processing(
+        &manifest, &values, &changed, &config, &catalog
+    ));
+    let pending: Vec<_> = values
+        .iter()
+        .filter(|topic| {
+            pending_compilation(topic, &changed, &manifest, &config, &BTreeSet::new(), None)
+                .is_some()
+        })
+        .collect();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].source_ids, vec![sources[0].id.clone()]);
+
+    values[1].notes = "User correction".into();
+    assert!(pending_compilation(
+        &values[1],
+        &sources,
+        &manifest,
+        &config,
+        &BTreeSet::new(),
+        None
+    )
+    .is_some());
+    let embedding = Models {
+        revision: "new-embedding".into(),
+        ..config.clone()
+    };
+    assert!(needs_automatic_processing(
+        &manifest,
+        &values[..1],
+        &sources,
+        &embedding,
+        &catalog
+    ));
+    assert!(pending_compilation(
+        &values[0],
+        &sources,
+        &manifest,
+        &embedding,
+        &BTreeSet::new(),
+        None,
+    )
+    .is_none());
+}
+
+#[test]
+fn automatic_scheduler_does_not_loop_on_failed_catalog_or_sync_metadata() {
+    let docs = vec![doc("failed", "work"), doc("complete", "work")];
+    let config = Models::default();
+    let mut manifest = manifest();
+    let mut catalog = Catalog::default();
+    catalog.failed.insert(
+        format!("{}:0", input_key(&docs[0], &config)),
+        "Invalid Wiki catalog output".into(),
+    );
+    catalog
+        .chunks
+        .insert(format!("{}:0", input_key(&docs[1], &config)), Vec::new());
+    let topic = Topic {
+        id: uuid::Uuid::new_v4().to_string(),
+        source_ids: vec![docs[0].id.clone()],
+        ..Default::default()
+    };
+    let values = vec![topic];
+    manifest.wiki_attempted_fingerprint = processing_inputs(&docs, &values, &config);
+    assert!(!needs_automatic_processing(
+        &manifest, &values, &docs, &config, &catalog
+    ));
+
+    manifest.sync_round = "new-sync-round".into();
+    manifest.completed_round = manifest.sync_round.clone();
+    manifest.updated_at = crate::now();
+    manifest
+        .wiki_automation
+        .as_mut()
+        .unwrap()
+        .folder_ids
+        .push("unrelated-folder".into());
+    let mut reordered = docs.clone();
+    reordered.reverse();
+    assert!(!needs_automatic_processing(
+        &manifest, &values, &reordered, &config, &catalog
+    ));
+    catalog.failed.clear();
+    assert!(needs_automatic_processing(
+        &manifest, &values, &reordered, &config, &catalog
+    ));
+}
+
+#[test]
+fn automatic_scheduler_refreshes_collections_after_member_edits_or_removal() {
+    let source = doc("member", "work");
+    let docs = vec![source.clone()];
+    let config = Models::default();
+    let mut manifest = manifest();
+    let mut member = Topic {
+        id: uuid::Uuid::new_v4().to_string(),
+        source_ids: vec![source.id.clone()],
+        ..Default::default()
+    };
+    member.last_fingerprint = page_version(&member, &docs, &manifest, &config);
+    member.published = Some(page(&member, &source, &manifest, "Saved member page"));
+    let collection = Topic {
+        id: uuid::Uuid::new_v4().to_string(),
+        collection: Some(collections::Collection::default()),
+        ..Default::default()
+    };
+    let values = vec![member, collection];
+    let mut catalog = Catalog::default();
+    catalog
+        .chunks
+        .insert(format!("{}:0", input_key(&source, &config)), Vec::new());
+    manifest.wiki_attempted_fingerprint = processing_inputs(&docs, &values, &config);
+    assert!(!needs_automatic_processing(
+        &manifest, &values, &docs, &config, &catalog
+    ));
+    let mut excluded = values.clone();
+    excluded[0].excluded = true;
+    assert!(needs_automatic_processing(
+        &manifest, &excluded, &docs, &config, &catalog
+    ));
+    assert!(needs_automatic_processing(
+        &manifest,
+        &values[1..],
+        &docs,
+        &config,
+        &catalog
+    ));
+    let mut edited = values.clone();
+    edited[0]
+        .published
+        .as_mut()
+        .unwrap()
+        .markdown
+        .push_str("\nExternal edit");
+    assert!(needs_automatic_processing(
+        &manifest, &edited, &docs, &config, &catalog
+    ));
+}
+
+#[test]
+fn completed_grouping_restores_idle_progress_without_erasing_failures() {
+    let mut manifest = manifest();
+    manifest.phase = "processing".into();
+    manifest.error = "Embedding failed for 1 sources; keyword search remains available".into();
+    manifest.wiki_progress = Some(WikiProgress {
+        stage: "grouping".into(),
+        completed: 30,
+        total: 30,
+        failed: 3,
+        ..Default::default()
+    });
+    let values = vec![Topic {
+        id: uuid::Uuid::new_v4().to_string(),
+        ..Default::default()
+    }];
+    assert!(finish_idle_grouping(&mut manifest, &values, 2));
+    assert_eq!(manifest.phase, "ready");
+    let progress = manifest.wiki_progress.as_ref().unwrap();
+    assert_eq!(
+        (
+            progress.stage.as_str(),
+            progress.completed,
+            progress.total,
+            progress.failed
+        ),
+        ("complete", 1, 1, 3)
+    );
+    assert!(manifest.error.starts_with("Embedding failed for 1 sources"));
+    assert!(!finish_idle_grouping(&mut manifest, &values, 2));
+}
 fn add(local: &Path, manifest: &mut Manifest, doc: &Document) {
-    let entry = store::write_document(local, doc, None).unwrap();
+    let entry = store::write_document(local, doc, manifest.entries.get(&doc.id)).unwrap();
     manifest.entries.insert(doc.id.clone(), entry);
 }
 fn row(doc: &Document) -> CatalogTopic {
@@ -87,12 +344,22 @@ fn model_output_failures_retry_per_session_but_stay_latched_within_a_session() {
     assert!(is_model_output_failure(
         "Lynclaw synthesis failed (HTTP 422): Invalid Wiki catalog output\n[lynse-validation] {\"catalogIssue\":{\"code\":\"missing_new_source\"}}"
     ));
-    assert!(is_model_output_failure("Lynclaw returned invalid synthesis JSON"));
-    assert!(is_model_output_failure("Lynclaw synthesis failed (HTTP 500): Invalid Wiki catalog output"));
+    assert!(is_model_output_failure(
+        "Lynclaw returned invalid synthesis JSON"
+    ));
+    assert!(is_model_output_failure(
+        "Lynclaw synthesis failed (HTTP 500): Invalid Wiki catalog output"
+    ));
     // Session, transport and compile-stage validation errors latch as before.
-    assert!(!is_model_output_failure("Lynclaw synthesis failed (HTTP 401)"));
-    assert!(!is_model_output_failure("Lynclaw synthesis failed (HTTP 503): Model outcome is unknown; retry explicitly"));
-    assert!(!is_model_output_failure("Insufficient evidence must not contain factual output"));
+    assert!(!is_model_output_failure(
+        "Lynclaw synthesis failed (HTTP 401)"
+    ));
+    assert!(!is_model_output_failure(
+        "Lynclaw synthesis failed (HTTP 503): Model outcome is unknown; retry explicitly"
+    ));
+    assert!(!is_model_output_failure(
+        "Insufficient evidence must not contain factual output"
+    ));
 }
 #[test]
 fn source_selection_covers_new_meetings_movement_exclusion_and_unavailable_sources() {
@@ -146,6 +413,7 @@ fn summaries_are_preferred_independently_and_transcripts_are_a_real_fallback() {
     manifest.artifacts.clear();
     assert_eq!(preferred(source.clone(), &manifest).kind, "meeting");
     source.transcript.clear();
+    source.refresh_revision();
     let local = root();
     add(&local, &mut manifest, &source);
     assert!(documents(&local, &manifest).is_empty());
@@ -197,7 +465,7 @@ fn catalog_rejects_forgery_unanchored_identity_unknown_fields_and_duplicate_keys
         &json!({"topics":[item]}),
         &[two.clone(), one.clone()],
         &manifest,
-        &[old.clone()]
+        &[(&old).into()]
     )
     .is_err());
     item.citations.push(row(&one).citations.remove(0));
@@ -205,7 +473,7 @@ fn catalog_rejects_forgery_unanchored_identity_unknown_fields_and_duplicate_keys
         &json!({"topics":[item.clone()]}),
         &[two.clone(), one.clone()],
         &manifest,
-        &[old.clone()]
+        &[(&old).into()]
     )
     .is_ok());
     let mut bad_key = item.clone();
@@ -214,7 +482,7 @@ fn catalog_rejects_forgery_unanchored_identity_unknown_fields_and_duplicate_keys
         &json!({"topics":[bad_key]}),
         &[two.clone(), one.clone()],
         &manifest,
-        &[old.clone()]
+        &[(&old).into()]
     )
     .is_err());
     item.citations[0].quote = "made up".into();
@@ -222,7 +490,7 @@ fn catalog_rejects_forgery_unanchored_identity_unknown_fields_and_duplicate_keys
         &json!({"topics":[item]}),
         &[two.clone(), one],
         &manifest,
-        &[old]
+        &[(&old).into()]
     )
     .is_err());
     assert!(validate_catalog(
@@ -346,7 +614,10 @@ fn page_cache_changes_only_for_actual_topic_inputs() {
     );
     assert_eq!(input_key(&source, &config), source_key);
     manifest.wiki_automation.as_mut().unwrap().folder_ids = vec!["other".into(), "work".into()];
-    assert_eq!(page_version(&topic, &[source.clone()], &manifest, &config), initial);
+    assert_eq!(
+        page_version(&topic, &[source.clone()], &manifest, &config),
+        initial
+    );
     assert_ne!(
         page_version(&topic, &[source, doc("new", "work")], &manifest, &config),
         initial
@@ -360,19 +631,42 @@ async fn range_changes_reuse_compilation_and_only_changed_evidence_calls_the_mod
     let mut manifest = manifest();
     let source = doc("existing", "work");
     add(&local, &mut manifest, &source);
-    let topic = Topic { id: "stable-topic".into(), title: "Budget".into(), source_ids: vec![source.id.clone()], ..Default::default() };
+    let topic = Topic {
+        id: "stable-topic".into(),
+        title: "Budget".into(),
+        source_ids: vec![source.id.clone()],
+        ..Default::default()
+    };
     let config = Models::default();
     let serial = tokio::sync::Mutex::new(());
     let calls = std::cell::Cell::new(0);
-    for folders in [vec!["work"], vec!["work", "other"], vec!["other", "work"], vec!["work"]] {
-        manifest.wiki_automation.as_mut().unwrap().folder_ids = folders.into_iter().map(String::from).collect();
+    for folders in [
+        vec!["work"],
+        vec!["work", "other"],
+        vec!["other", "work"],
+        vec!["work"],
+    ] {
+        manifest.wiki_automation.as_mut().unwrap().folder_ids =
+            folders.into_iter().map(String::from).collect();
         let version = page_version(&topic, &[source.clone()], &manifest, &config);
-        let evidence = vec![CompilationEvidence { source: source.clone(), value: json!({"relevant":true}) }];
+        let evidence = vec![CompilationEvidence {
+            source: source.clone(),
+            value: json!({"relevant":true}),
+        }];
         let result = json!({"summary":"Saved page", "citations":[{"kind":"meeting","id":source.id,"revision":source.revision,"quote":source.text()}]});
-        cached_compilation(&root, &compilation_key(&version, &evidence), &serial,
-            |value| sync::validate_result(&[source.clone()], &manifest, value), true, async {
-                calls.set(calls.get() + 1); Ok(result)
-            }).await.unwrap();
+        cached_compilation(
+            &root,
+            &compilation_key(&version, &evidence),
+            &serial,
+            |value| sync::validate_result(&[source.clone()], &manifest, value),
+            true,
+            async {
+                calls.set(calls.get() + 1);
+                Ok(result)
+            },
+        )
+        .await
+        .unwrap();
     }
     assert_eq!(calls.get(), 1);
     let mut changed = source.clone();
@@ -380,7 +674,10 @@ async fn range_changes_reuse_compilation_and_only_changed_evidence_calls_the_mod
     changed.refresh_revision();
     add(&local, &mut manifest, &changed);
     let version = page_version(&topic, &[changed.clone()], &manifest, &config);
-    let evidence = vec![CompilationEvidence { source: changed.clone(), value: json!({"relevant":true}) }];
+    let evidence = vec![CompilationEvidence {
+        source: changed.clone(),
+        value: json!({"relevant":true}),
+    }];
     cached_compilation(&root, &compilation_key(&version, &evidence), &serial,
         |value| sync::validate_result(&[changed.clone()], &manifest, value), true, async {
             calls.set(calls.get() + 1);
@@ -395,7 +692,10 @@ fn scoped_legacy_pages_migrate_only_when_complete_inputs_and_quotes_match() {
     let root = root();
     let local = root.join("sources");
     let mut manifest = manifest();
-    let config = Models { text_revision: "same-model-language-prompt".into(), ..Default::default() };
+    let config = Models {
+        text_revision: "same-model-language-prompt".into(),
+        ..Default::default()
+    };
     let source = doc("existing", "work");
     add(&local, &mut manifest, &source);
     let mut catalog = Catalog::default();
@@ -404,11 +704,22 @@ fn scoped_legacy_pages_migrate_only_when_complete_inputs_and_quotes_match() {
     let topic = &mut values[0];
     topic.pinned = true;
     topic.notes = "Keep this correction".into();
-    let version = scope_cache::legacy_version(topic, &[source.clone()], manifest.wiki_automation.as_ref().unwrap(), &config);
+    let version = scope_cache::legacy_version(
+        topic,
+        &[source.clone()],
+        manifest.wiki_automation.as_ref().unwrap(),
+        &config,
+    );
     let mut saved = page(topic, &source, &manifest, "Saved and reviewed page");
     // Prior gateway-only migrations advanced the completed version without rewriting this field.
     saved.cache_key = "pre-gateway-cache-key".into();
-    saved.fingerprint = page_fingerprint_with_legacy_scope(topic, &manifest, &config, &saved.citations, manifest.wiki_automation.as_ref());
+    saved.fingerprint = page_fingerprint_with_legacy_scope(
+        topic,
+        &manifest,
+        &config,
+        &saved.citations,
+        manifest.wiki_automation.as_ref(),
+    );
     saved.review = "approved".into();
     topic.published = Some(saved.clone());
     topic.last_fingerprint = version.clone();
@@ -416,38 +727,79 @@ fn scoped_legacy_pages_migrate_only_when_complete_inputs_and_quotes_match() {
     save_page(&root, topic, &saved, false).unwrap();
     save_topics(&root, &values).unwrap();
 
-    manifest.wiki_automation.as_mut().unwrap().folder_ids.extend(["new-folder".into(), "third-folder".into()]);
+    manifest
+        .wiki_automation
+        .as_mut()
+        .unwrap()
+        .folder_ids
+        .extend(["new-folder".into(), "third-folder".into()]);
     let docs = vec![source.clone()];
-    assert_eq!(migrate_scope_cache(&root, &local, &docs, &manifest, &config).unwrap(), 1);
-    assert_eq!(migrate_scope_cache(&root, &local, &docs, &manifest, &config).unwrap(), 0);
+    assert_eq!(
+        migrate_scope_cache(&root, &local, &docs, &manifest, &config).unwrap(),
+        1
+    );
+    assert_eq!(
+        migrate_scope_cache(&root, &local, &docs, &manifest, &config).unwrap(),
+        0
+    );
     let migrated = topics(&root).unwrap();
-    assert_eq!(migrated[0].last_fingerprint, page_version(&migrated[0], &docs, &manifest, &config));
+    assert_eq!(
+        migrated[0].last_fingerprint,
+        page_version(&migrated[0], &docs, &manifest, &config)
+    );
     let current = migrated[0].published.as_ref().unwrap();
     assert_eq!(current.id, saved.id);
     assert_eq!(current.markdown, saved.markdown);
     assert_eq!(current.review, "approved");
     assert_eq!(migrated[0].notes, "Keep this correction");
     assert!(migrated[0].pinned);
-    assert_eq!(fs::read_to_string(root.join(&migrated[0].id).join("published.md")).unwrap(), saved.markdown);
+    assert_eq!(
+        fs::read_to_string(root.join(&migrated[0].id).join("published.md")).unwrap(),
+        saved.markdown
+    );
     assert!(citable(&migrated[0], &local, &manifest, &config));
 
-    for mutation in ["notes", "source", "model", "refresh", "excluded", "range-revoked", "external-edit"] {
+    for mutation in [
+        "notes",
+        "source",
+        "model",
+        "refresh",
+        "excluded",
+        "range-revoked",
+        "external-edit",
+    ] {
         let mut trial = values.clone();
         let mut docs = vec![source.clone()];
         let mut model = config.clone();
         match mutation {
             "notes" => trial[0].notes.push_str(" New instruction"),
-            "source" => { docs[0].transcript.push_str("Changed evidence"); docs[0].refresh_revision(); add(&local, &mut manifest, &docs[0]); },
+            "source" => {
+                docs[0].transcript.push_str("Changed evidence");
+                docs[0].refresh_revision();
+                add(&local, &mut manifest, &docs[0]);
+            }
             "model" => model.text_revision = "different-model-or-language".into(),
             "refresh" => trial[0].force_refresh = true,
             "excluded" => manifest.entries.get_mut(&source.id).unwrap().excluded = true,
-            "range-revoked" => manifest.wiki_automation.as_mut().unwrap().folder_ids = vec!["other".into()],
-            _ => { fs::write(root.join(&trial[0].id).join("published.md"), "Manual edit").unwrap(); },
+            "range-revoked" => {
+                manifest.wiki_automation.as_mut().unwrap().folder_ids = vec!["other".into()]
+            }
+            _ => {
+                fs::write(root.join(&trial[0].id).join("published.md"), "Manual edit").unwrap();
+            }
         }
         save_topics(&root, &trial).unwrap();
-        assert_eq!(migrate_scope_cache(&root, &local, &docs, &manifest, &model).unwrap(), 0, "{mutation}");
-        assert_eq!(topics(&root).unwrap()[0].last_fingerprint, trial[0].last_fingerprint);
-        manifest.wiki_automation.as_mut().unwrap().folder_ids = vec!["work".into(), "new-folder".into(), "third-folder".into()];
+        assert_eq!(
+            migrate_scope_cache(&root, &local, &docs, &manifest, &model).unwrap(),
+            0,
+            "{mutation}"
+        );
+        assert_eq!(
+            topics(&root).unwrap()[0].last_fingerprint,
+            trial[0].last_fingerprint
+        );
+        manifest.wiki_automation.as_mut().unwrap().folder_ids =
+            vec!["work".into(), "new-folder".into(), "third-folder".into()];
         add(&local, &mut manifest, &source);
     }
     fs::remove_dir_all(root).unwrap();
@@ -465,15 +817,38 @@ fn migrating_a_failed_attempt_does_not_retry_it_or_turn_it_into_success() {
     let mut values = Vec::new();
     apply_catalog(&mut values, &mut catalog, &source.id, &[row(&source)]);
     values[0].error = "Invalid Wiki citations".into();
-    values[0].failure = Some(WikiFailure::new(&values[0].error, "compiling", vec![source.id.clone()]));
-    values[0].last_attempt_fingerprint = scope_cache::legacy_version(&values[0], &[source.clone()], manifest.wiki_automation.as_ref().unwrap(), &config);
+    values[0].failure = Some(WikiFailure::new(
+        &values[0].error,
+        "compiling",
+        vec![source.id.clone()],
+    ));
+    values[0].last_attempt_fingerprint = scope_cache::legacy_version(
+        &values[0],
+        &[source.clone()],
+        manifest.wiki_automation.as_ref().unwrap(),
+        &config,
+    );
     save_topics(&root, &values).unwrap();
-    manifest.wiki_automation.as_mut().unwrap().folder_ids.push("new-folder".into());
-    assert_eq!(migrate_scope_cache(&root, &local, &[source.clone()], &manifest, &config).unwrap(), 0);
+    manifest
+        .wiki_automation
+        .as_mut()
+        .unwrap()
+        .folder_ids
+        .push("new-folder".into());
+    assert_eq!(
+        migrate_scope_cache(&root, &local, &[source.clone()], &manifest, &config).unwrap(),
+        0
+    );
     let restored = topics(&root).unwrap();
-    assert_eq!(restored[0].last_attempt_fingerprint, page_version(&restored[0], &[source], &manifest, &config));
+    assert_eq!(
+        restored[0].last_attempt_fingerprint,
+        page_version(&restored[0], &[source], &manifest, &config)
+    );
     assert_eq!(restored[0].error, values[0].error);
-    assert_eq!(restored[0].failure.as_ref().unwrap().message, values[0].failure.as_ref().unwrap().message);
+    assert_eq!(
+        restored[0].failure.as_ref().unwrap().message,
+        values[0].failure.as_ref().unwrap().message
+    );
     assert!(restored[0].published.is_none());
     assert!(restored[0].last_fingerprint.is_empty());
     fs::remove_dir_all(root).unwrap();
@@ -727,7 +1102,8 @@ fn manual_retry_preserves_completed_pages_catalog_and_progress() {
         source_ids: vec![source.id.clone()],
         ..Default::default()
     };
-    completed.last_fingerprint = page_version(&completed, &[source.clone()], &manifest, &Models::default());
+    completed.last_fingerprint =
+        page_version(&completed, &[source.clone()], &manifest, &Models::default());
     completed.last_attempt_fingerprint = completed.last_fingerprint.clone();
     completed.published = Some(page(&completed, &source, &manifest, "Saved knowledge"));
     let saved = serde_json::to_value(&completed).unwrap();
@@ -744,18 +1120,38 @@ fn manual_retry_preserves_completed_pages_catalog_and_progress() {
         title: "Pending".into(),
         ..Default::default()
     };
-    let pinned = Topic { id: uuid::Uuid::new_v4().to_string(), title: "Pinned".into(), pinned: true, ..failed.clone() };
-    let excluded = Topic { id: uuid::Uuid::new_v4().to_string(), title: "Excluded".into(), excluded: true, ..failed.clone() };
+    let pinned = Topic {
+        id: uuid::Uuid::new_v4().to_string(),
+        title: "Pinned".into(),
+        pinned: true,
+        ..failed.clone()
+    };
+    let excluded = Topic {
+        id: uuid::Uuid::new_v4().to_string(),
+        title: "Excluded".into(),
+        excluded: true,
+        ..failed.clone()
+    };
     let mut values = vec![completed, failed, pending, pinned, excluded];
     let untouched = serde_json::to_value(&values[2..]).unwrap();
     manifest.wiki_progress = Some(WikiProgress {
-        stage: "compiling".into(), completed: 1, total: 3, failed: 1, ..Default::default()
+        stage: "compiling".into(),
+        completed: 1,
+        total: 3,
+        failed: 1,
+        ..Default::default()
     });
     manifest.error = "Model unavailable".into();
     let mut catalog = Catalog::default();
-    catalog.chunks.insert("completed".into(), vec![row(&source)]);
-    catalog.identities.insert("project".into(), "stable-identity".into());
-    catalog.failed.insert("failed".into(), "Invalid Wiki catalog output".into());
+    catalog
+        .chunks
+        .insert("completed".into(), vec![row(&source)]);
+    catalog
+        .identities
+        .insert("project".into(), "stable-identity".into());
+    catalog
+        .failed
+        .insert("failed".into(), "Invalid Wiki catalog output".into());
     write_json(&catalog_path(&root), &catalog).unwrap();
 
     retry_failed_work(&root, &mut values, &mut manifest, None).unwrap();
@@ -774,18 +1170,33 @@ fn manual_retry_preserves_completed_pages_catalog_and_progress() {
     let progress = manifest.wiki_progress.as_ref().unwrap();
     assert_eq!((progress.completed, progress.total), (1, 3));
     assert_eq!(manifest.phase, "processing");
-    assert_eq!(restored[0].last_fingerprint, page_version(&restored[0], &[source], &manifest, &Models::default()));
+    assert_eq!(
+        restored[0].last_fingerprint,
+        page_version(&restored[0], &[source], &manifest, &Models::default())
+    );
     assert!(!restored[0].force_refresh);
-    assert!(needs_compilation(&restored[1], &manifest, &Models::default()));
-    assert!(needs_compilation(&restored[2], &manifest, &Models::default()));
+    assert!(needs_compilation(
+        &restored[1],
+        &manifest,
+        &Models::default()
+    ));
+    assert!(needs_compilation(
+        &restored[2],
+        &manifest,
+        &Models::default()
+    ));
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
 fn failed_catalog_preserves_saved_source_links_and_does_not_compile_partial_topics() {
     let source = doc("failed-source", "work");
-    let mut values = vec![Topic { id: "saved".into(), automatic_key: "project".into(),
-        source_ids: vec![source.id.clone()], ..Default::default() }];
+    let mut values = vec![Topic {
+        id: "saved".into(),
+        automatic_key: "project".into(),
+        source_ids: vec![source.id.clone()],
+        ..Default::default()
+    }];
     let failed = BTreeSet::from([source.id.clone()]);
     reconcile_sources(&mut values, &BTreeMap::new(), &failed, &[source.clone()]);
     assert_eq!(values[0].source_ids, vec![source.id.clone()]);
@@ -804,31 +1215,64 @@ fn gateway_migration_reuses_only_matching_validated_inputs_and_completed_pages()
     let mut manifest = manifest();
     let source = preferred(doc("ready", "work"), &manifest);
     add(&local, &mut manifest, &source);
-    let old = Models { text_revision: "old-gateway".into(), ..Default::default() };
-    let new = Models { text_revision: "same-model-new-identity".into(), ..Default::default() };
+    let old = Models {
+        text_revision: "old-gateway".into(),
+        ..Default::default()
+    };
+    let new = Models {
+        text_revision: "same-model-new-identity".into(),
+        ..Default::default()
+    };
     let mut catalog = Catalog::default();
     let mut values = Vec::new();
     apply_catalog(&mut values, &mut catalog, &source.id, &[row(&source)]);
     values[0].published = Some(page(&values[0], &source, &manifest, "Saved content"));
     values[0].last_fingerprint = page_version(&values[0], &[source.clone()], &manifest, &old);
-    let old_fingerprint = page_fingerprint(&values[0], &manifest, &old, &values[0].published.as_ref().unwrap().citations);
+    let old_fingerprint = page_fingerprint(
+        &values[0],
+        &manifest,
+        &old,
+        &values[0].published.as_ref().unwrap().citations,
+    );
     values[0].published.as_mut().unwrap().fingerprint = old_fingerprint;
     values[0].published.as_mut().unwrap().cache_key = values[0].last_fingerprint.clone();
     let expected = page_version(&values[0], &[source.clone()], &manifest, &new);
     let saved_id = values[0].published.as_ref().unwrap().id.clone();
     values[0].source_ids.clear();
     save_topics(&root, &values).unwrap();
-    catalog.chunks.insert(format!("{}:0", input_key(&source, &old)), vec![row(&source)]);
-    migrate_catalog_revision(&root, &local, &mut catalog, &[source.clone()], &manifest, &new, &old.text_revision).unwrap();
-    assert!(catalog.chunks.contains_key(&format!("{}:0", input_key(&source, &new))));
+    catalog.chunks.insert(
+        format!("{}:0", input_key(&source, &old)),
+        vec![row(&source)],
+    );
+    migrate_catalog_revision(
+        &root,
+        &local,
+        &mut catalog,
+        &[source.clone()],
+        &manifest,
+        &new,
+        &old.text_revision,
+    )
+    .unwrap();
+    assert!(catalog
+        .chunks
+        .contains_key(&format!("{}:0", input_key(&source, &new))));
     let restored = topics(&root).unwrap();
     assert_eq!(restored[0].source_ids, vec![source.id.clone()]);
     assert_eq!(restored[0].last_fingerprint, expected);
     assert_eq!(restored[0].published.as_ref().unwrap().id, saved_id);
-    assert_eq!(restored[0].published.as_ref().unwrap().markdown, "Saved content");
+    assert_eq!(
+        restored[0].published.as_ref().unwrap().markdown,
+        "Saved content"
+    );
     assert!(citable(&restored[0], &local, &manifest, &new));
-    let changed_model = Models { text_revision: "other-model".into(), ..Default::default() };
-    assert!(!catalog.chunks.contains_key(&format!("{}:0", input_key(&source, &changed_model))));
+    let changed_model = Models {
+        text_revision: "other-model".into(),
+        ..Default::default()
+    };
+    assert!(!catalog
+        .chunks
+        .contains_key(&format!("{}:0", input_key(&source, &changed_model))));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -837,12 +1281,20 @@ fn catalog_failures_keep_actionable_diagnostics_until_a_successful_retry() {
     let root = root();
     let source = doc("failed-source", "work");
     let mut catalog = Catalog::default();
-    record_failure(&mut catalog, "chunk:0", &source, "Cloud knowledge identity verification failed");
+    record_failure(
+        &mut catalog,
+        "chunk:0",
+        &source,
+        "Cloud knowledge identity verification failed",
+    );
     catalog.chunks.insert("completed:0".into(), vec![]);
     write_json(&catalog_path(&root), &catalog).unwrap();
     let failures = source_failures(&root).unwrap();
     assert_eq!(failures[0]["sourceId"], source.id);
-    assert_eq!(failures[0]["message"], "Cloud knowledge identity verification failed");
+    assert_eq!(
+        failures[0]["message"],
+        "Cloud knowledge identity verification failed"
+    );
     assert_eq!(failures[0]["stage"], "analyzing");
     retry(&root).unwrap();
     let catalog: Catalog = read_json(&catalog_path(&root)).unwrap();
@@ -853,21 +1305,37 @@ fn catalog_failures_keep_actionable_diagnostics_until_a_successful_retry() {
     assert_eq!(queued[0]["retrying"], true);
     assert_eq!(queued[0]["message"], failures[0]["message"]);
     assert_eq!(queued[0]["occurredAt"], failures[0]["occurredAt"]);
-    assert!(is_service_failure("Cloud knowledge identity verification failed"));
+    assert!(is_service_failure(
+        "Cloud knowledge identity verification failed"
+    ));
     assert!(is_service_failure("Cloud knowledge offline"));
-    let annotated = validation_failure::annotate("Citation does not match source evidence".into(),
+    let annotated = validation_failure::annotate(
+        "Citation does not match source evidence".into(),
         &json!({"citationIssue":{"code":"quote_not_found","sourceId":source.id,"citationIndex":1,"location":"citations","quote":"PRIVATE_MODEL_QUOTE"}}),
-        &json!({"sources":[{"id":source.id}]}), true);
+        &json!({"sources":[{"id":source.id}]}),
+        true,
+    );
     let mut catalog: Catalog = read_json(&catalog_path(&root)).unwrap();
     record_failure(&mut catalog, "citation:1", &source, &annotated);
     write_json(&catalog_path(&root), &catalog).unwrap();
     let details = serde_json::to_value(&catalog.details["citation:1"]).unwrap();
-    assert_eq!(details["message"], "Citation does not match source evidence");
+    assert_eq!(
+        details["message"],
+        "Citation does not match source evidence"
+    );
     assert_eq!(details["validation"]["correctionAttempted"], true);
     assert_eq!(details["validation"]["citationIssue"]["citationIndex"], 1);
     assert!(!details.to_string().contains("PRIVATE_MODEL_QUOTE"));
-    assert_eq!(source_failures(&root).unwrap().as_array().unwrap().iter()
-        .find(|row| row["id"] == "citation:1").unwrap()["retrying"], false);
+    assert_eq!(
+        source_failures(&root)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == "citation:1")
+            .unwrap()["retrying"],
+        false
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -877,11 +1345,21 @@ async fn transient_preflight_recovers_only_after_verification_and_keeps_complete
     let mut catalog = Catalog::default();
     catalog.chunks.insert("completed:0".into(), vec![]);
     catalog.identities.insert("project".into(), "stable".into());
-    catalog.failed.insert("network:0".into(), "Cloud knowledge offline".into());
-    catalog.failed.insert("invalid:0".into(), "Invalid Wiki catalog output".into());
-    checked_preflight(&root, &mut catalog, async {Err("Cloud knowledge offline".into())}).await.unwrap_err();
+    catalog
+        .failed
+        .insert("network:0".into(), "Cloud knowledge offline".into());
+    catalog
+        .failed
+        .insert("invalid:0".into(), "Invalid Wiki catalog output".into());
+    checked_preflight(&root, &mut catalog, async {
+        Err("Cloud knowledge offline".into())
+    })
+    .await
+    .unwrap_err();
     assert!(catalog.run_failure.is_some());
-    checked_preflight(&root, &mut catalog, async {Ok(())}).await.unwrap();
+    checked_preflight(&root, &mut catalog, async { Ok(()) })
+        .await
+        .unwrap();
     let restored: Catalog = read_json(&catalog_path(&root)).unwrap();
     assert!(restored.run_failure.is_none());
     assert!(restored.chunks.contains_key("completed:0"));
@@ -894,16 +1372,25 @@ async fn transient_preflight_recovers_only_after_verification_and_keeps_complete
 #[tokio::test]
 async fn auth_and_policy_failures_do_not_resume_automatically() {
     let root = root();
-    for error in ["Cloud knowledge identity verification failed", "Cloud knowledge request failed (HTTP 403)",
-        "Cloud knowledge policy changed; reload before saving", "Cloud knowledge selected folders changed; review the organization range"] {
+    for error in [
+        "Cloud knowledge identity verification failed",
+        "Cloud knowledge request failed (HTTP 403)",
+        "Cloud knowledge policy changed; reload before saving",
+        "Cloud knowledge selected folders changed; review the organization range",
+    ] {
         let mut catalog = Catalog::default();
-        checked_preflight(&root, &mut catalog, async {Err(error.into())}).await.unwrap_err();
+        checked_preflight(&root, &mut catalog, async { Err(error.into()) })
+            .await
+            .unwrap_err();
         let called = std::sync::atomic::AtomicBool::new(false);
         assert!(checked_preflight(&root, &mut catalog, async {
-            called.store(true,std::sync::atomic::Ordering::SeqCst); Ok(())
-        }).await.is_err());
+            called.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        })
+        .await
+        .is_err());
         assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
-        assert_eq!(catalog.run_failure.as_ref().unwrap().message,error);
+        assert_eq!(catalog.run_failure.as_ref().unwrap().message, error);
     }
     fs::remove_dir_all(root).unwrap();
 }
@@ -912,24 +1399,45 @@ async fn auth_and_policy_failures_do_not_resume_automatically() {
 fn topic_retry_is_scoped_to_the_selected_topic_and_keeps_other_failures() {
     let root = root();
     let alias = uuid::Uuid::new_v4().to_string();
-    let mut values: Vec<_> = ["Selected", "Other"].into_iter().map(|title| Topic {
-        id: uuid::Uuid::new_v4().to_string(), title: title.into(), error: "Model unavailable".into(),
-        last_attempt_fingerprint: "attempted".into(), ..Default::default()
-    }).collect();
+    let mut values: Vec<_> = ["Selected", "Other"]
+        .into_iter()
+        .map(|title| Topic {
+            id: uuid::Uuid::new_v4().to_string(),
+            title: title.into(),
+            error: "Model unavailable".into(),
+            last_attempt_fingerprint: "attempted".into(),
+            ..Default::default()
+        })
+        .collect();
     values[0].merged_ids.push(alias.clone());
     let other = serde_json::to_value(&values[1]).unwrap();
     let mut catalog = Catalog::default();
-    catalog.failed.insert("failed".into(), "Invalid Wiki catalog output".into());
+    catalog
+        .failed
+        .insert("failed".into(), "Invalid Wiki catalog output".into());
     write_json(&catalog_path(&root), &catalog).unwrap();
     let graph_path = root.join("evidence-graph.json");
-    write_json(&graph_path, &json!({"chunks":{"failed":{"error":"offline"}},"paused":true})).unwrap();
+    write_json(
+        &graph_path,
+        &json!({"chunks":{"failed":{"error":"offline"}},"paused":true}),
+    )
+    .unwrap();
     let catalog_before = fs::read(catalog_path(&root)).unwrap();
     let graph_before = fs::read(&graph_path).unwrap();
     let mut manifest = Manifest {
-        enabled: true, allow_ai: true, initial_complete: true,
-        sync_round: "round".into(), completed_round: "round".into(),
+        enabled: true,
+        allow_ai: true,
+        initial_complete: true,
+        sync_round: "round".into(),
+        completed_round: "round".into(),
         error: "Wiki processing failed for 2 topics; open Wiki to review and retry".into(),
-        wiki_progress: Some(WikiProgress { stage: "complete".into(), completed: 3, total: 5, failed: 2, ..Default::default() }),
+        wiki_progress: Some(WikiProgress {
+            stage: "complete".into(),
+            completed: 3,
+            total: 5,
+            failed: 2,
+            ..Default::default()
+        }),
         ..Default::default()
     };
 
@@ -941,9 +1449,20 @@ fn topic_retry_is_scoped_to_the_selected_topic_and_keeps_other_failures() {
     assert_eq!(serde_json::to_value(&values[1]).unwrap(), other);
     assert_eq!(fs::read(catalog_path(&root)).unwrap(), catalog_before);
     assert_eq!(fs::read(graph_path).unwrap(), graph_before);
-    assert_eq!(manifest.error, "Wiki processing failed for 1 topics; open Wiki to review and retry");
+    assert_eq!(
+        manifest.error,
+        "Wiki processing failed for 1 topics; open Wiki to review and retry"
+    );
     let progress = manifest.wiki_progress.as_ref().unwrap();
-    assert_eq!((progress.stage.as_str(), progress.completed, progress.total, progress.failed), ("compiling", 3, 5, 1));
+    assert_eq!(
+        (
+            progress.stage.as_str(),
+            progress.completed,
+            progress.total,
+            progress.failed
+        ),
+        ("compiling", 3, 5, 1)
+    );
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -952,11 +1471,18 @@ fn embedding_retry_wakes_processing_without_recompiling_completed_topics() {
     let root = root();
     let config = Models::default();
     let mut manifest = Manifest {
-        enabled: true, allow_ai: true, initial_complete: true,
-        sync_round: "round".into(), completed_round: "round".into(),
+        enabled: true,
+        allow_ai: true,
+        initial_complete: true,
+        sync_round: "round".into(),
+        completed_round: "round".into(),
         ..Default::default()
     };
-    let mut topic = Topic { id: uuid::Uuid::new_v4().to_string(), title: "Complete".into(), ..Default::default() };
+    let mut topic = Topic {
+        id: uuid::Uuid::new_v4().to_string(),
+        title: "Complete".into(),
+        ..Default::default()
+    };
     topic.last_fingerprint = fingerprint(&topic, &manifest, &config);
     topic.last_attempt_fingerprint = topic.last_fingerprint.clone();
     let mut values = vec![topic];
@@ -983,13 +1509,31 @@ fn new_session_retries_service_failures_and_keeps_completed_work() {
     let source = doc("ready", "work");
     add(&local, &mut manifest, &source);
     let mut catalog = Catalog::default();
-    catalog.chunks.insert("completed".into(), vec![row(&source)]);
-    catalog.identities.insert("project".into(), "stable-identity".into());
-    catalog.failed.insert("expired".into(), "Lynclaw could not verify this server".into());
-    catalog.failed.insert("evidence".into(), "Invalid Wiki catalog output".into());
-    catalog.failed.insert("version".into(), "Lynclaw synthesis failed (HTTP 422): Unknown synthesis task".into());
+    catalog
+        .chunks
+        .insert("completed".into(), vec![row(&source)]);
+    catalog
+        .identities
+        .insert("project".into(), "stable-identity".into());
+    catalog.failed.insert(
+        "expired".into(),
+        "Lynclaw could not verify this server".into(),
+    );
+    catalog
+        .failed
+        .insert("evidence".into(), "Invalid Wiki catalog output".into());
+    catalog.failed.insert(
+        "version".into(),
+        "Lynclaw synthesis failed (HTTP 422): Unknown synthesis task".into(),
+    );
     write_json(&catalog_path(&root), &catalog).unwrap();
-    let mut topic = Topic { id: uuid::Uuid::new_v4().to_string(), title: "Saved topic".into(), error: "Lynclaw authentication failed; sign in again".into(), last_attempt_fingerprint: "failed-session".into(), ..Default::default() };
+    let mut topic = Topic {
+        id: uuid::Uuid::new_v4().to_string(),
+        title: "Saved topic".into(),
+        error: "Lynclaw authentication failed; sign in again".into(),
+        last_attempt_fingerprint: "failed-session".into(),
+        ..Default::default()
+    };
     topic.published = Some(page(&topic, &source, &manifest, "Saved knowledge"));
     let saved = topic.published.clone().unwrap();
     save_topics(&root, &[topic]).unwrap();
@@ -1005,7 +1549,10 @@ fn new_session_retries_service_failures_and_keeps_completed_work() {
     assert!(topics[0].error.is_empty());
     assert!(topics[0].last_attempt_fingerprint.is_empty());
     assert_eq!(topics[0].published.as_ref().unwrap().id, saved.id);
-    assert_eq!(topics[0].published.as_ref().unwrap().markdown, saved.markdown);
+    assert_eq!(
+        topics[0].published.as_ref().unwrap().markdown,
+        saved.markdown
+    );
     assert!(manifest.error.is_empty());
     assert!(manifest.wiki_attempted_fingerprint.is_empty());
     assert!(!retry_service_failures(&root).unwrap());
@@ -1019,11 +1566,20 @@ fn session_failure_classification_does_not_retry_evidence_failures() {
         "Lynclaw authentication failed; sign in again",
         "Lynclaw synthesis failed (HTTP 401)",
         "Lynclaw synthesis failed (HTTP 403)",
-    ] { assert!(is_session_failure(error)); }
-    for error in ["Invalid Wiki catalog output", "Citation does not match source evidence", "Lynclaw synthesis failed (HTTP 422)"] {
+    ] {
+        assert!(is_session_failure(error));
+    }
+    for error in [
+        "Invalid Wiki catalog output",
+        "Citation does not match source evidence",
+        "Lynclaw synthesis failed (HTTP 422)",
+    ] {
         assert!(!is_session_failure(error));
     }
-    assert_eq!(synthesis_error(401, &json!({"detail":"private provider text"})), "Lynclaw authentication failed; sign in again");
+    assert_eq!(
+        synthesis_error(401, &json!({"detail":"private provider text"})),
+        "Lynclaw authentication failed; sign in again"
+    );
 }
 
 #[test]
@@ -1036,10 +1592,21 @@ fn automatic_source_chunks_keep_the_remote_text_budget_without_empty_padding() {
     let part = analysis::part(&source, chunks[0].clone());
     assert!(part.text().chars().count() > 12000);
     let payload = transport_payload("source_analysis", &[part], "Project", Value::Null).unwrap();
-    assert_eq!(payload["sources"][0]["text"].as_str().unwrap().chars().count(), 12000);
+    assert_eq!(
+        payload["sources"][0]["text"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count(),
+        12000
+    );
     assert_eq!(source.transcript.chars().count(), 12000);
-    assert!(is_service_failure("Lynclaw synthesis failed (HTTP 422): Unknown synthesis task"));
-    assert!(!is_service_failure("Lynclaw synthesis failed (HTTP 422): Invalid source text"));
+    assert!(is_service_failure(
+        "Lynclaw synthesis failed (HTTP 422): Unknown synthesis task"
+    ));
+    assert!(!is_service_failure(
+        "Lynclaw synthesis failed (HTTP 422): Invalid source text"
+    ));
 }
 
 #[test]
@@ -1054,7 +1621,11 @@ fn page_source_snapshots_reuse_reads_and_recheck_changes_on_the_next_request() {
     let mut sources = PageSources::new(&local, &manifest);
     assert!(sources.valid_page(&revision));
     assert_eq!(sources.documents.len(), 1);
-    fs::write(store::paths(&local, &source.id).0, "Externally changed meeting").unwrap();
+    fs::write(
+        store::paths(&local, &source.id).0,
+        "Externally changed meeting",
+    )
+    .unwrap();
     assert!(sources.valid_page(&revision));
     assert!(!PageSources::new(&local, &manifest).valid_page(&revision));
     fs::remove_dir_all(local).unwrap();
@@ -1081,12 +1652,15 @@ fn source_dates_use_authorized_record_metadata_without_changing_saved_pages() {
     }
     let before = serde_json::to_value(&topics).unwrap();
     let mut sources = PageSources::new(&local, &manifest);
-    assert_eq!(sources.dates(&topics), std::collections::BTreeMap::from([
-        ("dated".into(), "2025-12-31".into()),
-    ]));
+    assert_eq!(
+        sources.dates(&topics),
+        std::collections::BTreeMap::from([("dated".into(), "2025-12-31".into()),])
+    );
     assert_eq!(serde_json::to_value(&topics).unwrap(), before);
     manifest.entries.get_mut("dated").unwrap().excluded = true;
-    assert!(PageSources::new(&local, &manifest).dates(&topics).is_empty());
+    assert!(PageSources::new(&local, &manifest)
+        .dates(&topics)
+        .is_empty());
     fs::remove_dir_all(local).unwrap();
 }
 
@@ -1097,11 +1671,19 @@ fn compilation_snippets_preserve_consent_and_reject_revoked_sources() {
     let mut source = doc("compile", "work");
     add(&local, &mut manifest, &source);
     let evidence = json!({"citations":[{"id":source.id,"kind":source.kind,"revision":source.revision,"quote":source.transcript}]});
-    let parts = compilation_parts(&[CompilationEvidence { source: source.clone(), value: evidence.clone() }]).unwrap();
+    let parts = compilation_parts(&[CompilationEvidence {
+        source: source.clone(),
+        value: evidence.clone(),
+    }])
+    .unwrap();
     assert!(sync::validate_result(&parts, &manifest, &evidence).is_ok());
     assert_eq!(parts[0].folder_id, "work");
     source.ai_context_enabled = false;
-    let revoked = compilation_parts(&[CompilationEvidence { source, value: evidence.clone() }]).unwrap();
+    let revoked = compilation_parts(&[CompilationEvidence {
+        source,
+        value: evidence.clone(),
+    }])
+    .unwrap();
     assert!(sync::validate_result(&revoked, &manifest, &evidence).is_err());
     fs::remove_dir_all(local).unwrap();
 }
@@ -1119,7 +1701,10 @@ fn compilation_preserves_source_quotes_only_used_in_auxiliary_summaries() {
         "summary":"计划下周投放。此前已增加投放，引用：「上周已增加投放，实际转化效果仍待确认。」",
         "citations":[reference("A项目计划下周投放广告。")]
     });
-    let batch = [CompilationEvidence { source: source.clone(), value: analysis.clone() }];
+    let batch = [CompilationEvidence {
+        source: source.clone(),
+        value: analysis.clone(),
+    }];
     let parts = compilation_parts(&batch).unwrap();
     let payload = transport_payload("topic_compile", &parts, "A项目", json!(batch)).unwrap();
     assert_eq!(payload["sources"][0]["text"], source.transcript);
@@ -1137,8 +1722,14 @@ fn local_wiki_state_source_reads_are_shared_across_pages() {
     let state = PathBuf::from(std::env::var("LYNSE_WIKI_STATE_PATH").expect("Local state file"));
     let manifest: Manifest = read_json(&state).unwrap();
     let local = PathBuf::from(&manifest.sync_root);
-    let wiki = local.parent().unwrap().parent().unwrap().join("Memory")
-        .join(state.parent().unwrap().file_name().unwrap()).join("wiki");
+    let wiki = local
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("Memory")
+        .join(state.parent().unwrap().file_name().unwrap())
+        .join("wiki");
     let topics = topics(&wiki).unwrap();
     let started = std::time::Instant::now();
     let mut sources = PageSources::new(&local, &manifest);
@@ -1154,23 +1745,40 @@ fn local_wiki_state_source_reads_are_shared_across_pages() {
     }
     assert!(pages > 0);
     assert!(sources.documents.len() < citations);
-    println!("Validated {pages} pages, {citations} citations, {} source reads in {} ms", sources.documents.len(), started.elapsed().as_millis());
+    println!(
+        "Validated {pages} pages, {citations} citations, {} source reads in {} ms",
+        sources.documents.len(),
+        started.elapsed().as_millis()
+    );
 }
 
 #[test]
 #[ignore = "Requires an explicitly supplied offline recovery copy; never calls a model"]
 fn local_completed_wiki_cache_recovery() {
-    let fixture = PathBuf::from(std::env::var("LYNSE_WIKI_RECOVERY_DIR").expect("Offline recovery copy"));
+    let fixture =
+        PathBuf::from(std::env::var("LYNSE_WIKI_RECOVERY_DIR").expect("Offline recovery copy"));
     let manifest: Manifest = read_json(&fixture.join("state.json")).unwrap();
     let local = PathBuf::from(&manifest.sync_root);
     let root = fixture.join("wiki");
     let docs = documents(&local, &manifest);
     let settings: Value = read_json(&fixture.join("recovery.json")).unwrap();
-    let config = Models { text_revision: settings["textRevision"].as_str().unwrap().into(), ..Default::default() };
+    let config = Models {
+        text_revision: settings["textRevision"].as_str().unwrap().into(),
+        ..Default::default()
+    };
     let before = topics(&root).unwrap();
     let mut catalog: Catalog = read_json(&catalog_path(&root)).unwrap();
     for revision in settings["previousRevisions"].as_array().unwrap() {
-        migrate_catalog_revision(&root, &local, &mut catalog, &docs, &manifest, &config, revision.as_str().unwrap()).unwrap();
+        migrate_catalog_revision(
+            &root,
+            &local,
+            &mut catalog,
+            &docs,
+            &manifest,
+            &config,
+            revision.as_str().unwrap(),
+        )
+        .unwrap();
     }
     let retained = migrate_scope_cache(&root, &local, &docs, &manifest, &config).unwrap();
     println!("Scope cache migration retained {retained} completed pages without model requests");
@@ -1185,28 +1793,69 @@ fn local_completed_wiki_cache_recovery() {
             assert_eq!(page.citations, saved.citations);
         }
     }
-    let total: usize = docs.iter().map(|doc| sync::split_text(doc.text().trim(), 12000).len()).sum();
-    let cached = docs.iter().map(|doc| (0..sync::split_text(doc.text().trim(),12000).len()).filter(|index| catalog.chunks.contains_key(&format!("{}:{index}",input_key(doc,&config)))).count()).sum::<usize>();
-    let completed = after.iter().filter(|topic| {
-        let selected: Vec<_> = docs.iter().filter(|doc| topic.source_ids.contains(&doc.id)).cloned().collect();
-        topic.published.is_some() && topic.last_fingerprint == page_version(topic,&selected,&manifest,&config)
-    }).count();
+    let total: usize = docs
+        .iter()
+        .map(|doc| sync::split_text(doc.text().trim(), 12000).len())
+        .sum();
+    let cached = docs
+        .iter()
+        .map(|doc| {
+            (0..sync::split_text(doc.text().trim(), 12000).len())
+                .filter(|index| {
+                    catalog
+                        .chunks
+                        .contains_key(&format!("{}:{index}", input_key(doc, &config)))
+                })
+                .count()
+        })
+        .sum::<usize>();
+    let completed = after
+        .iter()
+        .filter(|topic| {
+            let selected: Vec<_> = docs
+                .iter()
+                .filter(|doc| topic.source_ids.contains(&doc.id))
+                .cloned()
+                .collect();
+            topic.published.is_some()
+                && topic.last_fingerprint == page_version(topic, &selected, &manifest, &config)
+        })
+        .count();
     println!("Offline recovery: {} sources, {cached}/{total} cached chunks, {completed} unchanged completed topics, {} restored source links",docs.len(),after.iter().filter(|topic| !topic.source_ids.is_empty()).count());
 }
 
 #[test]
 #[ignore = "Requires an explicitly supplied local diagnostic fixture"]
 fn local_compiler_citation_regression() {
-    let fixture = PathBuf::from(std::env::var("LYNSE_WIKI_DIAGNOSTIC_DIR").expect("Local fixture directory"));
+    let fixture =
+        PathBuf::from(std::env::var("LYNSE_WIKI_DIAGNOSTIC_DIR").expect("Local fixture directory"));
     let topics: Vec<Topic> = read_json(&fixture.join("topics-local.json")).unwrap();
-    let documents: BTreeMap<String, Document> = read_json(&fixture.join("sources-local.json")).unwrap();
-    let topic = topics.iter().find(|topic| fixture.join(format!("{}-validated-with-complete-source.json", topic.id)).exists()).expect("Previously failed compiler response");
+    let documents: BTreeMap<String, Document> =
+        read_json(&fixture.join("sources-local.json")).unwrap();
+    let topic = topics
+        .iter()
+        .find(|topic| {
+            fixture
+                .join(format!("{}-validated-with-complete-source.json", topic.id))
+                .exists()
+        })
+        .expect("Previously failed compiler response");
     let request: Value = read_json(&fixture.join(format!("{}-request.json", topic.id))).unwrap();
     let source = documents[&topic.source_ids[0]].clone();
-    let evidence = [CompilationEvidence { source, value: request["evidence"][0].clone() }];
+    let evidence = [CompilationEvidence {
+        source,
+        value: request["evidence"][0].clone(),
+    }];
     let parts = compilation_parts(&evidence).unwrap();
-    let payload = transport_payload("topic_compile", &parts, "Local citation regression", json!(evidence)).unwrap();
-    let mut response: Value = read_json(&fixture.join(format!("{}-raw-response.json", topic.id))).unwrap();
+    let payload = transport_payload(
+        "topic_compile",
+        &parts,
+        "Local citation regression",
+        json!(evidence),
+    )
+    .unwrap();
+    let mut response: Value =
+        read_json(&fixture.join(format!("{}-raw-response.json", topic.id))).unwrap();
     restore_refs(&mut response, &parts).unwrap();
     let local = root();
     let mut manifest = manifest();
@@ -1215,7 +1864,8 @@ fn local_compiler_citation_regression() {
     }
     sync::validate_result(&parts, &manifest, &response).unwrap();
     for change in response["changes"].as_array().unwrap() {
-        sync::validate_result(&parts, &manifest, &json!({"citations":change["citations"]})).unwrap();
+        sync::validate_result(&parts, &manifest, &json!({"citations":change["citations"]}))
+            .unwrap();
     }
     write_json(&fixture.join("fixed-compiler-request.json"), &payload).unwrap();
     fs::remove_dir_all(local).unwrap();

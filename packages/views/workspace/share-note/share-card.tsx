@@ -12,6 +12,7 @@
  */
 import { createRoot } from "react-dom/client";
 import { Markdown } from "@lynse/ui/markdown/Markdown";
+import { CalendarDays, Sparkles } from "../../icons";
 import { wrapCjkSpacing } from "../cjk-spacing";
 import { isHtmlContent } from "../note-vault";
 import { extractBody } from "../content-html";
@@ -143,6 +144,15 @@ function sectionHeading(label: string, theme: ShareCardTheme): ReactNode {
   );
 }
 
+function headerMetaStyle(): CSSProperties {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    minWidth: 0,
+  };
+}
+
 function SectionBody({ text }: { text: string }) {
   if (isHtmlContent(text)) {
     const { content, scopedStyles } = extractBody(text);
@@ -173,6 +183,13 @@ export function ShareCard({ theme, title, dateLabel, outlineLabel, summaryLabel,
     .map((section) => ({ ...section, text: stripMindmapContent(section.text) }))
     .filter((section) => section.text.trim());
   const hasFooter = showBrand || !!wordCountLabel;
+  const templateNames = [
+    ...new Set(
+      sections
+        .map((section) => section.name?.trim() || summaryLabel)
+        .filter(Boolean),
+    ),
+  ];
 
   const cardStyle: CSSProperties = {
     width: CARD_WIDTH,
@@ -200,18 +217,28 @@ export function ShareCard({ theme, title, dateLabel, outlineLabel, summaryLabel,
         <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, lineHeight: 1.4, color: theme.foreground }}>
           {title}
         </h1>
-        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 7, fontSize: 13, color: theme.muted }}>
-          <span
-            style={{
-              width: 6,
-              height: 6,
-              borderRadius: 999,
-              background: theme.accent,
-              display: "inline-block",
-              flexShrink: 0,
-            }}
-          />
-          {dateLabel}
+        <div
+          style={{
+            marginTop: 10,
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            columnGap: 10,
+            rowGap: 6,
+            fontSize: 13,
+            color: theme.muted,
+          }}
+        >
+          <span style={headerMetaStyle()}>
+            <CalendarDays size={14} strokeWidth={1.8} />
+            {dateLabel}
+          </span>
+          {templateNames.length > 0 && (
+            <span style={headerMetaStyle()}>
+              <Sparkles size={14} strokeWidth={1.8} />
+              <span>{templateNames.join(" · ")}</span>
+            </span>
+          )}
         </div>
         <div style={{ height: 1, background: theme.border, margin: "24px 0 4px" }} />
         <div className="share-card-body">
@@ -223,7 +250,6 @@ export function ShareCard({ theme, title, dateLabel, outlineLabel, summaryLabel,
           )}
           {sections.map((section) => (
             <section key={section.id}>
-              {sectionHeading(section.name?.trim() || summaryLabel, theme)}
               <SectionBody text={section.text} />
             </section>
           ))}

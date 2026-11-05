@@ -12,6 +12,13 @@ pub fn digest(value: impl AsRef<[u8]>) -> String {
     format!("{:x}", Sha256::digest(value.as_ref()))
 }
 
+#[path = "source_recovery.rs"]
+mod source_recovery;
+pub(super) use source_recovery::{
+    ensure_incoming, purge_private_document, recover_document_writes, remove_document,
+    resolve_document_conflict,
+};
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceRef {
@@ -229,6 +236,48 @@ pub struct Entry {
     pub accepted_revision: String,
 }
 
+pub(super) fn preserve_summary_revision(
+    manifest: &mut Manifest,
+    previous: &Document,
+    next: &Document,
+) -> usize {
+    // A changed speaker attribution or structured conclusion can change the
+    // meaning of an otherwise identical transcript. Only proven metadata
+    // changes may keep an existing source-derived summary current.
+    if previous.id != next.id
+        || previous.kind != next.kind
+        || previous.title != next.title
+        || previous.created_at != next.created_at
+        || previous.transcript != next.transcript
+        || previous.segments != next.segments
+        || previous.outline != next.outline
+        || previous.conclusions != next.conclusions
+        || previous.todos != next.todos
+        || previous.markers != next.markers
+        || !previous.ai_context_enabled
+        || !next.ai_context_enabled
+        || previous.revision == next.revision
+    {
+        return 0;
+    }
+    let Some(rows) = manifest
+        .artifacts
+        .get_mut(&next.id)
+        .and_then(|artifact| artifact["summaries"].as_array_mut())
+    else {
+        return 0;
+    };
+    let mut migrated = 0;
+    for row in rows
+        .iter_mut()
+        .filter(|row| row["sourceRevision"] == previous.revision)
+    {
+        row["sourceRevision"] = json!(next.revision);
+        migrated += 1;
+    }
+    migrated
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WikiProgress {
@@ -267,7 +316,11 @@ pub struct Manifest {
     #[serde(default)]
     pub wiki_progress: Option<WikiProgress>,
     #[serde(default)]
+    pub source_error: String,
+    #[serde(default)]
     pub wiki_attempted_fingerprint: String,
+    #[serde(default)]
+    pub wiki_revision: String,
     #[serde(default)]
     pub wiki_automation: Option<WikiAutomation>,
     #[serde(default)]
@@ -275,9 +328,9 @@ pub struct Manifest {
     #[serde(default)]
     pub knowledge_pending: Option<Value>,
     #[serde(default)]
-    pub knowledge_uploads: std::collections::BTreeMap<String,Value>,
+    pub knowledge_uploads: std::collections::BTreeMap<String, Value>,
     #[serde(default)]
-    pub knowledge_events: std::collections::BTreeMap<String,String>,
+    pub knowledge_events: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub entries: BTreeMap<String, Entry>,
     #[serde(default)]
@@ -288,6 +341,8 @@ pub struct Manifest {
     pub excluded_sources: Vec<String>,
     #[serde(default)]
     pub aliases: BTreeMap<String, String>,
+    #[serde(default)]
+    pub source_tombstones: BTreeMap<String, String>,
 }
 impl Default for Manifest {
     fn default() -> Self {
@@ -302,7 +357,9 @@ impl Default for Manifest {
             updated_at: String::new(),
             error: String::new(),
             wiki_progress: None,
+            source_error: String::new(),
             wiki_attempted_fingerprint: String::new(),
+            wiki_revision: String::new(),
             wiki_automation: None,
             knowledge_policy: None,
             knowledge_pending: None,
@@ -313,6 +370,7 @@ impl Default for Manifest {
             artifacts: BTreeMap::new(),
             excluded_sources: vec![],
             aliases: BTreeMap::new(),
+            source_tombstones: BTreeMap::new(),
         }
     }
 }
@@ -357,7 +415,7 @@ pub fn write_document(
     previous: Option<&Entry>,
 ) -> CommandResult<Entry> {
     fs::create_dir_all(root).map_err(|e| e.to_string())?;
-    let (markdown_path, source_path) = paths(root, &document.id);
+    let (markdown_path, _) = paths(root, &document.id);
     let markdown = document.markdown();
     let old = fs::read(&markdown_path).ok();
     let new_hash = digest(markdown.as_bytes());
@@ -366,17 +424,18 @@ pub fn write_document(
     }) {
         return Ok(entry.clone());
     }
-    let conflict = previous.is_some_and(|entry| {
-        if !entry.accepted_revision.is_empty() && entry.accepted_revision != document.revision {
-            return true;
-        }
+    let conflict = previous.map_or_else(
+        || old.as_ref().is_some_and(|bytes| digest(bytes) != new_hash),
+        |entry| {
+            if !entry.accepted_revision.is_empty() && entry.accepted_revision != document.revision {
+                return true;
+            }
 
-        old.as_ref().is_some_and(|bytes| {
-            !entry.markdown_hash.is_empty()
-                && digest(bytes) != entry.markdown_hash
-                && digest(bytes) != new_hash
-        })
-    });
+            old.as_ref().is_some_and(|bytes| {
+                digest(bytes) != entry.markdown_hash && digest(bytes) != new_hash
+            })
+        },
+    );
     let mut entry = Entry {
         id: document.id.clone(),
         kind: document.kind.clone(),
@@ -402,27 +461,13 @@ pub fn write_document(
         }
     }
     if conflict {
-        crate::atomic_write(
-            &markdown_path.with_extension("incoming.md"),
-            markdown.as_bytes(),
-        )?;
-        crate::atomic_write(
-            &source_path.with_extension("incoming.json"),
-            &serde_json::to_vec_pretty(document).map_err(|e| e.to_string())?,
-        )?;
         entry.status = "conflict".into();
         entry.markdown_hash = previous
             .map(|e| e.markdown_hash.clone())
+            .or_else(|| old.as_ref().map(digest))
             .unwrap_or_default();
-    } else {
-        // The structured source and readable document are one knowledge-base record.
-        crate::atomic_write(
-            &source_path,
-            &serde_json::to_vec_pretty(document).map_err(|e| e.to_string())?,
-        )?;
-        crate::atomic_write(&markdown_path, markdown.as_bytes())?;
     }
-    Ok(entry)
+    source_recovery::write_record(root, document, &entry, &markdown, old.as_deref(), previous)
 }
 pub fn read_document(root: &Path, entry: &Entry) -> CommandResult<Document> {
     let (md, source) = paths(root, &entry.id);
@@ -860,7 +905,7 @@ mod tests {
         let mut local = remote.clone();
         local.transcript = "User-authored text".into();
         local.refresh_revision();
-        let mut accepted = write_document(&root, &local, None).unwrap();
+        let mut accepted = write_document(&root, &local, Some(&first)).unwrap();
         accepted.accepted_revision = remote.revision.clone();
         let same = write_document(&root, &remote, Some(&accepted)).unwrap();
         assert_eq!(same.revision, local.revision);

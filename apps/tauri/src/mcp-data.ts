@@ -48,7 +48,7 @@ function pick(row: Row, keys: string[]): Row {
   return Object.fromEntries(keys.filter((key) => row[key] !== undefined).map((key) => [key, row[key]]));
 }
 function shareable(row: Row): boolean {
-  return row.protection !== "e2ee" && !row.transition && row.locked !== true && row.aiContextEnabled !== false && row.sensitivity !== "restricted";
+  return row.protection !== "e2ee" && !row.transition && row.locked !== true && row.aiContextEnabled !== false && !["private", "sensitive", "restricted"].includes(String(row.sensitivity));
 }
 function find(rows: Row[], id: string): Row {
   const row = rows.find((item) => item.id === id);
@@ -123,7 +123,8 @@ export async function readDesktopMcpTool(name: string, args: Args, deps: McpData
       result = { document: record.document, markdown: record.markdown };
     }
     const current = await bridge.status();
-    if (!current.enabled || !current.allowAi || !current.initialComplete || current.scope !== status.scope || current.updatedAt !== status.updatedAt) throw new McpInputError("Account or sources changed; retry");
+    if (!current.enabled || !current.allowAi || !current.initialComplete || current.scope !== status.scope
+      || (current.wikiRevision ?? current.updatedAt) !== (status.wikiRevision ?? status.updatedAt)) throw new McpInputError("Account or sources changed; retry");
     return result;
   }
   switch (name) {

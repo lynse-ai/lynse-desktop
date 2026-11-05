@@ -1,18 +1,18 @@
 //! Evidence graph extraction and projection. Old discovery caches are intentionally not read.
 use super::*;
 use std::collections::{BTreeMap, BTreeSet};
-#[path = "wiki_graph_schema.rs"]
-mod schema;
 #[path = "wiki_graph_cache.rs"]
 mod cache;
-#[path = "wiki_graph_reuse.rs"]
-mod reuse;
 #[path = "wiki_graph_identity.rs"]
 mod identity;
-pub(super) use reuse::read as reusable_analysis;
+#[path = "wiki_graph_reuse.rs"]
+mod reuse;
+#[path = "wiki_graph_schema.rs"]
+mod schema;
 use futures_util::{stream, StreamExt};
-use schema::{ExtractNode, Extraction};
+pub(super) use reuse::read as reusable_analysis;
 pub(super) use schema::mask;
+use schema::{ExtractNode, Extraction};
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -54,7 +54,8 @@ fn node_id(key: &str, node: &ExtractNode) -> String {
     )
 }
 fn summary_sources(local: &Path, manifest: &Manifest) -> Vec<Document> {
-    sources_for(local, manifest).iter()
+    sources_for(local, manifest)
+        .iter()
         .filter_map(|doc| schema::summary_source(doc, manifest))
         .collect()
 }
@@ -68,20 +69,32 @@ fn effective_tracking(tracking: &Tracking, manifest: &Manifest, docs: &[Document
     result
 }
 fn pending_chunks(docs: &[Document], tracking: &Tracking) -> Vec<(String, Document)> {
-    cache::pending(docs, tracking).into_iter().map(|work| (work.key, work.part)).collect()
+    cache::pending(docs, tracking)
+        .into_iter()
+        .map(|work| (work.key, work.part))
+        .collect()
 }
 pub(super) fn compact_output() -> bool {
     std::env::var("LYNSE_GRAPH_COMPACT_OUTPUT").as_deref() != Ok("0")
 }
 fn concurrency() -> usize {
-    std::env::var("LYNSE_GRAPH_CONCURRENCY").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(3).clamp(1, 3)
+    std::env::var("LYNSE_GRAPH_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(3)
+        .clamp(1, 3)
 }
 fn recover_interrupted(tracking: &mut Tracking) -> u64 {
-    let interrupted = tracking.chunks.values_mut().filter(|chunk| chunk.in_flight).map(|chunk| {
-        chunk.in_flight = false;
-        chunk.error = "Graph request interrupted; retry explicitly".into();
-        1_u64
-    }).sum::<u64>();
+    let interrupted = tracking
+        .chunks
+        .values_mut()
+        .filter(|chunk| chunk.in_flight)
+        .map(|chunk| {
+            chunk.in_flight = false;
+            chunk.error = "Graph request interrupted; retry explicitly".into();
+            1_u64
+        })
+        .sum::<u64>();
     interrupted
 }
 fn valid_node_id(id: &str) -> bool {
@@ -97,11 +110,12 @@ pub(super) fn configure(root: &Path, request: &Value) -> CommandResult<()> {
                 .chunks
                 .iter()
                 .flat_map(|(key, chunk)| {
-                    chunk
-                        .extraction
-                        .nodes
-                        .iter()
-                        .map(move |node| (node_id(cache::identity(key, chunk), node), node.kind.as_str()))
+                    chunk.extraction.nodes.iter().map(move |node| {
+                        (
+                            node_id(cache::identity(key, chunk), node),
+                            node.kind.as_str(),
+                        )
+                    })
                 })
                 .collect();
             let kind = kinds
@@ -164,10 +178,14 @@ pub(super) fn configure(root: &Path, request: &Value) -> CommandResult<()> {
             tracking.refresh_legacy = true;
             tracking.paused = false;
             tracking.enabled |= !tracking.selected_sources.is_empty();
-            tracking.chunks.retain(|_, chunk| chunk.error.is_empty() || chunk.in_flight);
+            tracking
+                .chunks
+                .retain(|_, chunk| chunk.error.is_empty() || chunk.in_flight);
         }
         Some("tracking_retry") => {
-            tracking.chunks.retain(|_, chunk| chunk.error.is_empty() || chunk.in_flight);
+            tracking
+                .chunks
+                .retain(|_, chunk| chunk.error.is_empty() || chunk.in_flight);
             tracking.processing = tracking.chunks.values().any(|chunk| chunk.in_flight);
             tracking.paused = false;
         }
@@ -235,32 +253,48 @@ pub(super) fn configure(root: &Path, request: &Value) -> CommandResult<()> {
     write_json(&path(root), &tracking)
 }
 
-async fn extract(app: &AppHandle, session: &Session, work: &cache::Work) -> CommandResult<Extraction> {
+async fn extract(
+    app: &AppHandle,
+    session: &Session,
+    work: &cache::Work,
+) -> CommandResult<Extraction> {
     let copy = schema::transport(&work.part)?;
     let payload = json!({"sources":[{"id":copy.id,"kind":copy.kind,"revision":copy.revision,
         "title":copy.title,"text":copy.transcript,"segments":[]}]});
     for attempt in 0..2 {
         let mut control = SynthesisControl::default();
-        let result = request_model_report(app, session, "graph_extract", payload.clone(), &mut control).await;
+        let result =
+            request_model_report(app, session, "graph_extract", payload.clone(), &mut control)
+                .await;
         let verified = control.model.as_deref() == Some("deepseek-flash")
             && control.profile.as_deref() == Some(cache::PROFILE);
-        if control.retry_after.is_some() && attempt == 0 { continue; }
+        if control.retry_after.is_some() && attempt == 0 {
+            continue;
+        }
         if result.is_ok() && !verified {
-            return Err("Graph service version does not confirm deepseek-flash; update Lynclaw".into());
+            return Err(
+                "Graph service version does not confirm deepseek-flash; update Lynclaw".into(),
+            );
         }
         return result.and_then(|value| schema::validate(value, &work.part));
     }
     unreachable!("bounded extraction attempts")
 }
 
-pub(super) async fn run(app: &AppHandle, state: &WorkbenchState, session: &Session) -> CommandResult<bool> {
+pub(super) async fn run(
+    app: &AppHandle,
+    state: &WorkbenchState,
+    session: &Session,
+) -> CommandResult<bool> {
     // A second runner joins the same persisted results after the first batch commits.
     let _flight = state.graph_run.lock().await;
     let (root, work) = {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
         let manifest = load_state(app, session)?;
-        if ready(&manifest).is_err() { return Ok(false); }
+        if ready(&manifest).is_err() {
+            return Ok(false);
+        }
         let root = wiki_root(app, session)?;
         let saved: Tracking = read_json(&path(&root))?;
         let docs = summary_sources(&roots(app, session)?.0, &manifest);
@@ -277,15 +311,26 @@ pub(super) async fn run(app: &AppHandle, state: &WorkbenchState, session: &Sessi
         tracking.scope = session.scope.clone();
         tracking.language = session.locale.clone();
         let planned = cache::plan(&docs, &mut tracking);
-        let pending: Vec<_> = planned.iter().filter(|work| !tracking.chunks.contains_key(&work.key)).cloned().collect();
+        let pending: Vec<_> = planned
+            .iter()
+            .filter(|work| !tracking.chunks.contains_key(&work.key))
+            .cloned()
+            .collect();
         tracking.processing = !pending.is_empty();
         let work = pending.into_iter().take(concurrency()).collect::<Vec<_>>();
         for item in &work {
-            tracking.chunks.insert(item.key.clone(), Chunk {
-                source_id: item.part.id.clone(), content_revision: item.content_revision.clone(),
-                identity: item.identity.clone(), profile: cache::PROFILE.into(), in_flight: true,
-                error: "Graph request interrupted; retry explicitly".into(), ..Default::default()
-            });
+            tracking.chunks.insert(
+                item.key.clone(),
+                Chunk {
+                    source_id: item.part.id.clone(),
+                    content_revision: item.content_revision.clone(),
+                    identity: item.identity.clone(),
+                    profile: cache::PROFILE.into(),
+                    in_flight: true,
+                    error: "Graph request interrupted; retry explicitly".into(),
+                    ..Default::default()
+                },
+            );
         }
         write_json(&path(&root), &tracking)?;
         persist(app, session, &manifest)?;
@@ -294,28 +339,57 @@ pub(super) async fn run(app: &AppHandle, state: &WorkbenchState, session: &Sessi
     let mut results = stream::iter(work.into_iter().map(|work| async move {
         let result = extract(app, session, &work).await;
         (work, result)
-    })).buffer_unordered(concurrency());
+    }))
+    .buffer_unordered(concurrency());
     while let Some((work, result)) = results.next().await {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
         let manifest = load_state(app, session)?;
         let mut tracking: Tracking = read_json(&path(&root))?;
-        let current = summary_sources(&roots(app, session)?.0, &manifest).into_iter().find(|doc| doc.id == work.part.id);
+        let current = summary_sources(&roots(app, session)?.0, &manifest)
+            .into_iter()
+            .find(|doc| doc.id == work.part.id);
         if let Some(chunk) = tracking.chunks.get_mut(&work.key) {
             chunk.in_flight = false;
             chunk.error = "Source changed during graph extraction".into();
         }
-        if ready(&manifest).is_ok() && current.as_ref().is_some_and(|doc| schema::content_revision(doc) == work.content_revision) {
+        if ready(&manifest).is_ok()
+            && current
+                .as_ref()
+                .is_some_and(|doc| schema::content_revision(doc) == work.content_revision)
+        {
             let (mut extraction, error) = match result {
                 Ok(extraction) => (extraction, String::new()),
                 Err(error) => (Extraction::default(), error),
             };
-            let previous = tracking.chunks.iter().filter(|(key, chunk)| chunk.error.is_empty()
-                && cache::identity(key, chunk) == work.identity).max_by_key(|(_, chunk)| &chunk.extracted_at).map(|(_, chunk)| chunk);
-            let relation_ids = if error.is_empty() { identity::stabilize(&mut extraction, previous, &work.identity) } else { Vec::new() };
+            let previous = tracking
+                .chunks
+                .iter()
+                .filter(|(key, chunk)| {
+                    chunk.error.is_empty() && cache::identity(key, chunk) == work.identity
+                })
+                .max_by_key(|(_, chunk)| &chunk.extracted_at)
+                .map(|(_, chunk)| chunk);
+            let relation_ids = if error.is_empty() {
+                identity::stabilize(&mut extraction, previous, &work.identity)
+            } else {
+                Vec::new()
+            };
             tracking.paused |= manifest.wiki_automation.is_none() && !error.is_empty();
-            tracking.chunks.insert(work.key, Chunk { source_id: work.part.id, content_revision: work.content_revision,
-                extracted_at: crate::now(), extraction, error, identity: work.identity, profile: cache::PROFILE.into(), in_flight: false, relation_ids });
+            tracking.chunks.insert(
+                work.key,
+                Chunk {
+                    source_id: work.part.id,
+                    content_revision: work.content_revision,
+                    extracted_at: crate::now(),
+                    extraction,
+                    error,
+                    identity: work.identity,
+                    profile: cache::PROFILE.into(),
+                    in_flight: false,
+                    relation_ids,
+                },
+            );
         }
         write_json(&path(&root), &tracking)?;
         persist(app, session, &manifest)?;
@@ -327,7 +401,9 @@ pub(super) async fn run(app: &AppHandle, state: &WorkbenchState, session: &Sessi
     tracking.processing = false;
     let docs = summary_sources(&roots(app, session)?.0, &manifest);
     let effective = effective_tracking(&tracking, &manifest, &docs);
-    let more = ready(&manifest).is_ok() && !effective.paused && !cache::pending(&docs, &effective).is_empty();
+    let more = ready(&manifest).is_ok()
+        && !effective.paused
+        && !cache::pending(&docs, &effective).is_empty();
     write_json(&path(&root), &tracking)?;
     persist(app, session, &manifest)?;
     Ok(more)
@@ -536,17 +612,33 @@ pub(super) fn view(
     let tracking: Tracking = read_json(&path(root))?;
     let docs = sources_for(local, manifest);
     let current: BTreeMap<_, _> = docs.iter().map(|doc| (doc.id.as_str(), doc)).collect();
-    let summaries: Vec<_> = docs.iter().filter_map(|doc| schema::summary_source(doc, manifest)).collect();
+    let summaries: Vec<_> = docs
+        .iter()
+        .filter_map(|doc| schema::summary_source(doc, manifest))
+        .collect();
     let mut tracking = effective_tracking(&tracking, manifest, &summaries);
     let planned = cache::plan(&summaries, &mut tracking);
     let mut desired: BTreeSet<_> = planned.iter().map(|work| work.key.clone()).collect();
     // Keep a legacy graph readable while its explicitly requested replacement is pending or failed.
     if tracking.refresh_legacy {
         for work in &planned {
-            if tracking.chunks.get(&work.key).is_none_or(|chunk| !chunk.error.is_empty()) {
-                desired.extend(tracking.chunks.iter().filter(|(_, chunk)| chunk.profile.is_empty()
-                    && chunk.error.is_empty() && chunk.source_id == work.part.id
-                    && chunk.content_revision == work.content_revision).map(|(key, _)| key.clone()));
+            if tracking
+                .chunks
+                .get(&work.key)
+                .is_none_or(|chunk| !chunk.error.is_empty())
+            {
+                desired.extend(
+                    tracking
+                        .chunks
+                        .iter()
+                        .filter(|(_, chunk)| {
+                            chunk.profile.is_empty()
+                                && chunk.error.is_empty()
+                                && chunk.source_id == work.part.id
+                                && chunk.content_revision == work.content_revision
+                        })
+                        .map(|(key, _)| key.clone()),
+                );
             }
         }
     }
@@ -557,7 +649,8 @@ pub(super) fn view(
         .chunks
         .iter()
         .filter(|(key, chunk)| {
-            desired.contains(key.as_str()) && manifest.enabled
+            desired.contains(key.as_str())
+                && manifest.enabled
                 && manifest.allow_ai
                 && tracking.selected_sources.contains(&chunk.source_id)
                 && summary_docs
@@ -599,7 +692,10 @@ pub(super) fn view(
             ) else {
                 continue;
             };
-            let id = chunk.relation_ids.get(index).cloned()
+            let id = chunk
+                .relation_ids
+                .get(index)
+                .cloned()
                 .unwrap_or_else(|| identity::old_relation_id(key, index, relation));
             if tracking.dismissed.contains(&id) {
                 continue;
@@ -681,15 +777,18 @@ pub(super) fn view(
         .iter()
         .filter(|(_, chunk)| !chunk.error.is_empty() && !chunk.in_flight)
         .count();
-    let pending = planned.iter().filter(|work| !tracking.chunks.contains_key(&work.key)).count();
+    let pending = planned
+        .iter()
+        .filter(|work| !tracking.chunks.contains_key(&work.key))
+        .count();
     Ok(
         json!({"schemaVersion":schema::VERSION,"nodes":nodes.into_values().collect::<Vec<_>>(),"edges":edges.into_values().collect::<Vec<_>>(),"availableSources":available,"automaticTracking":tracking.enabled,"tracking":{"processing":tracking.processing,"paused":tracking.paused,"completed":total.saturating_sub(pending+failed+active.iter().filter(|(_, chunk)| chunk.in_flight).count()),"total":total,"failed":failed,"error":active.iter().find(|(_,chunk)| !chunk.error.is_empty() && !chunk.in_flight).map(|(_,chunk)| chunk.error.as_str()).unwrap_or(""),"legacyChunks":active.iter().filter(|(_,chunk)| chunk.profile.is_empty()).count(),"model":"deepseek-flash"}}),
     )
 }
 
 #[cfg(test)]
-#[path = "wiki_graph_tests.rs"]
-mod tests;
-#[cfg(test)]
 #[path = "wiki_graph_cache_tests.rs"]
 mod cache_tests;
+#[cfg(test)]
+#[path = "wiki_graph_tests.rs"]
+mod tests;

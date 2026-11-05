@@ -336,7 +336,7 @@ function navButtonClassName(isWeb: boolean, active: boolean): string {
     "relative flex rounded-lg transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
     isWeb ? "w-full items-center gap-2.5 px-2.5 py-2"
       : "h-9 w-10 shrink-0 items-center justify-center",
-    active ? "text-accent-brand-text"
+    active ? "bg-foreground/5 text-accent-brand-text"
       : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
   );
 }

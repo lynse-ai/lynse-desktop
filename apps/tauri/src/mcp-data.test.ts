@@ -55,6 +55,13 @@ describe("Desktop MCP data access", () => {
     }
   });
 
+  it.each(["private", "sensitive", "restricted"])("keeps %s notes out of AI even when cloud authority allows every source", async (sensitivity) => {
+    deps.notes = async () => [{ id: "withdrawn", text: "Local-only evidence", aiContextEnabled: true, sensitivity }];
+    expect(await readDesktopMcpTool("list_local_notes", {}, deps)).toEqual({ total: 0, items: [] });
+    await expect(readDesktopMcpTool("get_local_note", { id: "withdrawn" }, deps)).rejects.toThrow("not shared with AI");
+    expect(deps.authorizeSources).toHaveBeenCalledWith([], "note");
+  });
+
   it("only reads vault notes belonging to an existing local meeting", async () => {
     await expect(readDesktopMcpTool("get_local_meeting", {id:"../../secret", content:"notes"}, deps)).rejects.toThrow("Record not found");
     expect(deps.readMeetingNote).not.toHaveBeenCalled();
@@ -134,6 +141,20 @@ describe("Local memory MCP consent and stale-result guards", () => {
     const {status,bridge}=memory();bridge.search.mockImplementation(async()=>{status.scope="account-b";return {items:[],initialComplete:true};});
     // Return a snapshot just as the real IPC serialization does.
     bridge.status.mockImplementation(async()=>structuredClone(status));
+    await expect(readDesktopMcpTool("search_local_memory",{},deps)).rejects.toThrow("Account or sources changed");
+  });
+  it("keeps a valid read when only background progress changes",async()=>{
+    const {status,bridge}=memory();
+    Object.assign(status,{wikiRevision:"content-1"});
+    bridge.status.mockImplementation(async()=>structuredClone(status));
+    bridge.search.mockImplementation(async()=>{status.updatedAt="progress-2";return {items:[{id:"s1"}],initialComplete:true};});
+    await expect(readDesktopMcpTool("search_local_memory",{},deps)).resolves.toMatchObject({sources:[{id:"s1"}]});
+  });
+  it("rejects content changes even when the background progress timestamp is unchanged",async()=>{
+    const {status,bridge}=memory();
+    Object.assign(status,{wikiRevision:"content-1"});
+    bridge.status.mockImplementation(async()=>structuredClone(status));
+    bridge.search.mockImplementation(async()=>{Object.assign(status,{wikiRevision:"content-2"});return {items:[],initialComplete:true};});
     await expect(readDesktopMcpTool("search_local_memory",{},deps)).rejects.toThrow("Account or sources changed");
   });
   it("rejects a source with a per-item AI exclusion",async()=>{

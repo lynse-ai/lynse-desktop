@@ -23,7 +23,7 @@ export const memoryManagementEnglish = {
   settings_title: "AI memory (optional)", cloud_consent: "Remember important information from meetings", cloud_hint: "Send text from your selected meetings to cloud AI to suggest useful memories. You review and confirm new memories before AI uses them in future conversations.",
   auto_update: "Update memories automatically", auto_update_hint: "Look for new information after meetings are organized. Turn this off to keep existing memories without adding new ones.",
   local_consent: "Save local recording text in the cloud", local_hint: "Upload summaries or transcripts from selected recordings on this device. The text is stored under your account to create meeting memories; audio is not uploaded.",
-  projection_setting_hint: "Bring confirmed memories together into daily notes, people pages and other recaps.", range_hint: "Your selected folders and exclusions also apply to memory, and sync across your devices.", policy_pending: "Cloud range update pending synchronization. Restricted sources are blocked on this device.", policy_save: "Save shared scope", policy_saved: "Shared scope saved",
+  projection_setting_hint: "Bring confirmed memories together into daily notes, people pages and other recaps.", range_hint: "Your selected folders and exclusions also apply to memory, and sync across your devices.", policy_pending: "Cloud range update pending synchronization. Restricted sources are blocked on this device.", policy_conflict: "Cloud settings changed on another device. Reload the latest settings, review them, then save again.", policy_reload: "Reload cloud settings", policy_save: "Save shared scope", policy_saved: "Shared scope saved",
 } as const;
 
 export const memoryManagementChinese: Record<keyof typeof memoryManagementEnglish, string> = {
@@ -49,5 +49,5 @@ export const memoryManagementChinese: Record<keyof typeof memoryManagementEnglis
   settings_title: "AI 记忆（可选）", cloud_consent: "记住会议里的重要信息", cloud_hint: "将所选会议的文字交给云端 AI，找出值得记住的信息。新记忆由你确认后，才会用于以后的对话。",
   auto_update: "自动更新记忆", auto_update_hint: "会议整理完成后，自动查找值得记住的新信息。关闭后，已有记忆会保留。",
   local_consent: "将本机录音文字保存到云端", local_hint: "上传所选录音的总结或转写，保存在你的账号下，用于生成会议记忆；不上传音频。",
-  projection_setting_hint: "把已确认的记忆汇总成每日笔记、人物等页面。", range_hint: "记忆使用相同的文件夹和排除项，范围会同步到你的其他设备。", policy_pending: "云端范围待同步，本机已阻断受限资料。", policy_save: "保存共享范围", policy_saved: "共享范围已保存",
+  projection_setting_hint: "把已确认的记忆汇总成每日笔记、人物等页面。", range_hint: "记忆使用相同的文件夹和排除项，范围会同步到你的其他设备。", policy_pending: "云端范围待同步，本机已阻断受限资料。", policy_conflict: "其他设备已更新云端设置。请重新加载最新设置，检查后再保存。", policy_reload: "重新加载云端设置", policy_save: "保存共享范围", policy_saved: "共享范围已保存",
 };

@@ -9,7 +9,39 @@ const VERSION: &str = "topic-hierarchy-v1";
 struct GroupState {
     failed: BTreeMap<String, String>,
     inflight: BTreeSet<String>,
-    blocked: BTreeSet<String>,
+    #[serde(deserialize_with = "deserialize_blocked")]
+    blocked: BTreeMap<String, String>,
+}
+
+fn deserialize_blocked<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        Versions(BTreeMap<String, String>),
+        Legacy(BTreeSet<String>),
+    }
+    Ok(match Stored::deserialize(deserializer)? {
+        Stored::Versions(versions) => versions,
+        Stored::Legacy(ids) => ids.into_iter().map(|id| (id, String::new())).collect(),
+    })
+}
+
+fn snapshot_legacy_blocks(work: &mut GroupState, topics: &[Topic], locale: &str, config: &Models) {
+    for (id, blocked_version) in &mut work.blocked {
+        if blocked_version.is_empty() {
+            if let Some(topic) = topics.iter().find(|topic| &topic.id == id) {
+                *blocked_version = version(topic, locale, config);
+            }
+        }
+    }
+}
+
+fn blocked(work: &GroupState, topic: &Topic, locale: &str, config: &Models) -> bool {
+    work.blocked
+        .get(&topic.id)
+        .is_some_and(|saved| saved == &version(topic, locale, config))
 }
 fn state_path(root: &Path) -> PathBuf {
     root.join("topic-hierarchy.json")
@@ -399,6 +431,7 @@ pub(super) async fn run(
         let config = models(app, session)?;
         let values = topics(&root)?;
         let mut work: GroupState = read_json(&state_path(&root))?;
+        snapshot_legacy_blocks(&mut work, &values, &session.locale, &config);
         for key in std::mem::take(&mut work.inflight) {
             work.failed.insert(
                 key,
@@ -410,7 +443,7 @@ pub(super) async fn run(
             work = GroupState::default();
         }
         write_json(&state_path(&root), &work)?;
-        pending.retain(|t| !work.blocked.contains(&t.id));
+        pending.retain(|topic| !blocked(&work, topic, &session.locale, &config));
         pending.sort_by(|a, b| a.id.cmp(&b.id));
         (root, local, manifest, config, pending)
     };
@@ -443,7 +476,11 @@ pub(super) async fn run(
         if members.is_empty() {
             break;
         }
-        let latest = topics(&root)?;
+        let latest = {
+            let _guard = state.serial.lock().await;
+            require_current(state, session)?;
+            topics(&root)?
+        };
         let mut groups: Vec<_> = latest
             .iter()
             .filter(|t| parent(t) && !t.excluded)
@@ -480,16 +517,20 @@ pub(super) async fn run(
         let key = store::digest(
             json!([VERSION, session.locale, config.text_revision, payload]).to_string(),
         );
-        let mut work: GroupState = read_json(&state_path(&root))?;
-        if work.inflight.remove(&key) {
-            work.failed.insert(
-                key.clone(),
-                "Topic grouping outcome is unknown; retry explicitly".into(),
-            );
-            write_json(&state_path(&root), &work)?;
-        }
-        if work.failed.contains_key(&key) {
-            continue;
+        {
+            let _guard = state.serial.lock().await;
+            require_current(state, session)?;
+            let mut work: GroupState = read_json(&state_path(&root))?;
+            if work.inflight.remove(&key) {
+                work.failed.insert(
+                    key.clone(),
+                    "Topic grouping outcome is unknown; retry explicitly".into(),
+                );
+                write_json(&state_path(&root), &work)?;
+            }
+            if work.failed.contains_key(&key) {
+                continue;
+            }
         }
         report_progress(
             app,
@@ -518,21 +559,37 @@ pub(super) async fn run(
                 store::read_document(&local, entry)
             })
             .collect::<CommandResult<_>>()?;
-        let result = if let Some(value) = receipt(&root, &key)? {
+        let cached = {
+            let _guard = state.serial.lock().await;
+            require_current(state, session)?;
+            let cached = receipt(&root, &key)?;
+            if cached.is_none() {
+                let mut work: GroupState = read_json(&state_path(&root))?;
+                work.inflight.insert(key.clone());
+                work.blocked.extend(
+                    members
+                        .iter()
+                        .map(|topic| (topic.id.clone(), version(topic, &session.locale, &config))),
+                );
+                write_json(&state_path(&root), &work)?;
+            }
+            cached
+        };
+        let result = if let Some(value) = cached {
             Ok(value)
         } else {
-            work.inflight.insert(key.clone());
-            work.blocked.extend(members.iter().map(|t| t.id.clone()));
-            write_json(&state_path(&root), &work)?;
             async {
                 knowledge_cloud::authorize(app, session, &authority_docs, "wiki_compile").await?;
-                let value = automation::request(
-                    app,
-                    session,
-                    "wiki_topic_group",
-                    &docs,
-                    &query,
-                    Value::Null,
+                let value = tasks::profile_scope(
+                    config.server_profile.clone(),
+                    automation::request(
+                        app,
+                        session,
+                        "wiki_topic_group",
+                        &docs,
+                        &query,
+                        Value::Null,
+                    ),
                 )
                 .await?;
                 knowledge_cloud::authorize(app, session, &authority_docs, "wiki_compile").await?;
@@ -548,7 +605,7 @@ pub(super) async fn run(
         require_current(state, session)?;
         let current_manifest = load_state(app, session)?;
         ready(&current_manifest)?;
-        work = read_json(&state_path(&root))?;
+        let mut work: GroupState = read_json(&state_path(&root))?;
         work.inflight.remove(&key);
         match result {
             Err(error) => {

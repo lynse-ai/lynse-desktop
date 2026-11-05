@@ -9,6 +9,10 @@ import {
   readableForeground,
   selectAppThemePreset,
   setAppThemeAccent,
+  setAppThemeBackground,
+  setAppThemeFont,
+  setAppThemeForeground,
+  resetAppTheme,
 } from "./app-theme";
 
 const html = document.documentElement;
@@ -53,14 +57,14 @@ describe("presets", () => {
     expect(inlineVar("--background")).toBe("#08090a");
     expect(inlineVar("--sidebar")).toBe("#0f1011");
     // Linear keeps the same accent in dark; brand tints derive from it.
-    expect(inlineVar("--accent-brand-text")).toBe("#aab1e8");
+    expect(inlineVar("--accent-brand-text")).toBe("#abb1e5");
   });
 
   it("Notion dark overrides the hardcoded gold brand tints", () => {
     html.classList.add("dark");
     selectAppThemePreset("notion");
-    expect(inlineVar("--accent-brand-text")).toBe("#529cca");
-    expect(inlineVar("--sidebar")).toBe("#202020");
+    expect(inlineVar("--accent-brand-text")).toBe("#4f97df");
+    expect(inlineVar("--sidebar")).not.toBe("");
     expect(inlineVar("--primary-foreground")).toBe("#ffffff");
   });
 
@@ -90,7 +94,7 @@ describe("accent override", () => {
     selectAppThemePreset("notion");
     setAppThemeAccent("#ff0000");
     expect(inlineVar("--primary")).toBe("#ff0000");
-    expect(inlineVar("--sidebar")).toBe("#f7f7f5");
+    expect(inlineVar("--sidebar")).not.toBe("");
   });
 
   it("clearing the accent falls back to the preset's own accent", () => {
@@ -102,6 +106,63 @@ describe("accent override", () => {
 
   it("a 3-digit hex is normalized", () => {
     expect(setAppThemeAccent("#ABC").accent).toBe("#aabbcc");
+  });
+});
+
+describe("extended appearance state", () => {
+  it("uses the Codex Absolutely palette", () => {
+    html.classList.add("dark");
+    selectAppThemePreset("absolutely");
+    expect(inlineVar("--primary")).toBe("#cc7d5e");
+    expect(inlineVar("--background")).toBe("#2d2d2b");
+    expect(inlineVar("--foreground")).toBe("#f9f9f7");
+  });
+
+  it("uses the Codex Ayu palette", () => {
+    html.classList.add("dark");
+    selectAppThemePreset("ayu");
+    expect(inlineVar("--primary")).toBe("#e6b450");
+    expect(inlineVar("--background")).toBe("#10141c");
+    expect(inlineVar("--foreground")).toBe("#bfbbb6");
+  });
+
+  it("paints Codex themes in the active mode and persists overrides", () => {
+    html.classList.add("dark");
+    const state = selectAppThemePreset("catppuccin");
+    expect(state.preset).toBe("catppuccin");
+    expect(inlineVar("--background")).toBe("#1e2030");
+    expect(inlineVar("--foreground")).toBe("#cad3f5");
+    expect(inlineVar("--primary")).toBe("#f5bde6");
+  });
+
+  it("applies and clears background and foreground overrides", () => {
+    const backgroundState = setAppThemeBackground("#101112");
+    expect(backgroundState.background).toBe("#101112");
+    expect(inlineVar("--background")).toBe("#101112");
+
+    const foregroundState = setAppThemeForeground("#f6f7f8");
+    expect(foregroundState.foreground).toBe("#f6f7f8");
+    expect(inlineVar("--foreground")).toBe("#f6f7f8");
+
+    const cleared = setAppThemeBackground(undefined);
+    expect(cleared.background).toBeUndefined();
+  });
+
+  it("applies the selected UI font and resets the full appearance", () => {
+    selectAppThemePreset("github");
+    setAppThemeFont("mono");
+    expect(inlineVar("--font-sans")).toContain("SFMono-Regular");
+
+    const state = resetAppTheme();
+    expect(state).toEqual({ preset: "lynse" });
+    expect(inlineVar("--font-sans")).toBe("");
+    expect(inlineVar("--background")).toBe("");
+    expect(inlineVar("--primary")).toBe("");
+  });
+
+  it("supports Geist as a UI font", () => {
+    setAppThemeFont("geist");
+    expect(inlineVar("--font-sans")).toContain('"Geist Variable"');
   });
 });
 

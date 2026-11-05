@@ -273,6 +273,7 @@ async fn match_member(
     manifest: &Manifest,
     root: &Path,
     version: &str,
+    config: &Models,
 ) -> CommandResult<TopicLink> {
     let mut link = TopicLink {
         target_id: member.id.clone(),
@@ -295,13 +296,16 @@ async fn match_member(
                     validate_match(v, std::slice::from_ref(&part), manifest)
                 },
                 true,
-                automation::request(
-                    app,
-                    session,
-                    "wiki_topic_match",
-                    std::slice::from_ref(&part),
-                    &query,
-                    Value::Null,
+                tasks::profile_scope(
+                    config.server_profile.clone(),
+                    automation::request(
+                        app,
+                        session,
+                        "wiki_topic_match",
+                        std::slice::from_ref(&part),
+                        &query,
+                        Value::Null,
+                    ),
                 ),
             )
             .await?;
@@ -433,7 +437,7 @@ pub(super) async fn run(
         .collect();
     for topic in values.iter().filter(|t| {
         t.collection.is_some()
-            && !t.collection.as_ref().is_some_and(|c|c.hierarchy)
+            && !t.collection.as_ref().is_some_and(|c| c.hierarchy)
             && !t.excluded
             && !t.pinned
             && !t
@@ -510,7 +514,7 @@ pub(super) async fn run(
                 persist(app, session, &load_state(app, session)?)?;
             }
             let result = match_member(
-                app, state, session, topic, member, &selected, &manifest, &root, &version,
+                app, state, session, topic, member, &selected, &manifest, &root, &version, &config,
             )
             .await;
             let service_failure = result.as_ref().err().is_some_and(|e| is_service_failure(e));

@@ -57,6 +57,9 @@ def main():
                     health = json.load(response)
                 (output / 'health.json').write_text(json.dumps(health, indent=2), encoding='utf-8')
                 print('Local HTTP, Rust graph and desktop-renderer smoke passed. Results:', output, flush=True)
+            except Exception:
+                print((staging / 'service.log').read_text(), flush=True)
+                raise
             finally:
                 service.terminate()
                 try:

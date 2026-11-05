@@ -110,6 +110,14 @@ as independent source corroboration. Topic generation keeps its existing model.
 ## Validation and performance measurement
 
 Wiki organization retries preserve successful catalog receipts and completed pages.
+Automatic organization uses its own source and per-topic input identities for
+scheduling, matching the identities saved when pages complete. A completed pass
+persists its attempted input snapshot across restarts; a new sync round alone
+does not reopen it. Interrupted work and explicit retries still resume, while
+unchanged completed topics remain settled. Cached catalog receipts restore
+source associations together without entering the analysis queue or displaying
+an analysis stage for already processed text. Legacy cache migration writes only
+when it actually adopts receipts, repairs associations or updates page identities.
 Its text identity includes the protocol, input format, language and model selection;
 changing only the API gateway does not invalidate completed work. Legacy receipts
 are adopted only when their complete prior input identity and current citations

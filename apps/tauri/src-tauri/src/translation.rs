@@ -327,7 +327,7 @@ mod tests {
     async fn unknown_provider_records_failure() {
         let error = translate("你好", "zh", "en", TranslateKind::Sentence, &["nope".to_owned()], None)
             .await
-            .unwrap_err();
+            .err().expect("An unknown provider must fail");
         assert!(error.contains("unknown translation provider"));
     }
 }

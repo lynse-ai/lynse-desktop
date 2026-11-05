@@ -16,6 +16,32 @@
 > advertised it (its manifest mirror failed and the rollout was cancelled), so
 > that work plus the todo card redesign shipped together as 1.2.7.
 
+## 1.2.8 (2026-11-05)
+
+### Changed
+
+- Update notes now render grouped sections such as New Features, Improvements and Fixes, with clearer target/current version details, a wider reading layout, download progress and retry actions.
+- Chat history opens and closes with smoother interruptible motion, preserves its list position and keyboard focus, switches to an overlay on narrow content areas, and respects reduced-motion settings.
+- Chat and recording-side chat auto-scrolling now follows streaming content only while the reader is already near the bottom, avoiding forced jumps while reviewing older messages.
+- Summary failures now stay in their own tab with an in-place retry action, while existing summaries, outlines and transcripts remain readable; completed summaries are shown once even if task responses and refreshes race.
+- Summary generation, local transcription, upload and retry states use a shared, clearer task feedback layout with consistent controls and activity treatment.
+
+### Fixed
+
+- The main update dialog no longer mounts twice or allows duplicate dialogs to compete for focus and assistive-technology visibility.
+
+### 变更
+
+- 更新说明支持按“新功能”“改进”“错误修复”等分组渲染，显示更清晰的目标/当前版本信息，并采用更宽的阅读版式、下载进度与重试操作。
+- 聊天历史的开合动画更流畅且可中断，会保留列表位置和键盘焦点；窄内容区自动切换为覆盖层，并尊重系统减少动态设置。
+- 聊天页与录音侧栏聊天只在用户已经阅读到底部附近时自动跟随流式内容，回看旧消息时不再被强制拉到底部。
+- 总结失败会保留在对应页签并提供原位重试，原有总结、大纲和转写仍可查看；任务回包与刷新竞争时，完成的总结只会显示一次。
+- 总结生成、本地转写、上传和重试状态使用统一且更清晰的任务反馈布局，控件与活动指示表现一致。
+
+### 修复
+
+- 主界面的更新弹窗不再重复挂载，避免多个弹窗争夺焦点或影响辅助技术可见性。
+
 ## 1.2.7 (2026-11-04)
 
 ### New Features

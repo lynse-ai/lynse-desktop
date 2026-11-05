@@ -111,6 +111,7 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@lynse/ui/components/ui/context-menu";
 import "./content-preview.css";
@@ -272,6 +273,10 @@ export function ContentPanel() {
   const [selectedConclusionIdForTemplate, setSelectedConclusionIdForTemplate] = useState<string | null>(null);
   const [resummaryErrorFileId, setResummaryErrorFileId] = useState<string | null>(null);
   const [clearedSummaryFileIds, setClearedSummaryFileIds] = useState<Set<string>>(() => new Set());
+  // Which resummary mode is in flight per file — "replace" rewrites the visible
+  // summary in place (needs a dimmed working state), "rerun"/"add" swap to a
+  // pending state instead.
+  const [summaryWorkModes, setSummaryWorkModes] = useState<Record<string, SummaryTemplateDialogMode>>(() => ({}));
   const [pendingSummaryTabsByFile, setPendingSummaryTabsByFile] = useState<Record<string, SummaryTabModel[]>>({});
   const [summaryRetryTarget, setSummaryRetryTarget] = useState<{ fileId: string; key: string } | null>(null);
   const [retryingLocalFileIds, setRetryingLocalFileIds] = useState<Set<string>>(() => new Set());
@@ -800,6 +805,13 @@ export function ContentPanel() {
   const currentFileSummarizing = !!selectedItemId && summarizingFileIds.has(selectedItemId);
   const currentFileRerunning = currentFileSummarizing && currentFileSummariesCleared;
   const currentFileResummaryError = !!selectedItemId && resummaryErrorFileId === selectedItemId;
+  // Replace mode (and the local deep-summary regen) rewrite the summary that is
+  // already on screen instead of swapping to the pending state — dim it while
+  // working so the content reads as "regenerating" rather than sitting still.
+  const replaceRegenerating =
+    (selectedItemId ? summaryWorkModes[selectedItemId] : undefined) === "replace" ||
+    (isLocalSelectedItem && regeneratingLocalSummary);
+  const summaryRegenOverlay = replaceRegenerating && contentTab.startsWith("summary-");
 
   const handleResummaryStarted = useCallback((
     fileId: string,
@@ -838,6 +850,7 @@ export function ContentPanel() {
       });
       setContentTab("outline");
     }
+    setSummaryWorkModes((current) => ({ ...current, [fileId]: mode }));
     setFileSummarizing(fileId, true);
   }, [setContentTab, setFileSummarizing, t, visibleConclusionTexts.length, pendingSummaryTabs, summaryRetryTarget]);
 
@@ -848,6 +861,12 @@ export function ContentPanel() {
     options?: { pendingId?: string; conclusion?: import("./types").FileConclusion },
   ) => {
     setFileSummarizing(fileId, false);
+    setSummaryWorkModes((current) => {
+      if (!(fileId in current)) return current;
+      const next = { ...current };
+      delete next[fileId];
+      return next;
+    });
     // Add/replace failures belong to that summary. The transcript and saved
     // summaries remain available; only a full rerun needs the file-wide error.
     if (mode === "rerun") {
@@ -1052,6 +1071,15 @@ export function ContentPanel() {
                     <span>{t("resummarize.button")}</span>
                   </ContextMenuItem>
                 )}
+                <ContextMenuSeparator />
+                <ContextMenuItem
+                  variant="destructive"
+                  onClick={() => handleDeleteSummary(block.id, idx)}
+                  disabled={deleteConclusion.isPending || !block.id}
+                >
+                  <Trash2 className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
+                  <span>{text("summary_tab.delete", summaryTabFallback.delete)}</span>
+                </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>
           ))}
@@ -1228,7 +1256,25 @@ export function ContentPanel() {
                 </div>
               )}
 
+              {/* Replace-mode status line: the old summary stays readable while
+                  it regenerates, so say so explicitly (shimmering label). */}
+              {summaryRegenOverlay && (
+                <div className="animate-in fade-in mt-3 flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  <span className="animate-chat-text-shimmer">{t("resummarize.generating_title")}</span>
+                </div>
+              )}
+
               <div ref={contentPreviewRef} className={`content-preview mt-2 flex-1 min-h-0 ${contentTab === "transcription" || contentTab === "chapters" ? "lyse-transcription-preview flex flex-col flex-1 min-h-0" : ""}`}>
+                {/* Keyed by the resummary lifecycle: leaving the pending state
+                    remounts this box and replays its entrance fade on the fresh
+                    content instead of hard-swapping. While a replace regenerates
+                    in place, the same box dims — and the opacity transition
+                    plays the reveal when the new text arrives. */}
+                <div
+                  key={`${currentFileRerunning ? "pending" : "done"}-${activeSummary?.status ?? "idle"}`}
+                  className={`flex flex-1 min-h-0 flex-col transition-[opacity,filter] duration-300 ease-out animate-in fade-in slide-in-from-bottom-2 ${summaryRegenOverlay ? "opacity-40 blur-[1px]" : ""}`}
+                >
                 {currentFileRerunning ? (
                   <ResummaryPendingState />
                 ) : currentFileResummaryError ? (
@@ -1534,6 +1580,7 @@ export function ContentPanel() {
                     )}
                   </>
                 )}
+                </div>
               </div>
 
               {contentTab !== "transcription" && (

@@ -4,6 +4,7 @@ use super::*;
 tokio::task_local! { static OPERATION: String; }
 tokio::task_local! { static PROFILE: Option<Value>; }
 pub(super) const UNKNOWN: &str = "Model outcome is unknown; retry explicitly";
+const STATUS_CONFLICT: &str = "Lynclaw synthesis failed (HTTP 409)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Outcome {
@@ -15,6 +16,7 @@ pub(super) enum Outcome {
 impl Outcome {
     pub(super) fn classify(error: &str) -> Self {
         if error.contains(UNKNOWN)
+            || error == STATUS_CONFLICT
             || error == "Lynclaw returned invalid synthesis JSON"
             || [500, 502, 503, 504].iter().any(|status| {
                 error.starts_with(&format!("Lynclaw synthesis failed (HTTP {status})"))
@@ -77,6 +79,13 @@ fn connection(root: &Path) -> CommandResult<Connection> {
     conn.execute(
         "UPDATE model_tasks SET state='unknown',error=? WHERE state='done' AND output IS NULL",
         [UNKNOWN],
+    )
+    .map_err(|error| error.to_string())?;
+    // Older clients classified an unqualified 409 as a validation failure and
+    // could silently issue a new operation. Its remote outcome is unknown.
+    conn.execute(
+        "UPDATE model_tasks SET state='unknown' WHERE state='validation_failed' AND error=?",
+        [STATUS_CONFLICT],
     )
     .map_err(|error| error.to_string())?;
     if !conn
@@ -160,24 +169,19 @@ fn claim(root: &Path, key: &str) -> CommandResult<String> {
             return Err(error.clone());
         }
     }
-    // A released claim resumes with its original operation id so the gateway
-    // can return the already-recorded receipt instead of executing twice.
-    // Profile conflicts keep that identity too. A body-less synthesis 409 is a
-    // usage ledger conflict: the server has already retired the operation and
-    // cannot replay its body, so the only safe retry is an explicit regenerate
-    // under a new operation id.
-    let reused = existing
+    // Keep the original operation on automatic recovery so the gateway can
+    // detect an existing attempt. Only an explicit retry releases a generic
+    // conflict to `ready`, permitting a new operation for that retry.
+    let explicit_conflict_retry = existing
         .as_ref()
-        .is_none_or(|(_, state, error, _)| {
-            state != "validation_failed" || error != "Lynclaw synthesis failed (HTTP 409)"
-        });
-    let operation = if reused {
+        .is_some_and(|(_, state, error, _)| state == "ready" && error == STATUS_CONFLICT);
+    let operation = if explicit_conflict_retry {
+        uuid::Uuid::new_v4().to_string()
+    } else {
         existing
             .as_ref()
             .map(|(operation, _, _, _)| operation.clone())
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
-    } else {
-        uuid::Uuid::new_v4().to_string()
     };
     transaction.execute("INSERT OR REPLACE INTO model_tasks(id,operation_id,state,error,updated_at,output,retry_at) VALUES (?1,?2,'queued','',?3,NULL,0)",
         params![key, operation, crate::now()]).map_err(|error| error.to_string())?;
@@ -351,7 +355,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generic_status_conflict_regenerates_with_a_new_operation() {
+    async fn generic_status_conflict_waits_for_explicit_retry() {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         let _ = execute(&root, "ledger-conflict", true, async {
             Err("Lynclaw synthesis failed (HTTP 409)".into())
@@ -365,6 +369,12 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
+        let blocked = execute(&root, "ledger-conflict", true, async {
+            panic!("A conflict with an unknown outcome cannot be retried automatically")
+        })
+        .await;
+        assert_eq!(blocked.unwrap_err(), UNKNOWN);
+        retry_unknown(&root).unwrap();
         let second = claim(&root, "ledger-conflict").unwrap();
         assert_ne!(first, second);
         let state: String = connection(&root)
@@ -376,6 +386,22 @@ mod tests {
             )
             .unwrap();
         assert_eq!(state, "queued");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn old_generic_conflicts_become_unknown_before_they_can_be_claimed() {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let conn = connection(&root).unwrap();
+        conn.execute(
+            "INSERT INTO model_tasks(id,operation_id,state,error,updated_at) VALUES ('old-conflict','old-id','validation_failed',?,?)",
+            params![STATUS_CONFLICT, crate::now()],
+        )
+        .unwrap();
+        drop(conn);
+        assert_eq!(claim(&root, "old-conflict").unwrap_err(), UNKNOWN);
+        retry_unknown(&root).unwrap();
+        assert_ne!(claim(&root, "old-conflict").unwrap(), "old-id");
         fs::remove_dir_all(root).unwrap();
     }
 

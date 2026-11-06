@@ -87,10 +87,10 @@ export function AppUpdateDialog() {
       }}
     >
       <DialogContent
-        className={`flex max-h-[85dvh] w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden p-0 ${hasUpdate ? "sm:max-w-3xl" : "sm:max-w-md"}`}
+        className={`flex max-h-[88dvh] w-[calc(100%-4rem)] flex-col gap-0 overflow-hidden p-0 ${hasUpdate ? "sm:max-w-4xl lg:max-w-5xl" : "sm:max-w-md"}`}
         showCloseButton={!busy}
       >
-        <DialogHeader className="shrink-0 gap-1.5 border-b border-border/70 px-6 py-5 pr-12">
+        <DialogHeader className="shrink-0 gap-1.5 border-b border-border/70 px-8 py-6 pr-12">
           <DialogTitle className="text-lg leading-6 font-semibold">
             {hasUpdate
               ? t("settings.update_to_version", { version: update?.latestVersion })
@@ -109,10 +109,10 @@ export function AppUpdateDialog() {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-5 [scrollbar-gutter:stable]" data-slot="update-notes-body">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-8 py-6 [scrollbar-gutter:stable]" data-slot="update-notes-body">
           {hasUpdate && update?.releaseNotes?.trim() ? (
             <>
-              <p className="mb-5 text-xs text-muted-foreground">
+              <p className="mb-6 text-[13px] text-muted-foreground">
                 {t("settings.update_notes_this_version")}
               </p>
               <ReleaseNotesContent notes={update.releaseNotes} />
@@ -170,7 +170,7 @@ export function AppUpdateDialog() {
           )}
         </div>
 
-        <DialogFooter className="mx-0 mb-0 shrink-0 flex-row flex-wrap justify-end gap-3 rounded-none border-border/70 bg-transparent px-6 py-4">
+        <DialogFooter className="mx-0 mb-0 shrink-0 flex-row flex-wrap justify-end gap-3 rounded-none border-border/70 bg-transparent px-8 py-4">
           <Button variant="ghost" onClick={() => setOpen(false)} disabled={busy}>
             {hasUpdate ? t("settings.update_later") : t("settings.update_close")}
           </Button>

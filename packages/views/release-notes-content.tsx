@@ -54,17 +54,17 @@ export function ReleaseNotesContent({
   const id = useId();
   const parsed = useMemo(() => parseReleaseNotes(notes), [notes]);
   return (
-    <div className={cn("min-w-0 space-y-6 break-words text-foreground/85 [overflow-wrap:anywhere]", compact ? "text-xs leading-5" : "text-sm leading-6", className)}>
+    <div className={cn("min-w-0 space-y-7 break-words text-foreground/85 [overflow-wrap:anywhere]", compact ? "text-xs leading-5" : "text-[15px] leading-7", className)}>
       {parsed.paragraphs.map((paragraph, index) => (
         <p key={index} className="whitespace-pre-line"><InlineNote text={paragraph} /></p>
       ))}
       {parsed.sections.map((section, index) => (
         <section key={section.key} aria-labelledby={`${id}-${index}`}>
-          <h3 id={`${id}-${index}`} className="mb-2 flex items-baseline gap-2 font-semibold text-foreground">
+          <h3 id={`${id}-${index}`} className="mb-3 flex items-baseline gap-2 text-base font-semibold text-foreground">
             {section.category ? t(`settings.update_notes_${section.category}`) : section.title}
-            <span aria-hidden="true" className="font-normal tabular-nums text-muted-foreground">{section.items.length}</span>
+            <span aria-hidden="true" className="text-[13px] font-normal tabular-nums text-muted-foreground">{section.items.length}</span>
           </h3>
-          <ul className="list-disc space-y-2 pl-5 marker:text-muted-foreground">
+          <ul className="list-disc space-y-2.5 pl-5 marker:text-muted-foreground">
             {section.items.map((item, itemIndex) => (
               <li key={itemIndex} className="whitespace-pre-line pl-0.5"><InlineNote text={item} /></li>
             ))}

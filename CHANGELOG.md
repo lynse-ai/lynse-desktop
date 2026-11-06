@@ -8,9 +8,12 @@
 > the history (that commit documents a `vA.B.C(N)` build-counter tag
 > convention), so they are not listed either.
 >
-> Entries since 1.1.7 ship in both English and Chinese (New Features/Fixed plus
-> 新功能/修复). The release pipeline extracts the whole version section
-> verbatim, so the in-app update notes render both languages.
+> Entries since 1.1.7 ship in both English and Chinese, grouped into three
+> categories: New Features / Improvements / Fixed plus 新功能 / 改进 / 错误修复.
+> Legacy headings (Changed, Bug Fixes, Performance, 变更, 调整, 修复) were
+> renamed into these on 2026-11-06; the update dialog maps heading aliases onto
+> the same three groups regardless. The release pipeline extracts the whole
+> version section verbatim, so the in-app update notes render both languages.
 >
 > The 1.3.0 numbering was retired on 2026-11-04 before the updater channel ever
 > advertised it (its manifest mirror failed and the rollout was cancelled), so
@@ -18,7 +21,7 @@
 
 ## 1.2.8 (2026-11-05)
 
-### Changed
+### Improvements
 
 - Update notes now render grouped sections such as New Features, Improvements and Fixes, with clearer target/current version details, a wider reading layout, download progress and retry actions.
 - Chat history opens and closes with smoother interruptible motion, preserves its list position and keyboard focus, switches to an overlay on narrow content areas, and respects reduced-motion settings.
@@ -30,7 +33,7 @@
 
 - The main update dialog no longer mounts twice or allows duplicate dialogs to compete for focus and assistive-technology visibility.
 
-### 变更
+### 改进
 
 - 更新说明支持按“新功能”“改进”“错误修复”等分组渲染，显示更清晰的目标/当前版本信息，并采用更宽的阅读版式、下载进度与重试操作。
 - 聊天历史的开合动画更流畅且可中断，会保留列表位置和键盘焦点；窄内容区自动切换为覆盖层，并尊重系统减少动态设置。
@@ -38,7 +41,7 @@
 - 总结失败会保留在对应页签并提供原位重试，原有总结、大纲和转写仍可查看；任务回包与刷新竞争时，完成的总结只会显示一次。
 - 总结生成、本地转写、上传和重试状态使用统一且更清晰的任务反馈布局，控件与活动指示表现一致。
 
-### 修复
+### 错误修复
 
 - 主界面的更新弹窗不再重复挂载，避免多个弹窗争夺焦点或影响辅助技术可见性。
 
@@ -68,7 +71,7 @@
 - 待办标题支持在卡片上双击行内改名，与右侧编辑面板联动；已过期卡片上的到期时间红色高亮。
 - 打开右侧编辑面板时列表自动切为单列聚焦，关闭后恢复多列排布。
 
-### 修复
+### 错误修复
 
 - 超过浏览器解码上限的长录音会明确提示“暂不生成波形”，不再误显示为失败或提供无效重试。
 - 补齐章节、Apple 语音识别和实时纪要文案在全部发布语言中的翻译一致性。
@@ -82,17 +85,17 @@
 - Failed knowledge pages are retried automatically on the next pass instead of latching as permanent errors, and transient model-service failures recover within the run instead of stopping it.
 - Idle passes no longer rescan the whole catalog every two minutes; the "organizing" banner now clears once everything is processed, and real per-topic failures are reported honestly instead of being masked by a perpetual progress bar.
 
-### Changed
+### Improvements
 
 - The knowledge base (Wiki) feature is hidden in official builds while its release quality is being stabilized: the sidebar entry, the page, the home progress card and the desktop chat context are gated to debug-channel builds, development shells and the runtime test mode (five taps on the login logo). Existing knowledge bases stay intact on disk and the feature reappears unchanged for the team under test mode.
 
-### 修复
+### 错误修复
 
 - 知识库自动整理可能每一轮都丢弃刚编译完成的页面、永远到不了"完成"：页面校验对比的是原始会议文档，而编译时模型只看到经过 markdown 过滤的版本（带 HTML 可视化摘要大纲的会议，凡引用跨越被过滤段落的引文全部失败）。现在校验与编译使用同一份过滤后的文档，这类页面正常发布。
 - 编译失败的专题改为下一轮自动重试，不再永久记为错误；模型服务的瞬态故障在运行内自动恢复，不再中断整轮整理。
 - 空闲轮次不再每两分钟全量扫描目录；全部处理完后"整理中"横幅会正常消失，真实的专题级失败如实展示，不再被常驻进度条掩盖。
 
-### 变更
+### 改进
 
 - 正式版构建暂时隐藏知识库（Wiki）功能：侧边栏入口、页面、首页进度卡与桌面聊天上下文统一收进调试渠道门控（调试构建、开发环境与运行时测试模式可见，登录页 logo 五击开启）。已有知识库数据完整保留在本地磁盘，团队在测试模式下功能原样恢复。
 
@@ -113,7 +116,7 @@
 - 未上传云端的本地录音补齐恢复入口：本地模型转写、事后上传到云端（实时录音），总结失败提示下方新增醒目重试按钮——对从未转写的本地录音，重试会先跑本地转写而不是再次失败。
 - 本地转写完成后自动经 AI 助手后端生成深度总结，录音详情页新增「深度总结」页签（可编辑、可重新生成、可删除）。
 
-### 修复
+### 错误修复
 
 - 离线转写的 MLX 引擎环境改用兼容的 Python 解释器装配（优先 3.12/3.11/3.13，并兜底 GUI 应用的最小 PATH），修复系统 Python 3.9 下首次安装 mlx-qwen3-asr 静默失败的问题；旧环境通过懒安装自愈。
 - HTML / 图文报告请求复用加长的报告轮询时限，不再提前超时。
@@ -130,7 +133,7 @@
 - Recording source toggles (system audio / microphone) now sit under the timeline instead of the window's top-left corner.
 - Waiting-state labels render as plain text without the shimmer sweep.
 
-### 修复
+### 错误修复
 
 - 录音来源开关（电脑声音 / 麦克风）从窗口左上角移到时间进度条下方。
 - 等待状态文字不再带流光扫过效果。
@@ -141,7 +144,7 @@
 
 - Let monthly, weekly and quarterly report turns run to completion: the chat poll deadline now follows the server's extended report budget (up to 10 minutes) instead of timing out after about 3 minutes while the answer was still being written.
 
-### 修复
+### 错误修复
 
 - 周报/月报/季报生成现在会等待服务端完整跑完：轮询时限跟随服务端放宽后的报告预算（最长 10 分钟），不再在大约 3 分钟后、正文还在生成时就提示超时。
 
@@ -170,7 +173,7 @@
 - 支持切换知识图谱文本模型，整理或重试时复用未变化的分析。
 - 在助手设置中直接通过开关授权主动建议。
 
-### 修复
+### 错误修复
 
 - 整理失败后保留来源关联与成功结果；明确说明引用问题，支持只重试失败项，并预填问题反馈。
 - 知识图谱填满窗口可用高度，存在已排除专题时也不会在下方留下大片空白。
@@ -187,7 +190,7 @@
 - Explain folder-permission sync failures clearly, jump straight to the matching privacy pane, and offer a consent reset as a fallback.
 - Keep the permission onboarding fully visible in every window state with a roomier layout and a photo backdrop.
 
-### 修复
+### 错误修复
 
 - 升级后自动复查知识库文件夹访问权限，当 macOS 未授权「文稿」文件夹时给出引导，不再静默同步失败。
 - 因文件夹权限导致的同步失败给出明确说明，可一键跳转对应隐私设置面板，并提供重置授权兜底。
@@ -201,7 +204,7 @@
 - Show release notes in the selected interface language, including when switching languages without restarting.
 - Keep the website download alias, signed updater archive and release manifest synchronized.
 
-### 修复
+### 错误修复
 
 - 恢复正式自动更新通道，使旧版桌面应用可以发现 1.2.0。
 - 更新说明跟随所选界面语言，切换语言后立即生效。
@@ -236,7 +239,7 @@
 - Recheck source authorization before supplying local knowledge or MCP results to the assistant.
 - Keep forgotten sources available for manual browsing while blocking their automatic AI use.
 
-### Changed
+### Improvements
 
 - Start the new shared memory system with an empty data space. Existing memory is not imported.
 - Enable cloud-dependent features only when the deployed service advertises the required capabilities.
@@ -248,13 +251,13 @@
 - Wiki 专题自动发布并保留来源，可浏览知识图谱、单独重试失败专题。
 - 本地待办支持未开始、进行中、已完成和已取消四种状态，并保留变更历史。
 
-### 修复
+### 错误修复
 
 - 离开页面再返回时保留聊天草稿、记忆文件草稿及文件选择。
 - 本地知识和 MCP 结果交给助手前重新检查来源授权。
 - 遗忘后保留来源和 Wiki 的人工浏览能力，同时阻断相关内容的自动 AI 使用。
 
-### 变更
+### 改进
 
 - 新版共用记忆使用空白数据空间，不导入旧版记忆。
 - 云端相关功能仅在服务声明具备所需能力时启用。
@@ -291,7 +294,7 @@
 - Wiki 与知识图谱合并展示，使用同一笔记侧边栏，左侧阅读对应内容、右侧查看关联，支持调整阅读宽度。
 - Wiki 生成候选内容后经审阅发布，小灵助手可查询已授权的本地会议知识。
 
-### 修复
+### 错误修复
 
 - 仅处理新增或变更资料，复用已完成的 Wiki 批次，避免重复生成相同项目状态。
 - 整理完成后隐藏进度卡片；失败专题显示具体原因、直达入口和单独重试按钮。
@@ -318,7 +321,7 @@
 - Preserve local-media error responses so unavailable audio files can be distinguished from connection failures.
 - Include and verify every required transcription runtime binary in release archives, and complete missing WeChat translations.
 
-### Changed
+### Improvements
 
 - Remove the NewView recording-card integration and its device page. Microphone and system-audio recording remain available.
 - Update the client license to AGPL-3.0-only and clarify the license boundaries in the repository notices.
@@ -329,14 +332,14 @@
 - 导入音频时可选择本地转写语种，中文默认配置会固定 SenseVoice 识别语言。
 - 助手确认卡片直接显示在对话中，选择结果保留在聊天记录里。
 
-### 修复
+### 错误修复
 
 - 微信登录使用服务端下发的授权配置校验回调，手机号已绑定账号时提供更明确的提示。
 - 问题报告截图改用临时上传槽位直传，问题跟踪服务凭证仅保留在服务端。
 - 补全本地媒体错误响应，便于区分音频文件不可用和连接失败。
 - 发布时逐项校验转写运行时文件，补齐微信登录缺失的多语言文案。
 
-### 调整
+### 改进
 
 - 移除 NewView 录音卡集成及设备页面；麦克风与系统声音录制继续可用。
 - 客户端许可更新为 AGPL-3.0-only，并在仓库声明中明确许可范围。
@@ -376,7 +379,7 @@
 - 设置中增加按账号保存的个人上下文收件箱开关，默认关闭；开启后可从通知中心查看。
 - 增加桌面端本地 MCP 服务和助手模型选择。
 
-### 修复
+### 错误修复
 
 - 修复 macOS 从旧版本升级后首次启动时，启动器关闭标准输出和错误输出引起的闪退；日志写入失败不再触发递归崩溃。
 - AI 正常回复按 Markdown 显示，错误信息独立提示；失败时保留已有回复，并正确标记失败工具。
@@ -399,7 +402,7 @@
 - 小灵助手在所有环境默认直连 CloudBase 上的 AI 服务，不再经网关中转；助手服务器设置简化为「CloudBase 直连」与自定义地址两项。
 - 小灵助手与灵感云同步统一切换到 CloudBase 默认域名，历史保存的旧地址自动迁移。
 
-### 修复
+### 错误修复
 
 - 手机登录验证码统一为 6 位，移除 4 位码的兼容输入逻辑。
 
@@ -422,7 +425,7 @@
 - 桌面 AI 助手接入 WorkBuddy 云端，支持独立会话、流式回复、连续追问、会话历史和云端产物预览。
 - 本地音频导入改为后台转写，笔记中显示转写进度，切换页面后仍可收到完成或失败通知；拥有对应会员权益的账号可选择云端上传。
 
-### 修复
+### 错误修复
 
 - 修复 WorkBuddy 云端连接、授权权限、回复结束和停止操作；支持重置显示的授权状态后重新连接。
 - 防止检查转写配置和已安装模型时重复创建本地转写任务。
@@ -435,7 +438,7 @@
 
 - Fixed cross-device sync for Records (quick notes): a note created on one computer now shows up on the other after opening the Records page. The cloud pull step was silently discarding incoming changes — uploading was never affected.
 
-### 修复
+### 错误修复
 
 - 修复「记录」跨设备同步：在一台电脑新建的记录，另一台打开记录页即可看到。此前云端拉取步骤会静默丢弃变更，上传一直正常。
 
@@ -445,7 +448,7 @@
 
 - Internal maintenance release: refinements around the sign-in page and day-to-day housekeeping, with no changes to normal sign-in or update behavior.
 
-### 修复
+### 错误修复
 
 - 内部维护版本：登录页相关细节优化与日常维护，正常登录与更新行为均无变化。
 
@@ -474,7 +477,7 @@
 - 聊天支持附件卡片与懒签名下载链接；助手后端地址可在设置中配置（跟随主服务 / 指定云托管服务 / 自定义地址）。
 - 分发渠道从 TestFlight 切换为官网直发：新用户从下载页安装，老用户应用内升级；沙盒（TestFlight）构建改为引导到官网手动重装一次。
 
-### 修复
+### 错误修复
 
 - 更新通道切换到自定义域名 dl.lynse.cn（同一 CloudBase 托管，原长域名保留兜底）；发版镜像、修复任务与每日巡检同步发布到新地址。
 - 灵感云同步端点从待退役的旧服务切换到现役 lynse-memory 服务。
@@ -506,7 +509,7 @@
 - Windows 上可用 VibeVoice-ASR-BitNet 1.5B（微软，MIT 协议）：`vibeasr` sidecar 以静态链接方式随共享运行时发布（无需 MinGW 运行时 DLL），模型卡进入插件社区（固定大小与 SHA-256），非 macOS 平台可在转写设置中选择该引擎。已在 Windows 端到端实测（语音 → 流式协议转写）。
 - 下载的模型文件现在全部校验固定 SHA-256（此前只有声纹模型校验），目录中的模型大小与真实产物逐字节一致，下载进度因此精确。
 
-### 修复
+### 错误修复
 
 - 应用内更新通道已修复：CloudBase 镜像任务此前被误删，线上更新清单一直停留在 1.1.0，1.1.5 和 1.1.6 从未推送给已安装用户。现在发版会重新镜像到 CloudBase，发版流水线在发布后校验线上清单（镜像缺失时直接失败），并有每日巡检盯住清单落后。任意近期版本的客户端下次检查更新即可收到本版本。
 - 启动期崩溃不再无声无息：panic 记录器现在等文件日志后端就绪后才安装，插件初始化、托盘创建、窗口创建阶段的崩溃都能写入每日日志文件，而不是应用直接消失（Windows 上「Lynse 自己退出」类反馈的根因）。
@@ -522,7 +525,7 @@
 - Voiceprint engine rebuilt on sherpa-onnx with the 3D-Speaker CAM++ model (Apache-2.0, safe for commercial use): a ~28 MB download from the STT settings replaces the old bundled engine, and matching now runs in a lightweight environment without the heavy transcription stack.
 - The sign-in window is redesigned as a compact welcome screen with a 1:1 split layout and an illustration card, returning to the dashboard size after signing in.
 
-### Changed
+### Improvements
 
 - Voiceprints enrolled with an earlier engine no longer participate in matching; they stay listed with their engine badge and a hint to re-save them from the original transcript.
 - The onboarding page adapts to narrower windows (900 px breakpoint) with a smaller logo.
@@ -543,7 +546,7 @@
 - Entering the notes page always refetches notes and folders so stale lists can't linger.
 - Numbered lists in replies no longer trigger the option picker: the choice modal only opens when the text actually reads as a menu.
 
-### Changed
+### Improvements
 
 - The AI assistant now connects to the new backend service endpoint for improved reliability.
 
@@ -571,7 +574,7 @@
 
 - Dark Linear/Notion presets no longer paint an opaque sidebar over the macOS vibrancy frost — the rail dissolves into the frosted material like the default dark theme.
 
-### Changed
+### Improvements
 
 - Build channels are restructured to official/debug, and the runtime archives and update feeds now use CloudBase static hosting as the primary source (GitHub remains a fallback for older tags). The "new version" fallback link points at www.lynse.cn.
 ## 1.1.1 (2026-09-27)
@@ -581,10 +584,11 @@
 - 聊天回复支持附件：图片卡片（全屏查看、下载、转发）与 PDF 文件卡片。过期的下载链接会在打开前重新签名，不再出现点开后链接已失效的情况。
 - AI 助手可以配置独立的后端地址，常规业务请求不受影响。
 
-### Performance
+### Improvements
 
 - 流式回答不会再闪出半个 emoji 或把英文单词截断——打字机切片现在对齐到字符与单词边界。
 - 流式输出时活跃会话的状态写入合并为一次更新，每帧的渲染开销明显下降。
+- 侧边栏收窄，macOS 红绿灯间距与位置随之调整；首页隐藏滚动条。
 
 ### Fixed
 
@@ -592,10 +596,6 @@
 - 上传失败现在会指明是三步中的哪一步（创建占位 / 获取上传凭证 / 通知上传完成）以及服务端返回码，不再只显示一句「系统繁忙」。
 - 在笔记列表里删除本地录音后，该行不再残留在列表中；删除失败也会显示原因，而不是看起来毫无反应。
 - 删除本地录音会一并清理它在磁盘上的音频目录，不再留下孤立的 WAV 文件。
-
-### Changed
-
-- 侧边栏收窄，macOS 红绿灯间距与位置随之调整；首页隐藏滚动条。
 
 ## 1.1.0 (2026-09-23)
 
@@ -635,7 +635,7 @@
 - WorkBuddy joins the chat page. The assistant picker at the top now reads 小灵助手 and switches to Work buddy, and the conversation runs through your authorized WorkBuddy account — ask it for a document and it arrives as an attachment in the reply. When authorization is missing, the chat itself walks you through it instead of sending you to settings.
 - The About page shows what's new: the published release notes are read from the update source (CloudBase) and displayed next to the version, so checking for updates also tells you what you would be getting.
 
-### Changed
+### Improvements
 
 - Live translation switches to the qwen3.8-livetranslate-flash-realtime model; older sessions keep working through the migration, and a toast confirms which engine is actually serving the session.
 - The voice-enhancement control on the recording page is a real switch now, with a slash-marked icon for the off state instead of a caption toggle.
@@ -658,12 +658,9 @@
 - Local transcription grows three routes: the MOSS engine on MLX, a WhisperX engine, and Tencent Cloud real-time recognition as a streaming provider. WorkBuddy joins the sign-in methods.
 - Dual-channel echo-cancelled recording is in place on both platforms (raw 48 kHz tracks + a processed recognition track, with a `tracks.json` manifest that Windows and macOS read the same way).
 
-### Changed
+### Improvements
 
 - Echo cancellation defaults to off on macOS (`LYNSE_AEC=1` to enable) until it passes a listening acceptance: measured against silent system audio it removed only ~1 dB of echo while leaving processing artefacts in the archive, and the capture without it showed zero clipping, no impulse events and a self-consistent timeline.
-
-### Performance
-
 - MOSS-on-MLX transcription runs chunked prefill and batched audio-tower forward passes, which is what makes long recordings fit in memory; generation reports per-token progress instead of going quiet.
 
 ### Fixed
@@ -689,7 +686,7 @@
 - A help-and-feedback window in the app, in all five languages.
 - Theme follows the system by default and the native window appearance is kept in sync; gateway `{ code, msg }` error wrappers are decoded into readable messages instead of raw payloads.
 
-### Changed
+### Improvements
 
 - In-app updates and the STT runtime archives are served from Tencent CloudBase static hosting with GitHub Releases as fallback, because GitHub downloads are blocked or throttled from mainland China; the release workflow mirrors both to CloudBase and rewrites `latest.json`.
 - An API-key login entry is available in development builds only, and the endpoint fallback chain is saved address → build-time environment → production default.
@@ -709,7 +706,7 @@
 - QR-code sign-in, global search across the library, and a weather card on the home page.
 - A Playwright end-to-end suite with a mock server and scripted scenarios covering chat, navigation and recording flows.
 
-### Changed
+### Improvements
 
 - The chat transport and chat store were reworked around multi-turn history and streaming; the markdown vault mirror was extended accordingly.
 - The Apple build number is decoupled from the version string — decimal and auto-incremented.
@@ -734,7 +731,7 @@
 - Inspiration images open in a lightbox: click an image on a card and it opens full-screen with left/right paging (← / →) and Esc to close, instead of the click falling through to navigating into the note.
 - Settings → About gained **Report an issue** and **View logs**. "Report an issue" opens GitHub with a pre-filled, structured bug report carrying the app version, platform, user agent and timestamp (the issue form itself moved from free-form Markdown to a required-field YAML template), so reports arrive reproducible; "View logs" reveals the log folder in Finder/Explorer for attaching evidence.
 
-### Changed
+### Improvements
 
 - Diagnostics now land in one persistent file. Everything written to `console.error` / `console.warn`, plus uncaught exceptions and unhandled promise rejections in the webview — including third-party library noise — is forwarded through `tauri-plugin-log` into the same file the Rust side writes, so a bug report only ever needs one folder. The bridge swallows its own failures instead of rethrowing them, so logging can never turn into an unhandled-rejection feedback loop.
 - Rust panics are persisted too: the previous default hook wrote only to stderr, which is invisible for a packaged app launched from Finder. Log rotation keeps archived files so crash history survives post-mortem.
@@ -750,7 +747,7 @@
 
 - Update dialog: a single in-place update dialog now opens from every entry point — notification center, profile menu ("Check for updates"), sidebar, and settings — instead of routing through Settings → About. It shows what's new, then downloads, signature-verifies, installs and relaunches without leaving the page, with Later / Close / Retry actions (en / ja / zh).
 
-### Performance
+### Improvements
 
 - Recording waveform: the band scrolls at a continuous 62 px/s instead of jumping in 200 ms steps — a local clock extrapolates between the capture sidecar's updates (clamped, frozen while paused), the mic level is smoothed with a fast attack / slow release plus peak-hold, and canvas size, theme colours and the bar path are cached so no frame forces a layout read.
 - Elapsed timer: the `MM:SS.cs` readout now ticks at display refresh rate (`SmoothTimer` writes the interpolated value straight to the DOM) instead of stuttering five times a second.
@@ -763,7 +760,7 @@
 - Recording page: the pure-recording stage is redesigned after the iOS Voice Memos / Huawei recorder UI — a time ruler over a full-width waveform band with a red centre playhead, a large `MM:SS.cs` centisecond timer, and a proper transport bar (bookmark · stop · pause) while recording. Bookmarks drop red markers on the waveform band floor and clear when the session ends; the waveform freezes while paused and truncates on restart.
 - Chat: opening Chat from the sidebar now lands on the conversation the unread badge points at (latest unread, else the most recent) instead of a blank new-chat view, and chat notifications deep-link straight into their conversation.
 
-### Changed
+### Improvements
 
 - The notes audio player scrubber is restyled: neutral muted bars with a red playhead, replacing the previous primary-tinted look.
 
@@ -779,7 +776,7 @@
 
 - Right-click → Delete on a recording in the notes list now also removes local (on-device) transcriptions; previously those deletes were sent to the cloud API with a local id and silently failed, so the row never disappeared. Delete failures now surface as a toast instead of doing nothing.
 
-### Changed
+### Improvements
 
 - The Inspiration and Devices features are temporarily hidden while they are being finished; they will return in a future release.
 
@@ -797,7 +794,7 @@
 - The notes list now refreshes after generation, rename, delete, or move-to-group, so titles update instead of going stale until reload.
 - Chat notifications from the AI assistant now carry the assistant's mascot avatar instead of a generic message icon, and blank conversation titles no longer render empty 《》 brackets.
 
-### Changed
+### Improvements
 
 - Profile dropdown: the membership row now shows remaining credits; removed the redundant "Check for Updates" item (startup auto-check, notification center, and the About tab already cover it).
 
@@ -806,7 +803,7 @@
 ### Fixed
 - Restore the AI-assistant (chat) icon unread badge. In 0.1.27 chat unread was folded into the Bell only, forcing an extra step to learn the assistant had replied; the chat icon now shows the total unseen reply count again, while the Bell stays the unified notification center.
 
-### Changed
+### Improvements
 - Version-update availability now also appears as an entry in the notification center (Bell drawer): an available update shows as a "New version available" item that opens the release page in your browser. The avatar upgrade-arrow cue is retained.
 
 ## 0.1.27 (2026-08-31)
@@ -818,7 +815,7 @@
 - Cloud-backed Todo list: todos now sync with lynse.ai (list / update / delete / clear-completed) and fall back to local storage when signed out.
 - Maximized-window UX: double-click the title bar to maximize / restore; on very wide windows the reading column stays centered instead of stretching edge-to-edge.
 
-### Changed
+### Improvements
 
 - Rename the main 68px sidebar component `TencentMeetingSidebar` → `LynseSidebar` (it was never Tencent-meeting-specific).
 - Recording-page empty state redesigned: lighter import / record cards with semantic icons and a calm animated waveform backdrop.
@@ -834,7 +831,7 @@
 - Add an "About" entry to the avatar dropdown that shows the current version at a glance; when a newer release is available, an upgrade-arrow badge appears on the avatar itself.
 - Integrate the Qoder Cloud Agent chat (cloud-hosted agent backend) alongside recording-first local capture, plus a native macOS menu bar, tray, and live waveform.
 
-### Changed
+### Improvements
 
 - Remove the MOSS-Transcribe-Diarize offline engine: its hosted model weights (the `moss-transcribe-diarize-0.9b-q5_0.gguf` download URL) are no longer available, so the engine could not be installed. VibeVoice replaces it in the engine list and in the shared STT runtime (the `moss-transcribe` sidecar is replaced by `vibeasr`).
 - Notes list now shows ALL files on first entry (previously it only showed uncategorized files).
@@ -850,7 +847,7 @@
 - Add date, recording duration, and recording type tags to the Notes list, including 会议录音 and 通话录音 labels.
 - Add a draggable divider between the note list and note content, with keyboard controls and persisted width.
 
-### Changed
+### Improvements
 
 - Improve the Notes layout, startup window sizing, and metadata readability across desktop resolutions.
 
@@ -860,7 +857,7 @@
 
 - Rename "记忆" (Memory) to "笔记" (Notes) across the sidebar, the zh/en/ja locales, and routing. The Notes page is the home for your meeting recordings and the notes attached to them.
 
-### Changed
+### Improvements
 
 - Reconnect the Notes page to the correct backend listing. It now calls `GET /api/business/file/timeRange/list` (the same endpoint `lynse meetings list` uses) instead of the generic all-files endpoint, so it shows your recordings and notes rather than every uploaded file. The "Recordings" tab also matches cloud audio/video files by MIME type, not just local transcriptions.
 - Overhaul the live-translation transcript detail page and refine the floating dynamic-island and recording-complete dialog; remove the now-unused realtime-session completion call.
@@ -875,7 +872,7 @@
 - Add Volcengine AST v4 as a real-time transcription provider, with credentials stored in the operating system keychain and results normalized into the existing live-segment pipeline.
 - Unify recording and live transcription in one session page with pure recording, live transcription, and simultaneous translation modes, plus a real-time waveform and a completion dialog for saving the result.
 
-### Changed
+### Improvements
 
 - Redesign the shared dark interface around an Apple-inspired graphite palette with one restrained indigo accent, removing cyan/teal controls, decorative colour glows, and idle waveform motion while improving text and border contrast.
 - Improve todo refresh and clear-completed feedback with visible progress states and automatic reconciliation with local storage.
@@ -888,12 +885,12 @@
 - Add switchable AI assistant IP avatars: five transparent-background GIF personas (Default / Star Hat / Top Hat / Bow / Beret) are bundled with the app; click the assistant avatar in the chat header, empty state, or chat page to cycle through them, and the new persona animates in from small to large on each switch.
 - Add an AI assistant confirmation dialog (a2UI-style): when the assistant reply needs user confirmation, a clickable dialog pops up instead of requiring you to type "A/B/C". It supports the backend a2UI `type:"confirm"` protocol event directly, and also auto-detects a sequential option list (`A)` / `B)` / `C)` or `1.` / `2.` / `3.`) in the assistant's finished text to trigger the dialog; clicking an option sends it as the next message, while cancel closes the dialog without sending.
 
-### Changed
+### Improvements
 
 - Move the AI Assistant entry in the sidebar from the bottom Tools section to directly under Live Translation (always visible).
 - Shrink the AI assistant avatar inside chat messages and align it to the first text line so it no longer dominates the message row.
 
-### Bug Fixes
+### Fixed
 
 - Remove the duplicate AI Assistant navigation entry that previously appeared both in the bottom Tools section and the workspace nav.
 
@@ -904,11 +901,11 @@
 - Add a local offline transcription engine powered by Apple MLX (MLX-Whisper) on macOS with Apple Silicon. It appears as a new option in the STT engine dropdown alongside FunASR / Whisper / MOSS, runs fully on-device for faster and more power-efficient transcription, downloads its model weights on first use, and decodes audio with a bundled ffmpeg so it needs no shared STT runtime. On non-Apple-Silicon platforms it shows a clear prompt to switch back to FunASR / Whisper.
 - Add Alibaba Cloud Qwen (DashScope `qwen3.5-livetranslate-flash-realtime`) as a selectable real-time translation engine, joining the existing iLiveData backend and iLiveData direct options.
 
-### Changed
+### Improvements
 
 - Real-time translation engine is now user-selectable (lynse_backend / ilivedata_direct / qwen) from a dropdown; real-time translation remains cloud-only and does not use local/offline MLX inference.
 
-### Bug Fixes
+### Fixed
 
 - Fix macOS "Load failed" when connecting to a plaintext `http://` backend: inject `NSAppTransportSecurity` / `NSAllowsArbitraryLoads` into the bundled `Info.plist` so the WKWebView is allowed to reach HTTP test servers (App Transport Security was silently blocking non-localhost plaintext requests).
 - Change the default API base URL from the `http://119.97.160.133:10060` test server to the official HTTPS endpoint `https://api.lynse.cn` across the desktop settings dialog, settings page, and web proxy route.
@@ -922,12 +919,12 @@
 - Add live-translation quick controls to the system tray menu: start or pause real-time recording directly from the tray without opening the main window
 - Improve the macOS system-audio permission flow: requesting system-audio permission now opens System Settings directly to the Screen & System Audio Recording section, and the audio-capture helper pre-checks microphone and screen-capture permissions before starting with clear Chinese error messages
 
-### Changed
+### Improvements
 
 - Permission status now includes a `system_audio_required` field; the live-translation start button checks both microphone and system-audio permissions before enabling
 - The Swift audio-capture helper now uses the return value of `CGRequestScreenCaptureAccess()` to determine whether a restart is needed, instead of always returning `restartRequired = true`
 
-### Bug Fixes
+### Fixed
 
 - Fix the macOS audio-capture helper always reporting `restartRequired = true` regardless of whether screen-capture permission was actually granted
 
@@ -940,7 +937,7 @@
 
 ## 0.1.18 (2026-07-23)
 
-### Bug Fixes
+### Fixed
 
 - Fix live translation rendering the same spoken sentence as multiple duplicated dialog bubbles: each utterance now maps to a single segment, and the recognizer's rolling-buffer corrections (which are not always strict prefixes) refresh that bubble in place instead of spawning a new card
 
@@ -950,7 +947,7 @@
 
 - Add real-time translation support on Windows (stage 1): capture the default microphone with cpal, resample to 16 kHz mono 16-bit PCM, and feed the existing cloud STT + translation + subtitle pipeline; system-audio loopback capture is planned for a later stage
 
-### Changed
+### Improvements
 
 - Enable the real live_translation module on Windows (previously a stub); isolate macOS-only Unix-socket, Swift sidecar, and process-signal code behind `cfg(target_os = "macos")`
 
@@ -960,11 +957,11 @@
 
 - Show the software-update reminder under the username and membership in the sidebar, checked automatically on app launch
 
-### Changed
+### Improvements
 
 - Live translation real-time view shows the source text on top and the translation below, segmented by semantics; the backend now merges rolling-buffer updates into a single in-place refreshing segment instead of appending duplicate segments
 
-### Bug Fixes
+### Fixed
 
 - Shrink the desktop installer to ~6.4 MB by downloading the STT runtime on demand
 - Fix Windows CI packaging so the Windows msi is produced (it was missing due to an MSYS tar path bug)
@@ -976,13 +973,13 @@
 - Add real-time bilingual transcription and translation on macOS with separate microphone and system-audio streams, floating subtitles, pause/resume, and local recovery
 - Add switchable live-translation providers, including test-only iLiveData direct client authentication with credentials stored in the operating system keychain
 
-### Changed
+### Improvements
 
 - Require macOS 15 for dual-stream capture and bundle the native audio-capture helper in the desktop installer
 - Preserve API keys after failed connection attempts and display source and translated text in local transcription details
 - Improve Markdown table sizing and truncation
 
-### Bug Fixes
+### Fixed
 
 - Hide internal meeting identifiers from assistant replies while preserving Markdown links
 - Bundle the MOSS transcription engine and Windows FFmpeg as self-contained binaries, and validate sidecars before publishing installers
@@ -996,7 +993,7 @@
 - STT routing UI in Settings with an engine picker and engine-specific configuration, localized in English, Japanese, and Chinese
 - Bundle STT engine and media binaries (whisper, moss-transcribe, ffmpeg, ffprobe) as Tauri sidecar resources
 
-### Changed
+### Improvements
 
 - CI fetches/builds the STT sidecars and smoke-tests whisper, moss-transcribe, and ffmpeg on both Windows and macOS before bundling
 - Refactor the local transcription adapter to route by STT provider and resolve per-model status
@@ -1008,18 +1005,18 @@
 
 - Local todos in the desktop app, with the option to add a todo to the macOS system Calendar
 
-### Changed
+### Improvements
 
 - Simplify web app state and remove obsolete code paths
 - Redesign the desktop sidebar header with the Lynse wordmark and a draggable region for the frameless window
 
-### Bug Fixes
+### Fixed
 
 - Fix TypeScript errors that broke `pnpm typecheck` (i18next selector form did not resolve across packages; correct a test helper call)
 
 ## 0.1.5 (2026-07-06)
 
-### Changed
+### Improvements
 
 - Refine voiceprint settings and the enrollment flow
 - Simplify web app routing and remove obsolete code
@@ -1033,7 +1030,7 @@
 - Resummarize dialog to regenerate summaries with a chosen template and processing feedback
 - SSE streaming support in the API client with abort control and chunk parsing
 
-### Changed
+### Improvements
 
 - Add API proxy in the Electron Vite config for reliable streaming and request body forwarding
 - Extend localization with upload, template, and resummarize texts in English, Japanese, and Chinese
@@ -1052,7 +1049,7 @@
 - Detailed minutes and credits usage popover in user profile dropdown
 - API hook to fetch membership quota and details
 
-### Changed
+### Improvements
 
 - Move file list search query and sort state (field + direction) into the workspace store for persistence
 - Relocate chat panel, outline sidebar, and source view toggles from the content panel into the title bar
@@ -1070,13 +1067,13 @@
 - Brand-derived accent fills via color-mix for tab active/hover states
 - Authenticated image loading (blob URL proxy) for mind maps in summaries
 
-### Bug Fixes
+### Fixed
 
 - Fix API error field handling (msg vs message) for correct error reporting
 - Fix user info endpoint to use /current instead of /detail
 - Tokenize speaker colors from hardcoded hex to oklch with dark mode support
 
-### Changed
+### Improvements
 
 - Extract layout constants (tab bar height, page inset) for consistent spacing
 - Remove debug logging from content panel
@@ -1103,7 +1100,7 @@
 - Shared tsconfig for React libraries
 - Desktop app with electron-vite configuration
 
-### Changed
+### Improvements
 
 - Improved workspace store with expanded state management
 - Updated settings, recordings, meetings, and knowledge-base pages

@@ -99,6 +99,10 @@ pub struct Revision {
     pub review: String,
     pub overview: String,
     pub changes: Vec<WikiChange>,
+    #[serde(default)]
+    pub partial: bool,
+    #[serde(default)]
+    pub partial_failure_keys: Vec<String>,
 }
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -117,6 +121,14 @@ pub struct WikiFailure {
     pub occurred_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub validation: Option<ValidationDetails>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PartialCompilation {
+    pub version: String,
+    pub failure_keys: Vec<String>,
+    pub auto_retry_used: bool,
 }
 
 impl WikiFailure {
@@ -162,6 +174,7 @@ pub struct Topic {
     pub force_refresh: bool,
     pub error: String,
     pub failure: Option<WikiFailure>,
+    pub partial_compilation: Option<PartialCompilation>,
     pub collection: Option<collections::Collection>,
     pub automatic_key: String,
     pub topic_kind: String,
@@ -379,6 +392,10 @@ fn is_service_failure(error: &str) -> bool {
         || super::knowledge_transport::transient(error)
         || error == TEXT_MODEL_CHANGED
         || error == "Lynclaw synthesis failed (HTTP 422): Unknown synthesis task"
+        || error.starts_with("Lynclaw synthesis failed (HTTP 429)")
+        || [500, 502, 503, 504].iter().any(|status| {
+            error.starts_with(&format!("Lynclaw synthesis failed (HTTP {status})"))
+        })
         || matches!(
             error,
             "Cloud knowledge offline"
@@ -386,6 +403,16 @@ fn is_service_failure(error: &str) -> bool {
                 | "Cloud knowledge capability unavailable or authorization rejected"
                 | "Cloud knowledge organization is not enabled on this server"
         )
+}
+
+fn is_model_output_failure(error: &str) -> bool {
+    validation_failure::split(error.to_owned())
+        .1
+        .is_some_and(|validation| validation.failure_origin.as_deref() == Some("model_output"))
+}
+
+fn tolerate_compilation_failure(error: &str) -> bool {
+    is_model_output_failure(error) && !is_service_failure(error)
 }
 
 pub(super) const TEXT_MODEL_CHANGED: &str = "Text model changed; processing will resume";
@@ -811,6 +838,7 @@ fn retry_failed_work(
             topic.last_attempt_fingerprint.clear();
             topic.error.clear();
             topic.failure = None;
+            topic.partial_compilation = None;
             retried += 1;
         }
     }
@@ -1873,6 +1901,7 @@ async fn compile_profile(
         .sum();
     let mut analyzed = 0;
     let mut evidence = Vec::new();
+    let mut analysis_failures = Vec::new();
     let query = format!(
         "{}\n{}\nUser corrections and notes: {}",
         topic.title, topic.purpose, topic.notes
@@ -1894,7 +1923,8 @@ async fn compile_profile(
                 .to_string(),
             );
             let part = analysis::part(doc, chunk.clone());
-            let results = analysis::with_recovery(part.clone(), |part| {
+            let chunk_key = key.clone();
+            let results = match analysis::with_recovery(part.clone(), |part| {
                 let key = if part.transcript == *chunk {
                     key.clone()
                 } else {
@@ -1944,7 +1974,16 @@ async fn compile_profile(
                     .await
                 }
             })
-            .await?;
+            .await
+            {
+                Ok(results) => results,
+                Err(error) if tolerate_compilation_failure(&error) => {
+                    analysis_failures.push(chunk_key);
+                    analyzed += 1;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             for result in results {
                 if result["relevant"] != false && result["insufficientEvidence"] != true {
                     evidence.push(CompilationEvidence {
@@ -1957,7 +1996,10 @@ async fn compile_profile(
         }
     }
     if evidence.is_empty() {
-        return Err("No relevant source evidence found for this topic".into());
+        let failures = analysis_failures.len();
+        return Err(format!(
+            "No relevant source evidence found for this topic; {failures} chunks failed analysis"
+        ));
     }
     let page_query = compilation_query(&query);
     let cache_key =
@@ -1977,6 +2019,7 @@ async fn compile_profile(
     // Partition large evidence sets; each compiler request stays bounded and covers the entire set.
     let mut summaries = Vec::new();
     let mut citations = Vec::new();
+    let mut batch_failures = Vec::new();
     let mut batches = Vec::new();
     let mut current = Vec::new();
     for item in evidence {
@@ -2038,7 +2081,16 @@ async fn compile_profile(
                 .await
             },
         )
-        .await?;
+        .await;
+        let batch_key = key.clone();
+        let result = match result {
+            Ok(result) => result,
+            Err(error) if tolerate_compilation_failure(&error) => {
+                batch_failures.push(batch_key);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         if result["insufficientEvidence"] == true {
             continue;
         }
@@ -2053,7 +2105,8 @@ async fn compile_profile(
         citations.extend(refs);
     }
     if summaries.is_empty() || citations.is_empty() {
-        return Err("Wiki page has no supported evidence".into());
+        let failures = analysis_failures.len() + batch_failures.len();
+        return Err(format!("Wiki page has no supported evidence; {failures} units failed"));
     }
     let markdown = assemble_page(&topic.title, &summaries);
     Ok(Revision {
@@ -2063,6 +2116,8 @@ async fn compile_profile(
         fingerprint: page_fingerprint(topic, manifest, config, &citations),
         citations,
         cache_key,
+        partial: !analysis_failures.is_empty() || !batch_failures.is_empty(),
+        partial_failure_keys: [analysis_failures, batch_failures].concat(),
         created_at: crate::now(),
         ..Default::default()
     })
@@ -2215,6 +2270,12 @@ pub(super) async fn run(
                                 .history
                                 .iter()
                                 .any(|p| p.cache_key == page.cache_key && p.review == "rejected"));
+                    let was_auto_retried = current
+                        .partial_compilation
+                        .as_ref()
+                        .is_some_and(|partial| partial.auto_retry_used);
+                    let page_is_partial = page.partial;
+                    let page_failure_keys = page.partial_failure_keys.clone();
                     if !already_reviewed
                         && current
                             .candidate
@@ -2227,11 +2288,23 @@ pub(super) async fn run(
                         save_page(&root, current, &page, true)?;
                         current.candidate = Some(page);
                     }
+                    current.partial_compilation = if page_is_partial {
+                        Some(PartialCompilation {
+                            version: version.clone(),
+                            failure_keys: page_failure_keys,
+                            auto_retry_used: was_auto_retried,
+                        })
+                    } else {
+                        None
+                    };
                     current.force_refresh = false;
                     current.last_fingerprint = version.clone();
                     current.last_attempt_fingerprint = current.last_fingerprint.clone();
                     current.error.clear();
                     current.failure = None;
+                    if page_is_partial {
+                        current.error = "Some evidence batches failed; retry to complete this topic".into();
+                    }
                     job(&root, task, "done", None, "")?;
                 }
                 Err(error) => {
@@ -2248,6 +2321,9 @@ pub(super) async fn run(
                     );
                     current.error = failure.message.clone();
                     current.failure = Some(failure);
+                    if let Some(partial) = &mut current.partial_compilation {
+                        partial.auto_retry_used = true;
+                    }
                     job(&root, task, "failed", None, &error)?;
                 }
             }
@@ -2760,6 +2836,30 @@ pub async fn workbench_wiki(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_model_output_origin_is_tolerated_after_service_classes() {
+        let error = validation_failure::annotate(
+            "Citation does not match source evidence".into(),
+            &json!({"failureOrigin":"model_output","citationIssue":{"code":"quote_not_found"}}),
+            &json!({"task":"source_analysis"}),
+            false,
+        );
+        assert!(is_model_output_failure(&error));
+        assert!(tolerate_compilation_failure(&error));
+        assert!(!is_service_failure(&error));
+        assert!(!tolerate_compilation_failure(
+            "Lynclaw synthesis failed (HTTP 429): Model rate limited"
+        ));
+        assert!(!tolerate_compilation_failure(
+            "Lynclaw synthesis failed (HTTP 503): Model outcome is unknown; retry explicitly"
+        ));
+        assert!(!tolerate_compilation_failure(
+            "Lynclaw synthesis failed (HTTP 401)"
+        ));
+        assert!(!tolerate_compilation_failure(
+            "Insufficient evidence must not contain factual output"
+        ));
+    }
     #[test]
     fn page_validation_sees_the_compiler_markdown_filtered_documents() {
         let local = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());

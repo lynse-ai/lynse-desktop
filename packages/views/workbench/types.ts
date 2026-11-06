@@ -162,7 +162,7 @@ export interface DesktopWorkbenchApi {
 export interface WikiModel { baseUrl: string; model: string }
 export interface WikiModelsConfig { embedding: WikiModel; revision?: string; textRevision?: string }
 export interface WikiChange { id: string; text: string; createdAt: string; citations: SourceRef[] }
-export interface WikiRevision { overview?: string; changes?: WikiChange[]; id: string; markdown: string; citations: SourceRef[]; fingerprint: string; createdAt: string; reviewedAt: string; review: string }
+export interface WikiRevision { overview?: string; changes?: WikiChange[]; id: string; markdown: string; citations: SourceRef[]; fingerprint: string; createdAt: string; reviewedAt: string; review: string; partial?: boolean; partialFailureKeys?: string[] }
 export interface CitationIssue { code: "missing_citations" | "invalid_reference" | "source_missing" | "source_revision_mismatch" | "quote_missing" | "quote_not_found" | "quote_too_long" | "audio_position_mismatch"; sourceId?: string; citationIndex?: number; location?: string }
 export interface CatalogIssue {
   code: "result_format" | "topic_format" | "too_many_topics" | "invalid_field" | "invalid_kind" | "duplicate_key" | "missing_new_source" | "invalid_existing_id" | "existing_kind_mismatch" | "missing_existing_source" | "invalid_citation" | "invalid_context";
@@ -174,7 +174,8 @@ export interface WikiFailure { message: string; stage: string; sourceIds: string
 export interface WikiTimelineEvent { id: string; text: string; date: string; dateBasis: "event" | "record" | "unknown"; citations: SourceRef[] }
 export interface WikiTopicLink { targetId: string; state: "included" | "candidate" | "excluded" | "unrelated" | ""; manual: boolean; reason: string; citations: SourceRef[]; events: WikiTimelineEvent[]; fingerprint: string; error: string }
 export interface WikiCollection { hierarchy?: boolean; automatic?: boolean; links: WikiTopicLink[]; status: string; completed: number; total: number }
-export interface WikiTopic { groupingManual?: boolean; groupingRevision?: string; collection?: WikiCollection | null; failure?: WikiFailure | null; topicKind?: "project" | "topic"; automaticKey?: string; sourceIds?: string[]; inScope?: boolean; history?: WikiRevision[]; id: string; mergedIds?: string[]; title: string; purpose: string; notes: string; pinned: boolean; excluded: boolean; stale: boolean; candidate: WikiRevision | null; published: WikiRevision | null; error: string }
+export interface WikiPartialCompilation { version: string; failureKeys: string[]; autoRetryUsed: boolean }
+export interface WikiTopic { groupingManual?: boolean; groupingRevision?: string; collection?: WikiCollection | null; failure?: WikiFailure | null; topicKind?: "project" | "topic"; automaticKey?: string; sourceIds?: string[]; inScope?: boolean; history?: WikiRevision[]; id: string; mergedIds?: string[]; title: string; purpose: string; notes: string; pinned: boolean; excluded: boolean; stale: boolean; candidate: WikiRevision | null; published: WikiRevision | null; partialCompilation?: WikiPartialCompilation | null; error: string }
 export interface WikiSources { gmailEnabled: boolean; gmailAccountId: string; integrationsUrl: string; error?: string; updatedAt?: string }
 export type GraphKind = "entity" | "event" | "topic" | "wiki" | "source";
 export type GraphModality = "asserted" | "planned" | "proposed" | "negated" | "uncertain";

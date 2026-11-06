@@ -47,6 +47,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Sync version from the release tag
+        # The tag is the single source of truth for the release version:
+        # this stamps its semver into tauri.conf.json, apps/tauri/package.json
+        # and Cargo.toml (+ its lock entry), so cutting a release never edits
+        # version files by hand (the old three-place bump had already
+        # drifted — Cargo.toml lagged tauri.conf.json by six releases).
+        # Runs before everything that consumes a version: cargo fetch
+        # --locked needs the refreshed Cargo.lock, tauri-action builds with
+        # the stamped tauri.conf.json, and the notarize/verify/upload steps
+        # read the stamped package.json for the dmg paths. A workflow_dispatch
+        # from a branch (no release_tag) keeps the checked-in versions.
+        shell: bash
+        run: node apps/tauri/scripts/sync-version-from-tag.cjs "${LYNSE_RELEASE_TAG}"
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:

@@ -16,7 +16,7 @@ export interface ParsedReleaseNotes {
 
 const HEADING_ALIASES: Record<ReleaseNoteCategory, readonly string[]> = {
   features: ["features", "new features", "added", "新功能", "新增功能", "新增", "新機能", "새 기능"],
-  improvements: ["improvements", "performance improvements", "improved", "改进", "改進", "优化", "優化", "改善", "개선"],
+  improvements: ["improvements", "performance improvements", "performance", "improved", "changed", "改进", "改進", "优化", "優化", "改善", "变更", "變更", "개선"],
   fixes: ["bug fixes", "fixes", "fixed", "错误修复", "錯誤修復", "问题修复", "問題修復", "修复", "修復", "不具合修正", "バグ修正", "버그 수정", "오류 수정"],
   security: ["security", "安全", "セキュリティ", "보안"],
   changes: ["changes", "what's new", "updates", "更新内容", "更新內容", "更新情報", "変更内容", "업데이트 내용", "변경 사항"],

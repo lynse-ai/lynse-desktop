@@ -336,7 +336,8 @@ struct CatalogFailure {
 // unlike session or transport failures; they deserve a fresh attempt per run
 // instead of latching until a manual retry.
 fn is_model_output_failure(error: &str) -> bool {
-    error.contains("[lynse-validation]")
+    super::is_model_output_failure(error)
+        || error.contains("[lynse-validation]")
         || error.contains("invalid synthesis JSON")
         || error.contains("Invalid Wiki catalog output")
 }
@@ -1012,6 +1013,13 @@ fn pending_compilation(
         }
         None => page_version(topic, &selected, manifest, config),
     };
+    if topic
+        .partial_compilation
+        .as_ref()
+        .is_some_and(|partial| partial.version == version && !partial.auto_retry_used)
+    {
+        return Some((selected, version));
+    }
     // Older layouts rejected an entire topic when one oversized item arrived.
     // The repaired splitter can recover those topics without changing source
     // identity, so give this specific persisted failure one bounded retry.
@@ -1138,6 +1146,7 @@ async fn compile_automatic_profile(
 ) -> Result<Revision, WikiFailure> {
     let query = format!("{}\n{}\nUser corrections (user-provided context, not verified meeting evidence): {}\nWrite Current situation, Important changes and Open questions in the requested language. Preserve source uncertainty. Do not treat unsupported user notes as meeting facts.",topic.title,topic.purpose,topic.notes);
     let mut evidence = Vec::new();
+    let mut analysis_failures = Vec::new();
     for doc in docs {
         let chunks = {
             let _guard = state.serial.lock().await;
@@ -1152,7 +1161,7 @@ async fn compile_automatic_profile(
             {
                 value
             } else {
-                cached_compilation_prepared(
+                match cached_compilation_prepared(
                 root,
                 &key,
                 &state.serial,
@@ -1171,8 +1180,18 @@ async fn compile_automatic_profile(
                     "Extract the complete supported meeting evidence, independent of any one project or topic. Preserve substantive decisions, proposals, changes, commitments, conflicts and unresolved questions across all subjects, with exact original-source citations and their uncertainty. Do not invent missing owners, dates or conclusions. This shared evidence will be filtered for each topic later; retain relevant facts from every subject. The complete bounded original text remains available to the final compiler.",
                     Value::Null,
                 ),
-            )
-            .await.map_err(|error| WikiFailure::new(error, "analyzing", vec![doc.id.clone()]))?
+                )
+                .await
+                {
+                    Ok(value) => value,
+                    Err(error) if tolerate_compilation_failure(&error) => {
+                        analysis_failures.push(key);
+                        json!({"summary":"","citations":[],"insufficientEvidence":true})
+                    }
+                    Err(error) => {
+                        return Err(WikiFailure::new(error, "analyzing", vec![doc.id.clone()]))
+                    }
+                }
             };
             // Shared extraction is auxiliary, never a topical relevance gate.
             // The final compiler must still see every authorized original chunk,
@@ -1184,13 +1203,19 @@ async fn compile_automatic_profile(
         }
     }
     if evidence.is_empty() {
-        return Err("No relevant source evidence found for this topic".into());
+        let failures = analysis_failures.len();
+        return Err(WikiFailure::new(
+            format!("No relevant source evidence found for this topic; {failures} chunks failed analysis"),
+            "analyzing",
+            Vec::new(),
+        ));
     }
     let batches = batch_layout::plan(root, topic, evidence, &config)?;
     let mut bodies = Vec::new();
     let mut refs = Vec::new();
     let mut changes = Vec::new();
     let mut overview = String::new();
+    let mut batch_failures = Vec::new();
     for batch in batches {
         let parts = compilation_parts(&batch)?;
         let key = batch_compilation_key(topic, &config, &batch);
@@ -1214,14 +1239,22 @@ async fn compile_automatic_profile(
                 json!(batch),
             ),
         )
-        .await
-        .map_err(|error| {
-            WikiFailure::new(
-                error,
-                "compiling",
-                parts.iter().map(|part| part.id.clone()).collect(),
-            )
-        })?;
+        .await;
+        let batch_key = key.clone();
+        let value = match value {
+            Ok(value) => value,
+            Err(error) if tolerate_compilation_failure(&error) => {
+                batch_failures.push(batch_key);
+                continue;
+            }
+            Err(error) => {
+                return Err(WikiFailure::new(
+                    error,
+                    "compiling",
+                    parts.iter().map(|part| part.id.clone()).collect(),
+                ))
+            }
+        };
         if value["insufficientEvidence"] == true {
             continue;
         }
@@ -1258,7 +1291,12 @@ async fn compile_automatic_profile(
         refs.extend(citations);
     }
     if bodies.is_empty() || refs.is_empty() {
-        return Err("Wiki page has no supported evidence".into());
+        let failures = analysis_failures.len() + batch_failures.len();
+        return Err(WikiFailure::new(
+            format!("Wiki page has no supported evidence; {failures} units failed"),
+            "compiling",
+            Vec::new(),
+        ));
     }
     let markdown = assemble_page(&topic.title, &bodies);
     if overview.is_empty() {
@@ -1275,6 +1313,8 @@ async fn compile_automatic_profile(
         review: "auto_validated".into(),
         overview,
         changes,
+        partial: !analysis_failures.is_empty() || !batch_failures.is_empty(),
+        partial_failure_keys: [analysis_failures, batch_failures].concat(),
         ..Default::default()
     })
 }
@@ -1871,8 +1911,27 @@ pub(super) async fn run(
                         current.error.clear();
                         current.failure = None;
                     } else {
+                        let was_auto_retried = current
+                            .partial_compilation
+                            .as_ref()
+                            .is_some_and(|partial| partial.auto_retry_used);
+                        let page_is_partial = page.partial;
+                        let page_failure_keys = page.partial_failure_keys.clone();
                         publish_automatic(&root, current, page, version)?;
-                        current.error.clear();
+                        current.partial_compilation = if page_is_partial {
+                            Some(PartialCompilation {
+                                version: version.clone(),
+                                failure_keys: page_failure_keys,
+                                auto_retry_used: was_auto_retried,
+                            })
+                        } else {
+                            None
+                        };
+                        if page_is_partial {
+                            current.error = "Some evidence batches failed; retry to complete this topic".into();
+                        } else {
+                            current.error.clear();
+                        }
                         current.failure = None;
                         current.last_fingerprint = version.clone();
                         completed += 1;
@@ -1881,6 +1940,9 @@ pub(super) async fn run(
                 Err(failure) => {
                     current.error = failure.message.clone();
                     current.failure = Some(failure);
+                    if let Some(partial) = &mut current.partial_compilation {
+                        partial.auto_retry_used = true;
+                    }
                     topic_failures_run += 1;
                 }
             }

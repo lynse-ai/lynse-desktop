@@ -57,6 +57,8 @@ pub struct ValidationDetails {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub catalog_issue: Option<CatalogIssue>,
     pub correction_attempted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_origin: Option<String>,
 }
 
 fn safe_location(location: &str) -> bool {
@@ -134,6 +136,10 @@ pub(super) fn annotate(
             })
         })
         .flatten();
+    let failure_origin = response["failureOrigin"]
+        .as_str()
+        .filter(|origin| *origin == "model_output")
+        .map(str::to_owned);
     let citation_error = [
         "Citation does not match",
         "Invalid citation",
@@ -145,6 +151,7 @@ pub(super) fn annotate(
     if !citation_error
         && citation_issue.is_none()
         && catalog_issue.is_none()
+        && failure_origin.is_none()
         && !message.contains("Invalid Wiki catalog output")
     {
         return message;
@@ -155,6 +162,7 @@ pub(super) fn annotate(
         citation_issue,
         catalog_issue,
         correction_attempted: correction_attempted || response["correctionAttempted"] == true,
+        failure_origin,
     };
     format!(
         "{message}{MARKER}{}",

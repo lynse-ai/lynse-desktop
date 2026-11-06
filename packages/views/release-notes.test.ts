@@ -26,6 +26,14 @@ describe("authored release notes", () => {
     expect(parsed.sections.map((section) => section.category)).toEqual(["features", "improvements", "fixes"]);
   });
 
+  it("folds legacy Changed/Bug Fixes/Performance headings into the three authored groups", () => {
+    const parsed = parseReleaseNotes(
+      "### New Features\n- A\n\n### Changed\n- B\n\n### Bug Fixes\n- C\n\n### Performance\n- D\n\n### 变更\n- E",
+    );
+    expect(parsed.sections.map((section) => [section.category, section.items]))
+      .toEqual([["features", ["A"]], ["improvements", ["B", "D", "E"]], ["fixes", ["C"]]]);
+  });
+
   it("keeps custom sections and unstructured legacy text instead of discarding them", () => {
     expect(parseReleaseNotes("Legacy text\ncontinued here.\n\nAnother paragraph.")).toEqual({
       paragraphs: ["Legacy text continued here.", "Another paragraph."], sections: [], count: 0,

@@ -362,6 +362,36 @@ fn model_output_failures_retry_per_session_but_stay_latched_within_a_session() {
     ));
 }
 #[test]
+fn partial_automatic_results_retry_once_then_wait_for_user_retry() {
+    let docs = vec![doc("meeting", "work")];
+    let config = Models::default();
+    let manifest = manifest();
+    let mut topic = Topic {
+        id: "topic".into(),
+        title: "Partial".into(),
+        source_ids: vec!["meeting".into()],
+        published: Some(Revision {
+            markdown: "Saved knowledge".into(),
+            content_hash: store::digest("Saved knowledge"),
+            partial: true,
+            ..Default::default()
+        }),
+        last_fingerprint: version.clone(),
+        last_attempt_fingerprint: version.clone(),
+        partial_compilation: Some(PartialCompilation {
+            version: version.clone(),
+            failure_keys: vec!["failed-task".into()],
+            auto_retry_used: false,
+        }),
+        ..Default::default()
+    };
+    let version = page_version(&topic, &docs, &manifest, &config);
+    let failed_sources = BTreeSet::new();
+    assert!(pending_compilation(&topic, &docs, &manifest, &config, &failed_sources, None).is_some());
+    topic.partial_compilation.as_mut().unwrap().auto_retry_used = true;
+    assert!(pending_compilation(&topic, &docs, &manifest, &config, &failed_sources, None).is_none());
+}
+#[test]
 fn source_selection_covers_new_meetings_movement_exclusion_and_unavailable_sources() {
     let local = root();
     let mut manifest = manifest();

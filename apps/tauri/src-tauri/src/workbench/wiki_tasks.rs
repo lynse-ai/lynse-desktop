@@ -175,7 +175,10 @@ fn claim(root: &Path, key: &str) -> CommandResult<String> {
     let explicit_conflict_retry = existing
         .as_ref()
         .is_some_and(|(_, state, error, _)| state == "ready" && error == STATUS_CONFLICT);
-    let operation = if explicit_conflict_retry {
+    let validation_retry = existing
+        .as_ref()
+        .is_some_and(|(_, state, _, _)| state == "validation_failed");
+    let operation = if explicit_conflict_retry || validation_retry {
         uuid::Uuid::new_v4().to_string()
     } else {
         existing

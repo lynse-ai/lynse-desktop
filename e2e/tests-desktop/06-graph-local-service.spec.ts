@@ -17,10 +17,10 @@ test("local Lynclaw catalog and compiler produce a readable native Wiki with sum
   await openWiki(page);
   await expect(page.getByText("Processing usage",{exact:true})).toHaveCount(0);
   await page.getByRole("group",{name:"Knowledge graph canvas",exact:true}).getByRole("button",{name:"A项目",exact:true}).click();
-  await page.getByRole("button",{name:"Read full topic",exact:true}).click();
-  await expect(page.getByRole("heading",{name:"未解决问题",exact:true})).toBeVisible();
-  await expect(page.getByText("AI organized · sources verified",{exact:false})).toBeVisible();
-  await page.getByRole("button",{name:result.record.document.title,exact:true}).click();
+  const reader=page.getByRole("complementary").getByRole("article",{name:"A项目",exact:true});
+  await expect(reader.getByRole("heading",{name:"未解决问题",exact:true})).toBeVisible();
+  await expect(reader.getByText("AI organized · sources verified",{exact:false})).toBeVisible();
+  await reader.getByRole("button",{name:result.record.document.title,exact:true}).click();
   const source=page.getByRole("dialog",{name:"Source meetings",exact:true});
   await expect(source).toContainText("zhang@example.com");await expect(source).toContainText("Quoted from a meeting summary");
   await expect(source).not.toContainText("TRANSCRIPT_ONLY");await expect(source.locator("audio")).toHaveCount(0);

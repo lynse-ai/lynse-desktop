@@ -7,9 +7,11 @@ export type AudioEditorSaveMode = "overwrite" | "new";
 
 /** A local audio handed to the editor from the notes page. */
 export interface AudioEditorItem {
-  /** `local:<uuid>` record id. */
+  /** Local record ID or cached cloud audio ID. */
   id: string;
   title: string;
+  /** Local media URL for a synced copy of a cloud recording. */
+  cachedAudioUrl?: string;
   /** Recording start time — shown under the title in the trim header. */
   createdAt?: string;
 }

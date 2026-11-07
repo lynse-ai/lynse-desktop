@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import type { WaveformSelection } from "./editor-waveform";
+import { EDITOR_BAR_HEIGHT_RATIO, EDITOR_BAR_PITCH, editorWaveformBars } from "./waveform-display";
 
 // ───────────────────────────────────────────────────────────────
 // Trim overview strip — the whole file as a mini waveform, 1:1 with the
@@ -23,10 +24,6 @@ import type { WaveformSelection } from "./editor-waveform";
 const HANDLE_HIT_PX = 14;
 const HANDLE_WIDTH = 10;
 const CORNER_RADIUS = 6;
-// Fixed display pitch: 1px bar + 2px gap, whatever the duration — the
-// whole-file texture stays one-bar-at-a-time legible instead of collapsing
-// into a solid block on long recordings.
-const MIN_PITCH = 3;
 
 interface EditorOverviewProps {
   peaks: number[];
@@ -121,29 +118,21 @@ export function EditorOverview({
 
       const secToX = (sec: number) => (sec / durationSec) * width;
       const mid = height / 2;
-      const maxBarH = height * 0.52;
+      const maxBarHeight = height * EDITOR_BAR_HEIGHT_RATIO;
       const hasSelection = !!(selection && selection.endSec > selection.startSec);
       const stroke = hasSelection ? theme.warning : theme.border;
 
-      // Bars — the whole file as hairline strokes at the fixed MIN_PITCH
-      // spacing; each bar holds the max peak of the time span it covers.
+      // Use the same aggregation as the main waveform at whole-file zoom.
       if (peaks.length > 0) {
-        const buckets = Math.ceil(width / MIN_PITCH);
-        const bucketPeak = new Float32Array(buckets);
-        for (let i = 0; i < peaks.length; i++) {
-          const b = Math.floor((((i + 0.5) / peaks.length) * width) / MIN_PITCH);
-          if (b < 0 || b >= buckets) continue;
-          const value = peaks[i] ?? 0;
-          if (value > bucketPeak[b]!) bucketPeak[b] = value;
-        }
+        const bars = editorWaveformBars(peaks, durationSec, 0, durationSec, width);
         ctx.globalAlpha = 0.85;
         ctx.fillStyle = theme.bar;
         ctx.beginPath();
-        for (let b = 0; b < buckets; b++) {
-          const value = bucketPeak[b]!;
+        for (let b = 0; b < bars.length; b++) {
+          const value = bars[b]!;
           if (value <= 0) continue;
-          const bh = Math.max(2, value * maxBarH * 2);
-          ctx.rect(b * MIN_PITCH + 1, mid - bh / 2, 1, bh);
+          const bh = Math.max(2, value * maxBarHeight);
+          ctx.rect(b * EDITOR_BAR_PITCH + 1, mid - bh / 2, 1, bh);
         }
         ctx.fill();
         ctx.globalAlpha = 1;

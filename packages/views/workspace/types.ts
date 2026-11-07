@@ -48,6 +48,19 @@ export interface FilePageResponse {
   pages: number;
 }
 
+export interface RecordMarkResult {
+  timeoffset?: number | null;
+  title?: string | null;
+  outline?: string | null;
+}
+
+export interface RecordMarkImage {
+  imageId: string;
+  timestamp: number;
+  timeoffset?: number | null;
+  url?: string | null;
+}
+
 export interface FileDetail {
   id: string;
   originalFilename: string;
@@ -56,6 +69,9 @@ export interface FileDetail {
   folderId?: string;
   fileSize?: number;
   status?: string;
+  recordMarks?: number[] | null;
+  recordMarkResults?: RecordMarkResult[] | null;
+  markImages?: RecordMarkImage[] | null;
   [key: string]: unknown;
 }
 
@@ -258,6 +274,8 @@ export interface LocalTranscriptionRecord {
   /** Present on recordings captured by the live-translation sidecar; needed
    *  for the detail panel's reprocess entry. */
   liveSessionId?: string;
+  /** User markers captured during a live recording. Older records may omit them. */
+  markers?: import("../live-translation/types").RecordingMarker[];
   /** Deep summary produced by the agent service (lynclaw meeting-pipeline)
    *  after local transcription completed; cleared (null) while regenerating. */
   summaryMarkdown?: string | null;

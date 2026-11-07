@@ -36,6 +36,7 @@ import { useAudioEditorStore, type AudioEditorSaveMode } from "./store";
 import { EditorWaveform, type WaveformSelection } from "./editor-waveform";
 import { EditorOverview } from "./editor-overview";
 import { useAudioAnalysis } from "./use-audio-analysis";
+import { getDesktopLocalTranscriptionApi } from "../workspace/local-transcription";
 
 type EditorMode = "trim" | "merge" | "desilence" | "enhance";
 
@@ -130,9 +131,9 @@ export function AudioEditorPage() {
   // Merge always produces a new note; every other mode defaults to replacing
   // the source recording in place.
   const [saveMode, setSaveMode] = useState<AudioEditorSaveMode>(request?.defaultSaveMode ?? "overwrite");
-  const effectiveSaveMode: AudioEditorSaveMode = mode === "merge" ? "new" : saveMode;
   const [activeIndex, setActiveIndex] = useState(0);
   const activeItem = items[activeIndex] ?? null;
+  const effectiveSaveMode: AudioEditorSaveMode = mode === "merge" || activeItem?.cachedAudioUrl ? "new" : saveMode;
 
   // Recording date under the title, long-form per locale — the recording
   // page's header format (`2026年9月13日`).
@@ -150,22 +151,18 @@ export function AudioEditorPage() {
   // Audio URL per item, resolved from the local-transcription store.
   // Re-resolvable on demand: an overwrite export swaps the bytes behind the
   // same record, so the page refreshes its URLs (fresh `?v=`) when it ends.
-  const [audioUrls, setAudioUrls] = useState<Record<string, string>>({});
+  const [audioUrls, setAudioUrls] = useState<Record<string, string | null>>({});
   const resolveAudioUrls = useCallback(async (isCancelled?: () => boolean) => {
     if (!api || items.length === 0) return;
-    const desktopWindow = window as Window & {
-      desktopAPI?: { localTranscription?: { getAudioUrl: (id: string) => Promise<string | null> } };
-    };
-    const localApi = desktopWindow.desktopAPI?.localTranscription;
-    if (!localApi) return;
+    const localApi = getDesktopLocalTranscriptionApi();
     const entries = await Promise.all(
       items.map(async (item) => {
-        const url = await localApi.getAudioUrl(item.id);
-        return url ? ([item.id, url] as const) : null;
+        const url = item.cachedAudioUrl ?? await localApi?.getAudioUrl(item.id).catch(() => null);
+        return [item.id, url ?? null] as const;
       }),
     );
     if (isCancelled?.()) return;
-    setAudioUrls(Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => entry != null)));
+    setAudioUrls(Object.fromEntries(entries));
   }, [api, items]);
 
   useEffect(() => {
@@ -176,12 +173,14 @@ export function AudioEditorPage() {
     };
   }, [resolveAudioUrls]);
 
-  const activeUrl = activeItem ? audioUrls[activeItem.id] ?? null : null;
+  const activeUrl = activeItem ? activeItem.cachedAudioUrl ?? audioUrls[activeItem.id] ?? null : null;
+  const resolvingAudio = !!activeItem && !activeUrl && !Object.hasOwn(audioUrls, activeItem.id);
 
   // FFmpeg runtime availability (downloaded on demand, shared with STT).
   const [runtimeReady, setRuntimeReady] = useState<boolean | null>(null);
   const [runtimeDownloading, setRuntimeDownloading] = useState(false);
   const [runtimePercent, setRuntimePercent] = useState<number | null>(null);
+  const [analysisAttempt, setAnalysisAttempt] = useState(0);
 
   useEffect(() => {
     if (!api) return;
@@ -219,7 +218,9 @@ export function AudioEditorPage() {
     try {
       const status = await api.ensureRuntime();
       setRuntimeReady(status.ffmpegAvailable);
-      if (!status.ffmpegAvailable) {
+      if (status.ffmpegAvailable) {
+        setAnalysisAttempt(attempt => attempt + 1);
+      } else {
         toast.error(t("audio_editor.runtime_failed"));
       }
     } catch (error) {
@@ -236,9 +237,12 @@ export function AudioEditorPage() {
   const desilenceThresholdDb = -35;
   const desilenceMinSilenceSec = 0.6;
   const analysis = useAudioAnalysis(activeUrl, {
+    cloudId: activeItem?.cachedAudioUrl ? activeItem.id : undefined,
+    attempt: analysisAttempt,
     thresholdDb: desilenceThresholdDb,
     minSilenceSec: desilenceMinSilenceSec,
   });
+  const waveformLoading = resolvingAudio || analysis.loading;
   const analysisRef = useRef(analysis);
   analysisRef.current = analysis;
   const durationSec = analysis.durationSec;
@@ -496,7 +500,7 @@ export function AudioEditorPage() {
   // One muted status line in the control row — same content the old timer
   // block carried: analysing, selection, silence census, or the mode hint.
   const status = ((): string => {
-    if (analysis.loading) return t("audio_editor.analyzing");
+    if (waveformLoading) return t("audio_editor.analyzing");
     if (mode === "trim" && selection) {
       return t("audio_editor.selection", {
         start: formatTime(selection.startSec),
@@ -541,7 +545,7 @@ export function AudioEditorPage() {
     if (mode === "trim") setSelection(null);
     else setMode("trim");
   };
-  const showOverview = !analysis.loading && !analysis.error && !analysis.skipped && durationSec > 0;
+  const showOverview = !waveformLoading && !analysis.error && !analysis.skipped && durationSec > 0;
 
   return (
     <TooltipProvider delay={200}>
@@ -620,7 +624,7 @@ export function AudioEditorPage() {
               ))}
             </div>
 
-            {mode !== "merge" && (
+            {mode !== "merge" && !activeItem?.cachedAudioUrl && (
               <div className="flex items-center gap-0.5 rounded-full border border-border/60 bg-background/40 p-0.5">
                 {(
                   [
@@ -707,18 +711,14 @@ export function AudioEditorPage() {
           <section className="flex min-h-0 min-w-0 flex-1 flex-col">
             {/* Zoomed waveform band — the trim screen's main view */}
             <motion.div ref={bandRef} className="flex min-h-0 w-full flex-[2]" {...enter(0, 14)}>
-              {analysis.loading ? (
-                <div className="flex h-full w-full items-center justify-center gap-2 text-xs text-muted-foreground">
-                  <Loader2 className="size-4 animate-spin" />
-                  {t("audio_editor.analyzing")}
-                </div>
-              ) : analysis.skipped || analysis.error || !activeUrl ? (
+              {!waveformLoading && (analysis.skipped || analysis.error || !activeUrl) ? (
                 <div className="flex h-full w-full items-center justify-center px-6 text-center text-xs text-muted-foreground">
                   {t("audio_editor.waveform_unavailable")}
                 </div>
               ) : (
                 <EditorWaveform
                   className="min-h-0 w-full flex-1"
+                  loading={waveformLoading}
                   peaks={analysis.peaks}
                   durationSec={durationSec}
                   getPlayheadSec={getPlayheadSec}
@@ -733,20 +733,24 @@ export function AudioEditorPage() {
             </motion.div>
 
             {/* Overview strip — whole file + draggable view window */}
-            {showOverview && (
+            {(waveformLoading || showOverview) && (
               <motion.div className="shrink-0 px-6 pt-3" {...enter(0.06, 10)}>
-                <EditorOverview
-                  className="h-11 w-full"
-                  peaks={analysis.peaks}
-                  durationSec={durationSec}
-                  getPlayheadSec={getPlayheadSec}
-                  viewStartSec={viewStart}
-                  viewEndSec={viewEnd}
-                  selection={mode === "trim" ? selection : null}
-                  onSelectionChange={setSelection}
-                  onViewChange={(start, end) => setView(clampWindow(start, end))}
-                />
-                <div className="mt-1 flex justify-between text-2xs tabular-nums text-muted-foreground">
+                {showOverview ? (
+                  <EditorOverview
+                    className="h-11 w-full"
+                    peaks={analysis.peaks}
+                    durationSec={durationSec}
+                    getPlayheadSec={getPlayheadSec}
+                    viewStartSec={viewStart}
+                    viewEndSec={viewEnd}
+                    selection={mode === "trim" ? selection : null}
+                    onSelectionChange={setSelection}
+                    onViewChange={(start, end) => setView(clampWindow(start, end))}
+                  />
+                ) : (
+                  <div aria-hidden="true" className="h-11 rounded-md border border-border/60 bg-muted/30" />
+                )}
+                <div className={cn("mt-1 flex justify-between text-2xs tabular-nums text-muted-foreground", !showOverview && "invisible")}>
                   <span>{formatTime(0)}</span>
                   <span>{formatTotal(durationSec)}</span>
                 </div>
@@ -761,7 +765,7 @@ export function AudioEditorPage() {
               <div className="text-6xl font-medium tracking-tight tabular-nums text-foreground">
                 {formatCentis(playheadSec)}
               </div>
-              <p className="mt-1.5 truncate px-6 text-sm text-muted-foreground">{status}</p>
+              <p role={waveformLoading ? "status" : undefined} className="mt-1.5 truncate px-6 text-sm text-muted-foreground">{status}</p>
             </motion.div>
 
             {/* Open band between the timer and the transport — parks the

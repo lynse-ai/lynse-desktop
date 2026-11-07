@@ -56,7 +56,9 @@ export {
   Upload,           // Upload action
   Copy,             // Copy to clipboard
   Check,            // Confirm / Copied
-  Pencil,           // Rename / Edit inline
+  Pencil,           // Rename / Edit inline; screenshot annotation pen
+  ArrowUpRight,     // Screenshot annotation arrow tool
+  Eraser,           // Screenshot annotation eraser
   MoreHorizontal,   // Context menu trigger
   Pin,              // Pin optional sidebar destinations
   GripVertical,     // Drag handle

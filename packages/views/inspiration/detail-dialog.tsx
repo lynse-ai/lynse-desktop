@@ -7,6 +7,7 @@ import { Button } from "@lynse/ui/components/ui/button";
 import { Dialog, DialogContent } from "@lynse/ui/components/ui/dialog";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { featureFlags } from "../feature-flags";
 import {
   ChevronLeft,
   ChevronRight,
@@ -47,6 +48,7 @@ export function InspirationDetailDialog() {
   const { data: inspirations = [] } = useQuery({
     queryKey: ["inspirations", accountScope],
     queryFn: () => desktopApi!.list(),
+    networkMode: "always",
     enabled: Boolean(desktopApi) && !binding,
     refetchInterval: (query) =>
       ((query.state.data as InspirationRecord[] | undefined) ?? []).some(
@@ -59,6 +61,7 @@ export function InspirationDetailDialog() {
   const { data: detail } = useQuery({
     queryKey: ["inspiration-detail", accountScope, activeId, generation],
     queryFn: () => desktopApi!.read ? desktopApi!.read(activeId!) : Promise.resolve(listed!),
+    networkMode: "always",
     enabled: !!activeId && !!listed && !binding,
     gcTime: 0,
   });
@@ -82,6 +85,7 @@ export function InspirationDetailDialog() {
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["inspirations"] });
 
   const deleteMutation = useMutation({
+    networkMode: "always",
     mutationFn: (id: string) => desktopApi!.delete(id),
     onSuccess: () => {
       toast.success(t("inspiration.toast_deleted"));
@@ -213,7 +217,7 @@ function DetailView({ record, slides, onOpenLightbox, onEdit, onDelete, deleting
   const images = record.images ?? [];
   // Plan T8.1: 仅本机 / 同步中 / 已同步 / 冲突. Records never synced carry
   // no state and show nothing.
-  const syncState = record.syncState;
+  const syncState = featureFlags.inspirationCloudSync ? record.syncState : "local";
   const syncBadge = syncState === "conflict"
     ? { label: t("inspiration.cloud_conflicts", { count: 1 }), className: "bg-destructive/10 text-destructive" }
     : syncState === "synced"
@@ -221,7 +225,7 @@ function DetailView({ record, slides, onOpenLightbox, onEdit, onDelete, deleting
       : syncState === "syncing"
         ? { label: t("inspiration.cloud_syncing", { count: 1 }), className: "bg-muted text-muted-foreground" }
         : syncState === "local"
-          ? { label: t("inspiration.title"), className: "bg-muted text-muted-foreground" }
+          ? { label: t("inspiration.local_only"), className: "bg-muted text-muted-foreground" }
           : null;
   const aiContextEnabled = record.aiContextEnabled !== false;
 
@@ -308,7 +312,7 @@ function DetailView({ record, slides, onOpenLightbox, onEdit, onDelete, deleting
                 {syncBadge.label}
               </span>
             )}
-            <button
+            {featureFlags.inspirationCloudSync && <button
               type="button"
               disabled={busy || record.protection === "e2ee"}
               title={t(record.protection === "e2ee" ? "inspiration_private.no_ai" : "inspiration.ai_context")}
@@ -322,7 +326,7 @@ function DetailView({ record, slides, onOpenLightbox, onEdit, onDelete, deleting
             >
               {aiContextEnabled ? "✓ " : "✕ "}
               {t("inspiration.ai_context")}
-            </button>
+            </button>}
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <InspirationLockButton record={record} className="rounded-md p-2 text-muted-foreground hover:bg-muted" />

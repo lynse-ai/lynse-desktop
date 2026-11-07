@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import i18next from "i18next";
 import { toast } from "sonner";
 import { getAppInfoSync, openExternalUrl } from "./app-update";
-import { isMacDesktop } from "./layout/use-maximized";
 
 const ISSUE_TRACKER_URL = "https://github.com/lynse-ai/lynse-desktop/issues/new";
 
@@ -41,8 +40,13 @@ export type DesktopDiagnosticsApi = {
     includeLogs: boolean;
   }) => Promise<{ dir: string }>;
   revealReportFolder: (path: string) => Promise<void>;
-  // Optional: missing on an older host build still installed.
-  captureScreenshot?: () => Promise<StagedScreenshot>;
+  // Optional: missing on an older host build still installed. `background`
+  // is the resolved `rgb(r g b)` theme color that the snapshot's transparent
+  // vibrancy pixels are flattened onto (JPEG has no alpha).
+  captureScreenshot?: (background?: string | null) => Promise<StagedScreenshot>;
+  // Composites a transparent PNG overlay (data URL) onto the staged capture
+  // and returns the fresh staged file that replaces it.
+  saveAnnotatedScreenshot?: (path: string, overlayDataUrl: string) => Promise<StagedScreenshot>;
   submitCnbIssue?: (request: {
     endpoint: string;
     title: string;
@@ -80,8 +84,10 @@ export function getReportChannel(): { endpoint: string } | null {
 
 // ── Shared report flow (singleton dialog store + entry point) ──────────────
 // Every entry point (profile menu, sidebar, About window) opens the same
-// flow through this store: a standalone window on macOS, the in-app dialog
-// elsewhere (window creation can deadlock on Windows, see open-about.ts).
+// in-app dialog inside the current window. Keeping it in-window is also what
+// lets the annotation editor fill the whole app page — no second OS window
+// pops up (the standalone `?window=report` route still exists but is no
+// longer opened automatically).
 let reportDialogOpen = false;
 const reportDialogListeners = new Set<() => void>();
 
@@ -114,13 +120,36 @@ export function showScreenshotCaptureError(error: unknown): void {
   toast.error(i18next.isInitialized ? i18next.t("settings.report_capture_failed") : "Capture failed — please try again");
 }
 
+/**
+ * The report screenshot is a JPEG, which has no alpha channel — and the
+ * vibrancy shell keeps the title bar, sidebar and window edge transparent.
+ * Without an explicit backdrop those pixels flatten to white, a light
+ * border around dark-theme captures. Resolve the live `--background` token
+ * so both themes flatten onto their own color (null → host falls back to
+ * white, the pre-fix behavior).
+ */
+export function resolveCaptureBackground(): string | null {
+  if (typeof document === "undefined") return null;
+  const probe = document.createElement("div");
+  probe.style.backgroundColor = "var(--background)";
+  document.body.appendChild(probe);
+  const resolved = getComputedStyle(probe).backgroundColor;
+  probe.remove();
+  const channels = resolved.match(/\d+/g);
+  if (!channels || channels.length < 3) return null;
+  const [r, g, b] = channels;
+  return r !== undefined && g !== undefined && b !== undefined
+    ? `rgb(${r} ${g} ${b})`
+    : null;
+}
+
 async function openReportDialog(): Promise<void> {
   // Capture while the main window still shows what the user was looking at —
   // the in-app dialog would otherwise cover it. In the standalone window the
   // retake button re-captures the main window directly.
   const api = getDesktopDiagnosticsApi();
   pendingScreenshot = api?.captureScreenshot
-    ? await api.captureScreenshot().catch((error: unknown) => {
+    ? await api.captureScreenshot(resolveCaptureBackground()).catch((error: unknown) => {
         showScreenshotCaptureError(error);
         return null;
       })
@@ -129,27 +158,15 @@ async function openReportDialog(): Promise<void> {
 }
 
 /**
- * Open the problem report flow: the standalone report window on macOS, the
- * in-app dialog everywhere else (with the GitHub prefilled form as the
- * submission fallback when the CNB channel fails). Contextual reports use
- * the in-app form so their description stays available for review.
+ * Open the problem report flow: the in-app dialog inside the current window,
+ * with the GitHub prefilled form as the submission fallback when the CNB
+ * channel fails. Contextual reports use the in-app form so their description
+ * stays available for review.
  */
-export function openReportProblem(): void;
-export function openReportProblem(description: string): void;
 export function openReportProblem(description?: unknown): void {
+  // Contextual descriptions ride along into the shared in-app form.
   if (typeof description === "string" && description) {
-    // Context stays in the shared in-app form until the user submits it.
     pendingReportDescription = description;
-    void openReportDialog();
-    return;
-  }
-  const api = getDesktopDiagnosticsApi();
-  if (isMacDesktop && api?.openReportWindow) {
-    const title = i18next.isInitialized ? i18next.t("settings.report_title") : "Lynse";
-    api.openReportWindow(title).catch(() => {
-      void openReportDialog();
-    });
-    return;
   }
   void openReportDialog();
 }

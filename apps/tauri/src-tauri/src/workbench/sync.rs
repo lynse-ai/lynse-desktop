@@ -860,7 +860,12 @@ pub(super) async fn run(
     }
     // Journal records remain in their existing local store; the knowledge-base
     // record is an indexed view used by the same retrieval path as meetings.
-    for row in crate::list_store(app, "local-inspirations")? {
+    let inspirations = if crate::inspiration_cloud::SYNC_ENABLED {
+        crate::list_store(app, "local-inspirations")?
+    } else {
+        Vec::new()
+    };
+    for row in inspirations {
         if crate::inspiration_private::protected(&row) || row.get("deletedAt").is_some() {
             continue;
         }
@@ -1003,7 +1008,9 @@ pub(super) async fn run(
         let deleted: Vec<String> = manifest
             .entries
             .values()
-            .filter(|entry| entry.kind != "gmail" && !active.contains(&entry.id))
+            .filter(|entry| entry.kind != "gmail"
+                && (entry.kind != "inspiration" || crate::inspiration_cloud::SYNC_ENABLED)
+                && !active.contains(&entry.id))
             .map(|entry| entry.id.clone())
             .collect();
         let (root, _) = roots(app, session)?;

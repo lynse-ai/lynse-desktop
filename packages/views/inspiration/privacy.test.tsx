@@ -12,6 +12,10 @@ import { inspirationPrivacyLocales } from "./privacy-locales";
 const fixture = vi.hoisted(() => ({ bridge: {} as Record<string, unknown>, locked: () => {} }));
 vi.mock("./desktop-api", () => ({ getDesktopInspirationApi: () => fixture.bridge }));
 vi.mock("./use-inspiration-cloud", () => ({ useInspirationCloud: () => ({}) }));
+vi.mock("../feature-flags", async (importOriginal) => {
+  const { featureFlags } = await importOriginal<typeof import("../feature-flags")>();
+  return { featureFlags: { ...featureFlags, inspirationCloudSync: true } };
+});
 vi.mock("../navigation", () => ({ useNavigation: () => ({ push: vi.fn() }) }));
 vi.mock("../todo/todo-api", () => ({ saveTodo: vi.fn() }));
 vi.mock("../todo/use-todos", () => ({ useTodoStore: { getState: () => ({ upsert: vi.fn() }) } }));

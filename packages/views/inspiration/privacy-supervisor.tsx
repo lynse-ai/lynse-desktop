@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
 import { getDesktopInspirationApi } from "./desktop-api";
+import { featureFlags } from "../feature-flags";
 import { useInspirationCloud } from "./use-inspiration-cloud";
 import { closePrivacyDialog, ensureInspirationUnlocked, privacyError, useInspirationPrivacy, type PrivacyDialogMode } from "./privacy-state";
 import { useInspirationDetailStore } from "./detail-store";
@@ -66,12 +67,18 @@ function PrivacyDialog() {
   const [claim, setClaim] = useState(false);
   const [pairCreated, setPairCreated] = useState(false);
   const [deviceId, setDeviceId] = useState("");
+  const [initialized, setInitialized] = useState(false);
   const [afterUnlock, setAfterUnlock] = useState<PrivacyDialogMode | null>(null);
   useEffect(() => {
     setPassword(""); setConfirm(""); setRecovery(""); setRecoveryCode(""); setSaved(false); setPending(false); setError(""); setBusy(false); setPairCreated(false);
     if (mode === "manage" && api) {
-      void api.status().then((value) => setDeviceId(value.deviceId ?? ""));
-      void api.devices().then((value) => setDevices(value.devices)).catch(() => setDevices([]));
+      void api.status().then((value) => {
+        setDeviceId(value.deviceId ?? "");
+        setInitialized(value.initialized);
+      }).catch(() => setInitialized(false));
+      if (featureFlags.inspirationCloudSync) {
+        void api.devices().then((value) => setDevices(value.devices)).catch(() => setDevices([]));
+      }
       void api.legacy().then((value) => setLegacyCount(value.count)).catch(() => setLegacyCount(0));
     }
   }, [mode, api]);
@@ -117,9 +124,24 @@ function PrivacyDialog() {
         {(mode === "approve" || mode === "finish" || pairCreated) && <label className="block space-y-2 text-sm"><span>{t("inspiration_private.request_id")}</span><Input value={requestId} readOnly={pairCreated} onChange={(e) => setRequestId(e.target.value)} /></label>}
         {(mode === "approve" || pairCreated) && <label className="block space-y-2 text-sm"><span>{t("inspiration_private.fingerprint")}</span><Input value={fingerprint} readOnly={pairCreated} onChange={(e) => setFingerprint(e.target.value)} /></label>}
         {pairCreated && <><p className="text-sm text-muted-foreground">{t("inspiration_private.pair_hint")}</p><Button onClick={() => changeMode("finish")}>{t("inspiration_private.finish_pair")}</Button></>}
-        {(mode === "setup" || mode === "unlock") && <div className="flex flex-wrap gap-2"><Button variant="ghost" size="sm" onClick={() => changeMode("recover")}>{t("inspiration_private.recover")}</Button><Button variant="ghost" size="sm" onClick={() => changeMode("pair")}>{t("inspiration_private.pair")}</Button><Button variant="ghost" size="sm" onClick={() => changeMode("finish")}>{t("inspiration_private.finish_pair")}</Button></div>}
-        {mode === "manage" && <div className="space-y-4"><div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => { closePrivacyDialog(false); void ensureInspirationUnlocked().catch((cause) => setError(privacyError(cause, t))); }}>{t("inspiration_private.unlock")}</Button><Button variant="outline" onClick={() => { void api?.lock(); closePrivacyDialog(false); }}>{t("inspiration_private.lock")}</Button><Button variant="outline" onClick={() => void requireUnlocked("password")}>{t("inspiration_private.password_change")}</Button><Button variant="outline" onClick={() => void requireUnlocked("approve")}>{t("inspiration_private.approve")}</Button><Button variant="outline" onClick={() => changeMode("recover")}>{t("inspiration_private.recover")}</Button></div>
-          <Button variant="outline" onClick={() => { setRevoke([]); setFull(true); changeMode("rotate"); }}>{t("inspiration_private.full_reencrypt")}</Button><p className="text-sm font-medium">{t("inspiration_private.devices")}</p>{devices.map((device) => <div key={device.id} className="flex items-center justify-between gap-2 text-xs"><span className="truncate">{device.id}</span><Button variant="ghost" size="sm" disabled={!!device.revoked_at || device.id === deviceId} onClick={() => { setRevoke([device.id]); changeMode("rotate"); }}>{t(device.revoked_at ? "inspiration_private.revoked" : "inspiration_private.revoke")}</Button></div>)}
+        {featureFlags.inspirationCloudSync && (mode === "setup" || mode === "unlock") && <div className="flex flex-wrap gap-2"><Button variant="ghost" size="sm" onClick={() => changeMode("recover")}>{t("inspiration_private.recover")}</Button><Button variant="ghost" size="sm" onClick={() => changeMode("pair")}>{t("inspiration_private.pair")}</Button><Button variant="ghost" size="sm" onClick={() => changeMode("finish")}>{t("inspiration_private.finish_pair")}</Button></div>}
+        {mode === "manage" && <div className="space-y-4">
+          {(initialized || featureFlags.inspirationCloudSync) && (
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => { closePrivacyDialog(false); void ensureInspirationUnlocked().catch((cause) => setError(privacyError(cause, t))); }}>{t("inspiration_private.unlock")}</Button>
+              <Button variant="outline" onClick={() => { void api?.lock(); closePrivacyDialog(false); }}>{t("inspiration_private.lock")}</Button>
+              <Button variant="outline" onClick={() => void requireUnlocked("password")}>{t("inspiration_private.password_change")}</Button>
+              {featureFlags.inspirationCloudSync && <>
+                <Button variant="outline" onClick={() => void requireUnlocked("approve")}>{t("inspiration_private.approve")}</Button>
+                <Button variant="outline" onClick={() => changeMode("recover")}>{t("inspiration_private.recover")}</Button>
+              </>}
+            </div>
+          )}
+          {featureFlags.inspirationCloudSync && <>
+            <Button variant="outline" onClick={() => { setRevoke([]); setFull(true); changeMode("rotate"); }}>{t("inspiration_private.full_reencrypt")}</Button>
+            <p className="text-sm font-medium">{t("inspiration_private.devices")}</p>
+            {devices.map((device) => <div key={device.id} className="flex items-center justify-between gap-2 text-xs"><span className="truncate">{device.id}</span><Button variant="ghost" size="sm" disabled={!!device.revoked_at || device.id === deviceId} onClick={() => { setRevoke([device.id]); changeMode("rotate"); }}>{t(device.revoked_at ? "inspiration_private.revoked" : "inspiration_private.revoke")}</Button></div>)}
+          </>}
           {legacyCount > 0 && <section className="space-y-3 border-t pt-3"><p className="text-sm">{t("inspiration_private.legacy")} ({legacyCount})</p><p className="text-xs text-muted-foreground">{t("inspiration_private.legacy_hint")}</p><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={claim} onChange={(e) => setClaim(e.target.checked)} />{t("inspiration_private.legacy_confirm")}</label><Button disabled={!claim || busy} onClick={() => { setBusy(true); void api?.claimLegacy().then(finish).catch((cause) => setError(privacyError(cause, t))).finally(() => setBusy(false)); }}>{t("inspiration_private.legacy_claim")}</Button></section>}
         </div>}
         {mode === "rotate" && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={full} onChange={(e) => setFull(e.target.checked)} />{t("inspiration_private.full_reencrypt")}</label>}

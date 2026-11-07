@@ -46,6 +46,7 @@ pub struct Capability {
 }
 #[derive(Default)]
 pub struct PrivateState {
+    pub local_binding: Mutex<Option<inspiration_cloud::AccountBinding>>,
     pub unlocked: Mutex<Option<Unlocked>>,
     pub token: Mutex<Option<Zeroizing<String>>>,
     pub transport: Mutex<Option<(String, Zeroizing<String>)>>,
@@ -127,12 +128,12 @@ pub fn put(app: &AppHandle, row: &Value) -> CommandResult<()> {
     }
     crate::write_array(&path, &rows)
 }
-struct CreatedAssets {
-    paths: Vec<PathBuf>,
-    committed: bool,
+pub(super) struct CreatedAssets {
+    pub(super) paths: Vec<PathBuf>,
+    pub(super) committed: bool,
 }
 impl CreatedAssets {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             paths: Vec::new(),
             committed: false,
@@ -600,7 +601,7 @@ pub fn inspiration_stage_file(app: AppHandle, path: String) -> CommandResult<Val
     stage_reader(&app, &mut source, name, &mime)
 }
 
-fn stage_plain(
+pub(super) fn stage_plain(
     app: &AppHandle,
     source: &str,
 ) -> CommandResult<(Zeroizing<Vec<u8>>, String, String)> {
@@ -678,6 +679,9 @@ pub fn save(app: &AppHandle, input: Value) -> CommandResult<Value> {
         .try_lock()
         .map_err(|_| "inspiration_operation_busy")?;
     let _guard = state.serial.lock().map_err(|_| "storage_unavailable")?;
+    if input["protection"] != "e2ee" && !inspiration_cloud::read_binding(app)?.is_some_and(|binding| binding.private_v2) {
+        return crate::save_inspiration(app, input);
+    }
     let requested = input["id"].as_str();
     let id = requested
         .map(str::to_owned)
@@ -696,6 +700,9 @@ pub fn save(app: &AppHandle, input: Value) -> CommandResult<Value> {
     } else {
         None
     };
+    if old.as_ref().is_some_and(|row| !row["deletedAt"].is_null()) {
+        return Err("inspiration_not_found".into());
+    }
     if old.as_ref().is_some_and(|r| r["transition"].is_object()) {
         return Err("protection_transition_pending".into());
     }
@@ -754,6 +761,7 @@ pub fn save(app: &AppHandle, input: Value) -> CommandResult<Value> {
     }
     let directory = directory(app, &id)?;
     fs::create_dir_all(&directory).map_err(|_| "storage_unavailable")?;
+    let mut new_assets = CreatedAssets::new();
     for (pending, field, kind, limit) in [
         ("pendingImages", "images", "image", 9),
         ("pendingFiles", "files", "file", 20),
@@ -767,6 +775,7 @@ pub fn save(app: &AppHandle, input: Value) -> CommandResult<Value> {
             let (mut bytes, name, mime) = stage_plain(app, source)?;
             let asset = uuid::Uuid::new_v4().to_string();
             let path = directory.join(format!("{asset}.bin"));
+            new_assets.paths.push(path.clone());
             let mut metadata =
                 json!({"file":asset,"name":name,"mime":mime,"size":bytes.len(),"kind":kind});
             for dimension in ["width", "height"] {
@@ -802,7 +811,9 @@ pub fn save(app: &AppHandle, input: Value) -> CommandResult<Value> {
         }
         let (bytes, _, _) = stage_plain(app, source)?;
         let asset = uuid::Uuid::new_v4().to_string();
-        crate::atomic_write(&directory.join(format!("{asset}.bin")), &bytes)?;
+        let path = directory.join(format!("{asset}.bin"));
+        new_assets.paths.push(path.clone());
+        crate::atomic_write(&path, &bytes)?;
         content.0["audio"] = json!({"file":asset,"name":"audio.wav","mime":"audio/wav","kind":"audio","size":bytes.len(),"durationMs":input["pendingAudioDurationMs"]});
     }
     let now = crate::now();
@@ -854,27 +865,34 @@ pub fn save(app: &AppHandle, input: Value) -> CommandResult<Value> {
         .filter_map(|a| a["file"].as_str())
         .collect::<Vec<_>>());
     put(app, &row)?;
+    new_assets.committed = true;
     cloud::queue(app, &row)?;
     if protection == "plain" {
         crate::vault::sync_journal(app, &row)
     }
-    prune_assets(app, &row, &content.0)?;
-    if let Ok(mut stages) = state.staged.lock() {
-        for field in ["pendingImages", "pendingFiles"] {
-            for source in input[field]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|item| item["sourcePath"].as_str())
-                .filter_map(|path| path.strip_prefix("private-stage:"))
-            {
-                if let Some(stage) = stages.remove(source) {
-                    let _ = fs::remove_file(stage.path);
-                }
+    if let Err(error) = prune_assets(app, &row, &content.0) {
+        log::warn!("Failed to clean up unused quick note attachments: {error}");
+    }
+    discard_staged(app, &input);
+    view(app, &row, false)
+}
+
+pub(super) fn discard_staged(app: &AppHandle, input: &Value) {
+    let state = app.state::<PrivateState>();
+    let Ok(mut stages) = state.staged.lock() else { return; };
+    for field in ["pendingImages", "pendingFiles"] {
+        for source in input[field]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item["sourcePath"].as_str())
+            .filter_map(|path| path.strip_prefix("private-stage:"))
+        {
+            if let Some(stage) = stages.remove(source) {
+                let _ = fs::remove_file(stage.path);
             }
         }
     }
-    view(app, &row, false)
 }
 pub fn asset_entries(content: &Value) -> Vec<Value> {
     let mut entries = Vec::new();
@@ -1037,7 +1055,15 @@ pub fn inspiration_export_file(
         .iter()
         .find(|a| a["file"] == file)
         .ok_or("attachment_not_found")?;
-    let source = directory(&app, &id)?.join(format!("{file}.bin"));
+    let source = if inspiration_cloud::read_binding(&app)?.is_some_and(|binding| binding.private_v2) {
+        directory(&app, &id)?.join(format!("{file}.bin"))
+    } else {
+        if !crate::is_safe_asset_file_name(&file) || file == "." || file == ".." {
+            return Err("invalid_attachment".into());
+        }
+        let uuid = id.strip_prefix("inspiration:").unwrap_or(&id);
+        crate::inspiration_dir(&app, uuid)?.join(&file)
+    };
     let target = PathBuf::from(destination);
     if !target.is_absolute() {
         return Err("invalid_export_path".into());
@@ -1092,6 +1118,7 @@ pub async fn bind(
     backend: &str,
     _claimed_user: &str,
 ) -> CommandResult<Value> {
+    inspiration_cloud::require_sync_enabled()?;
     let state = app.state::<PrivateState>();
     let epoch = state.binding_generation.fetch_add(1, Ordering::SeqCst) + 1;
     {
@@ -1215,18 +1242,23 @@ pub fn delete(app: &AppHandle, id: &str) -> CommandResult<()> {
         .try_lock()
         .map_err(|_| "inspiration_operation_busy")?;
     let _guard = state.serial.lock().map_err(|_| "storage_unavailable")?;
+    if !inspiration_cloud::read_binding(app)?.is_some_and(|binding| binding.private_v2) {
+        return crate::delete_inspiration(app, id);
+    }
     let row = stored(app, id)?;
     let version = row["version"].as_u64().unwrap_or(0);
-    let mut pending = cloud::ops(app)?;
-    pending.retain(|o| o["id"] != id);
-    if version > 0 {
-        let mut body = json!({"base_version":version});
-        if protected(&row) {
-            body = cloud::sign_body(app, "delete", body)?;
+    if inspiration_cloud::SYNC_ENABLED {
+        let mut pending = cloud::ops(app)?;
+        pending.retain(|o| o["id"] != id);
+        if version > 0 {
+            let mut body = json!({"base_version":version});
+            if protected(&row) {
+                body = cloud::sign_body(app, "delete", body)?;
+            }
+            pending.push(json!({"id":id,"kind":"delete","operation_id":uuid::Uuid::new_v4().to_string(),"body":body}));
         }
-        pending.push(json!({"id":id,"kind":"delete","operation_id":uuid::Uuid::new_v4().to_string(),"body":body}));
+        crate::write_array(&index_path(app)?.with_file_name("ops.json"), &pending)?;
     }
-    crate::write_array(&index_path(app)?.with_file_name("ops.json"), &pending)?;
     let tombstone = json!({"id":id,"createdAt":row["createdAt"],"updatedAt":crate::now(),"deletedAt":crate::now(),"version":version,"protection":row["protection"],"account_scope":storage_scope(app)?});
     put(app, &tombstone)?;
     let dir = directory(app, id)?;

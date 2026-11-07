@@ -366,6 +366,17 @@ fn partial_automatic_results_retry_once_then_wait_for_user_retry() {
     let docs = vec![doc("meeting", "work")];
     let config = Models::default();
     let manifest = manifest();
+    let version = page_version(
+        &Topic {
+            id: "topic".into(),
+            title: "Partial".into(),
+            source_ids: vec!["meeting".into()],
+            ..Default::default()
+        },
+        &docs,
+        &manifest,
+        &config,
+    );
     let mut topic = Topic {
         id: "topic".into(),
         title: "Partial".into(),
@@ -385,7 +396,6 @@ fn partial_automatic_results_retry_once_then_wait_for_user_retry() {
         }),
         ..Default::default()
     };
-    let version = page_version(&topic, &docs, &manifest, &config);
     let failed_sources = BTreeSet::new();
     assert!(pending_compilation(&topic, &docs, &manifest, &config, &failed_sources, None).is_some());
     topic.partial_compilation.as_mut().unwrap().auto_retry_used = true;

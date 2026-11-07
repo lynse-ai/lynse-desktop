@@ -148,6 +148,17 @@
   font-size: inherit;
 }
 
+.content-preview-inner .recording-mark-delimiter {
+  display: none;
+}
+
+.content-preview-inner .recording-mark-text {
+  color: var(--accent-brand-text);
+  background: var(--accent-brand-strong);
+  border-radius: 0.2em;
+  padding-inline: 0.15em;
+}
+
 .content-preview-inner strong,
 .content-preview-inner b {
   font-weight: 600;

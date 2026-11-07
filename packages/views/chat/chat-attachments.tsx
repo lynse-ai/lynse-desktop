@@ -61,7 +61,7 @@ async function loadAttachmentText(url: string): Promise<string> {
  * downloader, falling back to opening the URL for a manual save when the
  * signed host refuses CORS.
  */
-async function downloadAttachment(
+export async function downloadAttachment(
   url: string,
   filename: string,
   savedMessage?: string,

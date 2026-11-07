@@ -220,6 +220,7 @@ export interface DesktopInspirationApi {
   voiceState: () => Promise<InspirationVoiceSnapshot>;
   /** Subscribe to `inspiration-voice-event`; returns an unlisten fn. */
   onVoiceEvent: (callback: (event: InspirationVoiceEvent) => void) => Promise<() => void>;
+  openLocalStore?: (userId: string | null, token: string | null, backendHost: string) => Promise<string>;
   /**
    * Lynse Memory cloud sync (plan T7/T8). `cloudBind` must only be called
    * after the renderer verified the Lynse token via `GET /v1/me` and passes

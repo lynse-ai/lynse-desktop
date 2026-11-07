@@ -1,0 +1,21 @@
+@keyframes waveform-highlight-sweep {
+  from { transform: translateX(-63%); }
+  to { transform: translateX(63%); }
+}
+
+@keyframes waveform-highlight-track {
+  from { transform: translateX(63%); }
+  to { transform: translateX(-63%); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .waveform-loading-highlight {
+    -webkit-mask-image: linear-gradient(to right, transparent 37%, black 50%, transparent 63%);
+    mask-image: linear-gradient(to right, transparent 37%, black 50%, transparent 63%);
+    animation: waveform-highlight-sweep 1.6s linear infinite;
+  }
+
+  .waveform-loading-highlight-track {
+    animation: waveform-highlight-track 1.6s linear infinite;
+  }
+}

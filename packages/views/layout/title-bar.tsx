@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { useWorkspaceStore } from "../workspace/store";
+import { lynclawNoteId } from "../workspace/lynclaw-notes";
 import { useFiles } from "../workspace/hooks/use-files";
 import { useFolders } from "../workspace/hooks/use-folders";
 import { useTranslation } from "@lynse/core/i18n/react";
@@ -30,6 +31,7 @@ export function WorkspaceTitleBarSlot({
 }) {
   const { t } = useTranslation();
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
+  const isLynclawNote = !!lynclawNoteId(selectedItemId);
   const selectedItemTitle = useWorkspaceStore((s) => s.selectedItemTitle);
   const selectedFolderId = useWorkspaceStore((s) => s.selectedFolderId);
   const contentTab = useWorkspaceStore((s) => s.contentTab);
@@ -77,9 +79,7 @@ export function WorkspaceTitleBarSlot({
 
   const actions = (
     <>
-      {/* Source code view toggle — the raw markdown only makes sense on a
-          summary tab */}
-      {selectedItemId && contentTab.startsWith("summary") && (
+      {selectedItemId && (isLynclawNote || contentTab.startsWith("summary")) && (
         <TitleBarButton
           onClick={toggleSourceView}
           active={sourceViewVisible}
@@ -92,19 +92,20 @@ export function WorkspaceTitleBarSlot({
       {/* Editor typography theme switcher */}
       <EditorThemeSwitcher />
 
-      {/* Ask AI button */}
-      <button
-        onClick={toggleChatPanel}
-        className={
-          chatPanelVisible
-            ? "flex h-7 items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/15 px-2.5 text-2xs font-medium text-accent-brand-text transition-colors"
-            : "flex h-7 items-center gap-1.5 rounded-lg border border-transparent px-2.5 text-2xs font-medium text-muted-foreground transition-colors hover:border-border hover:bg-card hover:text-foreground"
-        }
-        title={t("workspace.ask_ai")}
-      >
-        <Bot className="size-3.5" />
-        <span>{t("workspace.ask_ai")}</span>
-      </button>
+      {!isLynclawNote && (
+        <button
+          onClick={toggleChatPanel}
+          className={
+            chatPanelVisible
+              ? "flex h-7 items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/15 px-2.5 text-2xs font-medium text-accent-brand-text transition-colors"
+              : "flex h-7 items-center gap-1.5 rounded-lg border border-transparent px-2.5 text-2xs font-medium text-muted-foreground transition-colors hover:border-border hover:bg-card hover:text-foreground"
+          }
+          title={t("workspace.ask_ai")}
+        >
+          <Bot className="size-3.5" />
+          <span>{t("workspace.ask_ai")}</span>
+        </button>
+      )}
     </>
   );
 

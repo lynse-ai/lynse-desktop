@@ -3,10 +3,31 @@ import { api } from "./client";
 export const SUMMARY_HTML_STYLES = ["editorial", "editorial-dark", "infographic", "document"] as const;
 export type SummaryHtmlStyle = (typeof SUMMARY_HTML_STYLES)[number];
 
+// Bounds from the meeting-pipeline request contract.
+export const MAX_SUMMARY_TEXT_MARKS = 64;
+export const MAX_SUMMARY_IMAGE_MARKS = 4;
+
+export interface SummaryTextMark {
+  timeoffset?: number | null;
+  title?: string | null;
+  outline?: string | null;
+}
+
+export interface SummaryImageMark {
+  imageId: string;
+  timestamp?: number;
+  timeoffset?: number | null;
+  url?: string;
+}
+
 export interface SummarizeTranscriptInput {
   transcriptionText: string;
   /** YYYYMMDDHHmm — when the recording happened; anchors relative dates in the summary. */
   recordingTime?: string;
+  /** Recording start with timezone. Used to align absolute photo timestamps. */
+  recordingStartedAt?: string;
+  recordMarkResults?: readonly SummaryTextMark[];
+  markImages?: readonly SummaryImageMark[];
   language?: string;
   /** Also render the adaptive summary as a complete styled HTML document. */
   html?: boolean;
@@ -43,6 +64,11 @@ export async function summarizeTranscript(
     {
       transcription_text: text,
       ...(input.recordingTime ? { recording_time: input.recordingTime } : {}),
+      ...(input.recordingStartedAt ? { recording_started_at: input.recordingStartedAt } : {}),
+      ...(input.recordMarkResults?.length ? {
+        recordMarkResults: input.recordMarkResults.slice(0, MAX_SUMMARY_TEXT_MARKS),
+      } : {}),
+      ...(input.markImages?.length ? { markImages: input.markImages.slice(0, MAX_SUMMARY_IMAGE_MARKS) } : {}),
       ...(input.language ? { language: input.language } : {}),
       html,
       ...(html && input.style ? { style: input.style } : {}),

@@ -986,7 +986,11 @@ pub(crate) fn sync_journal(app: &AppHandle, record: &Value) {
             let Ok(root)=content_dir(app,ContentKind::KnowledgeMemory) else {return}; root.join(owner).join("Inspirations")
         },
         Some(_) => return,
-        None => { let Ok(path)=content_dir(app,ContentKind::Inspirations) else {return}; path },
+        None => {
+            let Ok(path) = content_dir(app, ContentKind::Inspirations) else { return; };
+            let Ok(scope) = crate::inspiration_private::storage_scope(app) else { return; };
+            path.join(scope)
+        }
     };
     if let Some(mut entry) = build_journal_entry(record, &attachments_root) {
         if let Some(owner)=scoped {

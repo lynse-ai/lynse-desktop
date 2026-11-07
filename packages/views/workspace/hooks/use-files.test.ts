@@ -351,6 +351,34 @@ describe("summary task polling", () => {
     ]);
   });
 
+  it("decodes a Lynclaw-encoded conclusion into a named summary tab", () => {
+    const tabs = mergePendingSummaryTab({
+      tabs: [
+        { key: "pending-1", id: "", name: "Lynclaw 总结 · Markdown", text: "", status: "pending", pendingId: "pending-1" },
+      ],
+      pendingId: "pending-1",
+      conclusion: {
+        id: "conclusion-lynclaw",
+        fileId: "file_1",
+        conclusionText: "<!-- lynclaw-summary:markdown -->\n\n## Markdown recap\n\nBody text",
+        templateName: "",
+        createdAt: "now",
+      },
+      lynclawName: "Lynclaw 总结",
+    });
+
+    expect(tabs).toEqual([
+      {
+        key: "conclusion-lynclaw",
+        id: "conclusion-lynclaw",
+        name: "Lynclaw 总结 · Markdown",
+        text: "## Markdown recap\n\nBody text",
+        status: "ready",
+        lynclawFormat: "markdown",
+      },
+    ]);
+  });
+
   it("parses tags from common file list fields", () => {
     expect(parseFileTags({ tags: "销售, 复盘 项目" })).toEqual(["销售", "复盘", "项目"]);
     expect(parseFileTags({ tagList: ["会议", "客户"] })).toEqual(["会议", "客户"]);

@@ -27,6 +27,7 @@ interface LynseE2EHooks {
 
 const COMMAND_PREFIX_STUBS: Array<[RegExp, unknown]> = [
   [/^(local_transcription_list|todo_list|inspiration_list|live_translation_recoveries)$/, []],
+  [/^inspiration_open_local_store$/, "unbound"],
   [/^local_stt_model_status$/, { models: [] }],
   [/^storage_usage$/, { items: [] }],
 ];
@@ -101,6 +102,30 @@ function defaultInvoke(cmd: string, args: Record<string, unknown>): unknown {
       writeVault(vault);
     }
     return null;
+  }
+  if (cmd === "lynclaw_notes_list" || cmd.startsWith("lynclaw_note_")) {
+    const key = `__lynse_e2e_lynclaw_notes__:${String(args.scope)}`;
+    const notes = JSON.parse(localStorage.getItem(key) ?? "[]") as Array<{ id: string; body: string; [key: string]: unknown }>;
+    if (cmd === "lynclaw_notes_list") return notes.map(({ body: _body, ...info }) => info);
+    if (cmd === "lynclaw_note_create") {
+      const { body, ...input } = args.note as { body: string; [key: string]: unknown };
+      const info = { ...input, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
+      localStorage.setItem(key, JSON.stringify([{ ...info, body }, ...notes]));
+      return info;
+    }
+    const id = String(args.id);
+    if (cmd === "lynclaw_note_read") return notes.find((note) => note.id === id) ?? null;
+    if (cmd === "lynclaw_note_update") {
+      const note = notes.find((row) => row.id === id);
+      if (!note) throw new Error("Note is unavailable");
+      note.body = String(args.body);
+      localStorage.setItem(key, JSON.stringify(notes));
+      return null;
+    }
+    if (cmd === "lynclaw_note_delete") {
+      localStorage.setItem(key, JSON.stringify(notes.filter((note) => note.id !== id)));
+      return null;
+    }
   }
   if (cmd === "workbench_set_text_model") return null;
   if (cmd === "workbench_wiki") return {topics:[],models:{embedding:{...DEFAULT_EMBEDDING_MODEL},revision:""},sources:{gmailEnabled:false,gmailAccountId:"",integrationsUrl:""}};

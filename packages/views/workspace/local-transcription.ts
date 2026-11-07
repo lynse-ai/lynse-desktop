@@ -338,7 +338,7 @@ function normalizeLocalSpeakerName(speaker: string | undefined, rawSpeaker?: str
   return speaker;
 }
 
-function formatLocalTimestamp(ms: number): string {
+export function formatLocalTimestamp(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);

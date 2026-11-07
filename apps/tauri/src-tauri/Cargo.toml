@@ -33,6 +33,10 @@ libsodium-rs = "=0.3.0"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
+# JPEG for the problem-report screenshot (Windows PrintWindow capture encode,
+# plus annotation compositing on every platform); PNG decodes the renderer's
+# transparent annotation overlay (see report_screenshot.rs).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 libc = "0.2"
 log = "0.4"
@@ -54,7 +58,7 @@ tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 thiserror = "2"
-tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "sync", "time"] }
 tokio-tungstenite = { version = "0.28", features = ["native-tls"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
@@ -88,8 +92,6 @@ block2 = "0.6"
 # meeting capture engine talks to WASAPI directly (loopback + RAW-mode mic).
 [target.'cfg(target_os = "windows")'.dependencies]
 cpal = "0.15"
-# JPEG encoding for the problem-report screenshot (PrintWindow capture).
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
 windows = { version = "0.61", features = [
     "Win32_Devices_FunctionDiscovery",
     "Win32_Foundation",

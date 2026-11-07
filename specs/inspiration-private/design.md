@@ -35,3 +35,20 @@ export path even while unlocked. Locking revokes capabilities and session epochs
 Recovery and paired-device public keys are authenticated at the device boundary;
 the server cannot silently enroll a replacement device. Metadata, denial of
 service, compromised endpoints and copies already exported remain outside E2EE.
+
+## Local-only Quick Notes release
+
+The local index and its adopted media are the source of truth for this release.
+Use the existing device store or reopen the last verified account partition
+locally. Keep IDs, timestamps, protection metadata and deletion tombstones on
+disk. The temporary Memory binding and queue remain available as migration
+metadata.
+
+Before enabling sync against the durable service, take a local snapshot and
+import live records and their media by stable ID. Verify ownership before
+adopting device-only records and preserve encrypted records and their local key
+packages. Rebuild upload operations from the local snapshot and reconcile
+tombstones against the new service's own version history. Treat temporary
+server cursors, versions and pending operations as legacy data. Enable the
+renderer and native sync gates together after verifying that the import can be
+retried and reopening an imported account shows the same local notes.

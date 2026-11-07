@@ -32,19 +32,25 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::{app_data_dir, now, CommandResult};
 
 pub(crate) const CLOUD_ROOT: &str = "inspiration-cloud";
+/// The current service is temporary. A durable migration must precede enabling sync.
+pub(crate) const SYNC_ENABLED: bool = false;
 const SCHEMA_VERSION: u32 = 1;
+
+pub(crate) fn require_sync_enabled() -> CommandResult<()> {
+    if SYNC_ENABLED { Ok(()) } else { Err("inspiration_sync_disabled".into()) }
+}
 
 // ── binding ─────────────────────────────────────────────────────────────────
 
 /// The account binding exists only after the renderer verified the Lynse
 /// token against `GET /v1/me` (server-derived user id). API-Key-only sessions
 /// never bind, so the cloud cache never opens (plan T7.4).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AccountBinding {
     pub token_fingerprint: String,
     pub account_scope: String,
@@ -54,6 +60,17 @@ pub(crate) struct AccountBinding {
     pub user_id: String,
     pub api_base: String,
     pub verified_at: String,
+}
+
+impl AccountBinding {
+    /// Select only a partition previously verified for this login backend.
+    /// The renderer's authenticated profile handles access-token rotation.
+    pub(crate) fn matches_local_session(&self, backend: &str, token: &str, user_id: Option<&str>) -> bool {
+        !token.is_empty()
+            && self.backend_host.trim_end_matches('/') == backend.trim_end_matches('/')
+            && (user_id == Some(self.user_id.as_str())
+                || self.token_fingerprint == format!("{:x}", Sha256::digest(token.as_bytes())))
+    }
 }
 
 fn cloud_root(app: &AppHandle) -> CommandResult<PathBuf> {
@@ -81,6 +98,15 @@ pub(crate) fn account_dir(app: &AppHandle, user_id: &str) -> CommandResult<PathB
 }
 
 pub(crate) fn read_binding(app: &AppHandle) -> CommandResult<Option<AccountBinding>> {
+    if !SYNC_ENABLED {
+        return app.try_state::<crate::inspiration_private::PrivateState>().map_or(Ok(None), |state| {
+            state.local_binding.lock().map(|binding| binding.clone()).map_err(|_| "session_unavailable".into())
+        });
+    }
+    read_saved_binding(app)
+}
+
+pub(crate) fn read_saved_binding(app: &AppHandle) -> CommandResult<Option<AccountBinding>> {
     let path = binding_path(app)?;
     let Ok(content) = fs::read_to_string(&path) else {
         return Ok(None);
@@ -520,6 +546,7 @@ static SYNC_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// operation. Best-effort: when no account is bound (API-Key mode, cloud
 /// disabled) this is a no-op and the record stays 仅本机.
 pub(crate) fn record_local_change(app: &AppHandle, saved: &Value) -> CommandResult<()> {
+    if !SYNC_ENABLED { return Ok(()); }
     let Some(binding) = read_binding(app)? else {
         return Ok(());
     };
@@ -546,6 +573,7 @@ pub(crate) fn record_local_change(app: &AppHandle, saved: &Value) -> CommandResu
 }
 
 pub(crate) fn record_local_delete(app: &AppHandle, entity_id: &str) -> CommandResult<()> {
+    if !SYNC_ENABLED { return Ok(()); }
     let Some(binding) = read_binding(app)? else {
         return Ok(());
     };
@@ -1163,6 +1191,26 @@ fn merge_into_global_store(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_mode_reopens_only_the_previously_bound_backend_and_account() {
+        assert_eq!(require_sync_enabled(), Err("inspiration_sync_disabled".into()));
+        let binding = AccountBinding {
+            token_fingerprint: format!("{:x}", Sha256::digest(b"verified-token")),
+            account_scope: "persisted-scope".into(),
+            backend_host: "https://login.example".into(),
+            private_v2: true,
+            private_enabled: true,
+            user_id: "verified-user".into(),
+            api_base: "https://memory.example".into(),
+            verified_at: String::new(),
+        };
+        assert!(binding.matches_local_session("https://login.example/", "verified-token", None));
+        assert!(binding.matches_local_session("https://login.example", "rotated-token", Some("verified-user")));
+        assert!(!binding.matches_local_session("https://login.example", "other-token", Some("other-user")));
+        assert!(!binding.matches_local_session("https://other.example", "verified-token", Some("verified-user")));
+        assert!(!binding.matches_local_session("https://login.example", "", Some("verified-user")));
+    }
 
     fn record(id: &str, text: &str) -> Value {
         json!({

@@ -55,6 +55,7 @@ mod vault;
 // the echo-canceller ABI.
 #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 mod audio_contract;
+mod cloud_audio;
 // Windows in-process capture engine for dual-track meeting recording
 // (WASAPI loopback + microphone through the shared echo-canceller ABI).
 #[cfg(target_os = "windows")]
@@ -71,6 +72,7 @@ mod tencent_asr;
 mod webdav;
 mod workbuddy;
 mod storage;
+mod lynclaw_notes;
 mod workbench;
 mod content_migration;
 mod window_effects;
@@ -2683,6 +2685,7 @@ fn save_inspiration(app: &AppHandle, inspiration: Value) -> CommandResult<Value>
     let text = object.get("text").and_then(Value::as_str).map(str::trim).unwrap_or_default();
     let pending_path = object.get("pendingAudioPath").and_then(Value::as_str).map(str::to_owned).filter(|value| !value.is_empty());
     let pending_images = object.get("pendingImages").and_then(Value::as_array).cloned().unwrap_or_default();
+    let pending_files = object.get("pendingFiles").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default();
     // An explicit `images` array expresses the keep-list for edits; an absent
     // field means "not an image edit", so nothing on disk is touched.
     let images_field_present = object.get("images").map(Value::is_array).unwrap_or(false);
@@ -2700,7 +2703,10 @@ fn save_inspiration(app: &AppHandle, inspiration: Value) -> CommandResult<Value>
     } else {
         get_store_value(app, "local-inspirations", &requested_id)?
     };
-    let has_attachments = pending_path.is_some() || !pending_images.is_empty() || !keep_images.is_empty();
+    if existing.as_ref().is_some_and(|row| !row["deletedAt"].is_null()) {
+        return Err("inspiration_not_found".into());
+    }
+    let has_attachments = pending_path.is_some() || !pending_images.is_empty() || !keep_images.is_empty() || !pending_files.is_empty();
     if text.is_empty() && !has_attachments && existing.is_none() {
         return Err("Inspiration text, image or audio is required".to_owned());
     }
@@ -2710,6 +2716,9 @@ fn save_inspiration(app: &AppHandle, inspiration: Value) -> CommandResult<Value>
         requested_id
     };
     let uuid = id.strip_prefix("inspiration:").unwrap_or(&id).to_owned();
+    if !is_safe_asset_file_name(&uuid) || uuid == "." || uuid == ".." {
+        return Err("invalid_identifier".into());
+    }
     let timestamp = now();
 
     // Merge onto the stored record for edits so unsent fields survive.
@@ -2747,75 +2756,47 @@ fn save_inspiration(app: &AppHandle, inspiration: Value) -> CommandResult<Value>
         }),
     };
     let record_object = record.as_object_mut().ok_or("Record must be an object")?;
+    let directory = inspiration_dir(app, &uuid)?;
+    let mut created = inspiration_private::CreatedAssets::new();
+    let mut staged_paths = Vec::new();
+    let mut removed_paths = Vec::new();
 
-    if pending_path.is_some() || !pending_images.is_empty() {
-        fs::create_dir_all(inspiration_dir(app, &uuid)?).map_err(|error| error.to_string())?;
-    }
-
-    // AUDIO: adopt a freshly captured memo (creation flow only — edits keep
-    // the existing WAV untouched).
+    // Keep staging intact until the local record and every new asset are durable.
     if let Some(pending) = pending_path {
         if record_object.get("audio").and_then(Value::as_object).is_none() {
-            let directory = inspiration_dir(app, &uuid)?;
-            let destination = directory.join("audio.wav");
-            if !destination.exists() {
-                // Staging lives under app data while the destination may be
-                // the vault folder, so the rename can hit a volume boundary;
-                // copy is the fallback.
-                if fs::rename(&pending, &destination).is_err() {
-                    fs::copy(&pending, &destination).map_err(|error| error.to_string())?;
-                    let _ = fs::remove_file(&pending);
-                }
-                // Best-effort cleanup of the now-empty capture directory.
-                if let Some(parent) = Path::new(&pending).parent() {
-                    if parent.file_name().and_then(|value| value.to_str()).unwrap_or_default().starts_with("capture-") {
-                        let _ = fs::remove_dir_all(parent);
-                    }
-                }
-            }
+            let (bytes, _, _) = inspiration_private::stage_plain(app, &pending)?;
+            let file = format!("audio-{}.wav", Uuid::new_v4());
+            let destination = directory.join(&file);
+            created.paths.push(destination.clone());
+            atomic_write(&destination, &bytes)?;
+            staged_paths.push(PathBuf::from(pending));
             let duration = object.get("pendingAudioDurationMs").and_then(Value::as_i64).unwrap_or(0);
-            record_object.insert("audio".to_owned(), json!({ "file": "audio.wav", "durationMs": duration }));
+            record_object.insert("audio".to_owned(), json!({ "file": file, "durationMs": duration }));
         }
     }
 
     // IMAGES: final list = keep-list + newly adopted staged/picked files,
     // then prune files that fell out of the keep-list.
     if images_field_present || !pending_images.is_empty() {
-        let directory = inspiration_dir(app, &uuid)?;
-        if !pending_images.is_empty() {
-            fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-        }
         let previous_images = record_object.get("images").and_then(Value::as_array).cloned().unwrap_or_default();
-        let mut final_images: Vec<Value> = Vec::new();
-        for file in &keep_images {
-            // Carry over the stored metadata (width/height) of kept images.
-            let previous = previous_images.iter().find(|image| {
-                image.get("file").and_then(Value::as_str) == Some(file.as_str())
-            });
-            final_images.push(previous.cloned().unwrap_or_else(|| json!({ "file": file })));
+        let mut final_images = previous_images.clone();
+        if images_field_present {
+            final_images.retain(|image| image["file"].as_str().is_some_and(|file| keep_images.iter().any(|keep| keep == file)));
         }
-        let staging_root = app_data_dir(app)?.join("inspirations").join("staging");
         for image in &pending_images {
-            let Some(source) = image.get("sourcePath").and_then(Value::as_str).filter(|value| !value.is_empty()) else {
-                continue;
-            };
-            let source_path = Path::new(source);
-            let extension = source_path
+            let source = image["sourcePath"].as_str().ok_or("invalid_attachment")?;
+            let (bytes, name, _) = inspiration_private::stage_plain(app, source)?;
+            let extension = Path::new(&name)
                 .extension()
                 .and_then(|value| value.to_str())
                 .map(str::to_ascii_lowercase)
                 .filter(|value| is_safe_asset_file_name(value))
                 .unwrap_or_else(|| "img".to_owned());
-            let file_name = format!("img-{}.{}", final_images.len() + 1, extension);
+            let file_name = format!("img-{}.{}", Uuid::new_v4(), extension);
             let destination = directory.join(&file_name);
-            if !destination.exists() {
-                // Staged pastes are ours to move; picked files stay put.
-                if source_path.starts_with(&staging_root) {
-                    fs::rename(source_path, &destination).map_err(|error| error.to_string())?;
-                } else {
-                    fs::copy(source_path, &destination).map_err(|error| error.to_string())?;
-                }
-            }
+            created.paths.push(destination.clone());
+            atomic_write(&destination, &bytes)?;
+            staged_paths.push(PathBuf::from(source));
             let mut entry = Map::new();
             entry.insert("file".to_owned(), json!(file_name));
             for key in ["width", "height"] {
@@ -2825,23 +2806,54 @@ fn save_inspiration(app: &AppHandle, inspiration: Value) -> CommandResult<Value>
             }
             final_images.push(Value::Object(entry));
         }
-        // Prune unreferenced image files (removed during an edit).
-        if images_field_present {
-            if let Ok(entries) = fs::read_dir(&directory) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    let referenced = final_images.iter().any(|image| {
-                        image.get("file").and_then(Value::as_str) == Some(name.as_str())
-                    });
-                    if name.starts_with("img-") && !referenced {
-                        let _ = fs::remove_file(entry.path());
-                    }
-                }
+        for file in previous_images.iter().filter_map(|image| image["file"].as_str()) {
+            if is_safe_asset_file_name(file) && file.starts_with("img-")
+                && !final_images.iter().any(|image| image["file"] == file) {
+                removed_paths.push(directory.join(file));
             }
         }
         record_object.insert("images".to_owned(), json!(final_images));
     }
+
+    if object.get("files").is_some_and(Value::is_array) || !pending_files.is_empty() {
+        let mut files = record_object.get("files").and_then(Value::as_array).cloned().unwrap_or_default();
+        if let Some(kept) = object.get("files").and_then(Value::as_array) {
+            files.retain(|item| {
+                let keep = kept.iter().any(|entry| entry["file"] == item["file"]);
+                if !keep {
+                    if let Some(file) = item["file"].as_str().filter(|file| is_safe_asset_file_name(file) && file.starts_with("file-")) {
+                        removed_paths.push(directory.join(file));
+                    }
+                }
+                keep
+            });
+        }
+        if files.len() + pending_files.len() > 20 { return Err("too_many_attachments".into()); }
+        for item in pending_files {
+            let source = item["sourcePath"].as_str().ok_or("invalid_attachment")?;
+            let (bytes, name, mime) = inspiration_private::stage_plain(app, source)?;
+            let file = format!("file-{}.bin", Uuid::new_v4());
+            let destination = directory.join(&file);
+            created.paths.push(destination.clone());
+            atomic_write(&destination, &bytes)?;
+            files.push(json!({"file":file,"name":name,"mime":mime,"size":bytes.len(),"kind":"file"}));
+        }
+        record_object.insert("files".to_owned(), json!(files));
+    }
+    if !inspiration_cloud::SYNC_ENABLED {
+        record_object.insert("syncState".to_owned(), json!("local"));
+    }
     let saved = save_store_value(app, "local-inspirations", record)?;
+    created.committed = true;
+    inspiration_private::discard_staged(app, &inspiration);
+    if let Ok(root) = inspiration_staging_dir(app).and_then(|path| path.canonicalize().map_err(|error| error.to_string())) {
+        for path in staged_paths {
+            if let Ok(path) = path.canonicalize() {
+                if path.starts_with(&root) { let _ = fs::remove_file(path); }
+            }
+        }
+    }
+    for path in removed_paths { let _ = fs::remove_file(path); }
     // Mirror the memo into the Obsidian-style Journal folder (markdown file
     // + copied attachments).
     vault::sync_journal(app, &saved);
@@ -2857,11 +2869,14 @@ fn save_inspiration(app: &AppHandle, inspiration: Value) -> CommandResult<Value>
 /// patched straight into the inspiration record. A missing model keeps the
 /// audio and marks the record `unavailable` so the UI can offer a retry after
 /// the model is installed.
-fn transcribe_inspiration(app: &AppHandle, record: Value, audio_path: PathBuf) -> CommandResult<Value> {
+fn transcribe_inspiration(
+    app: &AppHandle,
+    record: Value,
+    audio_path: PathBuf,
+    owner: String,
+    binding_generation: u64,
+) -> CommandResult<Value> {
     let id = record.get("id").and_then(Value::as_str).ok_or("Record id is required")?.to_owned();
-    if inspiration_private::protected(&record) { return Err("encrypted_ai_forbidden".into()); }
-    let owner = inspiration_private::storage_scope(app)?;
-    let binding_generation = app.state::<inspiration_private::PrivateState>().binding_generation.load(std::sync::atomic::Ordering::SeqCst);
     let audio_file = record.get("audio")
         .and_then(|audio| audio.get("file"))
         .and_then(Value::as_str)
@@ -2873,7 +2888,11 @@ fn transcribe_inspiration(app: &AppHandle, record: Value, audio_path: PathBuf) -
     // transcript state already landed — a slow transcription must never
     // overwrite newer state (plan T7.2).
     let write_back = |app: &AppHandle, transcript: Option<&str>, status: &str, error: Option<&str>| -> CommandResult<Option<Value>> {
-        if inspiration_private::storage_scope(app)? != owner || app.state::<inspiration_private::PrivateState>().binding_generation.load(std::sync::atomic::Ordering::SeqCst) != binding_generation { return Err("account_changed".into()); }
+        let state = app.state::<inspiration_private::PrivateState>();
+        let _guard = state.serial.lock().map_err(|_| "storage_unavailable")?;
+        if state.binding_generation.load(Ordering::SeqCst) != binding_generation || inspiration_private::storage_scope(app)? != owner {
+            return Err("account_changed".into());
+        }
         let current = match get_store_value(app, "local-inspirations", &id)? {
             Some(current) => current,
             None => return Ok(None),
@@ -2939,34 +2958,82 @@ fn transcribe_inspiration(app: &AppHandle, record: Value, audio_path: PathBuf) -
 
 #[tauri::command]
 fn inspiration_list(app: AppHandle) -> CommandResult<Vec<Value>> {
-    if inspiration_cloud::read_binding(&app)?.is_some_and(|b| b.private_v2) { return inspiration_private::list(&app); }
-    list_store(&app, "local-inspirations")
+    inspiration_private::list(&app)
 }
 
 /// Async: adopting attachments copies multi-megabyte images on disk, which
 /// must not run on the main thread (sync commands are main-thread bound).
 #[tauri::command(async)]
 fn inspiration_save(app: AppHandle, inspiration: Value) -> CommandResult<Value> {
-    if inspiration["protection"] == "e2ee" || inspiration_cloud::read_binding(&app)?.is_some_and(|b| b.private_v2) { return inspiration_private::save(&app, inspiration); }
-    save_inspiration(&app, inspiration)
+    inspiration_private::save(&app, inspiration)
 }
 
 /// Async: deleting removes the whole attachment directory from disk.
 #[tauri::command(async)]
 fn inspiration_delete(app: AppHandle, id: String) -> CommandResult<()> {
-    if inspiration_cloud::read_binding(&app)?.is_some_and(|b| b.private_v2) { return inspiration_private::delete(&app, &id); }
-    remove_store_value(&app, "local-inspirations", &id)?;
-    vault::remove_journal(&app, &id);
-    let uuid = id.strip_prefix("inspiration:").unwrap_or(&id);
-    let directory = inspiration_dir(&app, uuid)?;
+    inspiration_private::delete(&app, &id)
+}
+
+fn delete_inspiration(app: &AppHandle, id: &str) -> CommandResult<()> {
+    let uuid = id.strip_prefix("inspiration:").unwrap_or(id);
+    if !is_safe_asset_file_name(uuid) || uuid == "." || uuid == ".." {
+        return Err("invalid_identifier".into());
+    }
+    if inspiration_cloud::SYNC_ENABLED {
+        remove_store_value(app, "local-inspirations", id)?;
+    } else if let Some(row) = get_store_value(app, "local-inspirations", id)? {
+        let deleted_at = now();
+        save_store_value(app, "local-inspirations", json!({
+            "id": id,
+            "createdAt": row["createdAt"],
+            "updatedAt": deleted_at,
+            "deletedAt": row["deletedAt"].as_str().unwrap_or(&deleted_at),
+            "version": row["version"],
+        }))?;
+    }
+    vault::remove_journal(app, id);
+    let directory = inspiration_dir(app, uuid)?;
     if directory.exists() {
         fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
     }
-    inspiration_cloud::record_local_delete(&app, &id)?;
+    inspiration_cloud::record_local_delete(app, id)?;
     Ok(())
 }
 
 // ── Lynse Memory cloud sync (plan T7/T8) ────────────────────────────────────
+
+/// Reopen the last verified partition from disk, without contacting Memory.
+/// A session without a matching partition uses the existing device store.
+#[tauri::command]
+fn inspiration_open_local_store(
+    app: AppHandle,
+    user_id: Option<String>,
+    token: Option<String>,
+    backend_host: String,
+) -> CommandResult<String> {
+    let token = token.map(zeroize::Zeroizing::new);
+    let next = inspiration_cloud::read_saved_binding(&app)?.filter(|saved| {
+        token.as_ref().is_some_and(|token| {
+            saved.matches_local_session(&backend_host, token, user_id.as_deref())
+        })
+    });
+    let state = app.state::<inspiration_private::PrivateState>();
+    let _guard = state.serial.lock().map_err(|_| "session_unavailable")?;
+    let changed = {
+        let mut current = state.local_binding.lock().map_err(|_| "session_unavailable")?;
+        if *current == next {
+            false
+        } else {
+            *current = next;
+            true
+        }
+    };
+    if changed {
+        state.binding_generation.fetch_add(1, Ordering::SeqCst);
+        inspiration_private::lock(&app);
+    }
+    inspiration_private::storage_scope(&app)
+}
 
 /// Open the account-scoped inspiration cache. The renderer calls this ONLY
 /// after it verified the Lynse access token against `GET /v1/me` and passes
@@ -2990,11 +3057,18 @@ fn inspiration_cloud_unbind(app: AppHandle) -> CommandResult<()> {
     inspiration_private::lock(&app);
     *app.state::<inspiration_private::PrivateState>().token.lock().map_err(|_| "session_unavailable")? = None;
     *app.state::<inspiration_private::PrivateState>().transport.lock().map_err(|_| "session_unavailable")? = None;
+    if !inspiration_cloud::SYNC_ENABLED {
+        *state.local_binding.lock().map_err(|_| "session_unavailable")? = None;
+        return Ok(());
+    }
     inspiration_cloud::clear_binding(&app)
 }
 
 #[tauri::command]
 fn inspiration_cloud_status(app: AppHandle) -> CommandResult<Value> {
+    if !inspiration_cloud::SYNC_ENABLED {
+        return Ok(json!({"bound":false,"paused":false}));
+    }
     if inspiration_cloud::read_binding(&app)?.is_some_and(|b| b.private_v2) { return inspiration_private::cloud_status(&app); }
     inspiration_cloud::status_view(&app)
 }
@@ -3004,6 +3078,7 @@ fn inspiration_cloud_status(app: AppHandle) -> CommandResult<Value> {
 /// renderer's keychain, never persisted by this module).
 #[tauri::command(async)]
 async fn inspiration_cloud_sync(app: AppHandle, token: String) -> CommandResult<Value> {
+    inspiration_cloud::require_sync_enabled()?;
     use sha2::{Digest,Sha256};
     if !inspiration_cloud::read_binding(&app)?.is_some_and(|binding|binding.token_fingerprint==format!("{:x}",Sha256::digest(token.as_bytes()))) { return Err("account_changed".into()); }
     if inspiration_cloud::read_binding(&app)?.is_some_and(|b| b.private_v2) { return inspiration_private::cloud::sync(&app, token).await; }
@@ -3012,28 +3087,31 @@ async fn inspiration_cloud_sync(app: AppHandle, token: String) -> CommandResult<
 
 #[tauri::command]
 async fn inspiration_transcribe(app: AppHandle, id: String) -> CommandResult<Value> {
-    let record = get_store_value(&app, "local-inspirations", &id)?.ok_or("Inspiration not found")?;
-    let audio_file = record.get("audio")
-        .and_then(|audio| audio.get("file"))
-        .and_then(Value::as_str)
-        .ok_or("Inspiration has no audio")?
-        .to_owned();
-    let uuid = id.strip_prefix("inspiration:").unwrap_or(&id);
-    let mut audio_path = inspiration_dir(&app, uuid)?.join(&audio_file);
-    if !audio_path.exists() { audio_path = inspiration_dir(&app, uuid)?.join(format!("{audio_file}.bin")); }
-    if !audio_path.exists() {
-        return Err("灵感音频文件不存在".to_owned());
-    }
-    let mut record = record;
-    let object = record.as_object_mut().ok_or("Stored record must be an object")?;
-    object.insert("transcriptStatus".to_owned(), json!("pending"));
-    object.insert("updatedAt".to_owned(), json!(now()));
-    let record = save_store_value(&app, "local-inspirations", record)?;
-    vault::sync_journal(&app, &record);
-    let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || transcribe_inspiration(&handle, record, audio_path))
-        .await
-        .map_err(|error| error.to_string())?
+    let generation = app.state::<inspiration_private::PrivateState>().binding_generation.load(Ordering::SeqCst);
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<inspiration_private::PrivateState>();
+        let (record, audio_path, owner) = {
+            let _guard = state.serial.lock().map_err(|_| "storage_unavailable")?;
+            if state.binding_generation.load(Ordering::SeqCst) != generation {
+                return Err("account_changed".into());
+            }
+            let owner = inspiration_private::storage_scope(&app)?;
+            let mut record = get_store_value(&app, "local-inspirations", &id)?.ok_or("Inspiration not found")?;
+            if inspiration_private::protected(&record) { return Err("encrypted_ai_forbidden".into()); }
+            let audio_file = record["audio"]["file"].as_str().ok_or("Inspiration has no audio")?;
+            let uuid = id.strip_prefix("inspiration:").unwrap_or(&id);
+            let directory = inspiration_dir(&app, uuid)?;
+            let mut audio_path = directory.join(audio_file);
+            if !audio_path.exists() { audio_path = directory.join(format!("{audio_file}.bin")); }
+            if !audio_path.exists() { return Err("闪记录音文件不存在".into()); }
+            record["transcriptStatus"] = json!("pending");
+            record["updatedAt"] = json!(now());
+            let record = save_store_value(&app, "local-inspirations", record)?;
+            vault::sync_journal(&app, &record);
+            (record, audio_path, owner)
+        };
+        transcribe_inspiration(&app, record, audio_path, owner, generation)
+    }).await.map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -4289,7 +4367,9 @@ fn resolve_local_media_path(app: &AppHandle, id: String) -> CommandResult<PathBu
             return Err("Unsafe local media asset name".to_owned());
         }
     }
-    let path = if let Some(file) = id.strip_prefix("staging:") {
+    let path = if cloud_audio::is_cached_id(&id) && asset_file.is_none() {
+        cloud_audio::path_for_id(app, &id)?
+    } else if let Some(file) = id.strip_prefix("staging:") {
         if !is_safe_asset_file_name(file) {
             return Err("Unsafe local media asset name".to_owned());
         }
@@ -4384,8 +4464,21 @@ async fn local_audio_waveform(
         .decode_utf8()
         .map_err(|e| e.to_string())?
         .into_owned();
+    let is_cached_cloud = cloud_audio::is_cached_id(&id);
     let path = resolve_local_media_path(&app, id)?;
-    tauri::async_runtime::spawn_blocking(move || audio_contract::waveform::cached(&path))
+    tauri::async_runtime::spawn_blocking(move || {
+        use audio_contract::waveform::{self, Waveform};
+        if !is_cached_cloud {
+            return waveform::cached(&path);
+        }
+        waveform::cached_with(&path, || waveform::extract(&path).or_else(|_| {
+            let analysis = cloud_audio::analyze(&app, &path)?;
+            Ok(Waveform {
+                peaks: cloud_audio::summarize_peaks(&analysis.peaks, 256),
+                duration_ms: (analysis.duration_sec * 1000.0).round() as u64,
+            })
+        }))
+    })
         .await
         .map_err(|e| e.to_string())?
 }
@@ -5636,10 +5729,13 @@ pub fn run() {
             inspiration_list, inspiration_save, inspiration_delete, inspiration_transcribe, inspiration_audio_url,
             inspiration_image_url, inspiration_stage_image, inspiration_stage_image_from_path,
             inspiration_stage_image_from_clipboard, inspiration_capture_from_iphone,
-            inspiration_cloud_bind, inspiration_cloud_unbind, inspiration_cloud_status,
+            inspiration_open_local_store, inspiration_cloud_bind, inspiration_cloud_unbind, inspiration_cloud_status,
             inspiration_cloud_sync,
             inspiration_voice::inspiration_voice_start, inspiration_voice::inspiration_voice_stop,
             inspiration_voice::inspiration_voice_cancel, inspiration_voice::inspiration_voice_state,
+            lynclaw_notes::lynclaw_notes_list, lynclaw_notes::lynclaw_note_create,
+            lynclaw_notes::lynclaw_note_read, lynclaw_notes::lynclaw_note_update,
+            lynclaw_notes::lynclaw_note_delete,
             local_stt_model_status, local_stt_download_model, local_stt_delete_model,
             local_transcription_transcribe, local_transcription_start, local_transcription_retry, local_transcription_list_hotword_packages,
             local_transcription_save_hotword_package, local_transcription_delete_hotword_package,
@@ -5680,6 +5776,7 @@ pub fn run() {
             open_feedback_window,
             open_report_window,
             report_screenshot::report_capture_main_screenshot,
+            report_screenshot::report_save_annotated_screenshot,
             cnb_report::report_submit_cnb_issue,
             open_logs_folder,
             wechat_auth::wechat_auth_window, wechat_auth::wechat_auth_window_close,
@@ -5716,6 +5813,9 @@ pub fn run() {
             window_effects::window_effects_mode,
             audio_editor::audio_editor_status,
             audio_editor::audio_editor_ensure_runtime,
+            cloud_audio::cloud_audio_get,
+            cloud_audio::cloud_audio_download,
+            cloud_audio::cloud_audio_analyze,
             audio_editor::audio_editor_trim,
             audio_editor::audio_editor_merge,
             audio_editor::audio_editor_remove_silence,

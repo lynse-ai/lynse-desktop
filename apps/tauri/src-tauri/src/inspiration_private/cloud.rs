@@ -162,6 +162,7 @@ fn persist_operation(app: &AppHandle, row: &Value, op: Value) -> CommandResult<(
     save_ops(app, &pending)
 }
 pub fn queue(app: &AppHandle, row: &Value) -> CommandResult<()> {
+    if !inspiration_cloud::SYNC_ENABLED { return Ok(()); }
     persist_operation(app, row, make_operation(app, row)?)
 }
 pub(super) fn transport(app: &AppHandle, owner: &str) -> CommandResult<Option<Zeroizing<String>>> {
@@ -198,6 +199,7 @@ async fn request_scoped(
     body: Option<&Value>,
     operation: Option<&str>,
 ) -> CommandResult<Value> {
+    inspiration_cloud::require_sync_enabled()?;
     let (binding, generation, token) = {
         let state = app.state::<PrivateState>();
         let _guard = state.serial.lock().map_err(|_| "session_unavailable")?;
@@ -773,6 +775,7 @@ pub(super) fn cleanup_conversion(app: &AppHandle, row: &Value) -> CommandResult<
 }
 #[tauri::command]
 pub async fn inspiration_toggle_protection(app: AppHandle, id: String) -> CommandResult<Value> {
+    inspiration_cloud::require_sync_enabled()?;
     let generation = app
         .state::<PrivateState>()
         .generation

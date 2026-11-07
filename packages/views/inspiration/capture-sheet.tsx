@@ -147,11 +147,13 @@ export function InspirationCaptureSheet() {
   // when the capture sheet is opened from the home page before visiting it.
   const { data: inspirations = [] } = useQuery({
     queryKey: ["inspirations", accountScope],
+    networkMode: "always",
     queryFn: () => desktopApi!.list(),
     enabled: Boolean(desktopApi) && !binding,
   });
   const { data: editingRecord } = useQuery({
     queryKey: ["inspiration-detail", accountScope, editId, generation],
+    networkMode: "always",
     queryFn: () => desktopApi!.read!(editId!),
     enabled: !!desktopApi?.read && !!editId && open && !binding,
     gcTime: 0,
@@ -871,7 +873,7 @@ export function InspirationCaptureSheet() {
                 <span className="text-3xs text-muted-foreground/70">
                   {t("inspiration.save_hint")}
                 </span>
-                {mode === "note" && (<Button variant="ghost" size="icon-sm" aria-label={t(protection === "e2ee" ? "inspiration_private.decrypt" : "inspiration_private.encrypt")} title={t(protection === "e2ee" ? "inspiration_private.decrypt" : "inspiration_private.encrypt")} aria-pressed={protection === "e2ee"} disabled={privacyBusy || saving || recording || !!audio} onClick={() => void togglePrivacy()}>
+                {mode === "note" && featureFlags.inspirationCloudSync && (<Button variant="ghost" size="icon-sm" aria-label={t(protection === "e2ee" ? "inspiration_private.decrypt" : "inspiration_private.encrypt")} title={t(protection === "e2ee" ? "inspiration_private.decrypt" : "inspiration_private.encrypt")} aria-pressed={protection === "e2ee"} disabled={privacyBusy || saving || recording || !!audio} onClick={() => void togglePrivacy()}>
                       {privacyBusy ? <Loader2 className="size-4 animate-spin" /> : protection === "e2ee" ? <LockKeyhole className="size-4" /> : <LockKeyholeOpen className="size-4" />}
                     </Button>)}
                 <Button

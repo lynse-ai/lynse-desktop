@@ -70,6 +70,13 @@ pub fn seed_from_windows(path: &Path, windows: &[(u64, f32)]) -> Result<(), Stri
 /// Reads bounded chunks of PCM instead of decoding the complete meeting into
 /// a browser AudioBuffer. Every channel contributes, including right-only audio.
 pub fn cached(path: &Path) -> Result<Waveform, String> {
+    cached_with(path, || extract(path))
+}
+
+pub fn cached_with(
+    path: &Path,
+    compute: impl FnOnce() -> Result<Waveform, String>,
+) -> Result<Waveform, String> {
     let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
     let modified_nanos = metadata
         .modified()
@@ -88,7 +95,7 @@ pub fn cached(path: &Path) -> Result<Waveform, String> {
             }
         }
     }
-    let waveform = extract(path)?;
+    let waveform = compute()?;
     let cache = Cache {
         version: 1,
         bytes: metadata.len(),

@@ -7,6 +7,7 @@ import { cn } from "@lynse/ui/lib/utils";
 import { Button } from "@lynse/ui/components/ui/button";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { featureFlags } from "../feature-flags";
 import {
   AlertCircle,
   BookOpen,
@@ -464,6 +465,7 @@ export function InspirationPage() {
   const { data: inspirations = [], isLoading } = useQuery({
     queryKey,
     queryFn: () => desktopApi!.list(),
+    networkMode: "always",
     enabled: Boolean(desktopApi) && !binding,
     // While any memo is awaiting its transcript, poll so completed texts
     // appear without a manual refresh.
@@ -477,6 +479,7 @@ export function InspirationPage() {
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["inspirations"] });
   const deleteMutation = useMutation({
+    networkMode: "always",
     mutationFn: async (id: string) => {
       const record = inspirations.find((item) => item.id === id);
       if (record?.protection === "e2ee" && !(await ensureInspirationUnlocked())) throw new Error("vault_locked");
@@ -506,6 +509,7 @@ export function InspirationPage() {
     onSettled: () => setDeletingId(null),
   });
   const retryMutation = useMutation({
+    networkMode: "always",
     mutationFn: (id: string) => desktopApi!.transcribe(id),
     onSuccess: () => void invalidate(),
     onError: (error) => toast.error(String(error)),
@@ -626,8 +630,8 @@ export function InspirationPage() {
         <h2 className="text-sm font-medium text-foreground">{t("inspiration.title")}</h2>
         {desktopApi && (
           <div className="flex items-center gap-2">
-            {desktopApi.privacy && <Button variant="ghost" size="icon-sm" title={t("inspiration_private.manage")} aria-label={t("inspiration_private.manage")} onClick={() => void openPrivacyDialog("manage")}><ShieldCheck className="size-4" /></Button>}
-            {cloudStatus?.bound && (
+            {desktopApi.privacy && (featureFlags.inspirationCloudSync || accountScope !== "unbound") && <Button variant="ghost" size="icon-sm" title={t("inspiration_private.manage")} aria-label={t("inspiration_private.manage")} onClick={() => void openPrivacyDialog("manage")}><ShieldCheck className="size-4" /></Button>}
+            {cloudStatus?.bound ? (
               <button
                 type="button"
                 title={cloudStatus.lastError ?? cloudStatus.apiBase ?? ""}
@@ -651,6 +655,8 @@ export function InspirationPage() {
                       ? t("inspiration.cloud_syncing", { count: cloudStatus.pendingOps ?? 0 })
                       : t("inspiration.cloud_synced")}
               </button>
+            ) : (
+              <span className="rounded-full bg-muted px-2 py-0.5 text-3xs text-muted-foreground">{t("inspiration.local_only")}</span>
             )}
             <div className="flex items-center rounded-lg border border-border/50 p-0.5">
               <button

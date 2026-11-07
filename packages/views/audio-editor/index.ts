@@ -3,5 +3,6 @@ export { useAudioEditorStore, type AudioEditorItem } from "./store";
 export {
   getDesktopAudioEditorApi,
   type AudioEditorProgress,
+  type CloudAudioProgress,
   type DesktopAudioEditorApi,
 } from "./api";

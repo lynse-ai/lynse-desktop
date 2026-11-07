@@ -14,11 +14,21 @@ import { Button } from "@lynse/ui/components/ui/button";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useAddSummary, useReplaceSummaryTemplate, useRerunSummary, useTemplateCategories, useFileDetail } from "./hooks/use-files";
 import { isInsufficientCreditsError } from "../layout/use-user-credits";
-import type { FileConclusion } from "./types";
+import { isLynclawSummaryTabsEnabled } from "../feature-flags";
+import { LYNCLAW_FORMAT_LABELS } from "./lynclaw-notes";
+import type { LynclawSummaryFormat } from "./lynclaw-summary";
+import type { FileConclusion, PromptTemplate } from "./types";
 import { useQueryClient } from "@tanstack/react-query";
 import { TemplateSelector } from "./template-selector";
 
 export type SummaryTemplateDialogMode = "add" | "rerun" | "replace";
+
+/**
+ * Pseudo-template ids for the beta Lynclaw entries. Never sent to the server
+ * task pipeline — handleApply routes them to the client-side generation that
+ * inserts the result as a real conclusion (see onLynclawApply).
+ */
+const LYNCLAW_TEMPLATE_IDS = { markdown: "__lynclaw_markdown__", html: "__lynclaw_html__" } as const;
 
 const FALLBACK_TEXT = {
   en: {
@@ -38,6 +48,7 @@ const FALLBACK_TEXT = {
     replaceFailed: "Template change failed",
     unknownError: "Unknown error",
     creditsInsufficient: "Insufficient credits to process. Please recharge and try again.",
+    lynclawHint: "Beta · Generated on-device from the transcript",
   },
   "zh-Hans": {
     addTitle: "添加总结",
@@ -56,6 +67,7 @@ const FALLBACK_TEXT = {
     replaceFailed: "更换模板失败",
     unknownError: "未知错误",
     creditsInsufficient: "积分不足，无法完成处理，请充值后重试",
+    lynclawHint: "Beta · 客户端基于逐字稿直接生成",
   },
   ja: {
     addTitle: "要約を追加",
@@ -74,6 +86,7 @@ const FALLBACK_TEXT = {
     replaceFailed: "テンプレートの変更に失敗しました",
     unknownError: "不明なエラー",
     creditsInsufficient: "処理に必要なポイントが不足しています。チャージしてから再度お試しください。",
+    lynclawHint: "Beta · 端末上で文字起こしから直接生成",
   },
 } as const;
 
@@ -100,9 +113,15 @@ interface ResummarizeDialogProps {
     mode: SummaryTemplateDialogMode,
     options?: { pendingId?: string; conclusion?: FileConclusion },
   ) => void;
+  /**
+   * Beta Lynclaw entries: generate the summary client-side from the transcript
+   * and insert it as a real cloud conclusion. Provided only while the feature
+   * gate is unlocked; when absent the pseudo-templates are hidden entirely.
+   */
+  onLynclawApply?: (fileId: string, format: LynclawSummaryFormat) => Promise<FileConclusion>;
 }
 
-export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mode, onStarted, onFinished }: ResummarizeDialogProps) {
+export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mode, onStarted, onFinished, onLynclawApply }: ResummarizeDialogProps) {
   const { t, i18n } = useTranslation();
   const qc = useQueryClient();
   const { data: categories } = useTemplateCategories();
@@ -113,17 +132,6 @@ export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mo
 
   const [selectedId, setSelectedId] = useState<string>("");
 
-  // Flat list + default template
-  const allTemplates = useMemo(() => {
-    if (!categories) return [];
-    return categories.flatMap((c) => c.templates);
-  }, [categories]);
-
-  const defaultTemplate = useMemo(() => {
-    return allTemplates.find((tpl) => tpl.isDefault === 1) ?? allTemplates[0];
-  }, [allTemplates]);
-
-  const effectiveId = selectedId || defaultTemplate?.id || "";
   const fallback = FALLBACK_TEXT[getFallbackLanguage(i18n.language)];
   const text = useCallback(
     (key: string, fallbackValue: string) => {
@@ -133,6 +141,47 @@ export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mo
     [t],
   );
 
+  const lynclawEnabled = isLynclawSummaryTabsEnabled() && !!onLynclawApply;
+  const serverCategories = useMemo(() => categories ?? [], [categories]);
+
+  // Beta Lynclaw pseudo-templates: generated from the transcript on-device and
+  // inserted as real conclusions, so they sit alongside the server templates
+  // and stay hidden entirely while the beta gate is locked.
+  const lynclawTemplates = useMemo<PromptTemplate[]>(() => {
+    if (!lynclawEnabled) return [];
+    const hint = text("workspace.lynclaw_summary_beta_hint", fallback.lynclawHint);
+    const label = t("workspace.lynclaw_summary");
+    return (["markdown", "html"] as const).map((format) => ({
+      id: LYNCLAW_TEMPLATE_IDS[format],
+      name: `${label} · ${LYNCLAW_FORMAT_LABELS[format]}`,
+      alias: hint === "workspace.lynclaw_summary_beta_hint" ? "" : hint,
+      category: label,
+      tags: "Beta",
+      isDefault: 0,
+      status: 1,
+      sortOrder: 0,
+      iconUrl: "",
+      contentFormat: format,
+    }));
+  }, [lynclawEnabled, t, text, fallback]);
+
+  // Flat list + default template
+  const allCategories = useMemo(
+    () => lynclawTemplates.length
+      ? [...serverCategories, { category: lynclawTemplates[0]!.category, templates: lynclawTemplates }]
+      : serverCategories,
+    [serverCategories, lynclawTemplates],
+  );
+  const allTemplates = useMemo(() => allCategories.flatMap((c) => c.templates), [allCategories]);
+
+  const defaultTemplate = useMemo(() => {
+    // Default stays a server template — Lynclaw entries are opt-in additions.
+    const serverTemplates = serverCategories.flatMap((c) => c.templates);
+    return serverTemplates.find((tpl) => tpl.isDefault === 1) ?? serverTemplates[0] ?? lynclawTemplates[0];
+  }, [serverCategories, lynclawTemplates]);
+
+  const effectiveId = selectedId || defaultTemplate?.id || "";
+
   const handleApply = useCallback(async () => {
     if (!fileId || !effectiveId || (mode === "replace" && !conclusionId)) return;
     const currentFileId = fileId;
@@ -140,6 +189,15 @@ export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mo
     const currentTemplateId = effectiveId;
     const currentMode = mode;
     const currentTemplateName = allTemplates.find((tpl) => tpl.id === currentTemplateId)?.name ?? "";
+    // Beta Lynclaw entries never reach the server task pipeline — they route
+    // to the client-side generation + conclusion insert.
+    const lynclawFormat: LynclawSummaryFormat | null = lynclawEnabled
+      ? currentTemplateId === LYNCLAW_TEMPLATE_IDS.html
+        ? "html"
+        : currentTemplateId === LYNCLAW_TEMPLATE_IDS.markdown
+          ? "markdown"
+          : null
+      : null;
     const pendingId =
       currentMode === "add"
         ? `pending-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
@@ -152,7 +210,9 @@ export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mo
     }
     try {
       let conclusion: FileConclusion | undefined;
-      if (currentMode === "add") {
+      if (lynclawFormat) {
+        conclusion = await onLynclawApply!(currentFileId, lynclawFormat);
+      } else if (currentMode === "add") {
         const result = await addSummary.mutateAsync({
           aiTaskType: "CONCLUSION",
           fileId: currentFileId,
@@ -202,7 +262,7 @@ export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mo
       );
       onFinished?.(currentFileId, false, currentMode, { pendingId });
     }
-  }, [fileId, effectiveId, mode, conclusionId, allTemplates, onStarted, onOpenChange, qc, addSummary, replaceSummary, rerunSummary, text, fallback, onFinished]);
+  }, [fileId, effectiveId, mode, conclusionId, allTemplates, lynclawEnabled, onLynclawApply, onStarted, onOpenChange, qc, addSummary, replaceSummary, rerunSummary, text, fallback, onFinished]);
 
   const handleClose = useCallback(
     (nextOpen: boolean) => {
@@ -234,7 +294,7 @@ export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mo
 
         {/* Template list */}
         <TemplateSelector
-          categories={categories ?? []}
+          categories={allCategories}
           selectedId={effectiveId}
           onSelect={setSelectedId}
           scrollHeight="h-72"

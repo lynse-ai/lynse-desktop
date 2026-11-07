@@ -6,8 +6,8 @@ export type { ConnectorConnectionRequest, ConnectorRequestResult, ConnectorAccou
 export { parseWithFallback } from "./schema";
 export { getContextIdentity, listContextInbox, getContextInboxItem, actOnContextInbox, syncContextMeetings, downloadContextReview, isContextExportPath, getContextPreferences, setContextPreferences, deviceTimeZone, GLOBAL_CONTEXT_SCOPE } from "./context";
 export type { ContextInboxItem, ContextInboxResponse, ContextInboxDisabledResponse, ContextInboxResult, ContextInboxAction, ContextScope, ContextPreferences, ContextPreferencesChange } from "./context";
-export { summarizeTranscript, SUMMARY_HTML_STYLES } from "./summarize";
-export type { SummarizeTranscriptInput, SummarizeTranscriptResult, SummaryHtmlStyle } from "./summarize";
+export { summarizeTranscript, SUMMARY_HTML_STYLES, MAX_SUMMARY_TEXT_MARKS, MAX_SUMMARY_IMAGE_MARKS } from "./summarize";
+export type { SummarizeTranscriptInput, SummarizeTranscriptResult, SummaryHtmlStyle, SummaryTextMark, SummaryImageMark } from "./summarize";
 export { generateChapters } from "./chapters";
 export type { GenerateChaptersInput, GenerateChaptersResult, GeneratedChapter, ChapterUtterance } from "./chapters";
 export { updateMeetingNotes, normalizeMeetingNotes } from "./notes";

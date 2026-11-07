@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import type { ChapterDocument, FileTranscription } from "./types";
+import type { ChapterDocument } from "./types";
 import type { ChapterSegment } from "./semantic-chapters";
 
 /** Cloud generation results are derived from a canonical transcript snapshot;
@@ -12,7 +12,7 @@ export function cloudChaptersQueryKey(fileId: string | null): readonly unknown[]
 /** Read the same flexible transcript envelope used by the 转写 tab, but keep
  *  both timestamps and stable fallback ids so chapter boundaries can seek. */
 export function cloudTranscriptionToChapterSegments(
-  transcription: FileTranscription | undefined,
+  transcription: unknown,
 ): ChapterSegment[] {
   let records: unknown[] = [];
   if (Array.isArray(transcription)) {
@@ -28,16 +28,21 @@ export function cloudTranscriptionToChapterSegments(
     }
   }
 
-  return records.map((row, index) => {
+  return records.flatMap((row, index) => {
+    if (!row || typeof row !== "object") return [];
     const segment = row as Record<string, unknown>;
-    const text = String(segment.text ?? "");
-    return {
+    const text = [segment.text, segment.recognizedText, segment.content, segment.transcriptionText]
+      .find((value): value is string => typeof value === "string" && !!value.trim()) ?? "";
+    const startMs = segment.beginTime ?? segment.startMs;
+    const endMs = segment.endTime ?? segment.endMs;
+    const speaker = segment.speakerName ?? segment.speaker;
+    return [{
       id: segment.id ? String(segment.id) : `cloud-${String(index).padStart(6, "0")}`,
       text,
-      startMs: typeof segment.beginTime === "number" ? segment.beginTime : undefined,
-      endMs: typeof segment.endTime === "number" ? segment.endTime : undefined,
-      speaker: segment.speakerName ? String(segment.speakerName) : null,
-    };
+      startMs: typeof startMs === "number" ? startMs : undefined,
+      endMs: typeof endMs === "number" ? endMs : undefined,
+      speaker: speaker ? String(speaker) : null,
+    }];
   });
 }
 

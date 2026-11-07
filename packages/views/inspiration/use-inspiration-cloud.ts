@@ -15,6 +15,8 @@ import { api } from "@lynse/core/api";
 import { closePrivacyDialog, useInspirationPrivacy } from "./privacy-state";
 import { useInspirationDetailStore } from "./detail-store";
 import { useInspirationCaptureStore } from "./capture-store";
+import { getDesktopInspirationApi } from "./desktop-api";
+import { featureFlags } from "../feature-flags";
 import type { InspirationCloudStatus } from "./types";
 
 const SYNC_DEBOUNCE_MS = 1_500;
@@ -68,7 +70,14 @@ export function useInspirationCloud(manageLifecycle = false) {
     queryClient.removeQueries({ queryKey: CLOUD_QUERY_KEY });
     void (async () => {
       try {
-        if (isAuthenticated && enabled) {
+        if (!featureFlags.inspirationCloudSync) {
+          const scope = await getDesktopInspirationApi()?.openLocalStore?.(
+            isAuthenticated ? user?.id ?? null : null,
+            isAuthenticated ? api().getToken() : null,
+            accountOrigin,
+          );
+          if (!cancelled && scope) useInspirationPrivacy.setState({ accountScope: scope });
+        } else if (isAuthenticated && enabled) {
           const binding = await bindInspirationCloud();
           if (!cancelled && binding) useInspirationPrivacy.setState({ accountScope: binding.accountScope ?? "unbound" });
         } else {
@@ -77,8 +86,10 @@ export function useInspirationCloud(manageLifecycle = false) {
       } catch {
         // Native code retains an offline binding only for the same credential,
         // backend and Memory service; a different account is already unbound.
-        const cached = await fetchInspirationCloudStatus().catch(() => null);
-        if (!cancelled && cached?.bound && cached.accountScope) useInspirationPrivacy.setState({ accountScope: cached.accountScope });
+        if (enabled) {
+          const cached = await fetchInspirationCloudStatus().catch(() => null);
+          if (!cancelled && cached?.bound && cached.accountScope) useInspirationPrivacy.setState({ accountScope: cached.accountScope });
+        }
       }
       if (!cancelled) { useInspirationPrivacy.setState({ binding: false }); void queryClient.invalidateQueries({ queryKey: CLOUD_QUERY_KEY }); }
     })();

@@ -53,7 +53,7 @@ test("first setup requires an explicit folder selection and starts automatic org
   await expect(page.getByRole("button",{name:/Create topic|Approve and publish|Show connections/})).toHaveCount(0);
 });
 
-test("graph selection previews knowledge and full reading restores its view",async({page,mockServer})=>{
+test("graph selection shows the full topic and the full-page reader restores the graph",async({page,mockServer})=>{
   const errors:string[]=[];page.on("pageerror",error=>errors.push(error.message));page.on("console",message=>{if(message.type()==="error")errors.push(message.text());});
   await openWorkspace(page,mockServer.url);await installAutomaticWiki(page);await openWiki(page);
   const graph=page.getByRole("group",{name:"Knowledge graph canvas",exact:true});
@@ -78,12 +78,12 @@ test("graph selection previews knowledge and full reading restores its view",asy
   const preview=page.getByRole("complementary",{name:"Topic overview and updates",exact:true});
   await expect(preview.getByRole("heading",{name:"灵光记项目",exact:true})).toBeVisible();
   await page.screenshot({path:test.info().outputPath("wiki-compact-preview.png"),animations:"disabled"});
-  await expect(page.getByRole("heading",{name:"当前情况",exact:true})).toHaveCount(0);
+  await expect(preview.getByRole("heading",{name:"当前情况",exact:true})).toBeVisible();
   const beforeZoom=await graph.locator("[data-graph-node]").first().getAttribute("transform");
   await page.getByRole("button",{name:"Zoom in",exact:true}).click();
   await expect(graph.locator("[data-graph-node]").first()).not.toHaveAttribute("transform",beforeZoom!);
   const camera=await graph.locator("[data-graph-node]").first().getAttribute("transform");
-  await preview.getByRole("button",{name:"Read full topic",exact:true}).click();
+  await preview.getByRole("button",{name:"Full-page reader",exact:true}).click();
   await expect(sidebar).toHaveCount(0);
   await expect(page.getByRole("heading",{name:"当前情况",exact:true})).toBeVisible();
   await page.getByRole("button",{name:"Back to knowledge base",exact:true}).click();
@@ -95,9 +95,9 @@ test("graph selection previews knowledge and full reading restores its view",asy
   await page.keyboard.press("Escape");
   await preview.getByRole("button",{name:"Add context or a correction",exact:true}).click();
   const dialog=page.getByRole("dialog",{name:"Add context or a correction",exact:true});await dialog.getByRole("textbox").fill("人工补充：原型还需要做无障碍检查。");await dialog.getByRole("button",{name:"Save",exact:true}).click();
-  await preview.getByRole("button",{name:"Read full topic",exact:true}).click();await expect(page.getByText("人工补充：原型还需要做无障碍检查。",{exact:true})).toBeVisible();
-  await page.getByText("People and details",{exact:true}).click();await expect(page.getByRole("heading",{name:"小林",exact:true})).toBeVisible();
-  await page.getByText("Version history",{exact:true}).click();await page.getByText(/Oct 20.*Published/).click();await expect(page.getByRole("heading",{name:"历史情况",exact:true})).toBeVisible();
+  await expect(preview.getByText("人工补充：原型还需要做无障碍检查。",{exact:true})).toBeVisible();
+  await preview.getByText("People and details",{exact:true}).click();await expect(preview.getByRole("heading",{name:"小林",exact:true})).toBeVisible();
+  await preview.getByText("Version history",{exact:true}).click();await preview.getByText(/Oct 20.*Published/).click();await expect(preview.getByRole("heading",{name:"历史情况",exact:true})).toBeVisible();
   expect(errors).toEqual([]);
 });
 
@@ -129,8 +129,8 @@ test("range updates, pause and resume preserve the saved folder choices",async({
 test("service failure keeps the last reading version and exposes a retry",async({page,mockServer})=>{
   await openWorkspace(page,mockServer.url);await installAutomaticWiki(page);await openWiki(page);
   await page.evaluate(async()=>{const runtime=window as unknown as {desktopAPI:{workbench:{wiki:(request:{action:"state"})=>Promise<{topics:Record<string,unknown>[]}>}};wikiTest:{patch:(status:Record<string,unknown>,wiki:Record<string,unknown>)=>void}};const wiki=await runtime.desktopAPI.workbench.wiki({action:"state"});wiki.topics[0]!.error="Unavailable";wiki.topics[0]!.stale=true;runtime.wikiTest.patch({error:"Update failed"},wiki);});
-  await page.getByRole("group").getByRole("button",{name:"灵光记项目",exact:true}).click();await page.getByRole("button",{name:"Read full topic",exact:true}).click();
-  const reader=page.getByRole("article",{name:"灵光记项目",exact:true}).filter({has:page.getByRole("heading",{name:"当前情况",exact:true})});
+  await page.getByRole("group").getByRole("button",{name:"灵光记项目",exact:true}).click();
+  const reader=page.getByRole("complementary").getByRole("article",{name:"灵光记项目",exact:true});
   await expect(reader.getByRole("heading",{name:"当前情况",exact:true})).toBeVisible();await expect(reader.getByRole("alert")).toBeVisible();
   await reader.getByRole("button",{name:"Retry",exact:true}).click();await expect(page.getByRole("alert")).toHaveCount(0);
 });
@@ -143,11 +143,14 @@ test("Chinese graph is usable with keyboard, narrow windows and enlarged text",a
   await expect(page.getByRole("complementary",{name:"专题概览与更新",exact:true}).getByRole("heading",{name:"灵光记项目",exact:true})).toBeVisible();
   await page.screenshot({path:test.info().outputPath("wiki-graph-zh.png"),animations:"disabled"});
   await page.setViewportSize({width:680,height:800});await page.evaluate(()=>{document.documentElement.style.fontSize="24px";});
-  await expect(page.getByRole("button",{name:"阅读完整专题",exact:true})).toBeVisible();
+  await expect(page.getByRole("button",{name:"全页阅读",exact:true})).toBeVisible();
+  const bodyHeading=page.getByRole("complementary",{name:"专题概览与更新",exact:true}).getByRole("heading",{name:"当前情况",exact:true});
   const graph=page.getByRole("group",{name:"知识图谱画布",exact:true});
   const heading=page.getByRole("complementary",{name:"专题概览与更新",exact:true}).getByRole("heading",{name:"灵光记项目",exact:true});
   expect((await heading.boundingBox())!.y).toBeGreaterThan((await graph.boundingBox())!.y+(await graph.boundingBox())!.height);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth)).toBe(true);
+  await bodyHeading.scrollIntoViewIfNeeded();
+  await expect(bodyHeading).toBeInViewport();
   await page.screenshot({path:test.info().outputPath("wiki-narrow-zoom-zh.png"),animations:"disabled"});
   await page.setViewportSize({width:1280,height:900});
   await page.evaluate(()=>{document.documentElement.style.fontSize="";document.documentElement.style.zoom="2";});

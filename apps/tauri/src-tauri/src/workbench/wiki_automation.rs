@@ -1914,7 +1914,13 @@ pub(super) async fn run(
                         let was_auto_retried = current
                             .partial_compilation
                             .as_ref()
-                            .is_some_and(|partial| partial.auto_retry_used);
+                            .is_some_and(|partial| {
+                                partial.version == *version && partial.auto_retry_used
+                            });
+                        let had_partial = current
+                            .partial_compilation
+                            .as_ref()
+                            .is_some_and(|partial| partial.version == *version);
                         let page_is_partial = page.partial;
                         let page_failure_keys = page.partial_failure_keys.clone();
                         publish_automatic(&root, current, page, version)?;
@@ -1922,7 +1928,7 @@ pub(super) async fn run(
                             Some(PartialCompilation {
                                 version: version.clone(),
                                 failure_keys: page_failure_keys,
-                                auto_retry_used: was_auto_retried,
+                                auto_retry_used: was_auto_retried || had_partial,
                             })
                         } else {
                             None

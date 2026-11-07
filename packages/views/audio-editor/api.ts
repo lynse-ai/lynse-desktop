@@ -9,12 +9,29 @@ export interface AudioEditorProgress {
   detail?: string | null;
 }
 
+export interface CloudAudioKey {
+  scope: string;
+  fileId: string;
+  revision: string;
+  extension: string | null;
+}
+
+export interface CachedCloudAudio {
+  id: string;
+  url: string;
+}
+
+export interface CloudAudioProgress {
+  receivedBytes: number;
+  totalBytes: number | null;
+}
+
 export interface DesktopAudioEditorApi {
   /** Whether the shared FFmpeg runtime is already resolvable. */
   status: () => Promise<{ ffmpegAvailable: boolean }>;
   /** Download the shared FFmpeg runtime on first use (no-op when present). */
   ensureRuntime: () => Promise<{ ffmpegAvailable: boolean }>;
-  /** `source` is a filesystem path or a `local:<uuid>` record id. */
+  /** `source` is a filesystem path, local record ID, or cached cloud audio ID. */
   trim: (
     source: string,
     startSec: number,
@@ -23,6 +40,13 @@ export interface DesktopAudioEditorApi {
     overwrite?: boolean,
   ) => Promise<LocalTranscriptionRecord>;
   merge: (sources: string[], outName?: string) => Promise<LocalTranscriptionRecord>;
+  getCloudAudio: (key: CloudAudioKey) => Promise<CachedCloudAudio | null>;
+  downloadCloudAudio: (key: CloudAudioKey, url: string, onProgress: (progress: CloudAudioProgress) => void) => Promise<CachedCloudAudio>;
+  analyzeCloudAudio: (id: string) => Promise<{
+    durationSec: number;
+    peaks: number[];
+    silenceSegments: { startSec: number; endSec: number }[];
+  }>;
   removeSilence: (
     source: string,
     options?: { thresholdDb?: number; minSilenceSec?: number; paddingSec?: number },

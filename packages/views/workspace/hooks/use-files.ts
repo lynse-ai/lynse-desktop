@@ -7,8 +7,10 @@ import {
 } from "@tanstack/react-query";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
-import { api, ApiError } from "@lynse/core/api/client";
+import { api, ApiError, type ApiClient } from "@lynse/core/api/client";
 import { getAuthStore, useAuthStore } from "@lynse/core/auth";
+import { readLynclawSummary, type LynclawSummaryFormat } from "../lynclaw-summary";
+import { deleteLynclawNotesForSources } from "../lynclaw-notes";
 import type {
   FileDetail,
   FileConclusion,
@@ -132,6 +134,7 @@ export interface SummaryTabModel {
   text: string;
   status: "ready" | "pending" | "error";
   pendingId?: string;
+  lynclawFormat?: LynclawSummaryFormat;
 }
 
 export function sortConclusionsChronologically(conclusions: FileConclusion[]): FileConclusion[] {
@@ -282,19 +285,26 @@ export function mergePendingSummaryTab({
   tabs,
   pendingId,
   conclusion,
+  lynclawName,
 }: {
   tabs: SummaryTabModel[];
   pendingId: string;
   conclusion: FileConclusion;
+  /** Localized "lynclaw总结" label, used when the inserted text is Lynclaw-encoded. */
+  lynclawName?: string;
 }): SummaryTabModel[] {
   return tabs.map((tab) => {
     if (tab.pendingId !== pendingId) return tab;
+    const lynclaw = readLynclawSummary(conclusion.conclusionText);
     return {
       key: conclusion.id,
       id: conclusion.id,
-      name: normalizeSummaryTemplateName(conclusion.templateName) ?? tab.name ?? "",
-      text: conclusion.conclusionText,
+      name: lynclaw
+        ? `${lynclawName ?? "Lynclaw"} · ${lynclaw.format === "html" ? "HTML" : "Markdown"}`
+        : normalizeSummaryTemplateName(conclusion.templateName) ?? tab.name ?? "",
+      text: lynclaw?.body ?? conclusion.conclusionText,
       status: "ready",
+      ...(lynclaw ? { lynclawFormat: lynclaw.format } : {}),
     };
   });
 }
@@ -376,14 +386,20 @@ export function useFileDetail(fileId: string | null) {
   });
 }
 
+type BusinessRequestOptions = Parameters<ApiClient["getWithParams"]>[2];
+
 /**
  * One-shot file/info lookup outside React (e.g. the chat insert guard).
  * Resolves null when the backend answers `{ code: 200, data: null }` — the
  * signature of a file id that does not exist on the currently signed-in
  * server (ids are minted per environment); hard errors still throw.
  */
-export async function fetchFileDetail(fileId: string): Promise<FileDetail | null> {
-  return api().getWithParams<FileDetail | null>("/api/business/file/info", { fileId });
+export async function fetchFileDetail(fileId: string, options?: BusinessRequestOptions): Promise<FileDetail | null> {
+  return api().getWithParams<FileDetail | null>("/api/business/file/info", { fileId }, options);
+}
+
+export function fetchCloudFileTranscription(fileId: string, options?: BusinessRequestOptions) {
+  return api().getWithParams<FileTranscription>("/api/business/file/trans/get", { fileId }, options);
 }
 
 export function useFileConclusions(fileId: string | null) {
@@ -432,9 +448,7 @@ export function useFileTranscription(fileId: string | null) {
         if (!record) throw new Error("Local transcription not found");
         return localRecordToTranscription(record);
       }
-      return api().getWithParams<FileTranscription>("/api/business/file/trans/get", {
-        fileId: fileId!,
-      });
+      return fetchCloudFileTranscription(fileId!);
     },
     enabled: !!fileId && (isLocalFileId(fileId) || isAuthenticated),
   });
@@ -443,6 +457,10 @@ export function useFileTranscription(fileId: string | null) {
 /**
  * Get a presigned download URL for the file's original audio/media.
  */
+export function fetchCloudAudioUrl(fileId: string) {
+  return api().getWithParams<string>("/api/business/file/presign/download", { fileId });
+}
+
 export function useFileAudioUrl(fileId: string | null) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
@@ -453,10 +471,7 @@ export function useFileAudioUrl(fileId: string | null) {
         return getDesktopLocalTranscriptionApi()?.getAudioUrl(fileId!) ?? null;
       }
       try {
-        const data = await api().getWithParams<string>("/api/business/file/presign/download", {
-          fileId: fileId!,
-        });
-        return data;
+        return await fetchCloudAudioUrl(fileId!);
       } catch {
         return null;
       }
@@ -510,11 +525,17 @@ export function useDeleteConclusion() {
  * the new conclusionId. Omitting teamId targets a personal file; each call
  * appends a new conclusion and never overwrites previous ones.
  */
+export function insertFileConclusion(
+  req: { fileId: string; conclusionText: string; teamId?: string },
+  options?: BusinessRequestOptions,
+) {
+  return api().post<string>("/api/business/file/conclusion/insert", req, options);
+}
+
 export function useInsertConclusion() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (req: { fileId: string; conclusionText: string; teamId?: string }) =>
-      api().post<string>("/api/business/file/conclusion/insert", req),
+    mutationFn: (req: Parameters<typeof insertFileConclusion>[0]) => insertFileConclusion(req),
     onSuccess: (_conclusionId, req) => {
       qc.invalidateQueries({ queryKey: ["file-conclusions", req.fileId] });
       qc.invalidateQueries({ queryKey: ["files"] });
@@ -717,12 +738,17 @@ export function useDeleteWorkspaceFiles() {
       }
       const workbench = getWorkbenchApi();
       if (workbench) await Promise.all(fileIds.map((id) => workbench.removeSource(id)));
+      // Best-effort: legacy Lynclaw summary notes attached to the deleted
+      // files (the standalone-note era) have no server cascade — drop the
+      // local rows so they never resurface as orphans.
+      void deleteLynclawNotesForSources(fileIds);
       return { deleted: fileIds.length };
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["files"] });
       qc.invalidateQueries({ queryKey: ["notes"] });
       qc.invalidateQueries({ queryKey: ["folder-counts"] });
+      qc.invalidateQueries({ queryKey: ["lynclaw-notes"] });
     },
   });
 }

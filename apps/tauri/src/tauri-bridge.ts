@@ -1,5 +1,6 @@
 import type { DesktopWorkbenchApi } from "@lynse/views/workbench";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import type { DesktopLynclawNotesApi } from "@lynse/views/notes";
+import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl, openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -83,6 +84,7 @@ import type {
 } from "@lynse/views/bots";
 import type {
   AudioEditorProgress,
+  CloudAudioProgress,
   DesktopAudioEditorApi,
 } from "@lynse/views/audio-editor";
 
@@ -123,6 +125,7 @@ type DesktopApi = {
     shareFile: (name: string, bytes: Uint8Array) => Promise<boolean>;
   };
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
+  lynclawNotes: DesktopLynclawNotesApi;
   cloudSync: DesktopCloudSyncApi;
   liveTranslation: DesktopLiveTranslationApi;
   workbench: DesktopWorkbenchApi;
@@ -156,8 +159,15 @@ type DesktopApi = {
     // Opens (or focuses) the standalone problem-report window (macOS; other
     // platforms use the in-app dialog).
     openReportWindow: (title?: string) => Promise<void>;
-    // Capture the main window as JPEG, with a platform-compatible preview URL.
-    captureScreenshot: () => Promise<{ path: string; url: string }>;
+    // Capture the main window as JPEG, with a platform-compatible preview
+    // URL. `background` is the theme color the snapshot's transparent
+    // vibrancy pixels are flattened onto (JPEG has no alpha; missing →
+    // white, the legacy behavior).
+    captureScreenshot: (background?: string | null) => Promise<{ path: string; url: string }>;
+    // Composite the annotation overlay (a transparent PNG data URL) into the
+    // staged capture; returns the fresh staged file that replaces it.
+    saveAnnotatedScreenshot: (path: string, overlayDataUrl: string) =>
+      Promise<{ path: string; url: string }>;
     // File the report through the CloudBase cnb-report function (which owns
     // the CNB token server-side); returns the created issue number.
     submitCnbIssue: (req: {
@@ -206,6 +216,19 @@ let pendingUpdate: Update | null = null;
 
 function command<T>(name: string, payload?: Record<string, unknown>): Promise<T> {
   return invoke<T>(name, payload);
+}
+
+/**
+ * Rewrite a staged image's `local-media://localhost/<id>` preview link for
+ * the running webview. WebView2 serves custom protocols through
+ * http(s)://<scheme>.localhost, so the decoded asset ID (not the on-disk
+ * path or an encoded URL) goes through convertFileSrc.
+ */
+function toStagedPreviewUrl(url: string): string {
+  const prefix = "local-media://localhost/";
+  return url.startsWith(prefix)
+    ? convertFileSrc(decodeURIComponent(url.slice(prefix.length)), "local-media")
+    : url;
 }
 
 /**
@@ -408,6 +431,13 @@ export async function installTauriBridge(): Promise<void> {
     openExternal: async (url) => {
       await openUrl(url);
     },
+    lynclawNotes: {
+      list: (scope) => command("lynclaw_notes_list", { scope }),
+      create: (scope, note) => command("lynclaw_note_create", { scope, note }),
+      read: (scope, id) => command("lynclaw_note_read", { scope, id }),
+      update: (scope, id, body) => command("lynclaw_note_update", { scope, id, body }),
+      delete: (scope, id) => command("lynclaw_note_delete", { scope, id }),
+    },
     localTranscription: {
       pickAudioFile: async () => {
         const selected = await open({
@@ -475,6 +505,17 @@ export async function installTauriBridge(): Promise<void> {
         command("audio_editor_trim", { source, startSec, endSec, outName, overwrite }),
       merge: (sources: string[], outName?: string) =>
         command("audio_editor_merge", { sources, outName }),
+      getCloudAudio: async (key) => {
+        const id = await command<string | null>("cloud_audio_get", { key });
+        return id ? { id, url: convertFileSrc(id, "local-media") } : null;
+      },
+      downloadCloudAudio: async (key, url, callback) => {
+        const onProgress = new Channel<CloudAudioProgress>();
+        onProgress.onmessage = callback;
+        const id = await command<string>("cloud_audio_download", { key, url, onProgress });
+        return { id, url: convertFileSrc(id, "local-media") };
+      },
+      analyzeCloudAudio: (id) => command("cloud_audio_analyze", { id }),
       removeSilence: (
         source: string,
         options?: { thresholdDb?: number; minSilenceSec?: number; paddingSec?: number },
@@ -610,17 +651,22 @@ export async function installTauriBridge(): Promise<void> {
         command<void>("open_feedback_window", { title: title ?? null }),
       openReportWindow: (title?: string) =>
         command<void>("open_report_window", { title: title ?? null }),
-      captureScreenshot: async () => {
-        const screenshot = await command<{ path: string; url: string }>("report_capture_main_screenshot");
-        const prefix = "local-media://localhost/";
-        // WebView2 serves custom protocols through http(s)://<scheme>.localhost.
-        // Convert the decoded asset ID, not the on-disk path or an encoded URL.
-        return {
-          ...screenshot,
-          url: screenshot.url.startsWith(prefix)
-            ? convertFileSrc(decodeURIComponent(screenshot.url.slice(prefix.length)), "local-media")
-            : screenshot.url,
-        };
+      captureScreenshot: async (background?: string | null) => {
+        const screenshot = await command<{ path: string; url: string }>(
+          "report_capture_main_screenshot",
+          { background: background ?? null },
+        );
+        return { ...screenshot, url: toStagedPreviewUrl(screenshot.url) };
+      },
+      // Burns the annotation overlay (a transparent PNG data URL drawn by the
+      // report surface) into the staged capture; the host returns the fresh
+      // staged file so the preview and the eventual upload stay one path.
+      saveAnnotatedScreenshot: async (path: string, overlayDataUrl: string) => {
+        const screenshot = await command<{ path: string; url: string }>(
+          "report_save_annotated_screenshot",
+          { path, overlay: overlayDataUrl.slice(overlayDataUrl.indexOf(",") + 1) },
+        );
+        return { ...screenshot, url: toStagedPreviewUrl(screenshot.url) };
       },
       submitCnbIssue: (req: {
         endpoint: string;
@@ -838,6 +884,8 @@ export async function installTauriBridge(): Promise<void> {
       voiceStop: () => command("inspiration_voice_stop"),
       voiceCancel: () => command("inspiration_voice_cancel"),
       voiceState: () => command("inspiration_voice_state"),
+      openLocalStore: (userId: string | null, token: string | null, backendHost: string) =>
+        command("inspiration_open_local_store", { userId, token, backendHost }),
       cloudBind: (userId: string, apiBase: string, token: string, backendHost: string) =>
         command("inspiration_cloud_bind", { userId, apiBase, token, backendHost }),
       cloudUnbind: () => command<void>("inspiration_cloud_unbind"),

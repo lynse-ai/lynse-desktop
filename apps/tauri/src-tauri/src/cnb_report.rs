@@ -151,7 +151,8 @@ struct SubmitIssueRequest<'a> {
 /// Read the staged screenshot back, refusing anything outside the staging
 /// folder — the renderer only ever passes paths the capture command returned,
 /// but the check keeps this flow from becoming an arbitrary-file reader.
-fn read_staged_screenshot(app: &AppHandle, path: &str) -> Result<Vec<u8>, String> {
+/// Shared with the annotation step (see report_screenshot.rs).
+pub(crate) fn read_staged_screenshot(app: &AppHandle, path: &str) -> Result<Vec<u8>, String> {
     let staging = crate::inspiration_staging_dir(app)?;
     let candidate = std::path::PathBuf::from(path);
     let canonical = candidate

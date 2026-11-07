@@ -138,7 +138,11 @@ pub(super) fn load_state(app: &AppHandle, session: &Session) -> CommandResult<Ma
         ("local-inspirations", "inspiration:"),
         ("local-todos", "task:"),
     ] {
-        let rows = crate::list_store(app, directory)?;
+        let rows = if prefix == "inspiration:" && !crate::inspiration_cloud::SYNC_ENABLED {
+            Vec::new()
+        } else {
+            crate::list_store(app, directory)?
+        };
         let mut rows_by_id = std::collections::BTreeMap::new();
         for row in &rows {
             if let Some(id) = row["id"].as_str() {

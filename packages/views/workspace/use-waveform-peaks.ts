@@ -7,7 +7,7 @@ import { getDesktopLiveTranslationApi } from "../live-translation/desktop-api";
 // Waveform peak extraction.
 //
 // Fetches the audio at `src`, decodes it with Web Audio and reduces the
-// first channel to a fixed number of peak bars (0..1) that the shared
+// channels to a fixed number of peak bars (0..1) that the shared
 // `Waveform` component can render — the ElevenLabs UI "waveform + scrub"
 // pattern, self-contained (no extra dependency).
 //
@@ -28,8 +28,11 @@ export interface WaveformPeaksResult {
 }
 
 const BAR_COUNT = 96;
+const PLAYER_PEAK_GAIN = 2.2;
 const MAX_DECODE_SECONDS = 20 * 60;
 const MAX_DECODE_BYTES = 80 * 1024 * 1024;
+const MAX_CACHED_DECODE_BYTES = 160 * 1024 * 1024;
+const MAX_CACHED_DECODE_SECONDS = 2 * 60 * 60;
 
 export function useWaveformPeaks(src: string | null | undefined, recordId?: string | null): WaveformPeaksResult {
   const [attempt, setAttempt] = useState(0);
@@ -40,6 +43,9 @@ export function useWaveformPeaks(src: string | null | undefined, recordId?: stri
     if (!src) return;
     let cancelled = false;
     const controller = new AbortController();
+    const cachedCloud = recordId?.startsWith("cloud-audio:");
+    const maxBytes = cachedCloud ? MAX_CACHED_DECODE_BYTES : MAX_DECODE_BYTES;
+    const maxSeconds = cachedCloud ? MAX_CACHED_DECODE_SECONDS : MAX_DECODE_SECONDS;
     const finish = (peaks: number[], skipped = false, error = false) => {
       if (!cancelled) setResult({ src, recordId, attempt, peaks, skipped, error });
     };
@@ -58,21 +64,20 @@ export function useWaveformPeaks(src: string | null | undefined, recordId?: stri
         const response = await fetch(src, { signal: controller.signal });
         if (!response.ok) throw new Error(`fetch failed: ${response.status}`);
         const length = Number(response.headers.get("content-length"));
-        if (length > MAX_DECODE_BYTES) { await response.body?.cancel(); finish([], true); return; }
+        if (length > maxBytes) { await response.body?.cancel(); finish([], true); return; }
         const blob = await response.blob();
         if (cancelled) return;
-        if (blob.size > MAX_DECODE_BYTES) { finish([], true); return; }
+        if (blob.size > maxBytes) { finish([], true); return; }
         const arrayBuffer = await blob.arrayBuffer();
         if (cancelled) return;
-        const AudioContextCtor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-        if (!AudioContextCtor) { finish([], true); return; }
-        const context = new AudioContextCtor();
+        const context = createWaveformDecodeContext(!!cachedCloud);
+        if (!context) { finish([], true); return; }
         try {
           const audio = await context.decodeAudioData(arrayBuffer);
           if (cancelled) return;
-          if (audio.duration > MAX_DECODE_SECONDS) { finish([], true); return; }
-          finish(computePeaks(audio, BAR_COUNT));
-        } finally { void context.close(); }
+          if (audio.duration > maxSeconds) { finish([], true); return; }
+          finish(computePeaks(audio, BAR_COUNT, PLAYER_PEAK_GAIN));
+        } finally { if ("close" in context) void context.close(); }
       } catch { finish([], false, true); }
     })();
     return () => { cancelled = true; controller.abort(); };
@@ -85,8 +90,17 @@ export function useWaveformPeaks(src: string | null | undefined, recordId?: stri
     loading: !!src && current === null, retry };
 }
 
+export function createWaveformDecodeContext(cachedCloud: boolean): AudioContext | OfflineAudioContext | null {
+  if (cachedCloud && typeof window.OfflineAudioContext === "function") {
+    // Keep the decoded buffer small when the native decoder is unavailable.
+    return new window.OfflineAudioContext(1, 1, 8_000);
+  }
+  const AudioContextCtor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  return AudioContextCtor ? new AudioContextCtor() : null;
+}
+
 /** All channels contribute; true silence stays at zero. */
-export function computePeaks(buffer: AudioBuffer, bars: number): number[] {
+export function computePeaks(buffer: AudioBuffer, bars: number, gain = 1): number[] {
   const channels = Array.from({ length: buffer.numberOfChannels }, (_, index) => buffer.getChannelData(index));
   const channel = channels[0];
   if (!channel || bars < 1) return [];
@@ -102,7 +116,7 @@ export function computePeaks(buffer: AudioBuffer, bars: number): number[] {
         if (value > peak) peak = value;
       }
     }
-    out.push(Math.min(1, peak * 2.2));
+    out.push(Math.min(1, peak * gain));
   }
   return out;
 }

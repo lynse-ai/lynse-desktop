@@ -1,5 +1,5 @@
 {
-  "envId": "lynse-d8g49o1i956741f9e",
+  "envId": "lynse-staging-d0gswcvxwa1831b14",
   "$schema": "https://static.cloudbase.net/cli/cloudbaserc.schema.json",
   "cloudrun": {
     "name": "lynclaw-api"

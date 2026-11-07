@@ -477,7 +477,11 @@ async fn refresh_inner(app: &AppHandle, password: Option<&str>) -> CommandResult
 }
 #[tauri::command]
 pub async fn inspiration_vault_refresh(app: AppHandle, mut password: String) -> CommandResult<()> {
-    let result = refresh_inner(&app, Some(&password)).await;
+    let result = if inspiration_cloud::SYNC_ENABLED {
+        refresh_inner(&app, Some(&password)).await
+    } else {
+        Ok(())
+    };
     password.zeroize();
     result
 }

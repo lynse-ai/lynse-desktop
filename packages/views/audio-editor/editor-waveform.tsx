@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
+import { cubicBezier } from "motion";
 import type { SilenceSegment } from "./use-audio-analysis";
+import { EDITOR_BAR_HEIGHT_RATIO, EDITOR_BAR_PITCH, editorWaveformBars } from "./waveform-display";
 
 // ───────────────────────────────────────────────────────────────
 // Voice-Memos trim waveform (zoomed main view) — 1:1 with macOS.
@@ -24,13 +26,10 @@ import type { SilenceSegment } from "./use-audio-analysis";
 const TOP_PAD = 10;
 const RULER_HEIGHT = 24;
 const MIN_BAR_HEIGHT = 2;
-// Zoomed-out display pitch: bars never get closer than this (1px line +
-// 2px gap), so long recordings keep the hairline texture instead of
-// collapsing into a solid block.
-const MIN_PITCH = 3;
 const EDGE_HIT_PX = 12;
 /** Radius of the little dots sitting on the playhead / selection edges. */
 const EDGE_DOT_RADIUS = 4;
+const revealEase = cubicBezier(0.23, 1, 0.32, 1);
 
 export interface WaveformSelection {
   startSec: number;
@@ -38,6 +37,7 @@ export interface WaveformSelection {
 }
 
 interface EditorWaveformProps {
+  loading: boolean;
   peaks: number[];
   durationSec: number;
   /** Live playhead position, read every frame (kept out of React state so
@@ -61,6 +61,7 @@ type DragState =
   | null;
 
 export function EditorWaveform({
+  loading,
   peaks,
   durationSec,
   getPlayheadSec,
@@ -75,8 +76,8 @@ export function EditorWaveform({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<DragState>(null);
   // Latest props for the render loop, without re-subscribing the effect.
-  const stateRef = useRef({ peaks, durationSec, getPlayheadSec, viewStartSec, viewEndSec, selection, silenceSegments });
-  stateRef.current = { peaks, durationSec, getPlayheadSec, viewStartSec, viewEndSec, selection, silenceSegments };
+  const stateRef = useRef({ loading, peaks, durationSec, getPlayheadSec, viewStartSec, viewEndSec, selection, silenceSegments });
+  stateRef.current = { loading, peaks, durationSec, getPlayheadSec, viewStartSec, viewEndSec, selection, silenceSegments };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -112,12 +113,22 @@ export function EditorWaveform({
     let lastPeaks: number[] | null = null;
     let lastSelection: WaveformSelection | null | undefined = null;
     let lastSilence: SilenceSegment[] | null | undefined = undefined;
+    let lastLoading: boolean | undefined;
+    let lastReveal = 1;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const revealDuration = parseFloat(getComputedStyle(canvas).getPropertyValue("--duration-standard")) || 200;
+    let revealStartedAt = 0;
 
     let raf = 0;
-    const render = () => {
+    const render = (now: number) => {
       raf = requestAnimationFrame(render);
       if (width === 0 || height === 0) return;
-      const { peaks, durationSec, getPlayheadSec, viewStartSec, viewEndSec, selection, silenceSegments } = stateRef.current;
+      const { loading, peaks, durationSec, getPlayheadSec, viewStartSec, viewEndSec, selection, silenceSegments } = stateRef.current;
+      if (loading) dragRef.current = null;
+      if (peaks !== lastPeaks || lastLoading) revealStartedAt = now;
+      const skipReveal = reducedMotion.matches || !!dragRef.current;
+      if (skipReveal) revealStartedAt = now - revealDuration;
+      const reveal = loading || peaks.length === 0 || skipReveal ? 1 : Math.min(1, (now - revealStartedAt) / revealDuration);
       const playheadSec = getPlayheadSec();
       const windowSec = Math.max(0.001, viewEndSec - viewStartSec);
       const playheadPx = Math.round(((playheadSec - viewStartSec) / windowSec) * width);
@@ -126,7 +137,9 @@ export function EditorWaveform({
         signature === lastSignature &&
         peaks === lastPeaks &&
         selection === lastSelection &&
-        silenceSegments === lastSilence
+        silenceSegments === lastSilence &&
+        loading === lastLoading &&
+        reveal === lastReveal
       ) {
         return;
       }
@@ -134,6 +147,8 @@ export function EditorWaveform({
       lastPeaks = peaks;
       lastSelection = selection;
       lastSilence = silenceSegments;
+      lastLoading = loading;
+      lastReveal = reveal;
 
       const dpr = window.devicePixelRatio || 1;
       const canvasW = Math.round(width * dpr);
@@ -150,13 +165,24 @@ export function EditorWaveform({
       const bandH = Math.max(1, height - RULER_HEIGHT - TOP_PAD);
       const bandBottom = bandTop + bandH;
       const mid = bandTop + bandH / 2;
-      const maxBarH = bandH * 0.42;
+      const barScale = 0.25 + 0.75 * revealEase(reveal);
+      const maxBarHeight = bandH * EDITOR_BAR_HEIGHT_RATIO * barScale;
 
       // Band background.
       ctx.globalAlpha = theme.bandAlpha;
       ctx.fillStyle = theme.band;
       ctx.fillRect(0, bandTop, width, bandH);
       ctx.globalAlpha = 1;
+
+      if (loading) {
+        ctx.globalAlpha = 0.24;
+        ctx.fillStyle = theme.bar;
+        ctx.beginPath();
+        for (let x = 1; x < width; x += EDITOR_BAR_PITCH) ctx.rect(x, mid - 1, 1, 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        return;
+      }
 
       // Silence overlay (regions the desilence export would cut).
       if (silenceSegments && silenceSegments.length > 0) {
@@ -170,11 +196,8 @@ export function EditorWaveform({
         ctx.globalAlpha = 1;
       }
 
-      // Bars — hairline vertical strokes in the near-foreground colour, the
-      // Voice-Memos look. Bars never get closer than MIN_PITCH px: once the
-      // zoom level would crowd them together, peaks collapse into buckets of
-      // one bar per MIN_PITCH (max peak of the covered span), so the
-      // hairline + gap texture stays legible at any duration.
+      // Draw individual peaks when zoomed in. At wider zoom levels, combine
+      // peak windows so a brief spike doesn't set the height for several seconds.
       const barRate = durationSec > 0 ? peaks.length / durationSec : 0;
       if (barRate > 0) {
         const pitch = width / (windowSec * barRate);
@@ -182,7 +205,7 @@ export function EditorWaveform({
         const iEnd = Math.min(peaks.length - 1, Math.ceil(viewEndSec * barRate) + 1);
         ctx.globalAlpha = 0.88;
         ctx.fillStyle = theme.bar;
-        if (pitch >= MIN_PITCH) {
+        if (pitch >= EDITOR_BAR_PITCH) {
           // One hairline per bar, centred on its timestamp.
           const barW = Math.min(2, Math.max(1, pitch * 0.3));
           ctx.beginPath();
@@ -190,28 +213,18 @@ export function EditorWaveform({
             const t = (i + 0.5) / barRate;
             const x = secToX(t);
             if (x < -2 || x > width + 2) continue;
-            const bh = Math.max(MIN_BAR_HEIGHT, (peaks[i] ?? 0) * maxBarH * 2);
+            const bh = Math.max(MIN_BAR_HEIGHT, (peaks[i] ?? 0) * maxBarHeight);
             ctx.rect(x - barW / 2, mid - bh / 2, barW, bh);
           }
           ctx.fill();
         } else {
-          // Bucketed downsample: one 1px bar per MIN_PITCH px, holding the
-          // max peak of the time span it covers. Near-silent buckets still
-          // draw the min-height stub, forming the reference's dotted baseline.
-          const buckets = Math.ceil(width / MIN_PITCH);
-          const bucketPeak = new Float32Array(buckets);
-          for (let i = iStart; i <= iEnd; i++) {
-            const b = Math.floor(secToX((i + 0.5) / barRate) / MIN_PITCH);
-            if (b < 0 || b >= buckets) continue;
-            const value = peaks[i] ?? 0;
-            if (value > bucketPeak[b]!) bucketPeak[b] = value;
-          }
+          const bars = editorWaveformBars(peaks, durationSec, viewStartSec, viewEndSec, width);
           ctx.beginPath();
-          for (let b = 0; b < buckets; b++) {
-            const value = bucketPeak[b]!;
+          for (let b = 0; b < bars.length; b++) {
+            const value = bars[b]!;
             if (value <= 0) continue;
-            const bh = Math.max(MIN_BAR_HEIGHT, value * maxBarH * 2);
-            ctx.rect(b * MIN_PITCH + 1, mid - bh / 2, 1, bh);
+            const bh = Math.max(MIN_BAR_HEIGHT, value * maxBarHeight);
+            ctx.rect(b * EDITOR_BAR_PITCH + 1, mid - bh / 2, 1, bh);
           }
           ctx.fill();
         }
@@ -353,10 +366,12 @@ export function EditorWaveform({
       ref={canvasRef}
       className={className}
       style={{ touchAction: "none" }}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      aria-label="audio editor waveform"
+      onPointerDown={loading ? undefined : onPointerDown}
+      onPointerMove={loading ? undefined : onPointerMove}
+      onPointerUp={loading ? undefined : onPointerUp}
+      aria-hidden={loading || undefined}
+      aria-label={loading ? undefined : "audio editor waveform"}
+      data-slot={loading ? "editor-waveform-placeholder" : undefined}
     />
   );
 }

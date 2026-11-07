@@ -52,7 +52,6 @@ const en = {
   collection_add_existing: "Choose an existing topic",
   collection_candidates: "Associations to confirm",
   collection_excluded: "Removed from this topic",
-  collection_manage: "Manage related topics",
 
   auto_workspace: "Knowledge browsing",
   auto_views: "Browse knowledge",
@@ -80,7 +79,7 @@ const en = {
   auto_more_topics: "Browse {{count}} more topics",
   auto_search_topics: "Find a topic",
   auto_meeting_count: "{{count}} source meetings",
-  auto_read_topic: "Read full topic",
+  auto_read_topic: "Full-page reader",
   auto_back: "Back to knowledge base",
   auto_stale: "Showing the last saved version. An update is needed before chat can reference it.",
   auto_update_failed: "An update could not finish. Saved content is kept; retry to continue.",
@@ -447,7 +446,6 @@ const zh: typeof en = {
   collection_add_existing: "选择已有专题",
   collection_candidates: "待确认关联",
   collection_excluded: "已从本专题移出",
-  collection_manage: "管理关联专题",
 
   auto_workspace: "知识浏览",
   auto_views: "浏览知识",
@@ -475,7 +473,7 @@ const zh: typeof en = {
   auto_more_topics: "浏览其余 {{count}} 个专题",
   auto_search_topics: "查找专题",
   auto_meeting_count: "关联 {{count}} 场会议",
-  auto_read_topic: "阅读完整专题",
+  auto_read_topic: "全页阅读",
   auto_back: "返回知识库",
   auto_stale: "当前显示上次保存的内容，更新完成前暂停聊天引用。",
   auto_update_failed: "部分内容暂未更新，已保存内容会保留，可重试继续整理。",

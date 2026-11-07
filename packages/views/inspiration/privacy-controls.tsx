@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
 import { toast } from "sonner";
+import { featureFlags } from "../feature-flags";
 import { Download, Loader2, LockKeyhole, LockKeyholeOpen, Paperclip } from "../icons";
 import { getDesktopInspirationApi } from "./desktop-api";
 import { ensureInspirationUnlocked, privacyError } from "./privacy-state";
@@ -17,6 +18,7 @@ export function InspirationLockButton({ record, className }: { record: Inspirati
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
+  if (!featureFlags.inspirationCloudSync) return null;
   const encrypted = record.protection === "e2ee";
   return <button type="button" aria-label={t(encrypted ? "inspiration_private.decrypt" : "inspiration_private.encrypt")} title={t(record.transition ? "inspiration_private.pending" : encrypted ? "inspiration_private.decrypt" : "inspiration_private.encrypt")} disabled={busy || (!!record.transition && record.transition.phase !== "preparing")} className={className} onClick={(event) => {
     event.stopPropagation();

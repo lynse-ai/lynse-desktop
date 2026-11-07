@@ -21,6 +21,20 @@
 
 ## 1.2.8 (2026-11-05)
 
+### New Features
+
+- Recording details gain a Marks panel: text marks (title/outline at a playback position) and photo marks are listed alongside the transcript, and Lynclaw deep summaries now weave them in — text marks emphasise the topics at their timestamps, and photos are inserted at the matching positions as permanent OSS links.
+- Lynclaw summaries can be filed into the notes list and browsed from a dedicated panel, with Markdown/HTML formats selectable when generating from a recording.
+- Recordings synced from the cloud can fetch their audio on demand for playback.
+- Report-a-problem screenshots can be annotated before sending.
+
+### 新功能
+
+- 录音详情新增「标记」面板：支持在播放位置打文字标记（标题/备注）与图片标记；Lynclaw 深度总结会读取标记——文字标记强调对应时段主题，图片按时间对位以 OSS 永久链接插入总结正文。
+- Lynclaw 总结可存入笔记列表并从专属面板查看，录音侧生成时可选择 Markdown/HTML 格式。
+- 云端录音可按需拉取音频进行播放。
+- 问题反馈截图发送前支持标注。
+
 ### Improvements
 
 - Update notes now render grouped sections such as New Features, Improvements and Fixes, with clearer target/current version details, a wider reading layout, download progress and retry actions.
@@ -32,6 +46,7 @@
 ### Fixed
 
 - The main update dialog no longer mounts twice or allows duplicate dialogs to compete for focus and assistive-technology visibility.
+- Mark photo captions now show the playback position in the recording (e.g. 00:08) instead of rendering the recording-relative timestamp as a 1970 date.
 
 ### 改进
 
@@ -44,6 +59,7 @@
 ### 错误修复
 
 - 主界面的更新弹窗不再重复挂载，避免多个弹窗争夺焦点或影响辅助技术可见性。
+- 标记图片的时间说明改为显示录音内播放位置（如 00:08），不再把相对时间戳渲染成 1970 年的日期。
 
 ## 1.2.7 (2026-11-04)
 

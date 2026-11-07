@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { IconSwap } from "../icon-swap";
-import { useWorkspaceStore } from "../workspace/store";
+import { getWorkspaceState, useWorkspaceStore } from "../workspace/store";
 import { ContentPanel } from "../workspace/content-panel";
+import { LynclawNotePanel, LynclawNoteRow } from "./lynclaw-note-panel";
+import { lynclawNoteId, lynclawNoteItemId, useLynclawNotes, useLynclawNotesScope } from "../workspace/lynclaw-notes";
 import { ChatPanel } from "../workspace/right-panel/chat-panel";
 import { ResizableHandle } from "../workspace/resizable-handle";
 import { WorkspaceTitleBarSlot } from "../layout/title-bar";
@@ -288,6 +290,9 @@ export function NotesPage() {
   const [pendingDeleteIds, setPendingDeleteIds] = useState<string[] | null>(null);
 
   const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
+  const selectedLynclawNoteId = lynclawNoteId(selectedItemId);
+  const notesScope = useLynclawNotesScope();
+  const { data: lynclawNotes } = useLynclawNotes(notesScope);
   const selectedFolderId = useWorkspaceStore((s) => s.selectedFolderId);
   const selectFolder = useWorkspaceStore((s) => s.selectFolder);
   const selectItem = useWorkspaceStore((s) => s.selectItem);
@@ -686,15 +691,24 @@ export function NotesPage() {
       ...folderList.map((f) => String(f.id)),
     ];
     for (const id of ids) {
-      counts.set(id, filterWorkspaceFilesByFolder(sourceFiles, id).length);
+      const generated = id === "__all__" || id === "__uncategorized__" ? (lynclawNotes?.length ?? 0) : 0;
+      counts.set(id, filterWorkspaceFilesByFolder(sourceFiles, id).length + generated);
     }
     return counts;
-  }, [sourceFiles, folderList]);
+  }, [sourceFiles, folderList, lynclawNotes]);
 
-  const timeSections = useMemo(
-    () => getTimeSections(filteredFiles, t, i18n.language),
-    [filteredFiles, t, i18n.language],
-  );
+  const visibleNotesById = useMemo(() => {
+    const visible = !selectedFolderId || selectedFolderId === "__all__" || selectedFolderId === "__uncategorized__";
+    return new Map((visible ? (lynclawNotes ?? []) : []).map((note) => [lynclawNoteItemId(note.id), note]));
+  }, [lynclawNotes, selectedFolderId]);
+
+  const timeSections = useMemo(() => {
+    const items: WorkspaceItem[] = [...filteredFiles];
+    for (const [id, note] of visibleNotesById) {
+      items.push({ id, type: "note", title: note.title, createdAt: note.createdAt, updatedAt: note.createdAt });
+    }
+    return getTimeSections(items, t, i18n.language);
+  }, [filteredFiles, visibleNotesById, t, i18n.language]);
 
   const handleSelectFolder = (folderId: string | null) => {
     selectFolder(folderId);
@@ -783,7 +797,7 @@ export function NotesPage() {
             )}
             <h2 className="min-w-0 truncate text-sm font-semibold text-foreground" title={currentFolderName}>{currentFolderName}</h2>
             <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-              ({filteredFiles.length})
+              ({filteredFiles.length + visibleNotesById.size})
             </span>
           </div>
           <div className="flex flex-col items-end gap-2" data-tauri-drag-region={false}>
@@ -872,6 +886,22 @@ export function NotesPage() {
                   <TimeSectionHeader label={section.label} count={section.items.length} />
                   <div className="divide-y divide-border/40 px-4">
                     {section.items.map((file) => {
+                      const note = visibleNotesById.get(file.id);
+                      if (note) {
+                        return (
+                          <LynclawNoteRow
+                            key={file.id}
+                            note={note}
+                            selected={selectedItemId === file.id}
+                            onOpen={() => {
+                              const state = getWorkspaceState();
+                              if (state.sourceViewVisible) state.toggleSourceView();
+                              if (state.chatPanelVisible) state.toggleChatPanel();
+                              selectItem(file.id, "note", file.title);
+                            }}
+                          />
+                        );
+                      }
                       const isChecked = selectedFileIds.has(file.id);
                       const targetIds =
                         isChecked && selectedFileIds.size > 0
@@ -1039,9 +1069,11 @@ export function NotesPage() {
                 }
               />
               <div className="flex min-h-0 flex-1">
-                <ContentPanel />
+                {selectedLynclawNoteId && notesScope
+                  ? <LynclawNotePanel key={`${notesScope}:${selectedLynclawNoteId}`} id={selectedLynclawNoteId} scope={notesScope} />
+                  : <ContentPanel />}
                 <AnimatePresence initial={false}>
-                  {chatPanelVisible && (
+                  {chatPanelVisible && !selectedLynclawNoteId && (
                     <motion.div
                       key="chat-panel"
                       initial={{ width: 0, opacity: 0 }}

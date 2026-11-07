@@ -240,6 +240,9 @@ fn probe_duration_ms(app: &AppHandle, path: &str) -> Option<u64> {
 /// Resolve a source reference into a playable path. Accepts either a plain
 /// filesystem path or a `local:<uuid>` record id (the notes page passes ids).
 fn resolve_source(app: &AppHandle, source: &str) -> CommandResult<PathBuf> {
+    if crate::cloud_audio::is_cached_id(source) {
+        return crate::cloud_audio::path_for_id(app, source);
+    }
     if let Some(id) = source.strip_prefix("local:") {
         let index = local_store_path(app, "local-transcriptions")?;
         let record = read_array(&index)?
@@ -460,6 +463,9 @@ async fn run_job<F>(app: AppHandle, source: String, overwrite: bool, work: F) ->
 where
     F: FnOnce(&AppHandle, u32) -> CommandResult<(PathBuf, Option<u64>)> + Send + 'static,
 {
+    if overwrite && !source.starts_with("local:") {
+        return Err("覆盖原音频仅支持本地录音".into());
+    }
     let job_id = begin_job()?;
     let handle = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {

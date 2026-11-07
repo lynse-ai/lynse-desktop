@@ -57,10 +57,11 @@ test("paused organization still allows local grouping and removing an internal i
   expect(result.requests.filter(request=>request.action==="topic_link")).toHaveLength(1);
 });
 
-test("grouped timeline nodes show source dates and sort existing records newest first", async ({ page, mockServer }) => {
+test("the graph sidebar shows the full grouped timeline and opens issues in place", async ({ page, mockServer }) => {
   await openWorkspace(page, mockServer.url);
   const older = issue("older", "Earlier planning", "meeting-old");
   const recent = issue("recent", "Latest progress", "meeting-recent");
+  recent.published!.citations[0]!.kind = "meeting_summary";
   recent.published!.citations.push(older.published!.citations[0]!);
   const unknown = issue("unknown", "Undated discussion", "meeting-unknown");
   const parent: WikiTopic = {
@@ -76,14 +77,34 @@ test("grouped timeline nodes show source dates and sort existing records newest 
     sourceDates: { "meeting-old": "2025-12-31", "meeting-recent": "2026-10-25" },
   });
   await openWiki(page);
-  await page.getByRole("button", { name: "Topic directory", exact: true }).click();
-  const card = page.getByRole("button").filter({ has: page.getByRole("heading", { name: "Product development", exact: true }) });
-  await card.click();
-  const reader = page.getByRole("article", { name: "Product development", exact: true });
-  const timeline = reader.getByRole("region", { name: "Timeline", exact: true });
+  const graph = page.getByRole("group", { name: "Knowledge graph canvas", exact: true });
+  await graph.getByRole("button", { name: "Product development", exact: true }).click();
+  const sidebar = page.getByRole("complementary", { name: "Topic overview and updates", exact: true });
+  const timeline = sidebar.getByRole("region", { name: "Timeline", exact: true });
   await expect(timeline.locator("time")).toHaveText(["10/25/2026", "12/31/2025"]);
   await expect(timeline.getByRole("heading", { level: 4 })).toHaveText(["10/25/2026Record date", "12/31/2025Record date", "Date to confirm"]);
-  await expect(timeline).toContainText("Record date");
-  await expect(timeline).toContainText("Date to confirm");
-  await timeline.screenshot({ path: test.info().outputPath("grouped-timeline-dates.png"), animations: "disabled" });
+  await expect(sidebar.getByRole("button", { name: "Edit topic focus", exact: true })).toBeVisible();
+  await expect.poll(() => sidebar.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
+  expect(await sidebar.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: test.info().outputPath("grouped-topic-sidebar.png"), animations: "disabled" });
+
+  await timeline.getByRole("button", { name: "Evidence 1", exact: true }).first().click();
+  const source = page.getByRole("dialog", { name: "Source meetings", exact: true });
+  await expect(source).toContainText("Original evidence");
+  await page.keyboard.press("Escape");
+
+  await sidebar.getByRole("button", { name: "Latest progress", exact: true }).click();
+  const issueReader = sidebar.getByRole("article", { name: "Latest progress", exact: true });
+  await expect(issueReader).toContainText("Keep this original page.");
+  await expect(issueReader.getByText("Version history", { exact: true })).toBeVisible();
+  await expect(graph).toBeVisible();
+  await expect(sidebar).toBeFocused();
+  await expect.poll(() => sidebar.evaluate(element => element.scrollTop)).toBe(0);
+  await issueReader.getByRole("button", { name: "Parent topic: Product development", exact: true }).click();
+  await expect(timeline.locator("time")).toHaveCount(2);
+
+  await sidebar.getByRole("button", { name: "Full-page reader", exact: true }).click();
+  const reader = page.getByRole("article", { name: "Product development", exact: true });
+  await expect(sidebar).toHaveCount(0);
+  await expect(reader.getByRole("region", { name: "Timeline", exact: true }).locator("time")).toHaveText(["10/25/2026", "12/31/2025"]);
 });

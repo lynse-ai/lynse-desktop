@@ -17,6 +17,7 @@
 
 import { api } from "@lynse/core/api";
 import { CLOUDBASE_MEMORY_URL, STAGING_CLOUDBASE_MEMORY_URL, isTestApiUrl, memoryUrlForApiUrl } from "@lynse/core/config";
+import { featureFlags } from "../feature-flags";
 
 import { getDesktopInspirationApi } from "./desktop-api";
 import type { InspirationCloudStatus, InspirationCloudSyncReport } from "./types";
@@ -38,7 +39,7 @@ export const LEGACY_MEMORY_API_URL =
   "https://lynse-memory-321192-9-1401959758.sh.run.tcloudbase.com";
 
 export function memoryApiBase(): string {
-  if (typeof window === "undefined") return "";
+  if (!featureFlags.inspirationCloudSync || typeof window === "undefined") return "";
   const baseUrl = api().getBaseUrl();
   // TEMP (2026-10-31): inspiration cloud sync is beta-only for now. The
   // backend's single-session policy keeps invalidating production tokens,

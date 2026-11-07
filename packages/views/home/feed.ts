@@ -15,6 +15,7 @@ import type { WorkspaceItem } from "../workspace/types";
 import { useTodos } from "../todo/use-todos";
 import type { TodoItem } from "../todo/todo-api";
 import { getDesktopInspirationApi } from "../inspiration";
+import { useInspirationPrivacy } from "../inspiration/privacy-state";
 import { LINK_RECORD_TAG } from "../inspiration/types";
 import type { InspirationRecord } from "../inspiration/types";
 
@@ -256,10 +257,13 @@ export function useHomeFeed(): HomeFeed {
   const todos = useTodos();
 
   const desktopInspirationApi = getDesktopInspirationApi();
+  const inspirationScope = useInspirationPrivacy((state) => state.accountScope);
+  const inspirationBinding = useInspirationPrivacy((state) => state.binding);
   const inspirationsQuery = useQuery({
-    queryKey: ["inspirations"],
+    queryKey: ["inspirations", inspirationScope],
     queryFn: () => desktopInspirationApi!.list(),
-    enabled: Boolean(desktopInspirationApi),
+    enabled: Boolean(desktopInspirationApi) && !inspirationBinding,
+    networkMode: "always",
   });
 
   const entries = useMemo(() => {

@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect, Children, type ReactNode } from "react";
 import {
+  Bookmark,
   FileText,
   FileAudio,
   Sparkles,
@@ -22,6 +23,7 @@ import {
 import { getWorkspaceState, useWorkspaceStore } from "./store";
 import { SummaryExportMenuItem } from "../connections/summary-export-menu-item";
 import { useAudioEditorStore } from "../audio-editor/store";
+import { useCloudAudio } from "./use-cloud-audio";
 import { useNavigation } from "../navigation";
 import { TAB_BAR_HEIGHT } from "./layout-constants";
 import { api } from "@lynse/core/api/client";
@@ -36,6 +38,7 @@ import { ActivityIndicator } from "@lynse/ui/components/ui/activity-indicator";
 import { AudioPlayer } from "./audio-player";
 import type { AudioPlayerHandle } from "./audio-player";
 import { ChaptersPanel } from "./chapter-panel";
+import { RecordingMarksPanel, readRecordingMarks } from "./recording-marks-panel";
 import {
   cloudChaptersQueryKey,
   cloudTranscriptionToChapterSegments,
@@ -49,13 +52,14 @@ import {
   type ChapterSegment,
 } from "./semantic-chapters";
 import { generateChapters } from "@lynse/core/api";
-import type { ChapterDocument, SemanticChapter } from "./types";
+import type { ChapterDocument, FileConclusion, SemanticChapter, WorkspaceItem } from "./types";
 import { getDesktopLiveTranslationApi } from "../live-translation/desktop-api";
 import type { RecordingTrackManifest } from "./types";
 import { normalizeSummaryTemplateName } from "./types";
 import { getSpeakerColor } from "@lynse/ui/lib/speaker";
 import { getDisplayTitle, type EditedTitleState } from "./title-edit-state";
 import {
+  insertFileConclusion,
   mergePendingSummaryTab,
   useDeleteConclusion,
   useFiles,
@@ -91,6 +95,19 @@ import { useRecordingCloudSync } from "../live-translation/use-recording-cloud-s
 import { LiveNotesPanel } from "../live-translation/notes/notes-panel";
 import type { LiveNotesState } from "../live-translation/notes/engine";
 import { triggerLocalAutoSummary, LOCAL_SUMMARY_TAB_ID } from "./local-auto-summary";
+import { generateCloudLynclawSummary } from "./cloud-lynclaw-summary";
+import {
+  LYNCLAW_FORMAT_LABELS,
+  lynclawNoteId,
+} from "./lynclaw-notes";
+import {
+  encodeLynclawSummary,
+  logLynclawSummaryFailure,
+  LynclawSummaryError,
+  readLynclawSummary,
+  type LynclawSummaryFormat,
+} from "./lynclaw-summary";
+import { isLynclawSummaryTabsEnabled } from "../feature-flags";
 import { wrapCjkSpacing } from "./cjk-spacing";
 import { extractBody } from "./content-html";
 import { MilkdownViewer } from "./milkdown-viewer";
@@ -149,9 +166,9 @@ function getSummaryTabFallbackLanguage(language: string | undefined): keyof type
 }
 
 export function ContentPanel() {
-  const selectedItemId = useWorkspaceStore((s) => s.selectedItemId);
+  const selectedItemId = useWorkspaceStore((s) => lynclawNoteId(s.selectedItemId) ? null : s.selectedItemId);
   const selectedItemTitle = useWorkspaceStore((s) => s.selectedItemTitle);
-  const contentTab = useWorkspaceStore((s) => s.contentTab);
+  const requestedContentTab = useWorkspaceStore((s) => s.contentTab);
   const setContentTab = useWorkspaceStore((s) => s.setContentTab);
   const outlineSidebarVisible = useWorkspaceStore((s) => s.outlineSidebarVisible);
   const toggleOutlineSidebar = useWorkspaceStore((s) => s.toggleOutlineSidebar);
@@ -180,7 +197,7 @@ export function ContentPanel() {
     error: conclusionsError,
   } = useFileConclusions(selectedItemId);
   const { data: transcription, isLoading: transLoading } = useFileTranscription(selectedItemId);
-  const { data: audioUrl } = useFileAudioUrl(selectedItemId);
+  const isCloudSelectedItem = !!selectedItemId && !isLocalFileId(selectedItemId);
   // Dual-channel recordings: per-track listening (全部／本机／远端) and the
   // echo-cancellation status banner.
   const [trackFilter, setTrackFilter] = useState<"all" | "mic" | "system">("all");
@@ -198,8 +215,6 @@ export function ContentPanel() {
     | undefined;
   const selectedLiveSessionId =
     (transcription as { liveSessionId?: string } | undefined)?.liveSessionId ?? null;
-
-  const isCloudSelectedItem = !!selectedItemId && !selectedItemId.startsWith("local:");
 
   // AI semantic chapters use the same playback-ordered rows the 转写 tab
   // renders. Cloud rows use the flexible API envelope, so normalize them into
@@ -252,11 +267,19 @@ export function ContentPanel() {
     };
   }, [trackFilter, selectedItemId, selectedTrackManifest]);
 
-  const playerAudioUrl = trackFilter === "all" ? (audioUrl as string | null) : (trackAudioUrl ?? (audioUrl as string | null));
   const updateConclusion = useUpdateConclusion();
   const deleteConclusion = useDeleteConclusion();
   const rerunSummary = useRerunSummary();
-  const { data: fileDetail } = useFileDetail(selectedItemId);
+  const { data: fileDetail, isLoading: fileDetailLoading } = useFileDetail(selectedItemId);
+  const isDesktop = !!getDesktopLocalTranscriptionApi();
+  const recordingMarks = useMemo(
+    () => readRecordingMarks(isDesktop && fileDetail?.id === selectedItemId ? fileDetail : undefined),
+    [isDesktop, fileDetail, selectedItemId],
+  );
+  const hasRecordingMarks = recordingMarks.marks.length > 0 || recordingMarks.images.length > 0;
+  const contentTab = requestedContentTab === "marks" && !hasRecordingMarks
+    ? "transcription"
+    : requestedContentTab;
   const { data: templateCategories } = useTemplateCategories();
 
   const defaultTemplateId = useMemo(() => {
@@ -298,7 +321,7 @@ export function ContentPanel() {
   const pendingRecording = usePendingRecordingStore((s) =>
     s.pending.find((p) => pendingRecordingRecordId(p.sessionId) === selectedItemId),
   );
-  const selectedFile = useMemo(() => {
+  const selectedFile = useMemo<WorkspaceItem | null>(() => {
     if (!selectedItemId) return null;
     const listed = files?.find((f) => f.id === selectedItemId) ?? null;
     if (listed || !pendingRecording) return listed;
@@ -313,6 +336,18 @@ export function ContentPanel() {
       transcriptionCompleted: false,
     };
   }, [selectedItemId, files, pendingRecording]);
+
+  const audioDetail = fileDetail?.id === selectedItemId ? fileDetail : undefined;
+  const cloudAudio = useCloudAudio(
+    isCloudSelectedItem ? selectedItemId : null,
+    String(audioDetail?.updatedAt ?? selectedFile?.updatedAt ?? ""),
+    audioDetail?.originalFilename ?? selectedFile?.title,
+    fileDetailLoading,
+  );
+  const { data: audioUrl } = useFileAudioUrl(cloudAudio.managed ? null : selectedItemId);
+  const playerAudioUrl = cloudAudio.managed
+    ? cloudAudio.audio?.url
+    : (trackFilter === "all" ? audioUrl : trackAudioUrl ?? audioUrl);
 
   const isLocalSelectedItem = isLocalFileId(selectedItemId);
   // Only live-session records can upload: the Rust finalize / cloud-file-id
@@ -349,6 +384,17 @@ export function ContentPanel() {
     push("/audio-editor");
   }, [openAudioEditor, push, selectedFile]);
 
+  const handleEditCloudAudio = useCallback(() => {
+    if (!cloudAudio.audio) return;
+    openAudioEditor([{
+      id: cloudAudio.audio.id,
+      cachedAudioUrl: cloudAudio.audio.url,
+      title: selectedTitle || audioDetail?.originalFilename || t("audio_editor.title"),
+      createdAt: selectedFile?.createdAt ?? audioDetail?.createdAt,
+    }], "new");
+    push("/audio-editor");
+  }, [audioDetail, cloudAudio.audio, openAudioEditor, push, selectedFile?.createdAt, selectedTitle, t]);
+
   const [editedTitle, setEditedTitle] = useState<EditedTitleState | null>(null);
   const displayTitle = getDisplayTitle(selectedItemId, selectedTitle, editedTitle, selectedItemTitle);
 
@@ -358,17 +404,20 @@ export function ContentPanel() {
     return sortConclusionsChronologically(conclusions)
       .map((c, i) => {
         const obj = c as Record<string, unknown>;
-        const text = String(obj.conclusionText ?? "");
+        const stored = String(obj.conclusionText ?? "");
+        const lynclaw = readLynclawSummary(stored);
+        const text = lynclaw?.body ?? stored;
         const id = String(obj.id ?? "");
-        // templateName is the conclusion template name from the API; "auto" falls back to the default label
-        const name =
-          normalizeSummaryTemplateName(
+        // "auto" falls back to the default template label.
+        const name = lynclaw
+          ? `${t("workspace.lynclaw_summary")} · ${LYNCLAW_FORMAT_LABELS[lynclaw.format]}`
+          : normalizeSummaryTemplateName(
             String(obj.templateName ?? obj.conclusionName ?? obj.title ?? obj.name ?? ""),
           ) ?? "";
-        return text ? { key: id || `summary-${i}`, text, id, name, status: "ready" as const } : null;
+        return stored ? { key: id || `summary-${i}`, text, id, name, status: "ready" as const, lynclawFormat: lynclaw?.format } : null;
       })
       .filter(Boolean) as SummaryTabModel[];
-  }, [conclusions]);
+  }, [conclusions, t]);
   const currentFileSummariesCleared = !!selectedItemId && clearedSummaryFileIds.has(selectedItemId);
   const pendingSummaryTabs = useMemo(
     () => selectedItemId ? (pendingSummaryTabsByFile[selectedItemId] ?? []) : [],
@@ -377,14 +426,16 @@ export function ContentPanel() {
   // Local recordings carry their agent-service deep summary on the record
   // itself (no cloud conclusion) — surface it as the first summary tab.
   const localSummaryTab = useMemo<SummaryTabModel | null>(() => {
-    const markdown = isLocalSelectedItem ? String((transcription as Record<string, unknown> | undefined)?.summaryMarkdown ?? "").trim() : "";
-    if (!markdown) return null;
+    const stored = isLocalSelectedItem ? String((transcription as Record<string, unknown> | undefined)?.summaryMarkdown ?? "").trim() : "";
+    if (!stored) return null;
+    const lynclaw = readLynclawSummary(stored);
     return {
       key: LOCAL_SUMMARY_TAB_ID,
-      text: markdown,
+      text: lynclaw?.body ?? stored,
       id: LOCAL_SUMMARY_TAB_ID,
-      name: t("workspace.deep_summary_tab"),
+      name: lynclaw ? `${t("workspace.lynclaw_summary")} · ${LYNCLAW_FORMAT_LABELS[lynclaw.format]}` : t("workspace.deep_summary_tab"),
       status: "ready" as const,
+      lynclawFormat: lynclaw?.format,
     };
   }, [isLocalSelectedItem, transcription, t]);
   const visibleConclusionTexts = useMemo(
@@ -500,7 +551,8 @@ export function ContentPanel() {
 
   // Debounced save for conclusion edits
   const conclusionSaveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  const handleConclusionChange = useCallback((conclusionId: string, markdown: string) => {
+  const handleConclusionChange = useCallback((conclusionId: string, markdown: string, format?: LynclawSummaryFormat) => {
+    const conclusionText = format ? encodeLynclawSummary(format, markdown) : markdown;
     const existing = conclusionSaveTimers.current.get(conclusionId);
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
@@ -508,11 +560,11 @@ export function ContentPanel() {
       // straight to the record store instead of conclusion/update.
       if (isLocalSelectedItem && conclusionId === LOCAL_SUMMARY_TAB_ID) {
         void getDesktopLocalTranscriptionApi()
-          ?.saveSummary(selectedItemId!, null, markdown)
+          ?.saveSummary(selectedItemId!, null, conclusionText)
           .then(() => qc.invalidateQueries({ queryKey: ["file-transcription", selectedItemId] }))
           .catch(() => undefined);
       } else {
-        updateConclusion.mutate({ conclusionId, conclusionText: markdown });
+        updateConclusion.mutate({ conclusionId, conclusionText });
       }
       conclusionSaveTimers.current.delete(conclusionId);
     }, 1500);
@@ -898,7 +950,7 @@ export function ContentPanel() {
         const tabs = current[fileId] ?? [];
         const nextTabs =
           success && options.conclusion
-            ? mergePendingSummaryTab({ tabs, pendingId: options.pendingId!, conclusion: options.conclusion })
+            ? mergePendingSummaryTab({ tabs, pendingId: options.pendingId!, conclusion: options.conclusion, lynclawName: t("workspace.lynclaw_summary") })
             : tabs.map((tab) => tab.pendingId === options.pendingId ? { ...tab, status: "error" as const } : tab);
         return { ...current, [fileId]: nextTabs };
       });
@@ -911,7 +963,7 @@ export function ContentPanel() {
       });
       if (getWorkspaceState().selectedItemId === fileId) setContentTab("summary-0");
     }
-  }, [setContentTab, setFileSummarizing, displayTitle]);
+  }, [setContentTab, setFileSummarizing, displayTitle, t]);
 
   // One-click "auto generate": only available in the regenerate (重新生成)
   // context. Reruns the file with the default template, skipping the picker
@@ -962,6 +1014,54 @@ export function ContentPanel() {
     text,
   ]);
 
+  // Beta Lynclaw summary: generate from the transcript via the agent service,
+  // then insert the result as a real cloud conclusion — it renders as a
+  // regular summary tab (editable, deletable, synced), no AI task involved.
+  const lynclawTabsEnabled = isLynclawSummaryTabsEnabled();
+  const handleLynclawApply = useCallback(async (fileId: string, format: LynclawSummaryFormat): Promise<FileConclusion> => {
+    let stage = "summarize-cloud-recording";
+    try {
+      const body = await generateCloudLynclawSummary(fileId, format, i18n.resolvedLanguage ?? i18n.language);
+      stage = "insert-conclusion";
+      const conclusionText = encodeLynclawSummary(format, body);
+      const teamId = files?.find((file) => file.id === fileId)?.teamId;
+      const inserted = await insertFileConclusion({ fileId, conclusionText, ...(teamId ? { teamId } : {}) });
+      // The insert contract returns the new id; tolerate id-bearing objects too.
+      const insertedId = typeof inserted === "string" && inserted.trim()
+        ? inserted.trim()
+        : typeof inserted === "object" && inserted !== null
+          ? String((inserted as { id?: unknown }).id ?? "").trim()
+          : String(inserted ?? "").trim();
+      // Refresh the conclusions list so this tab becomes server-backed (the
+      // pending-tab merge alone never reaches the delete/edit mutations' cache).
+      void qc.invalidateQueries({ queryKey: ["file-conclusions", fileId] });
+      if (!insertedId) throw new Error("Conclusion insert returned no id");
+      return { id: insertedId, fileId, conclusionText, templateName: "", createdAt: new Date().toISOString() };
+    } catch (error) {
+      logLynclawSummaryFailure(stage, format, error);
+      // LynclawSummaryError messages are i18n keys — resolve them for the dialog's error toast.
+      throw error instanceof LynclawSummaryError ? new Error(t(error.message)) : error;
+    }
+  }, [files, i18n, t, qc]);
+
+  // Regenerate a Lynclaw summary tab in place — same pipeline as the dialog
+  // entry, routed through the shared pending-tab lifecycle.
+  const handleLynclawRegenerate = useCallback(async (tab: SummaryTabModel) => {
+    const fileId = selectedItemId;
+    if (!fileId || !tab.lynclawFormat || currentFileSummarizing || isLocalSelectedItem) return;
+    const pendingId = `pending-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    handleResummaryStarted(fileId, "add", { pendingId, templateName: tab.name });
+    try {
+      const conclusion = await handleLynclawApply(fileId, tab.lynclawFormat);
+      handleResummaryFinished(fileId, true, "add", { pendingId, conclusion });
+      toast.success(text("resummarize.success", "总结已重新生成"));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : text("resummarize.unknown_error", "未知错误");
+      toast.error(text("resummarize.failed", "重新总结失败"), { description: msg });
+      handleResummaryFinished(fileId, false, "add", { pendingId });
+    }
+  }, [selectedItemId, currentFileSummarizing, isLocalSelectedItem, handleResummaryStarted, handleResummaryFinished, handleLynclawApply, text]);
+
   const handleDeleteSummary = useCallback((conclusionId: string, idx: number) => {
     if (!selectedItemId) return;
     // Stage the deletion; the themed confirm dialog fires the mutation.
@@ -985,6 +1085,13 @@ export function ContentPanel() {
     deleteConclusion.mutate(conclusionId, {
       onSuccess: () => {
         setPendingDeleteSummary(null);
+        // Lynclaw tabs live in the pending model until the refetch lands — drop
+        // the deleted id immediately so the tab never outlives its server row.
+        setPendingSummaryTabsByFile((current) => {
+          const tabs = selectedItemId ? current[selectedItemId] : undefined;
+          if (!tabs?.some((tab) => tab.id === conclusionId)) return current;
+          return { ...current, [selectedItemId!]: tabs.filter((tab) => tab.id !== conclusionId) };
+        });
         if (contentTab === `summary-${idx}`) {
           const nextIdx = idx > 0 ? idx - 1 : 0;
           setContentTab(visibleConclusionTexts.length > 1 ? `summary-${nextIdx}` : "outline");
@@ -992,7 +1099,7 @@ export function ContentPanel() {
       },
       onError: () => setPendingDeleteSummary(null),
     });
-  }, [pendingDeleteSummary, deleteConclusion, contentTab, setContentTab, visibleConclusionTexts.length, isLocalSelectedItem, selectedItemId, refreshLocalQueries]);
+  }, [pendingDeleteSummary, deleteConclusion, contentTab, setContentTab, visibleConclusionTexts.length, isLocalSelectedItem, selectedItemId, refreshLocalQueries, setPendingSummaryTabsByFile]);
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col bg-background">
@@ -1011,8 +1118,17 @@ export function ContentPanel() {
             onClick={() => setContentTab("transcription")}
           >
             <FileAudio className="size-3.5" />
-            <span>{t("workspace.transcription")}</span>
+            <span>{isDesktop ? t("workspace.desktop_transcript") : t("workspace.transcription")}</span>
           </TabButton>
+          {hasRecordingMarks && (
+            <TabButton
+              active={contentTab === "marks"}
+              onClick={() => setContentTab("marks")}
+            >
+              <Bookmark className="size-3.5" />
+              <span>{t("workspace.marks")}</span>
+            </TabButton>
+          )}
           <TabButton
             active={contentTab === "chapters"}
             onClick={() => setContentTab("chapters")}
@@ -1041,7 +1157,7 @@ export function ContentPanel() {
                 </TabButton>
               </ContextMenuTrigger>
               <ContextMenuContent>
-                {block.id !== LOCAL_SUMMARY_TAB_ID && (
+                {block.id !== LOCAL_SUMMARY_TAB_ID && !block.lynclawFormat && (
                   <ContextMenuItem
                     onClick={() => {
                       setSelectedConclusionIdForTemplate(block.id);
@@ -1058,6 +1174,14 @@ export function ContentPanel() {
                   <ContextMenuItem
                     onClick={() => void handleRegenerateLocalSummary()}
                     disabled={regeneratingLocalSummary}
+                  >
+                    <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
+                    <span>{t("resummarize.button")}</span>
+                  </ContextMenuItem>
+                ) : block.lynclawFormat ? (
+                  <ContextMenuItem
+                    onClick={() => void handleLynclawRegenerate(block)}
+                    disabled={!selectedItemId || currentFileSummarizing}
                   >
                     <RefreshCw className="size-3.5 text-muted-foreground" strokeWidth={1.5} />
                     <span>{t("resummarize.button")}</span>
@@ -1120,7 +1244,7 @@ export function ContentPanel() {
               <MoreHorizontal className="size-3.5" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52">
-              {activeSummary?.id !== LOCAL_SUMMARY_TAB_ID && (
+              {activeSummary?.id !== LOCAL_SUMMARY_TAB_ID && !activeSummary?.lynclawFormat && (
                 <DropdownMenuItem
                   onClick={() => {
                     if (!activeSummary?.id) return;
@@ -1181,9 +1305,9 @@ export function ContentPanel() {
         <div className={`flex-1 min-w-0 ${contentTab === "transcription" ? "overflow-hidden" : "overflow-auto"}`}>
           {!selectedItemId ? (
             <EmptyState />
-          ) : offlineVaultMarkdown ? (
+          ) : offlineVaultMarkdown && contentTab !== "marks" ? (
             <OfflineVaultView markdown={offlineVaultMarkdown} />
-          ) : isLoading ? (
+          ) : isLoading && contentTab !== "marks" ? (
             <LoadingState />
           ) : (
             <div className={`px-3 py-6 ${contentTab === "transcription" ? "flex flex-col h-full" : "min-h-full flex flex-col"}`}>
@@ -1275,7 +1399,9 @@ export function ContentPanel() {
                   key={`${currentFileRerunning ? "pending" : "done"}-${activeSummary?.status ?? "idle"}`}
                   className={`flex flex-1 min-h-0 flex-col transition-[opacity,filter] duration-300 ease-out animate-in fade-in slide-in-from-bottom-2 ${summaryRegenOverlay ? "opacity-40 blur-[1px]" : ""}`}
                 >
-                {currentFileRerunning ? (
+                {contentTab === "marks" ? (
+                  <RecordingMarksPanel {...recordingMarks} />
+                ) : currentFileRerunning ? (
                   <ResummaryPendingState />
                 ) : currentFileResummaryError ? (
                   <ResummaryErrorState
@@ -1386,15 +1512,26 @@ export function ContentPanel() {
                         {/* Audio player — shared by the 转写 and 章节 tabs; it
                             lives above tab-specific content so switching tabs
                             never unmounts it and chapter seeks keep working */}
-                        {playerAudioUrl && (
+                        {(playerAudioUrl || cloudAudio.managed) && (
                           <div className="w-full shrink-0">
                             <AudioPlayer
+                              key={cloudAudio.managed ? cloudAudio.cacheKey : undefined}
                               ref={audioPlayerRef}
                               src={playerAudioUrl}
-                              recordId={trackFilter === "all" ? selectedItemId : undefined}
+                              recordId={cloudAudio.audio?.id ?? (trackFilter === "all" ? selectedItemId : undefined)}
                               sourceIntervals={transcription?.audioSourceIntervals}
                               highlightTimeMs={highlightTimeMs}
-                              onEdit={isLocalSelectedItem && contentTab === "transcription" ? handleEditSelectedAudio : undefined}
+                              durationHint={selectedFile?.durationSeconds}
+                              animateWaveformLoading={contentTab === "transcription"}
+                              download={cloudAudio.managed ? {
+                                start: cloudAudio.download,
+                                disabled: cloudAudio.checking || cloudAudio.job?.pending,
+                                progress: cloudAudio.job?.pending ? cloudAudio.job.percent : undefined,
+                                failed: cloudAudio.job?.failed,
+                              } : undefined}
+                              onEdit={contentTab === "transcription"
+                                ? isLocalSelectedItem ? handleEditSelectedAudio : cloudAudio.audio ? handleEditCloudAudio : undefined
+                                : undefined}
                             />
                           </div>
                         )}
@@ -1551,10 +1688,11 @@ export function ContentPanel() {
                           },
                         }} />
                       );
+                      const html = block.lynclawFormat ? block.lynclawFormat === "html" : isHtmlContent(block.text);
                       if (sourceViewVisible) {
-                        return <SourceView code={block.text} language={isHtmlContent(block.text) ? "html" : "markdown"} />;
+                        return <SourceView code={block.text} language={html ? "html" : "markdown"} />;
                       }
-                      return isHtmlContent(block.text) ? (() => {
+                      return html ? (() => {
                         const { content, scopedStyles } = extractBody(block.text);
                         return (
                           <>
@@ -1566,7 +1704,7 @@ export function ContentPanel() {
                         <>
                           <SummaryMarkdownEditor
                             content={block.text}
-                            onChange={(markdown) => handleConclusionChange(block.id, markdown)}
+                            onChange={(markdown) => handleConclusionChange(block.id, markdown, block.lynclawFormat)}
                             onEditorReady={setSummaryEditor}
                           />
                           <FloatingMarkdownToolbar editor={summaryEditor} />
@@ -1583,7 +1721,7 @@ export function ContentPanel() {
                 </div>
               </div>
 
-              {contentTab !== "transcription" && (
+              {contentTab !== "transcription" && contentTab !== "marks" && (
                 <div className="mt-2 border-t border-stroke-quaternary pt-1.5 pb-1 text-center shrink-0">
                   <p className="text-3xs text-muted-foreground/60">{t("workspace.ai_disclaimer")}</p>
                 </div>
@@ -1629,6 +1767,7 @@ export function ContentPanel() {
         mode={summaryDialogMode}
         onStarted={handleResummaryStarted}
         onFinished={handleResummaryFinished}
+        onLynclawApply={lynclawTabsEnabled ? handleLynclawApply : undefined}
       />
 
       {/* Outside the dropdown tree: closing the ⋯ menu unmounts its subtree,
@@ -1729,7 +1868,7 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 
 function ScrollableTabs({ activeTab, children }: { activeTab: string; children: ReactNode }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const itemCount = Children.count(children);
+  const itemCount = Children.toArray(children).length;
   const { t } = useTranslation();
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -1944,7 +2083,7 @@ function extractBase64Images(code: string): { cleaned: string; images: string[] 
 }
 
 /** Source code viewer — displays raw HTML/Markdown with syntax highlighting + base64 image preview */
-function SourceView({ code, language }: { code: string; language: "html" | "markdown" }) {
+export function SourceView({ code, language }: { code: string; language: "html" | "markdown" }) {
   const { highlighted, images } = useMemo(() => {
     const { cleaned, images } = extractBase64Images(code);
     return { highlighted: highlightCode(cleaned, language), images };

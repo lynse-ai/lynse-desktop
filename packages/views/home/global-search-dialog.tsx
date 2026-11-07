@@ -1,5 +1,6 @@
 "use client";
 import { todoClosed } from "../todo/todo-api";
+import { useInspirationPrivacy } from "../inspiration/privacy-state";
 
 /**
  * Global search (全局搜索) — a ⌘K command palette over everything the client
@@ -53,10 +54,13 @@ export function GlobalSearchDialog({
   const notes = useNotes({ enabled: open });
   const todos = useTodos();
   const inspirationApi = getDesktopInspirationApi();
+  const inspirationScope = useInspirationPrivacy((state) => state.accountScope);
+  const inspirationBinding = useInspirationPrivacy((state) => state.binding);
   const inspirations = useQuery({
-    queryKey: ["inspirations"],
+    queryKey: ["inspirations", inspirationScope],
     queryFn: () => inspirationApi!.list(),
-    enabled: Boolean(inspirationApi) && open,
+    enabled: Boolean(inspirationApi) && open && !inspirationBinding,
+    networkMode: "always",
   });
 
   // A fresh query each time the palette opens.

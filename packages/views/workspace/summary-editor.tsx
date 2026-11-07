@@ -9,7 +9,10 @@ import {
   editorViewCtx,
   serializerCtx,
   remarkPluginsCtx,
+  prosePluginsCtx,
 } from "@milkdown/kit/core";
+import { Plugin } from "@milkdown/kit/prose/state";
+import { Decoration, DecorationSet } from "@milkdown/kit/prose/view";
 import { commonmark } from "@milkdown/kit/preset/commonmark";
 import { gfm } from "@milkdown/kit/preset/gfm";
 import { history } from "@milkdown/kit/plugin/history";
@@ -159,6 +162,39 @@ function proxyImages(root: HTMLElement) {
   }
 }
 
+/** Display paired mark delimiters without interpreting arbitrary inline HTML.
+ * Keep the original nodes so editing and Markdown export preserve the markup. */
+function recordingHighlightPlugin() {
+  return new Plugin({
+    props: {
+      decorations({ doc }) {
+        const decorations: Decoration[] = [];
+        doc.descendants((node, pos) => {
+          if (!node.isTextblock) return;
+          let opening: { from: number; to: number } | undefined;
+          node.forEach((child, offset) => {
+            if (child.type.name !== "html") return;
+            const from = pos + 1 + offset;
+            const to = from + child.nodeSize;
+            if (child.attrs.value === "<mark>") {
+              opening = { from, to };
+            } else if (child.attrs.value === "</mark>" && opening) {
+              const delimiter = { class: "recording-mark-delimiter", "aria-hidden": "true" };
+              decorations.push(Decoration.node(opening.from, opening.to, delimiter), Decoration.node(from, to, delimiter));
+              if (opening.to < from) {
+                decorations.push(Decoration.inline(opening.to, from, { nodeName: "mark", class: "recording-mark-text" }));
+              }
+              opening = undefined;
+            }
+          });
+          return false;
+        });
+        return DecorationSet.create(doc, decorations);
+      },
+    },
+  });
+}
+
 interface SummaryMarkdownEditorProps {
   content: string;
   onChange?: (markdown: string) => void;
@@ -207,6 +243,7 @@ export function SummaryMarkdownEditor({ content, onChange, onEditorReady }: Summ
       .config((ctx) => {
         ctx.set(rootCtx, root);
         ctx.set(defaultValueCtx, sanitizedContent);
+        ctx.update(prosePluginsCtx, (plugins) => [...plugins, recordingHighlightPlugin()]);
         ctx.set(remarkPluginsCtx, [{ plugin: remarkBreaks, options: undefined as unknown as Record<string, unknown> }]);
         ctx.update(editorViewOptionsCtx, (prev) => ({
           ...prev,

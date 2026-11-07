@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
 } from "@lynse/ui/components/ui/dialog";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Textarea } from "@lynse/ui/components/ui/textarea";
+import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Camera, Check, Loader2, RefreshCw, X } from "./icons";
 import { initI18n } from "@lynse/core/i18n";
@@ -16,6 +18,7 @@ import {
   buildIssueUrl,
   getDesktopDiagnosticsApi,
   getReportChannel,
+  resolveCaptureBackground,
   showScreenshotCaptureError,
   takePendingScreenshot,
   takePendingReportDescription,
@@ -23,6 +26,7 @@ import {
   type LogTail,
   type StagedScreenshot,
 } from "./diagnostics";
+import { ReportProblemAnnotator } from "./report-problem-annotator";
 import { RESOURCES } from "./locales";
 import { isTauri } from "./layout/use-maximized";
 
@@ -66,18 +70,27 @@ function composeIssueBody(input: { description: string; logTail: LogTail | null 
 }
 
 /**
- * The problem report surface, shared by its two faces: the standalone
- * report window (macOS) and the in-app dialog (Windows/web fallback).
+ * The problem report surface, shared by its two faces: the in-app dialog
+ * (the default everywhere) and the standalone report window (`?window=report`
+ * route, no longer opened automatically).
  * Auto-screenshots the main window at open time; submission creates the
  * CNB issue directly, with the prefilled GitHub form as the manual
  * fallback when the report channel fails.
+ *
+ * Clicking the screenshot swaps the form for the annotation editor (the
+ * face hides its own header meanwhile, see `onAnnotatingChange`); the form
+ * stays mounted underneath so the description survives the detour. In the
+ * dialog face the editor fills the whole app page — the popup grows to the
+ * viewport while it is open.
  */
 function ReportProblemForm({
   variant,
   onCapturingChange,
+  onAnnotatingChange,
 }: {
   variant: "dialog" | "window";
   onCapturingChange?: (capturing: boolean) => void;
+  onAnnotatingChange?: (annotating: boolean) => void;
 }) {
   const { t } = useTranslation();
   const { setOpen } = useReportProblemDialog();
@@ -94,6 +107,18 @@ function ReportProblemForm({
   const [phase, setPhase] = useState<Phase>("compose");
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState<Submitted | null>(null);
+  const [annotating, setAnnotating] = useState(false);
+  // An older host build without the composite command still shows the
+  // preview; it just isn't a way into the editor.
+  const [canAnnotate] = useState(() => Boolean(getDesktopDiagnosticsApi()?.saveAnnotatedScreenshot));
+
+  const changeAnnotating = useCallback(
+    (value: boolean) => {
+      setAnnotating(value);
+      onAnnotatingChange?.(value);
+    },
+    [onAnnotatingChange],
+  );
 
   function close() {
     if (variant === "window") {
@@ -113,7 +138,7 @@ function ReportProblemForm({
     let cancelled = false;
     const api = getDesktopDiagnosticsApi();
     api
-      ?.captureScreenshot?.()
+      ?.captureScreenshot?.(resolveCaptureBackground())
       .then((shot) => {
         if (!cancelled) setScreenshot(shot);
       })
@@ -149,7 +174,7 @@ function ReportProblemForm({
       // The in-app dialog must actually leave the screen before the capture
       // runs — give the compositor a beat to drop it.
       await new Promise((resolve) => setTimeout(resolve, variant === "dialog" ? 200 : 0));
-      const shot = await api.captureScreenshot();
+      const shot = await api.captureScreenshot(resolveCaptureBackground());
       setPreviewFailed(false);
       setScreenshot(shot);
     } catch (error) {
@@ -159,6 +184,29 @@ function ReportProblemForm({
       onCapturingChange?.(false);
     }
   }, [capturing, onCapturingChange, variant]);
+
+  /**
+   * Burn the editor's overlay into the staged capture. The host hands back
+   * a fresh staged file, so the preview and the eventual upload both pick
+   * up the marks. Failures keep the editor open with the marks intact.
+   */
+  const saveAnnotation = useCallback(
+    async (overlayDataUrl: string) => {
+      const api = getDesktopDiagnosticsApi();
+      if (!api?.saveAnnotatedScreenshot || !screenshot) return;
+      try {
+        const next = await api.saveAnnotatedScreenshot(screenshot.path, overlayDataUrl);
+        setPreviewFailed(false);
+        setScreenshot(next);
+        changeAnnotating(false);
+      } catch (error) {
+        console.warn("[report-screenshot] annotation save failed:", error);
+        toast.error(t("settings.report_annotate_failed"));
+        throw error;
+      }
+    },
+    [changeAnnotating, screenshot, t],
+  );
 
   async function handleSubmit() {
     if (!description.trim() || phase === "submitting") return;
@@ -212,6 +260,18 @@ function ReportProblemForm({
       </div>
     );
   }
+
+  if (annotating && screenshot) {
+    return (
+      <ReportProblemAnnotator
+        screenshot={screenshot}
+        onClose={() => changeAnnotating(false)}
+        onSave={saveAnnotation}
+      />
+    );
+  }
+
+  const previewClickable = canAnnotate && !capturing;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -267,15 +327,23 @@ function ReportProblemForm({
             </div>
           </div>
           {screenshot && !previewFailed ? (
-            <div className="overflow-hidden rounded-lg border bg-muted/30">
-              <img
-                src={screenshot.url}
-                alt={t("settings.report_screenshot_label")}
-                decoding="async"
-                onError={() => setPreviewFailed(true)}
-                className="max-h-72 w-full object-contain"
-              />
-            </div>
+            <>
+              <div className="overflow-hidden rounded-lg border bg-muted/30">
+                <img
+                  src={screenshot.url}
+                  alt={t("settings.report_screenshot_label")}
+                  decoding="async"
+                  onError={() => setPreviewFailed(true)}
+                  onClick={previewClickable ? () => changeAnnotating(true) : undefined}
+                  className={cn("max-h-72 w-full object-contain", previewClickable && "cursor-zoom-in")}
+                />
+              </div>
+              {canAnnotate && (
+                <p className="text-2xs leading-relaxed text-muted-foreground">
+                  {t("settings.report_annotate_hint")}
+                </p>
+              )}
+            </>
           ) : (
             <button
               type="button"
@@ -328,32 +396,60 @@ function ReportProblemForm({
 }
 
 /**
- * In-app problem report dialog — the Windows/web face of the report flow.
- * The whole content fades out while a retake captures the main window, so
- * the dialog never photographs itself.
+ * In-app problem report dialog — the face of the report flow in every
+ * window. The whole content fades out while a retake captures the main
+ * window, so the dialog never photographs itself. While the screenshot is
+ * being annotated the popup grows to the full window: a portal would land
+ * outside Base UI's dialog (dismissed as an outside press), and `fixed`
+ * inside the translated popup can't reach the viewport, so the popup itself
+ * is the editor's frame.
  */
 export function ReportProblemDialog() {
   const { open, setOpen } = useReportProblemDialog();
   const [capturing, setCapturing] = useState(false);
+  const [annotating, setAnnotating] = useState(false);
   const contentClassName = useMemo(
     () =>
-      `grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 transition-opacity sm:max-w-xl ${
-        capturing ? "opacity-0" : "opacity-100"
-      }`,
-    [capturing],
+      annotating
+        ? "gap-0 overflow-hidden p-0"
+        : `grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 transition-opacity sm:max-w-xl ${
+            capturing ? "opacity-0" : "opacity-100"
+          }`,
+    [annotating, capturing],
+  );
+  // Inline so the popup's own max-width / radius utilities can't win on
+  // stylesheet order.
+  const contentStyle = useMemo(
+    () =>
+      annotating
+        ? {
+            width: "100vw",
+            height: "100vh",
+            maxWidth: "none",
+            borderRadius: 0,
+            borderColor: "transparent",
+            gridTemplateRows: "minmax(0,1fr)",
+          }
+        : undefined,
+    [annotating],
   );
 
   // A submitted dialog returns to the compose form on reopen.
   useEffect(() => {
     if (!open) return;
     setCapturing(false);
+    setAnnotating(false);
   }, [open]);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className={contentClassName} showCloseButton={false}>
-        <DialogHeaderLike />
-        <ReportProblemForm variant="dialog" onCapturingChange={setCapturing} />
+      <DialogContent className={contentClassName} style={contentStyle} showCloseButton={false}>
+        {!annotating && <DialogHeaderLike />}
+        <ReportProblemForm
+          variant="dialog"
+          onCapturingChange={setCapturing}
+          onAnnotatingChange={setAnnotating}
+        />
       </DialogContent>
     </Dialog>
   );
@@ -373,10 +469,12 @@ function DialogHeaderLike() {
 }
 
 /**
- * Standalone problem-report window (macOS) — the `?window=report` route
- * created by the Rust `open_report_window` command, laid out per the
- * reference: title + subtitle, description box, screenshot with retake and
- * remove, cancel/submit.
+ * Standalone problem-report window — the `?window=report` route created by
+ * the Rust `open_report_window` command, laid out per the reference: title +
+ * subtitle, description box, screenshot with retake and remove, cancel/
+ * submit. The report flow no longer opens it automatically (the in-app
+ * dialog is the default everywhere, and annotating fills the app page
+ * there), but the route keeps working when invoked directly.
  *
  * Runs outside CoreProvider, so it bootstraps i18n itself (see the init
  * below). Re-asserting the native window title keeps it correct if the
@@ -387,6 +485,7 @@ export function ReportProblemWindow() {
   // passive effect is too late (see about-window.tsx for the full story).
   useMemo(() => initI18n({ resources: RESOURCES }), []);
   const { t } = useTranslation();
+  const [annotating, setAnnotating] = useState(false);
 
   useEffect(() => {
     if (!isTauri) return;
@@ -395,13 +494,15 @@ export function ReportProblemWindow() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
-      <div className="border-b px-6 py-5">
-        <h1 className="text-xl font-semibold leading-tight">{t("settings.report_title")}</h1>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground text-pretty">
-          {t("settings.report_subtitle")}
-        </p>
-      </div>
-      <ReportProblemForm variant="window" />
+      {!annotating && (
+        <div className="border-b px-6 py-5">
+          <h1 className="text-xl font-semibold leading-tight">{t("settings.report_title")}</h1>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground text-pretty">
+            {t("settings.report_subtitle")}
+          </p>
+        </div>
+      )}
+      <ReportProblemForm variant="window" onAnnotatingChange={setAnnotating} />
     </div>
   );
 }

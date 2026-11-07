@@ -17,7 +17,8 @@ describe("recording playback waveform", () => {
   });
   it("includes a non-silent right channel and preserves true silence", () => {
     const audio = { numberOfChannels: 2, getChannelData: (index: number) => new Float32Array(index ? [0, 0, 0.5, 0.5] : [0, 0, 0, 0]) } as AudioBuffer;
-    expect(computePeaks(audio, 2)).toEqual([0, 1]);
+    expect(computePeaks(audio, 2)).toEqual([0, 0.5]);
+    expect(computePeaks(audio, 2, 2.2)).toEqual([0, 1]);
   });
 
   it("loads long local recordings through the native peak cache and immediately drops stale peaks", async () => {

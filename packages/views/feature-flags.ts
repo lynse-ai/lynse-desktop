@@ -8,6 +8,8 @@
 export const featureFlags = {
   /** Inspiration page (`/inspiration`) — quick flomo-style capture + feed. */
   inspiration: true,
+  /** Enable only after the durable sync service and local-data migration are ready. */
+  inspirationCloudSync: false,
   /** Auto-record detected meetings (desktop only; user opts in from Settings).
    * The headless agent and the settings card gate on this so the feature can
    * be shipped or hidden from here alone. */
@@ -34,6 +36,14 @@ export const featureFlags = {
    * pipeline is still under release hold — exposure follows the beta gate
    * below (debug-channel builds, dev shells and the runtime test mode). */
   wiki: true,
+  /** Lynclaw summary tabs (Beta): the add-summary dialog lists Lynclaw
+   * pseudo-templates (Markdown / HTML, badged "Beta"). The client summarizes
+   * the transcript via the agent service and inserts the result as a real
+   * cloud conclusion, so it renders as a regular summary tab — editable,
+   * deletable and synced like any template summary. Beta while the output
+   * quality (inline images in particular) is being evaluated; the backend
+   * will own generation once it graduates. */
+  lynclawSummaryTabs: true,
 } as const;
 
 /**
@@ -67,6 +77,16 @@ export function isConnectionsEnabled(): boolean {
  */
 export function isWikiEnabled(): boolean {
   return featureFlags.wiki && isBetaFeaturesUnlocked();
+}
+
+/**
+ * Whether the beta Lynclaw summary pseudo-templates are exposed in the
+ * add-summary dialog. The single gate every entry point reads: the flag above
+ * AND the beta channel gate — debug-channel builds, dev shells and the
+ * runtime test mode show them; official builds hide the entries entirely.
+ */
+export function isLynclawSummaryTabsEnabled(): boolean {
+  return featureFlags.lynclawSummaryTabs && isBetaFeaturesUnlocked();
 }
 
 /**

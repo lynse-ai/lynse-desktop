@@ -56,8 +56,26 @@ describe("report screenshot desktop bridge", () => {
     expect(shot.path).toBe(path);
     expect(shot.url).toBe(`${prefix}${encodeURIComponent(assetId)}`);
     expect(decodeURIComponent(new URL(shot.url).pathname.slice(1))).toBe(assetId);
-    expect(ipc).toHaveBeenCalledWith("report_capture_main_screenshot", {});
+    expect(ipc).toHaveBeenCalledWith("report_capture_main_screenshot", { background: null });
     expect(nativeScreenshot.url).toContain("%2Ejpg");
+  });
+
+  it("forwards the requested background colour to the capture command", async () => {
+    const ipc = vi.fn((command: string) => {
+      if (command === "report_capture_main_screenshot") {
+        return { path: "/tmp/Lynse/inspirations/staging/report.jpg", url: "local-media://localhost/staging%3Areport%2Ejpg" };
+      }
+      if (command === "get_app_info") return { version: "test", platform: "macos" };
+      throw new Error(`Unexpected command: ${command}`);
+    });
+    mockWindows("main");
+    mockConvertFileSrc("macos");
+    mockIPC(ipc, { shouldMockEvents: true });
+    await installTauriBridge();
+
+    await diagnostics().captureScreenshot!("#ffffff");
+
+    expect(ipc).toHaveBeenCalledWith("report_capture_main_screenshot", { background: "#ffffff" });
   });
 
   it("propagates native capture errors to the report form", async () => {

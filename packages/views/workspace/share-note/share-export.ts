@@ -106,6 +106,65 @@ export function buildNoteMarkdownFile(
 }
 
 // ---------------------------------------------------------------------------
+// Remote image inlining
+// ---------------------------------------------------------------------------
+
+const REMOTE_IMAGE_RE = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
+const IMAGE_FETCH_TIMEOUT_MS = 10_000;
+
+/** Fetch one image and return it as a data URL; null on any failure. */
+async function fetchImageAsDataUrl(url: string): Promise<string | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
+    const res = await fetch(url, { signal: controller.signal, mode: "cors" });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (!blob.type.startsWith("image/") || blob.size === 0) return null;
+    return await new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Replace `![alt](https://…)` image links in share content with inlined data
+ * URLs before the card mounts, so rendering and PNG/PDF capture never depend
+ * on network or CORS timing. Failures keep the original link (the card then
+ * degrades the same way the note view does). `cache` dedupes across sections.
+ */
+export async function embedRemoteImagesAsDataUrls(
+  text: string,
+  cache: Map<string, string>,
+): Promise<string> {
+  if (!text?.includes("](")) return text;
+  const matches = Array.from(text.matchAll(REMOTE_IMAGE_RE));
+  if (!matches.length) return text;
+  let result = text;
+  for (const match of matches) {
+    const full = match[0];
+    const alt = match[1] ?? "";
+    const url = match[2] ?? "";
+    if (!full || !url) continue;
+    let dataUrl = cache.get(url);
+    if (dataUrl === undefined) {
+      dataUrl = (await fetchImageAsDataUrl(url)) ?? "";
+      cache.set(url, dataUrl);
+    }
+    if (dataUrl) {
+      result = result.replace(full, `![${alt}](${dataUrl})`);
+    }
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Card capture (PNG) + PDF pagination
 // ---------------------------------------------------------------------------
 

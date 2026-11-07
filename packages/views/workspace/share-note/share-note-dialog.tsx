@@ -4,7 +4,7 @@
  * Note share dialog: live card preview, theme picker (image/PDF), format
  * selector (Markdown / PDF / image) and the save / system-share / copy actions.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -33,6 +33,7 @@ import {
   captureCardPng,
   cardPngToPdfBytes,
   copyImageBytesToClipboard,
+  embedRemoteImagesAsDataUrls,
   countContentWords,
   saveBytesToDisk,
   shareOrSaveBytes,
@@ -86,19 +87,54 @@ export function ShareNoteDialog({
   }, [createdAt, i18n.language]);
 
   const includedOutlineText = includeOutline ? outlineText : null;
+  // 预下载内容里的远程图片并内嵌为 data URL：卡片渲染与 PNG/PDF 截图全程
+  // 本地化，不依赖截图时的网络/CORS 时序；失败项保留原链接自然降级。
+  const [embedded, setEmbedded] = useState<{
+    outlineText: string | null;
+    conclusions: ShareCardSection[];
+  } | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const cache = new Map<string, string>();
+    let cancelled = false;
+    (async () => {
+      const [embeddedOutline, sections] = await Promise.all([
+        embedRemoteImagesAsDataUrls(outlineText ?? "", cache),
+        Promise.all(
+          conclusions.map(async (section) => ({
+            ...section,
+            text: await embedRemoteImagesAsDataUrls(section.text, cache),
+          })),
+        ),
+      ]);
+      if (!cancelled) {
+        setEmbedded({
+          outlineText: embeddedOutline || null,
+          conclusions: sections,
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, outlineText, conclusions]);
+  const cardOutlineText = includedOutlineText
+    ? (embedded?.outlineText ?? includedOutlineText)
+    : null;
+  const cardConclusions = embedded?.conclusions ?? conclusions;
   const cardProps = {
     theme,
     title: noteTitle,
     dateLabel,
     outlineLabel: t("vault.section_outline"),
     summaryLabel: t("vault.section_summary"),
-    outlineText: includedOutlineText,
-    conclusions,
+    outlineText: cardOutlineText,
+    conclusions: cardConclusions,
     showBrand,
     wordCountLabel: t("share.word_count", {
       count: countContentWords([
-        includedOutlineText ? stripMindmapContent(includedOutlineText) : null,
-        ...conclusions.map((section) => stripMindmapContent(section.text)),
+        cardOutlineText ? stripMindmapContent(cardOutlineText) : null,
+        ...cardConclusions.map((section) => stripMindmapContent(section.text)),
       ]),
     }),
   };

@@ -1779,7 +1779,17 @@ export function ContentPanel() {
         title={displayTitle}
         createdAt={selectedCreatedAt}
         outlineText={outlineRaw}
-        conclusions={conclusionTexts}
+        /* 分享当前正看的这份总结：Lynclaw 总结 tab 的分享只带 activeSummary，
+           没有激活 tab 时退回全部总结的旧行为。 */
+        conclusions={
+          activeSummary
+            ? [{
+                id: activeSummary.id,
+                name: activeSummary.name,
+                text: activeSummary.text,
+              }]
+            : conclusionTexts
+        }
       />
 
       <DeleteConfirmDialog

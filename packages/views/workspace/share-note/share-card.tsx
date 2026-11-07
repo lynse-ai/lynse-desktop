@@ -311,6 +311,25 @@ export async function mountShareCardOffscreen(props: ShareCardProps): Promise<Of
   root.render(<ShareCard {...props} />);
   // Let React commit and markdown/HTML rendering settle before capture.
   await new Promise((resolve) => setTimeout(resolve, 150));
+  // Offscreen containers never intersect the viewport, so `loading="lazy"`
+  // images stay unfetched and rasterize as blank boxes. Force eager loading
+  // and wait for every image to settle — bounded so one stalled URL can't
+  // hang the share dialog.
+  const images = Array.from(host.querySelectorAll("img"));
+  for (const img of images) img.loading = "eager";
+  await Promise.race([
+    Promise.all(
+      images.map(
+        (img) =>
+          new Promise<void>((resolve) => {
+            if (img.complete) return resolve();
+            img.addEventListener("load", () => resolve(), { once: true });
+            img.addEventListener("error", () => resolve(), { once: true });
+          }),
+      ),
+    ),
+    new Promise((resolve) => setTimeout(resolve, 8000)),
+  ]);
   try {
     await Promise.race([
       document.fonts?.ready ?? Promise.resolve(),

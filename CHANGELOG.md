@@ -19,7 +19,7 @@
 > advertised it (its manifest mirror failed and the rollout was cancelled), so
 > that work plus the todo card redesign shipped together as 1.2.7.
 
-## 1.2.8 (2026-11-05)
+## 1.2.8 (2026-11-08)
 
 ### New Features
 
@@ -27,6 +27,7 @@
 - Lynclaw summaries can be filed into the notes list and browsed from a dedicated panel, with Markdown/HTML formats selectable when generating from a recording.
 - Recordings synced from the cloud can fetch their audio on demand for playback.
 - Report-a-problem screenshots can be annotated before sending.
+- Knowledge-base synthesis no longer fails as a whole when a single source fails: completed sections are kept, failing sources are recorded, and the next retry runs automatically once before manual retry is needed.
 
 ### 新功能
 
@@ -34,6 +35,7 @@
 - Lynclaw 总结可存入笔记列表并从专属面板查看，录音侧生成时可选择 Markdown/HTML 格式。
 - 云端录音可按需拉取音频进行播放。
 - 问题反馈截图发送前支持标注。
+- 知识库整理遇到单个来源失败不再整体失败：已成功的部分会保留并记录失败来源，下一轮自动重试一次，之后可手动重试。
 
 ### Improvements
 
@@ -42,11 +44,14 @@
 - Chat and recording-side chat auto-scrolling now follows streaming content only while the reader is already near the bottom, avoiding forced jumps while reviewing older messages.
 - Summary failures now stay in their own tab with an in-place retry action, while existing summaries, outlines and transcripts remain readable; completed summaries are shown once even if task responses and refreshes race.
 - Summary generation, local transcription, upload and retry states use a shared, clearer task feedback layout with consistent controls and activity treatment.
+- Summary tabs gained a right-click menu action to delete a summary, using the same confirmation flow as the ··· menu.
 
 ### Fixed
 
 - The main update dialog no longer mounts twice or allows duplicate dialogs to compete for focus and assistive-technology visibility.
 - Mark photo captions now show the playback position in the recording (e.g. 00:08) instead of rendering the recording-relative timestamp as a 1970 date.
+- Sharing a Lynclaw summary now shares the tab you are viewing instead of the whole summary collection.
+- Images in shared cards are force-loaded before the screenshot is taken, so PNG/PDF exports no longer contain blank placeholders for lazy-loaded images.
 
 ### 改进
 
@@ -55,11 +60,14 @@
 - 聊天页与录音侧栏聊天只在用户已经阅读到底部附近时自动跟随流式内容，回看旧消息时不再被强制拉到底部。
 - 总结失败会保留在对应页签并提供原位重试，原有总结、大纲和转写仍可查看；任务回包与刷新竞争时，完成的总结只会显示一次。
 - 总结生成、本地转写、上传和重试状态使用统一且更清晰的任务反馈布局，控件与活动指示表现一致。
+- 总结标签的右击菜单新增「删除总结」，确认流程与「···」更多菜单一致。
 
 ### 错误修复
 
 - 主界面的更新弹窗不再重复挂载，避免多个弹窗争夺焦点或影响辅助技术可见性。
 - 标记图片的时间说明改为显示录音内播放位置（如 00:08），不再把相对时间戳渲染成 1970 年的日期。
+- Lynclaw 总结的「分享」现在分享当前正在查看的总结 tab，而不是全部总结合集。
+- 分享卡片截图前强制加载懒加载图片，PNG/PDF 导出不再出现空白占位。
 
 ## 1.2.7 (2026-11-04)
 

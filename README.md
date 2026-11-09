@@ -59,6 +59,17 @@ pnpm --filter @lynse/tauri build   # 打包桌面端（.app/.dmg/msi）
 
 推送 `v*` 格式的 tag（如 `v1.1.6`）即触发 GitHub Actions：构建 macOS（dmg + app）与 Windows（msi）安装包、生成签名的更新清单（latest.json）、发布 GitHub Release 并镜像到 CloudBase 更新源。**不要**在本地用 `gh release create` 手工建 Release。
 
+**Windows 代码签名**：未签名的 MSI 与 `lynse-tauri.exe` 会被 Windows 11「智能应用控制」拦截（提示"无法验证其发布者"）。配置下列 Secrets / Variables 后，release workflow 自动签名；未配置时仍可发布，但输出未签名包并给出告警。
+
+| 名称 | 类型 | 说明 |
+| --- | --- | --- |
+| `LYNSE_WINDOWS_SIGN_COMMAND` | Secret | 云 HSM 签名 CLI 命令模板，`{file}` 替换为带引号的绝对路径，支持 `$env:XXX`。例：`AzureSignTool sign -kvu <url> -kvc <cert> -kvi <id> -kvs <secret> -tr http://timestamp.digicert.com -td sha256 {file}` |
+| `WINDOWS_CERTIFICATE` / `WINDOWS_CERTIFICATE_PASSWORD` | Secret | base64 `.pfx` 与密码，仅用于自签证书演练或存量证书（2023 年 6 月起 CA 不再签发可导出的代码签名 `.pfx`） |
+| `WINDOWS_TIMESTAMP_URL` | Variable | RFC3161 时间戳服务器，默认 `http://timestamp.digicert.com` |
+| `LYNSE_REQUIRE_WINDOWS_SIGNING` | Variable | 设为 `1` 时缺少签名凭据直接失败，否则只告警 |
+
+签名在 `tauri build` 内部完成（`bundle.windows.signCommand`），这样 minisign 更新签名 `.sig` 覆盖的就是已签名的 MSI；按需下载的 STT sidecar 会在打包 runtime archive 前单独签名。
+
 ## English
 
 Lynse is a cross-platform desktop app (with a Web edition): import meeting recordings, audio/video, or documents — **on-device engines** handle speech transcription and speaker identification, then a cloud LLM turns the transcript into structured minutes. Local-first means your audio can stay on your machine: transcription, voiceprints, and hotwords all run locally.
@@ -111,6 +122,17 @@ pnpm --filter @lynse/tauri build   # Bundle the desktop app (.app/.dmg/msi)
 ### Releasing
 
 Pushing a `v*` tag (e.g. `v1.1.6`) triggers GitHub Actions: it builds the macOS (dmg + app) and Windows (msi) bundles, generates the signed update manifest (latest.json), publishes the GitHub Release, and mirrors it to the CloudBase update source. Do **not** create releases manually with `gh release create`.
+
+**Windows code signing**: an unsigned MSI / `lynse-tauri.exe` is blocked by Windows 11 Smart App Control ("publisher could not be verified"). Configure these secrets / variables to enable signing; without them the release still builds but ships unsigned with a warning.
+
+| Name | Type | Purpose |
+| --- | --- | --- |
+| `LYNSE_WINDOWS_SIGN_COMMAND` | Secret | Cloud-HSM signer command template; `{file}` becomes the quoted absolute path and `$env:XXX` is expanded. E.g. `AzureSignTool sign -kvu <url> -kvc <cert> -kvi <id> -kvs <secret> -tr http://timestamp.digicert.com -td sha256 {file}` |
+| `WINDOWS_CERTIFICATE` / `WINDOWS_CERTIFICATE_PASSWORD` | Secret | Base64 `.pfx` + password, for self-signed rehearsal or legacy certs only (public CAs stopped issuing exportable code-signing `.pfx` in June 2023) |
+| `WINDOWS_TIMESTAMP_URL` | Variable | RFC3161 timestamp server, defaults to `http://timestamp.digicert.com` |
+| `LYNSE_REQUIRE_WINDOWS_SIGNING` | Variable | Set to `1` to fail instead of warn when no credentials are configured |
+
+Signing runs inside `tauri build` via `bundle.windows.signCommand`, so the minisign updater `.sig` covers the already-signed MSI. On-demand STT sidecars are signed separately before the runtime archive is packaged.
 
 ---
 

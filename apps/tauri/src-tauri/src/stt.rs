@@ -8,8 +8,8 @@
 //! per transcription request.
 
 use crate::{
-    ensure_mlx_venv, ensure_whisperx_venv, mlx_script_path, run_mlx, whisperx_script_path,
-    CommandResult,
+    ensure_mlx_venv, ensure_whisperx_venv, mlx_script_path, run_mlx, silent_command,
+    whisperx_script_path, CommandResult,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -900,7 +900,7 @@ pub(crate) fn convert_to_wav_sr(
     // `.output()` rather than `.status()`: the pipes are drained so a chatty
     // ffmpeg cannot block, and its stderr is the only record of WHY a conversion
     // died — an exit code alone reached the user as a bare "FFmpeg 转换音频失败".
-    let run = Command::new(&ffmpeg)
+    let run = silent_command(&ffmpeg)
         .args([
             "-y",
             "-i",
@@ -1444,7 +1444,7 @@ impl BatchSttAdapter for FunasrAdapter {
             "[stt] funasr 启动：sidecar={sidecar_base} model={model_id} wav={} bytes threads={threads}",
             std::fs::metadata(&wav).map(|meta| meta.len()).unwrap_or_default()
         );
-        let run = Command::new(&sidecar)
+        let run = silent_command(&sidecar)
             .args(&args)
             .output()
             .map_err(|error| format!("无法启动 FunASR：{error}"))?;
@@ -1545,7 +1545,7 @@ impl BatchSttAdapter for WhisperAdapter {
             model_path.file_name().and_then(|name| name.to_str()).unwrap_or("?"),
             std::fs::metadata(&wav).map(|meta| meta.len()).unwrap_or_default()
         );
-        let run = Command::new(&sidecar)
+        let run = silent_command(&sidecar)
             .args(&args)
             .output()
             .map_err(|error| format!("无法启动 Whisper：{error}"))?;
@@ -1616,7 +1616,7 @@ pub(crate) fn help_advertises_one_shot(help: &str) -> bool {
 /// fetched a bad archive keep it — so check the advertised interface and name
 /// the fix instead of relaying a CLI parse error.
 fn vibeasr_protocol_problem(sidecar: &Path) -> Option<String> {
-    let run = Command::new(sidecar).arg("--help").output().ok()?;
+    let run = silent_command(sidecar).arg("--help").output().ok()?;
     let help = format!(
         "{}{}",
         String::from_utf8_lossy(&run.stdout),
@@ -1671,7 +1671,7 @@ impl BatchSttAdapter for VibeVoiceAdapter {
 
         let threads = sidecar_threads();
 
-        let mut command = Command::new(&sidecar);
+        let mut command = silent_command(&sidecar);
         command
             .arg("--vae-model")
             .arg(&vae)
@@ -2430,7 +2430,7 @@ mod tests {
             &sidecar_threads(),
             None,
         );
-        let run = Command::new(&sidecar)
+        let run = silent_command(&sidecar)
             .args(&args)
             .output()
             .expect("spawn whisper sidecar");

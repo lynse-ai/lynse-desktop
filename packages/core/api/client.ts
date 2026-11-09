@@ -284,7 +284,18 @@ export class ApiClient {
 
     if (res.status === 401) {
       if (authScope === "session") {
-        this.onUnauthorized?.();
+        // Name the culprit request: a silent onUnauthorized here reads as a
+        // spontaneous logout with zero trace (the login-kick investigation).
+        console.warn(`[auth-kick] HTTP 401 on ${init.method ?? "GET"} ${baseUrl}${path} (scope=${authScope}, hadToken=${!!requestToken})`);
+        // A rejection from a NON-main backend (the AI-assistant deployment)
+        // reflects that deployment's view of the token — its host whitelist,
+        // its binding state — not the session itself. The main gateway
+        // enforces its own expiry, so dropping the session here only ever
+        // logged users out while their Lynse session was still alive (the
+        // context-inbox 401 one second after every login).
+        if (baseUrl === this.backendUrl) {
+          this.onUnauthorized?.();
+        }
         throw new ApiError(res.status, "Unauthorized");
       }
     }
@@ -335,7 +346,13 @@ export class ApiClient {
           json.code === GATEWAY_SESSION_EXPIRED_CODE ||
           /not logged in|session has expired/i.test(envelopeMessage)
         )) {
-          this.onUnauthorized?.();
+          console.warn(`[auth-kick] envelope ${json.code} "${envelopeMessage}" on ${init.method ?? "GET"} ${baseUrl}${path} (scope=${authScope}, hadToken=${!!requestToken})`);
+          // Non-main backends judge the token through their own host
+          // whitelist/binding — their verdict must not drop the session
+          // (see the HTTP 401 branch above for the full rationale).
+          if (baseUrl === this.backendUrl) {
+            this.onUnauthorized?.();
+          }
         }
         // `data` may carry useful fields even on failure (e.g. `cooldown`
         // alongside error.operation.too.frequent).
@@ -449,7 +466,10 @@ export class ApiClient {
         if (agentChat && (this.token !== requestToken || this.sessionRevision !== revision)) throw new ApiError(401, "Session changed or unavailable");
 
         if (res.status === 401) {
-          this.onUnauthorized?.();
+          console.warn(`[auth-kick] HTTP 401 on stream POST ${baseUrl}${path} (agentChat=${agentChat}, hadToken=${!!requestToken})`);
+          if (baseUrl === this.backendUrl) {
+            this.onUnauthorized?.();
+          }
           throw new ApiError(res.status, "Unauthorized");
         }
         if (!res.ok) {

@@ -76,6 +76,7 @@ export function createAuthStore(opts: AuthOpts) {
      */
     function persistSession(result: AuthSession, apiUrl?: string) {
       clearWorkBuddyTokenCache();
+      console.warn(`[auth-kick] login success user=${result.user?.id ?? "?"} baseUrl=${apiUrl ?? opts.api.getBaseUrl()} hasApiKey=${!!result.apiKey} tokenHead=${result.accessToken.slice(0, 10)}`);
       if (apiUrl) {
         opts.api.setBaseUrl(apiUrl);
         opts.storage.setItem("lynse_api_url", apiUrl);
@@ -103,7 +104,10 @@ export function createAuthStore(opts: AuthOpts) {
 
     /** Start bounded registration in the background; chat waits for the same promise. */
     function registerBackendHost() {
-      void opts.api.ensureAgentSession().catch(() => undefined);
+      void opts.api.ensureAgentSession().then(
+        () => console.warn(`[auth-kick] agent host registered (agent=${opts.api.getAgentBaseUrl() ?? "main"} host=${opts.api.getBaseUrl()})`),
+        (error: unknown) => console.warn(`[auth-kick] agent host registration failed (agent=${opts.api.getAgentBaseUrl() ?? "main"} host=${opts.api.getBaseUrl()}): ${error instanceof Error ? error.message : String(error)}`),
+      );
     }
 
     return {
@@ -170,6 +174,9 @@ export function createAuthStore(opts: AuthOpts) {
       persistSession(result, apiUrl),
 
     logout: () => {
+      // The stack names whoever dropped the session (onUnauthorized vs a
+      // user action) — the only way to tell a kick from a click in the log.
+      console.warn(`[auth-kick] logout invoked\n${new Error("logout caller").stack ?? ""}`);
       clearWorkBuddyTokenCache();
       if (!opts.cookieAuth) {
         opts.storage.removeItem("lynse_api_key");
@@ -191,6 +198,7 @@ export function createAuthStore(opts: AuthOpts) {
     restoreSession: async () => {
       const savedApiKey = opts.storage.getItem("lynse_api_key");
       const savedToken = opts.storage.getItem("lynse_token");
+      console.warn(`[auth-kick] restoreSession savedApiKey=${savedApiKey ? `yes (${savedApiKey.slice(0, 8)}…)` : "no"} savedToken=${savedToken ? `yes (${savedToken.slice(0, 10)}…)` : "no"}`);
 
       if (savedApiKey) {
         opts.api.setApiKey(savedApiKey);
@@ -213,11 +221,13 @@ export function createAuthStore(opts: AuthOpts) {
               ),
             ),
           ]);
+          console.warn(`[auth-kick] restore ok (apikey mint) tokenHead=${res.accessToken.slice(0, 10)}`);
           opts.storage.setItem("lynse_token", res.accessToken);
           opts.api.setToken(res.accessToken);
           set({ isAuthenticated: true, isLoading: false });
           registerBackendHost();
         } catch {
+          console.warn(`[auth-kick] restore failed (apikey mint rejected) — falling to login page`);
           opts.api.setToken(null);
           opts.storage.removeItem("lynse_token");
           set({ isAuthenticated: false, isLoading: false });

@@ -117,6 +117,76 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Detect Windows code-signing secrets
+        id: winsign
+        if: runner.os == 'Windows'
+        # Windows 11 Smart App Control (and SmartScreen) block unsigned binaries
+        # with "we couldn't verify the publisher". Signing is opt-in via secrets,
+        # mirroring the macOS APPLE_* behaviour: a repo without credentials
+        # still releases (unsigned, with a loud warning) instead of failing.
+        #
+        #   LYNSE_WINDOWS_SIGN_COMMAND (secret, recommended for production)
+        #       Command template for any cloud-HSM / key-vault signer. `{file}`
+        #       (or "{file}") is replaced with the quoted absolute path and
+        #       $env:SECRET references are expanded. Example:
+        #       AzureSignTool sign -kvu <url> -kvc <cert> -kvi <id> -kvs <secret> -tr http://timestamp.digicert.com -td sha256 {file}
+        #       Every exe/dll/msi passes through this one command.
+        #   WINDOWS_CERTIFICATE + WINDOWS_CERTIFICATE_PASSWORD (secrets)
+        #       Base64 .pfx for self-signed rehearsal / legacy certificates.
+        #       Public CAs stopped issuing exportable .pfx in June 2023.
+        #   WINDOWS_TIMESTAMP_URL (variable, optional)
+        #       RFC3161 server; defaults to http://timestamp.digicert.com.
+        #   LYNSE_REQUIRE_WINDOWS_SIGNING (variable, "1" to enforce)
+        #       Fail the build instead of warning when nothing is configured.
+        #
+        # Secrets must stay absent rather than empty when unset. Credentials are
+        # forwarded through GITHUB_ENV so tauri build's child processes inherit
+        # them; the enabled output (not env) gates the later steps because GITHUB_ENV
+        # values are not reliably visible in step-level `if` expressions.
+        shell: pwsh
+        env:
+          WIN_CERT: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WIN_CERT_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WIN_SIGN_COMMAND: ${{ secrets.LYNSE_WINDOWS_SIGN_COMMAND }}
+          WIN_TIMESTAMP_URL: ${{ vars.WINDOWS_TIMESTAMP_URL }}
+          REQUIRE_SIGNING: ${{ vars.LYNSE_REQUIRE_WINDOWS_SIGNING }}
+        run: |
+          $enabled = $false
+          if (($env:WIN_CERT -and -not $env:WIN_CERT_PASSWORD) -or (-not $env:WIN_CERT -and $env:WIN_CERT_PASSWORD)) {
+            throw 'WINDOWS_CERTIFICATE and WINDOWS_CERTIFICATE_PASSWORD must be configured together'
+          }
+          if ($env:WIN_SIGN_COMMAND) {
+            $cmd = ($env:WIN_SIGN_COMMAND -replace '[\r\n]+', ' ').Trim()
+            Add-Content $env:GITHUB_ENV "LYNSE_WINDOWS_SIGN_COMMAND=$cmd"
+            $enabled = $true
+          }
+          if ($env:WIN_CERT -and $env:WIN_CERT_PASSWORD) {
+            # GITHUB_ENV is line-based: strip any whitespace a pasted base64
+            # blob may contain, and any newline in the password.
+            $b64 = $env:WIN_CERT -replace '\s', ''
+            $pass = $env:WIN_CERT_PASSWORD -replace '[\r\n]+', ''
+            Add-Content $env:GITHUB_ENV "WINDOWS_CERTIFICATE=$b64"
+            Add-Content $env:GITHUB_ENV "WINDOWS_CERTIFICATE_PASSWORD=$pass"
+            $enabled = $true
+          }
+          if ($env:WIN_TIMESTAMP_URL) {
+            Add-Content $env:GITHUB_ENV "WINDOWS_TIMESTAMP_URL=$($env:WIN_TIMESTAMP_URL)"
+          }
+          if ($env:REQUIRE_SIGNING) {
+            Add-Content $env:GITHUB_ENV "LYNSE_REQUIRE_WINDOWS_SIGNING=$($env:REQUIRE_SIGNING)"
+          }
+          Add-Content $env:GITHUB_OUTPUT "enabled=$($enabled.ToString().ToLowerInvariant())"
+          if (-not $enabled -and $env:REQUIRE_SIGNING -eq '1') {
+            # The signer script is never reached when every signing step is
+            # gated off, so enforce the opt-in here instead.
+            throw 'LYNSE_REQUIRE_WINDOWS_SIGNING=1 but no Windows code-signing credentials are configured'
+          }
+          if ($enabled) {
+            Write-Host 'Windows Authenticode signing enabled.'
+          } else {
+            Write-Host '::warning::No Windows code-signing secrets configured — the MSI and lynse-tauri.exe ship UNSIGNED and Windows 11 Smart App Control will block them. See the "Detect Windows code-signing secrets" step in release.yml.'
+          }
+
       - name: Verify runtime help checks
         run: bash apps/tauri/scripts/test-sidecar-help.sh
 
@@ -126,6 +196,27 @@ jobs:
 
       - name: Fetch / build STT sidecars
         run: bash apps/tauri/scripts/fetch-sidecars.sh
+
+      - name: Authenticode-sign Windows STT sidecars
+        if: runner.os == 'Windows' && steps.winsign.outputs.enabled == 'true'
+        # The on-demand runtime archive is NOT part of the MSI, so Tauri's
+        # signCommand never sees these binaries. Sign them BEFORE the archive
+        # is tarred (its SHA and the updater manifest are computed afterwards,
+        # so re-hashing stays correct) and before the smoke test, which then
+        # also proves signing did not corrupt the executables.
+        # Third-party release binaries (FunASR, FFmpeg) are re-signed under the
+        # Lynse publisher: Smart App Control judges every process, so an
+        # unsigned sidecar would still be blocked at transcription time.
+        shell: pwsh
+        run: |
+          $script = Join-Path $env:GITHUB_WORKSPACE 'apps/tauri/scripts/sign-windows.ps1'
+          $sidecars = Join-Path $env:GITHUB_WORKSPACE 'apps/tauri/src-tauri/resources/sidecars'
+          $files = @(Get-ChildItem -LiteralPath $sidecars -File |
+            Where-Object { $_.Extension -in @('.exe', '.dll') } |
+            Select-Object -ExpandProperty FullName)
+          if ($files.Count -eq 0) { throw "No Windows sidecar binaries found in $sidecars" }
+          Write-Host "Signing $($files.Count) sidecar binaries"
+          & $script -Files $files -Verify
 
       - name: Smoke test sidecars
         # Every sidecar must launch: the Windows vibeasr.exe is statically
@@ -341,6 +432,19 @@ jobs:
           cargo fetch --manifest-path apps/tauri/src-tauri/Cargo.toml --locked
           python3 apps/tauri/scripts/test-logging-relaunch.py
 
+      - name: Configure Tauri Windows signCommand
+        if: runner.os == 'Windows' && steps.winsign.outputs.enabled == 'true'
+        # signCommand runs INSIDE `tauri build`: Tauri signs the main exe and
+        # the MSI before computing the minisign updater .sig. Re-signing the
+        # MSI after the build would silently invalidate every in-app update.
+        # Only this CI working copy is mutated (the main tauri.conf.json, so
+        # the setting cannot be lost to platform-config merging), with an
+        # absolute script path because tauri build's cwd is not guaranteed.
+        shell: pwsh
+        run: |
+          node apps/tauri/scripts/configure-windows-signing.cjs `
+            --script (Join-Path $env:GITHUB_WORKSPACE 'apps/tauri/scripts/sign-windows.ps1')
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -380,6 +484,27 @@ jobs:
           prerelease: ${{ contains(inputs.release_tag || github.ref_name, '-') }}
           includeRelease: true
           includeUpdaterJson: true
+
+      - name: Verify Windows Authenticode signatures
+        if: runner.os == 'Windows' && steps.winsign.outputs.enabled == 'true'
+        # Hard gate: a release whose signing silently no-oped is worse than an
+        # unsigned release, because the updater .sig would then cover a
+        # different MSI than the one users install.
+        shell: pwsh
+        run: |
+          $root = $env:GITHUB_WORKSPACE
+          $exe = Join-Path $root 'apps/tauri/src-tauri/target/release/lynse-tauri.exe'
+          $msiDir = Join-Path $root 'apps/tauri/src-tauri/target/release/bundle/msi'
+          $msi = @(Get-ChildItem -LiteralPath $msiDir -Filter '*.msi' -File | Select-Object -First 1)
+          if ($msi.Count -eq 0) { throw "No MSI found under $msiDir" }
+          foreach ($f in @($exe, $msi[0].FullName)) {
+            if (-not (Test-Path -LiteralPath $f)) { throw "Missing release artifact: $f" }
+            $sig = Get-AuthenticodeSignature -FilePath $f
+            if ($sig.Status -eq 'NotSigned' -or -not $sig.SignerCertificate) {
+              throw "No Authenticode signature on $f (status $($sig.Status))"
+            }
+            Write-Host "OK $($sig.Status) — $f — $($sig.SignerCertificate.Subject)"
+          }
 
       - name: Notarize and staple macOS installer
         if: runner.os == 'macOS'

@@ -539,6 +539,21 @@ pub(crate) fn request_calendar_permission(app: &AppHandle) {
     }
 }
 
+/// A `Command` that will not flash a console window on Windows. Release builds
+/// run with `#![windows_subsystem = "windows"]`, so every spawned console
+/// subprocess (curl, tar, certutil, python, pip, the sidecars) pops a terminal
+/// window over the app unless CREATE_NO_WINDOW is set. No-op elsewhere: the
+/// creation flag is a Windows-only `CommandExt` method.
+pub(crate) fn silent_command<S: AsRef<std::ffi::OsStr>>(program: S) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    command
+}
+
 /// Locate or create a per-engine Python venv and return its interpreter.
 ///
 /// The layout differs per platform and this is the trap that has bitten twice:
@@ -589,11 +604,11 @@ fn ensure_python_venv(app: &AppHandle, env_var: &str, development_relative: &str
     }
     let interpreter = candidates
         .iter()
-        .find(|candidate| Command::new(candidate).arg("--version").output().map(|output| output.status.success()).unwrap_or(false))
+        .find(|candidate| silent_command(candidate).arg("--version").output().map(|output| output.status.success()).unwrap_or(false))
         .ok_or("未找到可用的 python3 解释器")?;
     log::info!("[stt] 创建 {directory_name} 虚拟环境（{interpreter}）：{}", venv.display());
     fs::create_dir_all(&venv).map_err(|error| error.to_string())?;
-    let status = Command::new(interpreter)
+    let status = silent_command(interpreter)
         .args(["-m", "venv", venv.to_string_lossy().as_ref()])
         .status()
         .map_err(|error| format!("无法创建 {directory_name} 虚拟环境：{error}"))?;
@@ -679,7 +694,7 @@ pub(crate) fn voiceprint_backend_available(app: &AppHandle) -> CommandResult<boo
 /// audio decoder). Self-heals a venv left half-installed by an interrupted
 /// pip run, mirroring [`ensure_qwen3_asr_package`].
 fn ensure_sherpa_package(python: &str) -> CommandResult<()> {
-    let check = Command::new(python)
+    let check = silent_command(python)
         .args(["-c", "import sherpa_onnx, imageio_ffmpeg"])
         .output()
         .map_err(|error| format!("无法运行声纹 Python：{error}"))?;
@@ -689,7 +704,7 @@ fn ensure_sherpa_package(python: &str) -> CommandResult<()> {
     // `-m pip` rather than the venv's `pip` sibling: on Windows that file is
     // `pip.exe` next to `Scripts/python.exe`, and the plain name does not exist.
     log::info!("[stt] 首次使用声纹引擎，安装 sherpa-onnx 依赖…");
-    let install = Command::new(python)
+    let install = silent_command(python)
         .args(["-m", "pip", "install", "--quiet", "--disable-pip-version-check", "sherpa-onnx", "imageio-ffmpeg"])
         .status()
         .map_err(|error| format!("安装 sherpa-onnx 失败：{error}"))?;
@@ -724,7 +739,7 @@ fn run_sherpa(app: &AppHandle, arguments: &[String]) -> CommandResult<String> {
 /// have a venv therefore pick up the new package lazily, right here.
 pub(crate) fn ensure_qwen3_asr_package(_app: &AppHandle, python: &str) -> CommandResult<()> {
     let python_path = PathBuf::from(python);
-    let check = Command::new(python)
+    let check = silent_command(python)
         .args(["-c", "import mlx_qwen3_asr"])
         .env("HF_HUB_OFFLINE", "1")
         .output()
@@ -737,7 +752,7 @@ pub(crate) fn ensure_qwen3_asr_package(_app: &AppHandle, python: &str) -> Comman
         .map(|directory| directory.join("pip"))
         .unwrap_or_else(|| PathBuf::from("pip"));
     log::info!("[stt] 首次使用 Qwen3 引擎，安装 mlx-qwen3-asr 依赖…");
-    let install = Command::new(&pip)
+    let install = silent_command(&pip)
         .args(["install", "--quiet", "--disable-pip-version-check", "mlx-qwen3-asr", "imageio-ffmpeg", "modelscope"])
         .status()
         .map_err(|error| format!("安装 mlx-qwen3-asr 失败：{error}"))?;
@@ -752,7 +767,7 @@ pub(crate) fn ensure_qwen3_asr_package(_app: &AppHandle, python: &str) -> Comman
 /// port, imageio-ffmpeg for audio decode), pip-installing on first use. The
 /// MOSS model weights download through the bridge itself, like Qwen3.
 pub(crate) fn ensure_moss_packages(_app: &AppHandle, python: &str) -> CommandResult<()> {
-    let check = Command::new(python)
+    let check = silent_command(python)
         .args(["-c", "import mlx_lm, tokenizers, soundfile, imageio_ffmpeg"])
         .env("HF_HUB_OFFLINE", "1")
         .output()
@@ -763,7 +778,7 @@ pub(crate) fn ensure_moss_packages(_app: &AppHandle, python: &str) -> CommandRes
     // Some venvs (e.g. the dev `.venv-mlx`) ship no `bin/pip` wrapper, so go
     // through the interpreter's pip module instead of a path that may not exist.
     log::info!("[stt] 首次使用 MOSS 引擎，安装 mlx-lm/tokenizers/soundfile 依赖…");
-    let install = Command::new(python)
+    let install = silent_command(python)
         .args(["-m", "pip", "install", "--quiet", "--disable-pip-version-check", "mlx-lm", "tokenizers", "soundfile", "imageio-ffmpeg"])
         .status()
         .map_err(|error| format!("安装 MOSS 转写依赖失败：{error}"))?;
@@ -783,7 +798,7 @@ pub(crate) fn detect_net_region() -> &'static str {
     static REGION: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
     REGION.get_or_init(|| {
         for url in ["https://ipinfo.io/json", "http://ip-api.com/json/?fields=countryCode"] {
-            let output = Command::new("curl")
+            let output = silent_command("curl")
                 .args(["-fsSL", "--connect-timeout", "3", "-m", "5", url])
                 .output();
             let body = match output {
@@ -815,7 +830,7 @@ pub(crate) fn detect_net_region() -> &'static str {
 /// be the macOS CLT 3.9, which is too old for mlx-qwen3-asr (requires >=3.10).
 pub(crate) fn ensure_mlx_venv(app: &AppHandle) -> CommandResult<String> {
     let python = ensure_python_venv(app, "LYNSE_MLX_PYTHON", "../../../.venv-mlx", "mlx-venv")?;
-    let check = Command::new(&python)
+    let check = silent_command(&python)
         .args(["-c", "import mlx_whisper, imageio_ffmpeg"])
         .env("HF_HUB_OFFLINE", "1")
         .output()
@@ -828,7 +843,7 @@ pub(crate) fn ensure_mlx_venv(app: &AppHandle) -> CommandResult<String> {
         .parent()
         .map(|directory| directory.join("pip"))
         .unwrap_or_else(|| PathBuf::from("pip"));
-    let install = Command::new(&pip)
+    let install = silent_command(&pip)
         .args(["install", "--quiet", "--disable-pip-version-check", "mlx-whisper", "imageio-ffmpeg"])
         .status()
         .map_err(|error| format!("安装 mlx-whisper 失败：{error}"))?;
@@ -863,12 +878,12 @@ pub(crate) fn ensure_whisperx_venv(app: &AppHandle) -> CommandResult<String> {
 
     let interpreter = ["python3.12", "python3.11", "python3.13", "python3"]
         .into_iter()
-        .find(|candidate| Command::new(candidate).arg("--version").output().map(|output| output.status.success()).unwrap_or(false))
+        .find(|candidate| silent_command(candidate).arg("--version").output().map(|output| output.status.success()).unwrap_or(false))
         .ok_or("未找到可用的 python3 解释器（whisperx 需要 3.10–3.13）")?;
 
     log::info!("[stt] 创建 WhisperX 虚拟环境（{interpreter}）：{}", venv.display());
     fs::create_dir_all(&venv).map_err(|error| error.to_string())?;
-    let status = Command::new(interpreter)
+    let status = silent_command(interpreter)
         .args(["-m", "venv", venv.to_string_lossy().as_ref()])
         .status()
         .map_err(|error| format!("无法创建 WhisperX 虚拟环境：{error}"))?;
@@ -876,7 +891,7 @@ pub(crate) fn ensure_whisperx_venv(app: &AppHandle) -> CommandResult<String> {
         return Err("创建 WhisperX 虚拟环境失败".to_owned());
     }
     let pip = venv.join("bin/pip");
-    let install = Command::new(&pip)
+    let install = silent_command(&pip)
         .args(["install", "--quiet", "--disable-pip-version-check", "whisperx", "imageio-ffmpeg"])
         .status()
         .map_err(|error| format!("安装 whisperx 失败：{error}"))?;
@@ -899,7 +914,7 @@ pub(crate) fn run_python_with_model_cache(
         .and_then(Path::file_name)
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "python".to_owned());
-    let output = match Command::new(python)
+    let output = match silent_command(python)
         .args(arguments)
         .env("MODELSCOPE_CACHE", model_directory)
         .env("HF_HOME", model_directory)
@@ -1466,11 +1481,11 @@ pub(crate) fn assign_campp_speakers(
 
 fn sha256_of_file(path: &Path) -> CommandResult<String> {
     let output = if cfg!(target_os = "windows") {
-        Command::new("certutil")
+        silent_command("certutil")
             .args(["-hashfile", path.to_string_lossy().as_ref(), "SHA256"])
             .output()
     } else {
-        Command::new("shasum")
+        silent_command("shasum")
             .args(["-a", "256", path.to_string_lossy().as_ref()])
             .output()
     }
@@ -1542,7 +1557,7 @@ fn model_download_candidates(primary: &str, region: &str) -> Vec<String> {
 /// progress can be shown, so a probe hanging for 30s reads as a frozen UI.
 fn resolve_content_length(candidates: &[String]) -> u64 {
     for url in candidates {
-        match Command::new("curl")
+        match silent_command("curl")
             .args(["-sIL", "--connect-timeout", "8", "--max-time", "10", url])
             .output()
         {
@@ -1675,7 +1690,7 @@ fn download_stt_model_file(app: &AppHandle, entry: &SttModelEntry) -> CommandRes
         for candidate in &candidates {
             // Spawn curl (instead of blocking on `.status()`) so we can poll the
             // partial file's size while it downloads and stream progress to the UI.
-            let mut child = Command::new("curl")
+            let mut child = silent_command("curl")
                 .args([
                     "-fL",
                     "--retry",
@@ -1895,6 +1910,11 @@ fn download_runtime(app: &AppHandle, provider: &str, model_id: &str, version: &s
     let part = downloads.join(format!("{archive}.part"));
 
     let candidates = runtime_download_candidates(version);
+    // React to the click before the size probes: resolve_content_length HEADs
+    // every candidate (each up to ~18 s against a dead mirror) and nothing was
+    // emitted until it finished, so the card sat without a progress bar and
+    // Windows users just saw flashing console windows.
+    emit_download_progress(app, provider, model_id, 0, 0, None, "runtime_downloading", None);
     // Resolve the archive size so the runtime download shows a determinate
     // percentage bar; falls back to 0 → indeterminate sweep.
     let total = resolve_content_length(&candidates);
@@ -1902,7 +1922,7 @@ fn download_runtime(app: &AppHandle, provider: &str, model_id: &str, version: &s
     emit_download_progress(app, provider, model_id, 0, total, initial_percent, "runtime_downloading", None);
     let mut last_error = "离线转写组件下载失败".to_owned();
     for url in &candidates {
-        let mut child = Command::new("curl")
+        let mut child = silent_command("curl")
             .args(["-fL", "--retry", "3", "--connect-timeout", "20", "-o", part.to_string_lossy().as_ref(), url])
             .spawn()
             .map_err(|error| format!("无法启动下载（curl）：{error}"))?;
@@ -1959,7 +1979,7 @@ fn install_runtime_archive(part: &Path, final_dir: &Path, expected_sha: Option<&
     }
     fs::create_dir_all(&staging).map_err(|error| error.to_string())?;
 
-    let status = Command::new("tar")
+    let status = silent_command("tar")
         .args(["xzf", part.to_string_lossy().as_ref(), "-C", staging.to_string_lossy().as_ref()])
         .status()
         .map_err(|error| format!("无法解压离线转写组件：{error}"))?;
@@ -2353,7 +2373,7 @@ fn fail_interrupted_records(app: &AppHandle) -> CommandResult<()> {
 /// callers simply skip the field instead of storing a wrong value.
 fn probe_audio_duration_ms(app: &AppHandle, path: &str) -> Option<i64> {
     let ffprobe = stt::sidecar_path(app, "ffprobe").ok()?;
-    let output = Command::new(&ffprobe)
+    let output = silent_command(&ffprobe)
         .args([
             "-v",
             "error",

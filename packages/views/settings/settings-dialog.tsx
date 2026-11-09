@@ -48,6 +48,7 @@ import { VaultConfigCard } from "./vault-config-card";
 import { WebdavSyncConfigCard } from "./webdav-sync-config-card";
 import { AgentServerCard } from "./agent-server-card";
 import { McpConfigCard } from "./mcp-config-card";
+import { McpConsoleCard } from "../mcp-authorizations";
 import { ModelConfigCard } from "./model-config-card";
 import { WorkBuddyConfigCard } from "./workbuddy-config-card";
 import { AppearanceSection } from "./appearance-settings";
@@ -164,6 +165,7 @@ export function SettingsDialog({
         </Card>}
         <WorkBuddyConfigCard />
         <McpConfigCard />
+        <McpConsoleCard />
       </>
     ),
   });

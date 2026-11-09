@@ -1,11 +1,15 @@
 export const RELEASE_NOTE_CATEGORIES = ["features", "improvements", "fixes", "security", "changes"] as const;
 export type ReleaseNoteCategory = (typeof RELEASE_NOTE_CATEGORIES)[number];
 
+/** Heading scripts the notes may be authored in; rendered notes pick one. */
+export type ReleaseNoteLanguage = "en" | "zh" | "ja" | "ko";
+
 export interface ReleaseNoteSection {
   key: string;
   category?: ReleaseNoteCategory;
   title: string;
   items: string[];
+  lang: ReleaseNoteLanguage;
 }
 
 export interface ParsedReleaseNotes {
@@ -31,8 +35,31 @@ function categoryOf(title: string): ReleaseNoteCategory | undefined {
   return RELEASE_NOTE_CATEGORIES.find((category) => HEADING_ALIASES[category].includes(key));
 }
 
+// Known headings have a fixed authored language (新機能 is all han yet Japanese),
+// so alias lookup decides first; script sniffing only covers custom headings.
+const ZH_HEADINGS = new Set(["新功能", "新增功能", "新增", "改进", "改進", "优化", "優化", "变更", "變更", "错误修复", "錯誤修復", "问题修复", "問題修復", "修复", "修復", "安全", "更新内容", "更新內容"]);
+const JA_HEADINGS = new Set(["新機能", "改善", "不具合修正", "バグ修正", "セキュリティ", "更新情報", "変更内容"]);
+const KO_HEADINGS = new Set(["새 기능", "개선", "버그 수정", "오류 수정", "보안", "업데이트 내용", "변경 사항"]);
+
+function scriptOfHeading(title: string): ReleaseNoteLanguage {
+  const key = title.toLowerCase();
+  if (JA_HEADINGS.has(key)) return "ja";
+  if (KO_HEADINGS.has(key)) return "ko";
+  if (ZH_HEADINGS.has(key)) return "zh";
+  // Kana and hangul win over han so mixed Japanese/Korean custom headings classify right.
+  if (/[\u3040-\u30ff]/.test(title)) return "ja";
+  if (/[\uac00-\ud7af]/.test(title)) return "ko";
+  if (/[\u4e00-\u9fff]/.test(title)) return "zh";
+  return "en";
+}
+
+export interface ParseReleaseNotesOptions {
+  /** Show only sections authored in this language; falls back to English, then all. */
+  language?: ReleaseNoteLanguage;
+}
+
 /** Parse authored sections without guessing a change's meaning or rendering HTML. */
-export function parseReleaseNotes(notes: string): ParsedReleaseNotes {
+export function parseReleaseNotes(notes: string, options: ParseReleaseNotesOptions = {}): ParsedReleaseNotes {
   const paragraphs: string[] = [];
   const sections = new Map<string, ReleaseNoteSection>();
   let current: ReleaseNoteSection | undefined;
@@ -43,10 +70,11 @@ export function parseReleaseNotes(notes: string): ParsedReleaseNotes {
 
   const sectionFor = (title: string) => {
     const category = categoryOf(title);
-    const key = category ?? `custom:${title}`;
+    const lang = scriptOfHeading(title);
+    const key = `${category ?? `custom:${title}`}:${lang}`;
     let section = sections.get(key);
     if (!section) {
-      section = { key, category, title, items: [] };
+      section = { key, category, title, items: [], lang };
       sections.set(key, section);
     }
     return section;
@@ -114,6 +142,17 @@ export function parseReleaseNotes(notes: string): ParsedReleaseNotes {
   const rank = (section: ReleaseNoteSection) => section.category
     ? RELEASE_NOTE_CATEGORIES.indexOf(section.category)
     : RELEASE_NOTE_CATEGORIES.length;
-  const result = [...sections.values()].filter((section) => section.items.length).sort((a, b) => rank(a) - rank(b));
+  let result = [...sections.values()].filter((section) => section.items.length).sort((a, b) => rank(a) - rank(b));
+  const language = options.language;
+  if (language) {
+    const exact = result.filter((section) => section.lang === language);
+    if (exact.length) result = exact;
+    else {
+      // Authored notes without this language render their English variant,
+      // falling back to everything rather than an empty dialog.
+      const english = result.filter((section) => section.lang === "en");
+      if (english.length) result = english;
+    }
+  }
   return { paragraphs, sections: result, count: result.reduce((count, section) => count + section.items.length, 0) };
 }

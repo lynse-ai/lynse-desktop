@@ -30,8 +30,25 @@ describe("authored release notes", () => {
     const parsed = parseReleaseNotes(
       "### New Features\n- A\n\n### Changed\n- B\n\n### Bug Fixes\n- C\n\n### Performance\n- D\n\n### 变更\n- E",
     );
-    expect(parsed.sections.map((section) => [section.category, section.items]))
-      .toEqual([["features", ["A"]], ["improvements", ["B", "D", "E"]], ["fixes", ["C"]]]);
+    // Sections split per heading language; category order ranks ahead of language.
+    expect(parsed.sections.map((section) => [section.category, section.items, section.lang]))
+      .toEqual([["features", ["A"], "en"], ["improvements", ["B", "D"], "en"], ["improvements", ["E"], "zh"], ["fixes", ["C"], "en"]]);
+  });
+
+  it("renders a single language when one is requested, falling back to English", () => {
+    const notes = "### New Features\n- English feature.\n\n### Improvements\n- English improvement.\n\n### 新功能\n- 中文功能。\n\n### 改进\n- 中文改进。";
+    const zh = parseReleaseNotes(notes, { language: "zh" });
+    expect(zh.sections.map((section) => section.items)).toEqual([["中文功能。"], ["中文改进。"]]);
+    expect(zh.count).toBe(2);
+    const en = parseReleaseNotes(notes, { language: "en" });
+    expect(en.sections.map((section) => section.items)).toEqual([["English feature."], ["English improvement."]]);
+    // No Japanese content authored: English variant renders instead of an empty dialog.
+    const ja = parseReleaseNotes(notes, { language: "ja" });
+    expect(ja.sections.map((section) => section.lang)).toEqual(["en", "en"]);
+    // A Japanese-authored note serves the Japanese dialog directly.
+    const jaNotes = "### 新機能\n- 日本語の機能。\n\n### New Features\n- English feature.";
+    expect(parseReleaseNotes(jaNotes, { language: "ja" }).sections.map((section) => section.items))
+      .toEqual([["日本語の機能。"]]);
   });
 
   it("keeps custom sections and unstructured legacy text instead of discarding them", () => {

@@ -4,7 +4,7 @@ import { useId, useMemo, type ReactNode } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
 import { getDesktopAppApi, openExternalUrl } from "./app-update";
-import { parseReleaseNotes } from "./release-notes";
+import { parseReleaseNotes, type ReleaseNoteLanguage } from "./release-notes";
 
 /** A deliberately small inline format: all other content stays literal text. */
 function InlineNote({ text }: { text: string }) {
@@ -50,9 +50,18 @@ export function ReleaseNotesContent({
   compact?: boolean;
   className?: string;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const id = useId();
-  const parsed = useMemo(() => parseReleaseNotes(notes), [notes]);
+  // Notes are authored in several languages side by side; render only the one
+  // matching the app language (see parseReleaseNotes for the fallback chain).
+  const language: ReleaseNoteLanguage = i18n.language?.startsWith("zh")
+    ? "zh"
+    : i18n.language?.startsWith("ja")
+      ? "ja"
+      : i18n.language?.startsWith("ko")
+        ? "ko"
+        : "en";
+  const parsed = useMemo(() => parseReleaseNotes(notes, { language }), [notes, language]);
   return (
     <div className={cn("min-w-0 space-y-7 break-words text-foreground/85 [overflow-wrap:anywhere]", compact ? "text-xs leading-5" : "text-[15px] leading-7", className)}>
       {parsed.paragraphs.map((paragraph, index) => (

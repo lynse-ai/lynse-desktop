@@ -1,6 +1,9 @@
 "use client";
 
 import { useRef, useState, type ReactElement } from "react";
+import { useNavigation } from "../navigation";
+import { isWebPlatform } from "../platform";
+import { Bot } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
 import { Input } from "@lynse/ui/components/ui/input";
 import { useTranslation, changeLanguage } from "@lynse/core/i18n/react";
@@ -82,6 +85,9 @@ export function UserProfileDropdown({
 }) {
   const { t } = useTranslation();
   const logout = useAuthStore((s) => s.logout);
+  const { push } = useNavigation();
+  // The Agent 配置 console is served by the web deployment only.
+  const webPlatform = isWebPlatform();
   const { data } = useUserCredits();
   const { data: membership } = useMembership();
   const { theme, setTheme } = useTheme();
@@ -222,6 +228,14 @@ export function UserProfileDropdown({
         <UserActivityHeatmap enabled={hasOpened} />
 
         <DropdownMenuSeparator />
+
+        {/* ── Agent 配置 console (web deployment only) ── */}
+        {webPlatform && (
+          <DropdownMenuItem onClick={() => { setOpen(false); push("/agent"); }}>
+            <Bot className="size-4 text-muted-foreground" strokeWidth={1.5} />
+            <span>{t("layout.user_agent_config")}</span>
+          </DropdownMenuItem>
+        )}
 
         {/* ── Settings ─────────────────────────────────── */}
         <DropdownMenuItem onClick={onOpenSettings}>

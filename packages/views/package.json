@@ -38,6 +38,7 @@
     "./bots": "./bots/index.ts",
     "./connections": "./connections/index.ts",
     "./mcp-authorizations": "./mcp-authorizations/index.ts",
+    "./agent-config": "./agent-config/index.ts",
     "./plugins": "./plugins/index.ts",
     "./i18n": "./i18n/index.ts",
     "./locales": "./locales/index.ts",

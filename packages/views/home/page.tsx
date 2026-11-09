@@ -248,7 +248,9 @@ export function HomePage() {
 
   return (
     <div className="flex h-full min-w-0">
-      <div className="no-scrollbar mx-auto flex h-full w-full min-w-0 max-w-4xl flex-col overflow-y-auto overscroll-contain px-6 pb-6">
+      {/* Small windows keep the readable 4xl column; maximized (xl+) fills
+          the content card so wide windows don't leave dead side margins. */}
+      <div className="no-scrollbar mx-auto flex h-full w-full min-w-0 max-w-4xl flex-col overflow-y-auto overscroll-contain px-6 pb-6 xl:max-w-none">
         {/* ── Header ───────────────────────────────────────
             Doubles as the window drag region (same as the other pages' title
             bars). Tauri only starts a drag when the exact mousedown target has

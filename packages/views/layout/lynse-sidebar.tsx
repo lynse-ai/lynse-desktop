@@ -64,6 +64,28 @@ function isNavActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(href + "/");
 }
 
+/**
+ * Web presentation flag for the sidebar: the label-first form needs ~208px,
+ * so below the md breakpoint the web sidebar degrades to the desktop icon
+ * rail and narrow windows/phones keep usable content width. Desktop never
+ * uses the wide form. Feature gating (platform checks) stays on
+ * `isWebPlatform()` and is intentionally separate from this.
+ */
+function useWideSidebar(): boolean {
+  const [wide, setWide] = useState(
+    () => isWebPlatform() && (typeof window === "undefined" || window.innerWidth >= 768),
+  );
+  useEffect(() => {
+    if (!isWebPlatform()) return;
+    const query = window.matchMedia("(min-width: 768px)");
+    const update = () => setWide(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  return wide;
+}
+
 export function LynseSidebar() {
   const { pathname, push } = useNavigation();
   const { t } = useTranslation();
@@ -90,8 +112,10 @@ export function LynseSidebar() {
 
   const nickname = (data?.nickname as string) || "User";
   const initials = nickname.slice(0, 2).toUpperCase();
-  // Web uses the same navigation with a wider, label-first presentation.
+  // Web uses the same navigation with a wider, label-first presentation that
+  // collapses back to the icon rail on narrow viewports (useWideSidebar).
   const isWeb = isWebPlatform();
+  const wide = useWideSidebar();
 
   const topItems: NavItem[] = [
     { key: "home", label: t("nav.home"), icon: House, path: "/home" },
@@ -151,7 +175,7 @@ export function LynseSidebar() {
         beta={item.beta}
       >
         <Icon className={cn("size-5", active && item.solid !== false && "fill-current")} />
-        {isWeb && (
+        {wide && (
           <span className="whitespace-nowrap text-[13px] font-medium leading-none">
             {item.label}
           </span>
@@ -169,32 +193,32 @@ export function LynseSidebar() {
       <aside
         className={cn(
           "lyse-sidebar flex h-full shrink-0 flex-col bg-sidebar",
-          isWeb
+          wide
             ? "items-stretch px-3 pt-4 pb-2"
             : "items-center pl-1 pt-4 pb-4",
         )}
-        style={{ width: isWeb ? WEB_SIDEBAR_WIDTH : DESKTOP_SIDEBAR_WIDTH }}
+        style={{ width: wide ? WEB_SIDEBAR_WIDTH : DESKTOP_SIDEBAR_WIDTH }}
         data-tauri-drag-region
       >
-      {isWeb && (
+      {wide && (
         <div className="px-1.5 pb-3 text-[15px] font-semibold tracking-tight text-foreground">
           Lynse
         </div>
       )}
 
-      <div className={cn("flex w-full flex-1 flex-col gap-0.5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", isWeb ? "items-stretch" : "items-center")}>
+      <div className={cn("flex w-full flex-1 flex-col gap-0.5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", wide ? "items-stretch" : "items-center")}>
         {topItems.map(renderNavItem)}
         {moreItems.length > 0 && (
           <Popover open={moreOpen} onOpenChange={setMoreOpen}>
             <NavTooltip title={t("nav.more")} disabled={moreOpen}>
               <PopoverTrigger
-                title={isWeb ? t("nav.more") : undefined}
+                title={wide ? t("nav.more") : undefined}
                 aria-label={t("nav.more")}
                 data-tauri-drag-region={false}
-                className={cn(navButtonClassName(isWeb, moreActive), moreOpen && "bg-foreground/5 text-foreground")}
+                className={cn(navButtonClassName(wide, moreActive), moreOpen && "bg-foreground/5 text-foreground")}
               >
                 <MoreHorizontal className="size-5" />
-                {isWeb && <span className="text-[13px] font-medium">{t("nav.more")}</span>}
+                {wide && <span className="text-[13px] font-medium">{t("nav.more")}</span>}
               </PopoverTrigger>
             </NavTooltip>
             <PopoverContent
@@ -251,8 +275,8 @@ export function LynseSidebar() {
         )}
         {pinnedItems.length > 0 && (
           <>
-            <div role="separator" className={cn("my-1 h-px shrink-0 bg-sidebar-border", isWeb ? "w-full" : "w-6")} />
-            <div role="group" aria-label={t("nav.pinned")} className={cn("flex w-full flex-col gap-0.5", !isWeb && "items-center")}>
+            <div role="separator" className={cn("my-1 h-px shrink-0 bg-sidebar-border", wide ? "w-full" : "w-6")} />
+            <div role="group" aria-label={t("nav.pinned")} className={cn("flex w-full flex-col gap-0.5", !wide && "items-center")}>
               {pinnedItems.map(renderNavItem)}
             </div>
           </>
@@ -267,8 +291,8 @@ export function LynseSidebar() {
           "flex w-full shrink-0 flex-col pt-2",
           // The desktop rail is too narrow for a divider to read well; only the
           // wide web sidebar keeps one above the account row.
-          isWeb && "border-t border-sidebar-border/60",
-          isWeb ? "items-stretch" : "items-center",
+          wide && "border-t border-sidebar-border/60",
+          wide ? "items-stretch" : "items-center",
         )}
       >
         {/* Update badge — sits above the account row and opens the shared
@@ -297,19 +321,19 @@ export function LynseSidebar() {
             title={t("nav.notifications")}
           >
             <Bell className="size-5" />
-            {isWeb && <span className="text-[13px] font-medium">{t("nav.notifications")}</span>}
+            {wide && <span className="text-[13px] font-medium">{t("nav.notifications")}</span>}
           </NavButton>
         )}
         <UserProfileDropdown
           onOpenSettings={() => setSettingsOpen(true)}
-          side={isWeb ? "top" : "right"}
+          side={wide ? "top" : "right"}
           trigger={
             <button
               type="button"
               title={nickname}
               data-tauri-drag-region={false}
               className={
-                isWeb
+                wide
                   ? "flex h-11 w-full shrink-0 items-center gap-2.5 rounded-xl px-1.5 transition-colors hover:bg-foreground/5"
                   : "flex size-8 shrink-0 items-center justify-center rounded-full bg-avatar-brand/15 text-xs font-medium text-avatar-brand-text ring-1 ring-inset ring-avatar-brand/20 transition-colors hover:bg-avatar-brand/20"
               }
@@ -317,7 +341,7 @@ export function LynseSidebar() {
               <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-avatar-brand/15 text-xs font-medium text-avatar-brand-text ring-1 ring-inset ring-avatar-brand/20">
                 {initials}
               </span>
-              {isWeb && (
+              {wide && (
                 <span className="truncate text-[13px] font-medium text-foreground">{nickname}</span>
               )}
             </button>
@@ -350,7 +374,9 @@ function NavTooltip({
   disabled?: boolean;
   children: React.ReactElement;
 }) {
-  if (isWebPlatform()) return children;
+  // Tooltips only make sense on the icon rail; the wide web sidebar already
+  // labels every entry inline.
+  if (useWideSidebar()) return children;
 
   return (
     <Tooltip disabled={disabled}>
@@ -387,19 +413,19 @@ function NavButton({
   beta?: boolean;
 }) {
   const { t } = useTranslation();
-  const isWeb = isWebPlatform();
+  const wide = useWideSidebar();
   const tooltipLabel = beta ? `${title} · ${t("settings.beta_badge")}` : title;
   return (
     <NavTooltip title={tooltipLabel}>
       <button
         type="button"
         onClick={onClick}
-        title={isWeb ? tooltipLabel : undefined}
+        title={wide ? tooltipLabel : undefined}
         aria-label={title}
         aria-description={beta ? t("settings.beta_badge") : undefined}
         aria-current={active ? "page" : undefined}
         data-tauri-drag-region={false}
-        className={navButtonClassName(isWeb, active)}
+        className={navButtonClassName(wide, active)}
       >
         {!!badgeCount && (
           <span
@@ -416,7 +442,7 @@ function NavButton({
           />
         )}
         {children}
-        {isWeb && beta && <span aria-hidden="true"><BetaBadge className="ml-auto" /></span>}
+        {wide && beta && <span aria-hidden="true"><BetaBadge className="ml-auto" /></span>}
       </button>
     </NavTooltip>
   );

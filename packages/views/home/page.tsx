@@ -255,7 +255,7 @@ export function HomePage() {
             the attribute, so it is repeated on the greeting text elements;
             the search button and weather stay interactive. */}
         <header
-          className="-mx-6 mb-5 flex select-none items-start justify-between gap-6 px-6 pt-6"
+          className="-mx-6 mb-5 flex select-none flex-col gap-4 px-6 pt-6 sm:flex-row sm:items-start sm:justify-between sm:gap-6"
           data-tauri-drag-region
         >
           <div className="min-w-0 flex-1" data-tauri-drag-region>
@@ -287,7 +287,7 @@ export function HomePage() {
               </p>
             )}
           </div>
-          <div className="flex shrink-0 flex-col items-end gap-3">
+          <div className="flex shrink-0 items-center justify-between gap-3 sm:flex-col sm:items-end">
             <button
               type="button"
               aria-label={t("home.search_records")}

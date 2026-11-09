@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, useCallback, useRef, useEffect, useLayoutEffect, Children, type ReactNode } from "react";
+import { API_PROXY_PREFIX } from "@lynse/core/config";
 import {
   Bookmark,
   FileText,
@@ -812,9 +813,9 @@ export function ContentPanel() {
 
       let proxyUrl: string;
       if (src.startsWith(client!.backendUrl)) {
-        proxyUrl = "/api/proxy" + src.slice(client!.backendUrl.length);
+        proxyUrl = API_PROXY_PREFIX + src.slice(client!.backendUrl.length);
       } else if (src.startsWith("/")) {
-        proxyUrl = "/api/proxy" + src;
+        proxyUrl = API_PROXY_PREFIX + src;
       } else {
         delete img.dataset.proxying;
         continue;

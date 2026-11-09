@@ -71,6 +71,8 @@ const ja = {
   auth: {
     login_title: "Lynse にログイン",
     login_subtitle: "録音・文字起こし・議事録・ナレッジ管理",
+    brand_title: "Lynse — AI議事録とナレッジベース",
+    brand_subtitle: "会話から要点を捉え、議事録とアクションを自動生成します。",
     welcome_title: "こんにちは、友達！ようこそ！👋🏻",
     sms_code_placeholder: "認証コードを入力",
     more_login: "その他のログイン方法",

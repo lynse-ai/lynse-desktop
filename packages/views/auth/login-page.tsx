@@ -31,6 +31,7 @@ import {
 import { useTranslation } from "@lynse/core/i18n/react";
 import { ArrowRight, Check, ChevronRight, KeyRound, Loader2, QrCode } from "../icons";
 import { getDesktopAppApi, openExternalUrl } from "../app-update";
+import { isWebPlatform } from "../platform";
 import {
   hasDevApiAuth,
   isTestMode,
@@ -120,6 +121,10 @@ function AgreementCheckbox({
 export function LoginPage() {
   const { t } = useTranslation();
   const devApiAuth = hasDevApiAuth();
+  // The web build (www.lynse.ai/app) fills a real browser viewport instead of
+  // the desktop welcome window, so it gets a full-page split layout: centered
+  // form column on the left, brand panel on the right (see the aside below).
+  const web = isWebPlatform();
 
   // Active sign-in view. Phone is the default: unlike the QR flow it needs no
   // Lynse mobile app, and it also covers registration.
@@ -448,26 +453,46 @@ export function LoginPage() {
         <div aria-hidden data-tauri-drag-region className="absolute inset-x-0 top-0 z-20 h-10" />
       )}
 
-      {/* Left column: brand block + the active sign-in form, actions hugging
-          the bottom edge like the reference window. Half the window — the
-          artwork card takes the mirrored half. */}
-      <div className="relative z-10 flex w-1/2 min-w-0 flex-col px-7 pb-5 pt-14">
+      {/* Left column: brand block + the active sign-in form. Desktop hugs the
+          compact welcome window (actions pinned to the bottom edge); web
+          centers a narrow form column, Plaud-welcome style. */}
+      <div
+        className={cn(
+          "relative z-10 flex min-w-0 flex-col px-7 pb-5 pt-14",
+          web ? "w-full items-center lg:w-1/2" : "w-1/2",
+        )}
+      >
         <button
           type="button"
           aria-label="Lynse"
           onClick={handleLogoTap}
-          className="cursor-default self-start"
+          className={cn("cursor-default", web ? "absolute left-7 top-8" : "self-start")}
         >
           <img src={LYNSE_LOGO_SRC} alt="" className="h-4 w-auto dark:invert" />
         </button>
-        <h1 className="mt-5 text-lg font-semibold tracking-tight">
+        <h1
+          className={cn(
+            "font-semibold tracking-tight",
+            web ? "mt-16 text-center text-2xl" : "mt-5 text-lg",
+          )}
+        >
           {t("auth.welcome_title")}
         </h1>
-        <p className="mt-2.5 text-[13px] leading-relaxed text-muted-foreground">
+        <p
+          className={cn(
+            "mt-2.5 text-[13px] leading-relaxed text-muted-foreground",
+            web && "text-center",
+          )}
+        >
           {t("auth.login_subtitle")}
         </p>
 
-        <div className="mt-7 w-full max-w-[260px] flex-1 overflow-y-auto">
+        <div
+          className={cn(
+            "mt-7 overflow-y-auto",
+            web ? "w-full max-w-[300px]" : "w-full max-w-[260px] flex-1",
+          )}
+        >
         {wechatBindVo ? (
           /* ── WeChat first sign-in: link a phone number ── */
           <div className="space-y-4">
@@ -707,10 +732,11 @@ export function LoginPage() {
         {error && <p className="mt-3 text-center text-xs text-destructive">{error}</p>}
         </div>
 
-        {/* ── More ways to sign in (phone view) / WeChat wait state,
-            pinned to the window's bottom edge ── */}
+        {/* ── More ways to sign in (phone view) / WeChat wait state.
+            Desktop pins it to the window's bottom edge; web keeps it right
+            under the centered form. ── */}
         {(view === "phone" || wechatWaiting) && (
-          <div className="mt-auto pt-3">
+          <div className={cn(web ? "mt-5" : "mt-auto pt-3")}>
             {wechatWaiting ? (
               <div className="space-y-1.5 text-center">
                 <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
@@ -743,23 +769,42 @@ export function LoginPage() {
         )}
       </div>
 
-      {/* ── Right column — full-height rounded artwork card, inset on all
-          sides like the reference window; exactly half the window. On
-          frameless Windows/Linux the card starts below the caption band so
-          the window buttons never overlap the image. ── */}
-      <aside
-        aria-hidden
-        className={cn(
-          "w-1/2 shrink-0 pb-3 pr-3",
-          showWindowControls ? "pt-[52px]" : "pt-3",
-        )}
-      >
-        <img
-          src={LOGIN_ARTWORK_SRC}
-          alt=""
-          className="h-full w-full select-none rounded-xl object-cover"
-        />
-      </aside>
+      {/* ── Right column. Desktop: full-height rounded artwork card, inset on
+          all sides like the reference window. Web (lg+): a soft brand panel
+          with the headline and the same artwork; below lg the column hides
+          and the form takes the full width. ── */}
+      {web ? (
+        <aside
+          aria-hidden
+          className="hidden w-1/2 shrink-0 flex-col items-center justify-center bg-gradient-to-b from-primary/10 via-background to-secondary/30 px-10 lg:flex"
+        >
+          <img
+            src={LOGIN_ARTWORK_SRC}
+            alt=""
+            className="w-full max-w-md select-none rounded-2xl object-cover shadow-sm"
+          />
+          <p className="mt-8 text-center text-lg font-semibold tracking-tight">
+            {t("auth.brand_title")}
+          </p>
+          <p className="mt-2 max-w-sm text-center text-sm leading-relaxed text-muted-foreground">
+            {t("auth.brand_subtitle")}
+          </p>
+        </aside>
+      ) : (
+        <aside
+          aria-hidden
+          className={cn(
+            "w-1/2 shrink-0 pb-3 pr-3",
+            showWindowControls ? "pt-[52px]" : "pt-3",
+          )}
+        >
+          <img
+            src={LOGIN_ARTWORK_SRC}
+            alt=""
+            className="h-full w-full select-none rounded-xl object-cover"
+          />
+        </aside>
+      )}
 
     </main>
   );

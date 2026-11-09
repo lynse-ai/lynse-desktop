@@ -71,6 +71,8 @@ const zhHant = {
   auth: {
     login_title: "登入 Lynse",
     login_subtitle: "錄音轉寫、會議紀要、知識管理",
+    brand_title: "Lynse，你的 AI 會議紀要與知識庫",
+    brand_subtitle: "從每一次對話中擷取重點，自動生成紀要與行動項。",
     welcome_title: "Hi，朋友，歡迎你！👋🏻",
     sms_code_placeholder: "請輸入驗證碼",
     more_login: "更多登入方式",

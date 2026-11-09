@@ -71,6 +71,8 @@ const zh = {
   auth: {
     login_title: "登录 Lynse",
     login_subtitle: "录音转写、会议纪要、知识管理",
+    brand_title: "Lynse，你的 AI 会议纪要与知识库",
+    brand_subtitle: "从每一次对话中捕捉要点，自动生成纪要与行动项。",
     welcome_title: "Hi，朋友，欢迎你！👋🏻",
     sms_code_placeholder: "请输入验证码",
     more_login: "更多登录方式",

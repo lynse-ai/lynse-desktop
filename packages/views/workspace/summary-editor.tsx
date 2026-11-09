@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
+import { API_PROXY_PREFIX } from "@lynse/core/config";
 import {
   Editor,
   rootCtx,
@@ -24,7 +25,7 @@ import { api } from "@lynse/core/api/client";
 
 import "@milkdown/kit/prose/view/style/prosemirror.css";
 
-const PROXY_PREFIX = "/api/proxy";
+const PROXY_PREFIX = API_PROXY_PREFIX;
 
 /** Backend templates occasionally prefix data URIs with a marker scheme
  *  ("mindmap:data:image/png;base64,...") that no browser can load. */

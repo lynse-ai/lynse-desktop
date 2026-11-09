@@ -1,3 +1,5 @@
+import { API_PROXY_PREFIX } from "../config";
+
 type ClientOptions = {
   onUnauthorized?: () => void;
   identity?: { platform?: string; version?: string; os?: string };
@@ -18,9 +20,11 @@ type RequestOptions = RequestInit & {
   responseType?: "json" | "blob";
 };
 
-// All requests go through /api/proxy to avoid CORS issues.
-// The proxy reads x-lynse-api-url to know where to forward.
-const PROXY_PREFIX = "/api/proxy";
+// All requests go through the app's proxy route to avoid CORS issues.
+// The proxy reads x-lynse-api-url to know where to forward. The prefix is
+// basePath-aware so subpath deployments (see config.API_PROXY_PREFIX) keep
+// hitting the Next route handler instead of leaking to the origin's /api/.
+const PROXY_PREFIX = API_PROXY_PREFIX;
 let apiTransportMode: "proxy" | "direct" = "proxy";
 
 /** Gateway envelope code for missing/expired credentials ("Please provide

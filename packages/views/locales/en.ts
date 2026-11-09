@@ -71,6 +71,8 @@ const en = {
   auth: {
     login_title: "Sign in to Lynse",
     login_subtitle: "Record, transcribe, and organize your meetings",
+    brand_title: "Lynse, your AI meeting notes and knowledge base",
+    brand_subtitle: "Capture the essentials from every conversation and turn them into notes and action items.",
     welcome_title: "Hi friend, welcome! 👋🏻",
     sms_code_placeholder: "Enter the code",
     more_login: "More ways to sign in",

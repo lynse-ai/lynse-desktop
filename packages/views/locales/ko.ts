@@ -71,6 +71,8 @@ const ko = {
   auth: {
     login_title: "Lynse 로그인",
     login_subtitle: "녹음, 문자 변환, 회의록, 지식 관리",
+    brand_title: "Lynse, AI 회의록과 지식 베이스",
+    brand_subtitle: "모든 대화에서 핵심을 담아 회의록과 액션 항목을 자동으로 만듭니다.",
     welcome_title: "안녕, 친구! 환영해요! 👋🏻",
     sms_code_placeholder: "인증 코드를 입력하세요",
     more_login: "더 많은 로그인 방법",

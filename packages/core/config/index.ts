@@ -36,6 +36,15 @@ export const DEFAULT_INTEGRATIONS_API_URL = "https://www.lynse.ai";
 /** Storage key for an explicitly configured Connections BFF origin. */
 export const INTEGRATIONS_API_URL_STORAGE_KEY = "lynse_integrations_api_url";
 
+/** Root-absolute prefix of the web app's server-side CORS proxy route.
+ *  Next.js basePath (subpath deployments such as /app on www.lynse.ai)
+ *  shifts the route, and raw fetch()/img-src strings never get it applied
+ *  automatically — always route through this constant instead of a
+ *  hard-coded "/api/proxy". The `typeof` guard and literal member
+ *  expression follow the NEXT_PUBLIC inlining rules documented above. */
+export const API_PROXY_PREFIX =
+  ((typeof process !== "undefined" && process.env.NEXT_PUBLIC_BASE_PATH) || "") + "/api/proxy";
+
 /**
  * Build-time edition split: one codebase, two packaged products.
  *   - `cn`   ships China-first connectors (Feishu today; WeCom/DingTalk later)

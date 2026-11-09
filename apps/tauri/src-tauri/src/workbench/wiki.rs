@@ -3,6 +3,8 @@ use futures_util::future;
 use std::sync::atomic::Ordering;
 #[path = "wiki_graph.rs"]
 mod graph;
+#[path = "wiki_graph_insights.rs"]
+mod insights;
 #[path = "wiki_synthesis_control.rs"]
 mod synthesis_control;
 use synthesis_control::SynthesisControl;
@@ -17,6 +19,8 @@ mod automation;
 mod collections;
 #[path = "wiki_content_cache.rs"]
 mod content_cache;
+#[path = "wiki_cloud.rs"]
+pub(super) mod cloud;
 #[path = "wiki_hierarchy.rs"]
 mod hierarchy;
 #[path = "wiki_page_commits.rs"]
@@ -1676,6 +1680,10 @@ impl<'a> PageSources<'a> {
         })
     }
 }
+const CONTEXT_PAGE_LIMIT: usize = 4;
+const CONTEXT_EXCERPT_CHARS: usize = 2400;
+const CONTEXT_RELATED_LIMIT: usize = 3;
+
 pub(super) fn context(
     app: &AppHandle,
     session: &Session,
@@ -1683,8 +1691,9 @@ pub(super) fn context(
     query: &str,
 ) -> CommandResult<Vec<Value>> {
     let (root, _) = roots(app, session)?;
+    let all = topics(&wiki_root(app, session)?)?;
     let mut pages = Vec::new();
-    for topic in topics(&wiki_root(app, session)?)? {
+    for topic in &all {
         if topic.excluded {
             continue;
         }
@@ -1698,12 +1707,42 @@ pub(super) fn context(
                     }))
             {
                 // Cite the reviewed page as a page; its reader exposes every underlying meeting citation.
-                pages.push(json!({"id":format!("wiki:{}",topic.id),"title":topic.title,"kind":"wiki","excerpt":page.markdown.chars().take(1800).collect::<String>(),"source":{"id":format!("wiki:{}",topic.id),"kind":"wiki","revision":page.content_hash,"quote":store::evidence_excerpt(&page.markdown,query,1800)},"citations":page.citations}));
+                let excerpt = page.markdown.chars().take(CONTEXT_EXCERPT_CHARS).collect::<String>();
+                let excerpt = match related_titles(&all, topic, CONTEXT_RELATED_LIMIT) {
+                    // Neighbors via shared evidence give the model the surrounding topic map.
+                    related if !related.is_empty() => {
+                        format!("{excerpt}\n\nRelated topics: {}", related.join(", "))
+                    }
+                    _ => excerpt,
+                };
+                pages.push(json!({"id":format!("wiki:{}",topic.id),"title":topic.title,"kind":"wiki","excerpt":excerpt,"source":{"id":format!("wiki:{}",topic.id),"kind":"wiki","revision":page.content_hash,"quote":store::evidence_excerpt(&page.markdown,query,CONTEXT_EXCERPT_CHARS)},"citations":page.citations}));
             }
         }
     }
-    pages.truncate(2);
+    pages.truncate(CONTEXT_PAGE_LIMIT);
     Ok(pages)
+}
+
+/// Topics sharing source evidence with `topic`, strongest overlap first.
+fn related_titles(topics: &[Topic], topic: &Topic, limit: usize) -> Vec<String> {
+    let mut ranked: Vec<(usize, &str)> = topics
+        .iter()
+        .filter(|other| !other.excluded && other.id != topic.id)
+        .filter_map(|other| {
+            let shared = other
+                .source_ids
+                .iter()
+                .filter(|id| topic.source_ids.contains(*id))
+                .count();
+            (shared > 0).then(|| (shared, other.title.as_str()))
+        })
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
+    ranked
+        .into_iter()
+        .take(limit)
+        .map(|(_, title)| title.to_owned())
+        .collect()
 }
 fn citable(topic: &Topic, local: &Path, manifest: &Manifest, config: &Models) -> bool {
     !topic.excluded
@@ -2655,6 +2694,21 @@ pub async fn workbench_wiki(
             write_json(&models_path(&app, &session)?, &next)?;
             config = next;
         }
+        "purpose" => {
+            // Steering input for future catalog runs only; never part of page
+            // fingerprints, so saving it cannot trigger recomputation.
+            let purpose = request["purpose"]
+                .as_str()
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            if purpose.chars().count() > 8000 {
+                return Err("Knowledge purpose is too long".into());
+            }
+            let mut manifest = load_state(&app, &session)?;
+            manifest.purpose = purpose;
+            persist(&app, &session, &manifest)?;
+        }
         "topic" => {
             topic_store::upsert(&root, &mut values, &request)?;
             created_topic_id = values
@@ -2825,11 +2879,12 @@ pub async fn workbench_wiki(
         .collect();
     let mut graph = graph::view(&root, &local, &manifest, &values, &config)?;
     graph::attach_todos(&app, &session, &root, &mut graph)?;
-    let topic_graph = automation::topic_graph(&values, &items);
+    let mut topic_graph = automation::topic_graph(&values, &items);
+    topic_graph["insights"] = insights::attach(&mut topic_graph);
     let source_dates = page_sources.dates(&values);
     require_current(&state, &session)?;
     Ok(
-        json!({"topics":items,"sourceDates":source_dates,"hierarchy":hierarchy::status(&root)?,"sourceFailures":automation::source_failures(&root)?,"models":config,"sources":super::sources::config(&app,&session)?,"graph":graph,"topicGraph":topic_graph,"automation":manifest.wiki_automation,"createdTopicId":created_topic_id}),
+        json!({"topics":items,"sourceDates":source_dates,"hierarchy":hierarchy::status(&root)?,"sourceFailures":automation::source_failures(&root)?,"models":config,"sources":super::sources::config(&app,&session)?,"graph":graph,"topicGraph":topic_graph,"automation":manifest.wiki_automation,"purpose":manifest.purpose,"createdTopicId":created_topic_id}),
     )
 }
 

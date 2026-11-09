@@ -323,6 +323,11 @@ pub struct Manifest {
     pub wiki_revision: String,
     #[serde(default)]
     pub wiki_automation: Option<WikiAutomation>,
+    // Scope-level knowledge-base goal, read by catalog steering and retrieval.
+    // Deliberately excluded from page fingerprints: editing it must never
+    // invalidate compiled pages.
+    #[serde(default)]
+    pub purpose: String,
     #[serde(default)]
     pub knowledge_policy: Option<Value>,
     #[serde(default)]
@@ -361,6 +366,7 @@ impl Default for Manifest {
             wiki_attempted_fingerprint: String::new(),
             wiki_revision: String::new(),
             wiki_automation: None,
+            purpose: String::new(),
             knowledge_policy: None,
             knowledge_pending: None,
             knowledge_uploads: Default::default(),

@@ -86,3 +86,11 @@ apps/tauri/audio-capture/vendor/build/
 # real artifact is built per machine / CI, never committed.
 apps/tauri/src-tauri/aec3/lib/
 apps/tauri/.build/
+/.desktop-rsi/
+
+# Docs live outside the repo now — never re-track.
+/docs/
+
+# RSI is a standalone side project — never commit into this repo.
+/specs/desktop-rsi/
+/e2e/playwright.rsi.config.ts

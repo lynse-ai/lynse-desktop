@@ -80,6 +80,13 @@ export const STAGING_CLOUDBASE_AGENT_URL =
 export const CLOUDBASE_MEMORY_URL =
   "https://lynse-memory-319577-10-1401959758.sh.run.tcloudbase.com";
 
+/**
+ * The staging environment was shut down (2026-11-08); CloudBase now has a
+ * single deployment. The staging hosts above stay exported only as anchors:
+ * boot heal and saved-override migration use them to recognize values saved
+ * before the shutdown and move them onto the production services.
+ */
+
 export const STAGING_CLOUDBASE_MEMORY_URL =
   "https://lynse-memory-336033-11-1401959758.sh.run.tcloudbase.com";
 
@@ -102,9 +109,11 @@ export function isTestApiUrl(apiUrl: string | null | undefined): boolean {
 
 export function agentUrlForApiUrl(apiUrl: string | null | undefined): string | null {
   if (!apiUrl) return null;
-  return isTestApiUrl(apiUrl) ? STAGING_CLOUDBASE_AGENT_URL : CLOUDBASE_AGENT_URL;
+  // Single CloudBase deployment since the staging shutdown — every login
+  // environment rides the production services.
+  return CLOUDBASE_AGENT_URL;
 }
 
-export function memoryUrlForApiUrl(apiUrl: string | null | undefined): string {
-  return isTestApiUrl(apiUrl) ? STAGING_CLOUDBASE_MEMORY_URL : CLOUDBASE_MEMORY_URL;
+export function memoryUrlForApiUrl(_apiUrl: string | null | undefined): string {
+  return CLOUDBASE_MEMORY_URL;
 }

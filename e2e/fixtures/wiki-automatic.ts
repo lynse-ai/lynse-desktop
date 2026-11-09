@@ -34,6 +34,7 @@ export async function installAutomaticWiki(page: Page, enabled = true, seed?: Pa
       if(status.enabled)wiki.topics=status.automation?.folderIds.includes("folder-work")?topics:[];
       publish();return structuredClone(status);});
     hook.setCommand("workbench_wiki",args=>{const request=args.request as Record<string,unknown>;runtime.wikiTest.requests.push(structuredClone(request));
+      if(request.action==="purpose"){wiki.purpose=String(request.purpose);publish();}
       if(request.action==="correction"){const topic=wiki.topics.find(topic=>topic.id===request.id);if(topic)topic.notes=String(request.notes);publish();}
       if(request.action==="retry"){
         if(runtime.wikiTest.failNextRetry){runtime.wikiTest.failNextRetry=false;throw new Error("Synthetic retry rejected");}

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { IconSwap } from "../icon-swap";
+import { SqueezePanel } from "../squeeze-panel";
 import { getWorkspaceState, useWorkspaceStore } from "../workspace/store";
 import { ContentPanel } from "../workspace/content-panel";
 import { LynclawNotePanel, LynclawNoteRow } from "./lynclaw-note-panel";
@@ -831,7 +832,7 @@ export function NotesPage() {
                   type="button"
                   onClick={() => setUploadOpen(true)}
                   title={t("layout.new_recording_import")}
-                  className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-accent hover:text-foreground active:scale-[0.96]"
+                  className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-accent hover:text-foreground active:scale-[0.96]"
                   data-tauri-drag-region={false}
                 >
                   <Upload className="size-4" />
@@ -842,7 +843,7 @@ export function NotesPage() {
                     onClick={handleSyncVault}
                     disabled={vaultSyncing}
                     title={t("vault.sync_all")}
-                    className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-accent hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50"
+                    className="flex size-8 items-center justify-center rounded-lg text-muted-foreground transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-accent hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50"
                     data-tauri-drag-region={false}
                   >
                     <IconSwap stateKey={vaultSyncing ? "busy" : "idle"}>
@@ -1072,33 +1073,23 @@ export function NotesPage() {
                 {selectedLynclawNoteId && notesScope
                   ? <LynclawNotePanel key={`${notesScope}:${selectedLynclawNoteId}`} id={selectedLynclawNoteId} scope={notesScope} />
                   : <ContentPanel />}
-                <AnimatePresence initial={false}>
-                  {chatPanelVisible && !selectedLynclawNoteId && (
-                    <motion.div
-                      key="chat-panel"
-                      initial={{ width: 0, opacity: 0 }}
-                      animate={{ width: chatPanelWidth, opacity: 1 }}
-                      exit={{ width: 0, opacity: 0 }}
-                      transition={
-                        isChatPanelResizing || reduceMotion
-                          ? { duration: 0 }
-                          : { type: "spring", bounce: 0, duration: 0.3 }
-                      }
-                      className="flex shrink-0 overflow-hidden bg-card/95 backdrop-blur-xl"
-                    >
-                      <ResizableHandle
-                        label={t("workspace.resize_chat_panel")}
-                        onResize={handleChatPanelResize}
-                        onResizeStart={() => setIsChatPanelResizing(true)}
-                        onResizeEnd={() => setIsChatPanelResizing(false)}
-                        side="left"
-                      />
-                      <div className="h-full overflow-hidden" style={{ width: chatPanelWidth }}>
-                        <ChatPanel />
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                <SqueezePanel
+                  open={chatPanelVisible && !selectedLynclawNoteId}
+                  width={chatPanelWidth}
+                  resizing={isChatPanelResizing}
+                  className="bg-card/95 backdrop-blur-xl"
+                >
+                  <ResizableHandle
+                    label={t("workspace.resize_chat_panel")}
+                    onResize={handleChatPanelResize}
+                    onResizeStart={() => setIsChatPanelResizing(true)}
+                    onResizeEnd={() => setIsChatPanelResizing(false)}
+                    side="left"
+                  />
+                  <div className="h-full overflow-hidden" style={{ width: chatPanelWidth }}>
+                    <ChatPanel />
+                  </div>
+                </SqueezePanel>
               </div>
             </div>
           </motion.div>

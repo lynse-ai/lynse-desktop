@@ -1473,8 +1473,14 @@ pub async fn workbench_context(
     state: State<'_, WorkbenchState>,
     query: String,
 ) -> CommandResult<Value> {
-    let _guard = state.serial.lock().await;
     let session = current(&state)?;
+    // Semantic recall acquires the serial lock itself; it must run before this
+    // command takes the same lock. Failures degrade to keyword-only recall.
+    let semantic = wiki::semantic_search(&app, &state, &session, &query)
+        .await
+        .unwrap_or_default();
+    let _guard = state.serial.lock().await;
+    require_current(&state, &session)?;
     let manifest = load_state(&app, &session)?;
     if wiki::ready(&manifest).is_err() {
         return Ok(Value::Null);
@@ -1482,6 +1488,17 @@ pub async fn workbench_context(
     let (root, _) = roots(&app, &session)?;
     let mut sources = store::search(&root, &wiki::ai_manifest(&root, &manifest), &query, 3);
     sources.extend(wiki::context(&app, &session, &manifest, &query)?);
+    // Merge semantic hits without duplicating keyword results; a small slice
+    // keeps the chat payload bounded.
+    for item in semantic.into_iter().take(3) {
+        let id = item["id"].as_str().unwrap_or_default();
+        if !sources
+            .iter()
+            .any(|source| source["id"].as_str() == Some(id))
+        {
+            sources.push(item);
+        }
+    }
     drop(_guard);
     let sources = knowledge_cloud::filter_items(&app, &session, sources)
         .await

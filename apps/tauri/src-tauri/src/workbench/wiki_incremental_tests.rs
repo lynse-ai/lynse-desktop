@@ -359,6 +359,70 @@ fn repeated_cached_replay_preserves_published_history_and_completed_versions() {
 }
 
 #[test]
+fn an_adopted_cloud_payload_schedules_no_model_work_and_keeps_membership() {
+    // Device A: an organized topic over two sources; capture exactly the
+    // projection the cloud index ships (topic head + catalog chunks/identities).
+    let docs = vec![source("first"), source("second")];
+    let config = Models::default();
+    let id = uuid::Uuid::new_v4().to_string();
+    let mut values = vec![Topic {
+        id: id.clone(),
+        title: "Release plan".into(),
+        automatic_key: format!("project:first:{}", normalize("release-plan")),
+        topic_kind: "project".into(),
+        source_ids: vec!["first".into(), "second".into()],
+        published: Some(saved_page("published-id", &docs[0])),
+        ..Default::default()
+    }];
+    let version = page_version(&values[0], &docs, &Manifest::default(), &config);
+    values[0].last_fingerprint = version.clone();
+    values[0].last_attempt_fingerprint = version.clone();
+    let mut catalog = Catalog::default();
+    for doc in &docs {
+        catalog
+            .identities
+            .insert(format!("project:{}:releaseplan", doc.id), id.clone());
+        catalog
+            .chunks
+            .insert(cached_key(doc, &config), vec![catalog_row(doc, Some(&id))]);
+    }
+    let payload = json!({
+        "topic": serde_json::to_value(&values[0]).unwrap(),
+        "chunks": serde_json::to_value(catalog.chunks.clone()).unwrap(),
+        "identities": serde_json::to_value(catalog.identities.clone()).unwrap(),
+    });
+
+    // Device B: empty local state reconstructs purely from the payload;
+    // the same cloud sources arrive through the regular meeting sync.
+    let mut restored = vec![serde_json::from_value::<Topic>(payload["topic"].clone()).unwrap()];
+    let mut restored_catalog = Catalog::default();
+    restored_catalog.chunks = serde_json::from_value(payload["chunks"].clone()).unwrap();
+    restored_catalog.identities = serde_json::from_value(payload["identities"].clone()).unwrap();
+    assert_eq!(restored[0].last_fingerprint, version);
+
+    let plan = prepare_catalog(&mut restored, &mut restored_catalog, &docs, &config);
+    assert!(plan.jobs.is_empty(), "adopted chunks must not re-extract");
+    assert_eq!(plan.applied, 2);
+    assert_eq!(
+        plan.active.get(&id),
+        Some(&BTreeSet::from(["first".into(), "second".into()]))
+    );
+    reconcile_sources(&mut restored, &plan.active, &plan.failed_sources, &docs);
+    assert_eq!(restored[0].source_ids, vec!["first", "second"]);
+
+    // The staleness gate re-derives the same fingerprint: nothing to compile.
+    assert!(pending_compilation(
+        &restored[0],
+        &docs,
+        &Manifest::default(),
+        &config,
+        &BTreeSet::new(),
+        None,
+    )
+    .is_none());
+}
+
+#[test]
 fn cached_empty_catalog_result_remains_a_completed_analysis() {
     let docs = vec![source("no-topic")];
     let config = Models::default();

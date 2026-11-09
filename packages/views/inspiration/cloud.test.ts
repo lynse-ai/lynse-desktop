@@ -17,14 +17,15 @@ it("disables cloud binding and sync even on staging with a saved endpoint", asyn
   expect(fixture.bind).not.toHaveBeenCalled();
   expect(fixture.sync).not.toHaveBeenCalled();
 });
-it("moves the default and previously saved production preset to staging with the login gateway", () => {
+it("routes the login gateway to production and migrates saved staging presets (single CloudBase deployment)", () => {
   fixture.enabled = true;
   fixture.host="https://gapp.lynse.cn";
-  const staging="https://lynse-memory-336033-11-1401959758.sh.run.tcloudbase.com";
-  expect(memoryApiBase()).toBe(staging);
+  expect(memoryApiBase()).toBe(DEFAULT_MEMORY_API_URL);
+  // Values saved before the staging shutdown ride the current default.
+  localStorage.setItem("lynse_memory_api_url","https://lynse-memory-336033-11-1401959758.sh.run.tcloudbase.com");
+  expect(memoryApiBase()).toBe(DEFAULT_MEMORY_API_URL);
   localStorage.setItem("lynse_memory_api_url",DEFAULT_MEMORY_API_URL);
-  expect(memoryApiBase()).toBe(staging);
-  localStorage.setItem("lynse_memory_api_url",staging);
+  expect(memoryApiBase()).toBe(DEFAULT_MEMORY_API_URL);
 });
 it("keeps production local-only even when an override tries to re-enable cloud (2026-10-31 gate)", () => {
   fixture.enabled = true;

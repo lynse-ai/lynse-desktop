@@ -10,7 +10,7 @@ import type { RecordingAudioSourceInterval } from "./types";
 import { WaveformProgress } from "./waveform-progress";
 
 const SPEEDS = [1, 1.5, 2];
-const PRIMARY_ACTION = "flex size-7 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-[background-color,transform] duration-150 hover:bg-primary/90 active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-60";
+const PRIMARY_ACTION = "flex size-7 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-[background-color,transform] duration-(--duration-quick) hover:bg-primary/90 active:scale-[0.96] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring disabled:opacity-60";
 
 function formatTime(seconds: number): string {
   if (!isFinite(seconds) || isNaN(seconds)) return "0:00";

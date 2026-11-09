@@ -313,7 +313,7 @@ export function HomePage() {
             disabled={rotateCount <= 1}
             title={t("home.summary_next")}
             className={cn(
-              "shrink-0 text-xs font-medium text-primary transition-transform duration-150",
+              "shrink-0 text-xs font-medium text-primary transition-transform duration-(--duration-quick)",
               rotateCount > 1
                 ? "cursor-pointer hover:opacity-80 active:scale-[0.96]"
                 : "cursor-default",
@@ -443,7 +443,7 @@ export function HomePage() {
               >
                 <Plus className="size-[18px]" strokeWidth={1.8} />
               </button>
-              <div className="pointer-events-none absolute bottom-full left-0 z-50 translate-y-1 pb-2 opacity-0 transition-[translate,opacity] duration-150 group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100">
+              <div className="pointer-events-none absolute bottom-full left-0 z-50 translate-y-1 pb-2 opacity-0 transition-[translate,opacity] duration-(--duration-quick) group-hover:pointer-events-auto group-hover:translate-y-0 group-hover:opacity-100">
                 <div className="w-48 rounded-xl border border-border/60 bg-popover p-1.5 shadow-lg">
                   <button
                     type="button"

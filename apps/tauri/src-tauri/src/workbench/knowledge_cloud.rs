@@ -14,7 +14,7 @@ pub(super) fn response_error(status: reqwest::StatusCode) -> String {
     }
 }
 
-fn stops_dispatch(error: &str) -> bool {
+pub(super) fn stops_dispatch(error: &str) -> bool {
     super::knowledge_transport::transient(error)
         || error.contains("Cloud knowledge identity")
         || error.contains("Cloud knowledge request failed (HTTP 403)")
@@ -941,6 +941,15 @@ async fn settle_outbox(
 pub(super) async fn background(app: &AppHandle, session: &Session) -> CommandResult<bool> {
     let state = app.state::<WorkbenchState>();
     require_current(&state, session)?;
+    // Cross-device organize-state reconciliation runs on the same lane; its
+    // failures never block the memory-event outbox below.
+    let wiki_sync_more = match wiki::cloud::background(app, session).await {
+        Ok(more) => more,
+        Err(error) => {
+            log::warn!("Wiki organize sync paused: {error}");
+            false
+        }
+    };
     let _ = retry_pending_policy(app, session).await;
     let capability = refresh_capabilities(app, session).await?;
     let refresh_outbox = {
@@ -1125,7 +1134,9 @@ pub(super) async fn background(app: &AppHandle, session: &Session) -> CommandRes
             }
         }
     }
-    Ok(!due_events(&read_outbox(&outbox_path(app, session)?)?, now_seconds()).is_empty())
+    let events_pending = !due_events(&read_outbox(&outbox_path(app, session)?)?, now_seconds())
+        .is_empty();
+    Ok(events_pending || wiki_sync_more)
 }
 
 #[cfg(test)]

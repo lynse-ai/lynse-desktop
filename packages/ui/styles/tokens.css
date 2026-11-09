@@ -96,9 +96,10 @@
    is emitted to :root as a global CSS var for hand-written keyframes. These strong
    curves intentionally override Tailwind's weak built-in ease-out / ease-in-out. */
 @theme {
-    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);     /* entrances / exits — the UI default */
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);     /* entrances — the UI default (exits use --ease-exit) */
     --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1); /* on-screen movement / morphing */
     --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);  /* iOS-like drawer / sheet curve */
+    --ease-exit: cubic-bezier(0.3, 0, 0.6, 0.6);    /* exits — accelerates out; dismissals must read snappier than their entrance */
 }
 
 :root {
@@ -222,12 +223,17 @@
     --feed-todo: #0284c7;
     /* Motion tokens — durations (UI stays ≤ 300ms). Theme-independent, so defined
        once on :root. Plain CSS vars (no Tailwind namespace) consumed by keyframes
-       and motion configs; use duration-[var(--duration-standard)] in markup. */
-    --duration-instant: 100ms;   /* press feedback lower bound */
-    --duration-quick: 150ms;     /* tooltips, small popovers, dropdowns */
-    --duration-standard: 200ms;  /* popovers, dropdowns, modal/drawer entry */
-    --duration-moderate: 300ms;  /* the UI ceiling; larger panels */
-    --duration-slow: 450ms;      /* drawers upper bound, onboarding, marketing */
+       and motion configs; use duration-[var(--duration-standard)] in markup.
+       Each step is the median of a band (±30%), not a law: a small element may
+       sit at the bottom of its band, a large surface at the top — but never
+       invent an out-of-band value. Exits ride one step below their entrance:
+       an element entering on --duration-standard dismisses on --duration-exit. */
+    --duration-instant: 100ms;   /* press feedback lower bound (band 70–130ms) */
+    --duration-quick: 150ms;     /* tooltips, small popovers, dropdowns (band 105–195ms) */
+    --duration-standard: 200ms;  /* popovers, dropdowns, modal/drawer entry (band 140–260ms) */
+    --duration-moderate: 300ms;  /* the UI ceiling; larger panels (band 210–390ms) */
+    --duration-slow: 450ms;      /* drawers upper bound, onboarding, marketing (band 315–585ms) */
+    --duration-exit: var(--duration-quick); /* dismisses — the shared exit clock */
 }
 
 .dark {

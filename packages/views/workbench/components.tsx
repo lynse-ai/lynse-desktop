@@ -24,7 +24,7 @@ import type { MemoryItem, SourceRef, SynthesisResult, TodoSuggestion, WorkbenchR
 import { isWikiEnabled, featureFlags } from "../feature-flags";
 import { usePluginStore } from "../plugins/state";
 import { loadChatModelSetting, MODEL_OVERRIDE_STORAGE_KEY, toRequestOverride } from "../workspace/model-override";
-import { WikiAttention, WikiModels, WikiTopics, WikiSources } from "./wiki";
+import { WikiAttention, WikiKnowledgePurpose, WikiModels, WikiTopics, WikiSources } from "./wiki";
 import { isWikiProcessingComplete, WorkbenchProgress } from "./progress";
 import { useNavigation } from "../navigation";
 import { useMemoryDrafts } from "./memory-drafts";
@@ -115,6 +115,7 @@ export function WorkbenchSettingsContent({ disabled = false, activation = false,
   if (activation) return <WikiAutomationSettings key={status?.scope} activation disabled={disabled} />;
   return <div className="space-y-4">
       <WikiAutomationSettings key={status?.scope} disabled={disabled} />
+      <WikiKnowledgePurpose key={status?.scope} />
       <details className="rounded-md border border-border p-3"><summary className="cursor-pointer text-sm font-medium">{t("workbench.wiki_advanced")}</summary><div className="mt-4 space-y-4">
       <p className="text-sm leading-relaxed text-muted-foreground">{t("workbench.wiki_advanced_hint")}</p>
       {status?.enabled && <><WikiSources /><WikiModels /></>}

@@ -715,7 +715,7 @@ function RecordingStage({
                     onClick={onStop}
                     disabled={busy}
                     aria-label={t("recording_mode.stop_recording")}
-                    className="mx-auto flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-[background-color,transform,box-shadow] duration-150 hover:bg-destructive/90 active:scale-[0.96] disabled:opacity-60"
+                    className="mx-auto flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-[background-color,transform,box-shadow] duration-(--duration-quick) hover:bg-destructive/90 active:scale-[0.96] disabled:opacity-60"
                   >
                     <IconSwap stateKey={busy ? "busy" : "idle"}>
                       {busy ? (
@@ -789,7 +789,7 @@ function RecordingStage({
                     onClick={onStart}
                     disabled={busy || stopping}
                     aria-label={t("recording_mode.start_recording")}
-                    className="mx-auto flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-[background-color,transform,box-shadow] duration-150 hover:bg-destructive/90 active:scale-[0.96] disabled:opacity-60"
+                    className="mx-auto flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-[background-color,transform,box-shadow] duration-(--duration-quick) hover:bg-destructive/90 active:scale-[0.96] disabled:opacity-60"
                   >
                     <IconSwap stateKey={busy ? "busy" : "idle"}>
                       {busy ? <Loader2 className="size-6 animate-spin" /> : <Mic className="size-6" />}

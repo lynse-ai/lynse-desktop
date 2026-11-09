@@ -3,7 +3,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { Plus, Calendar, Trash2, X, RefreshCw, Loader2, Upload, List, User } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { SqueezePanel } from "../squeeze-panel";
 import { Button } from "@lynse/ui/components/ui/button";
 import { toast } from "sonner";
 import { featureFlags, isConnectionsEnabled } from "../feature-flags";
@@ -415,7 +415,6 @@ export function TodoEditPanel({
   onToggle: (id: string) => void;
 }) {
   const { t } = useTranslation();
-  const reduceMotion = useReducedMotion();
   const [width, setWidth] = useState(TODO_PANEL_DEFAULT_WIDTH);
   const [resizing, setResizing] = useState(false);
 
@@ -424,20 +423,14 @@ export function TodoEditPanel({
   }, []);
 
   return (
-    <AnimatePresence initial={false}>
+    <SqueezePanel
+      open={todo !== null}
+      width={width}
+      resizing={resizing}
+      className="bg-background"
+    >
       {todo && (
-        <motion.div
-          key="todo-edit-panel"
-          className="flex shrink-0 overflow-hidden bg-background"
-          initial={{ width: 0, opacity: 0 }}
-          animate={{ width, opacity: 1 }}
-          exit={{ width: 0, opacity: 0 }}
-          transition={
-            resizing || reduceMotion
-              ? { duration: 0 }
-              : { type: "spring", bounce: 0, duration: 0.3 }
-          }
-        >
+        <>
           <ResizableHandle
             label={t("todo.resize_panel")}
             onResize={handlePanelResize}
@@ -456,9 +449,9 @@ export function TodoEditPanel({
               onToggle={onToggle}
             />
           </div>
-        </motion.div>
+        </>
       )}
-    </AnimatePresence>
+    </SqueezePanel>
   );
 }
 

@@ -13,9 +13,10 @@ import { KnowledgeGraphScene } from "./knowledge-graph-scene";
 import { graphNeighborhood, GRAPH_NODE_LIMIT, visibleGraphNodes } from "./graph-visible-nodes";
 import { graphRelations, graphRelationKey } from "./graph-relations";
 import { GraphSourceNote } from "./graph-source-note";
+import { GraphInsights } from "./graph-insights";
 import type { GraphKind, GraphNode, KnowledgeGraph, SourceRef } from "./types";
 
-import { graphKinds as kinds, graphColors as color, graphKindKey as kindKey, graphNodeKindKey, graphStatusKey as statusKey, graphModalityKey, graphPredicateKey } from "./graph-vocabulary";
+import { communityPalette, graphKinds as kinds, graphColors as color, graphKindKey as kindKey, graphNodeKindKey, graphStatusKey as statusKey, graphModalityKey, graphPredicateKey } from "./graph-vocabulary";
 import { GraphTracking as TrackingSettings } from "./graph-tracking";
 import { GraphQuestions } from "./graph-questions";
 import { GraphIdentity } from "./graph-identity";
@@ -113,6 +114,7 @@ function GraphView({ embedded = false, selectedId, onSelect, onSource: externalS
   const needsExtraction = !!graph && !graph.nodes.some(node => node.kind !== "wiki" && node.kind !== "source");
   const [search, setSearch] = useState("");
   const [kind, setKind] = useState<GraphKind | "all">("all");
+  const [communityMode, setCommunityMode] = useState(false);
   const [browsing, setBrowsing] = useState(false);
   const [scope, setScope] = useState<"global" | "local">("local");
   const [depth, setDepth] = useState(1);
@@ -135,6 +137,21 @@ function GraphView({ embedded = false, selectedId, onSelect, onSource: externalS
   }, [selection, nodes]);
   const local = scope === "local" && !!selected;
   const hasFilter = !!search.trim() || kind !== "all";
+  // Community ids ride on topic-graph nodes; wiki nodes in the evidence graph
+  // share the same ids, so a lookup map is enough for coloring.
+  const communities = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const community of wiki.data?.topicGraph?.insights?.communities ?? [])
+      for (const member of community.members) map.set(member, community.id);
+    return map;
+  }, [wiki.data?.topicGraph?.insights]);
+  const colorOf = useMemo(() => {
+    if (!communityMode || !communities.size) return null;
+    return (node: GraphNode) => {
+      const community = communities.get(node.id);
+      return community === undefined ? null : communityPalette[community % communityPalette.length] ?? null;
+    };
+  }, [communityMode, communities]);
   const filtered = useMemo(() => (nodes ?? []).filter(node => (kind === "all" || node.kind === kind) && (node.title + " " + node.description + " " + (node.members?.map(member => member.title).join(" ") ?? "")).toLowerCase().includes(search.trim().toLowerCase())), [nodes, kind, search]);
   const neighborhood = useMemo(() => graphNeighborhood(nodes ?? [], edges ?? [], selection, depth), [nodes, edges, selection, depth]);
   const sceneNodes = local ? neighborhood : filtered;
@@ -166,6 +183,7 @@ function GraphView({ embedded = false, selectedId, onSelect, onSource: externalS
       {local && <div className="flex gap-1" aria-label={t("workbench.graph_depth")}>{[1, 2].map(value => <Button key={value} size="sm" variant={depth === value ? "outline" : "ghost"} aria-pressed={depth === value} onClick={() => setDepth(value)}>{t(value === 1 ? "workbench.graph_one_hop" : "workbench.graph_two_hops")}</Button>)}</div>}
       <Button size="sm" variant="ghost" disabled={!previous} onClick={goBack}>{t("workbench.graph_back")}</Button>
       {hasFilter && <Button size="sm" variant="ghost" onClick={() => { setSearch(""); setKind("all"); }}>{t("workbench.graph_clear_filters")}</Button>}
+      {!!communities.size && <Button size="sm" variant={communityMode ? "secondary" : "ghost"} aria-pressed={communityMode} onClick={() => setCommunityMode(value => !value)}>{t("workbench.graph_by_community")}</Button>}
     </div>
     <p className="text-xs leading-relaxed text-muted-foreground">{t(local ? "workbench.graph_local_hint" : "workbench.graph_global_hint")}</p>
     <details open={browsing || hasFilter} className="rounded-lg border border-border p-3" onToggle={event => setBrowsing(event.currentTarget.open)}>
@@ -191,11 +209,12 @@ function GraphView({ embedded = false, selectedId, onSelect, onSource: externalS
     {wiki.error && <p role="alert" className="text-xs text-destructive">{String(wiki.error)}</p>}
     {needsExtraction && <TrackingSettings wiki={wiki} expanded />}
     <GraphQuestions graph={graph} onSelect={setSelection} onSource={openSource} compact={embedded} />
+    <GraphInsights wiki={wiki} onSelect={setSelection} compact={embedded} />
     {controls}
     <div className={embedded ? "min-w-0" : "grid gap-4 xl:grid-cols-[minmax(0,1fr)_19rem]"}>
       <div className="min-w-0 space-y-2">
         <div className="relative overflow-hidden rounded-xl border border-border">
-          <KnowledgeGraphScene nodes={visible} edges={graph.edges} selection={selection} onSelect={setSelection} nodeLabel={node => t(graphNodeKindKey(node)) + ": " + node.title} details={reader} controls={controls}
+          <KnowledgeGraphScene nodes={visible} edges={graph.edges} selection={selection} onSelect={setSelection} nodeLabel={node => t(graphNodeKindKey(node)) + ": " + node.title} details={reader} controls={controls} colorOf={colorOf ?? undefined}
             viewKey={local ? "local:" + selection + ":" + depth : "global:" + kind + ":" + search} />
           {!visible.length && <p className="pointer-events-none absolute inset-0 flex items-center justify-center p-8 text-center text-sm text-muted-foreground">{t(hasFilter ? "workbench.graph_no_matches" : "workbench.graph_empty")}</p>}
         </div>

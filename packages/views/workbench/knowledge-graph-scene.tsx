@@ -18,6 +18,7 @@ interface Props {
   nodeLabel: (node: GraphNode) => string;
   details?: ReactNode;
   controls?: ReactNode;
+  colorOf?: (node: GraphNode) => string | null;
   viewKey?: string;
   simple?: boolean;
   fill?: boolean;
@@ -29,7 +30,7 @@ interface Drag {
   node: SVGGElement | null; moved: boolean; rotate: boolean;
 }
 
-export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLabel, details, controls, viewKey, simple = false, fill = false, initialCamera, onCameraChange }: Props) {
+export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLabel, details, controls, colorOf, viewKey, simple = false, fill = false, initialCamera, onCameraChange }: Props) {
   const { t } = useTranslation();
   const svg = useRef<SVGSVGElement>(null);
   const [svgElement, setSvgElement] = useState<SVGSVGElement | null>(null);
@@ -250,7 +251,8 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
           const active = node.id === selection;
           const radius = (simple ? 20 + Math.min(8, degree.get(node.id) ?? 0) : (3 + Math.min(5, Math.log2((degree.get(node.id) ?? 0) + 1) * 1.1)) * (mode === "3d" ? p.size : 1));
           const glow = active || node.id === preview;
-          const color = glow ? "var(--graph-highlight)" : graphColors[node.kind];
+          const tinted = glow ? null : colorOf?.(node) ?? null;
+          const color = glow ? "var(--graph-highlight)" : tinted ?? graphColors[node.kind];
           const TopicIcon = node.subtype === "project" ? Layers : BookOpen;
           return <g key={node.id} ref={element => { if (element) elements.current.set(node.id, element); else elements.current.delete(node.id); }}
             data-graph-node={node.id} role="button" tabIndex={node.id === tabStop ? 0 : -1} aria-label={nodeLabel(node)} aria-pressed={active}
@@ -279,7 +281,7 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
             <title>{nodeLabel(node)}</title>
             <circle r={simple ? 28 : 16} fill="transparent" />
             <circle className="graph-focus" r={simple ? radius + 5 : 13} fill="none" stroke="var(--ring)" strokeWidth={2} opacity={0} pointerEvents="none" />
-            {mode === "3d" && <circle r={radius * 3.6} fill={"url(#" + glowId + (glow ? "highlight" : node.kind) + ")"} opacity={glow ? 0.7 : Math.max(0.06, Math.min(0.16, 0.1 * p.size))} pointerEvents="none" />}
+            {mode === "3d" && <circle r={radius * 3.6} fill={glow || tinted ? color : "url(#" + glowId + node.kind + ")"} opacity={glow ? 0.7 : Math.max(0.06, Math.min(0.16, 0.1 * p.size))} pointerEvents="none" />}
             {mode === "3d" && active && <g pointerEvents="none" aria-hidden="true">
               <circle className="graph-selection-pulse" r={radius} fill={"url(#" + glowId + "pulse)"} />
               <circle className="graph-selection-pulse graph-selection-pulse-delayed" r={radius} fill={"url(#" + glowId + "pulse)"} />

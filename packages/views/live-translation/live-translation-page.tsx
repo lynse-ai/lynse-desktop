@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { SqueezePanel } from "../squeeze-panel";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { AudioSourceControls } from "./audio-source-controls";
@@ -60,7 +60,6 @@ export function LiveTranslationPage() {
   const { t } = useTranslation();
   const { api, view } = useLiveTranslation();
   const { pathname } = useNavigation();
-  const reduceMotion = useReducedMotion();
   const [permissions, setPermissions] = useState<LivePermissionStatus | null>(null);
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [sourceLanguage, setSourceLanguage] = useState("zh");
@@ -521,15 +520,11 @@ export function LiveTranslationPage() {
       </header>
 
       <main className="relative flex min-h-0 flex-1">
-        <AnimatePresence initial={false}>
-        {!settingsCollapsed && (
-        <motion.aside
-          key="settings-rail"
-          initial={{ width: 0, opacity: 0 }}
-          animate={{ width: 320, opacity: 1 }}
-          exit={{ width: 0, opacity: 0 }}
-          transition={reduceMotion ? { duration: 0 } : { type: "spring", bounce: 0, duration: 0.3 }}
-          className="relative shrink-0 overflow-hidden border-r border-border"
+        <SqueezePanel
+          open={!settingsCollapsed}
+          width={320}
+          element="aside"
+          className="relative border-r border-border"
         >
           <button
             type="button"
@@ -616,9 +611,7 @@ export function LiveTranslationPage() {
             </div>
           )}
           </div>
-        </motion.aside>
-        )}
-        </AnimatePresence>
+        </SqueezePanel>
 
         {settingsCollapsed && (
           <button
@@ -799,16 +792,12 @@ export function LiveTranslationPage() {
 
         {/* AI structured notes rail: builds during the session, survives the
             stop transition so the final version stays readable. */}
-        <AnimatePresence initial={false}>
-          {notesOpen && (
-            <motion.aside
-              key="notes-rail"
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 320, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
-              transition={reduceMotion ? { duration: 0 } : { type: "spring", bounce: 0, duration: 0.3 }}
-              className="relative shrink-0 overflow-hidden border-l border-border"
-            >
+        <SqueezePanel
+          open={notesOpen}
+          width={320}
+          element="aside"
+          className="relative border-l border-border"
+        >
               <button
                 type="button"
                 onClick={() => setNotesOpen(false)}
@@ -830,9 +819,7 @@ export function LiveTranslationPage() {
                 </div>
                 <LiveNotesPanel state={notes} />
               </div>
-            </motion.aside>
-          )}
-        </AnimatePresence>
+        </SqueezePanel>
       </main>
     </div>
   );

@@ -392,6 +392,13 @@ const en = {
   observation: "Fact", proposal: "Proposal", decision: "Decision", unresolved: "Needs confirmation", edit: "Edit", save: "Save", pin: "Pin", unpin: "Unpin", forget: "Exclude", cancel: "Cancel", insufficient: "There is not enough source evidence for this topic.",
   marker: "Recording markers", highlight: "Highlight", todo: "Task", marker_note: "Optional note", add_marker: "Add marker", remove: "Remove", after_meeting: "Review this meeting", enable_first: "Enable meeting memory in Settings → Sync to prepare this meeting.",
   knowledge: "Local meeting documents", processing: "AI processing", retry: "Retry", memory_count: "{{count}} sourced conclusions", brief_hint: "Uses the local sources matching this topic. Conflicting statements remain unresolved.",
+  graph_insights: "Knowledge insights", graph_by_community: "By community",
+  graph_bridges: "Bridge topics", graph_bridges_hint: "hold several clusters together", graph_bridge_meta: "{{count}} clusters",
+  graph_isolated: "Isolated topics", graph_isolated_hint: "share little evidence with others", graph_isolated_meta: "{{count}} connections",
+  graph_sparse: "Loose clusters", graph_sparse_hint: "weakly connected members", graph_sparse_meta: "{{count}} topics · cohesion {{cohesion}}%",
+  graph_cross_links: "Cross-cluster links", graph_cross_links_hint: "strong shared evidence", graph_cross_meta: "{{count}} shared sources",
+  wiki_purpose: "Knowledge-base goal", wiki_purpose_hint: "Describe what this knowledge base is for; new content is clustered with this goal in mind. Changing it never recomputes existing pages.", wiki_purpose_saved: "Knowledge-base goal saved",
+  wiki_health: "Knowledge-base health", wiki_health_progress: "Organizing: {{completed}} / {{total}} sources processed", wiki_health_hierarchy: "Topic grouping needs attention", wiki_health_stale: "{{count}} topics are outdated after source changes", wiki_health_candidates: "{{count}} generated candidates await review",
 };
 const zh: typeof en = {
   ...groupingZh,
@@ -786,5 +793,12 @@ const zh: typeof en = {
   observation: "事实", proposal: "提议", decision: "决定", unresolved: "待确认", edit: "纠正", save: "保存", pin: "固定", unpin: "取消固定", forget: "排除", cancel: "取消", insufficient: "当前主题的来源证据不足。",
   marker: "录音标记", highlight: "重点", todo: "待办", marker_note: "可选备注", add_marker: "添加标记", remove: "删除", after_meeting: "整理这场会议", enable_first: "在设置 → 同步中开启会议记忆后，可整理这场会议。",
   knowledge: "本地会议资料", processing: "AI 正在处理", retry: "重试", memory_count: "{{count}} 条有来源的结论", brief_hint: "基于本地相关资料整理，矛盾信息保留为待确认事项。",
+  graph_insights: "知识洞察", graph_by_community: "按社区着色",
+  graph_bridges: "桥接专题", graph_bridges_hint: "连接着多个知识簇", graph_bridge_meta: "连接 {{count}} 个知识簇",
+  graph_isolated: "孤立专题", graph_isolated_hint: "与其他专题共享的资料很少", graph_isolated_meta: "{{count}} 个关联",
+  graph_sparse: "松散知识簇", graph_sparse_hint: "内部关联薄弱", graph_sparse_meta: "{{count}} 个专题 · 内聚度 {{cohesion}}%",
+  graph_cross_links: "跨簇连接", graph_cross_links_hint: "共享了较多资料", graph_cross_meta: "共享 {{count}} 份资料",
+  wiki_purpose: "知识库目标", wiki_purpose_hint: "描述这个知识库的目标与关注范围，新内容的归类会参考这段目标；修改它不会触发已生成页面的重新整理。", wiki_purpose_saved: "知识库目标已保存",
+  wiki_health: "知识库体检", wiki_health_progress: "整理进行中：已完成 {{completed}} / {{total}} 份资料", wiki_health_hierarchy: "专题分组需要处理", wiki_health_stale: "{{count}} 个专题因资料变化已过期", wiki_health_candidates: "{{count}} 个候选页面待审阅",
 };
 export const workbenchLocales = { en, "zh-Hans": zh, "zh-Hant": zh, ja: en, ko: en };

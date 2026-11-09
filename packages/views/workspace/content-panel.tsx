@@ -1229,7 +1229,7 @@ export function ContentPanel() {
               setResummarizeOpen(true);
             }}
             disabled={!selectedItemId || currentFileSummarizing || isLocalSelectedItem}
-            className="ml-0.5 flex shrink-0 items-center justify-center rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-accent/50 hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50"
+            className="ml-0.5 flex shrink-0 items-center justify-center rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-accent/50 hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50"
             title={t("add_summary.button")}
           >
             <Plus className="size-3.5" />
@@ -1935,7 +1935,7 @@ function ScrollableTabs({ activeTab, children }: { activeTab: string; children: 
           onClick={() => scrollByDir(-1)}
           aria-label={t("workspace.scroll_tabs_left")}
           title={t("workspace.scroll_tabs_left")}
-          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-accent/50 hover:text-foreground active:scale-[0.96]"
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-accent/50 hover:text-foreground active:scale-[0.96]"
         >
           <ChevronLeft className="size-4" />
         </button>
@@ -1957,7 +1957,7 @@ function ScrollableTabs({ activeTab, children }: { activeTab: string; children: 
           onClick={() => scrollByDir(1)}
           aria-label={t("workspace.scroll_tabs_right")}
           title={t("workspace.scroll_tabs_right")}
-          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-accent/50 hover:text-foreground active:scale-[0.96]"
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-accent/50 hover:text-foreground active:scale-[0.96]"
         >
           <ChevronRight className="size-4" />
         </button>

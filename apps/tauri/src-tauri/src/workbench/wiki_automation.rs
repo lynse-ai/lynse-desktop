@@ -555,6 +555,66 @@ fn catalog_path(root: &Path) -> PathBuf {
     root.join("automatic-catalog.json")
 }
 
+/// Per-source projection of the extraction cache for cross-device sync.
+/// Chunk keys are content-addressed, so the slices stay valid on any device
+/// that holds the same source text and model configuration.
+pub(super) fn source_catalog_slices(
+    root: &Path,
+    docs: &[Document],
+    config: &Models,
+) -> CommandResult<BTreeMap<String, Value>> {
+    let catalog: Catalog = read_json(&catalog_path(root))?;
+    let mut slices: BTreeMap<String, Value> = BTreeMap::new();
+    for doc in docs {
+        let mut chunks = BTreeMap::new();
+        for text in source_chunks(doc, &catalog) {
+            let key = catalog_chunk_key(doc, &text, config);
+            if let Some(rows) = catalog.chunks.get(&key) {
+                chunks.insert(key, rows.clone());
+            }
+        }
+        let marker = format!(":{}:", doc.id);
+        let identities: BTreeMap<_, _> = catalog
+            .identities
+            .iter()
+            .filter(|(identity, _)| identity.contains(&marker))
+            .map(|(identity, topic)| (identity.clone(), topic.clone()))
+            .collect();
+        if chunks.is_empty() && identities.is_empty() {
+            continue;
+        }
+        let entry = slices
+            .entry(doc.id.clone())
+            .or_insert(json!({"chunks": {}, "identities": {}}));
+        entry["chunks"] = json!(chunks);
+        entry["identities"] = json!(identities);
+    }
+    Ok(slices)
+}
+
+/// Merge a synced extraction-cache slice into the local catalog without
+/// touching local failure or deletion latches. Returns adopted chunk keys.
+pub(super) fn merge_catalog_state(
+    root: &Path,
+    chunks: &Value,
+    identities: &Value,
+) -> CommandResult<usize> {
+    let chunks: BTreeMap<String, Vec<CatalogTopic>> = serde_json::from_value(chunks.clone())
+        .map_err(|_| "Invalid synced catalog chunks")?;
+    let identities: BTreeMap<String, String> = serde_json::from_value(identities.clone())
+        .map_err(|_| "Invalid synced catalog identities")?;
+    let mut catalog: Catalog = read_json(&catalog_path(root))?;
+    let mut adopted = 0usize;
+    for (key, rows) in chunks {
+        if catalog.chunks.insert(key, rows).is_none() {
+            adopted += 1;
+        }
+    }
+    catalog.identities.extend(identities);
+    write_json(&catalog_path(root), &catalog)?;
+    Ok(adopted)
+}
+
 fn validate_catalog(
     value: &Value,
     docs: &[Document],
@@ -1684,7 +1744,7 @@ pub(super) async fn run(
                 require_current(state,session)?;
                 topics(&root)?
             };
-            for topic in retrieval::candidates(&existing, job.doc, 12) {
+            for topic in retrieval::candidates(&existing, job.doc, &manifest.purpose, 12) {
                 let Some(anchor) = docs
                     .iter()
                     .find(|source| topic.source_ids.contains(&source.id))
@@ -1711,7 +1771,13 @@ pub(super) async fn run(
                 anchors.push(json!({"id":topic.id,"title":topic.title,"kind":topic.topic_kind,"excluded":topic.excluded,"sourceIds":source_ids}));
             }
             let existing = existing_catalog(&existing);
-            let query = json!({"existingTopics":anchors,"newSourceId":job.doc.id}).to_string();
+            // The scope purpose steers clustering for future ingests; the
+            // server prompt consumes it when present and ignores it otherwise.
+            let mut query_value = json!({"existingTopics":anchors,"newSourceId":job.doc.id});
+            if !manifest.purpose.trim().is_empty() {
+                query_value["scopePurpose"] = json!(manifest.purpose.trim());
+            }
+            let query = query_value.to_string();
             let value = cached_compilation_prepared(&root, &format!("catalog-{}", job.key), &state.serial,
                 |value| {
                     let value = content_cache::rebind(value, &parts, &manifest)?;

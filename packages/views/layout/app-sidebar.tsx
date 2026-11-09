@@ -156,7 +156,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                     href={item.path}
                     title={item.label}
                     className={cn(
-                      "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-3xs font-medium leading-none transition-[color,background-color,transform] duration-150 active:scale-[0.96]",
+                      "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-3xs font-medium leading-none transition-[color,background-color,transform] duration-(--duration-quick) active:scale-[0.96]",
                       isActive
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                         : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -172,7 +172,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                 href="/todo"
                 title={t("nav.todo")}
                 className={cn(
-                  "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-3xs font-medium leading-none transition-[color,background-color,transform] duration-150 active:scale-[0.96]",
+                  "flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-3xs font-medium leading-none transition-[color,background-color,transform] duration-(--duration-quick) active:scale-[0.96]",
                   isNavActive(pathname, "/todo")
                     ? "bg-sidebar-accent text-sidebar-accent-foreground"
                     : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -186,7 +186,7 @@ export function AppSidebar({ topSlot, headerClassName, headerStyle }: AppSidebar
                 type="button"
                 onClick={() => setTemplateManagerOpen(true)}
                 title={t("templates.title")}
-                className="flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-3xs font-medium leading-none text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-accent hover:text-foreground active:scale-[0.96]"
+                className="flex flex-col items-center gap-1.5 rounded-lg px-1 py-2.5 text-3xs font-medium leading-none text-muted-foreground transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-accent hover:text-foreground active:scale-[0.96]"
               >
                 <LayoutTemplate className="size-4 shrink-0" />
                 <span className="w-full truncate text-center">{t("templates.title")}</span>

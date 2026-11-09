@@ -237,7 +237,7 @@ export function LynseSidebar() {
                       aria-pressed={pinned}
                       onClick={() => togglePin(item.key)}
                       className={cn(
-                        "mr-1 flex size-8 shrink-0 items-center justify-center rounded-lg outline-none transition-colors duration-150 hover:bg-foreground/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+                        "mr-1 flex size-8 shrink-0 items-center justify-center rounded-lg outline-none transition-colors duration-(--duration-quick) hover:bg-foreground/10 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
                         pinned ? "text-foreground" : "text-muted-foreground",
                       )}
                     >
@@ -281,7 +281,7 @@ export function LynseSidebar() {
             title={t("notifications.update_available", { version: update.latestVersion })}
             aria-label={t("notifications.update_available", { version: update.latestVersion })}
             data-tauri-drag-region={false}
-            className="mb-2 flex size-7 shrink-0 items-center justify-center rounded-full bg-sidebar-primary text-sidebar-primary-foreground shadow-sm transition-transform duration-150 hover:scale-105 active:scale-95"
+            className="mb-2 flex size-7 shrink-0 items-center justify-center rounded-full bg-sidebar-primary text-sidebar-primary-foreground shadow-sm transition-transform duration-(--duration-quick) hover:scale-105 active:scale-95"
           >
             <Download className="size-3.5" strokeWidth={2.5} />
           </button>

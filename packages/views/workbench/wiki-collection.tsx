@@ -33,7 +33,7 @@ export function CreateWikiTopic({ wiki, topic, onCreated }: { wiki: Wiki; topic?
         }).catch(() => setError(t("workbench.collection_save_failed")));
       }}>
         <label className="block space-y-2 text-sm"><span>{t("workbench.topic_title")}</span><Input required autoFocus maxLength={200} value={title} onChange={e => setTitle(e.target.value)} /></label>
-        <label className="block space-y-2 text-sm"><span>{t("workbench.collection_focus")}</span><textarea className="min-h-28 w-full rounded-md border border-input bg-background p-3 text-sm leading-relaxed" maxLength={8000} value={purpose} onChange={e => setPurpose(e.target.value)} placeholder={t("workbench.collection_focus_hint")} /></label>
+        <label className="block space-y-2 text-sm"><span>{t("workbench.collection_focus")}</span><textarea className="min-h-28 w-full rounded-md border border-input bg-background p-3 text-sm leading-relaxed" maxLength={8000} value={purpose} onChange={e => setPurpose(e.target.value)} placeholder={topic ? t("workbench.collection_focus_hint") : wiki.data?.purpose?.trim() || t("workbench.collection_focus_hint")} /></label>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         {!wiki.status?.allowAi && <p className="text-sm text-muted-foreground">{t("workbench.collection_wait_ai")}</p>}
         <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setOpen(false)}>{t("workbench.cancel")}</Button><Button type="submit" disabled={wiki.busy || !title.trim()}>{t(wiki.status?.allowAi ? topic ? "workbench.collection_save_run" : "workbench.collection_create_run" : "workbench.save")}</Button></div>

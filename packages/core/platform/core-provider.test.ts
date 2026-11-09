@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { getAuthStore } from "../auth";
 import { api } from "../api/client";
 import { initCore } from "./core-provider";
+import { CLOUDBASE_AGENT_URL, STAGING_CLOUDBASE_AGENT_URL } from "../config";
 import type { AuthSession } from "../auth/session";
 
 function memoryStorage() {
@@ -65,5 +66,29 @@ describe("core provider auth wiring", () => {
     const state = getAuthStore()!.getState();
     expect(state.isAuthenticated).toBe(false);
     expect(storage.getItem("lynse_token")).toBeNull();
+  });
+
+  it("heals a saved staging agent url onto the production CloudBase service at boot", async () => {
+    // initCore is a module singleton (and its imports are cached), so the
+    // boot-heal path needs a fresh module graph with its own storage.
+    vi.resetModules();
+    const { initCore: freshInit } = await import("./core-provider");
+    const { api: freshApi } = await import("../api/client");
+    const healStorage = memoryStorage();
+    healStorage.setItem("lynse_api_url", "https://gapp.lynse.cn");
+    // A device that logged in before the staging shutdown saved this preset.
+    healStorage.setItem("lynse_agent_api_url", STAGING_CLOUDBASE_AGENT_URL);
+    freshInit("https://backend.test", healStorage);
+    expect(freshApi().getAgentBaseUrl()).toBe(CLOUDBASE_AGENT_URL);
+    // A hand-typed custom agent URL is left untouched (fresh singleton again).
+    vi.resetModules();
+    const { initCore: customInit } = await import("./core-provider");
+    const { api: customApi } = await import("../api/client");
+    const customStorage = memoryStorage();
+    customStorage.setItem("lynse_api_url", "https://gapp.lynse.cn");
+    customStorage.setItem("lynse_agent_api_url", "https://agent.custom.invalid");
+    customInit("https://backend.test", customStorage);
+    expect(customApi().getAgentBaseUrl()).toBe("https://agent.custom.invalid");
+    vi.resetModules();
   });
 });

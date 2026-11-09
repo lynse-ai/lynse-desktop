@@ -31,13 +31,19 @@ fn terms(text: &str) -> BTreeSet<String> {
     terms
 }
 
-pub(super) fn candidates<'a>(topics: &'a [Topic], doc: &Document, limit: usize) -> Vec<&'a Topic> {
+pub(super) fn candidates<'a>(
+    topics: &'a [Topic],
+    doc: &Document,
+    scope_purpose: &str,
+    limit: usize,
+) -> Vec<&'a Topic> {
     let query = terms(&format!(
         "{} {} {}",
         doc.title,
         doc.text(),
         doc.tags.join(" ")
     ));
+    let scope = terms(scope_purpose);
     let eligible: Vec<_> = topics
         .iter()
         .filter(|topic| topic.collection.is_none() && !topic.excluded)
@@ -66,25 +72,37 @@ pub(super) fn candidates<'a>(topics: &'a [Topic], doc: &Document, limit: usize) 
     let mut ranked: Vec<_> = eligible
         .into_iter()
         .zip(indexed.iter())
-        .map(|(topic, terms)| {
+        .map(|(topic, topic_terms)| {
             let title_terms = terms_of_title(topic);
-            let relevance: u64 = terms
+            let relevance: u64 = topic_terms
                 .intersection(&query)
                 .map(|term| {
                     let rarity = 1000 / frequencies.get(term.as_str()).copied().unwrap_or(1) as u64;
                     rarity * if title_terms.contains(term) { 4 } else { 1 }
                 })
                 .sum();
+            // Topics aligned with the declared knowledge-base goal are better
+            // clustering anchors; a small constant boost, never an eligibility gate.
+            let scope_alignment = if scope.is_empty() {
+                0
+            } else {
+                terms(&topic.purpose).intersection(&scope).count() as u64
+            };
             let continuity = topic.source_ids.contains(&doc.id);
-            (topic, continuity, relevance)
+            (topic, continuity, relevance, scope_alignment)
         })
         .collect();
-    ranked.sort_by(|(a, ac, ar), (b, bc, br)| bc.cmp(ac).then(br.cmp(ar)).then(a.id.cmp(&b.id)));
+    ranked.sort_by(|(a, ac, ar, asr), (b, bc, br, bsr)| {
+        bc.cmp(ac)
+            .then(br.cmp(ar))
+            .then(bsr.cmp(asr))
+            .then(a.id.cmp(&b.id))
+    });
     ranked
         .into_iter()
-        .filter(|(_, continuity, relevance)| *continuity || *relevance > 0)
+        .filter(|(_, continuity, relevance, _)| *continuity || *relevance > 0)
         .take(limit)
-        .map(|(topic, _, _)| topic)
+        .map(|(topic, _, _, _)| topic)
         .collect()
 }
 
@@ -118,7 +136,7 @@ mod tests {
         };
         assert!(!doc.text().contains(&topics[0].title));
         let ids = |values: &[Topic]| {
-            candidates(values, &doc, 1)
+            candidates(values, &doc, "", 1)
                 .into_iter()
                 .map(|topic| topic.id.clone())
                 .collect::<Vec<_>>()
@@ -160,12 +178,61 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            candidates(&topics, &doc, 12)
+            candidates(&topics, &doc, "", 12)
                 .iter()
                 .map(|topic| topic.id.as_str())
                 .collect::<Vec<_>>(),
             vec!["existing", "related"]
         );
+    }
+    #[test]
+    fn scope_purpose_breaks_relevance_ties_without_recalling_unmatched_topics() {
+        let topics = vec![
+            Topic {
+                id: "aligned".into(),
+                title: "release".into(),
+                purpose: "录音转写模型与会议摘要".into(),
+                ..Default::default()
+            },
+            Topic {
+                id: "other".into(),
+                title: "release".into(),
+                purpose: "包装配色与网站字体".into(),
+                ..Default::default()
+            },
+            Topic {
+                id: "unmatched".into(),
+                title: "release".into(),
+                ..Default::default()
+            },
+        ];
+        let doc = Document {
+            transcript: "release schedule".into(),
+            ..Default::default()
+        };
+        // Equal relevance and no continuity: the scope-aligned topic ranks first.
+        assert_eq!(
+            candidates(&topics, &doc, "录音转写 会议摘要", 12)
+                .iter()
+                .map(|topic| topic.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["aligned", "other", "unmatched"]
+        );
+        // Without a scope purpose the tie breaks by id instead.
+        assert_eq!(
+            candidates(&topics, &doc, "", 12)
+                .iter()
+                .map(|topic| topic.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["aligned", "other", "unmatched"]
+        );
+        // A topic matching neither the query nor the scope is never recalled.
+        let unrelated = vec![Topic {
+            id: "far".into(),
+            title: "unrelated".into(),
+            ..Default::default()
+        }];
+        assert!(candidates(&unrelated, &doc, "录音转写 会议摘要", 12).is_empty());
     }
     #[test]
     fn inverted_graph_retains_all_shared_evidence_without_duplicate_pairs() {

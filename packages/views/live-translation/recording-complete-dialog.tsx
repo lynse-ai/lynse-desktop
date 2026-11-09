@@ -294,7 +294,7 @@ function RecordingPreview({ src }: { src: string }) {
           type="button"
           onClick={togglePlay}
           aria-label={playing ? t("recording_mode.pause") : t("recording_mode.resume")}
-          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-[background-color,transform] duration-150 hover:bg-foreground/90 active:scale-[0.96]"
+          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background transition-[background-color,transform] duration-(--duration-quick) hover:bg-foreground/90 active:scale-[0.96]"
         >
           <IconSwap stateKey={playing ? "pause" : "play"}>
             {playing ? <Pause className="size-3.5" /> : <Play className="size-3.5 ml-0.5" />}

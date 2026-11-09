@@ -152,7 +152,7 @@ export function AppUpdateDialog() {
                   className="h-1.5 w-full overflow-hidden rounded-full bg-primary/15"
                 >
                   <div
-                    className="h-full rounded-full bg-primary transition-[width] duration-150 motion-reduce:transition-none"
+                    className="h-full rounded-full bg-primary transition-[width] duration-(--duration-quick) motion-reduce:transition-none"
                     style={{ width: `${percent}%` }}
                   />
                 </div>

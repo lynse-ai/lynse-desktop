@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useCallback, useState } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { SqueezePanel } from "../squeeze-panel";
 import { useWorkspaceStore } from "./store";
 import { FileList } from "./middle-panel/file-list";
 import { ContentPanel } from "./content-panel";
@@ -22,7 +22,6 @@ export function WorkspaceLayout() {
   const handleFileListResize = useWorkspaceStore((s) => s.handleFileListResize);
 
   const [isChatResizing, setIsChatResizing] = useState(false);
-  const reduceMotion = useReducedMotion();
 
   const { setOnDragEnd } = useDndBridge();
   const moveFilesMutation = useMoveFiles();
@@ -76,33 +75,23 @@ export function WorkspaceLayout() {
           </div>
 
           {/* Chat panel: slides in from right when "Ask AI" is clicked */}
-          <AnimatePresence initial={false}>
-            {chatPanelVisible && (
-              <motion.div
-                key="chat-panel"
-                className="flex shrink-0 overflow-hidden bg-card/95 backdrop-blur-xl"
-                initial={{ width: 0, opacity: 0 }}
-                animate={{ width: chatPanelWidth, opacity: 1 }}
-                exit={{ width: 0, opacity: 0 }}
-                transition={
-                  isChatResizing || reduceMotion
-                    ? { duration: 0 }
-                    : { type: "spring", bounce: 0, duration: 0.3 }
-                }
-              >
-                <ResizableHandle
-                  label={t("workspace.resize_chat_panel")}
-                  onResize={handleChatPanelResize}
-                  onResizeStart={() => setIsChatResizing(true)}
-                  onResizeEnd={() => setIsChatResizing(false)}
-                  side="left"
-                />
-                <div className="h-full overflow-hidden" style={{ width: chatPanelWidth }}>
-                  <ChatPanel />
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+          <SqueezePanel
+            open={chatPanelVisible}
+            width={chatPanelWidth}
+            resizing={isChatResizing}
+            className="bg-card/95 backdrop-blur-xl"
+          >
+            <ResizableHandle
+              label={t("workspace.resize_chat_panel")}
+              onResize={handleChatPanelResize}
+              onResizeStart={() => setIsChatResizing(true)}
+              onResizeEnd={() => setIsChatResizing(false)}
+              side="left"
+            />
+            <div className="h-full overflow-hidden" style={{ width: chatPanelWidth }}>
+              <ChatPanel />
+            </div>
+          </SqueezePanel>
         </div>
       </div>
     </div>

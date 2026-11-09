@@ -62,7 +62,7 @@ export const ChatHistorySidebar = memo(function ChatHistorySidebar({
               <button
                 key={conversation.id}
                 type="button"
-                className={`w-full rounded-lg px-2.5 py-2 text-left transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${
+                className={`w-full rounded-lg px-2.5 py-2 text-left transition-colors duration-(--duration-quick) outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset ${
                   conversation.id === activeConversationId
                     ? "bg-card text-foreground shadow-sm ring-1 ring-border/70"
                     : "text-muted-foreground hover:bg-card/70 hover:text-foreground"

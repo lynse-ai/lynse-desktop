@@ -1,5 +1,7 @@
 import type { GraphKind, GraphNode, GraphStatus } from "./types";
 export const graphKinds: GraphKind[] = ["entity", "event", "topic", "wiki", "source"];
+// Distinguishable steps of one hue family, matching the restrained --graph-* tokens.
+export const communityPalette: string[] = Array.from({ length: 12 }, (_, index) => `oklch(0.62 0.1 ${index * 30})`);
 export const graphColors: Record<GraphKind, string> = { entity: "var(--graph-entity)", event: "var(--graph-event)", topic: "var(--graph-topic)", wiki: "var(--graph-wiki)", source: "var(--graph-source)" };
 export const graphKindKey = { entity: "workbench.graph_entity", event: "workbench.graph_event", topic: "workbench.graph_topic", wiki: "workbench.graph_wiki", source: "workbench.graph_source" } as const;
 export const graphStatusKey: Record<GraphStatus, string> = { unknown: "workbench.graph_unknown", proposed: "workbench.graph_proposed", active: "workbench.graph_active", blocked: "workbench.graph_blocked", completed: "workbench.graph_completed", cancelled: "workbench.graph_cancelled", unresolved: "workbench.unresolved", candidate: "workbench.candidate", published: "workbench.published", stale: "workbench.stale", source: "workbench.graph_source" };

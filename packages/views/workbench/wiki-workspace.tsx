@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
@@ -10,14 +10,17 @@ import { ArrowLeft, ArrowRight, BookOpen, FileText, Network, Pencil } from "../i
 import { TitleBarSlot } from "../layout/app-title-bar";
 import { useNavigation } from "../navigation";
 import { GraphSourceNote } from "./graph-source-note";
+import { GraphInsights } from "./graph-insights";
 import { KnowledgeGraphScene } from "./knowledge-graph-scene";
 import { useWiki } from "./wiki";
 import { CreateWikiTopic, CollectionContent } from "./wiki-collection";
 import { GroupWikiTopics } from "./wiki-grouping";
 import { browsingGraph, browsableTopics, parentTopics, topLevelTopics, recentWikiChanges, topicChanges, topicDetails, topicOverview, topicSources } from "./wiki-browse";
 import { useWikiBrowser } from "./wiki-browser-state";
+import { SwapFade } from "../swap-fade";
+import { communityPalette } from "./graph-vocabulary";
 import { DEFAULT_GRAPH_CAMERA, type GraphCamera } from "./graph-scene-layout";
-import type { SourceRef, WikiTopic } from "./types";
+import type { GraphNode, SourceRef, WikiTopic } from "./types";
 
 export function WikiWorkspace() {
   const { t, i18n } = useTranslation();
@@ -33,6 +36,7 @@ export function WikiWorkspace() {
   const [notes, setNotes] = useState("");
   const [correctionError, setCorrectionError] = useState("");
   const [historyCount, setHistoryCount] = useState(5);
+  const [communityMode, setCommunityMode] = useState(false);
   const readerRef = useRef<HTMLElement>(null);
   const previewRef = useRef<HTMLElement>(null);
   const catalogSearchRef = useRef<HTMLInputElement>(null);
@@ -41,6 +45,21 @@ export function WikiWorkspace() {
   const allTopics = wiki.data?.topics ?? [];
   const topics = browsableTopics(allTopics);
   const graph = browsingGraph(topics, wiki.data?.topicGraph);
+  // Community ids come from the topic-graph insights; browse nodes share the
+  // same "wiki:<id>" identity, so a lookup map is enough for coloring.
+  const communities = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const community of wiki.data?.topicGraph?.insights?.communities ?? [])
+      for (const member of community.members) map.set(member, community.id);
+    return map;
+  }, [wiki.data?.topicGraph?.insights]);
+  const colorOf = useMemo(() => {
+    if (!communityMode || !communities.size) return undefined;
+    return (node: GraphNode) => {
+      const community = communities.get(node.id);
+      return community === undefined ? null : communityPalette[community % communityPalette.length] ?? null;
+    };
+  }, [communityMode, communities]);
   const roots = topLevelTopics(topics);
   const hasParents = roots.some(topic => !!topic.collection?.hierarchy);
   const unassigned = hasParents ? roots.filter(topic => !topic.collection) : [];
@@ -186,8 +205,15 @@ export function WikiWorkspace() {
     {!topics.length ? <div className="mx-auto flex min-h-80 max-w-lg flex-col items-center justify-center gap-3 px-5 text-center"><Network className="size-8 text-primary" aria-hidden="true" /><h2 className="text-base font-semibold">{t("workbench.auto_empty")}</h2><p className="text-sm leading-relaxed text-muted-foreground">{t("workbench.auto_empty_hint")}</p><CreateWikiTopic wiki={wiki} onCreated={id => navigation.replace(`/memory?tab=wiki&view=catalog&topic=${encodeURIComponent(id)}`)} /><Button size="sm" variant="outline" onClick={() => navigation.replace("/memory?tab=settings")}>{t("workbench.auto_settings")}</Button></div> : <>
       <div className={reading ? "hidden" : `grid min-w-0 ${browse.previewOpen ? "shrink-0 gap-6 @min-[52rem]:min-h-0 @min-[52rem]:flex-1 @min-[52rem]:grid-cols-[minmax(0,1fr)_clamp(19rem,36cqw,26rem)]" : "min-h-0 flex-1"}`}>
         <section className="flex min-h-0 min-w-0 flex-col" aria-label={t(view === "graph" ? "workbench.graph_title" : "workbench.auto_catalog")}>
-          <div className={view === "graph" ? "flex min-h-96 flex-1 flex-col" : "hidden"}><KnowledgeGraphScene fill nodes={graph.nodes.slice(0, 40)} edges={graph.edges} selection={selected ? `wiki:${selected.id}` : null} onSelect={select} nodeLabel={item => item.title} initialCamera={browse.camera ?? { ...DEFAULT_GRAPH_CAMERA, mode: "3d" }} onCameraChange={cameraChanged} viewKey={scope} />{graph.nodes.length > 40 && <Button size="sm" variant="ghost" onClick={() => navigation.replace("/memory?tab=wiki&view=catalog")}>{t("workbench.auto_more_topics", { count: graph.nodes.length - 40 })}</Button>}</div>
-          {view === "catalog" && <div className="space-y-5"><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-semibold">{t("workbench.auto_catalog")}</h2><CreateWikiTopic wiki={wiki} onCreated={id => navigation.replace(path({ topic: id }))} /><Input ref={catalogSearchRef} className="w-full @min-[30rem]:w-60" value={browse.search} onChange={event => update({ search: event.target.value })} aria-label={t("workbench.auto_search_topics")} placeholder={t("workbench.auto_search_topics")} /></div><div className="grid gap-4 @min-[35rem]:grid-cols-2">{matches.map(card)}</div>{!browse.search.trim() && !!unassigned.length && <details className="rounded-lg border border-border p-4"><summary className="cursor-pointer text-sm font-medium">{t("workbench.hierarchy_unassigned", { count: unassigned.length })}</summary><p className="mt-3 text-sm text-muted-foreground">{t("workbench.hierarchy_unassigned_help")}</p><div className="mt-4 grid gap-4 @min-[35rem]:grid-cols-2">{unassigned.map(card)}</div></details>}{!matches.length && <div className="space-y-2"><p role="status" className="text-sm text-muted-foreground">{t("workbench.wiki_no_results", { query: browse.search })}</p><Button size="sm" variant="ghost" onClick={() => update({ search: "" })}>{t("workbench.wiki_clear_search")}</Button></div>}</div>}
+          <div className={view === "graph" ? "flex min-h-96 flex-1 flex-col" : "hidden"}>
+            <KnowledgeGraphScene fill nodes={graph.nodes.slice(0, 40)} edges={graph.edges} selection={selected ? `wiki:${selected.id}` : null} onSelect={select} nodeLabel={item => item.title} initialCamera={browse.camera ?? { ...DEFAULT_GRAPH_CAMERA, mode: "3d" }} onCameraChange={cameraChanged} colorOf={colorOf} viewKey={scope} />
+            <div className="flex shrink-0 flex-wrap items-center gap-2 pt-2">
+              {!!communities.size && <Button size="sm" variant={communityMode ? "secondary" : "ghost"} aria-pressed={communityMode} onClick={() => setCommunityMode(value => !value)}>{t("workbench.graph_by_community")}</Button>}
+              {graph.nodes.length > 40 && <Button size="sm" variant="ghost" onClick={() => navigation.replace("/memory?tab=wiki&view=catalog")}>{t("workbench.auto_more_topics", { count: graph.nodes.length - 40 })}</Button>}
+            </div>
+            <GraphInsights wiki={wiki} onSelect={select} compact />
+          </div>
+          {view === "catalog" && <SwapFade viewKey="catalog" className="space-y-5"><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-lg font-semibold">{t("workbench.auto_catalog")}</h2><CreateWikiTopic wiki={wiki} onCreated={id => navigation.replace(path({ topic: id }))} /><Input ref={catalogSearchRef} className="w-full @min-[30rem]:w-60" value={browse.search} onChange={event => update({ search: event.target.value })} aria-label={t("workbench.auto_search_topics")} placeholder={t("workbench.auto_search_topics")} /></div><div className="grid gap-4 @min-[35rem]:grid-cols-2">{matches.map(card)}</div>{!browse.search.trim() && !!unassigned.length && <details className="rounded-lg border border-border p-4"><summary className="cursor-pointer text-sm font-medium">{t("workbench.hierarchy_unassigned", { count: unassigned.length })}</summary><p className="mt-3 text-sm text-muted-foreground">{t("workbench.hierarchy_unassigned_help")}</p><div className="mt-4 grid gap-4 @min-[35rem]:grid-cols-2">{unassigned.map(card)}</div></details>}{!matches.length && <div className="space-y-2"><p role="status" className="text-sm text-muted-foreground">{t("workbench.wiki_no_results", { query: browse.search })}</p><Button size="sm" variant="ghost" onClick={() => update({ search: "" })}>{t("workbench.wiki_clear_search")}</Button></div>}</SwapFade>}
         </section>
         {!reading && browse.previewOpen && <aside
           ref={previewRef}
@@ -195,7 +221,7 @@ export function WikiWorkspace() {
           className="min-h-0 min-w-0 border-t border-border pt-5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring @min-[52rem]:overflow-y-auto @min-[52rem]:overscroll-y-contain @min-[52rem]:border-s @min-[52rem]:border-t-0 @min-[52rem]:ps-6 @min-[52rem]:pt-0"
           aria-label={t("workbench.auto_preview")}
         >
-          {selected ? renderTopic(selected) : timeline()}
+          {selected ? renderTopic(selected) : <><GraphInsights wiki={wiki} onSelect={select} compact />{timeline()}</>}
         </aside>}
       </div>
       {reading && selected && renderTopic(selected)}

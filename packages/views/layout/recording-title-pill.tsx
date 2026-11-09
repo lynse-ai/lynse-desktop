@@ -129,7 +129,7 @@ export function RecordingTitleBarPill() {
         onClick={togglePause}
         aria-label={paused ? t("recording_mode.resume") : t("recording_mode.pause")}
         title={paused ? t("recording_mode.resume") : t("recording_mode.pause")}
-        className="flex size-5 items-center justify-center rounded-full text-background/70 transition-[color,background-color,transform] duration-150 hover:bg-background/15 hover:text-background active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-foreground/10 dark:hover:text-foreground"
+        className="flex size-5 items-center justify-center rounded-full text-background/70 transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-background/15 hover:text-background active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-foreground/10 dark:hover:text-foreground"
       >
         <IconSwap stateKey={paused ? "play" : "pause"}>
           {paused ? <Play className="size-3" /> : <Pause className="size-3" />}
@@ -140,7 +140,7 @@ export function RecordingTitleBarPill() {
         onClick={stop}
         aria-label={t("recording_mode.stop_recording")}
         title={t("recording_mode.stop_recording")}
-        className="flex size-5 items-center justify-center rounded-full text-background/70 transition-[color,background-color,transform] duration-150 hover:bg-destructive/25 hover:text-destructive active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-destructive/15"
+        className="flex size-5 items-center justify-center rounded-full text-background/70 transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-destructive/25 hover:text-destructive active:scale-[0.96] dark:text-muted-foreground dark:hover:bg-destructive/15"
       >
         <Square className="size-3" />
       </button>

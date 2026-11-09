@@ -582,7 +582,7 @@ export function AudioEditorPage() {
                       push("/notes");
                     }}
                     aria-label={backLabel}
-                    className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-[color,background-color] duration-150 hover:bg-muted hover:text-foreground"
+                    className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-[color,background-color] duration-(--duration-quick) hover:bg-muted hover:text-foreground"
                   >
                     <ChevronLeft className="size-4.5" />
                   </button>
@@ -790,7 +790,7 @@ export function AudioEditorPage() {
                               type="button"
                               onClick={discard}
                               aria-label={t("audio_editor.cancel")}
-                              className="flex size-9 items-center justify-center rounded-full bg-muted text-muted-foreground transition-[color,background-color,transform] duration-150 hover:bg-accent hover:text-foreground active:scale-[0.96]"
+                              className="flex size-9 items-center justify-center rounded-full bg-muted text-muted-foreground transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-accent hover:text-foreground active:scale-[0.96]"
                             >
                               <IconSwap stateKey={processing ? "busy" : "idle"}>
                                 {processing ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4.5" />}
@@ -817,7 +817,7 @@ export function AudioEditorPage() {
                               onClick={apply}
                               disabled={!canApply}
                               aria-label={t("audio_editor.done")}
-                              className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-[background-color,transform] duration-150 hover:bg-primary/90 active:scale-[0.96] disabled:opacity-40"
+                              className="flex size-9 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm transition-[background-color,transform] duration-(--duration-quick) hover:bg-primary/90 active:scale-[0.96] disabled:opacity-40"
                             >
                               <IconSwap stateKey={processing ? "busy" : "idle"}>
                                 {processing ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4.5" />}
@@ -873,7 +873,7 @@ export function AudioEditorPage() {
                         onClick={() => skip(-15)}
                         disabled={!activeUrl}
                         aria-label={t("audio_editor.skip_back")}
-                        className="flex size-10 items-center justify-center rounded-full text-foreground transition-[color,background-color,transform] duration-150 hover:bg-muted active:scale-[0.96] disabled:opacity-40"
+                        className="flex size-10 items-center justify-center rounded-full text-foreground transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-muted active:scale-[0.96] disabled:opacity-40"
                       >
                         <GoTo15Icon forward={false} className="size-6" />
                       </button>
@@ -889,7 +889,7 @@ export function AudioEditorPage() {
                         onClick={togglePlay}
                         disabled={!activeUrl}
                         aria-label={playPauseLabel}
-                        className="flex size-12 items-center justify-center rounded-full text-foreground transition-[color,opacity,transform] duration-150 hover:opacity-70 active:scale-[0.96] disabled:opacity-40"
+                        className="flex size-12 items-center justify-center rounded-full text-foreground transition-[color,opacity,transform] duration-(--duration-quick) hover:opacity-70 active:scale-[0.96] disabled:opacity-40"
                       >
                         <IconSwap stateKey={playing ? "pause" : "play"}>
                           {playing ? <Pause className="size-7" fill="currentColor" /> : <Play className="ml-1 size-7 fill-current" />}
@@ -907,7 +907,7 @@ export function AudioEditorPage() {
                         onClick={() => skip(15)}
                         disabled={!activeUrl}
                         aria-label={t("audio_editor.skip_forward")}
-                        className="flex size-10 items-center justify-center rounded-full text-foreground transition-[color,background-color,transform] duration-150 hover:bg-muted active:scale-[0.96] disabled:opacity-40"
+                        className="flex size-10 items-center justify-center rounded-full text-foreground transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-muted active:scale-[0.96] disabled:opacity-40"
                       >
                         <GoTo15Icon forward className="size-6" />
                       </button>

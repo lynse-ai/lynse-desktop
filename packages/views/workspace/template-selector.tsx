@@ -204,7 +204,7 @@ function TemplateCard({
     <button
       type="button"
       className={cn(
-        "group relative flex flex-col gap-1.5 rounded-xl border-2 px-3 py-2.5 text-left transition-[border-color,background-color,box-shadow] duration-150",
+        "group relative flex flex-col gap-1.5 rounded-xl border-2 px-3 py-2.5 text-left transition-[border-color,background-color,box-shadow] duration-(--duration-quick)",
         isSelected
           ? "border-primary bg-primary/5 shadow-sm shadow-primary/10"
           : "border-transparent bg-card hover:border-border/60 hover:bg-muted/50 active:bg-muted/70",
@@ -249,7 +249,7 @@ function TemplateCard({
           {/* Check indicator */}
           <div
             className={cn(
-              "flex size-4 items-center justify-center rounded-full border-2 transition-[border-color,background-color,opacity] duration-150",
+              "flex size-4 items-center justify-center rounded-full border-2 transition-[border-color,background-color,opacity] duration-(--duration-quick)",
               isSelected
                 ? "border-primary bg-primary"
                 : "border-border/50 opacity-0 group-hover:opacity-100",

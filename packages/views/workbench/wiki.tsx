@@ -20,6 +20,7 @@ import { useNavigation } from "../navigation";
 import { DEFAULT_EMBEDDING_MODEL, embeddingModelError } from "./embedding-model";
 import { workbenchErrorCopy } from "./errors";
 import { WikiFailures } from "./wiki-failures";
+import { WikiHealth } from "./wiki-health";
 import { WikiSourceFailures } from "./wiki-source-failures";
 import type { SourceRef, WikiModelsConfig, WikiRequest, WikiTopic } from "./types";
 
@@ -67,7 +68,31 @@ export function WikiAttention() {
     {!!errorCount && !wiki.isPending && !wiki.error && !failures.length && !wiki.data?.sourceFailures?.length && <div className="space-y-2"><p className="text-xs text-muted-foreground">{t("workbench.wiki_refresh_topics")}</p><Button size="sm" variant="outline" onClick={() => void Promise.all([refreshWorkbench(), wiki.refetch()]).catch(() => undefined)}>{t("workbench.retry")}</Button></div>}
     <WikiSourceFailures wiki={wiki} />
     <WikiFailures wiki={wiki} />
+    <WikiHealth wiki={wiki} />
   </>;
+}
+export function WikiKnowledgePurpose() {
+  const { t } = useTranslation();
+  const wiki = useWiki();
+  const [purpose, setPurpose] = useState("");
+  const savedPurpose = wiki.data?.purpose ?? "";
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => { if (!dirty) setPurpose(savedPurpose); }, [savedPurpose, dirty]);
+  if (!wiki.status?.enabled) return null;
+  async function save() {
+    await wiki.mutate({ action: "purpose", purpose: purpose.trim() });
+    setDirty(false);
+    toast.success(t("workbench.wiki_purpose_saved"));
+  }
+  return <section className="space-y-2 rounded-md border border-border p-3">
+    <h3 className="text-xs font-medium">{t("workbench.wiki_purpose")}</h3>
+    <p className="text-xs text-muted-foreground">{t("workbench.wiki_purpose_hint")}</p>
+    <label className="block space-y-1 text-xs">
+      <span className="sr-only">{t("workbench.wiki_purpose")}</span>
+      <textarea className="min-h-20 w-full rounded-md border border-input bg-background p-2 text-sm leading-relaxed" value={purpose} maxLength={8000} placeholder={t("workbench.wiki_purpose_example")} aria-label={t("workbench.wiki_purpose")} onChange={(event) => { setDirty(true); setPurpose(event.target.value); }} />
+    </label>
+    <Button size="sm" variant="outline" disabled={wiki.busy || (!dirty && purpose.trim() === savedPurpose)} onClick={() => void save().catch(() => undefined)}>{t("workbench.save")}</Button>
+  </section>;
 }
 export function WikiModels() {
   const wiki = useWiki();
@@ -187,7 +212,7 @@ export function WikiTopicForm({ onCreated }: { onCreated?: (title: string) => vo
   const titleId = useId();
   return <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (!title.trim()) return; void wiki.mutate({ action: "topic", title: title.trim(), purpose: purpose.trim() }).then(() => { onCreated?.(title.trim()); setTitle(""); setPurpose(""); }).catch(() => undefined); }}>
     <div className="space-y-2"><label htmlFor={titleId} className="text-sm font-medium">{t("workbench.topic_title")}</label><Input id={titleId} required placeholder={t("workbench.wiki_topic_example")} value={title} maxLength={200} onChange={(e) => setTitle(e.target.value)} /></div>
-    <details><summary className="cursor-pointer text-sm text-muted-foreground">{t("workbench.wiki_add_focus")}</summary><label className="mt-3 block space-y-2 text-sm"><span>{t("workbench.topic_purpose")}</span><Input placeholder={t("workbench.wiki_purpose_example")} value={purpose} maxLength={8000} onChange={(e) => setPurpose(e.target.value)} /></label></details>
+    <details><summary className="cursor-pointer text-sm text-muted-foreground">{t("workbench.wiki_add_focus")}</summary><label className="mt-3 block space-y-2 text-sm"><span>{t("workbench.topic_purpose")}</span><Input placeholder={wiki.data?.purpose?.trim() || t("workbench.wiki_purpose_example")} value={purpose} maxLength={8000} onChange={(e) => setPurpose(e.target.value)} /></label></details>
     <Button type="submit" size="sm" disabled={wiki.busy || !wiki.status?.enabled}>{t("workbench.topic_create")}</Button>
   </form>;
 }

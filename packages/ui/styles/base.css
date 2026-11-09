@@ -329,11 +329,16 @@
   margin-top: 2.5px;
 }
 
-/* Overlays (tw-animate-css animate-in/out) use the strong ease-out curve.
+/* Overlays (tw-animate-css animate-in/out) use the strong curves: entrances ride
+   ease-out, exits accelerate out on ease-exit so dismissals read snappier than
+   their entrances (astryx-style entrance/exit split).
    base.css is imported after tw-animate-css (globals.css:2,5), so this wins the cascade. */
-.animate-in,
-.animate-out {
+.animate-in {
   animation-timing-function: var(--ease-out);
+}
+
+.animate-out {
+  animation-timing-function: var(--ease-exit);
 }
 
 @layer base {
@@ -390,14 +395,35 @@
   .animate-chat-text-shimmer {
     animation: none;
   }
-  /* tw-animate-css overlays + Tailwind animate-* utilities: appear without movement.
-     Content still resolves to final opacity, so feedback is preserved. */
-  .animate-in,
-  .animate-out,
+  /* Tailwind looping utilities: stop */
   .animate-spin,
   .animate-ping,
   .animate-bounce,
   .animate-pulse {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+  /* tw-animate-css overlays (dialogs, popovers, menus): zero the travel vars so
+     enter/exit degrade to an opacity-only cross-fade at their authored duration
+     (≤ 200ms, the cap the policy allows). Fine pointers (desktop) complete at
+     once instead — the tier below overrides this one. */
+  .animate-in,
+  .animate-out {
+    --tw-enter-translate-x: 0;
+    --tw-enter-translate-y: 0;
+    --tw-enter-scale: 1;
+    --tw-enter-rotate: 0;
+    --tw-exit-translate-x: 0;
+    --tw-exit-translate-y: 0;
+    --tw-exit-scale: 1;
+    --tw-exit-rotate: 0;
+  }
+}
+/* Reduced motion on a fine pointer (desktop): overlays complete at once rather
+   than cross-fading — a cross-fade reads as lag under a mouse. */
+@media (prefers-reduced-motion: reduce) and (pointer: fine) {
+  .animate-in,
+  .animate-out {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }

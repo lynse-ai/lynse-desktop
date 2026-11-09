@@ -84,7 +84,7 @@ export function RecordingDock({
                   onClick={onStart}
                   disabled={busy || stopping}
                   aria-label={t("recording_mode.start_recording")}
-                  className="flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-[background-color,transform,box-shadow] duration-150 hover:bg-destructive/90 active:scale-[0.96] disabled:opacity-60"
+                  className="flex size-16 items-center justify-center rounded-full bg-destructive text-white shadow-lg shadow-destructive/25 transition-[background-color,transform,box-shadow] duration-(--duration-quick) hover:bg-destructive/90 active:scale-[0.96] disabled:opacity-60"
                 >
                   <IconSwap stateKey={busy ? "busy" : "idle"}>
                     {busy ? (
@@ -176,7 +176,7 @@ function DockButton({
             onClick={onClick}
             aria-label={label}
             className={cn(
-              "flex size-9 items-center justify-center rounded-full transition-[color,background-color,transform] duration-150 active:scale-[0.96]",
+              "flex size-9 items-center justify-center rounded-full transition-[color,background-color,transform] duration-(--duration-quick) active:scale-[0.96]",
               destructive
                 ? "text-destructive hover:bg-destructive/10"
                 : "text-foreground/70 hover:bg-foreground/10 hover:text-foreground",

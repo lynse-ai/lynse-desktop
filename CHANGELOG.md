@@ -19,6 +19,32 @@
 > advertised it (its manifest mirror failed and the rollout was cancelled), so
 > that work plus the todo card redesign shipped together as 1.2.7.
 
+## 1.2.9 (2026-11-09)
+
+### New Features
+
+- Knowledge insights: the knowledge base now surfaces discovered topic clusters, bridge topics and isolated topics, and the knowledge graph supports coloring by community.
+- Knowledge-base goal: declare your focus in knowledge-base settings and new meetings are organized with that goal in mind. Editing the goal never recomputes existing pages.
+- Knowledge organization results sync across devices, so switching devices no longer requires re-organizing the same meetings.
+- A knowledge-base health panel shows organization progress, outdated topics and candidates awaiting review at a glance.
+- The AI assistant automatically cites knowledge-base topics in answers: semantic retrieval matches topic pages, appends related-topic hints, and source cards open the underlying evidence.
+
+### Improvements
+
+- The staging test deployment is retired: all services now point to the single production deployment, and previously saved staging addresses migrate automatically at startup.
+
+### 新功能
+
+- 知识整理新增「知识洞察」：自动发现知识簇、桥接专题与孤立专题，知识图谱支持按社区着色切换。
+- 知识库设置新增「知识库目标」：声明关注方向后，新会议的归类会参考目标；修改目标不会重算已生成的页面。
+- 知识整理结果支持跨设备云同步，更换设备无需重新整理。
+- 新增「知识库体检」面板：整理进度、过期专题与待审阅候选一目了然。
+- AI 助手回答会自动引用知识库专题：语义检索匹配专题页并附相关专题提示，来源卡片可查看底层证据。
+
+### 改进
+
+- 测试服退役：所有服务统一切换至生产部署；此前保存的测试服地址会在启动时自动迁移，无需手动处理。
+
 ## 1.2.8 (2026-11-08)
 
 ### New Features

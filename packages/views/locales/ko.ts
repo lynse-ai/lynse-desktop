@@ -159,6 +159,8 @@ const ko = {
     wechat_bind_title: "전화번호 연결",
     wechat_bind_hint:
       "이 WeChat 계정에 연결된 계정을 찾을 수 없습니다. 전화번호를 인증하여 로그인해 주세요.",
+    bind_email_title: "이메일 연결",
+    bind_email_hint: "Apple 또는 Google 계정으로 처음 로그인할 때 Lynse 계정에 이메일을 연결합니다.",
     wechat_bind_submit: "연결 후 로그인",
     wechat_bind_failed: "연결에 실패했습니다. 다시 시도해 주세요",
     sms_login: "전화번호 로그인",

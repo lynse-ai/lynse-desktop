@@ -24,9 +24,10 @@ const STATE_STORAGE_KEY = "lynse_wechat_state";
  *
  * Runs the backend's WECHAT_SCAN login with the one-time `code` and completes
  * the login on this client. A first-time WeChat identity responds with a
- * bind-required marker instead of a token; the phone + SMS form then finishes
- * the login through `/api/auth/bind`. Shared view — the web app mounts this
- * from a thin route page, framework-router free.
+ * bind-required marker instead of a token; the bind form then finishes the
+ * login through `/api/auth/bind`. The cn site binds a China phone, the intl
+ * site binds an email (edition-driven inside the form). Shared view — the web
+ * app mounts this from a thin route page, framework-router free.
  */
 export function WechatCallback() {
   const { replace } = useNavigation();
@@ -112,6 +113,7 @@ export function WechatCallback() {
         <div className="w-full max-w-sm rounded-xl border bg-card p-8 shadow-sm">
           <WechatBindForm
             thirdPartyId={bindVo.thirdPartyId ?? ""}
+            authType="WECHAT_SCAN"
             agreed
             onBound={persistAndLeave}
           />

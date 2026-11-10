@@ -20,11 +20,17 @@ export function isValidEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
-/** Ask the backend to send a sign-in code to `email`. */
-export function sendEmailCaptcha(email: string): Promise<SmsCaptchaResult> {
+/**
+ * Ask the backend to send a code to `email`. `BIND` links a third-party
+ * identity (Google/Apple on the intl site); `LOGIN` signs in directly.
+ */
+export function sendEmailCaptcha(
+  email: string,
+  opts: { actionType?: "LOGIN" | "BIND" } = {},
+): Promise<SmsCaptchaResult> {
   return api().getWithParams<SmsCaptchaResult>("/api/auth/captcha/email", {
     email,
-    actionType: "LOGIN",
+    actionType: opts.actionType ?? "LOGIN",
   });
 }
 

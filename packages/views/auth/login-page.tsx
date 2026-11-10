@@ -354,7 +354,6 @@ export function LoginPage() {
         if (result.status === "need_bind") {
           setBindAuthType("GOOGLE");
           setWechatBindVo({ thirdPartyId: result.thirdPartyId });
-          setView("phone");
         } else {
           completeLogin(result.session);
         }
@@ -453,6 +452,7 @@ export function LoginPage() {
       }
       if (isWechatBindRequired(vo)) {
         if (!vo.thirdPartyId) throw new Error(t("auth.wechat_bind_failed"));
+        setBindAuthType("WECHAT_SCAN");
         setWechatBindVo(vo);
         return;
       }
@@ -608,7 +608,7 @@ export function LoginPage() {
           )}
         >
         {wechatBindVo ? (
-          /* ── WeChat first sign-in: link a phone number ── */
+          /* ── First third-party sign-in: intl binds email, cn binds phone ── */
           <div className="space-y-4">
             <WechatBindForm
               thirdPartyId={wechatBindVo.thirdPartyId ?? ""}

@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { Input } from "@lynse/ui/components/ui/input";
 import { Button } from "@lynse/ui/components/ui/button";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { LYNSE_EDITION } from "@lynse/core/config";
+import { isValidEmail, sendEmailCaptcha } from "@lynse/core/auth/email";
 import { api, ApiError } from "@lynse/core/api";
 import {
   SMS_CODE_LENGTH,
@@ -22,32 +24,36 @@ import { authErrorText } from "./auth-errors";
 import { Loader2 } from "../icons";
 
 /**
- * Phone + SMS binding form for a first-time WeChat sign-in. The backend's
- * WECHAT_SCAN login responds with a bind-required marker instead of a token
- * when the scanned WeChat identity has no phone linked yet; this form collects
- * the phone number, texts a code (`actionType: "BIND"`), and completes the
- * login through `GET /api/auth/bind`. Shared by the desktop login page and
- * the web WeChat callback page.
+ * Binding form for a first-time third-party sign-in (Google/Apple/WeChat).
+ * The backend responds with `isNeedBind` when the identity has no account
+ * linked yet; this form collects the binding credential and completes the
+ * login through `GET /api/auth/bind`. The credential depends on the edition:
+ * intl (www.lynse.ai) binds an email + email code, cn (www.lynse.cn) binds a
+ * China phone + SMS code. Shared by the login page and OAuth callback pages.
  */
 export function WechatBindForm({
   thirdPartyId,
   authType = "WECHAT_SCAN",
+  channel = LYNSE_EDITION === "intl" ? "email" : "phone",
   agreed,
   onBound,
 }: {
   /** `thirdPartyId` from the bind-required login response. */
   thirdPartyId: string;
-  /** Identity provider completing the bind — WeChat today, Google for its
-   *  first-time sign-ins (same endpoint, provider decides the shape). */
+  /** Identity provider — GOOGLE / APPLE / WECHAT_SCAN (backend selects the
+   *  identity by authType, not EMAIL_CODE). */
   authType?: string;
-  /** Agreement gate owned by the host page (the login page shares its
-   *  checkbox; the callback page is always agreed). */
+  /** intl binds an email, cn binds a China phone; defaults to the edition. */
+  channel?: "email" | "phone";
+  /** Agreement gate owned by the host page. */
   agreed: boolean;
   /** Called with the session-carrying response after a successful bind. */
   onBound: (vo: WechatLoginVo) => void;
 }) {
   const { t } = useTranslation();
+  const intl = channel === "email";
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [captchaCode, setCaptchaCode] = useState("");
   const [codeSending, setCodeSending] = useState(false);
   const [resendIn, setResendIn] = useState(0);
@@ -66,11 +72,15 @@ export function WechatBindForm({
   }, [resending]);
 
   async function handleSendCode() {
-    if (!isValidChinaPhone(phone) || codeSending || resendIn > 0) return;
+    const target = intl ? email.trim() : phone.trim();
+    const valid = intl ? isValidEmail(target) : isValidChinaPhone(target);
+    if (!valid || codeSending || resendIn > 0) return;
     setError(null);
     setCodeSending(true);
     try {
-      const res = await sendSmsCaptcha(phone.trim(), { actionType: "BIND" });
+      const res = intl
+        ? await sendEmailCaptcha(target, { actionType: "BIND" })
+        : await sendSmsCaptcha(target, { actionType: "BIND" });
       if (res.success) {
         setResendIn(res.cooldown > 0 ? res.cooldown : SMS_RESEND_DEFAULT_SECONDS);
       } else {
@@ -87,20 +97,16 @@ export function WechatBindForm({
   }
 
   async function handleSubmit() {
-    if (
-      !agreed ||
-      !isValidChinaPhone(phone) ||
-      !isCompleteSmsCode(captchaCode) ||
-      submitting
-    )
-      return;
+    const target = intl ? email.trim() : phone.trim();
+    const valid = intl ? isValidEmail(target) : isValidChinaPhone(target);
+    if (!agreed || !valid || !isCompleteSmsCode(captchaCode) || submitting) return;
     setError(null);
     setSubmitting(true);
     try {
       const vo = await bindThirdPartyPhone({
         authType,
         thirdPartyId,
-        phone: phone.trim(),
+        phone: target,
         captchaCode,
       });
       if (!vo.token || isWechatBindRequired(vo)) {
@@ -127,32 +133,50 @@ export function WechatBindForm({
     }
   }
 
-  const sendCodeDisabled = !isValidChinaPhone(phone) || codeSending || resendIn > 0;
+  const target = intl ? email.trim() : phone.trim();
+  const targetValid = intl ? isValidEmail(target) : isValidChinaPhone(target);
+  const sendCodeDisabled = !targetValid || codeSending || resendIn > 0;
   const submitDisabled =
-    !agreed || !isValidChinaPhone(phone) || !isCompleteSmsCode(captchaCode) || submitting;
+    !agreed || !targetValid || !isCompleteSmsCode(captchaCode) || submitting;
 
   return (
     <div className="w-full space-y-3">
       <div className="space-y-1 text-center">
-        <h2 className="text-sm font-medium">{t("auth.wechat_bind_title")}</h2>
+        <h2 className="text-sm font-medium">
+          {t(intl ? "auth.bind_email_title" : "auth.wechat_bind_title")}
+        </h2>
         <p className="text-2xs leading-relaxed text-muted-foreground">
-          {t("auth.wechat_bind_hint")}
+          {t(intl ? "auth.bind_email_hint" : "auth.wechat_bind_hint")}
         </p>
       </div>
 
-      {/* Same pill-input treatment as the phone sign-in form. */}
-      <div className="flex h-9 items-center gap-3 rounded-full bg-muted px-3.5">
-        <span className="text-sm text-foreground">+86</span>
-        <span className="h-4 w-px shrink-0 bg-border" />
+      {/* Intl binds an email address; cn keeps the +86 phone pill. */}
+      {intl ? (
         <Input
-          inputMode="numeric"
-          autoComplete="tel"
-          placeholder={t("auth.sms_phone_placeholder")}
-          value={phone}
-          onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 11))}
-          className="flex-1 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none rounded-none"
+          inputMode="email"
+          autoComplete="email"
+          placeholder={t("auth.email_placeholder")}
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void handleSubmit();
+          }}
+          className="border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none rounded-none"
         />
-      </div>
+      ) : (
+        <div className="flex h-9 items-center gap-3 rounded-full bg-muted px-3.5">
+          <span className="text-sm text-foreground">+86</span>
+          <span className="h-4 w-px shrink-0 bg-border" />
+          <Input
+            inputMode="numeric"
+            autoComplete="tel"
+            placeholder={t("auth.sms_phone_placeholder")}
+            value={phone}
+            onChange={(e) => setPhone(e.target.value.replace(/\D/g, "").slice(0, 11))}
+            className="flex-1 border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none rounded-none"
+          />
+        </div>
+      )}
 
       <div className="relative">
         <Input

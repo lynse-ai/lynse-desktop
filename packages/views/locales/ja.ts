@@ -159,6 +159,8 @@ const ja = {
     wechat_bind_title: "電話番号のリンク",
     wechat_bind_hint:
       "この WeChat アカウントに紐づくアカウントが見つかりません。電話番号を認証してログインしてください。",
+    bind_email_title: "メールを紐付け",
+    bind_email_hint: "Apple または Google アカウントでの初回ログインでは、Lynse アカウントにメールアドレスを紐付けます。",
     wechat_bind_submit: "リンクしてログイン",
     wechat_bind_failed: "リンクに失敗しました。もう一度お試しください",
     sms_login: "電話番号でログイン",

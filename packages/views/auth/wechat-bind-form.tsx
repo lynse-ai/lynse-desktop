@@ -37,6 +37,8 @@ export function WechatBindForm({
   channel = LYNSE_EDITION === "intl" ? "email" : "phone",
   agreed,
   onBound,
+  variant = "inline",
+  onCancel,
 }: {
   /** `thirdPartyId` from the bind-required login response. */
   thirdPartyId: string;
@@ -49,6 +51,11 @@ export function WechatBindForm({
   agreed: boolean;
   /** Called with the session-carrying response after a successful bind. */
   onBound: (vo: WechatLoginVo) => void;
+  /** "standalone" renders a clean full-width card with a cancel action for
+   *  the dedicated binding screen; "inline" keeps the compact old layout. */
+  variant?: "inline" | "standalone";
+  /** Leave the binding flow and go back to the sign-in choices. */
+  onCancel?: () => void;
 }) {
   const { t } = useTranslation();
   const intl = channel === "email";
@@ -140,29 +147,38 @@ export function WechatBindForm({
     !agreed || !targetValid || !isCompleteSmsCode(captchaCode) || submitting;
 
   return (
-    <div className="w-full space-y-3">
+    <div className={variant === "standalone" ? "w-full space-y-5" : "w-full space-y-3"}>
       <div className="space-y-1 text-center">
-        <h2 className="text-sm font-medium">
+        <h2 className={variant === "standalone" ? "text-lg font-semibold tracking-tight" : "text-sm font-medium"}>
           {t(intl ? "auth.bind_email_title" : "auth.wechat_bind_title")}
         </h2>
-        <p className="text-2xs leading-relaxed text-muted-foreground">
+        <p className={variant === "standalone"
+          ? "mx-auto max-w-xs text-xs leading-relaxed text-muted-foreground"
+          : "text-2xs leading-relaxed text-muted-foreground"}>
           {t(intl ? "auth.bind_email_hint" : "auth.wechat_bind_hint")}
         </p>
       </div>
 
       {/* Intl binds an email address; cn keeps the +86 phone pill. */}
       {intl ? (
-        <Input
-          inputMode="email"
-          autoComplete="email"
-          placeholder={t("auth.email_placeholder")}
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void handleSubmit();
-          }}
-          className="border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none rounded-none"
-        />
+        <div className="space-y-1.5">
+          <label className="block text-2xs text-muted-foreground">
+            {t("auth.bind_email_label")}
+          </label>
+          <Input
+            inputMode="email"
+            autoComplete="email"
+            placeholder={t("auth.email_placeholder")}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleSubmit();
+            }}
+            className={variant === "standalone"
+              ? "h-9 rounded-lg border bg-muted/30 px-3 text-sm shadow-none focus-visible:ring-1 focus-visible:ring-ring"
+              : "border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none rounded-none"}
+          />
+        </div>
       ) : (
         <div className="flex h-9 items-center gap-3 rounded-full bg-muted px-3.5">
           <span className="text-sm text-foreground">+86</span>
@@ -218,6 +234,15 @@ export function WechatBindForm({
         {t("auth.wechat_bind_submit")}
       </Button>
       {error && <p className="text-center text-xs text-destructive">{error}</p>}
+      {variant === "standalone" && onCancel && (
+        <button
+          type="button"
+          onClick={onCancel}
+          className="mx-auto block text-2xs text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {t("auth.bind_cancel")}
+        </button>
+      )}
     </div>
   );
 }

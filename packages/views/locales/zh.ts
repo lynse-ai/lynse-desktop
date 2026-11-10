@@ -158,6 +158,8 @@ const zh = {
     wechat_bind_hint: "未找到当前微信关联的账号，请验证手机号完成登录",
     bind_email_title: "绑定邮箱",
     bind_email_hint: "首次使用 Apple 或 Google 账号登录，需要绑定邮箱以关联你的 Lynse 账号。",
+    bind_email_label: "邮箱地址",
+    bind_cancel: "取消，返回登录",
     wechat_bind_submit: "绑定并登录",
     wechat_bind_failed: "绑定失败，请重试",
     wechat_phone_already_bound: "该手机号已绑定微信，本次微信登录未能匹配原账号。请使用手机号登录。",

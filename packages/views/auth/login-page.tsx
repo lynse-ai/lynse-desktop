@@ -12,7 +12,7 @@ import {
   loginByEmailCode,
   sendEmailCaptcha,
 } from "@lynse/core/auth/email";
-import { completeGoogleRedirect, isGoogleConfigured, startGoogleRedirect } from "@lynse/core/auth/google";
+import { isGoogleConfigured, signInWithGoogle, warmUpGoogleAuth } from "@lynse/core/auth/google";
 import {
   isAppleAuthorizeUrlConfigured,
   renderAppleLoginUrl,
@@ -188,7 +188,13 @@ export function LoginPage() {
   const wechatApiUrlRef = useRef("");
   // Bind-required login response — shows the phone + SMS form instead of
   // the sign-in views until the bind completes.
-  const [wechatBindVo, setWechatBindVo] = useState<WechatLoginVo | null>(null);
+  // `?bind_preview=1` renders the dedicated binding screen directly (QA
+  // entry for reviewing that screen without completing a third-party login).
+  const bindPreview = typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("bind_preview") === "1";
+  const [wechatBindVo, setWechatBindVo] = useState<WechatLoginVo | null>(
+    bindPreview ? { thirdPartyId: "bind-preview-identity", isNeedBind: true } : null,
+  );
 
   const [error, setError] = useState<string | null>(null);
 
@@ -310,6 +316,12 @@ export function LoginPage() {
 
   // Apple entry availability: the backend's Apple config may still carry
   // placeholder values — check once per mount (intl builds only).
+  // Warm up Firebase Auth on mount so the Google popup opens synchronously
+  // inside the click handler (see core/auth/google.ts).
+  useEffect(() => {
+    warmUpGoogleAuth();
+  }, []);
+
   useEffect(() => {
     if (!intl) return;
     let active = true;
@@ -325,49 +337,27 @@ export function LoginPage() {
     };
   }, [intl]);
 
-  /** Google sign-in runs through a full-page redirect; the result is
-   *  completed by the redirect effect below after the browser returns. */
+  /** Google popup flow; first-time identities continue into the dedicated
+   *  binding screen (intl binds an email, cn binds a phone). */
   async function handleGoogleLogin() {
     if (googleBusy) return;
     setError(null);
     setGoogleBusy(true);
     try {
-      await startGoogleRedirect();
-      // The page navigates away; reaching here means the redirect failed to
-      // start (e.g. popup/network) — drop the busy state so retry is possible.
-      setGoogleBusy(false);
+      const result = await signInWithGoogle();
+      if (result.status === "need_bind") {
+        setBindAuthType("GOOGLE");
+        setWechatBindVo({ thirdPartyId: result.thirdPartyId });
+      } else {
+        completeLogin(result.session);
+      }
     } catch (e: unknown) {
-      setGoogleBusy(false);
       setError(authErrorText(e, t, "auth.login_failed"));
+    } finally {
+      setGoogleBusy(false);
     }
   }
 
-  // Complete a Google redirect sign-in when the browser lands back here.
-  const [googleRedirectBusy, setGoogleRedirectBusy] = useState(false);
-  useEffect(() => {
-    if (!intl || !isGoogleConfigured() || googleRedirectBusy) return;
-    let active = true;
-    setGoogleRedirectBusy(true);
-    void completeGoogleRedirect()
-      .then((result) => {
-        if (!active || !result) return;
-        if (result.status === "need_bind") {
-          setBindAuthType("GOOGLE");
-          setWechatBindVo({ thirdPartyId: result.thirdPartyId });
-        } else {
-          completeLogin(result.session);
-        }
-      })
-      .catch((e: unknown) => setError(authErrorText(e, t, "auth.login_failed")))
-      .finally(() => {
-        if (active) setGoogleRedirectBusy(false);
-      });
-    return () => {
-      active = false;
-    };
-    // completeLogin is a stable store action; intl gates the web-only flow.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   /**
    * CN WeChat scan: the backend renders the qrconnect URL. The web app can
@@ -538,6 +528,32 @@ export function LoginPage() {
   const pillInputClass =
     "border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none rounded-none";
 
+  // First-time third-party sign-in: replace the whole login page with a
+  // single, distraction-free binding card (no logo, tabs, brand panel,
+  // agreement checkbox or other sign-in methods). Cancel returns to the
+  // normal sign-in view and clears the pending third-party identity.
+  if (wechatBindVo) {
+    return (
+      <main className="flex h-dvh items-center justify-center overflow-hidden bg-background px-4 text-foreground">
+        <div className="w-full max-w-sm rounded-2xl border bg-card p-8 shadow-sm">
+          <WechatBindForm
+            thirdPartyId={wechatBindVo.thirdPartyId ?? ""}
+            authType={bindAuthType}
+            channel={intl ? "email" : "phone"}
+            agreed
+            variant="standalone"
+            onCancel={() => {
+              setWechatBindVo(null);
+              setError(null);
+              setView(intl ? "email" : "phone");
+            }}
+            onBound={completeWechatSession}
+          />
+        </div>
+      </main>
+    );
+  }
+
   return (
     /* Locked to the viewport with no page scroll: the column is sized to fit
        the compact welcome window (690×450, see AuthGate). Theme-driven tokens
@@ -607,36 +623,7 @@ export function LoginPage() {
             web ? "w-full max-w-[300px]" : "w-full max-w-[260px] flex-1",
           )}
         >
-        {wechatBindVo ? (
-          /* ── First third-party sign-in: intl binds email, cn binds phone ── */
-          <div className="space-y-4">
-            <WechatBindForm
-              thirdPartyId={wechatBindVo.thirdPartyId ?? ""}
-              authType={bindAuthType}
-              agreed={agreed}
-              onBound={completeWechatSession}
-            />
-            <AgreementCheckbox
-              agreed={agreed}
-              onToggle={() => setAgreed(!agreed)}
-              onLink={handleAgreeLink}
-            />
-            <div className="text-center">
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-8 text-xs text-muted-foreground"
-                onClick={() => {
-                  setWechatBindVo(null);
-                  setError(null);
-                  setView("phone");
-                }}
-              >
-                {t("auth.back_to_phone")}
-              </Button>
-            </div>
-          </div>
-        ) : view === "more" ? (
+        {view === "more" ? (
           /* ── More ways to sign in ─────────────────────── */
           <div className="space-y-4">
             <p className="text-center text-sm font-medium">

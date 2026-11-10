@@ -159,6 +159,8 @@ const en = {
     wechat_bind_hint: "No account was found for this WeChat identity. Verify your phone number to continue.",
     bind_email_title: "Bind your email",
     bind_email_hint: "First time signing in with Apple or Google? Bind an email to link your Lynse account.",
+    bind_email_label: "Email address",
+    bind_cancel: "Cancel, back to sign in",
     wechat_bind_submit: "Link and sign in",
     wechat_bind_failed: "Linking failed, please try again",
     wechat_phone_already_bound: "This phone number is already linked to WeChat, but this sign-in could not match the existing account. Please sign in with your phone number.",

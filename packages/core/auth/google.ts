@@ -1,6 +1,12 @@
 import { api } from "../api/client";
 import type { AuthSession } from "./session";
 import { smsSessionFromLogin, type AuthLoginVo } from "./sms";
+// Static imports: the popup must open synchronously inside the click handler.
+// A dynamic import here would drop the user-gesture context and the browser
+// would block the popup (or, with redirect, lose the pending result on the
+// handler page). Tree-shaking still keeps only the auth SDK paths we use.
+import { getApps, initializeApp } from "firebase/app";
+import { getAuth, GoogleAuthProvider, signInWithPopup } from "firebase/auth";
 
 // Core has no Node types (@types/node is out of boundary); declare just the
 // shape Next.js injects (see config/index.ts for the inlining rules).
@@ -72,41 +78,35 @@ function needBind(vo: ThirdPartyLoginVo): boolean {
   return vo.isNeedBind === true || vo.needBind === true;
 }
 
-async function loadFirebaseAuth() {
-  const [{ initializeApp, getApps }, authMod] = await Promise.all([
-    import("firebase/app"),
-    import("firebase/auth"),
-  ]);
+function firebaseAuth() {
   const app = getApps()[0] ?? initializeApp(firebaseConfig());
-  return { auth: authMod.getAuth(app), authMod };
+  return getAuth(app);
 }
 
 /**
- * Start the Google sign-in via a full-page redirect (not a popup: the async
- * Firebase import would drop the user-gesture context and popup blockers eat
- * the window). The page navigates away; the promise never resolves.
+ * Warm up the Firebase Auth instance before any click. getAuth performs an
+ * async IndexedDB persistence handshake on first use; calling it here lets
+ * that finish while the page is idle, so signInWithPopup can open the popup
+ * synchronously inside the click handler without a popup blocker.
  */
-export async function startGoogleRedirect(): Promise<void> {
-  const { auth, authMod } = await loadFirebaseAuth();
-  const provider = new authMod.GoogleAuthProvider();
-  await authMod.signInWithRedirect(auth, provider);
+export function warmUpGoogleAuth(): void {
+  if (isGoogleConfigured()) void firebaseAuth();
 }
 
 /**
- * Finish a redirect sign-in on the page the browser lands back on.
- * Resolves null when no redirect is pending (normal first visit).
+ * Run the Google popup flow synchronously inside the click handler (the
+ * Firebase SDK is statically imported above, so the browser keeps the
+ * user-gesture context). Resolves `need_bind` (the UI shows the binding
+ * screen with `thirdPartyId`) or `signed_in`.
  */
-export async function completeGoogleRedirect(): Promise<GoogleLoginResult | GoogleBindRequired | null> {
-  const { auth, authMod } = await loadFirebaseAuth();
-  const result = await authMod.getRedirectResult(auth);
-  if (!result?.user) return null;
-  const identityToken = await result.user.getIdToken();
+export async function signInWithGoogle(): Promise<GoogleLoginResult | GoogleBindRequired> {
+  const credential = await signInWithPopup(firebaseAuth(), new GoogleAuthProvider());
+  const identityToken = await credential.user.getIdToken();
   const vo = await loginByGoogleIdentityToken(identityToken);
   if (needBind(vo)) {
     return { status: "need_bind", thirdPartyId: vo.thirdPartyId ?? "" };
   }
-  const session: AuthSession = smsSessionFromLogin(vo as AuthLoginVo);
-  return { status: "signed_in", session };
+  return { status: "signed_in", session: smsSessionFromLogin(vo as AuthLoginVo) };
 }
 
 /**

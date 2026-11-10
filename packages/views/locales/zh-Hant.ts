@@ -159,6 +159,8 @@ const zhHant = {
     wechat_bind_hint: "未找到目前微信關聯的帳號，請驗證手機號完成登入",
     bind_email_title: "綁定郵箱",
     bind_email_hint: "首次使用 Apple 或 Google 帳號登入，需要綁定郵箱以關聯你的 Lynse 帳號。",
+    bind_email_label: "郵箱地址",
+    bind_cancel: "取消，返回登入",
     wechat_bind_submit: "綁定並登入",
     wechat_bind_failed: "綁定失敗，請重試",
     sms_login: "手機號登入",

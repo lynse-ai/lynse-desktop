@@ -60,10 +60,17 @@ declare const __LYNSE_EDITION__: string | undefined;
 declare const __LYNSE_DEV__: boolean | undefined;
 
 export const LYNSE_EDITION: LynseEdition =
-  typeof __LYNSE_EDITION__ !== "undefined" &&
-  (__LYNSE_EDITION__ === "cn" || __LYNSE_EDITION__ === "intl")
-    ? __LYNSE_EDITION__
-    : "cn";
+  // Web deployments pick the edition at build time via NEXT_PUBLIC_LYNSE_EDITION
+  // (the Next compiler inlines the literal member expression; see the rules
+  // documented above). The Tauri define stays as the packaged-shell override.
+  (typeof process !== "undefined" && process.env.NEXT_PUBLIC_LYNSE_EDITION) === "intl"
+    ? "intl"
+    : (typeof process !== "undefined" && process.env.NEXT_PUBLIC_LYNSE_EDITION) === "cn"
+      ? "cn"
+      : typeof __LYNSE_EDITION__ !== "undefined" &&
+          (__LYNSE_EDITION__ === "cn" || __LYNSE_EDITION__ === "intl")
+        ? __LYNSE_EDITION__
+        : "cn";
 
 /** True for dev servers; packaged builds are always false. Used only to gate
  *  debug affordances (e.g. the dev `lynse_edition` view override). */

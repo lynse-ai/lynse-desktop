@@ -5,6 +5,21 @@ import { Input } from "@lynse/ui/components/ui/input";
 import { Button } from "@lynse/ui/components/ui/button";
 import { useAuthStore } from "@lynse/core/auth";
 import { api } from "@lynse/core/api";
+import { LYNSE_EDITION } from "@lynse/core/config";
+import {
+  emailSessionFromLogin,
+  isValidEmail,
+  loginByEmailCode,
+  sendEmailCaptcha,
+} from "@lynse/core/auth/email";
+import { isGoogleConfigured, signInWithGoogle } from "@lynse/core/auth/google";
+import {
+  isAppleAuthorizeUrlConfigured,
+  renderAppleLoginUrl,
+  startAppleLogin,
+} from "@lynse/core/auth/apple";
+import { renderWechatLoginUrl } from "@lynse/core/auth/wechat";
+import { toast } from "sonner";
 import {
   buildQrLoginPayload,
   createQrLogin,
@@ -50,9 +65,10 @@ import { LOGIN_ARTWORK_SRC } from "./login-artwork";
 /** Login QR panel phases. "expired"/"error" offer a manual refresh. */
 type QrPhase = "creating" | "ready" | "scanned" | "expired" | "error";
 
-/** Sign-in views: phone + SMS form, the "more ways" screen (WeChat / QR /
- *  dev API entry), the app-scanned QR code, or the API form. */
-type LoginView = "phone" | "more" | "qr" | "api";
+/** Sign-in views: phone + SMS form, the email + code form (intl default),
+ *  the "more ways" screen (WeChat / QR / dev API entry), the app-scanned QR
+ *  code, or the API form. */
+type LoginView = "phone" | "email" | "more" | "qr" | "api";
 
 /** The user-agreement round check + inline terms/privacy links, shared by
  *  the phone sign-in form and the WeChat bind form. */
@@ -125,10 +141,13 @@ export function LoginPage() {
   // the desktop welcome window, so it gets a full-page split layout: centered
   // form column on the left, brand panel on the right (see the aside below).
   const web = isWebPlatform();
+  // intl builds lead with Google / Apple / email sign-in; cn leads with the
+  // phone + SMS form and WeChat (see the view branches below).
+  const intl = LYNSE_EDITION === "intl";
+  const googleReady = isGoogleConfigured();
 
-  // Active sign-in view. Phone is the default: unlike the QR flow it needs no
-  // Lynse mobile app, and it also covers registration.
-  const [view, setView] = useState<LoginView>("phone");
+  // Active sign-in view. Phone is the CN default; intl leads with email.
+  const [view, setView] = useState<LoginView>(intl ? "email" : "phone");
 
   // Create a challenge, show its QR, then
   // poll until the Lynse mobile app scans + confirms it.
@@ -137,14 +156,22 @@ export function LoginPage() {
   const [qrPayload, setQrPayload] = useState("");
   const qrCancelledRef = useRef(false);
 
-  // Phone + SMS sign-in.
+  // Phone + SMS sign-in (CN default). The intl email form shares the same
+  // code/resend/agreement state — the handlers branch on the active view.
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [smsCode, setSmsCode] = useState("");
   const [codeSending, setCodeSending] = useState(false);
   const [smsSubmitting, setSmsSubmitting] = useState(false);
   const [resendIn, setResendIn] = useState(0);
   const [agreed, setAgreed] = useState(false);
   const [smsError, setSmsError] = useState<string | null>(null);
+  const [googleBusy, setGoogleBusy] = useState(false);
+  // Apple entry renders only while the backend serves a configured
+  // (non-placeholder) authorize URL.
+  const [appleUrl, setAppleUrl] = useState<string | null>(null);
+  // Which identity provider the active phone-bind form completes.
+  const [bindAuthType, setBindAuthType] = useState<"WECHAT_SCAN" | "GOOGLE">("WECHAT_SCAN");
 
   // WeChat sign-in. The authorize URL comes from the
   // backend's /api/auth/render; on desktop the page opens in an embedded
@@ -229,11 +256,16 @@ export function LoginPage() {
   }, [resending]);
 
   async function handleSendCode() {
-    if (!isValidChinaPhone(phone) || codeSending || resendIn > 0) return;
+    if (codeSending || resendIn > 0) return;
+    if (view === "email" && !isValidEmail(email)) return;
+    if (view !== "email" && !isValidChinaPhone(phone)) return;
     setSmsError(null);
     setCodeSending(true);
     try {
-      const res = await sendSmsCaptcha(phone.trim());
+      const res =
+        view === "email"
+          ? await sendEmailCaptcha(email.trim())
+          : await sendSmsCaptcha(phone.trim());
       if (res.success) {
         setResendIn(res.cooldown > 0 ? res.cooldown : SMS_RESEND_DEFAULT_SECONDS);
       } else {
@@ -252,18 +284,16 @@ export function LoginPage() {
 
   async function handleSmsLogin(codeOverride?: string) {
     const code = codeOverride ?? smsCode;
-    if (
-      !agreed ||
-      !isValidChinaPhone(phone) ||
-      !isCompleteSmsCode(code) ||
-      smsSubmitting
-    )
-      return;
+    const emailView = view === "email";
+    const targetValid = emailView ? isValidEmail(email) : isValidChinaPhone(phone);
+    if (!agreed || !targetValid || !isCompleteSmsCode(code) || smsSubmitting) return;
     setSmsError(null);
     setSmsSubmitting(true);
     try {
-      const vo = await loginByPhoneCode(phone.trim(), code);
-      completeLogin(smsSessionFromLogin(vo));
+      const vo = emailView
+        ? await loginByEmailCode(email.trim(), code)
+        : await loginByPhoneCode(phone.trim(), code);
+      completeLogin(emailView ? emailSessionFromLogin(vo) : smsSessionFromLogin(vo));
     } catch (e: unknown) {
       setSmsError(authErrorText(e, t, "auth.sms_login_failed"));
     } finally {
@@ -276,6 +306,66 @@ export function LoginPage() {
     setSmsCode(digits);
     // All six digits in — submit right away.
     if (digits.length === SMS_CODE_LENGTH) void handleSmsLogin(digits);
+  }
+
+  // Apple entry availability: the backend's Apple config may still carry
+  // placeholder values — check once per mount (intl builds only).
+  useEffect(() => {
+    if (!intl) return;
+    let active = true;
+    void renderAppleLoginUrl()
+      .then((url) => {
+        if (active && isAppleAuthorizeUrlConfigured(url)) setAppleUrl(url);
+      })
+      .catch(() => {
+        // Apple stays hidden when the backend cannot render an authorize URL.
+      });
+    return () => {
+      active = false;
+    };
+  }, [intl]);
+
+  /** Google popup flow; first-time identities continue into phone binding. */
+  async function handleGoogleLogin() {
+    if (googleBusy) return;
+    setError(null);
+    setGoogleBusy(true);
+    try {
+      const result = await signInWithGoogle();
+      if (result.status === "need_bind") {
+        setBindAuthType("GOOGLE");
+        setWechatBindVo({ thirdPartyId: result.thirdPartyId });
+        setView("phone");
+      } else {
+        completeLogin(result.session);
+      }
+    } catch (e: unknown) {
+      setError(authErrorText(e, t, "auth.login_failed"));
+    } finally {
+      setGoogleBusy(false);
+    }
+  }
+
+  /**
+   * CN WeChat scan: the backend renders the qrconnect URL. The web app can
+   * only complete the flow when the authorize redirect points back at this
+   * origin — otherwise the backend callback page ends the journey and the
+   * entry explains it is still being configured.
+   */
+  async function handleWechatQrLogin() {
+    setError(null);
+    try {
+      const url = await renderWechatLoginUrl();
+      const sameOrigin =
+        !web || (typeof window !== "undefined" && new URL(url).origin === window.location.origin);
+      if (!sameOrigin) {
+        toast(t("auth.wechat_qr_pending"));
+        return;
+      }
+      window.location.href = url;
+    } catch (e: unknown) {
+      setError(authErrorText(e, t, "auth.login_failed"));
+    }
   }
 
   function handleAgreeLink(url: string) {
@@ -415,10 +505,10 @@ export function LoginPage() {
           : t("auth.qr_login_hint");
   const qrDimmed = qrPhase === "expired" || qrPhase === "error";
 
-  const phoneValid = isValidChinaPhone(phone);
-  const sendCodeDisabled = !phoneValid || codeSending || resendIn > 0;
+  const targetValid = view === "email" ? isValidEmail(email) : isValidChinaPhone(phone);
+  const sendCodeDisabled = !targetValid || codeSending || resendIn > 0;
   const loginDisabled =
-    !agreed || !phoneValid || !isCompleteSmsCode(smsCode) || smsSubmitting;
+    !agreed || !targetValid || !isCompleteSmsCode(smsCode) || smsSubmitting;
 
   // Shared pill-input treatment (borderless muted fill, like the mobile app).
   const pillInputClass =
@@ -459,7 +549,7 @@ export function LoginPage() {
       <div
         className={cn(
           "relative z-10 flex min-w-0 flex-col px-7 pb-5 pt-14",
-          web ? "w-full items-center lg:w-1/2" : "w-1/2",
+          web ? "w-full items-center justify-center lg:w-1/2" : "w-1/2",
         )}
       >
         <button
@@ -473,7 +563,7 @@ export function LoginPage() {
         <h1
           className={cn(
             "font-semibold tracking-tight",
-            web ? "mt-16 text-center text-2xl" : "mt-5 text-lg",
+            web ? "mt-8 text-center text-2xl" : "mt-5 text-lg",
           )}
         >
           {t("auth.welcome_title")}
@@ -498,6 +588,7 @@ export function LoginPage() {
           <div className="space-y-4">
             <WechatBindForm
               thirdPartyId={wechatBindVo.thirdPartyId ?? ""}
+              authType={bindAuthType}
               agreed={agreed}
               onBound={completeWechatSession}
             />
@@ -528,6 +619,28 @@ export function LoginPage() {
               {t("auth.more_login")}
             </p>
             <div className="space-y-2">
+              {intl && (
+                <button
+                  type="button"
+                  onClick={() => setView("phone")}
+                  className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
+                >
+                  <KeyRound className="size-4" />
+                  <span className="text-sm">{t("auth.phone_code_login")}</span>
+                  <ChevronRight className="ml-auto size-4 text-muted-foreground" />
+                </button>
+              )}
+              {!intl && web && (
+                <button
+                  type="button"
+                  onClick={() => void handleWechatQrLogin()}
+                  className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
+                >
+                  <WechatIcon className="size-4" />
+                  <span className="text-sm">{t("auth.wechat_qr_login")}</span>
+                  <ChevronRight className="ml-auto size-4 text-muted-foreground" />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={handleWechatLogin}
@@ -584,7 +697,111 @@ export function LoginPage() {
             </div>
           </div>
         ) : view !== "api" ? (
-          view === "phone" ? (
+          view === "email" ? (
+            /* ── Email + code sign-in (intl default), Google/Apple above ── */
+            <>
+              {/* Google/Apple stay visible on intl: clicking without the
+                  Firebase/OAuth backend config explains the pending state
+                  instead of dying silently, and the flows activate the
+                  moment the environment variables land. */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (!googleReady) { toast(t("auth.google_pending")); return; }
+                  void handleGoogleLogin();
+                }}
+                disabled={googleBusy}
+                className="flex h-9 w-full items-center justify-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
+              >
+                <span className="text-sm">{t("auth.google_login")}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!appleUrl) { toast(t("auth.apple_pending")); return; }
+                  startAppleLogin(appleUrl);
+                }}
+                className="mt-2 flex h-9 w-full items-center justify-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
+              >
+                <span className="text-sm">{t("auth.apple_login")}</span>
+              </button>
+              <div className="my-4 flex items-center gap-3 text-2xs text-muted-foreground">
+                <span className="h-px flex-1 bg-border" />
+                {t("auth.or_divider")}
+                <span className="h-px flex-1 bg-border" />
+              </div>
+
+              {/* ── Email pill ─────────────────────────────── */}
+              <Input
+                inputMode="email"
+                autoComplete="email"
+                placeholder={t("auth.email_placeholder")}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleSmsLogin();
+                }}
+                className={pillInputClass}
+              />
+
+              {/* ── Code pill (send button inside) ─────────── */}
+              <div className="relative mt-3.5">
+                <Input
+                  inputMode="numeric"
+                  maxLength={SMS_CODE_LENGTH}
+                  placeholder={t("auth.sms_code_placeholder")}
+                  value={smsCode}
+                  onChange={(e) => handleSmsCodeChange(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleSmsLogin();
+                  }}
+                  className="h-9 rounded-full border-0 bg-muted pl-3.5 pr-24 text-sm shadow-none focus-visible:ring-0 focus-visible:shadow-none"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="absolute right-3 top-1/2 h-6 -translate-y-1/2 px-0 text-xs font-medium hover:bg-transparent"
+                  disabled={sendCodeDisabled}
+                  onClick={handleSendCode}
+                >
+                  {codeSending
+                    ? t("auth.sms_sending")
+                    : resendIn > 0
+                      ? t("auth.sms_resend_in", { seconds: resendIn })
+                      : t("auth.sms_send_code")}
+                </Button>
+              </div>
+
+              {/* ── Sign-in + agreement ────────────────────── */}
+              <Button
+                size="sm"
+                className="relative mt-6 h-9 w-full rounded-full bg-gradient-to-r from-[color-mix(in_oklab,var(--primary)_55%,white)] to-primary text-sm font-medium text-primary-foreground hover:opacity-90"
+                disabled={loginDisabled}
+                onClick={() => handleSmsLogin()}
+              >
+                {smsSubmitting ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    {t("auth.sms_logging_in")}
+                  </>
+                ) : (
+                  t("auth.sms_login_btn")
+                )}
+                {!smsSubmitting && (
+                  <ArrowRight className="absolute right-4 top-1/2 size-4 -translate-y-1/2" />
+                )}
+              </Button>
+              {smsError && (
+                <p className="mt-3 text-left text-xs text-destructive">{smsError}</p>
+              )}
+              <AgreementCheckbox
+                agreed={agreed}
+                onToggle={() => setAgreed(!agreed)}
+                onLink={handleAgreeLink}
+              />
+            </>
+          ) : view === "phone" ? (
             <>
               {/* ── Phone number pill ──────────────────────── */}
               <div className="flex h-9 items-center gap-3 rounded-full bg-muted px-3.5">

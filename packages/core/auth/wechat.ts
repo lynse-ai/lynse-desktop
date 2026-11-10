@@ -114,21 +114,33 @@ export function loginByWechat(
 }
 
 /**
- * Link the WeChat identity (`thirdPartyId` from the login response) to a
+ * Link a third-party identity (`thirdPartyId` from the login response) to a
  * phone number. `captchaCode` is the SMS code sent via
  * `sendSmsCaptcha(phone, { actionType: "BIND" })`. Resolves the session.
+ * `authType` names the identity provider — WeChat today, Google when its
+ * first sign-in also requires phone binding.
  */
-export function bindWechatPhone(input: {
+export function bindThirdPartyPhone(input: {
+  authType: string;
   thirdPartyId: string;
   phone: string;
   captchaCode: string;
 }): Promise<WechatLoginVo> {
   return api().getWithParams<WechatLoginVo>("/api/auth/bind", {
-    authType: WECHAT_AUTH_TYPE,
+    authType: input.authType,
     thirdPartyId: input.thirdPartyId,
     username: input.phone,
     captchaCode: input.captchaCode,
   });
+}
+
+/** WeChat-specific wrapper preserving the historical call shape. */
+export function bindWechatPhone(input: {
+  thirdPartyId: string;
+  phone: string;
+  captchaCode: string;
+}): Promise<WechatLoginVo> {
+  return bindThirdPartyPhone({ ...input, authType: WECHAT_AUTH_TYPE });
 }
 
 /** Assemble the persistable session from a login/bind response. */

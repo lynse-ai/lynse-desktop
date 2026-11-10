@@ -14,7 +14,7 @@ import {
   sendSmsCaptcha,
 } from "@lynse/core/auth/sms";
 import {
-  bindWechatPhone,
+  bindThirdPartyPhone,
   isWechatBindRequired,
   type WechatLoginVo,
 } from "@lynse/core/auth/wechat";
@@ -31,11 +31,15 @@ import { Loader2 } from "../icons";
  */
 export function WechatBindForm({
   thirdPartyId,
+  authType = "WECHAT_SCAN",
   agreed,
   onBound,
 }: {
   /** `thirdPartyId` from the bind-required login response. */
   thirdPartyId: string;
+  /** Identity provider completing the bind — WeChat today, Google for its
+   *  first-time sign-ins (same endpoint, provider decides the shape). */
+  authType?: string;
   /** Agreement gate owned by the host page (the login page shares its
    *  checkbox; the callback page is always agreed). */
   agreed: boolean;
@@ -93,7 +97,8 @@ export function WechatBindForm({
     setError(null);
     setSubmitting(true);
     try {
-      const vo = await bindWechatPhone({
+      const vo = await bindThirdPartyPhone({
+        authType,
         thirdPartyId,
         phone: phone.trim(),
         captchaCode,

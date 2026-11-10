@@ -35,10 +35,14 @@
     "./integrations/types": "./integrations/types.ts",
     "./types": "./types/index.ts",
     "./types/storage": "./types/storage.ts",
-    "./api/memory": "./api/memory.ts"
+    "./api/memory": "./api/memory.ts",
+    "./auth/email": "./auth/email.ts",
+    "./auth/google": "./auth/google.ts",
+    "./auth/apple": "./auth/apple.ts"
   },
   "dependencies": {
     "@tanstack/react-query": "catalog:",
+    "firebase": "^13.2.0",
     "i18next": "catalog:",
     "react-i18next": "catalog:",
     "zod": "catalog:",

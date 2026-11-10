@@ -143,7 +143,13 @@ export async function signInWithGoogle(): Promise<GoogleLoginResult | GoogleBind
  * Resolves null when no redirect is pending (normal first visit).
  */
 export async function completeGoogleRedirect(): Promise<GoogleLoginResult | null> {
-  const result = await getRedirectResult(firebaseAuth());
+  (window as unknown as { __googleDebug?: string }).__googleDebug = "entered";
+  const auth = firebaseAuth();
+  const result = await getRedirectResult(auth);
+  const currentUserEmail = auth.currentUser?.email ?? "none";
+  const providerIds = JSON.stringify(auth.currentUser?.providerData?.map((p) => p.providerId) ?? []);
+  (window as unknown as { __googleDebug?: string }).__googleDebug =
+    `redirectUser=${result?.user?.email ?? "null"} currentUser=${currentUserEmail} providerData=${providerIds}`;
   if (!result?.user) return null;
   return finishGoogleSignIn(result.user);
 }

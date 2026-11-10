@@ -367,10 +367,11 @@ export function LoginPage() {
       }
     } catch (e: unknown) {
       setError(authErrorText(e, t, "auth.login_failed"));
-      const detail = e && typeof e === "object" && "data" in e
+      const message = e instanceof Error ? e.message : String(e).slice(0, 160);
+      const data = e && typeof e === "object" && "data" in e
         ? JSON.stringify((e as { data: unknown }).data).slice(0, 200)
-        : String(e instanceof Error ? e.message : e).slice(0, 200);
-      setGoogleDiag("error: " + detail);
+        : "-";
+      setGoogleDiag("error: " + message + " | data: " + data);
       setGoogleBusy(false);
     }
   }

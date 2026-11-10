@@ -12,7 +12,12 @@ import {
   loginByEmailCode,
   sendEmailCaptcha,
 } from "@lynse/core/auth/email";
-import { isGoogleConfigured, signInWithGoogle, warmUpGoogleAuth } from "@lynse/core/auth/google";
+import {
+  completeGoogleRedirect,
+  isGoogleConfigured,
+  signInWithGoogle,
+  warmUpGoogleAuth,
+} from "@lynse/core/auth/google";
 import {
   isAppleAuthorizeUrlConfigured,
   renderAppleLoginUrl,
@@ -167,6 +172,7 @@ export function LoginPage() {
   const [agreed, setAgreed] = useState(false);
   const [smsError, setSmsError] = useState<string | null>(null);
   const [googleBusy, setGoogleBusy] = useState(false);
+  const [googleDiag, setGoogleDiag] = useState<string | null>(null);
   // Apple entry renders only while the backend serves a configured
   // (non-placeholder) authorize URL.
   const [appleUrl, setAppleUrl] = useState<string | null>(null);
@@ -348,15 +354,46 @@ export function LoginPage() {
       if (result.status === "need_bind") {
         setBindAuthType("GOOGLE");
         setWechatBindVo({ thirdPartyId: result.thirdPartyId });
-      } else {
+        setGoogleBusy(false);
+      } else if (result.status === "redirecting") {
+        // Full-page redirect in progress; the return completes via
+        // completeGoogleRedirect on the landing page mount.
+        return;
+      } else if (result.status === "signed_in" && result.session) {
         completeLogin(result.session);
+        setGoogleBusy(false);
+      } else {
+        setGoogleBusy(false);
       }
     } catch (e: unknown) {
       setError(authErrorText(e, t, "auth.login_failed"));
-    } finally {
+      const detail = e && typeof e === "object" && "data" in e
+        ? JSON.stringify((e as { data: unknown }).data).slice(0, 200)
+        : String(e instanceof Error ? e.message : e).slice(0, 200);
+      setGoogleDiag("error: " + detail);
       setGoogleBusy(false);
     }
   }
+
+  // Complete a Google redirect sign-in when the browser lands back here.
+  // A ref (not state) guards StrictMode's double effect: getRedirectResult
+  // consumes the pending redirect exactly once.
+  const googleRedirectStartedRef = useRef(false);
+  useEffect(() => {
+    if (!intl || !isGoogleConfigured() || googleRedirectStartedRef.current) return;
+    googleRedirectStartedRef.current = true;
+    void completeGoogleRedirect()
+      .then((result) => {
+        if (!result || result.status === "redirecting") return;
+        if (result.status === "need_bind") {
+          setBindAuthType("GOOGLE");
+          setWechatBindVo({ thirdPartyId: result.thirdPartyId });
+        } else if (result.session) {
+          completeLogin(result.session);
+        }
+      })
+      .catch((e: unknown) => setError(authErrorText(e, t, "auth.login_failed")));
+  }, []);
 
 
   /**
@@ -540,14 +577,19 @@ export function LoginPage() {
             thirdPartyId={wechatBindVo.thirdPartyId ?? ""}
             authType={bindAuthType}
             channel={intl ? "email" : "phone"}
-            agreed
+            agreed={agreed}
             variant="standalone"
             onCancel={() => {
               setWechatBindVo(null);
               setError(null);
-              setView(intl ? "email" : "phone");
+              setView("phone");
             }}
             onBound={completeWechatSession}
+          />
+          <AgreementCheckbox
+            agreed={agreed}
+            onToggle={() => setAgreed(!agreed)}
+            onLink={handleAgreeLink}
           />
         </div>
       </main>
@@ -959,6 +1001,7 @@ export function LoginPage() {
         )}
 
         {error && <p className="mt-3 text-center text-xs text-destructive">{error}</p>}
+        {googleDiag && <p className="mt-2 break-all text-center text-2xs text-muted-foreground">[google] {googleDiag}</p>}
         </div>
 
         {/* ── More ways to sign in (phone view) / WeChat wait state.

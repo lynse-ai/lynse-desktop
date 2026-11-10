@@ -6,7 +6,13 @@ import { smsSessionFromLogin, type AuthLoginVo } from "./sms";
 // would block the popup (or, with redirect, lose the pending result on the
 // handler page). Tree-shaking still keeps only the auth SDK paths we use.
 import { getApps, initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider, signInWithPopup } from "firebase/auth";
+import {
+  getAuth,
+  GoogleAuthProvider,
+  getRedirectResult,
+  signInWithPopup,
+  signInWithRedirect,
+} from "firebase/auth";
 
 // Core has no Node types (@types/node is out of boundary); declare just the
 // shape Next.js injects (see config/index.ts for the inlining rules).
@@ -33,8 +39,9 @@ export interface GoogleBindRequired {
 }
 
 export interface GoogleLoginResult {
-  status: "signed_in";
-  session: AuthSession;
+  status: "signed_in" | "need_bind" | "redirecting";
+  session?: AuthSession;
+  thirdPartyId?: string;
 }
 
 /** Firebase web config from build-time env; empty strings when unset.
@@ -60,6 +67,7 @@ export function isGoogleConfigured(): boolean {
 export interface ThirdPartyLoginVo {
   token?: string | null;
   expireIn?: number | null;
+  isFirstLogin?: boolean;
   isNeedBind?: boolean;
   needBind?: boolean;
   customerId?: string | null;
@@ -75,7 +83,10 @@ export function loginByGoogleIdentityToken(identityToken: string): Promise<Third
 }
 
 function needBind(vo: ThirdPartyLoginVo): boolean {
-  return vo.isNeedBind === true || vo.needBind === true;
+  // The backend marks a first-time Google identity with isNeedBind; some
+  // environments only return isFirstLogin + no token. Treat both as bind.
+  return vo.isNeedBind === true || vo.needBind === true ||
+    (vo.isFirstLogin === true && !vo.token);
 }
 
 function firebaseAuth() {
@@ -93,20 +104,48 @@ export function warmUpGoogleAuth(): void {
   if (isGoogleConfigured()) void firebaseAuth();
 }
 
-/**
- * Run the Google popup flow synchronously inside the click handler (the
- * Firebase SDK is statically imported above, so the browser keeps the
- * user-gesture context). Resolves `need_bind` (the UI shows the binding
- * screen with `thirdPartyId`) or `signed_in`.
- */
-export async function signInWithGoogle(): Promise<GoogleLoginResult | GoogleBindRequired> {
-  const credential = await signInWithPopup(firebaseAuth(), new GoogleAuthProvider());
-  const identityToken = await credential.user.getIdToken();
+function errCode(e: unknown): string | null {
+  return e && typeof e === "object" && "code" in e ? String((e as { code: unknown }).code) : null;
+}
+
+/** Finish a Google sign-in from a popup credential or a redirect result. */
+async function finishGoogleSignIn(user: { getIdToken: (force?: boolean) => Promise<string> }): Promise<GoogleLoginResult> {
+  const identityToken = await user.getIdToken();
   const vo = await loginByGoogleIdentityToken(identityToken);
   if (needBind(vo)) {
     return { status: "need_bind", thirdPartyId: vo.thirdPartyId ?? "" };
   }
   return { status: "signed_in", session: smsSessionFromLogin(vo as AuthLoginVo) };
+}
+
+/**
+ * Google sign-in: popup first (opens synchronously inside the click handler —
+ * the Firebase SDK is statically imported, so the user-gesture context is
+ * intact); browsers that block popups fall back to the full-page redirect,
+ * whose result `completeGoogleRedirect` finishes after the browser returns.
+ */
+export async function signInWithGoogle(): Promise<GoogleLoginResult | GoogleBindRequired> {
+  const provider = new GoogleAuthProvider();
+  try {
+    const credential = await signInWithPopup(firebaseAuth(), provider);
+    return await finishGoogleSignIn(credential.user);
+  } catch (e: unknown) {
+    if (errCode(e) === "auth/popup-blocked") {
+      await signInWithRedirect(firebaseAuth(), provider);
+      return { status: "redirecting" };
+    }
+    throw e;
+  }
+}
+
+/**
+ * Finish a redirect sign-in on the page the browser lands back on.
+ * Resolves null when no redirect is pending (normal first visit).
+ */
+export async function completeGoogleRedirect(): Promise<GoogleLoginResult | null> {
+  const result = await getRedirectResult(firebaseAuth());
+  if (!result?.user) return null;
+  return finishGoogleSignIn(result.user);
 }
 
 /**

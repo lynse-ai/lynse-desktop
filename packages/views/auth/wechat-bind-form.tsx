@@ -240,7 +240,7 @@ export function WechatBindForm({
           onClick={onCancel}
           className="mx-auto block text-2xs text-muted-foreground transition-colors hover:text-foreground"
         >
-          {t("auth.bind_cancel")}
+          {t("auth.back_to_phone")}
         </button>
       )}
     </div>

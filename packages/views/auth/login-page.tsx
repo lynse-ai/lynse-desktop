@@ -49,7 +49,7 @@ import {
   smsSessionFromLogin,
 } from "@lynse/core/auth/sms";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { ArrowRight, Check, ChevronRight, KeyRound, Loader2, QrCode } from "../icons";
+import { ArrowRight, ChevronRight, KeyRound, Loader2, QrCode } from "../icons";
 import { getDesktopAppApi, openExternalUrl } from "../app-update";
 import { isWebPlatform } from "../platform";
 import {
@@ -57,10 +57,11 @@ import {
   isTestMode,
   setTestMode,
 } from "../feature-flags";
-import { privacyUrl, termsUrl } from "../about/links";
 import { WindowControls, showWindowControls } from "../layout/app-title-bar";
 import { cn } from "@lynse/ui/lib/utils";
+import { AgreementCheckbox } from "./agreement-checkbox";
 import { WechatIcon } from "./wechat-icon";
+import { AppleIcon } from "./apple-icon";
 import { WechatBindForm } from "./wechat-bind-form";
 import { authErrorText } from "./auth-errors";
 import { ApiAuthPanel } from "./api-auth-panel";
@@ -74,56 +75,6 @@ type QrPhase = "creating" | "ready" | "scanned" | "expired" | "error";
  *  the "more ways" screen (WeChat / QR / dev API entry), the app-scanned QR
  *  code, or the API form. */
 type LoginView = "phone" | "email" | "more" | "qr" | "api";
-
-/** The user-agreement round check + inline terms/privacy links, shared by
- *  the phone sign-in form and the WeChat bind form. */
-function AgreementCheckbox({
-  agreed,
-  onToggle,
-  onLink,
-}: {
-  agreed: boolean;
-  onToggle: () => void;
-  onLink: (url: string) => void;
-}) {
-  const { t, i18n } = useTranslation();
-  return (
-    <div className="mt-4 flex items-start gap-2">
-      <button
-        type="button"
-        role="checkbox"
-        aria-checked={agreed}
-        onClick={onToggle}
-        className={`mt-0.5 flex size-3.5 shrink-0 items-center justify-center rounded-full border transition-colors ${
-          agreed ? "border-primary bg-primary" : "border-muted-foreground/60"
-        }`}
-      >
-        {agreed && (
-          <Check className="size-2.5 text-primary-foreground" strokeWidth={3.5} />
-        )}
-      </button>
-      <p className="text-left text-2xs leading-relaxed text-muted-foreground text-pretty">
-        {t("auth.agree_prefix")}
-        <button
-          type="button"
-          onClick={() => onLink(termsUrl(i18n.language))}
-          className="underline decoration-from-font underline-offset-2 transition-colors hover:text-foreground"
-        >
-          {t("auth.agree_terms")}
-        </button>
-        {t("auth.agree_join")}
-        <button
-          type="button"
-          onClick={() => onLink(privacyUrl(i18n.language))}
-          className="underline decoration-from-font underline-offset-2 transition-colors hover:text-foreground"
-        >
-          {t("auth.agree_privacy")}
-        </button>
-        {t("auth.agree_autocreate")}
-      </p>
-    </div>
-  );
-}
 
 /**
  * Startup login page, shown by the AuthGate before any session exists, in
@@ -172,12 +123,10 @@ export function LoginPage() {
   const [agreed, setAgreed] = useState(false);
   const [smsError, setSmsError] = useState<string | null>(null);
   const [googleBusy, setGoogleBusy] = useState(false);
+  const [appleBusy, setAppleBusy] = useState(false);
   const [googleDiag, setGoogleDiag] = useState<string | null>(null);
-  // Apple entry renders only while the backend serves a configured
-  // (non-placeholder) authorize URL.
-  const [appleUrl, setAppleUrl] = useState<string | null>(null);
-  // Which identity provider the active phone-bind form completes.
-  const [bindAuthType, setBindAuthType] = useState<"WECHAT_SCAN" | "GOOGLE">("WECHAT_SCAN");
+  // Which identity provider the active bind form completes.
+  const [bindAuthType, setBindAuthType] = useState<"WECHAT_SCAN" | "GOOGLE" | "APPLE">("WECHAT_SCAN");
 
   // WeChat sign-in. The authorize URL comes from the
   // backend's /api/auth/render; on desktop the page opens in an embedded
@@ -320,28 +269,11 @@ export function LoginPage() {
     if (digits.length === SMS_CODE_LENGTH) void handleSmsLogin(digits);
   }
 
-  // Apple entry availability: the backend's Apple config may still carry
-  // placeholder values — check once per mount (intl builds only).
   // Warm up Firebase Auth on mount so the Google popup opens synchronously
   // inside the click handler (see core/auth/google.ts).
   useEffect(() => {
     warmUpGoogleAuth();
   }, []);
-
-  useEffect(() => {
-    if (!intl) return;
-    let active = true;
-    void renderAppleLoginUrl()
-      .then((url) => {
-        if (active && isAppleAuthorizeUrlConfigured(url)) setAppleUrl(url);
-      })
-      .catch(() => {
-        // Apple stays hidden when the backend cannot render an authorize URL.
-      });
-    return () => {
-      active = false;
-    };
-  }, [intl]);
 
   /** Google popup flow; first-time identities continue into the dedicated
    *  binding screen (intl binds an email, cn binds a phone). */
@@ -371,7 +303,19 @@ export function LoginPage() {
       const data = e && typeof e === "object" && "data" in e
         ? JSON.stringify((e as { data: unknown }).data).slice(0, 200)
         : "-";
-      setGoogleDiag("error: " + message + " | data: " + data);
+      // Decode the ID token payload (base64 JSON, no signature verification
+      // client-side) so the exact iss/aud presented to the backend is visible
+      // for configuration alignment.
+      let claims = "-";
+      try {
+        const token = (window as unknown as { __lastGoogleIdentityToken?: string }).__lastGoogleIdentityToken ?? "";
+        const claimsB64 = token.split(".")[1];
+        if (claimsB64) {
+          const payload = JSON.parse(atob(claimsB64.replace(/-/g, "+").replace(/_/g, "/"))) as Record<string, unknown>;
+          claims = JSON.stringify({ iss: payload.iss ?? "-", aud: payload.aud ?? "-", sub: String(payload.sub ?? "-").slice(0, 20), email: payload.email ?? "-" });
+        }
+      } catch { /* token not captured */ }
+      setGoogleDiag("error: " + message + " | data: " + data + " | tokenClaims: " + claims);
       setGoogleBusy(false);
     }
   }
@@ -396,6 +340,31 @@ export function LoginPage() {
       .catch((e: unknown) => setError(authErrorText(e, t, "auth.login_failed")));
   }, []);
 
+
+  /**
+   * Apple web login (all editions): the backend renders the authorize URL
+   * (Services ID com.lynse.web) and completes the exchange server-side, then
+   * 302s back to the web landing pages (#token fragment or bind landing).
+   * Placeholder configs surface as the pending toast instead of a broken
+   * redirect to Apple.
+   */
+  async function handleAppleWebLogin() {
+    if (appleBusy) return;
+    setError(null);
+    setAppleBusy(true);
+    try {
+      const url = await renderAppleLoginUrl();
+      if (!isAppleAuthorizeUrlConfigured(url)) {
+        toast(t("auth.apple_pending"));
+        return;
+      }
+      startAppleLogin(url);
+    } catch (e: unknown) {
+      setError(authErrorText(e, t, "auth.login_failed"));
+    } finally {
+      setAppleBusy(false);
+    }
+  }
 
   /**
    * CN WeChat scan: the backend renders the qrconnect URL. The web app can
@@ -697,6 +666,16 @@ export function LoginPage() {
               )}
               <button
                 type="button"
+                onClick={() => void handleAppleWebLogin()}
+                disabled={appleBusy}
+                className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
+              >
+                <AppleIcon className="size-4" />
+                <span className="text-sm">{t("auth.apple_login")}</span>
+                <ChevronRight className="ml-auto size-4 text-muted-foreground" />
+              </button>
+              <button
+                type="button"
                 onClick={handleWechatLogin}
                 disabled={wechatWaiting}
                 className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
@@ -773,8 +752,16 @@ export function LoginPage() {
               <button
                 type="button"
                 onClick={() => {
-                  if (!appleUrl) { toast(t("auth.apple_pending")); return; }
-                  startAppleLogin(appleUrl);
+                  setError(null);
+                  void renderAppleLoginUrl()
+                    .then((url) => {
+                      if (!isAppleAuthorizeUrlConfigured(url)) {
+                        toast(t("auth.apple_pending"));
+                        return;
+                      }
+                      startAppleLogin(url);
+                    })
+                    .catch((e: unknown) => setError(authErrorText(e, t, "auth.login_failed")));
                 }}
                 className="mt-2 flex h-9 w-full items-center justify-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
               >

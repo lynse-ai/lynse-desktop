@@ -1,5 +1,5 @@
 import { DashboardLayout } from "@lynse/views/layout";
-import { AuthGate } from "@lynse/views/auth";
+import { AuthGate, AppleFragmentBootstrap } from "@lynse/views/auth";
 
 export default function DashboardShell({
   children,
@@ -9,8 +9,11 @@ export default function DashboardShell({
   // Startup gate: splash while the session restores, login page when there
   // is none, otherwise the dashboard.
   return (
-    <AuthGate>
-      <DashboardLayout>{children}</DashboardLayout>
-    </AuthGate>
+    <>
+      <AppleFragmentBootstrap />
+      <AuthGate>
+        <DashboardLayout>{children}</DashboardLayout>
+      </AuthGate>
+    </>
   );
 }

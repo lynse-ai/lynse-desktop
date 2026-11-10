@@ -333,7 +333,7 @@
     },
     {
       "name": "get_local_memory_source",
-      "description": "Read the original authorized local knowledge-base source. Verify the cited revision, quote and audio timestamp before answering facts.",
+      "description": "Read the original authorized local knowledge-base source, optionally narrowed to one evidence chunk (chunkId from search_local_memory matches) or one transcript segment (segmentId). Verify the cited revision, quote and audio timestamp before answering facts.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -341,6 +341,17 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200
+          },
+          "chunkId": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional full-text chunk id returned in search_local_memory matches; returns that chunk's quote and audio span."
+          },
+          "segmentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Optional transcript segment id; returns that segment's text, speaker and audio span."
           }
         },
         "required": [

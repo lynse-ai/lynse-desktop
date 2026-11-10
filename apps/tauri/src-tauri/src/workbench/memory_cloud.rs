@@ -270,6 +270,122 @@ async fn flush(
     Ok(saved)
 }
 
+// -- shared daily note ------------------------------------------------------
+//
+// `notes/daily-<date>.md` merges both authors: the desktop owns the
+// 记忆观察 and 会议纪要大纲 sections, lynclaw owns 今日对话要点 and
+// 会话中确定的事项. Each side renders its own sections and preserves the
+// other's verbatim on save.
+
+const DAILY_CHAT_SECTIONS: [&str; 2] = ["今日对话要点", "会话中确定的事项"];
+const DAILY_NOTE_MAX_CHARS: usize = 7800;
+
+/// Keep only lynclaw-owned sections from a remote daily note so the local
+/// re-render can preserve them verbatim.
+fn extract_chat_block(markdown: &str) -> String {
+    let mut out = String::new();
+    let mut owned = false;
+    for line in markdown.lines() {
+        if line.starts_with("## ") && !line.starts_with("### ") {
+            owned = DAILY_CHAT_SECTIONS.contains(&line[3..].trim());
+        }
+        if owned {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out.trim_end().to_string()
+}
+
+fn clip_chars(markdown: &str, limit: usize) -> String {
+    if markdown.chars().count() <= limit {
+        return markdown.to_string();
+    }
+    let mut clipped: String = markdown.chars().take(limit - 20).collect();
+    clipped.push_str("\n- …（内容过长已截断）");
+    clipped
+}
+
+fn meeting_consent(manifest: &super::store::Manifest) -> bool {
+    manifest
+        .knowledge_policy
+        .as_ref()
+        .is_none_or(|policy| policy["memory_consent"] == true)
+}
+
+/// Pull lynclaw's chat sections from the shared cloud daily note into the
+/// manifest, re-render the local authoritative file, then mirror it back.
+/// Best-effort: offline or conflicting states simply wait for the next cycle.
+pub(super) async fn sync_daily_note(app: &AppHandle, session: &Session) -> CommandResult<()> {
+    let state = app.state::<WorkbenchState>();
+    require_current(&state, session)?;
+    require_beta(&state)?;
+    let manifest = super::load_state(app, session)?;
+    if !manifest.initial_complete || !meeting_consent(&manifest) {
+        return Ok(());
+    }
+    let (_, memory_root) = super::roots(app, session)?;
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let path = format!("notes/daily-{today}.md");
+    let remote = match request(app, session, "/read", None, Some(&path)).await {
+        Ok(document) => document,
+        // Absent file or offline: nothing to merge this cycle.
+        Err(_) => Value::Null,
+    };
+    if let Some(markdown) = remote["markdown"].as_str() {
+        let chat_block = extract_chat_block(markdown);
+        let _guard = state.serial.lock().await;
+        require_current(&state, session)?;
+        let mut latest = super::load_state(app, session)?;
+        let current = latest
+            .daily_chat
+            .get(&today)
+            .map(String::as_str)
+            .unwrap_or_default();
+        if chat_block != current {
+            latest.daily_chat.insert(today.clone(), chat_block);
+            // persist() re-renders daily/<date>.md with the merged sections.
+            super::persist(app, session, &latest)?;
+        }
+    }
+    let file = memory_root.join("daily").join(format!("{today}.md"));
+    let Ok(markdown) = fs::read_to_string(&file) else {
+        return Ok(());
+    };
+    let markdown = clip_chars(&markdown, DAILY_NOTE_MAX_CHARS);
+    if markdown.trim().is_empty() || !markdown.contains("## ") {
+        return Ok(());
+    }
+    let mut revision = remote["revision"]
+        .as_str()
+        .filter(|revision| !revision.is_empty() && *revision != "local:")
+        .unwrap_or("new")
+        .to_owned();
+    let digest = store::digest(&markdown);
+    let payload = |revision: &str| {
+        json!({"path":path,"markdown":markdown,"revision":revision,
+            "operation_id":format!("desktop-daily-{today}-{}", &digest[..16])})
+    };
+    for attempt in 0..2 {
+        match request(app, session, "/save", Some(payload(&revision)), None).await {
+            Ok(_) => return Ok(()),
+            Err(error) if attempt == 0 && error.contains("changed") => {
+                // Someone saved in between; refresh the revision once.
+                if let Ok(document) = request(app, session, "/read", None, Some(&path)).await {
+                    if let Some(next) = document["revision"].as_str() {
+                        revision = next.to_owned();
+                    }
+                }
+            }
+            Err(error) => {
+                log::debug!("[cloud-memory] daily note mirror pending: {error}");
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(super) async fn handle(
     app: &AppHandle,
     session: &Session,

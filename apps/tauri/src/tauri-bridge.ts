@@ -176,6 +176,10 @@ type DesktopApi = {
       body: string;
       screenshotPath?: string | null;
     }) => Promise<{ number: number }>;
+    // Upload a staged screenshot to the report channel's object storage;
+    // returns its public download URL for the feedback ticket.
+    uploadScreenshot: (req: { endpoint: string; path: string }) =>
+      Promise<{ downloadUrl: string }>;
     openLogsFolder: () => Promise<void>;
     // Tail of the app log files for the bug report dialog. `truncated` marks
     // that older rotated archives were left out of the tail.
@@ -417,6 +421,7 @@ export async function installTauriBridge(): Promise<void> {
     confirmTodos: (id, suggestions) => command("workbench_confirm_todos", { id, suggestions }),
     syncMemorySource: (id) => command("workbench_sync_memory_source", { id }),
     readForAi: (id) => command("workbench_read_for_ai", { id }),
+    sourceFragment: (id, chunkId, segmentId) => command("workbench_source_fragment", { id, ...(chunkId !== undefined ? { chunkId } : {}), ...(segmentId ? { segmentId } : {}) }),
     context: (query) => command("workbench_context", { query }),
     saveSummary: (id, summaryId, markdown) => command("workbench_summary_save", { id, summaryId, markdown }),
     regenerate: (id) => command("workbench_regenerate", { id }),
@@ -681,6 +686,10 @@ export async function installTauriBridge(): Promise<void> {
             body: req.body,
             screenshotPath: req.screenshotPath ?? null,
           },
+        }),
+      uploadScreenshot: (req: { endpoint: string; path: string }) =>
+        command<{ downloadUrl: string }>("report_upload_screenshot", {
+          req: { endpoint: req.endpoint, path: req.path },
         }),
       openLogsFolder: () => command<void>("open_logs_folder"),
       readLogs: (maxBytes?: number) =>

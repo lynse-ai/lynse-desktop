@@ -53,6 +53,9 @@ export type DesktopDiagnosticsApi = {
     body: string;
     screenshotPath?: string | null;
   }) => Promise<{ issueUrl: string; number: number }>;
+  // Uploads a staged screenshot to the report channel's object storage and
+  // returns its public download URL (the feedback-center ticket field).
+  uploadScreenshot?: (request: { endpoint: string; path: string }) => Promise<{ downloadUrl: string }>;
   openReportWindow?: (title?: string) => Promise<void>;
 };
 
@@ -101,6 +104,17 @@ function setReportDialogOpen(open: boolean): void {
 // once by whichever face (window or dialog) mounts.
 let pendingScreenshot: StagedScreenshot | null = null;
 let pendingReportDescription = "";
+
+// Tab + category the center should open with (e.g. the feature-request entry
+// opens the submit tab with the feature category preset). Consumed once.
+export type FeedbackCenterPreset = { tab: "submit" | "tickets"; category?: string };
+let pendingFeedbackOptions: FeedbackCenterPreset | null = null;
+
+export function takePendingFeedbackOptions(): FeedbackCenterPreset | null {
+  const options = pendingFeedbackOptions;
+  pendingFeedbackOptions = null;
+  return options;
+}
 
 export function takePendingReportDescription(): string {
   const description = pendingReportDescription;
@@ -158,16 +172,24 @@ async function openReportDialog(): Promise<void> {
 }
 
 /**
- * Open the problem report flow: the in-app dialog inside the current window,
- * with the GitHub prefilled form as the submission fallback when the CNB
- * channel fails. Contextual reports use the in-app form so their description
- * stays available for review.
+ * Open the feedback center: the in-app dialog inside the current window, with
+ * the GitHub prefilled form as the submission fallback when the feedback API
+ * fails. Contextual reports use the in-app form so their description stays
+ * available for review. `options` presets the tab / ticket category (the
+ * feature-request menu entry opens the submit tab with category=feature).
  */
-export function openReportProblem(description?: unknown): void {
+export function openReportProblem(
+  description?: unknown,
+  options?: { tab?: "submit" | "tickets"; category?: string },
+): void {
   // Contextual descriptions ride along into the shared in-app form.
   if (typeof description === "string" && description) {
     pendingReportDescription = description;
   }
+  pendingFeedbackOptions = {
+    tab: options?.tab ?? "submit",
+    category: options?.category,
+  };
   void openReportDialog();
 }
 

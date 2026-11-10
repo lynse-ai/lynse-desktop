@@ -348,6 +348,10 @@ pub struct Manifest {
     pub aliases: BTreeMap<String, String>,
     #[serde(default)]
     pub source_tombstones: BTreeMap<String, String>,
+    /// Lynclaw-authored chat sections of the shared cloud daily note,
+    /// keyed by date and preserved verbatim when the local file re-renders.
+    #[serde(default)]
+    pub daily_chat: BTreeMap<String, String>,
 }
 impl Default for Manifest {
     fn default() -> Self {
@@ -377,6 +381,7 @@ impl Default for Manifest {
             excluded_sources: vec![],
             aliases: BTreeMap::new(),
             source_tombstones: BTreeMap::new(),
+            daily_chat: BTreeMap::new(),
         }
     }
 }
@@ -498,6 +503,182 @@ pub fn eligible(entry: &Entry) -> bool {
     !entry.excluded && entry.status == "synced"
 }
 
+fn memory_body(root: &Path, items: &[Value]) -> String {
+    let mut text = String::new();
+    for item in items {
+        text.push_str(&format!(
+            "- **{}** {}\n  Source: `{}`\n",
+            item["kind"].as_str().unwrap_or("observation"),
+            item["text"].as_str().unwrap_or_default(),
+            item["sourceId"].as_str().unwrap_or_default()
+        ));
+    }
+    for item in items {
+        if let Some(refs) = item["citations"].as_array() {
+            for reference in refs {
+                let id = reference["id"].as_str().unwrap_or_default();
+                let document = root
+                    .parent()
+                    .and_then(|parent| parent.parent())
+                    .unwrap_or(root)
+                    .join("Meetings")
+                    .join(root.file_name().unwrap_or_default())
+                    .join(format!("{}.md", digest(id)));
+                text.push_str(&format!(
+                    "\n  [Source {}](<{}>) · revision `{}`\n  > {}\n",
+                    id,
+                    document.display(),
+                    reference["revision"].as_str().unwrap_or_default(),
+                    reference["quote"].as_str().unwrap_or_default()
+                ));
+            }
+        }
+    }
+    text
+}
+
+/// Headings and structured key points distilled from a generated meeting
+/// summary. Deterministic and verbatim, mirroring lynclaw's daily-memory
+/// extractor: transcript/appendix sections are skipped, action bullets and
+/// decision/risk sections become labeled points.
+fn meeting_outline(markdown: &str) -> (Vec<String>, Vec<(String, String)>) {
+    static SKIP_SECTION: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static HEADING: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static ACTION_SECTION: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static ACTION_LINE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static DECISION_SECTION: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static RISK_SECTION: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let skip_section = SKIP_SECTION.get_or_init(|| regex::Regex::new(r"(?i)原文|转写|逐字|transcript|附录|appendix|参考|reference").unwrap());
+    let heading = HEADING.get_or_init(|| regex::Regex::new(r"^(#{2,3})\s+(.+)$").unwrap());
+    let action_section = ACTION_SECTION.get_or_init(|| regex::Regex::new(r"(?i)待办|行动项|行动计划|下一步|后续|任务|action|todo|next step|follow[- ]?up").unwrap());
+    let action_line = ACTION_LINE.get_or_init(|| regex::Regex::new(r"(?i)负责人|截止|deadline|owner|@\S+|\bDDL\b").unwrap());
+    let decision_section = DECISION_SECTION.get_or_init(|| regex::Regex::new(r"(?i)决议|结论|决策|决定|共识|decision|conclusion|agreement").unwrap());
+    let risk_section = RISK_SECTION.get_or_init(|| regex::Regex::new(r"(?i)风险|阻塞|blocker|risk").unwrap());
+    let clean = |line: &str| -> String {
+        let trimmed = line.trim();
+        let trimmed = trimmed.trim_start_matches(['-', '*', '+', '|']).trim();
+        let trimmed = trimmed.trim_start_matches(|ch: char| ch.is_ascii_digit() || ch == '.' || ch == '、' || ch == ')');
+        trimmed.trim_start_matches("[ ]").trim().to_string()
+    };
+    let mut headings: Vec<String> = Vec::new();
+    let mut points: Vec<(String, String)> = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut section = String::new();
+    let mut skip = false;
+    for raw in markdown.lines() {
+        let stripped = raw.trim();
+        if let Some(captured) = heading.captures(stripped) {
+            section = clean(&captured[2]);
+            skip = skip_section.is_match(&section);
+            // Only `##` top sections feed the outline; `###` subsections stay local.
+            if captured[1].len() == 2
+                && !section.is_empty()
+                && !skip
+                && headings.len() < 8
+                && !headings.contains(&section)
+            {
+                headings.push(section.chars().take(60).collect());
+            }
+            continue;
+        }
+        if stripped.starts_with("# ") || skip {
+            continue;
+        }
+        if !stripped.starts_with(['-', '*', '+']) && !stripped.starts_with(|ch: char| ch.is_ascii_digit()) {
+            continue;
+        }
+        let text = clean(stripped);
+        if text.chars().count() < 6 {
+            continue;
+        }
+        let kind = if decision_section.is_match(&section) {
+            "决策"
+        } else if risk_section.is_match(&section) {
+            "风险"
+        } else if action_section.is_match(&section) || action_line.is_match(&text) {
+            "待办"
+        } else {
+            continue;
+        };
+        let mut clipped: String = text.chars().take(160).collect();
+        if text.chars().count() > 160 {
+            clipped.push('…');
+        }
+        let key = clipped.to_lowercase();
+        if seen.insert(key) && points.len() < 10 {
+            points.push((kind.to_string(), clipped));
+        }
+    }
+    (headings, points)
+}
+
+/// `## 会议纪要大纲` for one date, built from the generated summaries stored
+/// in the manifest (no document reads). One block per meeting.
+fn meeting_daily_section(state: &Manifest, date: &str) -> String {
+    let mut blocks: Vec<String> = Vec::new();
+    for entry in state
+        .entries
+        .values()
+        .filter(|entry| entry.kind == "meeting" && !entry.excluded)
+    {
+        let rows = state
+            .artifacts
+            .get(&entry.id)
+            .and_then(|artifact| artifact["summaries"].as_array());
+        let Some(rows) = rows else { continue };
+        let mut headings: Vec<String> = Vec::new();
+        let mut points: Vec<(String, String)> = Vec::new();
+        let mut stamp = String::new();
+        for row in rows.iter().filter(|row| row["sourceRevision"] == entry.revision) {
+            let Some(markdown) = row["markdown"]
+                .as_str()
+                .filter(|markdown| !markdown.trim().is_empty())
+            else {
+                continue;
+            };
+            let created = row["createdAt"].as_str().unwrap_or_default();
+            if !created.starts_with(date) {
+                continue;
+            }
+            if stamp.is_empty() && created.len() >= 16 {
+                stamp = created[11..16].to_string();
+            }
+            let (row_headings, row_points) = meeting_outline(markdown);
+            for item in row_headings {
+                if !headings.contains(&item) {
+                    headings.push(item);
+                }
+            }
+            for item in row_points {
+                if !points.iter().any(|(_, text)| *text == item.1) {
+                    points.push(item);
+                }
+            }
+        }
+        if headings.is_empty() && points.is_empty() {
+            continue;
+        }
+        let stamp = if stamp.is_empty() {
+            String::new()
+        } else {
+            format!("（{stamp}）")
+        };
+        let mut block = format!("### {}{stamp}\n", entry.title);
+        if !headings.is_empty() {
+            block.push_str(&format!("- 大纲：{}\n", headings.join(" / ")));
+        }
+        for (kind, text) in points {
+            block.push_str(&format!("- [{kind}] {text}\n"));
+        }
+        blocks.push(block);
+    }
+    if blocks.is_empty() {
+        String::new()
+    } else {
+        format!("## 会议纪要大纲\n\n{}", blocks.join("\n"))
+    }
+}
+
 pub fn write_memory_views(root: &Path, state: &Manifest) -> CommandResult<()> {
     let daily = root.join("daily");
     fs::create_dir_all(&daily).map_err(|e| e.to_string())?;
@@ -509,35 +690,21 @@ pub fn write_memory_views(root: &Path, state: &Manifest) -> CommandResult<()> {
         .collect();
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let render = |date: &str, items: &[Value]| -> String {
-        let mut text = format!("# Lynse Memory · {date}\n\n");
-        for item in items {
-            text.push_str(&format!(
-                "- **{}** {}\n  Source: `{}`\n",
-                item["kind"].as_str().unwrap_or("observation"),
-                item["text"].as_str().unwrap_or_default(),
-                item["sourceId"].as_str().unwrap_or_default()
-            ));
+        // Rolling view: observations only, unchanged shape.
+        format!("# Lynse Memory · {date}\n\n{}", memory_body(root, items))
+    };
+    let render_daily = |date: &str, items: &[Value]| -> String {
+        // Authoritative daily note: desktop owns 记忆观察/会议纪要大纲,
+        // lynclaw's chat sections are preserved verbatim from the cloud pull.
+        let mut text = format!("# Lynse Memory · {date}\n\n## 记忆观察\n\n{}", memory_body(root, items));
+        let meetings = meeting_daily_section(state, date);
+        if !meetings.is_empty() {
+            text.push('\n');
+            text.push_str(&meetings);
         }
-        for item in items {
-            if let Some(refs) = item["citations"].as_array() {
-                for reference in refs {
-                    let id = reference["id"].as_str().unwrap_or_default();
-                    let document = root
-                        .parent()
-                        .and_then(|parent| parent.parent())
-                        .unwrap_or(root)
-                        .join("Meetings")
-                        .join(root.file_name().unwrap_or_default())
-                        .join(format!("{}.md", digest(id)));
-                    text.push_str(&format!(
-                        "\n  [Source {}](<{}>) · revision `{}`\n  > {}\n",
-                        id,
-                        document.display(),
-                        reference["revision"].as_str().unwrap_or_default(),
-                        reference["quote"].as_str().unwrap_or_default()
-                    ));
-                }
-            }
+        if let Some(chat) = state.daily_chat.get(date) {
+            text.push('\n');
+            text.push_str(chat);
         }
         text
     };
@@ -561,7 +728,7 @@ pub fn write_memory_views(root: &Path, state: &Manifest) -> CommandResult<()> {
         )?;
         crate::atomic_write(
             &path.with_extension("md"),
-            render(
+            render_daily(
                 path.file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or_default(),
@@ -577,7 +744,7 @@ pub fn write_memory_views(root: &Path, state: &Manifest) -> CommandResult<()> {
         )?;
         crate::atomic_write(
             &daily.join(format!("{today}.md")),
-            render(&today, &current).as_bytes(),
+            render_daily(&today, &current).as_bytes(),
         )?;
     }
     crate::atomic_write(&root.join("MEMORY.md"), render(&today, &current).as_bytes())
@@ -709,6 +876,87 @@ pub fn evidence_excerpt(body: &str, query: &str, limit: usize) -> String {
     body.chars().skip(start).take(limit).collect()
 }
 fn search_impl(
+    root: &Path,
+    state: &Manifest,
+    query: &str,
+    limit: usize,
+    ai_only: bool,
+) -> Vec<Value> {
+    if query_terms(query).is_empty() {
+        return legacy_search(root, state, query, limit, ai_only);
+    }
+    if let Ok(hits) = super::fulltext::search(root, query, 80) {
+        if !hits.is_empty() {
+            return render_chunk_hits(root, state, hits, limit, ai_only);
+        }
+    }
+    legacy_search(root, state, query, limit, ai_only)
+}
+
+/// Group chunk hits per document in bm25 order and render the established
+/// item shape, carrying chunk-level evidence (quote + segment timestamps).
+fn render_chunk_hits(
+    root: &Path,
+    state: &Manifest,
+    hits: Vec<super::fulltext::ChunkHit>,
+    limit: usize,
+    ai_only: bool,
+) -> Vec<Value> {
+    let mut order: Vec<String> = Vec::new();
+    let mut grouped: BTreeMap<String, Vec<super::fulltext::ChunkHit>> = BTreeMap::new();
+    for hit in hits {
+        if !grouped.contains_key(&hit.doc_id) {
+            order.push(hit.doc_id.clone());
+        }
+        grouped.entry(hit.doc_id.clone()).or_default().push(hit);
+    }
+    let mut items = Vec::new();
+    for doc_id in order {
+        if items.len() >= limit.min(100) {
+            break;
+        }
+        let Some(entry) = state.entries.get(&doc_id) else {
+            continue;
+        };
+        let allowed = if ai_only {
+            eligible(entry)
+        } else {
+            matches!(entry.status.as_str(), "synced" | "awaiting_transcription")
+        };
+        if !allowed {
+            continue;
+        }
+        let Ok(document) = read_document(root, entry) else {
+            continue;
+        };
+        if ai_only && !document.ai_context_enabled {
+            continue;
+        }
+        let Some(group) = grouped.get(&doc_id) else {
+            continue;
+        };
+        let best = &group[0];
+        let mut source = document.reference();
+        source.segment_id = best.segment_id.clone();
+        source.start_ms = best.start_ms;
+        source.end_ms = best.end_ms;
+        let excerpt: String = best.quote.chars().take(1800).collect();
+        source.quote = excerpt.clone();
+        let matches: Vec<Value> = group.iter().take(3).map(|hit| hit.evidence()).collect();
+        items.push(json!({
+            "id":document.id,"title":document.title,"kind":document.kind,
+            "updatedAt":document.updated_at,"excerpt":excerpt,"source":source,
+            "matches":matches,
+        }));
+    }
+    items
+}
+
+/// Pre-FTS5 keyword search over the deduped bigram term list. Kept as the
+/// fallback when the full-text database is missing or a query tokenizes to
+/// nothing; scheduled for removal once the chunk index has shipped for a
+/// full release cycle.
+fn legacy_search(
     root: &Path,
     state: &Manifest,
     query: &str,
@@ -866,6 +1114,81 @@ mod tests {
         assert!(fs::read_to_string(root.join(".search-index.json"))
             .unwrap()
             .contains("old-meeting"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn chunk_search_returns_segment_timestamps_and_evidence() {
+        let root = root();
+        let mut state = Manifest::default();
+        let mut document = Document {
+            id: "chunked".into(),
+            kind: "meeting".into(),
+            title: "Budget review".into(),
+            transcript: "讨论预算".into(),
+            ai_context_enabled: true,
+            ..Default::default()
+        };
+        document.segments = vec![
+            json!({"id":"s1","startMs":60_000,"endMs":70_000,"text":"今天讨论了第三季度的项目预算分配"}),
+            json!({"id":"s2","startMs":70_000,"endMs":80_000,"text":"确认客户交付时间表"}),
+        ];
+        document.refresh_revision();
+        let entry = write_document(&root, &document, None).unwrap();
+        super::super::fulltext::index_document(&root, &document, &entry.markdown_hash).unwrap();
+        state.entries.insert(document.id.clone(), entry);
+        let results = search(&root, &state, "项目预算", 10);
+        assert_eq!(results.len(), 1, "FTS5 chunk index must serve the hit");
+        let item = &results[0];
+        assert_eq!(item["source"]["startMs"], json!(60_000));
+        assert_eq!(item["source"]["segmentId"], json!("s1"));
+        assert!(item["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["quote"].as_str().unwrap().contains("预算")));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn daily_note_renders_meeting_outline_and_preserves_chat_sections() {
+        let root = root();
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let mut state = Manifest {
+            initial_complete: true,
+            ..Default::default()
+        };
+        state.memories = vec![json!({"id":"m1","text":"Deadline noted","sourceId":"one","kind":"decision"})];
+        state.entries.insert(
+            "meeting-1".into(),
+            Entry {
+                id: "meeting-1".into(),
+                kind: "meeting".into(),
+                title: "Quarterly plan".into(),
+                revision: "r1".into(),
+                status: "synced".into(),
+                ..Default::default()
+            },
+        );
+        state.artifacts.insert(
+            "meeting-1".into(),
+            json!({"summaries":[{"markdown":"## 决议\n\n- 下季度预算削减百分之十\n\n## 待办\n\n- 张三负责交付时间表，截止周五\n\n## 原文\n\n- 不应出现的转写文本","createdAt":format!("{today}T10:30:00Z"),"sourceRevision":"r1"}]}),
+        );
+        state.daily_chat.insert(
+            today.clone(),
+            "## 今日对话要点\n\n- [结论] 用户确认了周报产出\n".into(),
+        );
+        write_memory_views(&root, &state).unwrap();
+        let daily = fs::read_to_string(root.join("daily").join(format!("{today}.md"))).unwrap();
+        assert!(daily.contains("## 记忆观察"));
+        assert!(daily.contains("- **decision** Deadline noted"));
+        assert!(daily.contains("## 会议纪要大纲"));
+        assert!(daily.contains("### Quarterly plan（10:30）"));
+        assert!(daily.contains("- 大纲：决议 / 待办"));
+        assert!(daily.contains("- [决策] 下季度预算削减百分之十"));
+        assert!(daily.contains("- [待办] 张三负责交付时间表，截止周五"));
+        assert!(!daily.contains("不应出现的转写文本"));
+        // Lynclaw's chat section rides along verbatim across re-renders.
+        assert!(daily.contains("## 今日对话要点"));
+        assert!(daily.contains("用户确认了周报产出"));
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

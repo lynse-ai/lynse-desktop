@@ -9,7 +9,8 @@ import {
 import { ReportProblemDialog } from "./report-problem-dialog";
 
 const mocks = vi.hoisted(() => ({
-  capture: vi.fn(), submit: vi.fn(), annotate: vi.fn(), toastError: vi.fn(), t: (key: string) => key,
+  capture: vi.fn(), submit: vi.fn(), annotate: vi.fn(), toastError: vi.fn(),
+  create: vi.fn(), listTickets: vi.fn(), upload: vi.fn(), t: (key: string) => key,
 }));
 vi.mock("@lynse/core/i18n/react", () => ({ useTranslation: () => ({ t: mocks.t }) }));
 vi.mock("@lynse/core/i18n", () => ({ initI18n: vi.fn() }));
@@ -20,6 +21,11 @@ vi.mock("./app-update", () => ({
   getAppInfoSync: () => ({ version: "test", platform: "win32" }), openExternalUrl: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: { error: mocks.toastError } }));
+vi.mock("@lynse/core/api", () => ({
+  api: () => ({ getToken: () => "test-token", getAgentBaseUrl: () => "https://agent.test", getBaseUrl: () => "https://api.test" }),
+  createFeedbackTicket: mocks.create,
+  listFeedbackTickets: mocks.listTickets,
+}));
 
 const screenshot = {
   path: "C:\\Lynse\\inspirations\\staging\\report-example.jpg",
@@ -29,11 +35,13 @@ const screenshot = {
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.capture.mockResolvedValue(screenshot);
-  mocks.submit.mockResolvedValue({ number: 42 });
+  mocks.create.mockResolvedValue({ ticket_id: "recSmoke", status: "已提交", created_at: 1 });
+  mocks.listTickets.mockResolvedValue({ items: [], total: 0 });
   vi.spyOn(console, "warn").mockImplementation(() => {});
   const api: DesktopDiagnosticsApi = {
     captureScreenshot: mocks.capture,
     submitCnbIssue: mocks.submit,
+    uploadScreenshot: mocks.upload,
     readLogs: async () => ({ dir: "logs", tail: "", truncated: false, files: 0 }),
     prepareReport: async () => ({ dir: "report" }),
     revealReportFolder: async () => {},
@@ -62,9 +70,9 @@ describe("problem report screenshot recovery", () => {
     const description = "Knowledge organization failed: Launch\nquote_not_found\n2026-10-31T01:46:35Z";
     act(() => openReportProblem(description));
     await waitFor(() => expect((screen.getByLabelText("settings.report_problem_label") as HTMLTextAreaElement).value).toBe(description));
-    expect(mocks.submit).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "settings.report_submit" }));
-    await waitFor(() => expect(mocks.submit).toHaveBeenCalledWith(expect.objectContaining({ body: expect.stringContaining(description) })));
+    await waitFor(() => expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ description: expect.stringContaining(description) }), "test-token"));
   });
 
   it("replaces a broken preview with a retry hint while retaining the JPEG for submission", async () => {
@@ -78,8 +86,8 @@ describe("problem report screenshot recovery", () => {
     expect(screen.getByText("settings.report_preview_failed")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("settings.report_problem_label"), { target: { value: "Broken preview" } });
     fireEvent.click(screen.getByRole("button", { name: "settings.report_submit" }));
-    await waitFor(() => expect(mocks.submit).toHaveBeenCalledWith(expect.objectContaining({
-      screenshotPath: screenshot.path,
+    await waitFor(() => expect(mocks.upload).toHaveBeenCalledWith(expect.objectContaining({
+      path: screenshot.path,
     })));
   });
 
@@ -213,8 +221,8 @@ describe("problem report screenshot annotation", () => {
     expect(description().value).toBe("Button is misaligned");
 
     fireEvent.click(screen.getByRole("button", { name: "settings.report_submit" }));
-    await waitFor(() => expect(mocks.submit).toHaveBeenCalledWith(expect.objectContaining({
-      screenshotPath: annotated.path,
+    await waitFor(() => expect(mocks.upload).toHaveBeenCalledWith(expect.objectContaining({
+      path: annotated.path,
     })));
   });
 

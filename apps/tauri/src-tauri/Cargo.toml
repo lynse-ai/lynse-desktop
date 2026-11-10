@@ -37,6 +37,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 # plus annotation compositing on every platform); PNG decodes the renderer's
 # transparent annotation overlay (see report_screenshot.rs).
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+jieba-rs = "0.11"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 libc = "0.2"
 log = "0.4"

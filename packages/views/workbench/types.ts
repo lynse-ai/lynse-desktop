@@ -119,8 +119,17 @@ export interface WorkbenchReadResult {
   markdown: string;
   artifacts: { summaries: { id: string; markdown: string; createdAt: string; sourceRevision?: string }[]; todoSuggestions: TodoSuggestion[] } | null;
 }
+export interface MemoryEvidence {
+  chunkId?: number;
+  quote: string;
+  heading?: string;
+  segmentId?: string;
+  startMs?: number;
+  endMs?: number;
+  speaker?: string;
+}
 export interface SearchResult {
-  items: { id: string; title: string; kind: string; excerpt: string; source: SourceRef }[];
+  items: { id: string; title: string; kind: string; excerpt: string; source: SourceRef; matches?: MemoryEvidence[] }[];
   initialComplete: boolean;
 }
 export interface DesktopContext {
@@ -140,6 +149,7 @@ export interface DesktopWorkbenchApi {
   search(query: string, aiOnly?: boolean): Promise<SearchResult>;
   read(id: string): Promise<WorkbenchReadResult>;
   readForAi?(id: string): Promise<WorkbenchReadResult>;
+  sourceFragment?(id: string, chunkId?: number, segmentId?: string): Promise<MemoryEvidence & { id: string }>;
   syncMemorySource?(id: string): Promise<{ source_id: string; source_revision: number; complete: boolean }>;
   review(query: string): Promise<SynthesisResult>;
   exclude(id: string, excluded: boolean): Promise<void>;

@@ -169,6 +169,37 @@ pub(crate) fn read_staged_screenshot(app: &AppHandle, path: &str) -> Result<Vec<
     Ok(bytes)
 }
 
+/// Upload a staged screenshot to the report channel's object storage and
+/// return its public download URL. Used by the unified feedback center: the
+/// renderer attaches this URL to the ticket it creates through the feedback
+/// API (the ticket POST itself rides the authenticated TS fetch path, not
+/// this command).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotUploadRequest {
+    pub endpoint: String,
+    /// Staged screenshot path (must live inside the app staging dir).
+    pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenshotUploadResult {
+    pub download_url: String,
+}
+
+#[command]
+pub async fn report_upload_screenshot(
+    app: AppHandle,
+    req: ScreenshotUploadRequest,
+) -> Result<ScreenshotUploadResult, String> {
+    let endpoint = validate_endpoint(&req.endpoint)?;
+    let bytes = read_staged_screenshot(&app, &req.path)?;
+    let client = api_client()?;
+    let download_url = upload_screenshot(&client, &endpoint, &bytes).await?;
+    Ok(ScreenshotUploadResult { download_url })
+}
+
 /// CNB returns the issue number as a string ("42").
 fn parse_issue_number(issue: &Value) -> Result<i64, String> {
     match issue.get("number") {

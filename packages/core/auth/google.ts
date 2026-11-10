@@ -128,7 +128,9 @@ export async function signInWithGoogle(): Promise<GoogleLoginResult | GoogleBind
   const provider = new GoogleAuthProvider();
   try {
     const credential = await signInWithPopup(firebaseAuth(), provider);
-    return await finishGoogleSignIn(credential.user);
+    const identityToken = await credential.user.getIdToken();
+    (window as unknown as { __lastGoogleIdentityToken?: string }).__lastGoogleIdentityToken = identityToken;
+    return await finishGoogleSignIn({ getIdToken: async () => identityToken });
   } catch (e: unknown) {
     if (errCode(e) === "auth/popup-blocked") {
       await signInWithRedirect(firebaseAuth(), provider);

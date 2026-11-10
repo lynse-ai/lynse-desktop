@@ -1,3 +1,4 @@
+mod fulltext;
 mod knowledge_cloud;
 mod knowledge_transport;
 mod markdown;
@@ -785,6 +786,11 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                         false
                     }
                 };
+                // Mirror the merged daily note (chat sections pulled from
+                // lynclaw, meeting sections pushed to the cloud) best-effort.
+                if let Err(error) = memory_cloud::sync_daily_note(&app, &session).await {
+                    log::debug!("Daily note mirror pending: {error}");
+                }
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(if more { 3 } else { 120 })) => {},
                     _ = state.cloud_wakeup.notified() => {},
@@ -921,40 +927,76 @@ pub async fn workbench_search(
     ai_only: Option<bool>,
 ) -> CommandResult<Value> {
     let session = current(&state)?;
-    let (mut items, complete, semantic) = {
+    let ai_mode = ai_only.unwrap_or(false);
+    let (keyword, complete, semantic, topics) = {
         let _guard = state.serial.lock().await;
         require_current(&state, &session)?;
         let manifest = load_state(&app, &session)?;
-        if ai_only.unwrap_or(false) && wiki::ready(&manifest).is_err() {
+        if ai_mode && wiki::ready(&manifest).is_err() {
             return Ok(json!({"items":[],"initialComplete":false}));
         }
         let (root, _) = roots(&app, &session)?;
-        (
-            if ai_only.unwrap_or(false) {
-                store::search(&root, &wiki::ai_manifest(&root, &manifest), &query, 30)
-            } else {
-                store::browse(&root, &manifest, &query, 100)
-            },
-            manifest.initial_complete,
-            wiki::ready(&manifest).is_ok(),
-        )
+        let keyword = if ai_mode {
+            store::search(&root, &wiki::ai_manifest(&root, &manifest), &query, 30)
+        } else {
+            store::browse(&root, &manifest, &query, 100)
+        };
+        let semantic = wiki::ready(&manifest).is_ok();
+        // AI retrieval also merges compiled wiki pages; keyword matching there
+        // is cheap because published pages are few.
+        let topics = if ai_mode && semantic {
+            wiki::context(&app, &session, &manifest, &query).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        (keyword, manifest.initial_complete, semantic, topics)
     };
+    let mut lanes = vec![keyword, topics];
     if semantic {
         if let Ok(matches) = wiki::semantic_search(&app, &state, &session, &query).await {
-            for row in matches {
-                if !items.iter().any(|r| r["id"] == row["id"]) {
-                    items.push(row);
-                }
-            }
+            lanes.push(matches);
         }
     }
+    let mut items = rrf_merge(lanes);
     require_current(&state, &session)?;
-    if ai_only.unwrap_or(false) {
+    if ai_mode {
         items = knowledge_cloud::filter_items(&app, &session, items)
             .await
             .unwrap_or_default();
     }
     Ok(json!({"items":items,"initialComplete":complete}))
+}
+
+/// Reciprocal-rank fusion across retrieval lanes (k=60): each lane votes for
+/// its own ordering and an item's fused score is the sum of its votes, so a
+/// chunk-level keyword hit, a semantic neighbor, and a compiled page reinforce
+/// each other without any single lane dominating.
+fn rrf_merge(lanes: Vec<Vec<Value>>) -> Vec<Value> {
+    const K: f64 = 60.0;
+    let mut order: Vec<String> = Vec::new();
+    let mut scored: std::collections::BTreeMap<String, (f64, Value)> = Default::default();
+    for lane in &lanes {
+        for (rank, item) in lane.iter().enumerate() {
+            let Some(id) = item["id"].as_str().map(String::from) else {
+                continue;
+            };
+            if !scored.contains_key(&id) {
+                order.push(id.clone());
+                scored.insert(id.clone(), (0.0, item.clone()));
+            }
+            if let Some(entry) = scored.get_mut(&id) {
+                entry.0 += 1.0 / (K + rank as f64 + 1.0);
+            }
+        }
+    }
+    let mut rows: Vec<(String, f64)> = order
+        .into_iter()
+        .filter_map(|id| scored.get(&id).map(|(score, _)| (id, *score)))
+        .collect();
+    rows.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
+    rows.into_iter()
+        .filter_map(|(id, _)| scored.remove(&id).map(|(_, item)| item))
+        .collect()
 }
 
 #[tauri::command]
@@ -1246,6 +1288,7 @@ pub(crate) async fn revoke_private_inspiration(app: &AppHandle, id: &str) -> Com
     for alias in aliases {
         store::purge_private_document(&root, &alias)
             .map_err(|_| "private_source_cleanup_failed")?;
+        fulltext::remove_document(&root, &alias);
         manifest.entries.remove(&alias);
         manifest.knowledge_uploads.remove(&alias);
     }
@@ -1278,6 +1321,7 @@ pub async fn workbench_remove_source(
     persist(&app, &session, &manifest)?;
     let (root, _) = roots(&app, &session)?;
     store::remove_document(&root, &actual, manifest.entries.get(&actual))?;
+    fulltext::remove_document(&root, &actual);
     manifest.entries.remove(&actual);
     persist(&app, &session, &manifest)?;
     drop(_guard);
@@ -1687,6 +1731,64 @@ pub async fn workbench_read_for_ai(
         return Err("Source stopped from automatic AI use".into());
     }
     Ok(value)
+}
+
+/// Fetch one precise evidence fragment (a full-text chunk or a transcript
+/// segment) instead of the whole document markdown.
+#[tauri::command]
+pub async fn workbench_source_fragment(
+    app: AppHandle,
+    state: State<'_, WorkbenchState>,
+    id: String,
+    chunk_id: Option<i64>,
+    segment_id: Option<String>,
+) -> CommandResult<Value> {
+    if crate::inspiration_private::source_is_protected(&app, &id) {
+        return Err("Encrypted inspirations are unavailable to AI".into());
+    }
+    let _guard = state.serial.lock().await;
+    let session = current(&state)?;
+    let manifest = load_state(&app, &session)?;
+    let actual = manifest.aliases.get(&id).cloned().unwrap_or_else(|| id.clone());
+    let entry = manifest
+        .entries
+        .get(&actual)
+        .filter(|entry| store::eligible(entry))
+        .ok_or("Source is not available to AI")?;
+    let (root, _) = roots(&app, &session)?;
+    let document = store::read_document(&root, entry)?;
+    if !document.ai_context_enabled {
+        return Err("Source stopped from automatic AI use".into());
+    }
+    let mut fragment = if let Some(chunk_id) = chunk_id {
+        let hit = fulltext::chunk(&root, chunk_id)?
+            .filter(|hit| hit.doc_id == actual)
+            .ok_or("Chunk is not part of this source")?;
+        json!({"chunkId":hit.chunk_id,"quote":hit.quote,"heading":hit.heading,
+            "segmentId":hit.segment_id,"startMs":hit.start_ms,"endMs":hit.end_ms})
+    } else if let Some(segment_id) = segment_id.as_deref() {
+        let segment = document
+            .segments
+            .iter()
+            .find(|row| row.get("id").and_then(Value::as_str) == Some(segment_id))
+            .ok_or("Segment is not part of this source")?;
+        json!({
+            "segmentId":segment_id,
+            "quote":segment.get("text").or_else(|| segment.get("recognizedText")).and_then(Value::as_str).unwrap_or_default(),
+            "startMs":segment.get("startMs").cloned().unwrap_or(Value::Null),
+            "endMs":segment.get("endMs").cloned().unwrap_or(Value::Null),
+            "speaker":segment.get("speakerName").or_else(|| segment.get("speaker")).cloned().unwrap_or(Value::Null),
+        })
+    } else {
+        return Err("Provide chunkId or segmentId".into());
+    };
+    fragment["id"] = json!(document.id);
+    drop(_guard);
+    let authorized = knowledge_cloud::filter_items(&app, &session, vec![fragment.clone()]).await?;
+    if authorized.is_empty() {
+        return Err("Source stopped from automatic AI use".into());
+    }
+    Ok(fragment)
 }
 
 #[tauri::command]

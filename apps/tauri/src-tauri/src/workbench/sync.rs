@@ -459,6 +459,12 @@ async fn commit_document_inner(
         .and_then(|entry| read_document(&root, entry).ok());
     let mut entry = write_document(&root, &document, old)?;
     entry.excluded = entry.excluded || manifest.excluded_sources.contains(&document.id);
+    // Keep the chunk-level full-text index in lockstep with the vault copy.
+    if matches!(entry.status.as_str(), "synced" | "awaiting_transcription") {
+        super::fulltext::index_document(&root, &document, &entry.markdown_hash)?;
+    } else {
+        super::fulltext::remove_document(&root, &document.id);
+    }
     if entry.status != "conflict" {
         if let Some(previous) = previous_document {
             store::preserve_summary_revision(&mut manifest, &previous, &document);
@@ -753,6 +759,7 @@ pub(super) async fn run(
                 }
                 if let Some(document) = replacement {
                     let entry = write_document(&root, &document, manifest.entries.get(&id))?;
+                    super::fulltext::index_document(&root, &document, &entry.markdown_hash)?;
                     manifest.entries.insert(id.clone(), entry);
                 } else if let Some(entry) = manifest.entries.get_mut(&id) {
                     entry.status = "conflict".into();
@@ -1032,6 +1039,7 @@ pub(super) async fn run(
         for id in deleted {
             store::remove_document(&root, &id, manifest.entries.get(&id))?;
             manifest.entries.remove(&id);
+            super::fulltext::remove_document(&root, &id);
         }
         store::rebuild_index(&root, &manifest)?;
         let complete = finish_sync(&root, &mut manifest);

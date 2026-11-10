@@ -3,6 +3,8 @@ export { getUsageSummary } from "./usage";
 export type { UsageSummary } from "./usage";
 export { normalizeConnectionRequest, getConnectorRequest, resumeConnectorRequest, cancelConnectorRequest } from "./connectors";
 export type { ConnectorConnectionRequest, ConnectorRequestResult, ConnectorAccount, ConnectorRequestStatus } from "./connectors";
+export { createFeedbackTicket, listFeedbackTickets, getFeedbackTicket, addFeedbackMessage } from "./feedback";
+export type { FeedbackCategory, FeedbackSeverity, FeedbackSender, FeedbackTicketSummary, FeedbackMessage, FeedbackTicketDetail, FeedbackEnvironment, CreateFeedbackTicketInput } from "./feedback";
 export { parseWithFallback } from "./schema";
 export { getContextIdentity, listContextInbox, getContextInboxItem, actOnContextInbox, syncContextMeetings, downloadContextReview, isContextExportPath, getContextPreferences, setContextPreferences, deviceTimeZone, GLOBAL_CONTEXT_SCOPE } from "./context";
 export type { ContextInboxItem, ContextInboxResponse, ContextInboxDisabledResponse, ContextInboxResult, ContextInboxAction, ContextScope, ContextPreferences, ContextPreferencesChange } from "./context";

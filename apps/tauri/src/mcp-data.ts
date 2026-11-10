@@ -116,11 +116,22 @@ export async function readDesktopMcpTool(name: string, args: Args, deps: McpData
       result = { id, text: record.markdown, citations: record.document.citations ?? [] };
     } else {
       const id = stringArg(args, "id", true);
+      const chunkId = args.chunkId === undefined ? undefined : numberArg(args, "chunkId", 1, Number.MAX_SAFE_INTEGER);
+      const segmentId = args.segmentId === undefined ? "" : stringArg(args, "segmentId");
       const source = status.entries.find((entry) => entry.id === id && !entry.excluded && entry.status === "synced");
       if (!source) throw new McpInputError("Source unavailable or excluded from AI");
-      const record = await bridge.readForAi(id);
-      if (record.document.aiContextEnabled === false) throw new McpInputError("Source excluded from AI");
-      result = { document: record.document, markdown: record.markdown };
+      if (chunkId !== undefined || segmentId) {
+        // Precise evidence: one chunk or transcript segment instead of the
+        // whole markdown. Consent and staleness guards still run below.
+        if (!bridge.sourceFragment) throw new McpInputError("Fragment retrieval unavailable; update the desktop bridge");
+        const fragment = await bridge.sourceFragment(id, chunkId, segmentId || undefined);
+        if (!fragment?.quote) throw new McpInputError("Fragment not found in this source");
+        result = { id: fragment.id, ...fragment };
+      } else {
+        const record = await bridge.readForAi(id);
+        if (record.document.aiContextEnabled === false) throw new McpInputError("Source excluded from AI");
+        result = { document: record.document, markdown: record.markdown };
+      }
     }
     const current = await bridge.status();
     if (!current.enabled || !current.allowAi || !current.initialComplete || current.scope !== status.scope

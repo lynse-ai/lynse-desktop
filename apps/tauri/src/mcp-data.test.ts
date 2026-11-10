@@ -161,4 +161,34 @@ describe("Local memory MCP consent and stale-result guards", () => {
     const {bridge}=memory();bridge.read.mockResolvedValue({document:{id:"s1",aiContextEnabled:false,transcript:"Original"},markdown:"Original"});
     await expect(readDesktopMcpTool("get_local_memory_source",{id:"s1"},deps)).rejects.toThrow("excluded from AI");
   });
+  it("returns the whole document when no fragment is requested",async()=>{
+    memory();
+    await expect(readDesktopMcpTool("get_local_memory_source",{id:"s1"},deps)).resolves.toEqual({document:{id:"s1",aiContextEnabled:true,transcript:"Original"},markdown:"Original"});
+  });
+  it("routes chunk and segment fragments through the guarded bridge",async()=>{
+    const {bridge}=memory();
+    bridge.sourceFragment = vi.fn().mockResolvedValue({id:"s1",chunkId:5,quote:"今天讨论了项目预算",heading:"Transcript / 转写",segmentId:"s1",startMs:60000,endMs:70000});
+    await expect(readDesktopMcpTool("get_local_memory_source",{id:"s1",chunkId:5},deps)).resolves.toMatchObject({id:"s1",chunkId:5,quote:"今天讨论了项目预算",startMs:60000});
+    expect(bridge.sourceFragment).toHaveBeenCalledWith("s1",5,undefined);
+    await expect(readDesktopMcpTool("get_local_memory_source",{id:"s1",segmentId:"s2"},deps)).resolves.toMatchObject({id:"s1"});
+    expect(bridge.sourceFragment).toHaveBeenCalledWith("s1",undefined,"s2");
+    await expect(readDesktopMcpTool("get_local_memory_source",{id:"s1",chunkId:5,segmentId:"s2"},deps)).resolves.toMatchObject({chunkId:5});
+  });
+  it("validates fragment arguments and old bridges",async()=>{
+    const {bridge}=memory();
+    bridge.sourceFragment = vi.fn();
+    for (const chunkId of [0, 1.5, "5"]) {
+      await expect(readDesktopMcpTool("get_local_memory_source",{id:"s1",chunkId},deps)).rejects.toThrow("Invalid chunkId");
+    }
+    expect(bridge.sourceFragment).not.toHaveBeenCalled();
+    delete (bridge as Partial<typeof bridge>).sourceFragment;
+    await expect(readDesktopMcpTool("get_local_memory_source",{id:"s1",chunkId:5},deps)).rejects.toThrow("update the desktop bridge");
+    await expect(readDesktopMcpTool("get_local_memory_source",{id:"s1",segmentId:"s2"},deps)).rejects.toThrow("update the desktop bridge");
+  });
+  it("rejects a fragment when the account switches mid-flight",async()=>{
+    const {status,bridge}=memory();
+    bridge.status.mockImplementation(async()=>structuredClone(status));
+    bridge.sourceFragment = vi.fn().mockImplementation(async()=>{status.scope="account-b";return {id:"s1",quote:"secret"};});
+    await expect(readDesktopMcpTool("get_local_memory_source",{id:"s1",chunkId:5},deps)).rejects.toThrow("Account or sources changed");
+  });
 });

@@ -413,6 +413,10 @@ fn is_model_output_failure(error: &str) -> bool {
     validation_failure::split(error.to_owned())
         .1
         .is_some_and(|validation| validation.failure_origin.as_deref() == Some("model_output"))
+        // Fallback: the server may not label the rejection, but a validation
+        // marker on a 422 body is still a model-output rejection. Service
+        // classes (session, transport, 429, 5xx) never carry the marker.
+        || error.contains("[lynse-validation]")
 }
 
 fn tolerate_compilation_failure(error: &str) -> bool {

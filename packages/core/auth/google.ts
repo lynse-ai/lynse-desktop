@@ -31,14 +31,16 @@ export interface GoogleLoginResult {
   session: AuthSession;
 }
 
-/** Firebase web config from build-time env; empty strings when unset. */
+/** Firebase web config from build-time env; empty strings when unset.
+ *  The literal `process.env.NEXT_PUBLIC_*` member expressions are required —
+ *  Next.js inlines exactly those at build time (indirect access would survive
+ *  into the browser bundle as an undefined `process`). */
 function firebaseConfig() {
-  const env = (typeof process !== "undefined" && process.env) || {};
   return {
-    apiKey: env.NEXT_PUBLIC_FIREBASE_API_KEY ?? "",
-    authDomain: env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN ?? "",
-    projectId: env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? "",
-    appId: env.NEXT_PUBLIC_FIREBASE_APP_ID ?? "",
+    apiKey: (typeof process !== "undefined" && process.env.NEXT_PUBLIC_FIREBASE_API_KEY) || "",
+    authDomain: (typeof process !== "undefined" && process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN) || "",
+    projectId: (typeof process !== "undefined" && process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID) || "",
+    appId: (typeof process !== "undefined" && process.env.NEXT_PUBLIC_FIREBASE_APP_ID) || "",
   };
 }
 
@@ -70,20 +72,35 @@ function needBind(vo: ThirdPartyLoginVo): boolean {
   return vo.isNeedBind === true || vo.needBind === true;
 }
 
-/**
- * Run the Google popup flow and sign in. Resolves `need_bind` (the UI then
- * shows the phone-binding form with `thirdPartyId`) or `signed_in`.
- */
-export async function signInWithGoogle(): Promise<GoogleLoginResult | GoogleBindRequired> {
-  const [{ initializeApp, getApps }, { getAuth, GoogleAuthProvider, signInWithPopup }] = await Promise.all([
+async function loadFirebaseAuth() {
+  const [{ initializeApp, getApps }, authMod] = await Promise.all([
     import("firebase/app"),
     import("firebase/auth"),
   ]);
   const app = getApps()[0] ?? initializeApp(firebaseConfig());
-  const auth = getAuth(app);
-  const provider = new GoogleAuthProvider();
-  const credential = await signInWithPopup(auth, provider);
-  const identityToken = await credential.user.getIdToken();
+  return { auth: authMod.getAuth(app), authMod };
+}
+
+/**
+ * Start the Google sign-in via a full-page redirect (not a popup: the async
+ * Firebase import would drop the user-gesture context and popup blockers eat
+ * the window). The page navigates away; the promise never resolves.
+ */
+export async function startGoogleRedirect(): Promise<void> {
+  const { auth, authMod } = await loadFirebaseAuth();
+  const provider = new authMod.GoogleAuthProvider();
+  await authMod.signInWithRedirect(auth, provider);
+}
+
+/**
+ * Finish a redirect sign-in on the page the browser lands back on.
+ * Resolves null when no redirect is pending (normal first visit).
+ */
+export async function completeGoogleRedirect(): Promise<GoogleLoginResult | GoogleBindRequired | null> {
+  const { auth, authMod } = await loadFirebaseAuth();
+  const result = await authMod.getRedirectResult(auth);
+  if (!result?.user) return null;
+  const identityToken = await result.user.getIdToken();
   const vo = await loginByGoogleIdentityToken(identityToken);
   if (needBind(vo)) {
     return { status: "need_bind", thirdPartyId: vo.thirdPartyId ?? "" };

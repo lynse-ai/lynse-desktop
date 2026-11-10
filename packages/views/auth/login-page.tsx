@@ -12,7 +12,7 @@ import {
   loginByEmailCode,
   sendEmailCaptcha,
 } from "@lynse/core/auth/email";
-import { isGoogleConfigured, signInWithGoogle } from "@lynse/core/auth/google";
+import { completeGoogleRedirect, isGoogleConfigured, startGoogleRedirect } from "@lynse/core/auth/google";
 import {
   isAppleAuthorizeUrlConfigured,
   renderAppleLoginUrl,
@@ -325,26 +325,50 @@ export function LoginPage() {
     };
   }, [intl]);
 
-  /** Google popup flow; first-time identities continue into phone binding. */
+  /** Google sign-in runs through a full-page redirect; the result is
+   *  completed by the redirect effect below after the browser returns. */
   async function handleGoogleLogin() {
     if (googleBusy) return;
     setError(null);
     setGoogleBusy(true);
     try {
-      const result = await signInWithGoogle();
-      if (result.status === "need_bind") {
-        setBindAuthType("GOOGLE");
-        setWechatBindVo({ thirdPartyId: result.thirdPartyId });
-        setView("phone");
-      } else {
-        completeLogin(result.session);
-      }
-    } catch (e: unknown) {
-      setError(authErrorText(e, t, "auth.login_failed"));
-    } finally {
+      await startGoogleRedirect();
+      // The page navigates away; reaching here means the redirect failed to
+      // start (e.g. popup/network) — drop the busy state so retry is possible.
       setGoogleBusy(false);
+    } catch (e: unknown) {
+      setGoogleBusy(false);
+      setError(authErrorText(e, t, "auth.login_failed"));
     }
   }
+
+  // Complete a Google redirect sign-in when the browser lands back here.
+  const [googleRedirectBusy, setGoogleRedirectBusy] = useState(false);
+  useEffect(() => {
+    if (!intl || !isGoogleConfigured() || googleRedirectBusy) return;
+    let active = true;
+    setGoogleRedirectBusy(true);
+    void completeGoogleRedirect()
+      .then((result) => {
+        if (!active || !result) return;
+        if (result.status === "need_bind") {
+          setBindAuthType("GOOGLE");
+          setWechatBindVo({ thirdPartyId: result.thirdPartyId });
+          setView("phone");
+        } else {
+          completeLogin(result.session);
+        }
+      })
+      .catch((e: unknown) => setError(authErrorText(e, t, "auth.login_failed")))
+      .finally(() => {
+        if (active) setGoogleRedirectBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+    // completeLogin is a stable store action; intl gates the web-only flow.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /**
    * CN WeChat scan: the backend renders the qrconnect URL. The web app can
@@ -710,6 +734,7 @@ export function LoginPage() {
                   if (!googleReady) { toast(t("auth.google_pending")); return; }
                   void handleGoogleLogin();
                 }}
+                data-testid="google-login"
                 disabled={googleBusy}
                 className="flex h-9 w-full items-center justify-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
               >

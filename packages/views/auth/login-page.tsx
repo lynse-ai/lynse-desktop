@@ -608,14 +608,14 @@ export function LoginPage() {
           type="button"
           aria-label="Lynse"
           onClick={handleLogoTap}
-          className={cn("cursor-default", web ? "absolute left-7 top-8" : "self-start")}
+          className={cn("cursor-default", web ? "mx-auto mb-5 mt-2 block" : "self-start")}
         >
-          <img src={LYNSE_LOGO_SRC} alt="" className="h-4 w-auto dark:invert" />
+          <img src={LYNSE_LOGO_SRC} alt="" className="h-5 w-auto dark:invert" />
         </button>
         <h1
           className={cn(
             "font-semibold tracking-tight",
-            web ? "mt-8 text-center text-2xl" : "mt-5 text-lg",
+            web ? "text-center text-2xl" : "mt-5 text-lg",
           )}
         >
           {t("auth.welcome_title")}
@@ -653,27 +653,6 @@ export function LoginPage() {
                   <ChevronRight className="ml-auto size-4 text-muted-foreground" />
                 </button>
               )}
-              {!intl && web && (
-                <button
-                  type="button"
-                  onClick={() => void handleWechatQrLogin()}
-                  className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
-                >
-                  <WechatIcon className="size-4" />
-                  <span className="text-sm">{t("auth.wechat_qr_login")}</span>
-                  <ChevronRight className="ml-auto size-4 text-muted-foreground" />
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => void handleAppleWebLogin()}
-                disabled={appleBusy}
-                className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
-              >
-                <AppleIcon className="size-4" />
-                <span className="text-sm">{t("auth.apple_login")}</span>
-                <ChevronRight className="ml-auto size-4 text-muted-foreground" />
-              </button>
               <button
                 type="button"
                 onClick={handleWechatLogin}
@@ -845,6 +824,33 @@ export function LoginPage() {
             </>
           ) : view === "phone" ? (
             <>
+              {/* ── Social sign-in above the form (web, CN edition) ── */}
+              {web && !intl && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => void handleAppleWebLogin()}
+                    disabled={appleBusy}
+                    className="flex h-9 w-full items-center justify-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
+                  >
+                    <AppleIcon className="size-4" />
+                    <span className="text-sm">{t("auth.apple_login")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleWechatQrLogin()}
+                    className="mt-2 flex h-9 w-full items-center justify-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
+                  >
+                    <WechatIcon className="size-4" />
+                    <span className="text-sm">{t("auth.wechat_qr_login")}</span>
+                  </button>
+                  <div className="my-4 flex items-center gap-3 text-2xs text-muted-foreground">
+                    <span className="h-px flex-1 bg-border" />
+                    {t("auth.or_divider")}
+                    <span className="h-px flex-1 bg-border" />
+                  </div>
+                </>
+              )}
               {/* ── Phone number pill ──────────────────────── */}
               <div className="flex h-9 items-center gap-3 rounded-full bg-muted px-3.5">
                 <span className="text-sm text-foreground">+86</span>

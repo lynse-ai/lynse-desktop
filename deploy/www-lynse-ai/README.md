@@ -27,6 +27,11 @@ deploy/www-lynse-ai/deploy.sh "$BUNDLE"
 - `/app/<route>` 反代 `127.0.0.1:3102`；静态资源走同前缀（`/app/_next/...`）。
 - include 片段安装为 `/etc/nginx/snippets/lynse-web-app.conf`，注入 `revelspark` 站点 443 server 块，修改前备份到远端 `~/apps/lynse-web/backups/`。
 
+
+## 版本序列
+
+web 端版本号从 **0.1.0** 起（`apps/web/package.json` 的 `@lynse/web`），独立于桌面端（根 `lynse-webapp` 1.2.x）与 MCP 服务（lynse-mcp 0.2.0）的版本序列。www.lynse.ai 的发布以 apps/web 版本号为准。
+
 ## 与 MCP 桥接的关系
 
 - 授权管理页 `/app/authorizations` 同源调用 `/platform/oauth/api/authorizations` 等动作；桥接会话 cookie（path=/platform/oauth）与网页版账号 token 相互独立，通过桥接的 `token-login` 动作静默打通（用当前账号 token 换桥接会话，见 lynse-mcp 仓库 `docs/authorization-records-api.md`）。

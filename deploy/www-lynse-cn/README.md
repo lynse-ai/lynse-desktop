@@ -54,3 +54,7 @@ ECS 无 SSH（安全组未开 22）：全部通过云助手执行 —— `python
 2. **微信 WECHAT_SCAN redirect_uri**：改为 https://www.lynse.cn/auth/wechat（前端回调页已就绪）；当前值 https://api.lynse.cn/auth/login 是后端自己的页面，web 拿不到 code。
 3. **gapp 测试后端同步**：Apple 授权 URL 补 response_mode=form_post；web-success-url=https://www.lynse.ai/app/home、web-bind-url=https://www.lynse.ai/app/bind。
 4. **Google（intl）**：后端 Firebase Admin SDK 的项目必须与前端 `lynse-6312d` 一致（前端已送出真实 token，后端返回 error.google.identity.token.invalid——项目不匹配的典型症状）。
+
+## 版本序列
+
+web 端版本号从 **0.1.0** 起（`apps/web/package.json` 的 `@lynse/web`），独立于桌面端（根 `lynse-webapp` 1.2.x）与 MCP 服务（lynse-mcp 0.2.0）的版本序列。www.lynse.cn 的发布以 apps/web 版本号为准。

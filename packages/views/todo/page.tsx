@@ -381,7 +381,7 @@ function GroupSection({
 // ── Edit Panel ─────────────────────────────────────────────
 
 /** Width limits mirror the assistant chat panel so both right-hand panels feel alike. */
-const TODO_PANEL_DEFAULT_WIDTH = 340;
+const TODO_PANEL_DEFAULT_WIDTH = isWebPlatform() ? 300 : 340;
 const TODO_PANEL_MIN_WIDTH = 260;
 const TODO_PANEL_MAX_WIDTH = 600;
 
@@ -824,9 +824,10 @@ export function TodoPage() {
 
   // ── Render ────────────────────────────────────────────────
   return (
-    // Web caps the page like home/chat (max-w-4xl) so the edit panel
-    // squeezes a wider list instead of half of a narrow column.
-    <div className={`flex h-full flex-col min-w-0${isWebPlatform() ? " mx-auto w-full max-w-4xl" : ""}`}>
+    // Web caps the page on narrow viewports so the edit panel squeezes a
+    // wider list; on maximized windows (xl+) it fills the content card
+    // instead of leaving dead margins around a centered column.
+    <div className={`flex h-full flex-col min-w-0${isWebPlatform() ? " mx-auto w-full max-w-4xl xl:max-w-none" : ""}`}>
       {/* Refresh / clear actions live in the unified app title bar via the
           slot (no center title — the bar doesn't echo the page name). */}
       <TitleBarSlot

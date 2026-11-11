@@ -824,7 +824,9 @@ export function TodoPage() {
 
   // ── Render ────────────────────────────────────────────────
   return (
-    <div className={`flex h-full flex-col min-w-0${isWebPlatform() ? " mx-auto w-full max-w-3xl" : ""}`}>
+    // Web caps the page like home/chat (max-w-4xl) so the edit panel
+    // squeezes a wider list instead of half of a narrow column.
+    <div className={`flex h-full flex-col min-w-0${isWebPlatform() ? " mx-auto w-full max-w-4xl" : ""}`}>
       {/* Refresh / clear actions live in the unified app title bar via the
           slot (no center title — the bar doesn't echo the page name). */}
       <TitleBarSlot

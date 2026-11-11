@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { IconSwap } from "../icon-swap";
 import { SqueezePanel } from "../squeeze-panel";
 import { getWorkspaceState, useWorkspaceStore } from "../workspace/store";
+import { isWebPlatform } from "../platform";
 import { ContentPanel } from "../workspace/content-panel";
 import { LynclawNotePanel, LynclawNoteRow } from "./lynclaw-note-panel";
 import { lynclawNoteId, lynclawNoteItemId, useLynclawNotes, useLynclawNotesScope } from "../workspace/lynclaw-notes";
@@ -299,6 +300,7 @@ export function NotesPage() {
   const selectItem = useWorkspaceStore((s) => s.selectItem);
   const chatPanelVisible = useWorkspaceStore((s) => s.chatPanelVisible);
   const chatPanelWidth = useWorkspaceStore((s) => s.chatPanelWidth);
+  const toggleChatPanel = useWorkspaceStore((s) => s.toggleChatPanel);
   const notesListWidth = useWorkspaceStore((s) => s.notesListWidth);
   const setNotesListWidth = useWorkspaceStore((s) => s.setNotesListWidth);
   const handleChatPanelResize = useWorkspaceStore((s) => s.handleChatPanelResize);
@@ -327,10 +329,12 @@ export function NotesPage() {
   // The AI chat panel and the notes list compete for width: opening the
   // assistant collapses the list, closing it gives the list back. A list the
   // user had already collapsed themselves stays collapsed on close.
+  // Web shows all three columns side by side instead — no mutual exclusion.
   const isListCollapsedRef = useRef(isListCollapsed);
   isListCollapsedRef.current = isListCollapsed;
   const chatListLinkRef = useRef({ prevChatVisible: chatPanelVisible, collapsedByChat: false });
   useEffect(() => {
+    if (isWebPlatform()) return;
     const link = chatListLinkRef.current;
     if (link.prevChatVisible === chatPanelVisible) return;
     link.prevChatVisible = chatPanelVisible;
@@ -342,6 +346,17 @@ export function NotesPage() {
       setIsListCollapsed(false);
     }
   }, [chatPanelVisible]);
+
+  // Web: opening a note reveals the assistant next to the list by default;
+  // closing it keeps it closed until another note is picked.
+  const prevSelectedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!isWebPlatform()) return;
+    if (selectedItemId && prevSelectedRef.current !== selectedItemId && !chatPanelVisible) {
+      toggleChatPanel();
+    }
+    prevSelectedRef.current = selectedItemId;
+  }, [selectedItemId, chatPanelVisible, toggleChatPanel]);
 
   // Landing on Notes is "seeing" its module notifications (transcription
   // completions, vault sync) — clear the sidebar's notes dot.
@@ -364,9 +379,16 @@ export function NotesPage() {
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+  // Desktop collapses the list while the assistant is open, so the 520px
+  // reserve covers the content column alone. Web keeps list + content +
+  // assistant side by side — add the assistant's width so the note column
+  // keeps a readable minimum as it flexes between the two panels.
+  const chatWidthReserve =
+    isWebPlatform() && chatPanelVisible && !selectedLynclawNoteId ? chatPanelWidth : 0;
+  const listWidthReserve = 520 + chatWidthReserve;
   const listWidth =
     listContainerWidth > 0
-      ? Math.max(300, Math.min(notesListWidth, listContainerWidth - 520))
+      ? Math.max(300, Math.min(notesListWidth, listContainerWidth - listWidthReserve))
       : notesListWidth;
 
   // Stable for the session: a bare `new Date()` here would change the query key
@@ -719,10 +741,10 @@ export function NotesPage() {
     (delta: number) => {
       const layoutWidth = layoutRef.current?.getBoundingClientRect().width ?? window.innerWidth;
       const currentWidth = listRef.current?.getBoundingClientRect().width ?? notesListWidth;
-      const maxWidth = Math.max(300, Math.min(600, layoutWidth - 520));
+      const maxWidth = Math.max(300, Math.min(600, layoutWidth - listWidthReserve));
       setNotesListWidth(currentWidth + delta, maxWidth);
     },
-    [notesListWidth, setNotesListWidth],
+    [notesListWidth, setNotesListWidth, listWidthReserve],
   );
 
   const folderDropdownItems = (
@@ -778,7 +800,7 @@ export function NotesPage() {
         )}
         style={
           selectedItemId && !isListCollapsed
-            ? { width: `clamp(300px, ${notesListWidth}px, calc(100% - 520px))` }
+            ? { width: `clamp(300px, ${notesListWidth}px, calc(100% - ${listWidthReserve}px))` }
             : undefined
         }
       >

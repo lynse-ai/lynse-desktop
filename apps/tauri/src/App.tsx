@@ -14,7 +14,6 @@ import { InspirationCaptureSheet, InspirationPage, InspirationPrivacySupervisor 
 import { NotificationsPage, AppUpdateNotifier, ContextInboxNotifier } from "@lynse/views/notifications";
 import { SettingsDialog, useWebdavAutoSync } from "@lynse/views/settings";
 import { AboutWindow } from "@lynse/views/about";
-import { FeedbackWindow } from "@lynse/views/feedback";
 import { ReportProblemWindow } from "@lynse/views/report-problem-dialog";
 import { BotAgent, BotAuthSupervisor } from "@lynse/views/bots";
 import { PluginHost } from "@lynse/views/plugins";
@@ -242,7 +241,6 @@ export default function App() {
   const subtitleWindow = windowKind === "live-subtitles";
   const recordingIslandWindow = windowKind === "recording-island";
   const aboutWindow = windowKind === "about";
-  const feedbackWindow = windowKind === "feedback";
   const reportWindow = windowKind === "report";
   const identity = useMemo(() => {
     const appInfo = (window as unknown as { desktopAPI?: { appInfo?: { version: string } } })
@@ -269,8 +267,6 @@ export default function App() {
         <LiveSubtitleOverlay />
       ) : aboutWindow ? (
         <AboutWindow />
-      ) : feedbackWindow ? (
-        <FeedbackWindow getStoredValue={(key) => secureStorage.getItem(key)} />
       ) : reportWindow ? (
         <ReportProblemWindow />
       ) : (

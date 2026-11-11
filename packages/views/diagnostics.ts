@@ -105,9 +105,15 @@ function setReportDialogOpen(open: boolean): void {
 let pendingScreenshot: StagedScreenshot | null = null;
 let pendingReportDescription = "";
 
-// Tab + category the center should open with (e.g. the feature-request entry
-// opens the submit tab with the feature category preset). Consumed once.
-export type FeedbackCenterPreset = { tab: "submit" | "tickets"; category?: string };
+// Which face the shared dialog store drives on the next open: the problem
+// report (CNB issues) or the feature-request center (Feishu tickets). Both
+// faces are dialogs over the same open state; the mode is picked at open
+// time and read by the mount-point dispatcher.
+export type ReportDialogMode = "report" | "center";
+let reportDialogMode: ReportDialogMode = "report";
+
+// Tab the feedback center should open with. Consumed once.
+export type FeedbackCenterPreset = { tab: "submit" | "tickets" };
 let pendingFeedbackOptions: FeedbackCenterPreset | null = null;
 
 export function takePendingFeedbackOptions(): FeedbackCenterPreset | null {
@@ -157,7 +163,7 @@ export function resolveCaptureBackground(): string | null {
     : null;
 }
 
-async function openReportDialog(): Promise<void> {
+async function openReportDialog(mode: ReportDialogMode): Promise<void> {
   // Capture while the main window still shows what the user was looking at —
   // the in-app dialog would otherwise cover it. In the standalone window the
   // retake button re-captures the main window directly.
@@ -168,44 +174,54 @@ async function openReportDialog(): Promise<void> {
         return null;
       })
     : null;
+  reportDialogMode = mode;
   setReportDialogOpen(true);
 }
 
 /**
- * Open the feedback center: the in-app dialog inside the current window, with
- * the GitHub prefilled form as the submission fallback when the feedback API
- * fails. Contextual reports use the in-app form so their description stays
- * available for review. `options` presets the tab / ticket category (the
- * feature-request menu entry opens the submit tab with category=feature).
+ * Open the problem-report dialog: the in-app CNB-issue form inside the
+ * current window, with the GitHub prefilled form as the submission fallback
+ * when the report channel fails. Contextual reports use the in-app form so
+ * their description stays available for review.
  */
-export function openReportProblem(
-  description?: unknown,
-  options?: { tab?: "submit" | "tickets"; category?: string },
-): void {
+export function openReportProblem(description?: unknown): void {
   // Contextual descriptions ride along into the shared in-app form.
   if (typeof description === "string" && description) {
     pendingReportDescription = description;
   }
-  pendingFeedbackOptions = {
-    tab: options?.tab ?? "submit",
-    category: options?.category,
-  };
-  void openReportDialog();
+  void openReportDialog("report");
+}
+
+/**
+ * Open the feature-request center: the in-app dialog backed by the lynclaw
+ * /api/feedback gateway (Feishu tickets, with the「我的反馈」progress tab).
+ * `options` presets the tab; the submit form is feature-category only —
+ * problem reports go through openReportProblem / the CNB channel instead.
+ */
+export function openFeatureRequests(options?: { tab?: "submit" | "tickets" }): void {
+  pendingFeedbackOptions = { tab: options?.tab ?? "submit" };
+  void openReportDialog("center");
 }
 
 export function closeReportProblemDialog(): void {
   setReportDialogOpen(false);
 }
 
-/** Subscribe the mounted dialog to the shared open state. */
+/** Subscribe the mounted dialog to the shared open state (and the face picked
+ *  at open time — see ReportProblemDialog, the mount-point dispatcher). */
 export function useReportProblemDialog(): {
   open: boolean;
   setOpen: (open: boolean) => void;
+  mode: ReportDialogMode;
 } {
   const [open, setOpen] = useState(reportDialogOpen);
+  const [mode, setMode] = useState<ReportDialogMode>(reportDialogMode);
 
   useEffect(() => {
-    const sync = () => setOpen(reportDialogOpen);
+    const sync = () => {
+      setOpen(reportDialogOpen);
+      setMode(reportDialogMode);
+    };
     reportDialogListeners.add(sync);
     sync();
     return () => {
@@ -213,7 +229,7 @@ export function useReportProblemDialog(): {
     };
   }, []);
 
-  return { open, setOpen: setReportDialogOpen };
+  return { open, setOpen: setReportDialogOpen, mode };
 }
 
 // ── Issue composition ──────────────────────────────────────────────────────

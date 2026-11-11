@@ -5086,12 +5086,6 @@ pub(crate) fn show_main_window(app: &AppHandle) {
 const ABOUT_WINDOW_WIDTH: f64 = 320.0;
 const ABOUT_WINDOW_HEIGHT: f64 = 460.0;
 
-/// Logical size of the standalone feature-request window hosting the FeedLog
-/// widget. The widget's panel is 400pt wide and up to `100vh - 120pt` tall,
-/// so the window leaves room for the launcher bubble plus the header.
-const FEEDBACK_WINDOW_WIDTH: f64 = 440.0;
-const FEEDBACK_WINDOW_HEIGHT: f64 = 760.0;
-
 /// Logical size of the standalone problem-report window: wide enough for the
 /// description box plus a 16:9-ish screenshot preview, per the reference
 /// layout (title / description / screenshot with retake & remove / submit).
@@ -5351,50 +5345,6 @@ async fn open_about_window(app: AppHandle, title: Option<String>) -> CommandResu
     center_window_over_main(&app, &window, ABOUT_WINDOW_WIDTH, ABOUT_WINDOW_HEIGHT);
     #[cfg(target_os = "windows")]
     ensure_window_revealed(&app, "about");
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
-    Ok(())
-}
-
-/// Open (or focus) the standalone feature-request window — a small fixed-size
-/// window hosting the FeedLog feedback widget (`?window=feedback` route),
-/// mirroring the About window setup. `title` is the localized window title
-/// picked by the frontend, which knows the active locale.
-#[tauri::command]
-async fn open_feedback_window(app: AppHandle, title: Option<String>) -> CommandResult<()> {
-    if let Some(window) = app.get_webview_window("feedback") {
-        let _ = window.show();
-        let _ = window.set_focus();
-        return Ok(());
-    }
-    // Created hidden and positioned before the reveal, so the popup never
-    // flashes at the screen origin before settling over the main window.
-    // Same Windows page-load-gated reveal as the About window above.
-    let window = WebviewWindowBuilder::new(
-        &app,
-        "feedback",
-        WebviewUrl::App("index.html?window=feedback".into()),
-    )
-    .title(title.unwrap_or_else(|| "Lynse".to_string()))
-    .inner_size(FEEDBACK_WINDOW_WIDTH, FEEDBACK_WINDOW_HEIGHT)
-    .resizable(false)
-    .maximizable(false)
-    .minimizable(false)
-    .visible(false)
-    .on_page_load(|window, payload| {
-        if payload.event() == PageLoadEvent::Finished {
-            let _ = window.show();
-            let _ = window.set_focus();
-        }
-    })
-    .build()
-    .map_err(|error| format!("failed to create feedback window: {error}"))?;
-    center_window_over_main(&app, &window, FEEDBACK_WINDOW_WIDTH, FEEDBACK_WINDOW_HEIGHT);
-    #[cfg(target_os = "windows")]
-    ensure_window_revealed(&app, "feedback");
     #[cfg(not(target_os = "windows"))]
     {
         let _ = window.show();
@@ -5794,7 +5744,6 @@ pub fn run() {
             get_app_info,
             open_about_window,
             set_compact_window_mode,
-            open_feedback_window,
             open_report_window,
             report_screenshot::report_capture_main_screenshot,
             report_screenshot::report_save_annotated_screenshot,

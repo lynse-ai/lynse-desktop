@@ -1,10 +1,12 @@
 "use client";
 
 /**
- * Unified feedback center: 「报告问题」 submit tab + 「我的反馈」 tickets tab
- * in one dialog (the ZCode feedback-center pattern). The shared diagnostics
- * store still drives open/close and the pre-open screenshot capture; entry
- * points preset the tab / category via openReportProblem options.
+ * Feature-request center: 「提交建议」 submit tab + 「我的反馈」 tickets tab
+ * in one dialog (the ZCode feedback-center pattern). Tickets live in the
+ * lynclaw /api/feedback gateway (Feishu Bitable); problem reports take the
+ * CNB channel instead and never show up here. The shared diagnostics store
+ * still drives open/close and the pre-open screenshot capture; entry points
+ * preset the tab via openFeatureRequests options.
  *
  * While the screenshot is being annotated the popup grows to the full
  * window: a portal would land outside Base UI's dialog (dismissed as an
@@ -21,9 +23,8 @@ import {
   useReportProblemDialog,
   type FeedbackCenterPreset,
 } from "../diagnostics";
-import { ReportProblemForm } from "../report-problem-dialog";
+import { FeatureRequestForm } from "./feature-request-form";
 import { MyFeedbackPane } from "./my-feedback";
-import type { FeedbackCategory } from "@lynse/core/api";
 
 type CenterTab = "submit" | "tickets";
 
@@ -31,7 +32,6 @@ export function FeedbackCenterDialog() {
   const { open, setOpen } = useReportProblemDialog();
   const { t } = useTranslation();
   const [tab, setTab] = useState<CenterTab>("submit");
-  const [initialCategory, setInitialCategory] = useState<FeedbackCategory>("bug");
   const [formEpoch, setFormEpoch] = useState(0);
   const [capturing, setCapturing] = useState(false);
   const [annotating, setAnnotating] = useState(false);
@@ -60,8 +60,8 @@ export function FeedbackCenterDialog() {
     [annotating],
   );
 
-  // Entry presets (tab/category) ride through the diagnostics store and are
-  // consumed on each open; reopening with no preset keeps the current tab.
+  // Entry presets (tab) ride through the diagnostics store and are consumed
+  // on each open; reopening with no preset keeps the current tab.
   useEffect(() => {
     if (!open) return;
     setCapturing(false);
@@ -69,11 +69,6 @@ export function FeedbackCenterDialog() {
     const preset: FeedbackCenterPreset | null = takePendingFeedbackOptions();
     if (preset) {
       setTab(preset.tab);
-      if (preset.category === "feature" || preset.category === "usage" || preset.category === "performance") {
-        setInitialCategory(preset.category);
-      } else if (preset.category === "bug") {
-        setInitialCategory("bug");
-      }
       // A fresh form per open: the epoch remounts the submit pane so a
       // previously submitted description doesn't leak into the next ticket.
       setFormEpoch((epoch) => epoch + 1);
@@ -118,10 +113,8 @@ export function FeedbackCenterDialog() {
           </div>
         )}
         {tab === "submit" ? (
-          <ReportProblemForm
+          <FeatureRequestForm
             key={formEpoch}
-            variant="dialog"
-            initialCategory={initialCategory}
             onCapturingChange={setCapturing}
             onAnnotatingChange={setAnnotating}
             onSubmitted={() => setTab("tickets")}

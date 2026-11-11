@@ -2,7 +2,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeReportProblemDialog, openReportProblem, setReportChannel } from "../diagnostics";
+import { closeReportProblemDialog, openFeatureRequests, setReportChannel } from "../diagnostics";
 import { FeedbackCenterDialog } from "./feedback-center-dialog";
 
 const mocks = vi.hoisted(() => ({
@@ -64,7 +64,7 @@ describe("feedback center", () => {
   it("opens on the submit tab and switches to the tickets tab on demand", async () => {
     mocks.listTickets.mockResolvedValue({ items: [], total: 0 });
     renderCenter();
-    act(() => openReportProblem());
+    act(() => openFeatureRequests());
     await screen.findByLabelText("settings.report_problem_label");
     expect(screen.getByText("settings.feedback_tab_submit")).toBeTruthy();
     expect(screen.queryByText("settings.feedback_tickets_empty_title")).toBeNull();
@@ -76,7 +76,7 @@ describe("feedback center", () => {
 
   it("shows ticket status in the list and opens the detail with the staff timeline", async () => {
     renderCenter();
-    act(() => openReportProblem(undefined, { tab: "tickets" }));
+    act(() => openFeatureRequests({ tab: "tickets" }));
     await screen.findByText("录音保存失败");
     expect(screen.getByText("settings.feedback_status_in_progress")).toBeTruthy();
 
@@ -91,7 +91,7 @@ describe("feedback center", () => {
       message_id: "m2", sender: "user", content: "又复现了一次", created_at: Date.now(),
     });
     renderCenter();
-    act(() => openReportProblem(undefined, { tab: "tickets" }));
+    act(() => openFeatureRequests({ tab: "tickets" }));
     fireEvent.click(await screen.findByText("录音保存失败"));
     fireEvent.change(await screen.findByPlaceholderText("settings.feedback_supplement_placeholder"), {
       target: { value: "又复现了一次" },
@@ -106,7 +106,7 @@ describe("feedback center", () => {
   it("surfaces a submission failure with the manual browser fallback", async () => {
     mocks.create.mockRejectedValue(new Error("反馈通道未配置"));
     renderCenter();
-    act(() => openReportProblem());
+    act(() => openFeatureRequests());
     fireEvent.change(await screen.findByLabelText("settings.report_problem_label"), {
       target: { value: "Crash on save" },
     });
@@ -115,10 +115,21 @@ describe("feedback center", () => {
     expect(screen.getByRole("button", { name: "settings.report_browser_fallback" })).toBeTruthy();
   });
 
-  it("presets the feature category when opened through the feature-request entry", async () => {
+  it("files every submission as a feature ticket on the Feishu gateway", async () => {
+    mocks.create.mockResolvedValue({ ticket_id: "recNew", status: "已提交", created_at: 1 });
     renderCenter();
-    act(() => openReportProblem(undefined, { tab: "submit", category: "feature" }));
-    const category = await screen.findByLabelText("settings.feedback_category_label");
-    expect((category as HTMLSelectElement).value).toBe("feature");
+    act(() => openFeatureRequests());
+    fireEvent.change(await screen.findByLabelText("settings.report_problem_label"), {
+      target: { value: "请支持批量导出笔记" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "settings.report_submit" }));
+    await waitFor(() =>
+      expect(mocks.create).toHaveBeenCalledWith(
+        expect.objectContaining({ category: "feature", description: expect.stringContaining("批量导出") }),
+        "test-token",
+      )
+    );
+    // A created ticket flips the center to the progress tab, which lists it.
+    await screen.findByText("录音保存失败");
   });
 });

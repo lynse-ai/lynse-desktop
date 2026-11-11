@@ -3,14 +3,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { toast } from "sonner";
+import {
+  Dialog,
+  DialogContent,
+} from "@lynse/ui/components/ui/dialog";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Textarea } from "@lynse/ui/components/ui/textarea";
-import { Input } from "@lynse/ui/components/ui/input";
-import { NativeSelect, NativeSelectOption } from "@lynse/ui/components/ui/native-select";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { api } from "@lynse/core/api";
-import { createFeedbackTicket, type FeedbackCategory, type FeedbackSeverity } from "@lynse/core/api";
 import { Camera, Check, Loader2, RefreshCw, X } from "./icons";
 import { initI18n } from "@lynse/core/i18n";
 import { getAppInfoSync } from "./app-update";
@@ -32,22 +32,7 @@ import { RESOURCES } from "./locales";
 import { isTauri } from "./layout/use-maximized";
 
 type Phase = "compose" | "submitting" | "submitted";
-
-/** Module dropdown values (pinned to the Feishu 单选 options — see
- *  lynclaw docs/feedback-feishu-setup.md; keys double as i18n suffixes). */
-export const FEEDBACK_MODULES = [
-  "recording",
-  "knowledge",
-  "assistant",
-  "live_translation",
-  "todo_calendar",
-  "account_sync",
-  "stability",
-  "ui",
-  "other",
-] as const;
-
-const SEVERITIES: FeedbackSeverity[] = ["P1-高", "P2-中", "P3-低"];
+type Submitted = { number: number };
 
 /** Open a URL in the system browser, falling back to window.open on web. */
 function openInBrowser(url: string): void {
@@ -66,20 +51,23 @@ function clampText(text: string, limit: number): string {
   return `…[截断 / truncated]…\n${text.slice(-limit)}`;
 }
 
-/** ZCode-style title: first non-empty line of the description, truncated. */
-function deriveTitle(description: string): string {
-  const firstLine = description
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find((line) => line.length > 0);
-  return (firstLine ?? description.replace(/\s+/g, " ").trim()).slice(0, 200);
-}
-
-/** Raw description + optional log tail; the server composes the environment block. */
-function composeDescription(description: string, logTail: LogTail | null): string {
-  const body = description.trim();
-  if (!logTail?.tail) return body;
-  return `${body}\n\n日志（尾部）/ Logs (tail):\n${clampText(logTail.tail, 4000)}`;
+/** Markdown body for the CNB issue: description + environment + log tail. */
+function composeIssueBody(input: { description: string; logTail: LogTail | null }): string {
+  const appInfo = getAppInfoSync();
+  const lines = [
+    "## 问题描述 / What happened",
+    input.description.trim(),
+    "",
+    "## 环境 / Environment",
+    `- App: v${appInfo?.version ?? "unknown"}`,
+    `- Platform: ${appInfo?.platform ?? "unknown"}`,
+    `- User agent: ${typeof navigator !== "undefined" ? navigator.userAgent : "unknown"}`,
+    `- Date: ${new Date().toISOString()}`,
+  ];
+  if (input.logTail?.tail) {
+    lines.push("", "## 日志（尾部）/ Logs (tail)", "```text", clampText(input.logTail.tail, 6000), "```");
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -96,19 +84,14 @@ function composeDescription(description: string, logTail: LogTail | null): strin
  * dialog face the editor fills the whole app page — the popup grows to the
  * viewport while it is open.
  */
-export function ReportProblemForm({
+function ReportProblemForm({
   variant,
-  initialCategory = "bug",
   onCapturingChange,
   onAnnotatingChange,
-  onSubmitted,
 }: {
   variant: "dialog" | "window";
-  initialCategory?: FeedbackCategory;
   onCapturingChange?: (capturing: boolean) => void;
   onAnnotatingChange?: (annotating: boolean) => void;
-  /** Fired after a ticket is created — the dialog switches to the tickets tab. */
-  onSubmitted?: () => void;
 }) {
   const { t } = useTranslation();
   const { setOpen } = useReportProblemDialog();
@@ -124,12 +107,8 @@ export function ReportProblemForm({
   const [logTail, setLogTail] = useState<LogTail | null>(null);
   const [phase, setPhase] = useState<Phase>("compose");
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [submitted, setSubmitted] = useState<{ ticketId: string } | null>(null);
+  const [submitted, setSubmitted] = useState<Submitted | null>(null);
   const [annotating, setAnnotating] = useState(false);
-  const [category, setCategory] = useState<FeedbackCategory>(initialCategory);
-  const [module_, setModule] = useState<string>(FEEDBACK_MODULES[8]);
-  const [severity, setSeverity] = useState<FeedbackSeverity>("P2-中");
-  const [contact, setContact] = useState("");
   // An older host build without the composite command still shows the
   // preview; it just isn't a way into the editor.
   const [canAnnotate] = useState(() => Boolean(getDesktopDiagnosticsApi()?.saveAnnotatedScreenshot));
@@ -232,48 +211,26 @@ export function ReportProblemForm({
 
   async function handleSubmit() {
     if (!description.trim() || phase === "submitting") return;
-    const hostApi = getDesktopDiagnosticsApi();
-    const token = api().getToken();
-    if (!token) {
-      setSubmitError(t("settings.feedback_login_required"));
+    const api = getDesktopDiagnosticsApi();
+    const channel = getReportChannel();
+    if (!api?.submitCnbIssue || !channel) {
+      setSubmitError(t("settings.report_channel_missing"));
       return;
     }
     setPhase("submitting");
     setSubmitError(null);
     const appInfo = getAppInfoSync();
+    const version = appInfo?.version || "unknown";
+    const platform = appInfo?.platform ?? "unknown";
     try {
-      // Upload the staged screenshot first (best effort): its public URL is
-      // the ticket's screenshot field; a failed upload just drops the field.
-      let screenshotUrl: string | undefined;
-      const channel = getReportChannel();
-      if (screenshot?.path && hostApi?.uploadScreenshot && channel) {
-        try {
-          const upload = await hostApi.uploadScreenshot({
-            endpoint: channel.endpoint,
-            path: screenshot.path,
-          });
-          screenshotUrl = upload.downloadUrl || undefined;
-        } catch (uploadError) {
-          console.warn("[feedback-center] screenshot upload failed:", uploadError);
-        }
-      }
-      const result = await createFeedbackTicket({
-        title: deriveTitle(description) || t("settings.feedback_title_fallback"),
-        description: composeDescription(description, logTail),
-        category,
-        module: t(`settings.feedback_module_${module_}`),
-        severity,
-        contact: contact.trim() || undefined,
-        screenshot_url: screenshotUrl,
-        environment: {
-          app_version: appInfo?.version ? `v${appInfo.version}` : undefined,
-          platform: appInfo?.platform,
-          user_agent: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
-        },
-      }, token);
-      setSubmitted({ ticketId: result.ticket_id });
+      const result = await api.submitCnbIssue({
+        endpoint: channel.endpoint,
+        title: `[报告] v${version} / ${platform}`,
+        body: composeIssueBody({ description, logTail }),
+        screenshotPath: screenshot?.path ?? null,
+      });
+      setSubmitted(result);
       setPhase("submitted");
-      onSubmitted?.();
     } catch (error) {
       setPhase("compose");
       setSubmitError(
@@ -296,7 +253,7 @@ export function ReportProblemForm({
         </div>
         <p className="text-sm font-medium">{t("settings.report_created_title")}</p>
         <p className="max-w-sm text-2xs leading-relaxed text-muted-foreground text-pretty">
-          {t("settings.feedback_created_hint")}
+          {t("settings.report_created_hint", { number: submitted.number })}
         </p>
         <Button size="sm" className="mt-1 h-7 text-xs" onClick={close}>
           {t("settings.report_done")}
@@ -332,73 +289,6 @@ export function ReportProblemForm({
             className="min-h-28 text-sm"
             autoFocus
           />
-        </div>
-
-        {/* Classification row: type / module / severity / contact — the
-            lightweight form the server composes into the ticket body. */}
-        <div className="grid grid-cols-2 gap-3">
-          <div className="space-y-1.5">
-            <label htmlFor="feedback-category" className="text-xs font-medium text-muted-foreground">
-              {t("settings.feedback_category_label")}
-            </label>
-            <NativeSelect
-              id="feedback-category"
-              value={category}
-              onChange={(event) => setCategory(event.target.value as FeedbackCategory)}
-              className="h-8 text-xs"
-            >
-              <NativeSelectOption value="bug">{t("settings.feedback_category_bug")}</NativeSelectOption>
-              <NativeSelectOption value="feature">{t("settings.feedback_category_feature")}</NativeSelectOption>
-              <NativeSelectOption value="usage">{t("settings.feedback_category_usage")}</NativeSelectOption>
-              <NativeSelectOption value="performance">{t("settings.feedback_category_performance")}</NativeSelectOption>
-            </NativeSelect>
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor="feedback-module" className="text-xs font-medium text-muted-foreground">
-              {t("settings.feedback_module_label")}
-            </label>
-            <NativeSelect
-              id="feedback-module"
-              value={module_}
-              onChange={(event) => setModule(event.target.value)}
-              className="h-8 text-xs"
-            >
-              {FEEDBACK_MODULES.map((key) => (
-                <NativeSelectOption key={key} value={key}>
-                  {t(`settings.feedback_module_${key}`)}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor="feedback-severity" className="text-xs font-medium text-muted-foreground">
-              {t("settings.feedback_severity_label")}
-            </label>
-            <NativeSelect
-              id="feedback-severity"
-              value={severity}
-              onChange={(event) => setSeverity(event.target.value as FeedbackSeverity)}
-              className="h-8 text-xs"
-            >
-              {SEVERITIES.map((value) => (
-                <NativeSelectOption key={value} value={value}>
-                  {t(`settings.feedback_severity_${value === "P1-高" ? "p1" : value === "P2-中" ? "p2" : "p3"}`)}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </div>
-          <div className="space-y-1.5">
-            <label htmlFor="feedback-contact" className="text-xs font-medium text-muted-foreground">
-              {t("settings.feedback_contact_label")}
-            </label>
-            <Input
-              id="feedback-contact"
-              value={contact}
-              onChange={(event) => setContact(event.target.value)}
-              placeholder={t("settings.feedback_contact_placeholder")}
-              className="h-8 text-xs"
-            />
-          </div>
         </div>
 
         <div className="space-y-2">
@@ -507,12 +397,87 @@ export function ReportProblemForm({
 }
 
 /**
- * In-app feedback center — kept as the mount-point name every window already
- * renders (about dialog, about window, sidebar). The two-tab shell (submit /
- * my tickets) lives in feedback-center/feedback-center-dialog.tsx.
+ * Mount point shared by every window (about dialog, about window, sidebar).
+ * Dispatches on the mode picked at open time: the problem report dialog
+ * above (CNB issues) or the feature-request center (Feishu tickets).
  */
 export function ReportProblemDialog() {
-  return <FeedbackCenterDialog />;
+  const { mode } = useReportProblemDialog();
+  if (mode === "center") return <FeedbackCenterDialog />;
+  return <ReportProblemDialogContent />;
+}
+
+/**
+ * In-app problem report dialog — the face of the report flow in every
+ * window. The whole content fades out while a retake captures the main
+ * window, so the dialog never photographs itself. While the screenshot is
+ * being annotated the popup grows to the full window: a portal would land
+ * outside Base UI's dialog (dismissed as an outside press), and `fixed`
+ * inside the translated popup can't reach the viewport, so the popup itself
+ * is the editor's frame.
+ */
+function ReportProblemDialogContent() {
+  const { open, setOpen } = useReportProblemDialog();
+  const [capturing, setCapturing] = useState(false);
+  const [annotating, setAnnotating] = useState(false);
+  const contentClassName = useMemo(
+    () =>
+      annotating
+        ? "gap-0 overflow-hidden p-0"
+        : `grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 transition-opacity sm:max-w-xl ${
+            capturing ? "opacity-0" : "opacity-100"
+          }`,
+    [annotating, capturing],
+  );
+  // Inline so the popup's own max-width / radius utilities can't win on
+  // stylesheet order.
+  const contentStyle = useMemo(
+    () =>
+      annotating
+        ? {
+            width: "100vw",
+            height: "100vh",
+            maxWidth: "none",
+            borderRadius: 0,
+            borderColor: "transparent",
+            gridTemplateRows: "minmax(0,1fr)",
+          }
+        : undefined,
+    [annotating],
+  );
+
+  // A submitted dialog returns to the compose form on reopen.
+  useEffect(() => {
+    if (!open) return;
+    setCapturing(false);
+    setAnnotating(false);
+  }, [open]);
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent className={contentClassName} style={contentStyle} showCloseButton={false}>
+        {!annotating && <DialogHeaderLike />}
+        <ReportProblemForm
+          variant="dialog"
+          onCapturingChange={setCapturing}
+          onAnnotatingChange={setAnnotating}
+        />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Title block matching the reference layout (kept dialog-sized). */
+function DialogHeaderLike() {
+  const { t } = useTranslation();
+  return (
+    <div className="border-b px-5 py-3.5 pr-12">
+      <h2 className="text-base font-semibold leading-tight">{t("settings.report_title")}</h2>
+      <p className="mt-0.5 text-2xs leading-relaxed text-muted-foreground text-pretty">
+        {t("settings.report_subtitle")}
+      </p>
+    </div>
+  );
 }
 
 /**

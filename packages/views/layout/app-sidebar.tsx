@@ -63,8 +63,7 @@ import { SettingsDialog } from "../settings/settings-dialog";
 import { UploadDialog } from "../workspace/upload-dialog";
 import { TemplateManager } from "../workspace/template-manager";
 import { AppUpdateDialog } from "../app-update-dialog";
-import { openReportProblem } from "../diagnostics";
-import { openFeedbackWindow } from "../feedback/open-feedback";
+import { openFeatureRequests, openReportProblem } from "../diagnostics";
 import { ReportProblemDialog } from "../report-problem-dialog";
 import { LayoutTemplate, MessageSquarePlus } from "lucide-react";
 
@@ -505,8 +504,8 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
           <span>{t("layout.user_help_feedback")}</span>
         </DropdownMenuItem>
 
-        {/* ── Feature requests (FeedLog board) ────────── */}
-        <DropdownMenuItem onClick={openFeedbackWindow}>
+        {/* ── Feature requests (Feishu-backed center) ─── */}
+        <DropdownMenuItem onClick={() => openFeatureRequests()}>
           <MessageSquarePlus className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_feature_requests")}</span>
         </DropdownMenuItem>

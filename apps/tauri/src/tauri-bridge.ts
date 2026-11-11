@@ -155,7 +155,6 @@ type DesktopApi = {
       sandboxed: boolean;
     }>;
     openAboutWindow: (title?: string) => Promise<void>;
-    openFeedbackWindow: (title?: string) => Promise<void>;
     // Opens (or focuses) the standalone problem-report window (macOS; other
     // platforms use the in-app dialog).
     openReportWindow: (title?: string) => Promise<void>;
@@ -650,10 +649,6 @@ export async function installTauriBridge(): Promise<void> {
       // is passed in because only the frontend knows the active locale.
       openAboutWindow: (title?: string) =>
         command<void>("open_about_window", { title: title ?? null }),
-      // Opens (or focuses) the standalone feature-request window hosting the
-      // FeedLog widget. Same localized-title convention as openAboutWindow.
-      openFeedbackWindow: (title?: string) =>
-        command<void>("open_feedback_window", { title: title ?? null }),
       openReportWindow: (title?: string) =>
         command<void>("open_report_window", { title: title ?? null }),
       captureScreenshot: async (background?: string | null) => {

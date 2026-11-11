@@ -17,6 +17,11 @@ import { LYNSE_APP_ICON_SRC } from "./app-icon";
 import { ReleaseNotesContent } from "../release-notes-content";
 import { WEBSITE_URL, privacyUrl, termsUrl } from "./links";
 
+// Core/views have no Node types; declare just the shape Next.js injects so
+// the literal NEXT_PUBLIC member expression inlines at build time (see
+// core/config/index.ts for the pattern).
+declare const process: { env: Record<string, string | undefined> } | undefined;
+
 /** Open a URL in the system browser, falling back to a new tab on web. */
 function openInBrowser(url: string): void {
   const desktopWindow = window as Window & {
@@ -43,10 +48,15 @@ export function AboutContent() {
   const isDesktop = Boolean(getDesktopAppApi());
   const appInfo = getAppInfoSync();
   // Build number in parentheses after the version, native-About style
-  // ("1.0.3 (107)") — present only in bundled macOS releases.
+  // ("1.0.3 (107)") — present only in bundled macOS releases. The web build
+  // has no Rust bridge; it falls back to the version Next inlines from the
+  // app package.json at build time.
+  const webVersion = (typeof process !== "undefined" && process.env.NEXT_PUBLIC_APP_VERSION) || "";
   const versionLabel = appInfo
     ? `v${appInfo.version}${appInfo.build ? ` (${appInfo.build})` : ""}`
-    : "—";
+    : webVersion
+      ? `v${webVersion}`
+      : "—";
   const hasUpdate = Boolean(update?.hasUpdate);
   const year = new Date().getFullYear();
 

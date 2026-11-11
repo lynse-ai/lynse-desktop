@@ -2,12 +2,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 use tauri::{ipc::Channel, AppHandle};
 use tokio::io::AsyncWriteExt;
 
-use crate::{app_data_dir, stt, CommandResult};
+use crate::{app_data_dir, silent_command, stt, CommandResult};
 
 const PREFIX: &str = "cloud-audio:";
 const EXTENSIONS: &[&str] = &[
@@ -236,7 +236,9 @@ struct SilenceSegment {
 /// entire meeting in the webview. Each 100 ms peak uses two 50 ms PCM windows.
 pub(crate) fn analyze(app: &AppHandle, path: &Path) -> CommandResult<CloudAudioAnalysis> {
     let ffmpeg = stt::sidecar_path(app, "ffmpeg")?;
-    let mut child = Command::new(ffmpeg)
+    // CREATE_NO_WINDOW on Windows — a bare spawn flashes a console over the
+    // app while the audio is analyzed (issue #25).
+    let mut child = silent_command(ffmpeg)
         .args(["-nostdin", "-v", "error", "-i"])
         .arg(path)
         .args([

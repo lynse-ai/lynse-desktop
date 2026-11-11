@@ -16,7 +16,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
-use crate::{ensure_runtime_available, local_store_path, now, read_array, stt, CommandResult};
+use crate::{ensure_runtime_available, local_store_path, now, read_array, silent_command, stt, CommandResult};
 
 /// Only one ffmpeg job may run at a time from the editor page.
 static JOB_ID: AtomicU32 = AtomicU32::new(0);
@@ -45,7 +45,9 @@ fn emit_progress(app: &AppHandle, job_id: u32, phase: &str, detail: Option<&str>
 /// promptly. Returns Err("cancelled") when the user aborted.
 fn run_ffmpeg(app: &AppHandle, job_id: u32, args: &[String], output: &Path) -> CommandResult<()> {
     let ffmpeg = ffmpeg_path(app)?;
-    let mut child = Command::new(&ffmpeg)
+    // CREATE_NO_WINDOW on Windows — a bare spawn flashes a console over the
+    // app for the whole export (issue #25).
+    let mut child = silent_command(&ffmpeg)
         .args(args)
         .stderr(std::process::Stdio::piped())
         .spawn()
@@ -224,7 +226,7 @@ fn overwrite_record(app: &AppHandle, source: &str, output: &Path, duration_ms: O
 /// Probe duration in ms via ffprobe (best effort).
 fn probe_duration_ms(app: &AppHandle, path: &str) -> Option<u64> {
     let ffprobe = stt::sidecar_path(app, "ffprobe").ok()?;
-    let output = Command::new(&ffprobe)
+    let output = silent_command(&ffprobe)
         .args([
             "-v", "error",
             "-show_entries", "format=duration",
@@ -441,7 +443,7 @@ pub(crate) fn audio_editor_cancel() -> CommandResult<()> {
         if let Ok(slot) = CHILD_PID.lock() {
             if let Some(pid) = *slot {
                 #[cfg(target_os = "windows")]
-                let status = Command::new("taskkill").args(["/PID", &pid.to_string(), "/F"]).status();
+                let status = silent_command("taskkill").args(["/PID", &pid.to_string(), "/F"]).status();
                 #[cfg(not(target_os = "windows"))]
                 let status = Command::new("kill").arg(pid.to_string()).status();
                 if let Ok(status) = status {

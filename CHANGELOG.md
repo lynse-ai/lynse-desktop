@@ -19,6 +19,58 @@
 > advertised it (its manifest mirror failed and the rollout was cancelled), so
 > that work plus the todo card redesign shipped together as 1.2.7.
 
+## 1.2.10 (2026-11-12)
+
+### New Features
+
+- The todo page now opens as a task board: cards flow across Unsorted (no date yet), Near-term (dated) and a starred Focus column. Dragging a card into Near-term asks for a date, and the star icon files any card into Focus with one click; completed cards tuck away behind a toggle.
+- Multi-channel sign-in: the international edition adds email-code, Google and Apple sign-in with first-time binding flows; the China edition adds WeChat QR sign-in.
+- Feedback is now triaged by channel: problem reports keep going to the issue tracker, while feature requests go straight to a Feishu board you can follow from the in-app feedback center.
+- Settings gains custom model keys: bring your own model API keys and let the knowledge organizer run on your own models.
+- The knowledge base gains full-text search with word segmentation.
+- Daily notes now sync across devices through the cloud.
+- A new Agent configuration console centralizes agent-related settings.
+- Knowledge organization enhancements: meeting candidate memory, direct-mode distillation, and a resilient publish uplink for meeting notes that recovers from interruptions.
+
+### Improvements
+
+- The todo page and home dashboard fill maximized windows, and the web home gets a responsive shell with an icon-rail sidebar.
+- Update notes now render in the app language only instead of bilingual side-by-side.
+- The notes editor gets a docked Markdown toolbar.
+- Notes on the web show list and editor side by side without accordion coupling.
+- The login page adopts a centered, social-first layout; the web About panel shows the app version.
+
+### Fixed
+
+- Windows: console windows no longer flash when spawning audio tools, builds are now code-signed, and a secondary backend returning 401 no longer logs you out.
+- Knowledge organizer: compiling now tolerates unlabeled model-output rejections.
+- Google sign-in: errors surface properly and the popup flow falls back to a redirect when needed.
+
+### 新功能
+
+- 待办页升级为任务看板：卡片在「未整理」（未安排时间）、「近期任务」（已定日期）与「重点追踪」（星标）三列间流转。拖拽卡片到「近期任务」会弹出日期确认；点卡片上的星星即可一键归入重点追踪；已完成的卡片默认收起，可随时展开查看。
+- 多通道登录：国际版新增邮箱验证码、Google 与 Apple 登录及首次绑定流程；中国版新增微信扫码登录。
+- 反馈按渠道分诊：报告问题照旧进入事项跟踪，功能建议直达飞书看板，可在应用内反馈中心跟进进度。
+- 设置新增自定义模型密钥：自带模型 API 密钥，知识整理可运行在你自己的模型上。
+- 知识库新增分词全文检索。
+- 每日笔记支持云端跨设备同步。
+- 新增 Agent 配置控制台，集中管理 Agent 相关设置。
+- 知识整理增强：新增会议候选记忆与直接模式提炼，纪要发布上行链路支持中断恢复。
+
+### 改进
+
+- 待办页与主页在最大化窗口下铺满内容区；网页版主页获得响应式外壳与图标栏侧边栏。
+- 更新说明按应用语言单独渲染，不再双语并排。
+- 笔记编辑器新增常驻 Markdown 工具栏。
+- 网页版笔记列表与编辑器三栏并列，不再联动折叠。
+- 登录页改为居中 Logo、社交优先的布局；网页版关于面板显示应用版本。
+
+### 错误修复
+
+- Windows：拉起音频工具不再闪现控制台窗口；安装包已进行代码签名；次要后端返回 401 不再导致误登出。
+- 知识整理：编译阶段可容忍未标注的模型输出拒绝。
+- Google 登录：错误信息正常展示，弹窗流程失败时自动回退到重定向。
+
 ## 1.2.9 (2026-11-09)
 
 ### New Features

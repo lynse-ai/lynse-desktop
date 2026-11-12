@@ -56,6 +56,11 @@ export type DesktopDiagnosticsApi = {
   // Uploads a staged screenshot to the report channel's object storage and
   // returns its public download URL (the feedback-center ticket field).
   uploadScreenshot?: (request: { endpoint: string; path: string }) => Promise<{ downloadUrl: string }>;
+  // Opens an image file dialog and stages the picked file as a report
+  // attachment (same {path, url} shape as a captured screenshot). Null when
+  // the user cancels; missing on an older host build — the composer then
+  // hides the upload button.
+  pickReportAttachment?: () => Promise<StagedScreenshot | null>;
   openReportWindow?: (title?: string) => Promise<void>;
 };
 

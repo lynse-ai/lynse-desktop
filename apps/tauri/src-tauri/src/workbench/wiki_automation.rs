@@ -1504,6 +1504,35 @@ async fn checked_preflight(
     catalog
         .failed
         .retain(|_, error| !super::super::knowledge_transport::transient(error));
+    // Pure HTTP 503 rejections never started server-side work, so re-attempt
+    // them after a cool-down per the retry-spacing rule. Gateway cuts (504)
+    // keep an unknown outcome and stay latched to avoid double-billed work.
+    let cutoff = chrono::Utc::now() - chrono::Duration::seconds(600);
+    let retriable: Vec<String> = catalog
+        .failed
+        .iter()
+        .filter(|(key, error)| {
+            error.starts_with("Lynclaw synthesis failed (HTTP 503)")
+                && catalog
+                    .details
+                    .get(*key)
+                    .and_then(|failure| {
+                        chrono::DateTime::parse_from_rfc3339(&failure.occurred_at).ok()
+                    })
+                    .is_some_and(|at| at < cutoff)
+        })
+        .map(|(key, _)| key.clone())
+        .collect();
+    if !retriable.is_empty() {
+        log::info!(
+            "[wiki-run] releasing {} server-rejected chunks for spaced retry",
+            retriable.len()
+        );
+        for key in retriable {
+            catalog.failed.remove(&key);
+            catalog.details.remove(&key);
+        }
+    }
     write_json(&catalog_path(root), catalog)
 }
 
@@ -1595,7 +1624,46 @@ pub(super) async fn run(
     let initial_topics = {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
-        topics(&root)?
+        let mut values = topics(&root)?;
+        // Same spaced retry as catalog chunks: pure HTTP 503 rejections never
+        // started server-side work, so release them after a cool-down instead
+        // of latching topics until the next bind. This must run BEFORE the
+        // idle check: failed topics leave the inputs fingerprint untouched,
+        // so an idle pass would otherwise strand them forever.
+        let cutoff = chrono::Utc::now() - chrono::Duration::seconds(600);
+        let mut released = 0usize;
+        for topic in &mut values {
+            let stale_503 = topic
+                .failure
+                .as_ref()
+                .is_some_and(|failure| {
+                    // The stored message is the bare UNKNOWN text for both
+                    // 503 rejections and network send failures; neither
+                    // started server-side work. Gateway cuts (504) keep an
+                    // unknown outcome and stay latched.
+                    (failure.message.contains(tasks::UNKNOWN)
+                        || failure
+                            .message
+                            .starts_with("Lynclaw synthesis failed (HTTP 503)"))
+                        && chrono::DateTime::parse_from_rfc3339(&failure.occurred_at)
+                            .map(|at| at < cutoff)
+                            .unwrap_or(false)
+                });
+            if stale_503 {
+                topic.error.clear();
+                topic.failure = None;
+                topic.last_attempt_fingerprint.clear();
+                released += 1;
+            }
+        }
+        if released > 0 {
+            log::info!(
+                "[wiki-run] releasing {} server-rejected topics for spaced retry",
+                released
+            );
+            save_topics(&root, &values)?;
+        }
+        values
     };
     if !needs_automatic_processing(&manifest, &initial_topics, &docs, &config, &catalog) {
         let _guard = state.serial.lock().await;
@@ -1617,8 +1685,16 @@ pub(super) async fn run(
         if finish_idle_grouping(&mut latest, &initial_topics, catalog_failures) {
             persist(app, session, &latest)?;
         }
+        // Heartbeats re-enter every two minutes; an idle pass must stay silent
+        // so the file log only records real organize work.
         return Ok(());
     }
+    let run_started = std::time::Instant::now();
+    log::info!(
+        "[wiki-run] pass started: sources={} topics={}",
+        docs.len(),
+        initial_topics.len()
+    );
     // Save the inputs actually attempted, so a change during this pass remains pending.
     let attempted_inputs = processing_inputs(&docs, &initial_topics, &config);
     // Topic failures from earlier passes stay visible in progress reports
@@ -1640,7 +1716,11 @@ pub(super) async fn run(
     if let Some(error) = catalog.failed.iter().find_map(|(key, error)| {
         (current_keys.contains(key)
             && is_service_failure(error)
-            && !super::super::knowledge_transport::transient(error))
+            // Synthesis 5xx/429 recover on their own once the backend settles;
+            // blocking here wedged the pipeline until restart while the log
+            // dedup hid the reason. Latched chunks are skipped per session in
+            // prepare_catalog, so an open gate burns no extra model calls.
+            && !tasks::Outcome::recoverable(error))
         .then_some(error)
     }) {
         return Err(error.clone());
@@ -1711,6 +1791,12 @@ pub(super) async fn run(
     // queue; each wave's results then apply serially so topic identity,
     // progress and persisted state keep their original single-stream order.
     let wave_size = state.synthesis_queue.capacity().max(1);
+    log::info!(
+        "[wiki-run] catalog phase: {} sources to analyze, {} already applied (wave size {})",
+        jobs.len(),
+        applied,
+        wave_size
+    );
     let shared_manifest = Arc::new(manifest.clone());
     let shared_docs = Arc::new(docs.clone());
     for wave in jobs.chunks(wave_size) {
@@ -1795,6 +1881,12 @@ pub(super) async fn run(
             require_current(state, session)?;
             match result {
                 Ok(rows) => {
+                    log::info!(
+                        "[wiki-catalog] source {} ({}) -> {} topic rows",
+                        job.doc.title,
+                        job.doc.id,
+                        rows.len()
+                    );
                     catalog.chunks.insert(job.key.clone(), rows.clone());
                     catalog.failed.remove(&job.key);
                     catalog.details.remove(&job.key);
@@ -1812,12 +1904,24 @@ pub(super) async fn run(
                 }
                 // Service failures apply to the whole run, never to an individual source.
                 Err(error) if is_service_failure(&error) => {
+                    log::warn!(
+                        "[wiki-catalog] service failure on source {} ({}): {}",
+                        job.doc.title,
+                        job.doc.id,
+                        error
+                    );
                     catalog.details.remove(&job.key);
                     record_failure(&mut catalog, &job.key, job.doc, &error);
                     write_json(&catalog_path(&root), &catalog)?;
                     wave_error.get_or_insert(error);
                 }
                 Err(error) => {
+                    log::warn!(
+                        "[wiki-catalog] source {} ({}) failed: {}",
+                        job.doc.title,
+                        job.doc.id,
+                        error
+                    );
                     catalog.details.remove(&job.key);
                     record_failure(&mut catalog, &job.key, job.doc, &error);
                     failed_sources.insert(job.doc.id.clone());
@@ -1894,6 +1998,12 @@ pub(super) async fn run(
     // model queue concurrently; per-topic state changes still apply serially
     // in the original order after each wave completes.
     let compile_wave = state.synthesis_queue.capacity().min(3).max(1);
+    log::info!(
+        "[wiki-run] compile phase: {} topics pending, {} already settled (wave size {})",
+        pending.len(),
+        completed,
+        compile_wave
+    );
     for wave in pending.chunks(compile_wave) {
         report_progress(
             app,
@@ -2007,9 +2117,21 @@ pub(super) async fn run(
                         current.failure = None;
                         current.last_fingerprint = version.clone();
                         completed += 1;
+                        log::info!(
+                            "[wiki-compile] topic {} ({}) published (partial={})",
+                            current.title,
+                            current.id,
+                            page_is_partial
+                        );
                     }
                 }
                 Err(failure) => {
+                    log::warn!(
+                        "[wiki-compile] topic {} ({}) failed: {}",
+                        topic.title,
+                        topic.id,
+                        failure.message
+                    );
                     current.error = failure.message.clone();
                     current.failure = Some(failure);
                     if let Some(partial) = &mut current.partial_compilation {
@@ -2062,6 +2184,15 @@ pub(super) async fn run(
             "Wiki catalog failed for {catalog_failures} sources; retry automatic organization"
         );
     }
+    log::info!(
+        "[wiki-run] pass finished in {:.1}s: catalog ok={} failed={}, topics completed={} failed={}, embedding failures={}",
+        run_started.elapsed().as_secs_f64(),
+        applied,
+        catalog_failures,
+        completed,
+        topic_failures_run,
+        embedding_failures
+    );
     persist(app, session, &latest)
 }
 

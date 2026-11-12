@@ -395,6 +395,7 @@ fn is_service_failure(error: &str) -> bool {
         || error == "Account or consent changed; result discarded"
         || super::knowledge_transport::transient(error)
         || error == TEXT_MODEL_CHANGED
+        || error == TEXT_MODEL_KEY_REQUIRED
         || error == "Lynclaw synthesis failed (HTTP 422): Unknown synthesis task"
         || error.starts_with("Lynclaw synthesis failed (HTTP 429)")
         || [500, 502, 503, 504].iter().any(|status| {
@@ -1022,8 +1023,40 @@ fn embedding_ready(model: &Model, key: Option<&str>) -> bool {
         });
     !requires_key || key.is_some_and(|key| !key.trim().is_empty())
 }
-fn key_name(session: &Session, kind: &str) -> String {
+pub(super) fn key_name(session: &Session, kind: &str) -> String {
     format!("wiki-{}-{kind}", session.scope)
+}
+/// Run only when the user picked one of their own custom models AND its API
+/// key is vaulted. Knowledge organization never falls back to the platform
+/// credential: without both pieces this error blocks the whole pass before
+/// any topic can be marked as failed.
+pub(super) const TEXT_MODEL_KEY_REQUIRED: &str =
+    "Knowledge organization needs your own model API key; set it in knowledge settings";
+/// The session's text model with its vaulted API key attached at request
+/// time. The session only names a custom-model profile; the key itself lives
+/// in the OS keychain and never enters the session or the state files.
+async fn text_model_override(app: &AppHandle, session: &Session) -> CommandResult<Value> {
+    let mut value = session
+        .model_override
+        .clone()
+        .ok_or(TEXT_MODEL_KEY_REQUIRED)?;
+    let profile = value
+        .get("profileId")
+        .and_then(Value::as_str)
+        .filter(|profile| !profile.is_empty())
+        .ok_or(TEXT_MODEL_KEY_REQUIRED)?
+        .to_owned();
+    let key = crate::custom_models::key(app, &profile)
+        .await?
+        .unwrap_or_default();
+    if key.trim().is_empty() {
+        return Err(TEXT_MODEL_KEY_REQUIRED.into());
+    }
+    if let Some(fields) = value.as_object_mut() {
+        fields.remove("profileId");
+    }
+    value["apiKey"] = json!(key);
+    Ok(value)
 }
 async fn model_key(
     app: &AppHandle,
@@ -1162,7 +1195,7 @@ async fn request_model_report(
     require_task_model(&state, session, task)?;
     let mut body = lynclaw_payload(session, task, payload);
     if task != "graph_extract" {
-        body["modelOverride"] = json!(current(&state)?.model_override);
+        body["modelOverride"] = json!(text_model_override(app, session).await?);
     }
     if task != "graph_extract" {
         let profile = if tasks::profile_bound() {
@@ -1185,6 +1218,12 @@ async fn request_model_report(
     if let Some(operation) = tasks::current_operation() {
         tasks::dispatched(&wiki_root(app, session)?, &operation)?;
     }
+    let model_started = std::time::Instant::now();
+    let model_sources = body["sources"].as_array().map(|rows| rows.len()).unwrap_or(0);
+    let model_operation = body["operationId"]
+        .as_str()
+        .map(|id| id.chars().take(8).collect::<String>())
+        .unwrap_or_default();
     let result = send_synthesis_report(
         &client,
         &format!("{}{path}", session.agent_url),
@@ -1198,6 +1237,23 @@ async fn request_model_report(
         },
     )
     .await;
+    match &result {
+        Ok(_) => log::info!(
+            "[wiki-model] task={} sources={} op={} ok in {:.1}s",
+            task,
+            model_sources,
+            model_operation,
+            model_started.elapsed().as_secs_f64()
+        ),
+        Err(error) => log::warn!(
+            "[wiki-model] task={} sources={} op={} failed after {:.1}s: {}",
+            task,
+            model_sources,
+            model_operation,
+            model_started.elapsed().as_secs_f64(),
+            error
+        ),
+    }
     if let Some(seconds) = report.retry_after {
         state.synthesis_queue.rate_limited(seconds).await;
     }
@@ -1385,10 +1441,28 @@ async fn send_synthesis_report(
             .get("retry-after")
             .and_then(|v| v.to_str().ok())
             .map(retry_after_seconds);
-        let value: Value = match response.json().await {
+        // Read the raw body once. A JSON decode failure must not discard the
+        // status or shape: gateway cuts on long synthesis calls return HTML or
+        // empty bodies that are otherwise indistinguishable from model garbage.
+        let response_bytes = response
+            .bytes()
+            .await
+            .map_err(|_| tasks::UNKNOWN.to_string())?;
+        let value: Value = match serde_json::from_slice(&response_bytes) {
             Ok(value) => value,
             Err(_) => {
-                return Err("Lynclaw returned invalid synthesis JSON".into());
+                let prefix = String::from_utf8_lossy(&response_bytes)
+                    .chars()
+                    .take(120)
+                    .collect::<String>();
+                log::warn!(
+                    "[wiki-model] non-JSON synthesis body: status={} bytes={} prefix={prefix:?}",
+                    status,
+                    response_bytes.len()
+                );
+                return Err(format!(
+                    "Lynclaw returned invalid synthesis JSON (HTTP {status})"
+                ));
             }
         };
         report.absorb(&value);
@@ -1541,6 +1615,7 @@ fn synthesis_error(status: u16, body: &Value) -> String {
                 | "Irrelevant Wiki analysis must contain no claims"
                 | "Graph DeepSeek credentials are not configured"
                 | "Graph model rate limited"
+                | "Model rate limited"
                 | "Model output was truncated"
                 | "Model outcome is unknown; retry explicitly"
                 | "Synthesis processor changed; refresh capabilities"
@@ -2171,7 +2246,14 @@ pub(super) async fn run(
     state: &WorkbenchState,
     session: &Session,
 ) -> CommandResult<()> {
-    if load_state(app, session)?.wiki_automation.is_some() {
+    let manifest = load_state(app, session)?;
+    if manifest.wiki_automation.is_some() {
+        // Organization runs on the user's own model key. Stop the pass here
+        // while it is missing so a keyless run cannot fail topics one by one.
+        // A paused or disabled workbench keeps running keyless without nagging.
+        if manifest.enabled && manifest.allow_ai {
+            text_model_override(app, session).await?;
+        }
         // These orchestration futures contain very large state. Keep their
         // coroutine state on the heap so nested model-task work does not
         // exhaust the runtime worker stack.
@@ -2210,6 +2292,8 @@ pub(super) async fn run(
             }
             return Ok(());
         }
+        // Pending work needs the user's own model key; see the automation gate.
+        text_model_override(app, session).await?;
         manifest.phase = "processing".into();
         if manifest
             .wiki_progress
@@ -2526,19 +2610,25 @@ async fn embed_sources(
     local: &Path,
 ) -> CommandResult<usize> {
     if !embedding_configured(&config.embedding) {
+        log::debug!("[wiki-embed] disabled: embedding service not configured");
         return Ok(0);
     }
     let key = model_key(app, session, "embedding").await?;
     if !embedding_ready(&config.embedding, key.as_deref()) {
+        log::debug!("[wiki-embed] disabled: embedding API key not ready");
         return Ok(0);
     }
     let manifest = load_state(app, session)?;
     ready(&manifest)?;
     let mut failures = 0;
+    let mut cached = 0usize;
+    let mut embedded = 0usize;
     let docs = sources_for(local, &manifest);
     let total = docs.len();
+    log::info!("[wiki-embed] phase started: sources={total}");
     for (index, doc) in docs.into_iter().enumerate() {
         if embedding_cached(root, &doc, config)? {
+            cached += 1;
             continue;
         }
         report_progress(
@@ -2568,7 +2658,13 @@ async fn embed_sources(
         let vector = match embedding(app, state, session, config, &doc.text(), key.as_deref()).await
         {
             Ok(vector) => vector,
-            Err(_) => {
+            Err(error) => {
+                log::warn!(
+                    "[wiki-embed] source {} ({}) failed: {}",
+                    doc.id,
+                    doc.title,
+                    &error.chars().take(300).collect::<String>()
+                );
                 require_current(state, session)?;
                 failures += 1;
                 continue;
@@ -2590,8 +2686,16 @@ async fn embed_sources(
                     ],
                 )
                 .map_err(|e| e.to_string())?;
+            embedded += 1;
         }
     }
+    log::info!(
+        "[wiki-embed] phase finished: sources={} cached={} embedded={} failed={}",
+        total,
+        cached,
+        embedded,
+        failures
+    );
     Ok(failures)
 }
 

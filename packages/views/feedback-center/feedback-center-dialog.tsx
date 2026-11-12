@@ -40,7 +40,7 @@ export function FeedbackCenterDialog() {
     () =>
       annotating
         ? "gap-0 overflow-hidden p-0"
-        : `grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 transition-opacity sm:max-w-2xl ${
+        : `grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 transition-opacity sm:max-w-xl ${
             capturing ? "opacity-0" : "opacity-100"
           }`,
     [annotating, capturing],

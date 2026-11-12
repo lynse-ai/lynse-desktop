@@ -348,6 +348,9 @@ fn model_output_failures_retry_per_session_but_stay_latched_within_a_session() {
         "Lynclaw returned invalid synthesis JSON"
     ));
     assert!(is_model_output_failure(
+        "Lynclaw returned invalid synthesis JSON (HTTP 504)"
+    ));
+    assert!(is_model_output_failure(
         "Lynclaw synthesis failed (HTTP 500): Invalid Wiki catalog output"
     ));
     // Session, transport and compile-stage validation errors latch as before.

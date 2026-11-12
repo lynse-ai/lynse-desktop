@@ -4,7 +4,6 @@ import { useRef, useState, useEffect, useCallback, useImperativeHandle, forwardR
 import { Play, Pause, SkipForward, Volume2, VolumeX, Crop, Download, Loader2, Mic, Monitor } from "../icons";
 import { IconSwap } from "../icon-swap";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { cn } from "@lynse/ui/lib/utils";
 import { useWaveformPeaks } from "./use-waveform-peaks";
 import type { RecordingAudioSourceInterval } from "./types";
 import { WaveformProgress } from "./waveform-progress";
@@ -206,7 +205,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
     const showWaveformLoading = animateWaveformLoading && waveformLoading;
 
     return (
-      <div className="flex w-full flex-col gap-1.5 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+      <div className="flex w-full items-center gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
         {/* Hidden audio element */}
         {src && (
           <audio
@@ -222,6 +221,30 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
           />
         )}
 
+        {/* Primary action embedded at the head of the waveform row — download while cloud audio is pending, play/pause once a source exists */}
+        {!src && download ? (
+          <button type="button" onClick={download.start} disabled={download.disabled} className={PRIMARY_ACTION} aria-label={downloadLabel} title={downloadLabel}>
+            {downloading ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : <Download aria-hidden="true" className="size-3.5" />}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={togglePlay}
+            disabled={loading}
+            className={PRIMARY_ACTION}
+            aria-label={t(playing ? "audio_editor.pause" : "audio_editor.play")}
+          >
+            <IconSwap stateKey={playing ? "pause" : "play"}>
+              {playing ? (
+                <Pause className="size-3.5" />
+              ) : (
+                <Play className="size-3.5 ml-0.5" />
+              )}
+            </IconSwap>
+          </button>
+        )}
+
+        {/* Waveform scrubber fills the middle of the row */}
         {showDownloadWaveform || showWaveformLoading || peaks.length > 0 ? (
           <WaveformProgress
             peaks={peaks}
@@ -232,10 +255,10 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
               percent: src ? 100 : download?.progress,
               label: downloading ? downloadLabel : undefined,
             } : undefined}
-            className="py-0.5"
+            className="min-w-0 flex-1 py-0.5"
           />
-        ) : !loading && (
-          <div className="group relative h-1.5 w-full cursor-pointer rounded-full bg-muted/60" onClick={handleSeek}>
+        ) : (
+          <div className="group relative h-1.5 min-w-0 flex-1 cursor-pointer rounded-full bg-muted/60" onClick={handleSeek}>
             <div
               className="absolute inset-y-0 left-0 rounded-full bg-primary"
               style={{ width: `${progress}%` }}
@@ -248,36 +271,81 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
           </div>
         )}
 
+        {/* Status text and secondary controls share the same row */}
         {!src && download ? (
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={download.start} disabled={download.disabled} className={PRIMARY_ACTION} aria-label={downloadLabel} title={downloadLabel}>
-              {downloading ? <Loader2 aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" /> : <Download aria-hidden="true" className="size-3.5" />}
-            </button>
-            {download.failed ? (
-              <span role="status" className="text-2xs text-destructive">{t("workspace.download_audio_failed")}</span>
-            ) : (
-              <span className="text-2xs tabular-nums text-muted-foreground">
-                {downloadLabel}{download.progress != null ? ` ${download.progress}%` : ""}
-              </span>
-            )}
-            {!!durationHint && <span className="ms-auto shrink-0 text-2xs tabular-nums text-muted-foreground">{formatTime(durationHint)}</span>}
-          </div>
+          download.failed ? (
+            <span role="status" className="shrink-0 text-2xs text-destructive">{t("workspace.download_audio_failed")}</span>
+          ) : (
+            <div className="flex shrink-0 items-center gap-2">
+              {downloading && download.progress != null && (
+                <span className="text-2xs tabular-nums text-muted-foreground">{download.progress}%</span>
+              )}
+              {!!durationHint && <span className="text-2xs tabular-nums text-muted-foreground">{formatTime(durationHint)}</span>}
+            </div>
+          )
         ) : loading ? (
-          <div role={showWaveformLoading ? "status" : undefined} className={cn("flex items-center gap-2 text-xs text-muted-foreground", (showDownloadWaveform || showWaveformLoading) && "min-h-7")}>
-            {!showWaveformLoading && <div className="size-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground motion-reduce:animate-none" />}
-            {t(showWaveformLoading ? "recording_sources.waveform_loading" : "audio.loading")}
+          <div role="status" className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+            <div className="size-3 animate-spin rounded-full border-2 border-muted-foreground/30 border-t-muted-foreground motion-reduce:animate-none" />
+            {t("audio.loading")}
           </div>
         ) : (
-          <div className="flex flex-col gap-1.5">
-            {(waveformLoading || waveformError || waveformSkipped) && (
-              <div role="status" className="flex items-center gap-2 text-2xs text-muted-foreground">
-                <span>{t(waveformLoading ? "recording_sources.waveform_loading" : waveformSkipped ? "recording_sources.waveform_skipped" : "recording_sources.waveform_failed")}</span>
-                {!waveformLoading && !waveformSkipped && <button type="button" onClick={retryWaveform} className="underline underline-offset-2 hover:text-foreground">{t("recording_sources.retry")}</button>}
+          <div className="flex shrink-0 items-center gap-1.5">
+            {(waveformLoading || waveformError || waveformSkipped) ? (
+              <div role="status" className="flex max-w-44 shrink-0 items-center gap-1 text-2xs text-muted-foreground">
+                <span className="truncate">{t(waveformLoading ? "recording_sources.waveform_loading" : waveformSkipped ? "recording_sources.waveform_skipped" : "recording_sources.waveform_failed")}</span>
+                {!waveformLoading && !waveformSkipped && <button type="button" onClick={retryWaveform} className="shrink-0 underline underline-offset-2 hover:text-foreground">{t("recording_sources.retry")}</button>}
               </div>
+            ) : (
+              <span className="min-w-[80px] text-2xs tabular-nums text-muted-foreground">
+                {formatTime(currentTime)} / {formatTime(duration)}
+              </span>
             )}
 
+            {/* Skip forward 15s */}
+            <button
+              onClick={skipForward}
+              className="flex size-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              title="+15s"
+            >
+              <SkipForward className="size-3.5" />
+            </button>
+
+            {onEdit && (
+              <button
+                type="button"
+                onClick={onEdit}
+                className="flex size-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+                aria-label={t("audio_editor.edit")}
+                title={t("audio_editor.edit")}
+              >
+                <Crop aria-hidden="true" className="size-3.5" />
+              </button>
+            )}
+
+            {/* Speed */}
+            <button
+              onClick={cycleSpeed}
+              className="flex h-5 items-center rounded px-1.5 text-2xs font-medium tabular-nums text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              {speed}x
+            </button>
+
+            {/* Mute toggle */}
+            <button
+              onClick={() => setMuted(!muted)}
+              className="flex size-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <IconSwap stateKey={muted ? "muted" : "unmuted"}>
+                {muted ? (
+                  <VolumeX className="size-3.5" />
+                ) : (
+                  <Volume2 className="size-3.5" />
+                )}
+              </IconSwap>
+            </button>
+
             {!!sourceIntervals?.length && (
-              <div className="flex items-center gap-2 text-muted-foreground" role="img"
+              <div className="flex items-center gap-1 text-muted-foreground" role="img"
                 aria-label={sourceIntervals.some((interval) => interval.sources.includes("mic"))
                   ? (sourceIntervals.some((interval) => interval.sources.includes("system")) ? `${t("recording_sources.system")} + ${t("recording_sources.mic")}` : t("recording_sources.mic"))
                   : t("recording_sources.system")}>
@@ -285,75 +353,6 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
                 {sourceIntervals.some((interval) => interval.sources.includes("mic")) && <span title={t("recording_sources.mic")}><Mic aria-hidden="true" className="size-3.5" /></span>}
               </div>
             )}
-
-            {/* Controls row */}
-            <div className="flex items-center gap-2">
-              {/* Play / Pause */}
-              <button
-                type="button"
-                onClick={togglePlay}
-                className={PRIMARY_ACTION}
-                aria-label={t(playing ? "audio_editor.pause" : "audio_editor.play")}
-              >
-                <IconSwap stateKey={playing ? "pause" : "play"}>
-                  {playing ? (
-                    <Pause className="size-3.5" />
-                  ) : (
-                    <Play className="size-3.5 ml-0.5" />
-                  )}
-                </IconSwap>
-              </button>
-
-              {/* Skip forward 15s */}
-              <button
-                onClick={skipForward}
-                className="flex size-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                title="+15s"
-              >
-                <SkipForward className="size-3.5" />
-              </button>
-
-              {/* Time display */}
-              <span className="min-w-[80px] text-2xs tabular-nums text-muted-foreground">
-                {formatTime(currentTime)} / {formatTime(duration)}
-              </span>
-
-              <div className="flex-1" />
-
-              {onEdit && (
-                <button
-                  type="button"
-                  onClick={onEdit}
-                  className="flex size-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-                  aria-label={t("audio_editor.edit")}
-                  title={t("audio_editor.edit")}
-                >
-                  <Crop aria-hidden="true" className="size-3.5" />
-                </button>
-              )}
-
-              {/* Speed */}
-              <button
-                onClick={cycleSpeed}
-                className="flex h-5 items-center rounded px-1.5 text-2xs font-medium tabular-nums text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              >
-                {speed}x
-              </button>
-
-              {/* Mute toggle */}
-              <button
-                onClick={() => setMuted(!muted)}
-                className="flex size-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-              >
-                <IconSwap stateKey={muted ? "muted" : "unmuted"}>
-                  {muted ? (
-                    <VolumeX className="size-3.5" />
-                  ) : (
-                    <Volume2 className="size-3.5" />
-                  )}
-                </IconSwap>
-              </button>
-            </div>
           </div>
         )}
       </div>

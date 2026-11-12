@@ -5,7 +5,7 @@ import { Progress } from "@lynse/ui/components/ui/progress";
 import { cn } from "@lynse/ui/lib/utils";
 import { Loader2 } from "../icons";
 import type { WorkbenchStatus } from "./types";
-import { workbenchErrorCopy } from "./errors";
+import { wikiModelErrorKey, workbenchErrorCopy } from "./errors";
 
 function percent(completed: number, total: number): number | null {
   return total > 0 ? Math.round(Math.min(1, Math.max(0, completed / total)) * 100) : null;
@@ -24,6 +24,7 @@ export function WorkbenchProgress({ status, error, compact = false }: { status: 
 
   const progress = status.wikiProgress;
   const failure = error || status.error;
+  const modelError = wikiModelErrorKey(failure);
   const errorCopy = workbenchErrorCopy(failure);
   const syncTotal = Math.max(status.synced, status.discovered - status.awaitingTranscription - status.failed);
   let label = "workbench.home_syncing";
@@ -108,7 +109,7 @@ export function WorkbenchProgress({ status, error, compact = false }: { status: 
     </p>}
     {!compact && failure && <p role="alert" className="flex items-start gap-2 break-words text-destructive">
       <span aria-hidden="true" className="mt-1.5 size-1.5 shrink-0 rounded-full bg-destructive" />
-      <span>{errorCopy ? t(errorCopy.key, { count: errorCopy.count }) : failure}</span>
+      <span>{modelError ? t(modelError) : errorCopy ? t(errorCopy.key, { count: errorCopy.count }) : failure}</span>
     </p>}
   </div>;
 }

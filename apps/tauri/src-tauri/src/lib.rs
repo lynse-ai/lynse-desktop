@@ -73,6 +73,9 @@ mod webdav;
 mod workbuddy;
 mod storage;
 mod lynclaw_notes;
+// Shared BYO-model profiles + keys for features running on the user's own
+// model (knowledge organization, local summaries, …).
+mod custom_models;
 mod workbench;
 mod content_migration;
 mod window_effects;
@@ -5646,6 +5649,10 @@ pub fn run() {
             // rail-embedded lights.
         })
         .invoke_handler(tauri::generate_handler![
+            custom_models::custom_model_set_key,
+            custom_models::custom_model_has_key,
+            custom_models::custom_model_complete,
+            custom_models::custom_model_test_connection,
             workbench::wiki::workbench_wiki,
             workbench::workbench_bind,
             workbench::workbench_set_text_model,
@@ -5747,6 +5754,7 @@ pub fn run() {
             open_report_window,
             report_screenshot::report_capture_main_screenshot,
             report_screenshot::report_save_annotated_screenshot,
+            report_screenshot::report_stage_attachment,
             cnb_report::report_submit_cnb_issue,
             cnb_report::report_upload_screenshot,
             open_logs_folder,

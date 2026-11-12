@@ -18,6 +18,7 @@ import {
   CalendarDays,
   Cloud,
   Captions,
+  Cpu,
   Info,
   Puzzle,
   Bot,
@@ -50,6 +51,7 @@ import { AgentServerCard } from "./agent-server-card";
 import { McpConfigCard } from "./mcp-config-card";
 import { McpConsoleCard } from "../mcp-authorizations";
 import { ModelConfigCard } from "./model-config-card";
+import { CustomModelsCard, getCustomModelsApi } from "../custom-models";
 import { WorkBuddyConfigCard } from "./workbuddy-config-card";
 import { AppearanceSection } from "./appearance-settings";
 import { ContextInboxCard } from "./context-inbox-card";
@@ -169,6 +171,18 @@ export function SettingsDialog({
       </>
     ),
   });
+
+  // Custom models: shared BYO endpoints for features that run on the user's
+  // own model (knowledge organization, local recording summaries, …). Keys
+  // live in the OS keychain, so this is desktop-only.
+  if (getCustomModelsApi()) {
+    sections.push({
+      id: "custom_models",
+      label: t("customModels.title"),
+      icon: Cpu,
+      content: <CustomModelsCard />,
+    });
+  }
 
   if (getDesktopLiveTranslationApi()) {
     sections.push({

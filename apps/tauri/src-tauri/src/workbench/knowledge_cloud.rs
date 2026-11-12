@@ -93,13 +93,18 @@ async fn capabilities(app: &AppHandle, session: &Session, force: bool) -> Comman
     require_current(&state, session)?;
     let now = now_seconds();
     if !force {
-        if let Some((_, _, value)) = cached.as_ref().filter(|(generation, checked, _)| {
+        if let Some((_, checked, value)) = cached.as_ref().filter(|(generation, checked, _)| {
             *generation == session.generation && now.saturating_sub(*checked) < 30
         }) {
+            log::debug!(
+                "[cloud-capabilities] cache hit (age={}s)",
+                now.saturating_sub(*checked)
+            );
             return Ok(value.clone());
         }
     }
     let value = request(app, session, "/capabilities", None, None).await?;
+    log::info!("[cloud-capabilities] fetched from server (forced={force})");
     let _guard = state.serial.lock().await;
     require_current(&state, session)?;
     let mut manifest = load_state(app, session)?;

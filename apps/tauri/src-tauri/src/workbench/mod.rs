@@ -518,7 +518,15 @@ pub async fn workbench_bind(
         user_id,
         base_url: base,
         agent_url: agent,
-        model_override: request.model_override,
+        // API keys travel in the OS keychain, never in the session: strip any
+        // legacy client-supplied key here and keep only the routing fields.
+        model_override: {
+            let mut value = request.model_override;
+            if let Some(fields) = value.as_mut().and_then(|value| value.as_object_mut()) {
+                fields.remove("apiKey");
+            }
+            value
+        },
         token: request.token,
         generation,
         locale: request.locale,
@@ -580,6 +588,14 @@ pub async fn workbench_set_text_model(
     model_override: Option<Value>,
 ) -> CommandResult<()> {
     let _guard = state.serial.lock().await;
+    // Keys are vaulted per custom-model profile by the management UI; the
+    // session only ever carries routing fields plus the profile reference.
+    let model_override = model_override.map(|mut value| {
+        if let Some(fields) = value.as_object_mut() {
+            fields.remove("apiKey");
+        }
+        value
+    });
     let changed = replace_text_model(&state, model_override)?;
     if changed {
         let session = current(&state)?;
@@ -674,8 +690,16 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
         let source_loop = async {
             loop {
                 let state = app.state::<WorkbenchState>();
-                let Ok(session) = current(&state) else {
-                    return;
+                let session = match current(&state) {
+                    Ok(session) => session,
+                    // A transient session gap (rebind in flight) must not kill
+                    // the worker: run_worker_lanes select! takes every lane
+                    // down when one returns, and nothing respawns until the
+                    // next bind.
+                    Err(_) => {
+                        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                        continue;
+                    }
                 };
                 // Older UI callers wake this lane for edits; forward that intent
                 // without making a long Wiki pass block source discovery.
@@ -709,15 +733,26 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                     _ = state.sync_requested.notified() => {},
                 }
                 if !worker_is_current(&app, &state, &session) {
-                    return;
+                    // Epoch changed or the vault check failed transiently.
+                    // Lanes re-read the current session every pass, so parking
+                    // keeps the worker serving whatever session is live;
+                    // exiting here silently killed every lane through the
+                    // select! and nothing respawned until the next bind.
+                    log::warn!("[workbench-worker] lane parked: worker state stale, re-checking in 120s");
+                    tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                    continue;
                 }
             }
         };
         let wiki_loop = async {
             loop {
                 let state = app.state::<WorkbenchState>();
-                let Ok(session) = current(&state) else {
-                    return;
+                let session = match current(&state) {
+                    Ok(session) => session,
+                    Err(_) => {
+                        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                        continue;
+                    }
                 };
                 state.wiki_requested.store(false, Ordering::SeqCst);
                 if let Err(error) = knowledge_cloud::refresh_capabilities(&app, &session).await {
@@ -743,15 +778,26 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                     _ = state.wiki_wakeup.notified() => {},
                 }
                 if !worker_is_current(&app, &state, &session) {
-                    return;
+                    // Epoch changed or the vault check failed transiently.
+                    // Lanes re-read the current session every pass, so parking
+                    // keeps the worker serving whatever session is live;
+                    // exiting here silently killed every lane through the
+                    // select! and nothing respawned until the next bind.
+                    log::warn!("[workbench-worker] lane parked: worker state stale, re-checking in 120s");
+                    tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                    continue;
                 }
             }
         };
         let discovery_loop = async {
             loop {
                 let state = app.state::<WorkbenchState>();
-                let Ok(session) = current(&state) else {
-                    return;
+                let session = match current(&state) {
+                    Ok(session) => session,
+                    Err(_) => {
+                        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                        continue;
+                    }
                 };
                 let more = match wiki::discover(&app, &state, &session).await {
                     Ok(more) => more,
@@ -769,15 +815,26 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                     }
                 }
                 if !worker_is_current(&app, &state, &session) {
-                    return;
+                    // Epoch changed or the vault check failed transiently.
+                    // Lanes re-read the current session every pass, so parking
+                    // keeps the worker serving whatever session is live;
+                    // exiting here silently killed every lane through the
+                    // select! and nothing respawned until the next bind.
+                    log::warn!("[workbench-worker] lane parked: worker state stale, re-checking in 120s");
+                    tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                    continue;
                 }
             }
         };
         let cloud_loop = async {
             loop {
                 let state = app.state::<WorkbenchState>();
-                let Ok(session) = current(&state) else {
-                    return;
+                let session = match current(&state) {
+                    Ok(session) => session,
+                    Err(_) => {
+                        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                        continue;
+                    }
                 };
                 let more = match knowledge_cloud::background(&app, &session).await {
                     Ok(more) => more,
@@ -796,7 +853,14 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                     _ = state.cloud_wakeup.notified() => {},
                 }
                 if !worker_is_current(&app, &state, &session) {
-                    return;
+                    // Epoch changed or the vault check failed transiently.
+                    // Lanes re-read the current session every pass, so parking
+                    // keeps the worker serving whatever session is live;
+                    // exiting here silently killed every lane through the
+                    // select! and nothing respawned until the next bind.
+                    log::warn!("[workbench-worker] lane parked: worker state stale, re-checking in 120s");
+                    tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                    continue;
                 }
             }
         };

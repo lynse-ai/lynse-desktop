@@ -16,7 +16,7 @@ import { WikiWorkspace } from "./wiki-workspace";
 import { HierarchyStatus } from "./wiki-grouping";
 import { WorkbenchSettingsContent } from "./components";
 import { isWikiProcessingComplete, WorkbenchProgress } from "./progress";
-import { workbenchErrorCopy } from "./errors";
+import { wikiModelErrorKey, workbenchErrorCopy } from "./errors";
 
 const AssistantSettingsDialog = lazy(() => import("../settings/settings-dialog").then(module => ({ default: module.SettingsDialog })));
 
@@ -26,7 +26,9 @@ export function KnowledgePage() {
   const wikiEnabled = useWikiEnabled();
   const status = useWorkbench((state) => state.status);
   const error = useWorkbench((state) => state.error);
-  const errorCopy = workbenchErrorCopy(error || status?.error || "");
+  const failure = error || status?.error || "";
+  const modelError = wikiModelErrorKey(failure);
+  const errorCopy = workbenchErrorCopy(failure);
   const [assistantSettingsOpen, setAssistantSettingsOpen] = useState(false);
   const requestedTab = navigation.searchParams.get("tab");
   const tab = requestedTab === "library" || requestedTab === "settings" ? requestedTab : "wiki";
@@ -64,7 +66,15 @@ export function KnowledgePage() {
       <div className={`mx-auto w-full space-y-4 ${tab === "wiki" ? "flex min-h-0 flex-1 flex-col " : ""}${tab === "settings" ? "max-w-4xl" : "max-w-none"}`}>
         {tab === "wiki" && <SwapFade viewKey="wiki" className="flex min-h-0 flex-1 flex-col gap-4"><>
           {!!wiki.data?.topics.length && !navigation.searchParams.has("topic") && <HierarchyStatus wiki={wiki} onCreated={id => navigation.replace(`/memory?${new URLSearchParams({tab:"wiki",topic:id,view})}`)} />}
-          {(error || status?.error) && errorCopy?.key !== "workbench.error_topics" && <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3"><p className="text-sm text-muted-foreground">{t(errorCopy?.key ?? "workbench.auto_update_failed", { count: errorCopy?.count })}</p><Button size="sm" variant="outline" disabled={wiki.busy || !automatic} onClick={() => void wiki.mutate({ action: "retry" }).catch(() => undefined)}>{t("workbench.retry")}</Button></div>}
+          {failure && errorCopy?.key !== "workbench.error_topics" && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3">
+              <p role="alert" className="text-sm text-destructive">{t(modelError ?? errorCopy?.key ?? "workbench.auto_update_failed", { count: errorCopy?.count })}</p>
+              <div className="flex flex-wrap gap-2">
+                {modelError && <Button size="sm" variant="outline" onClick={() => changeTab("settings")}>{t("workbench.auto_settings")}</Button>}
+                <Button size="sm" variant="outline" disabled={wiki.busy || !automatic} onClick={() => void wiki.mutate({ action: "retry" }).catch(() => undefined)}>{t("workbench.retry")}</Button>
+              </div>
+            </div>
+          )}
           <WikiAttention />
           {(!status?.automation || !status.enabled || !status.allowAi) && <WorkbenchSettingsContent activation />}
           <WikiWorkspace key={status?.scope} />

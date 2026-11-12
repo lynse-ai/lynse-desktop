@@ -97,6 +97,8 @@ import { LiveNotesPanel } from "../live-translation/notes/notes-panel";
 import type { LiveNotesState } from "../live-translation/notes/engine";
 import { triggerLocalAutoSummary, LOCAL_SUMMARY_TAB_ID } from "./local-auto-summary";
 import { generateCloudLynclawSummary } from "./cloud-lynclaw-summary";
+import { generateCustomModelSummary } from "./custom-model-summary";
+import { getCustomModelsApi } from "../custom-models";
 import {
   LYNCLAW_FORMAT_LABELS,
   lynclawNoteId,
@@ -665,6 +667,19 @@ export function ContentPanel() {
     }
   }, [selectedItemId, regeneratingLocalSummary, qc, t, setContentTab]);
 
+  // Fully off-cloud summary for local recordings: the user's own template
+  // plus their own custom model, called directly from the desktop. The result
+  // lands on the record's local summary tab like any other local summary.
+  const handleCustomModelApply = useCallback(async (
+    fileId: string,
+    options: { prompt: string; profileId: string; templateName: string },
+  ) => {
+    await generateCustomModelSummary(fileId, options);
+    await qc.invalidateQueries({ queryKey: ["file-transcription", fileId] });
+    // The local summary is always the first tab.
+    if (getWorkspaceState().selectedItemId === fileId) setContentTab("summary-0");
+  }, [qc, setContentTab]);
+
   // AI semantic chapters — an independent task from the deep summary: one
   // failing must never block the other. `force` bypasses the manual-edit guard
   // only after the panel's confirm step.
@@ -1229,7 +1244,7 @@ export function ContentPanel() {
               setSummaryDialogMode("add");
               setResummarizeOpen(true);
             }}
-            disabled={!selectedItemId || currentFileSummarizing || isLocalSelectedItem}
+            disabled={!selectedItemId || currentFileSummarizing || (isLocalSelectedItem && !getCustomModelsApi())}
             className="ml-0.5 flex shrink-0 items-center justify-center rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-accent/50 hover:text-foreground active:scale-[0.96] disabled:pointer-events-none disabled:opacity-50"
             title={t("add_summary.button")}
           >
@@ -1769,6 +1784,8 @@ export function ContentPanel() {
         onStarted={handleResummaryStarted}
         onFinished={handleResummaryFinished}
         onLynclawApply={lynclawTabsEnabled ? handleLynclawApply : undefined}
+        localOnly={isLocalSelectedItem}
+        onCustomModelApply={handleCustomModelApply}
       />
 
       {/* Outside the dropdown tree: closing the ⋯ menu unmounts its subtree,

@@ -151,6 +151,11 @@ describe("ChatPage", () => {
     view.rerender(<ChatPage />);
     expect(screen.queryByRole("status")).toBeNull();
     expect(screen.getByRole("button", { name: "chat.thinking_active" }).getAttribute("aria-expanded")).toBe("true");
+    // The live trace streams into a fixed-height scroll box instead of
+    // pushing the conversation apart.
+    const trace = screen.getByText("Checking the meeting context").parentElement;
+    expect(trace?.className).toContain("overflow-y-auto");
+    expect(trace?.className).toContain("max-h-40");
 
     chat.messages = [{ ...message, content: "The decision is confirmed.", thinking: "Checking the meeting context", thinkingActive: false }];
     chat.isLoading = false;

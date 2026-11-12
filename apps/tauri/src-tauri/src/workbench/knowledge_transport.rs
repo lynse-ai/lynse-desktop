@@ -85,8 +85,9 @@ impl Transport {
         deadline: Instant,
         check: &impl Fn() -> CommandResult<()>,
     ) -> CommandResult<Value> {
-        for attempt in 0..2 {
-            check()?;
+    for attempt in 0..2 {
+        check()?;
+        let attempt_started = Instant::now();
             let cooldown = self
                 .cooldown
                 .lock()
@@ -132,6 +133,12 @@ impl Transport {
                 }
                 Ok(response) => {
                     let error = http_error(response.status(), stage);
+                    log::warn!(
+                        "[cloud-transport] stage={stage} HTTP {} after {:.1}s{}",
+                        response.status().as_u16(),
+                        attempt_started.elapsed().as_secs_f64(),
+                        if attempt > 0 { " (retry)" } else { "" }
+                    );
                     if transient(&error) {
                         if let Some(delay) = response
                             .headers()
@@ -154,7 +161,15 @@ impl Transport {
                     }
                     error
                 }
-                Err(error) => connection_error(&error, stage),
+                Err(error) => {
+                    let message = connection_error(&error, stage);
+                    log::warn!(
+                        "[cloud-transport] stage={stage} transport failure after {:.1}s: {message}{}",
+                        attempt_started.elapsed().as_secs_f64(),
+                        if attempt > 0 { " (retry)" } else { "" }
+                    );
+                    message
+                }
             };
             // Writes and unknown model outcomes must never be replayed here.
             if !read

@@ -26,6 +26,7 @@
     "./report-problem-dialog": "./report-problem-dialog.tsx",
     "./files": "./files/index.ts",
     "./workspace": "./workspace/index.ts",
+    "./custom-models": "./custom-models/index.ts",
     "./todo": "./todo/index.ts",
     "./live-translation": "./live-translation/index.ts",
     "./notes": "./notes/index.ts",

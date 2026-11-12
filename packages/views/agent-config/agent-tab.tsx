@@ -12,7 +12,7 @@ import { mcpEndpointUrl } from "./shared";
 
 /** Copy-ready connector setup per AI tool. Snippets are re-computed at render
  *  time so the deployed origin (www.lynse.ai) is always the one shown. */
-function setupSnippets(mcpUrl: string): { id: string; label: string; lang: string; code: string }[] {
+function setupSnippets(mcpUrl: string): { id: string; label: string; lang: string; code: string; descKey?: string }[] {
   return [
     {
       id: "claude",
@@ -31,6 +31,22 @@ function setupSnippets(mcpUrl: string): { id: string; label: string; lang: strin
       label: "Cursor",
       lang: "json",
       code: JSON.stringify({ mcpServers: { lynse: { url: mcpUrl } } }, null, 2),
+    },
+    {
+      id: "workbuddy",
+      label: "WorkBuddy",
+      lang: "json",
+      // Mirrors integrations/workbuddy/mcp.json in lynse-mcp (connector package format).
+      code: JSON.stringify({ mcpServers: { lynse: { type: "streamableHttp", url: mcpUrl, timeout: 30000 } } }, null, 2),
+      descKey: "agentConfig.agent_desc_workbuddy",
+    },
+    {
+      id: "muse",
+      label: "Muse",
+      lang: "text",
+      // muse.ai has no documented custom-URL JSON format; the connector takes the bare remote address.
+      code: mcpUrl,
+      descKey: "agentConfig.agent_desc_muse",
     },
     {
       id: "generic",
@@ -84,6 +100,9 @@ export function AgentTab({ onNavigate }: { onNavigate: (tab: AgentConfigTab) => 
               </button>
             ))}
           </div>
+          {snippet.descKey && (
+            <p className="text-2xs leading-relaxed text-muted-foreground">{t(snippet.descKey)}</p>
+          )}
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <p className="text-2xs text-muted-foreground">{t("agentConfig.agent_snippet_hint", { label: snippet.label })}</p>

@@ -14,10 +14,19 @@ pub(super) enum Outcome {
     AuthorizationFailed,
 }
 impl Outcome {
+    /// Self-healing classes: the backend hiccuped but will serve later, and
+    /// the recorded failures already skip work within this session. Gates use
+    /// this to stay open instead of wedging the pipeline until a restart.
+    pub(super) fn recoverable(error: &str) -> bool {
+        matches!(
+            Self::classify(error),
+            Self::Unknown | Self::Retryable
+        )
+    }
     pub(super) fn classify(error: &str) -> Self {
         if error.contains(UNKNOWN)
             || error == STATUS_CONFLICT
-            || error == "Lynclaw returned invalid synthesis JSON"
+            || error.starts_with("Lynclaw returned invalid synthesis JSON")
             || [500, 502, 503, 504].iter().any(|status| {
                 error.starts_with(&format!("Lynclaw synthesis failed (HTTP {status})"))
             })

@@ -1,6 +1,7 @@
 import type { CatalogIssue, CitationIssue, WikiValidationDetails } from "./types";
 
 export function workbenchErrorCopy(error: string): { key: string; count?: number } | null {
+  if (error.includes("needs your own model API key")) return { key: "workbench.error_model_key_required" };
   if (/Cloud knowledge request failed \(HTTP (404|501)\)/.test(error)) return { key: "workbench.error_service_version" };
   if (error.includes("Graph DeepSeek credentials are not configured")) return { key: "workbench.graph_error_credentials" };
   if (error.includes("Model output was truncated")) return { key: "workbench.graph_error_truncated" };
@@ -24,6 +25,13 @@ export function workbenchErrorCopy(error: string): { key: string; count?: number
   if (error.includes("Model did not return valid structured output") || error.includes("Invalid synthesis result") || /Invalid topic (match|relation|timeline)|Event date needs/.test(error) || error.includes("Irrelevant Wiki analysis must contain no claims")) return { key: "workbench.error_model_output" };
   if (error.includes("Graph service version does not confirm deepseek-flash")) return { key: "workbench.error_service_version" };
   if (error.includes("Unknown synthesis task")) return { key: "workbench.error_service_version" };
+  return null;
+}
+
+export function wikiModelErrorKey(error: string): string | null {
+  if (error.includes("needs your own model API key")) return "workbench.error_model_key_required";
+  if (error.includes("Lynclaw synthesis failed (HTTP 429): Model rate limited")) return "workbench.organize_model_rate_limited";
+  if (error.includes("Model outcome is unknown") || error === "Lynclaw synthesis failed (HTTP 503)") return "workbench.organize_model_request_failed";
   return null;
 }
 
@@ -73,6 +81,10 @@ export function wikiFailureResolution(error: string, validation?: WikiValidation
       advice: code === "invalid_context" ? "workbench.wiki_catalog_context_help" : "workbench.wiki_catalog_help", catalog: true, citation: code === "invalid_citation" };
   }
   if (copy?.key === "workbench.wiki_failure_publication_format") return { reason: copy.key, advice: "workbench.wiki_failure_format_help", settings: "model" };
+  // The organize model + its key are picked in the knowledge settings tab.
+  if (copy?.key === "workbench.error_model_key_required") return { reason: copy.key, advice: "workbench.error_model_key_help", settings: "scope" };
+  const modelError = wikiModelErrorKey(error);
+  if (modelError) return { reason: modelError, advice: "workbench.organize_model_test_help", settings: "scope" };
   if (["workbench.wiki_source_not_enrolled", "workbench.wiki_source_range_changed"].includes(copy?.key ?? "")) return { reason: copy!.key, advice: "workbench.wiki_failure_scope_help", settings: "scope" };
   if (/Cloud knowledge (offline|unavailable|connection failed)/.test(error)) return {
     reason: /reason: timeout/.test(error) ? "workbench.wiki_failure_connection_timeout"

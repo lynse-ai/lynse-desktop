@@ -87,6 +87,7 @@ import type {
   CloudAudioProgress,
   DesktopAudioEditorApi,
 } from "@lynse/views/audio-editor";
+import type { DesktopCustomModelsApi } from "@lynse/views/custom-models";
 
 export type AppUpdateInfo = {
   currentVersion: string;
@@ -126,6 +127,7 @@ type DesktopApi = {
   };
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
   lynclawNotes: DesktopLynclawNotesApi;
+  customModels: DesktopCustomModelsApi;
   cloudSync: DesktopCloudSyncApi;
   liveTranslation: DesktopLiveTranslationApi;
   workbench: DesktopWorkbenchApi;
@@ -179,6 +181,9 @@ type DesktopApi = {
     // returns its public download URL for the feedback ticket.
     uploadScreenshot: (req: { endpoint: string; path: string }) =>
       Promise<{ downloadUrl: string }>;
+    // Open an image file dialog and stage the picked file as a report
+    // attachment (copied into the report staging dir). Null on cancel.
+    pickReportAttachment: () => Promise<{ path: string; url: string } | null>;
     openLogsFolder: () => Promise<void>;
     // Tail of the app log files for the bug report dialog. `truncated` marks
     // that older rotated archives were left out of the tail.
@@ -442,6 +447,13 @@ export async function installTauriBridge(): Promise<void> {
       update: (scope, id, body) => command("lynclaw_note_update", { scope, id, body }),
       delete: (scope, id) => command("lynclaw_note_delete", { scope, id }),
     },
+    customModels: {
+      // Keys live in the OS keychain only; the UI never receives one back.
+      setKey: (profileId, apiKey) => command("custom_model_set_key", { profileId, apiKey }),
+      hasKey: (profileId) => command<boolean>("custom_model_has_key", { profileId }),
+      testConnection: (endpoint) => command("custom_model_test_connection", { endpoint }),
+      complete: (request) => command("custom_model_complete", { request }),
+    },
     localTranscription: {
       pickAudioFile: async () => {
         const selected = await open({
@@ -686,6 +698,23 @@ export async function installTauriBridge(): Promise<void> {
         command<{ downloadUrl: string }>("report_upload_screenshot", {
           req: { endpoint: req.endpoint, path: req.path },
         }),
+      // Pick one image from disk and stage it as a report attachment; the
+      // host copies it into the report staging dir and hands back the same
+      // {path, url} shape as a captured screenshot, so the composer, the
+      // annotator and the eventual upload all treat it identically.
+      pickReportAttachment: async () => {
+        const selected = await open({
+          multiple: false,
+          directory: false,
+          filters: [{ name: "Images", extensions: ["jpg", "jpeg", "png", "webp", "gif", "bmp"] }],
+        });
+        if (typeof selected !== "string") return null;
+        const screenshot = await command<{ path: string; url: string }>(
+          "report_stage_attachment",
+          { path: selected },
+        );
+        return { ...screenshot, url: toStagedPreviewUrl(screenshot.url) };
+      },
       openLogsFolder: () => command<void>("open_logs_folder"),
       readLogs: (maxBytes?: number) =>
         command<{ dir: string; tail: string; truncated: boolean; files: number }>(

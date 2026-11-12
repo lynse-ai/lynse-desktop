@@ -23,7 +23,9 @@ import { getWorkbenchApi, refreshWorkbench, useWorkbench, useWikiEnabled } from 
 import type { MemoryItem, SourceRef, SynthesisResult, TodoSuggestion, WorkbenchReadResult } from "./types";
 import { isWikiEnabled, featureFlags } from "../feature-flags";
 import { usePluginStore } from "../plugins/state";
-import { loadChatModelSetting, MODEL_OVERRIDE_STORAGE_KEY, toRequestOverride } from "../workspace/model-override";
+import { CUSTOM_MODELS_CHANGED_EVENT, CUSTOM_MODELS_STORAGE_KEY } from "../custom-models";
+import { resolveWorkbenchModelOverride, WORKBENCH_MODEL_CHANGED_EVENT, WORKBENCH_MODEL_STORAGE_KEY } from "./workbench-model";
+import { WikiModelProfile } from "./wiki-model-profile";
 import { WikiAttention, WikiKnowledgePurpose, WikiModels, WikiTopics, WikiSources } from "./wiki";
 import { isWikiProcessingComplete, WorkbenchProgress } from "./progress";
 import { useNavigation } from "../navigation";
@@ -48,18 +50,27 @@ export function WorkbenchSupervisor() {
   const [configurationVersion, setConfigurationVersion] = useState(0);
   useEffect(() => {
     const changed = () => setConfigurationVersion((value) => value + 1);
+    // Organization runs on the user's own custom model, decoupled from the
+    // chat model: re-push the binding whenever it or its profile changes.
     const modelChanged = () => {
       if (!authenticated) return;
       const bridge = getWorkbenchApi();
       if (!bridge?.setTextModel) { changed(); return; }
-      void bridge.setTextModel(toRequestOverride(loadChatModelSetting())).catch((error: unknown) => {
+      void bridge.setTextModel(resolveWorkbenchModelOverride()).catch((error: unknown) => {
         if (useWorkbench.getState().status) useWorkbench.getState().setError(String(error));
       });
     };
-    const storageChanged = (event: StorageEvent) => { if (event.key === MODEL_OVERRIDE_STORAGE_KEY) modelChanged(); };
-    window.addEventListener("lynse-chat-model-setting", modelChanged);
+    const storageChanged = (event: StorageEvent) => {
+      if (event.key === WORKBENCH_MODEL_STORAGE_KEY || event.key === CUSTOM_MODELS_STORAGE_KEY) modelChanged();
+    };
+    window.addEventListener(WORKBENCH_MODEL_CHANGED_EVENT, modelChanged);
+    window.addEventListener(CUSTOM_MODELS_CHANGED_EVENT, modelChanged);
     window.addEventListener("storage", storageChanged);
-    return () => { window.removeEventListener("lynse-chat-model-setting", modelChanged); window.removeEventListener("storage", storageChanged); };
+    return () => {
+      window.removeEventListener(WORKBENCH_MODEL_CHANGED_EVENT, modelChanged);
+      window.removeEventListener(CUSTOM_MODELS_CHANGED_EVENT, modelChanged);
+      window.removeEventListener("storage", storageChanged);
+    };
   }, [authenticated]);
   const { i18n } = useTranslation();
   useEffect(() => {
@@ -72,10 +83,10 @@ export function WorkbenchSupervisor() {
     const token = api().getToken();
     if (!authenticated || !token) { void bridge.unbind(); return; }
     void bridge.bind({ baseUrl: api().getBaseUrl(), agentUrl: api().getAgentBaseUrl() ?? undefined,
-      token, locale: i18n.language, betaEnabled: isWikiEnabled(), gmailPluginEnabled, modelOverride: toRequestOverride(loadChatModelSetting()) })
+      token, locale: i18n.language, betaEnabled: isWikiEnabled(), gmailPluginEnabled, modelOverride: resolveWorkbenchModelOverride() })
       .then(async (status) => { if (!disposed) {
         boundScope = status?.scope; useWorkbench.getState().setStatus(status);
-        await bridge.setTextModel?.(toRequestOverride(loadChatModelSetting()));
+        await bridge.setTextModel?.(resolveWorkbenchModelOverride());
       } })
       .catch((error: unknown) => { if (!disposed) useWorkbench.getState().setError(String(error)); });
     void bridge.onUpdate((status) => {
@@ -112,8 +123,12 @@ export function WorkbenchSettingsContent({ disabled = false, activation = false,
   const [clearing, setClearing] = useState(false);
   const wikiEnabled = useWikiEnabled();
   if (!bridge || !wikiEnabled) return null;
-  if (activation) return <WikiAutomationSettings key={status?.scope} activation disabled={disabled} />;
+  if (activation) return <div className="space-y-4">
+      <WikiModelProfile disabled={disabled} />
+      <WikiAutomationSettings key={status?.scope} activation disabled={disabled} />
+    </div>;
   return <div className="space-y-4">
+      <WikiModelProfile disabled={disabled} />
       <WikiAutomationSettings key={status?.scope} disabled={disabled} />
       <WikiKnowledgePurpose key={status?.scope} />
       <details className="rounded-md border border-border p-3"><summary className="cursor-pointer text-sm font-medium">{t("workbench.wiki_advanced")}</summary><div className="mt-4 space-y-4">

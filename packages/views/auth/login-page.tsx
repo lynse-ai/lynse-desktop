@@ -66,7 +66,7 @@ import { WechatBindForm } from "./wechat-bind-form";
 import { authErrorText } from "./auth-errors";
 import { ApiAuthPanel } from "./api-auth-panel";
 import { LYNSE_LOGO_SRC } from "./lynse-logo";
-import { LOGIN_ARTWORK_SRC } from "./login-artwork";
+import { LOGIN_ARTWORK_SRC, LOGIN_ARTWORK_SRC_WEB } from "./login-artwork";
 
 /** Login QR panel phases. "expired"/"error" offer a manual refresh. */
 type QrPhase = "creating" | "ready" | "scanned" | "expired" | "error";
@@ -80,8 +80,9 @@ type LoginView = "phone" | "email" | "more" | "qr" | "api";
  * Startup login page, shown by the AuthGate before any session exists, in
  * the compact welcome window (690×450 — the window shape is AuthGate's
  * job). Qoder-welcome layout: a left column with the wordmark, a welcome
- * heading and the active sign-in form, and a full-height rounded artwork
- * card on the right (LOGIN_ARTWORK_SRC, user-provided).
+ * heading and the active sign-in form, and a rounded artwork card on the
+ * right (desktop: LOGIN_ARTWORK_SRC full-height; web: LOGIN_ARTWORK_SRC_WEB,
+ * both user-provided).
  *
  * Every build uses the same phone, WeChat and app-scanned QR sign-in flow.
  * The API form (server selection + API key, the same UI as /api-config)
@@ -1045,7 +1046,7 @@ export function LoginPage() {
           className="hidden w-1/2 shrink-0 flex-col items-center justify-center bg-gradient-to-b from-primary/10 via-background to-secondary/30 px-10 lg:flex"
         >
           <img
-            src={LOGIN_ARTWORK_SRC}
+            src={LOGIN_ARTWORK_SRC_WEB}
             alt=""
             className="w-full max-w-md select-none rounded-2xl object-cover shadow-sm"
           />

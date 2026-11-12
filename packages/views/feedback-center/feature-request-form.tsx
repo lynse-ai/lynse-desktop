@@ -3,14 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@lynse/ui/components/ui/button";
-import { Textarea } from "@lynse/ui/components/ui/textarea";
 import { Input } from "@lynse/ui/components/ui/input";
 import { NativeSelect, NativeSelectOption } from "@lynse/ui/components/ui/native-select";
-import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { api } from "@lynse/core/api";
 import { createFeedbackTicket, type FeedbackSeverity } from "@lynse/core/api";
-import { Camera, Check, Loader2, RefreshCw, X } from "../icons";
+import { Check, Loader2 } from "../icons";
 import { getAppInfoSync } from "../app-update";
 import {
   buildIssueUrl,
@@ -24,6 +22,7 @@ import {
   type StagedScreenshot,
 } from "../diagnostics";
 import { ReportProblemAnnotator } from "../report-problem-annotator";
+import { ReportAttachmentComposer } from "../report-attachment-composer";
 
 type Phase = "compose" | "submitting" | "submitted";
 
@@ -112,6 +111,12 @@ export function FeatureRequestForm({
   // An older host build without the composite command still shows the
   // preview; it just isn't a way into the editor.
   const [canAnnotate] = useState(() => Boolean(getDesktopDiagnosticsApi()?.saveAnnotatedScreenshot));
+  // The paperclip upload and the capture button degrade on hosts (or web)
+  // without the staging commands: hidden / disabled instead of erroring.
+  const [canPick] = useState(() => Boolean(getDesktopDiagnosticsApi()?.pickReportAttachment));
+  const [canCapture] = useState(() => Boolean(getDesktopDiagnosticsApi()?.captureScreenshot));
+  // App logs ride along by default; the composer's checkbox opts out.
+  const [includeLogs, setIncludeLogs] = useState(true);
 
   const changeAnnotating = useCallback(
     (value: boolean) => {
@@ -125,8 +130,8 @@ export function FeatureRequestForm({
     setOpen(false);
   }
 
-  // Log tail rides along automatically (no UI toggle): read once, attach on
-  // submit, stay silent on failure.
+  // Log tail rides along by default (the composer's checkbox opts out):
+  // read once, attach on submit, stay silent on failure.
   useEffect(() => {
     let cancelled = false;
     getDesktopDiagnosticsApi()
@@ -159,6 +164,22 @@ export function FeatureRequestForm({
       onCapturingChange?.(false);
     }
   }, [capturing, onCapturingChange]);
+
+  /** Paperclip upload: pick an image on disk, stage it as the attachment. */
+  const pickAttachment = useCallback(async () => {
+    const api = getDesktopDiagnosticsApi();
+    if (!api?.pickReportAttachment || capturing) return;
+    try {
+      const staged = await api.pickReportAttachment();
+      if (staged) {
+        setPreviewFailed(false);
+        setScreenshot(staged);
+      }
+    } catch (error) {
+      console.warn("[report-screenshot] attachment pick failed:", error);
+      toast.error(t("settings.report_attach_failed"));
+    }
+  }, [capturing, t]);
 
   /**
    * Burn the editor's overlay into the staged capture. The host hands back
@@ -213,7 +234,7 @@ export function FeatureRequestForm({
       }
       const result = await createFeedbackTicket({
         title: deriveTitle(description) || t("settings.feedback_title_fallback"),
-        description: composeDescription(description, logTail),
+        description: composeDescription(description, includeLogs ? logTail : null),
         category: "feature",
         module: t(`settings.feedback_module_${module_}`),
         severity,
@@ -269,8 +290,6 @@ export function FeatureRequestForm({
     );
   }
 
-  const previewClickable = canAnnotate && !capturing;
-
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
@@ -278,13 +297,29 @@ export function FeatureRequestForm({
           <label htmlFor="report-description" className="text-sm font-medium">
             {t("settings.report_problem_label")}
           </label>
-          <Textarea
+          <ReportAttachmentComposer
             id="report-description"
             value={description}
-            onChange={(event) => setDescription(event.target.value)}
+            onChange={setDescription}
             placeholder={t("settings.report_description_placeholder")}
-            className="min-h-28 text-sm"
             autoFocus
+            screenshot={screenshot}
+            previewFailed={previewFailed}
+            capturing={capturing}
+            canAnnotate={canAnnotate}
+            canPick={canPick}
+            canCapture={canCapture}
+            showLogToggle={Boolean(logTail?.tail)}
+            includeLogs={includeLogs}
+            onIncludeLogsChange={setIncludeLogs}
+            onOpenEditor={() => changeAnnotating(true)}
+            onCapture={() => void retake()}
+            onPick={() => void pickAttachment()}
+            onRemove={() => {
+              setScreenshot(null);
+              setPreviewFailed(false);
+            }}
+            onPreviewError={() => setPreviewFailed(true)}
           />
         </div>
 
@@ -338,75 +373,6 @@ export function FeatureRequestForm({
               className="h-8 text-xs"
             />
           </div>
-        </div>
-
-        <div className="space-y-2">
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-sm font-medium">{t("settings.report_screenshot_label")}</span>
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="h-7 text-xs"
-                disabled={capturing}
-                onClick={() => void retake()}
-              >
-                {capturing ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="size-3.5" />
-                )}
-                {t("settings.report_retake")}
-              </Button>
-              {screenshot && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  className="h-7 text-xs"
-                  onClick={() => {
-                    setScreenshot(null);
-                    setPreviewFailed(false);
-                  }}
-                >
-                  <X className="size-3.5" />
-                  {t("settings.report_remove")}
-                </Button>
-              )}
-            </div>
-          </div>
-          {screenshot && !previewFailed ? (
-            <>
-              <div className="overflow-hidden rounded-lg border bg-muted/30">
-                <img
-                  src={screenshot.url}
-                  alt={t("settings.report_screenshot_label")}
-                  decoding="async"
-                  onError={() => setPreviewFailed(true)}
-                  onClick={previewClickable ? () => changeAnnotating(true) : undefined}
-                  className={cn("max-h-72 w-full object-contain", previewClickable && "cursor-zoom-in")}
-                />
-              </div>
-              {canAnnotate && (
-                <p className="text-2xs leading-relaxed text-muted-foreground">
-                  {t("settings.report_annotate_hint")}
-                </p>
-              )}
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={() => void retake()}
-              disabled={capturing}
-              className="flex aspect-video max-h-72 w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed text-muted-foreground transition-colors hover:bg-muted/30 disabled:opacity-60"
-            >
-              <Camera className="size-5" />
-              <span className="text-xs">
-                {previewFailed ? t("settings.report_preview_failed") : t("settings.report_capture_missing")}
-              </span>
-            </button>
-          )}
         </div>
       </div>
 

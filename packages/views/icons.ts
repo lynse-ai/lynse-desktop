@@ -59,6 +59,7 @@ export {
   Pencil,           // Rename / Edit inline; screenshot annotation pen
   ArrowUpRight,     // Screenshot annotation arrow tool
   Eraser,           // Screenshot annotation eraser
+  Scan,              // Viewfinder corners; report composer capture/retake button
   MoreHorizontal,   // Context menu trigger
   Pin,              // Pin optional sidebar destinations
   GripVertical,     // Drag handle

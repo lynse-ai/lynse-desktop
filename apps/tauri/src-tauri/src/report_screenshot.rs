@@ -470,6 +470,27 @@ fn capture_main_window_jpeg(_app: &AppHandle) -> CommandResult<Vec<u8>> {
     Err("screenshot capture is not supported on this platform".into())
 }
 
+/// Stage an image the user picked from disk (renderer-side file dialog) as a
+/// report attachment: copied into the plain staging dir under the `report-`
+/// prefix, so it never takes the private-vault branch in
+/// [`crate::write_staged_image`] (that store is for inspiration content, not
+/// report uploads) and is wiped on next launch like every staged capture.
+/// Returns `{path, url}` with the `local-media://` preview link.
+#[tauri::command(async)]
+pub fn report_stage_attachment(app: AppHandle, path: String) -> CommandResult<Value> {
+    let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
+    if bytes.is_empty() {
+        return Err("Attachment file is empty".into());
+    }
+    let extension = std::path::Path::new(&path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .filter(|value| crate::is_safe_asset_file_name(value))
+        .unwrap_or_else(|| crate::sniff_image_extension(&bytes).to_owned());
+    crate::write_staged_image(&app, bytes, "report", &extension)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

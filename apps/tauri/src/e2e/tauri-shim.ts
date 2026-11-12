@@ -128,6 +128,10 @@ function defaultInvoke(cmd: string, args: Record<string, unknown>): unknown {
     }
   }
   if (cmd === "workbench_set_text_model") return null;
+  if (cmd === "custom_model_set_key") return null;
+  if (cmd === "custom_model_has_key") return false;
+  if (cmd === "custom_model_test_connection") throw "missing_key";
+  if (cmd === "custom_model_complete") return "";
   if (cmd === "workbench_wiki") return {topics:[],models:{embedding:{...DEFAULT_EMBEDDING_MODEL},revision:""},sources:{gmailEnabled:false,gmailAccountId:"",integrationsUrl:""}};
   if (cmd === "workbench_bind" || cmd === "workbench_status") return {scope:"synthetic-account",userId:"user-e2e",enabled:false,allowAi:false,initialComplete:false,phase:"disabled",updatedAt:"",error:"",discovered:0,synced:0,awaitingTranscription:0,failed:0,conflicts:0,entries:[],memories:[]};
   if (cmd === "get_app_info") return { version: "0.0.0-e2e", build: "1", platform: "macos" };

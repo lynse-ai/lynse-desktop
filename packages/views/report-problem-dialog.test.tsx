@@ -96,10 +96,10 @@ describe("problem report screenshot recovery", () => {
     mocks.capture.mockRejectedValueOnce(new Error("PrintWindow failed for the main window"));
     openDialog();
 
-    await screen.findByText("settings.report_capture_missing");
+    await screen.findByRole("button", { name: "settings.report_screenshot_label" });
     expect(mocks.toastError).toHaveBeenCalledWith("settings.report_capture_failed");
     expect(console.warn).toHaveBeenCalledWith("[report-screenshot] capture failed:", expect.any(Error));
-    fireEvent.click(screen.getByRole("button", { name: "settings.report_retake" }));
+    fireEvent.click(screen.getByRole("button", { name: "settings.report_screenshot_label" }));
 
     const image = await screen.findByRole("img", { name: "settings.report_screenshot_label" });
     expect(image.getAttribute("src")).toBe(screenshot.url);
@@ -107,6 +107,49 @@ describe("problem report screenshot recovery", () => {
     // The capture carries the theme backdrop for the vibrancy transparency
     // (jsdom can't resolve `--background`, so the host's white fallback).
     expect(mocks.capture).toHaveBeenCalledWith(null);
+  });
+
+  it("stages an image picked through the paperclip upload and submits it", async () => {
+    const host = window as Window & { desktopAPI?: { app: DesktopDiagnosticsApi } };
+    const uploaded = { ...screenshot, path: screenshot.path.replace("example", "upload") };
+    host.desktopAPI!.app.pickReportAttachment = vi.fn().mockResolvedValue(uploaded);
+    openDialog();
+
+    fireEvent.click(await screen.findByRole("button", { name: "settings.report_attach_upload" }));
+    const image = await screen.findByRole("img", { name: "settings.report_screenshot_label" });
+    expect(image.getAttribute("src")).toBe(uploaded.url);
+
+    fireEvent.change(screen.getByLabelText("settings.report_problem_label"), { target: { value: "From an upload" } });
+    fireEvent.click(screen.getByRole("button", { name: "settings.report_submit" }));
+    await waitFor(() => expect(mocks.submit).toHaveBeenCalledWith(expect.objectContaining({
+      screenshotPath: uploaded.path,
+    })));
+  });
+
+  it("lets the include-logs checkbox opt out of the automatic log tail", async () => {
+    const host = window as Window & { desktopAPI?: { app: DesktopDiagnosticsApi } };
+    host.desktopAPI!.app.readLogs = async () =>
+      ({ dir: "logs", tail: "WARN handbook compile failed", truncated: false, files: 3 });
+    // The first submission fails so the compose form (and its checkbox) stay
+    // mounted for the comparison resubmission.
+    mocks.submit.mockRejectedValueOnce(new Error("channel down"));
+    openDialog();
+
+    const description = "Something broke";
+    fireEvent.change(await screen.findByLabelText("settings.report_problem_label"), { target: { value: description } });
+    // Default on: the tail rides along…
+    fireEvent.click(screen.getByRole("button", { name: "settings.report_submit" }));
+    await waitFor(() => expect(mocks.submit).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.stringContaining("WARN handbook compile failed"),
+    })));
+    // …then unchecked drops it from the resubmission.
+    fireEvent.click(screen.getByRole("checkbox"));
+    await waitFor(() => expect((screen.getByRole("checkbox") as HTMLInputElement).getAttribute("aria-checked")).toBe("false"));
+    fireEvent.click(screen.getByRole("button", { name: "settings.report_submit" }));
+    await waitFor(() => expect(mocks.submit).toHaveBeenCalledTimes(2));
+    const secondBody = (mocks.submit.mock.calls[1] as [{ body: string }])[0].body;
+    expect(secondBody).not.toContain("WARN handbook compile failed");
+    expect(secondBody).toContain(description);
   });
 
   it("clears a failed preview when a new screenshot is captured", async () => {

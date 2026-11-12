@@ -592,13 +592,13 @@ export function useInvalidateOnAuth() {
 // ── Template & Upload pipeline hooks ─────────────────────
 
 /** Fetch all prompt template categories (50+ templates). */
-export function useTemplateCategories() {
+export function useTemplateCategories(enabled = true) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   return useQuery({
     queryKey: ["template-categories"],
     queryFn: () =>
       api().get<PromptTemplateCategory[]>("/api/business/translate/prompt/categories"),
-    enabled: isAuthenticated,
+    enabled: isAuthenticated && enabled,
     staleTime: 10 * 60 * 1000, // templates rarely change
   });
 }

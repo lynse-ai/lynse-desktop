@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -11,6 +11,16 @@ import {
   DialogFooter,
 } from "@lynse/ui/components/ui/dialog";
 import { Button } from "@lynse/ui/components/ui/button";
+import { Input } from "@lynse/ui/components/ui/input";
+import { Label } from "@lynse/ui/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@lynse/ui/components/ui/select";
+import { Trash2 } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useAddSummary, useReplaceSummaryTemplate, useRerunSummary, useTemplateCategories, useFileDetail } from "./hooks/use-files";
 import { isInsufficientCreditsError } from "../layout/use-user-credits";
@@ -20,6 +30,17 @@ import type { LynclawSummaryFormat } from "./lynclaw-summary";
 import type { FileConclusion, PromptTemplate } from "./types";
 import { useQueryClient } from "@tanstack/react-query";
 import { TemplateSelector } from "./template-selector";
+import {
+  getCustomModelsApi,
+  getCustomModel,
+  isValidTemplatePrompt,
+  loadCustomModels,
+  loadCustomTemplates,
+  removeCustomTemplate,
+  saveCustomTemplate,
+  type CustomModelProfile,
+  type CustomSummaryTemplate,
+} from "../custom-models";
 
 export type SummaryTemplateDialogMode = "add" | "rerun" | "replace";
 
@@ -119,18 +140,57 @@ interface ResummarizeDialogProps {
    * gate is unlocked; when absent the pseudo-templates are hidden entirely.
    */
   onLynclawApply?: (fileId: string, format: LynclawSummaryFormat) => Promise<FileConclusion>;
+  /**
+   * Local recordings: with this prop the dialog switches to the fully
+   * off-cloud section — the user's own template plus their own custom model,
+   * called directly from the desktop. Cloud template categories are hidden.
+   */
+  localOnly?: boolean;
+  onCustomModelApply?: (
+    fileId: string,
+    options: { prompt: string; profileId: string; templateName: string },
+  ) => Promise<void>;
 }
 
-export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mode, onStarted, onFinished, onLynclawApply }: ResummarizeDialogProps) {
+/** Last-used custom model for local summaries, so the picker opens sensibly. */
+const LAST_CUSTOM_MODEL_KEY = "lynse_custom_summary_profile";
+
+export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mode, onStarted, onFinished, onLynclawApply, localOnly, onCustomModelApply }: ResummarizeDialogProps) {
   const { t, i18n } = useTranslation();
   const qc = useQueryClient();
-  const { data: categories } = useTemplateCategories();
+  // Off-cloud mode never queries the cloud template list.
+  const { data: categories } = useTemplateCategories(!localOnly);
   const { data: fileDetail } = useFileDetail(fileId);
   const addSummary = useAddSummary();
   const rerunSummary = useRerunSummary();
   const replaceSummary = useReplaceSummaryTemplate();
 
   const [selectedId, setSelectedId] = useState<string>("");
+
+  // Off-cloud section (local recordings): the user's own template + model.
+  const customEnabled = !!localOnly && !!onCustomModelApply && !!getCustomModelsApi();
+  const [customProfiles, setCustomProfiles] = useState<CustomModelProfile[]>([]);
+  const [customTemplates, setCustomTemplates] = useState<CustomSummaryTemplate[]>([]);
+  const [customProfileId, setCustomProfileId] = useState("");
+  const [customTemplateId, setCustomTemplateId] = useState("");
+  const [customName, setCustomName] = useState("");
+  const [customPrompt, setCustomPrompt] = useState("");
+  const [customBusy, setCustomBusy] = useState(false);
+  const [customError, setCustomError] = useState<{ title: string; description: string } | null>(null);
+  const customDialogOpen = useRef(false);
+  useEffect(() => {
+    customDialogOpen.current = open && customEnabled;
+    return () => { customDialogOpen.current = false; };
+  }, [open, customEnabled]);
+  useEffect(() => {
+    if (!open || !customEnabled) return;
+    setCustomError(null);
+    const profiles = loadCustomModels();
+    setCustomProfiles(profiles);
+    setCustomTemplates(loadCustomTemplates());
+    const last = typeof localStorage === "undefined" ? null : localStorage.getItem(LAST_CUSTOM_MODEL_KEY);
+    setCustomProfileId(profiles.some((profile) => profile.id === last) ? last! : profiles[0]?.id ?? "");
+  }, [open, customEnabled]);
 
   const fallback = FALLBACK_TEXT[getFallbackLanguage(i18n.language)];
   const text = useCallback(
@@ -272,6 +332,58 @@ export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mo
     [onOpenChange],
   );
 
+  // --- Off-cloud section (local recordings) --------------------------------
+
+  const chooseCustomTemplate = useCallback((id: string) => {
+    setCustomTemplateId(id);
+    const template = loadCustomTemplates().find((entry) => entry.id === id);
+    if (template) {
+      setCustomName(template.name);
+      setCustomPrompt(template.prompt);
+    }
+  }, []);
+
+  const saveCurrentTemplate = useCallback(() => {
+    const name = customName.trim();
+    if (!name || !isValidTemplatePrompt(customPrompt)) return;
+    const id = customTemplateId || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    setCustomTemplates(saveCustomTemplate({ id, name, prompt: customPrompt.trim(), createdAt: new Date().toISOString() }));
+    setCustomTemplateId(id);
+    toast.success(t("customModels.template_saved"));
+  }, [customName, customPrompt, customTemplateId, t]);
+
+  const handleCustomApply = useCallback(async () => {
+    if (!fileId || !onCustomModelApply || !customProfileId || !isValidTemplatePrompt(customPrompt) || customBusy) return;
+    const profile = getCustomModel(customProfileId);
+    setCustomError(null);
+    setCustomBusy(true);
+    try {
+      if (!profile) throw new Error("customModels.summary_no_profile");
+      if (typeof localStorage !== "undefined") localStorage.setItem(LAST_CUSTOM_MODEL_KEY, customProfileId);
+      await onCustomModelApply(fileId, {
+        prompt: customPrompt.trim(),
+        profileId: customProfileId,
+        templateName: customName.trim() || profile.label,
+      });
+      toast.success(t("customModels.summary_generated", { model: profile.label }));
+      onOpenChange(false);
+    } catch (err) {
+      const key = err instanceof Error ? err.message : "";
+      const failure = {
+        title: profile ? t("customModels.summary_failed_with_model", { model: profile.label }) : t("customModels.summary_failed"),
+        description: key.startsWith("customModels.") && i18n.exists(key)
+          ? t(key)
+          : t("customModels.summary_retry"),
+      };
+      if (customDialogOpen.current) setCustomError(failure);
+      else toast.error(failure.title, { description: failure.description });
+    } finally {
+      setCustomBusy(false);
+    }
+  }, [fileId, onCustomModelApply, customProfileId, customPrompt, customName, customBusy, onOpenChange, t, i18n]);
+
+  const customModel = customProfiles.find((profile) => profile.id === customProfileId);
+
   return (
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-lg">
@@ -292,21 +404,118 @@ export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mo
           </DialogDescription>
         </DialogHeader>
 
-        {/* Template list */}
-        <TemplateSelector
-          categories={allCategories}
-          selectedId={effectiveId}
-          onSelect={setSelectedId}
-          scrollHeight="h-72"
-        />
+        {/* Template list — off-cloud mode swaps in the custom-template editor */}
+        {customEnabled ? (
+          <div className="space-y-3">
+            <p className="text-xs leading-relaxed text-muted-foreground">{t("customModels.summary_section_hint")}</p>
+            {customTemplates.length > 0 && (
+              <div className="space-y-1.5">
+                <Label htmlFor="custom-template-pick" className="text-xs text-muted-foreground">{t("customModels.template_label")}</Label>
+                <div className="flex gap-2">
+                  <Select
+                    value={customTemplateId}
+                    items={Object.fromEntries(customTemplates.map((template) => [template.id, template.name]))}
+                    onValueChange={(id) => { if (id !== null) chooseCustomTemplate(id); }}
+                  >
+                    <SelectTrigger id="custom-template-pick" className="h-9 flex-1 text-xs"><SelectValue placeholder={t("customModels.template_label")} /></SelectTrigger>
+                    <SelectContent>
+                      {customTemplates.map((template) => (
+                        <SelectItem key={template.id} value={template.id}>{template.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {customTemplateId && (
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className="size-9 shrink-0"
+                      aria-label={t("customModels.delete")}
+                      onClick={() => {
+                        setCustomTemplates(removeCustomTemplate(customTemplateId));
+                        setCustomTemplateId("");
+                      }}
+                    >
+                      <Trash2 className="size-3.5" aria-hidden="true" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <Label htmlFor="custom-template-name" className="text-xs text-muted-foreground">{t("customModels.template_name_label")}</Label>
+              <Input
+                id="custom-template-name"
+                className="h-9 text-xs"
+                placeholder={t("customModels.template_name_placeholder")}
+                value={customName}
+                onChange={(event) => setCustomName(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="custom-template-prompt" className="text-xs text-muted-foreground">{t("customModels.template_label")}</Label>
+              <textarea
+                id="custom-template-prompt"
+                className="min-h-32 w-full rounded-md border border-input bg-background p-2 text-sm leading-relaxed"
+                spellCheck={false}
+                value={customPrompt}
+                onChange={(event) => setCustomPrompt(event.target.value)}
+              />
+              <Button type="button" size="sm" variant="ghost" disabled={!isValidTemplatePrompt(customPrompt) || !customName.trim()} onClick={saveCurrentTemplate}>
+                {t("customModels.save_template")}
+              </Button>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="custom-model-pick" className="text-xs text-muted-foreground">{t("customModels.use_model")}</Label>
+              <Select
+                value={customProfileId}
+                items={Object.fromEntries(customProfiles.map((profile) => [profile.id, `${profile.label} · ${profile.model}`]))}
+                onValueChange={(id) => {
+                  setCustomProfileId(id ?? "");
+                  setCustomError(null);
+                }}
+                disabled={!customProfiles.length || customBusy}
+              >
+                <SelectTrigger id="custom-model-pick" className="h-9 text-xs"><SelectValue placeholder={t("customModels.empty")} /></SelectTrigger>
+                <SelectContent>
+                  {customProfiles.map((profile) => (
+                    <SelectItem key={profile.id} value={profile.id}>{profile.label} · {profile.model}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {!customProfiles.length && <p className="text-2xs leading-relaxed text-muted-foreground">{t("customModels.empty")}</p>}
+              {customError && (
+                <div role="alert" className="text-xs leading-relaxed text-destructive">
+                  <p className="font-medium">{customError.title}</p>
+                  <p>{customError.description}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <TemplateSelector
+            categories={allCategories}
+            selectedId={effectiveId}
+            onSelect={setSelectedId}
+            scrollHeight="h-72"
+          />
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={() => handleClose(false)}>
             {text("resummarize.cancel", fallback.cancel)}
           </Button>
-          <Button onClick={handleApply} disabled={!effectiveId || (mode === "replace" && !conclusionId)}>
-            {text("resummarize.apply", fallback.apply)}
-          </Button>
+          {customEnabled ? (
+            <Button onClick={() => void handleCustomApply()} disabled={customBusy || !customProfileId || !isValidTemplatePrompt(customPrompt)}>
+              {customBusy && customModel
+                ? t("customModels.summary_generating", { model: customModel.label })
+                : text("resummarize.apply", fallback.apply)}
+            </Button>
+          ) : (
+            <Button onClick={handleApply} disabled={!effectiveId || (mode === "replace" && !conclusionId)}>
+              {text("resummarize.apply", fallback.apply)}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

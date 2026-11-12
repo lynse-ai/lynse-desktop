@@ -85,6 +85,25 @@ it("renders bounded citation positions and leaves old records unlocated", () => 
 });
 
 
+it("routes a missing organize model to the knowledge settings", () => {
+  const error = "Knowledge organization needs your own model API key; set it in knowledge settings";
+  expect(workbenchErrorCopy(error)).toEqual({ key: "workbench.error_model_key_required" });
+  expect(wikiFailureResolution(error)).toMatchObject({
+    reason: "workbench.error_model_key_required",
+    advice: "workbench.error_model_key_help",
+    settings: "scope",
+  });
+});
+
+it.each([
+  ["Lynclaw synthesis failed (HTTP 429): Model rate limited", "workbench.organize_model_rate_limited"],
+  ["Lynclaw synthesis failed (HTTP 503): Model outcome is unknown; retry explicitly", "workbench.organize_model_request_failed"],
+])("points Wiki model failures to the organization settings: %s", (error, reason) => {
+  expect(wikiFailureResolution(error)).toMatchObject({
+    reason, advice: "workbench.organize_model_test_help", settings: "scope",
+  });
+});
+
 it("routes connection checks to cloud settings and preserves the failed phase", () => {
   expect(wikiFailureResolution("Cloud knowledge connection failed (stage: capabilities; reason: timeout)"))
     .toMatchObject({ reason: "workbench.wiki_failure_connection_timeout", settings: "connection" });

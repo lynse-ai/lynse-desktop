@@ -155,6 +155,13 @@ export function ThinkingBlock({
   // Elapsed seconds, frozen the moment reasoning ends so the folded label
   // keeps the final duration instead of drifting with the wall clock.
   const [frozenSeconds, setFrozenSeconds] = React.useState<number | null>(null);
+  // The trace lives in a fixed-height scroll box (it would otherwise push the
+  // whole conversation apart while streaming). `stick` tracks whether the
+  // user is parked at the bottom: while they are, the box follows the stream;
+  // scrolling up to read earlier reasoning pauses the follow until they come
+  // back down. Reopening the block always re-pins to the newest line.
+  const scrollRef = React.useRef<HTMLDivElement | null>(null);
+  const stick = React.useRef(true);
 
   React.useEffect(() => {
     if (active) {
@@ -168,6 +175,16 @@ export function ThinkingBlock({
     }
     wasActive.current = Boolean(active);
   }, [active, startedAt]);
+
+  React.useEffect(() => {
+    if (open) stick.current = true;
+  }, [open]);
+
+  React.useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !open) return;
+    if (stick.current) el.scrollTop = el.scrollHeight;
+  }, [text, open]);
 
   const liveSeconds = useElapsedSeconds(startedAt, Boolean(active) && startedAt != null);
   const elapsed = active ? liveSeconds : null;
@@ -198,8 +215,16 @@ export function ThinkingBlock({
         <ChevronDown className={cn("size-3 shrink-0 transition-transform", open && "rotate-180")} />
       </button>
       {open && (
-        <div className="mt-1.5 whitespace-pre-wrap border-l-2 border-border pl-3 text-xs leading-5 text-muted-foreground">
-          {text}
+        <div
+          ref={scrollRef}
+          onScroll={() => {
+            const el = scrollRef.current;
+            if (!el) return;
+            stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+          }}
+          className="mt-1.5 max-h-40 overflow-y-auto rounded-lg border border-border/60 bg-card/40 px-3 py-2 text-xs leading-5 text-muted-foreground"
+        >
+          <div className="whitespace-pre-wrap">{text}</div>
         </div>
       )}
     </div>

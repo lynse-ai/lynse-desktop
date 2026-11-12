@@ -22,9 +22,17 @@ vi.mock("./api", () => ({
 vi.mock("../feature-flags", async original => ({ ...await original<Record<string, unknown>>(), isWikiEnabled: () => true }));
 
 import { WorkbenchSupervisor } from "./components";
-import { MODEL_OVERRIDE_STORAGE_KEY, saveChatModelSetting } from "../workspace/model-override";
+import { upsertCustomModel } from "../custom-models";
+import { saveWorkbenchModelBinding, WORKBENCH_MODEL_STORAGE_KEY } from "./workbench-model";
 
-describe("graph and chat model lifecycle isolation", () => {
+const profile = {
+  id: "deepseek", label: "DeepSeek",
+  baseUrl: "https://api.deepseek.com", model: "deepseek-flash", createdAt: "2026-11-11T00:00:00.000Z",
+};
+// The session carries the explicit endpoint plus the profile reference — never a key.
+const override = { baseUrl: "https://api.deepseek.com", model: "deepseek-flash", profileId: "deepseek" };
+
+describe("graph and organize model lifecycle isolation", () => {
   beforeEach(() => {
     vi.clearAllMocks(); localStorage.clear(); fixture.status = null; fixture.auth.isAuthenticated = true;
     fixture.bind.mockResolvedValue({ scope: "verified-user" });
@@ -36,20 +44,31 @@ describe("graph and chat model lifecycle isolation", () => {
   it("updates only text settings on in-window and cross-window model changes", async () => {
     render(<WorkbenchSupervisor />);
     await waitFor(() => expect(fixture.setTextModel).toHaveBeenCalledWith(null));
-    act(() => saveChatModelSetting({ mode: "preset", presetId: "miaoyun", model: "glm-5.3-flash" }));
-    await waitFor(() => expect(fixture.setTextModel).toHaveBeenCalledWith({ preset: "miaoyun", model: "glm-5.3-flash" }));
-    act(() => window.dispatchEvent(new StorageEvent("storage", { key: MODEL_OVERRIDE_STORAGE_KEY })));
-    await waitFor(() => expect(fixture.setTextModel).toHaveBeenCalledTimes(3));
+    act(() => { upsertCustomModel(profile); saveWorkbenchModelBinding("deepseek"); });
+    await waitFor(() => expect(fixture.setTextModel).toHaveBeenLastCalledWith(override));
+    const calls = fixture.setTextModel.mock.calls.length;
+    act(() => window.dispatchEvent(new StorageEvent("storage", { key: WORKBENCH_MODEL_STORAGE_KEY })));
+    await waitFor(() => expect(fixture.setTextModel).toHaveBeenCalledTimes(calls + 1));
+    expect(fixture.setTextModel).toHaveBeenLastCalledWith(override);
     expect(fixture.bind).toHaveBeenCalledTimes(1);
     expect(fixture.unbind).not.toHaveBeenCalled();
+  });
+  it("binds without a model until one is chosen and never forwards a key", async () => {
+    render(<WorkbenchSupervisor />);
+    await waitFor(() => expect(fixture.bind).toHaveBeenCalledWith(expect.objectContaining({ modelOverride: null })));
+    act(() => { upsertCustomModel(profile); saveWorkbenchModelBinding("deepseek"); });
+    await waitFor(() => expect(fixture.setTextModel).toHaveBeenLastCalledWith(override));
+    for (const [value] of fixture.setTextModel.mock.calls) {
+      expect(value === null || !("apiKey" in (value as object))).toBe(true);
+    }
   });
   it("applies the latest choice after a slow bind and still cancels work on logout", async () => {
     let bound!: (status: { scope: string }) => void;
     fixture.bind.mockReturnValue(new Promise(resolve => { bound = resolve; }));
     const view = render(<WorkbenchSupervisor />);
-    act(() => saveChatModelSetting({ mode: "preset", presetId: "miaoyun", model: "glm-5.3-flash" }));
+    act(() => { upsertCustomModel(profile); saveWorkbenchModelBinding("deepseek"); });
     await act(async () => { bound({ scope: "verified-user" }); });
-    expect(fixture.setTextModel).toHaveBeenLastCalledWith({ preset: "miaoyun", model: "glm-5.3-flash" });
+    expect(fixture.setTextModel).toHaveBeenLastCalledWith(override);
     expect(fixture.bind).toHaveBeenCalledTimes(1);
     expect(fixture.unbind).not.toHaveBeenCalled();
     fixture.auth.isAuthenticated = false;

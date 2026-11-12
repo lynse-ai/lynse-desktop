@@ -554,6 +554,7 @@ const zhHant = {
     user_appearance: "外觀",
     user_help_feedback: "報告問題",
     user_feature_requests: "功能建議",
+    user_version_updates: "版本更新",
     edit_name: "編輯使用者名稱",
     about: "關於",
     activity_title: "筆記活躍度",
@@ -1775,11 +1776,6 @@ local_summary_failed: "深度總結生成失敗",
   todo: {
     export_button: "匯出",
     export_dialog_cancel: "取消",
-    export_exit: "完成",
-    export_select_all: "全選",
-    export_selected: "已選擇 {{count}} 項",
-    export_cancel: "清除",
-    export_select_item: "選擇該行動項",
     export_title: "匯出行動項",
     export_subtitle: "將把 {{count}} 項傳送到你選擇的服務。",
     export_choose_provider: "服務",
@@ -1800,6 +1796,11 @@ local_summary_failed: "深度總結生成失敗",
     kanban_near: "近期任務",
     kanban_star: "重點追蹤",
     star_toggle: "標記重點追蹤",
+    unstar_toggle: "取消重點追蹤",
+    menu_edit: "編輯",
+    menu_mark_done: "標記為已完成",
+    menu_mark_undone: "標記為未完成",
+    menu_open_source: "開啟來源",
     kanban_show_done: "顯示/隱藏已完成欄",
     move_date_title: "設置執行日期",
     move_date_confirm: "確定移動",
@@ -1992,6 +1993,10 @@ local_summary_failed: "深度總結生成失敗",
       "open_console": "打開應用控制台",
       "continue_authorize": "已添加，繼續授權"
     }
+  },
+
+  feedback: {
+    title: "意見回饋",
   },
 
   about: {

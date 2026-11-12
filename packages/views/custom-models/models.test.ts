@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CUSTOM_MODELS_CHANGED_EVENT,
   getCustomModel,
+  isValidMaxTokens,
   isValidProfileId,
   loadCustomModels,
   removeCustomModel,
@@ -57,6 +58,22 @@ describe("custom model profile store", () => {
     expect(toModelOverride(custom)).toEqual({ baseUrl: "http://127.0.0.1:8000/v1", model: "qwen3", profileId: "local-vllm" });
     expect(JSON.stringify([toModelOverride(deepseek), toModelOverride(custom)])).not.toContain("apiKey");
     expect(toCompletionBase(deepseek)).toEqual({ profileId: "deepseek", baseUrl: "https://api.deepseek.com", model: "deepseek-flash" });
+  });
+
+  it("carries a valid maxTokens ceiling but never an invalid one", () => {
+    expect(toModelOverride({ ...deepseek, maxTokens: 32000 })).toEqual({
+      baseUrl: "https://api.deepseek.com", model: "deepseek-flash",
+      profileId: "deepseek", maxTokens: 32000,
+    });
+    expect(toModelOverride({ ...deepseek, maxTokens: 0 })).not.toHaveProperty("maxTokens");
+    expect(isValidMaxTokens(16000)).toBe(true);
+    expect(isValidMaxTokens(undefined)).toBe(false);
+    expect(isValidMaxTokens("16000")).toBe(false);
+    expect(isValidMaxTokens(70000)).toBe(false);
+    localStorage.setItem("lynse_custom_models", JSON.stringify([
+      { ...deepseek, maxTokens: 32000 }, { ...custom, maxTokens: -1 },
+    ]));
+    expect(loadCustomModels()).toEqual([{ ...deepseek, maxTokens: 32000 }]);
   });
 
   it("suggests unique, vault-safe ids", () => {

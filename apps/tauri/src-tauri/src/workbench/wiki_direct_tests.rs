@@ -301,6 +301,7 @@ fn direct_model(endpoint: &str, key: Option<&str>) -> DirectModel {
         base_url: endpoint.to_owned(),
         model: "synthetic-model".into(),
         key: key.map(str::to_owned),
+        max_tokens: DEFAULT_MAX_TOKENS,
     }
 }
 

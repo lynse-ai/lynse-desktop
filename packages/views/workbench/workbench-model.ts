@@ -43,7 +43,7 @@ export function saveWorkbenchModelBinding(profileId: string | null): void {
  * Null when nothing is bound or the bound profile was deleted.
  */
 export function resolveWorkbenchModelOverride():
-  | { preset?: string; baseUrl?: string; model: string; profileId: string }
+  | { preset?: string; baseUrl?: string; model: string; profileId: string; maxTokens?: number }
   | null {
   const id = loadWorkbenchModelBinding();
   if (!id) return null;

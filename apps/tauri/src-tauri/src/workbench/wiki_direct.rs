@@ -49,7 +49,15 @@ pub(super) struct DirectModel {
     base_url: String,
     model: String,
     key: Option<String>,
+    max_tokens: u32,
 }
+
+/// Transport ceiling for one Chat Completions reply. A profile may override
+/// it; the range is deliberately bounded so a stray value cannot turn a
+/// single organization task into an unbounded generation.
+const DEFAULT_MAX_TOKENS: u32 = 16000;
+const MIN_MAX_TOKENS: u64 = 1024;
+const MAX_MAX_TOKENS: u64 = 65536;
 
 fn is_loopback(url: &url::Url) -> bool {
     match url.host() {
@@ -111,6 +119,12 @@ async fn resolve(app: &AppHandle, session: &Session) -> CommandResult<DirectMode
         base_url,
         model,
         key,
+        max_tokens: model_override
+            .get("maxTokens")
+            .and_then(Value::as_u64)
+            .filter(|value| (MIN_MAX_TOKENS..=MAX_MAX_TOKENS).contains(value))
+            .map(|value| value as u32)
+            .unwrap_or(DEFAULT_MAX_TOKENS),
     })
 }
 
@@ -1729,9 +1743,9 @@ async fn generate(
             .map(|(role, content)| json!({"role": role, "content": content}))
             .collect::<Vec<_>>(),
         "stream": false,
-        // Grouping 19 sources produced output past the gateway's 8000-token
-        // ceiling (truncated); the graph task already runs at this limit.
-        "max_tokens": 16000,
+        // Grouping 19 sources can produce a long structured reply. The
+        // profile's ceiling wins; the default matches the graph task.
+        "max_tokens": direct.max_tokens,
         "temperature": 0.1,
     });
     let mut request = client

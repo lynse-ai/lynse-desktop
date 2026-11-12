@@ -17,6 +17,9 @@ export interface CustomModelProfile {
    *  request; direct calls append `/chat/completions` to it. */
   baseUrl: string;
   model: string;
+  /** Upper bound for a direct Chat Completions response. Omitted means the
+   *  desktop default; it is a transport ceiling, not part of model identity. */
+  maxTokens?: number;
   createdAt: string;
 }
 

@@ -11,7 +11,8 @@ import { useAuthStore } from "@lynse/core/auth";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useAppUpdate, getAppInfoSync } from "../app-update";
 import { openAboutWindow } from "../about/open-about";
-import { openFeatureRequests, openReportProblem } from "../diagnostics";
+import { openReportProblem } from "../diagnostics";
+import { openFeedbackWindow, openChangelog } from "../feedback/open-feedback";
 import { useUserCredits, useMembership, useUpdateNickname } from "./use-user-credits";
 import { UserActivityHeatmap } from "./user-activity-heatmap";
 import {
@@ -31,6 +32,7 @@ import {
   Globe,
   HelpCircle,
   MessageSquarePlus,
+  Megaphone,
   Zap,
   LogOut,
   UserCircle,
@@ -293,10 +295,16 @@ export function UserProfileDropdown({
           <span>{t("layout.user_help_feedback")}</span>
         </DropdownMenuItem>
 
-        {/* ── Feature requests — the Feishu-backed center ── */}
-        <DropdownMenuItem onClick={() => openFeatureRequests()}>
+        {/* ── Feature requests — the FeedLog widget window ── */}
+        <DropdownMenuItem onClick={openFeedbackWindow}>
           <MessageSquarePlus className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_feature_requests")}</span>
+        </DropdownMenuItem>
+
+        {/* ── Version updates — the FeedLog changelog page ── */}
+        <DropdownMenuItem onClick={openChangelog}>
+          <Megaphone className="size-4 text-muted-foreground" strokeWidth={1.5} />
+          <span>{t("layout.user_version_updates")}</span>
         </DropdownMenuItem>
 
         {/* ── About (version) — pops the standalone About window ── */}

@@ -13,8 +13,11 @@ import { isHttpUrl } from "../workspace/model-override";
 import {
   CUSTOM_MODELS_CHANGED_EVENT,
   getCustomModel,
+  isValidMaxTokens,
   isValidProfileId,
   loadCustomModels,
+  MAX_MODEL_MAX_TOKENS,
+  MIN_MODEL_MAX_TOKENS,
   removeCustomModel,
   suggestProfileId,
   toCompletionBase,
@@ -29,6 +32,7 @@ type EditorState = {
   baseUrl: string;
   model: string;
   apiKey: string;
+  maxTokens: string;
 };
 
 const emptyEditor = (): EditorState => ({
@@ -37,6 +41,7 @@ const emptyEditor = (): EditorState => ({
   baseUrl: "",
   model: "",
   apiKey: "",
+  maxTokens: "",
 });
 
 type ConnectionTest =
@@ -106,6 +111,7 @@ export function CustomModelsCard() {
       baseUrl: profile.baseUrl,
       model: profile.model,
       apiKey: "",
+      maxTokens: profile.maxTokens ? String(profile.maxTokens) : "",
     });
   }
 
@@ -128,6 +134,14 @@ export function CustomModelsCard() {
     if (!label) { setError(t("customModels.invalid_label")); return; }
     if (!isHttpUrl(baseUrl)) { setError(t("settings.model_invalid_url")); return; }
     if (!model) { setError(t("customModels.connection_invalid_model")); return; }
+    const rawMaxTokens = editor.maxTokens.trim();
+    const maxTokens = rawMaxTokens ? Number(rawMaxTokens) : undefined;
+    if (rawMaxTokens && !isValidMaxTokens(maxTokens)) {
+      setError(t("customModels.invalid_max_tokens", {
+        min: MIN_MODEL_MAX_TOKENS, max: MAX_MODEL_MAX_TOKENS,
+      }));
+      return;
+    }
     const id = editor.id && isValidProfileId(editor.id) ? editor.id : suggestProfileId(label);
     setBusy(true); setError(null);
     try {
@@ -141,6 +155,7 @@ export function CustomModelsCard() {
         baseUrl,
         model,
         createdAt: getCustomModel(id)?.createdAt ?? new Date().toISOString(),
+        ...(maxTokens === undefined ? {} : { maxTokens }),
       };
       upsertCustomModel(profile);
       setEditor(null);
@@ -263,6 +278,20 @@ export function CustomModelsCard() {
                 onChange={(event) => setEditor((current) => current && { ...current, baseUrl: event.target.value })}
               />
               <p className="text-2xs text-muted-foreground">{t("settings.model_base_url_hint")}</p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="custom-model-max-tokens" className="text-xs text-muted-foreground">{t("customModels.max_tokens_label")}</Label>
+              <Input
+                id="custom-model-max-tokens"
+                className="h-9 text-xs"
+                inputMode="numeric"
+                spellCheck={false}
+                autoComplete="off"
+                placeholder={t("customModels.max_tokens_placeholder")}
+                value={editor.maxTokens}
+                onChange={(event) => setEditor((current) => current && { ...current, maxTokens: event.target.value })}
+              />
+              <p className="text-2xs text-muted-foreground">{t("customModels.max_tokens_hint")}</p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="custom-model-key" className="text-xs text-muted-foreground">{t("settings.model_api_key_label")}</Label>

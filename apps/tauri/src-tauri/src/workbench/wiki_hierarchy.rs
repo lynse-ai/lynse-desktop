@@ -544,21 +544,6 @@ pub(super) async fn run(
             },
         )
         .await?;
-        let authority_ids: BTreeSet<_> = members
-            .iter()
-            .flat_map(|t| &t.published.as_ref().unwrap().citations)
-            .map(|r| r.id.clone())
-            .collect();
-        let authority_docs: Vec<_> = authority_ids
-            .iter()
-            .map(|id| {
-                let entry = manifest
-                    .entries
-                    .get(id)
-                    .ok_or("Grouping source unavailable")?;
-                store::read_document(&local, entry)
-            })
-            .collect::<CommandResult<_>>()?;
         let cached = {
             let _guard = state.serial.lock().await;
             require_current(state, session)?;
@@ -579,8 +564,7 @@ pub(super) async fn run(
             Ok(value)
         } else {
             async {
-                knowledge_cloud::authorize(app, session, &authority_docs, "wiki_compile").await?;
-                let value = tasks::profile_scope(
+                tasks::profile_scope(
                     config.server_profile.clone(),
                     automation::request(
                         app,
@@ -591,9 +575,7 @@ pub(super) async fn run(
                         Value::Null,
                     ),
                 )
-                .await?;
-                knowledge_cloud::authorize(app, session, &authority_docs, "wiki_compile").await?;
-                Ok::<Value, String>(value)
+                .await
             }
             .await
         }

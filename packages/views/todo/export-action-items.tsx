@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Button } from "@lynse/ui/components/ui/button";
 import {
   Dialog,
@@ -27,74 +27,17 @@ import { Loader2 } from "../icons";
 import { useDestinations, useExportActionItems } from "../connections/use-connections";
 
 /**
- * Action-item export (PRD FR-2).
- *
- * Selection is page-local rather than in `TodoStore`: it is transient view
- * state with exactly one consumer, and the store already carries the
- * single-select detail-sheet id (`page.tsx:537`) — a second "selected" concept
- * there would be ambiguous.
+ * Action-item export (PRD FR-2). Entry point is the card context menu
+ * (`card-context-menu.tsx`): one card, one dialog — the multi-select
+ * toolbar mode was replaced by that per-card flow.
  *
  * Only cloud todos are exportable: the export contract keys items by their
  * cloud id, and local todos (`TodoItem.backend`, `todo-api.ts:44`) have none.
- * Callers must filter before handing ids over, and the row renders those items
- * as non-selectable.
+ * Callers must filter before handing ids over; the menu hides the item for
+ * local todos.
  */
 
 export const EXPORTABLE_PROVIDERS: IntegrationsProvider[] = ["todoist", "google-tasks", "feishu-tasks"];
-
-export function useTodoExportSelection(todos: { id: string; backend?: boolean }[]) {
-  const [selected, setSelected] = useState<Set<string>>(() => new Set());
-  const exportable = useMemo(
-    () => new Set(todos.filter((todo) => todo.backend).map((todo) => todo.id)),
-    [todos],
-  );
-
-  return {
-    selected,
-    exportableIds: exportable,
-    count: selected.size,
-    toggle: (id: string) =>
-      setSelected((prev) => {
-        const next = new Set(prev);
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
-        return next;
-      }),
-    selectAll: () => setSelected(new Set(exportable)),
-    clear: () => setSelected(new Set()),
-  };
-}
-
-export function TodoExportBar({
-  count,
-  onSelectAll,
-  onClear,
-  onExport,
-}: {
-  count: number;
-  onSelectAll: () => void;
-  onClear: () => void;
-  onExport: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="flex shrink-0 items-center gap-2 border-b border-border/50 bg-muted/30 px-6 py-1.5">
-      <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-2xs" onClick={onSelectAll}>
-        {t("todo.export_select_all")}
-      </Button>
-      <span className="text-2xs tabular-nums text-muted-foreground">
-        {t("todo.export_selected", { count })}
-      </span>
-      <div className="flex-1" />
-      <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-2xs" onClick={onClear}>
-        {t("todo.export_cancel")}
-      </Button>
-      <Button type="button" size="sm" className="h-6 text-2xs" disabled={count === 0} onClick={onExport}>
-        {t("todo.export_button")}
-      </Button>
-    </div>
-  );
-}
 
 /**
  * Pick provider + destination, then export. A missing destination is not a

@@ -314,7 +314,6 @@ struct Catalog {
     failed: BTreeMap<String, String>,
     identities: BTreeMap<String, String>,
     details: BTreeMap<String, CatalogFailure>,
-    run_failure: Option<CatalogFailure>,
     deleted: BTreeSet<String>,
     #[serde(skip)]
     layouts: BTreeMap<String, Vec<String>>,
@@ -361,16 +360,11 @@ fn record_failure(catalog: &mut Catalog, key: &str, doc: &Document, error: &str)
 
 pub(super) fn source_failures(root: &Path) -> CommandResult<Value> {
     let catalog: Catalog = read_json(&catalog_path(root))?;
-    let mut failures: Vec<Value> = catalog
-        .run_failure
-        .iter()
-        .map(|failure| json!(failure))
-        .collect();
-    failures.extend(catalog.details.values().map(|failure| {
+    let failures: Vec<Value> = catalog.details.values().map(|failure| {
         let mut value = json!(failure);
         value["retrying"] = json!(!catalog.failed.contains_key(&failure.id));
         value
-    }));
+    }).collect();
     Ok(json!(failures))
 }
 
@@ -1443,7 +1437,6 @@ pub(super) fn publish_automatic(
 pub(super) fn retry(root: &Path) -> CommandResult<()> {
     let mut catalog: Catalog = read_json(&catalog_path(root))?;
     catalog.failed.clear();
-    catalog.run_failure = None;
     write_json(&catalog_path(root), &catalog)
 }
 
@@ -1454,86 +1447,41 @@ pub(super) fn retry_service_failures(root: &Path) -> CommandResult<bool> {
     }
     let mut catalog: Catalog = read_json(&path)?;
     let previous = catalog.failed.len();
-    let run_recovered = catalog
-        .run_failure
-        .as_ref()
-        .is_some_and(|failure| is_service_failure(&failure.message));
-    if run_recovered {
-        catalog.run_failure = None;
-    }
     // Model-output rejections are nondeterministic: give them one fresh
     // attempt per session (bind), not per heartbeat, so a deterministic
     // validation failure cannot burn model calls every two minutes.
     catalog
         .failed
         .retain(|_, error| !is_service_failure(error) && !is_model_output_failure(error));
-    let changed = run_recovered || previous != catalog.failed.len();
+    let changed = previous != catalog.failed.len();
     if changed {
         write_json(&path, &catalog)?;
     }
     Ok(changed)
 }
 
-async fn checked_preflight(
-    root: &Path,
-    catalog: &mut Catalog,
-    verify: impl std::future::Future<Output = CommandResult<()>>,
+/// Mark these inputs as attempted before any network work starts.
+///
+/// The happy-path tail writes the same fingerprint, but a pass interrupted by
+/// a cloud 503 or a model-service failure used to leave it empty forever, so
+/// `needs_automatic_processing` replayed the entire pass on every heartbeat.
+/// Incomplete work is still found by the catalog-chunk and
+/// `pending_compilation` checks below, so an early checkpoint stops the
+/// whole-pass replay without hiding the items that still need a retry.
+async fn checkpoint_attempted_inputs(
+    app: &AppHandle,
+    state: &WorkbenchState,
+    session: &Session,
+    attempted_inputs: &str,
 ) -> CommandResult<()> {
-    if let Some(failure) = &catalog.run_failure {
-        if failure.stage != "preparing"
-            || !super::super::knowledge_transport::transient(&failure.message)
-        {
-            return Err(failure.message.clone());
-        }
+    let _guard = state.serial.lock().await;
+    require_current(state, session)?;
+    let mut latest = load_state(app, session)?;
+    if latest.wiki_attempted_fingerprint == attempted_inputs {
+        return Ok(());
     }
-    if let Err(error) = verify.await {
-        catalog.run_failure = Some(CatalogFailure {
-            id: "organization".into(),
-            source_id: String::new(),
-            title: String::new(),
-            stage: "preparing".into(),
-            message: error.clone(),
-            occurred_at: crate::now(),
-            validation: None,
-        });
-        write_json(&catalog_path(root), catalog)?;
-        return Err(error);
-    }
-    // Only a successful authorization check releases a transient connection latch.
-    catalog.run_failure = None;
-    catalog
-        .failed
-        .retain(|_, error| !super::super::knowledge_transport::transient(error));
-    // Pure HTTP 503 rejections never started server-side work, so re-attempt
-    // them after a cool-down per the retry-spacing rule. Gateway cuts (504)
-    // keep an unknown outcome and stay latched to avoid double-billed work.
-    let cutoff = chrono::Utc::now() - chrono::Duration::seconds(600);
-    let retriable: Vec<String> = catalog
-        .failed
-        .iter()
-        .filter(|(key, error)| {
-            error.starts_with("Lynclaw synthesis failed (HTTP 503)")
-                && catalog
-                    .details
-                    .get(*key)
-                    .and_then(|failure| {
-                        chrono::DateTime::parse_from_rfc3339(&failure.occurred_at).ok()
-                    })
-                    .is_some_and(|at| at < cutoff)
-        })
-        .map(|(key, _)| key.clone())
-        .collect();
-    if !retriable.is_empty() {
-        log::info!(
-            "[wiki-run] releasing {} server-rejected chunks for spaced retry",
-            retriable.len()
-        );
-        for key in retriable {
-            catalog.failed.remove(&key);
-            catalog.details.remove(&key);
-        }
-    }
-    write_json(&catalog_path(root), catalog)
+    latest.wiki_attempted_fingerprint = attempted_inputs.to_owned();
+    persist(app, session, &latest)
 }
 
 pub(super) async fn run(
@@ -1580,13 +1528,6 @@ pub(super) async fn run(
         manifest = load_state(app, session)?;
         manifest.wiki_attempted_fingerprint.clear();
         persist(app, session, &manifest)?;
-    }
-    if let Some(failure) = &catalog.run_failure {
-        if failure.stage != "preparing"
-            || !super::super::knowledge_transport::transient(&failure.message)
-        {
-            return Err(failure.message.clone());
-        }
     }
     {
         let _guard = state.serial.lock().await;
@@ -1725,48 +1666,10 @@ pub(super) async fn run(
     }) {
         return Err(error.clone());
     }
-    // Refresh this server's policy before using persisted settings from an earlier route.
-    let preflight = checked_preflight(&root, &mut catalog, async {
-        let capabilities =
-            knowledge_cloud::request(app, session, "/capabilities", None, None).await?;
-        if capabilities["available"] != true {
-            return Err("Cloud knowledge capability unavailable or authorization rejected".into());
-        }
-        let policy = capabilities
-            .get("policy")
-            .ok_or("Cloud source eligibility unavailable")?;
-        if policy["enrolled"] != true {
-            return Err("Cloud knowledge organization is not enabled on this server".into());
-        }
-        // A changed range requires review instead of silently dropping saved source links.
-        if docs.iter().any(|doc| {
-            !knowledge_cloud::local_allows(
-                doc,
-                &Manifest {
-                    knowledge_policy: Some(policy.clone()),
-                    knowledge_pending: None,
-                    ..manifest.clone()
-                },
-            )
-        }) {
-            return Err(
-                "Cloud knowledge selected folders changed; review the organization range".into(),
-            );
-        }
-        Ok::<(), String>(())
-    })
-    .await;
-    if let Err(error) = preflight {
-        let _guard = state.serial.lock().await;
-        require_current(state, session)?;
-        let mut latest = load_state(app, session)?;
-        latest.wiki_progress = Some(WikiProgress {
-            stage: "preparing".into(),
-            ..Default::default()
-        });
-        persist(app, session, &latest)?;
-        return Err(error);
-    }
+    // Organization runs entirely on the user's own model. The cloud only
+    // mirrors published pages later, so no server gatekeeping belongs in
+    // front of a pass.
+    checkpoint_attempted_inputs(app, state, session, &attempted_inputs).await?;
     let CatalogPlan {
         jobs,
         mut active,

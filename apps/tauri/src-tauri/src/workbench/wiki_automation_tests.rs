@@ -1382,62 +1382,6 @@ fn catalog_failures_keep_actionable_diagnostics_until_a_successful_retry() {
     fs::remove_dir_all(root).unwrap();
 }
 
-#[tokio::test]
-async fn transient_preflight_recovers_only_after_verification_and_keeps_completed_work() {
-    let root = root();
-    let mut catalog = Catalog::default();
-    catalog.chunks.insert("completed:0".into(), vec![]);
-    catalog.identities.insert("project".into(), "stable".into());
-    catalog
-        .failed
-        .insert("network:0".into(), "Cloud knowledge offline".into());
-    catalog
-        .failed
-        .insert("invalid:0".into(), "Invalid Wiki catalog output".into());
-    checked_preflight(&root, &mut catalog, async {
-        Err("Cloud knowledge offline".into())
-    })
-    .await
-    .unwrap_err();
-    assert!(catalog.run_failure.is_some());
-    checked_preflight(&root, &mut catalog, async { Ok(()) })
-        .await
-        .unwrap();
-    let restored: Catalog = read_json(&catalog_path(&root)).unwrap();
-    assert!(restored.run_failure.is_none());
-    assert!(restored.chunks.contains_key("completed:0"));
-    assert_eq!(restored.identities["project"], "stable");
-    assert!(!restored.failed.contains_key("network:0"));
-    assert!(restored.failed.contains_key("invalid:0"));
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[tokio::test]
-async fn auth_and_policy_failures_do_not_resume_automatically() {
-    let root = root();
-    for error in [
-        "Cloud knowledge identity verification failed",
-        "Cloud knowledge request failed (HTTP 403)",
-        "Cloud knowledge policy changed; reload before saving",
-        "Cloud knowledge selected folders changed; review the organization range",
-    ] {
-        let mut catalog = Catalog::default();
-        checked_preflight(&root, &mut catalog, async { Err(error.into()) })
-            .await
-            .unwrap_err();
-        let called = std::sync::atomic::AtomicBool::new(false);
-        assert!(checked_preflight(&root, &mut catalog, async {
-            called.store(true, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
-        })
-        .await
-        .is_err());
-        assert!(!called.load(std::sync::atomic::Ordering::SeqCst));
-        assert_eq!(catalog.run_failure.as_ref().unwrap().message, error);
-    }
-    fs::remove_dir_all(root).unwrap();
-}
-
 #[test]
 fn topic_retry_is_scoped_to_the_selected_topic_and_keeps_other_failures() {
     let root = root();

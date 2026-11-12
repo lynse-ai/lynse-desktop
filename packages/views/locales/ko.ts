@@ -557,6 +557,7 @@ const ko = {
     user_appearance: "화면",
     user_help_feedback: "문제 보고",
     user_feature_requests: "기능 요청",
+    user_version_updates: "버전 소식",
     edit_name: "사용자 이름 편집",
     about: "정보",
     activity_title: "노트 활동",
@@ -1780,11 +1781,6 @@ local_summary_failed: "심층 요약 생성 실패",
   todo: {
     export_button: "내보내기",
     export_dialog_cancel: "취소",
-    export_exit: "완료",
-    export_select_all: "모두 선택",
-    export_selected: "{{count}}개 선택됨",
-    export_cancel: "지우기",
-    export_select_item: "이 할 일 선택",
     export_title: "할 일 내보내기",
     export_subtitle: "{{count}}개를 선택한 서비스로 전송합니다.",
     export_choose_provider: "서비스",
@@ -1805,6 +1801,11 @@ local_summary_failed: "심층 요약 생성 실패",
     kanban_near: "예정 작업",
     kanban_star: "중점 추적",
     star_toggle: "중점 추적 전환",
+    unstar_toggle: "중점 추적 해제",
+    menu_edit: "편집",
+    menu_mark_done: "완료로 표시",
+    menu_mark_undone: "미완료로 표시",
+    menu_open_source: "원본 열기",
     kanban_show_done: "완료 열 표시/숨기기",
     move_date_title: "실행 날짜 설정",
     move_date_confirm: "이동",
@@ -1997,6 +1998,10 @@ local_summary_failed: "심층 요약 생성 실패",
       "open_console": "앱 콘솔 열기",
       "continue_authorize": "추가했습니다 — 인증으로 진행"
     }
+  },
+
+  feedback: {
+    title: "피드백",
   },
 
   about: {

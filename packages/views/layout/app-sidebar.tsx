@@ -14,6 +14,7 @@ import {
   HelpCircle,
   Check,
   LogOut,
+  Megaphone,
   Zap,
   Crown,
   ListChecks,
@@ -63,8 +64,9 @@ import { SettingsDialog } from "../settings/settings-dialog";
 import { UploadDialog } from "../workspace/upload-dialog";
 import { TemplateManager } from "../workspace/template-manager";
 import { AppUpdateDialog } from "../app-update-dialog";
-import { openFeatureRequests, openReportProblem } from "../diagnostics";
+import { openReportProblem } from "../diagnostics";
 import { ReportProblemDialog } from "../report-problem-dialog";
+import { openFeedbackWindow, openChangelog } from "../feedback/open-feedback";
 import { LayoutTemplate, MessageSquarePlus } from "lucide-react";
 
 function isNavActive(pathname: string, href: string): boolean {
@@ -504,10 +506,16 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
           <span>{t("layout.user_help_feedback")}</span>
         </DropdownMenuItem>
 
-        {/* ── Feature requests (Feishu-backed center) ─── */}
-        <DropdownMenuItem onClick={() => openFeatureRequests()}>
+        {/* ── Feature requests (FeedLog widget window) ── */}
+        <DropdownMenuItem onClick={openFeedbackWindow}>
           <MessageSquarePlus className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_feature_requests")}</span>
+        </DropdownMenuItem>
+
+        {/* ── Version updates — the FeedLog changelog page ── */}
+        <DropdownMenuItem onClick={openChangelog}>
+          <Megaphone className="size-4 text-muted-foreground" strokeWidth={1.5} />
+          <span>{t("layout.user_version_updates")}</span>
         </DropdownMenuItem>
 
         {/* ── About (version) — pops the standalone About window ── */}

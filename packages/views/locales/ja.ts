@@ -558,6 +558,7 @@ const ja = {
     user_appearance: "外観",
     user_help_feedback: "問題を報告",
     user_feature_requests: "機能リクエスト",
+    user_version_updates: "更新情報",
     edit_name: "ユーザー名を編集",
     about: "バージョン情報",
     activity_title: "ノートの活動",
@@ -1781,11 +1782,6 @@ local_summary_failed: "詳細要約の生成に失敗しました",
   todo: {
     export_button: "エクスポート",
     export_dialog_cancel: "キャンセル",
-    export_exit: "完了",
-    export_select_all: "すべて選択",
-    export_selected: "{{count}} 件選択中",
-    export_cancel: "解除",
-    export_select_item: "この行動項目を選択",
     export_title: "行動項目をエクスポート",
     export_subtitle: "{{count}} 件を選択したサービスへ送信します。",
     export_choose_provider: "サービス",
@@ -1806,6 +1802,11 @@ local_summary_failed: "詳細要約の生成に失敗しました",
     kanban_near: "近いタスク",
     kanban_star: "重点フォロー",
     star_toggle: "フォローを切り替え",
+    unstar_toggle: "フォローを解除",
+    menu_edit: "編集",
+    menu_mark_done: "完了にする",
+    menu_mark_undone: "未完了に戻す",
+    menu_open_source: "ソースを開く",
     kanban_show_done: "完了列の表示/非表示",
     move_date_title: "期日を設定",
     move_date_confirm: "移動",
@@ -1998,6 +1999,10 @@ local_summary_failed: "詳細要約の生成に失敗しました",
       "open_console": "アプリコンソールを開く",
       "continue_authorize": "追加しました — 認証へ進む"
     }
+  },
+
+  feedback: {
+    title: "フィードバック",
   },
 
   about: {

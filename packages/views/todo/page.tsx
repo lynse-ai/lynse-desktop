@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { Plus, Calendar, Trash2, X, RefreshCw, Loader2, Upload, List, User, Columns2 } from "../icons";
+import { Plus, Calendar, Trash2, X, RefreshCw, Loader2, List, User, Columns2 } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { SqueezePanel } from "../squeeze-panel";
 import { Button } from "@lynse/ui/components/ui/button";
 import { toast } from "sonner";
-import { featureFlags, isConnectionsEnabled } from "../feature-flags";
+import { featureFlags } from "../feature-flags";
 import { getDesktopInspirationApi } from "../inspiration/desktop-api";
 import { isWebPlatform } from "../platform";
 import { useInspirationCaptureStore } from "../inspiration/capture-store";
@@ -15,7 +15,8 @@ import { groupTodos, formatDueDisplay, type GroupKey } from "./grouping";
 import { DatePickerPopover, TimePickerPopover } from "./date-time-picker";
 import { TodoStateControl } from "./state-control";
 import { useTodos } from "./use-todos";
-import { TodoExportBar, TodoExportDialog, useTodoExportSelection } from "./export-action-items";
+import { TodoExportDialog } from "./export-action-items";
+import { TodoCardContextMenu } from "./card-context-menu";
 import { TodoCalendarView } from "./calendar-view";
 import { TodoKanbanView } from "./kanban-view";
 import { useWorkbench } from "../workbench";
@@ -138,7 +139,7 @@ function AddTodoTrigger({ onOpen }: { onOpen: () => void }) {
 
 /**
  * One todo as a card in the responsive grid. A plain div with role=button so
- * the source chip (a real button), the checkboxes and the inline title
+ * the source chip (a real button), the checkbox and the inline title
  * editor can nest inside without invalid button-in-button markup.
  *
  * The title edits in place on double-click (same entry point as the edit
@@ -151,9 +152,6 @@ function TodoItemCard({
   onSelect,
   onToggle,
   onRename,
-  selectable = false,
-  isChecked = false,
-  onCheck,
 }: {
   todo: TodoItem;
   active: boolean;
@@ -163,16 +161,11 @@ function TodoItemCard({
   onToggle: () => void;
   /** Persist a new title (optimistic patch + saveTodo). */
   onRename: (todo: TodoItem, title: string) => void;
-  /** Export mode: a second checkbox appears and the card click selects. */
-  selectable?: boolean;
-  isChecked?: boolean;
-  onCheck?: () => void;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigation();
   const dueText = formatDueDisplay(todo);
   const closed = todoClosed(todo);
-  const selectAction = selectable ? (onCheck ?? onSelect) : onSelect;
 
   // ── Inline title editing ──
   const [editing, setEditing] = useState(false);
@@ -220,11 +213,11 @@ function TodoItemCard({
     <div
       role="button"
       tabIndex={0}
-      onClick={selectAction}
+      onClick={onSelect}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          selectAction();
+          onSelect();
         }
       }}
       className={`flex cursor-pointer flex-col gap-2 rounded-xl border p-3 text-left transition-colors ${
@@ -234,16 +227,6 @@ function TodoItemCard({
       }`}
     >
       <div className="flex items-start gap-2">
-        {selectable && (
-          <input
-            type="checkbox"
-            checked={isChecked}
-            onChange={() => onCheck?.()}
-            className="size-4 shrink-0 rounded border-border accent-primary"
-            onClick={(e) => e.stopPropagation()}
-            aria-label={t("todo.export_select_item")}
-          />
-        )}
         <input
           type="checkbox"
           checked={todo.completed}
@@ -745,17 +728,12 @@ export function TodoPage() {
   // The board is the default landing view — the triage columns beat the
   // flat list for day-to-day use.
   const [viewMode, setViewMode] = useState<"list" | "kanban" | "calendar">("kanban");
-  // Export selection (PRD FR-2). Only cloud todos carry an id the export
-  // contract understands, so local ones stay unselectable.
-  const exportSelection = useTodoExportSelection(todos);
-  const [exportMode, setExportMode] = useState(false);
-  const [exportOpen, setExportOpen] = useState(false);
-  const rowSelectionProps = (todo: TodoItem) => ({
-    selectable: exportMode && Boolean(todo.backend),
-    isChecked: exportSelection.selected.has(todo.id),
-    onCheck: () => exportSelection.toggle(todo.id),
-  });
+  // Export now lives in the card context menu: pick a cloud todo, right-click,
+  // 导出 — the dialog opens for that single item. The menu component hides the
+  // entry for local todos (no cloud id) and when connections are off.
+  const [exportTarget, setExportTarget] = useState<TodoItem | null>(null);
   const calendarAvailable = useMemo(() => isCalendarAvailable(), []);
+  const navigate = useNavigation();
 
   const handleAdd = useCallback(
     (title: string) => {
@@ -833,6 +811,24 @@ export function TodoPage() {
   const groups = useMemo(() => groupTodos(todos), [todos]);
   const selected = todos.find((x) => x.id === selectedId) ?? null;
 
+  /** Shared per-card context menu props (list grid + kanban board). The menu
+   *  itself hides items that don't apply (export for local todos, source for
+   *  todos without one). */
+  const cardMenuProps = useCallback(
+    (todo: TodoItem) => ({
+      todo,
+      onEdit: () => setSelectedId(todo.id),
+      onToggle: () => handleToggle(todo.id),
+      onDelete: () => void handleDelete(todo.id),
+      onMoveKanban: handleMoveKanban,
+      onExport: (target: TodoItem) => setExportTarget(target),
+      onOpenSource: hasTodoSource(todo)
+        ? () => openTodoSource(todo, (path) => navigate.push(path))
+        : undefined,
+    }),
+    [handleToggle, handleDelete, handleMoveKanban, navigate],
+  );
+
   // ── Render ────────────────────────────────────────────────
   return (
     // Web caps the page on narrow viewports so the edit panel squeezes a
@@ -867,19 +863,6 @@ export function TodoPage() {
                 </button>
               ))}
             </div>
-            {isConnectionsEnabled() && exportSelection.exportableIds.size > 0 && (
-              <button
-                onClick={() => {
-                  setExportMode((prev) => !prev);
-                  if (exportMode) exportSelection.clear();
-                }}
-                className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50"
-                title={t("todo.export_button")}
-              >
-                {exportMode ? <X className="size-3.5" /> : <Upload className="size-3.5" />}
-                {t(exportMode ? "todo.export_exit" : "todo.export_button")}
-              </button>
-            )}
             <button
               onClick={() => load({ force: true })}
               disabled={refreshing}
@@ -907,18 +890,12 @@ export function TodoPage() {
         }
       />
 
-      {exportMode && (
-        <TodoExportBar
-          count={exportSelection.count}
-          onSelectAll={exportSelection.selectAll}
-          onClear={exportSelection.clear}
-          onExport={() => setExportOpen(true)}
-        />
-      )}
       <TodoExportDialog
-        open={exportOpen}
-        onOpenChange={setExportOpen}
-        actionItemIds={[...exportSelection.selected]}
+        open={exportTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setExportTarget(null);
+        }}
+        actionItemIds={exportTarget ? [exportTarget.id] : []}
       />
 
       {/* Error banner */}
@@ -948,6 +925,9 @@ export function TodoPage() {
               onSelect={setSelectedId}
               onToggle={handleToggle}
               onMoveKanban={handleMoveKanban}
+              onDelete={(id) => void handleDelete(id)}
+              onExport={(todo) => setExportTarget(todo)}
+              onOpenSource={(todo) => openTodoSource(todo, (path) => navigate.push(path))}
             />
           ) : viewMode === "calendar" ? (
             <TodoCalendarView
@@ -986,16 +966,16 @@ export function TodoPage() {
                         }`}
                       >
                         {items.map((todo) => (
-                          <TodoItemCard
-                            key={todo.id}
-                            todo={todo}
-                            active={selectedId === todo.id}
-                            overdue={key === "overdue"}
-                            onSelect={() => setSelectedId(todo.id)}
-                            onToggle={() => handleToggle(todo.id)}
-                            onRename={handleRename}
-                            {...rowSelectionProps(todo)}
-                          />
+                          <TodoCardContextMenu key={todo.id} {...cardMenuProps(todo)}>
+                            <TodoItemCard
+                              todo={todo}
+                              active={selectedId === todo.id}
+                              overdue={key === "overdue"}
+                              onSelect={() => setSelectedId(todo.id)}
+                              onToggle={() => handleToggle(todo.id)}
+                              onRename={handleRename}
+                            />
+                          </TodoCardContextMenu>
                         ))}
                       </div>
                     </GroupSection>

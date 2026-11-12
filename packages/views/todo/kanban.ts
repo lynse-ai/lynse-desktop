@@ -1,4 +1,4 @@
-import { type TodoItem, todoStatus } from "./todo-api";
+import { type TodoItem, type TodoStatus, type KanbanLane, todoStatus } from "./todo-api";
 import { isOverdueTodo } from "./grouping";
 
 /**
@@ -14,6 +14,15 @@ import { isOverdueTodo } from "./grouping";
  */
 
 export type KanbanColumnKey = "unsorted" | "near" | "star" | "done";
+
+/** A board move target: all fields optional — undefined keeps the current
+ *  value, null/false clears (see moveTodoKanban). */
+export type KanbanMoveTarget = {
+  status?: TodoStatus | null;
+  lane?: KanbanLane | null;
+  dueDate?: string | null;
+  starred?: boolean | null;
+};
 
 /** Columns in board order; done is opt-in via the toolbar toggle. */
 export const KANBAN_COLUMNS: { key: KanbanColumnKey; optional?: boolean }[] = [

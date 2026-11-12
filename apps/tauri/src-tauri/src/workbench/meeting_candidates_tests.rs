@@ -308,3 +308,76 @@ fn empty_days_render_without_entries_and_backoff_blocks_retry() {
     assert!(!backoff_until(&conn, "missing").unwrap());
     cleanup(&root);
 }
+
+// --- publication uplink ------------------------------------------------------
+
+/// Shared fingerprint test vectors: the expected digests were computed by the
+/// gateway's normalize_transcript (runtime/knowledge_proxy.py). Any change on
+/// either side must keep these green and re-pin the other side in one release.
+#[test]
+fn transcript_fingerprint_matches_the_gateway_spec() {
+    // Shared vectors: digests computed by the gateway normalize_transcript.
+    let cases = [
+        ("  第一行\n\n第二行  \n\n\n  第三行", "ae4f6df039c62b53932681965f7c478cc013f6f05c9ded1c881b56cb47c97fb2"),
+        ("会议开始\n我们最终决定采用方案A\n散会\n", "bf73b0ed29c91898e077c91ea229d4fd234b5663a22cf25c66db25c11d25eeb7"),
+        ("", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        ("   \n  \n", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        ("中文 内容 与 English mixed\r\nwindows 换行", "79034818544a75d77716ebfaf126118520d1b96b46748209824f1d0897edca3c"),
+    ];
+    for (text, expected) in cases {
+        assert_eq!(transcript_fingerprint(text), expected, "vector {text:?}");
+    }
+}
+
+#[test]
+fn writer_decisions_never_auto_take_over_another_device() {
+    // No server writer: register fresh.
+    assert_eq!(
+        writer_decision("d1", 0, None),
+        WriterAction::Register
+    );
+    // Same device with a moved server generation: adopt, never commit stale.
+    assert_eq!(
+        writer_decision("d1", 1, Some(("d1", 3))),
+        WriterAction::AdoptServerGeneration(3)
+    );
+    // Same device in sync: commit.
+    assert_eq!(
+        writer_decision("d1", 2, Some(("d1", 2))),
+        WriterAction::CommitWithGeneration(2)
+    );
+    // Another device owns the writer: pause, never auto-take-over.
+    assert_eq!(
+        writer_decision("d1", 1, Some(("d2", 1))),
+        WriterAction::PauseNeedTakeover {
+            device_id: "d2".into()
+        }
+    );
+}
+
+#[test]
+fn publish_entries_map_desktop_kinds_to_gateway_kinds() {
+    let root = temp_root();
+    let conn = connection(&root).unwrap();
+    store_batch(
+        &conn, "scope", "m1", "r1", "2026-11-12", "ex-1",
+        &[
+            item("已确认采用方案A", "decision"),
+            item("客户要求月底上线", "observation"),
+            item("预算仍在讨论", "unresolved"),
+        ],
+    )
+    .unwrap();
+    let entries = publish_entries(&conn, "scope", "m1").unwrap();
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0]["kind"], json!("decision"));
+    assert_eq!(entries[1]["kind"], json!("project_fact"));
+    assert_eq!(entries[2]["kind"], json!("project_fact"));
+    assert!(entries[0]["client_id"].as_str().unwrap().len() == 64);
+    // Citations travel verbatim for the gateway's transcript verification.
+    assert_eq!(
+        entries[0]["citations"][0]["quote"],
+        json!("已确认采用方案A")
+    );
+    cleanup(&root);
+}

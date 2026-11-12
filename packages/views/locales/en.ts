@@ -556,6 +556,7 @@ const en = {
     user_appearance: "Appearance",
     user_help_feedback: "Report an issue",
     user_feature_requests: "Feature Requests",
+    user_version_updates: "What's New",
     edit_name: "Edit username",
     about: "About",
     activity_title: "Notes activity",
@@ -1778,11 +1779,6 @@ local_summary_failed: "Deep summary failed",
   todo: {
     export_button: "Export",
     export_dialog_cancel: "Cancel",
-    export_exit: "Done",
-    export_select_all: "Select all",
-    export_selected: "{{count}} selected",
-    export_cancel: "Clear",
-    export_select_item: "Select this action item",
     export_title: "Export action items",
     export_subtitle: "{{count}} items will be sent to the service you choose.",
     export_choose_provider: "Service",
@@ -1803,6 +1799,11 @@ local_summary_failed: "Deep summary failed",
     kanban_near: "Near-term",
     kanban_star: "Focus",
     star_toggle: "Toggle tracking",
+    unstar_toggle: "Remove from watchlist",
+    menu_edit: "Edit",
+    menu_mark_done: "Mark as completed",
+    menu_mark_undone: "Mark as not completed",
+    menu_open_source: "Open source note",
     kanban_show_done: "Show/hide the Done column",
     move_date_title: "Set a date",
     move_date_confirm: "Move",
@@ -1995,6 +1996,10 @@ local_summary_failed: "Deep summary failed",
       "open_console": "Open the app console",
       "continue_authorize": "Done — continue to authorization"
     }
+  },
+
+  feedback: {
+    title: "Feedback",
   },
 
   about: {

@@ -43,7 +43,18 @@ function isCustomModelProfile(value: unknown): value is CustomModelProfile {
     typeof v.label === "string" && !!v.label &&
     typeof v.baseUrl === "string" && isHttpUrl(v.baseUrl) &&
     typeof v.model === "string" && !!v.model &&
-    typeof v.createdAt === "string";
+    typeof v.createdAt === "string" &&
+    (v.maxTokens === undefined || isValidMaxTokens(v.maxTokens));
+}
+
+/** Keep a user-entered ceiling inside a range providers can actually serve. */
+export const MIN_MODEL_MAX_TOKENS = 1024;
+export const MAX_MODEL_MAX_TOKENS = 65536;
+export const DEFAULT_MODEL_MAX_TOKENS = 16000;
+
+export function isValidMaxTokens(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) &&
+    value >= MIN_MODEL_MAX_TOKENS && value <= MAX_MODEL_MAX_TOKENS;
 }
 
 export function saveCustomModels(models: CustomModelProfile[]): void {
@@ -85,8 +96,16 @@ export function toModelOverride(profile: CustomModelProfile): {
   baseUrl: string;
   model: string;
   profileId: string;
+  maxTokens?: number;
 } {
-  return { baseUrl: profile.baseUrl, model: profile.model, profileId: profile.id };
+  const override: {
+    baseUrl: string;
+    model: string;
+    profileId: string;
+    maxTokens?: number;
+  } = { baseUrl: profile.baseUrl, model: profile.model, profileId: profile.id };
+  if (isValidMaxTokens(profile.maxTokens)) override.maxTokens = profile.maxTokens;
+  return override;
 }
 
 /** Direct-call request prefix (off-cloud features): base URL + model. */

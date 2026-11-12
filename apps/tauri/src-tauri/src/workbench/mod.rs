@@ -664,6 +664,20 @@ fn record_source_error(manifest: &mut Manifest, error: String) {
     }
 }
 
+/// Recoverable outages (cloud transport, provider throttling/5xx) should not
+/// pin the workbench in `phase="failed"` forever. The wiki pass has already
+/// checkpointed its inputs, and the next heartbeat resumes any unfinished
+/// chunks/topics, so a settled terminal state is safe here.
+fn recoverable_wiki_error(error: &str) -> bool {
+    knowledge_transport::transient(error)
+        || error.starts_with("Model provider failed (HTTP 429)")
+        || error.starts_with("Lynclaw synthesis failed (HTTP 429)")
+        || [500, 502, 503, 504].iter().any(|status| {
+            error.starts_with(&format!("Model provider failed (HTTP {status})"))
+                || error.starts_with(&format!("Lynclaw synthesis failed (HTTP {status})"))
+        })
+}
+
 async fn record_worker_error(
     app: &AppHandle,
     state: &WorkbenchState,
@@ -676,6 +690,13 @@ async fn record_worker_error(
         if let Ok(mut manifest) = load_state(app, session) {
             if source {
                 record_source_error(&mut manifest, error);
+            } else if recoverable_wiki_error(&error) {
+                manifest.phase = "ready".into();
+                manifest.error = error;
+                manifest
+                    .wiki_progress
+                    .get_or_insert_with(Default::default)
+                    .stage = "complete".into();
             } else {
                 manifest.phase = "failed".into();
                 manifest.error = error;

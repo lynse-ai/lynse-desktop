@@ -226,7 +226,7 @@ fn models(app: &AppHandle, session: &Session) -> CommandResult<Models> {
             "lynclaw-wiki-v2",
             super::markdown::INPUT_VERSION,
             session.agent_url,
-            session.model_override
+            session.model_override.as_ref().map(model_cache_identity)
         ])
         .to_string(),
     );
@@ -240,7 +240,12 @@ pub(super) fn model_cache_identity(value: &Value) -> Value {
         Value::Object(fields) => Value::Object(
             fields
                 .iter()
-                .filter(|(key, _)| !matches!(key.as_str(), "apiKey" | "api_key" | "token"))
+                .filter(|(key, _)| {
+                    !matches!(
+                        key.as_str(),
+                        "apiKey" | "api_key" | "token" | "maxTokens"
+                    )
+                })
                 .map(|(key, value)| (key.clone(), model_cache_identity(value)))
                 .collect(),
         ),
@@ -1079,6 +1084,9 @@ async fn text_model_override(app: &AppHandle, session: &Session) -> CommandResul
     }
     if let Some(fields) = value.as_object_mut() {
         fields.remove("profileId");
+        // maxTokens is a direct-call transport ceiling. Keep it out of the
+        // gateway payload; the server validates modelOverride fields strictly.
+        fields.remove("maxTokens");
     }
     value["apiKey"] = json!(key);
     Ok(value)
@@ -1167,29 +1175,12 @@ async fn request_model_report(
         ready(&manifest)?;
         validate_request_sources(&roots(app, session)?.0, &manifest, &payload)?;
     }
-    let authority_docs = {
-        let manifest = load_state(app, session)?;
-        let (root, _) = roots(app, session)?;
-        payload["sources"]
-            .as_array()
-            .ok_or("Model sources unavailable")?
-            .iter()
-            .map(|source| {
-                let entry = manifest
-                    .entries
-                    .get(source["id"].as_str().ok_or("Invalid model source")?)
-                    .ok_or("Model source unavailable")?;
-                store::read_document(&root, entry)
-            })
-            .collect::<CommandResult<Vec<_>>>()?
-    };
-    knowledge_cloud::authorize(app, session, &authority_docs, "wiki_compile").await?;
     if task != "graph_extract" {
         // Direct mode: the desktop is the synthesis processor. Prompts,
         // passage numbering, citation restoration and validation run locally;
-        // the provider sees only the user's endpoint and vaulted key. Lynse
-        // credentials stay on business endpoints, such as the source
-        // eligibility check that just ran above.
+        // the provider sees only the user's endpoint and vaulted key. The
+        // cloud only mirrors published pages later, so nothing on the server
+        // gates a model call here.
         return direct_synthesis(app, session, &state, task, payload, report).await;
     }
     // Gateway path, retained for graph extraction only: graph runs on server

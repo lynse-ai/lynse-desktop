@@ -554,6 +554,7 @@ const zh = {
     user_appearance: "外观",
     user_help_feedback: "报告问题",
     user_feature_requests: "功能建议",
+    user_version_updates: "版本更新",
     edit_name: "编辑用户名",
     about: "关于",
     activity_title: "笔记活跃度",
@@ -1775,11 +1776,6 @@ local_summary_failed: "深度总结生成失败",
   todo: {
     export_button: "导出",
     export_dialog_cancel: "取消",
-    export_exit: "完成",
-    export_select_all: "全选",
-    export_selected: "已选择 {{count}} 项",
-    export_cancel: "清除",
-    export_select_item: "选择该行动项",
     export_title: "导出行动项",
     export_subtitle: "将把 {{count}} 项发送到你选择的服务。",
     export_choose_provider: "服务",
@@ -1800,6 +1796,11 @@ local_summary_failed: "深度总结生成失败",
     kanban_near: "近期任务",
     kanban_star: "重点追踪",
     star_toggle: "标记重点追踪",
+    unstar_toggle: "取消重点追踪",
+    menu_edit: "编辑",
+    menu_mark_done: "标记为已完成",
+    menu_mark_undone: "标记为未完成",
+    menu_open_source: "打开来源",
     kanban_show_done: "显示/隐藏已完成列",
     move_date_title: "设置执行日期",
     move_date_confirm: "确定移动",
@@ -1992,6 +1993,10 @@ local_summary_failed: "深度总结生成失败",
       "open_console": "打开应用控制台",
       "continue_authorize": "已添加，继续授权"
     }
+  },
+
+  feedback: {
+    title: "意见反馈",
   },
 
   about: {

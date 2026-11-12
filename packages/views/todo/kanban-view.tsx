@@ -4,27 +4,20 @@ import { useMemo, useState } from "react";
 import { Calendar, Star, User } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@lynse/ui/components/ui/dialog";
-import { Button } from "@lynse/ui/components/ui/button";
-import {
   type TodoItem,
-  type KanbanLane,
   todoClosed,
 } from "./todo-api";
-import { dayKey, formatDueDisplay, isOverdueTodo, startOfLocalDay } from "./grouping";
-import { MonthCalendarGrid, quickDateTargets } from "./date-time-picker";
+import { formatDueDisplay, isOverdueTodo } from "./grouping";
 import {
   KANBAN_COLUMNS,
   isGenericOwner,
   kanbanColumnFor,
   kanbanColumns,
   type KanbanColumnKey,
+  type KanbanMoveTarget,
 } from "./kanban";
+import { MoveDateDialog, rebaseDate } from "./move-date-dialog";
+import { TodoCardContextMenu } from "./card-context-menu";
 
 /**
  * Kanban board view of the todo page — a triage workflow: 未整理 (no date
@@ -33,30 +26,8 @@ import {
  * drop between columns; dropping on 近期任务 always pops the date dialog so
  * the move lands on a concrete day; the card's star icon files it into
  * 重点追踪 with one click. Clicking a card opens the shared edit sidebar via
- * `onSelect`.
+ * `onSelect`; right-clicking opens the shared card context menu.
  */
-
-/** A board move target: all fields optional — undefined keeps the current
- *  value, null/false clears (see moveTodoKanban). */
-export type KanbanMoveTarget = {
-  status?: "open" | "doing" | "done" | null;
-  lane?: KanbanLane | null;
-  dueDate?: string | null;
-  starred?: boolean | null;
-};
-
-/** yyyy-MM-dd with the todo's existing time-of-day preserved (if any). */
-function rebaseDate(todo: TodoItem, key: string): string {
-  if (todo.dueDate && todo.dueDate.length > 10) {
-    const d = new Date(todo.dueDate);
-    if (!isNaN(d.getTime())) {
-      const hh = String(d.getHours()).padStart(2, "0");
-      const mm = String(d.getMinutes()).padStart(2, "0");
-      return `${key}T${hh}:${mm}:00`;
-    }
-  }
-  return key;
-}
 
 function KanbanCard({
   todo,
@@ -234,95 +205,6 @@ function KanbanColumn({
 }
 
 /**
- * Drop follow-up for 近期任务: pick the concrete day the task moves to.
- * Quick slots (今天/明天/下周末/下周) prefill the selection; the month grid
- * picks anything else; 确认 commits — cancelling abandons the move entirely.
- */
-function MoveDateDialog({
-  todo,
-  onConfirm,
-  onCancel,
-}: {
-  todo: TodoItem;
-  onConfirm: (dueDate: string) => void;
-  onCancel: () => void;
-}) {
-  const { t, i18n } = useTranslation();
-  const locale = i18n.language || "en";
-  const dayFormatter = useMemo(
-    () => new Intl.DateTimeFormat(locale, { month: "numeric", day: "numeric" }),
-    [locale],
-  );
-  // Preselect the todo's own day when it has a parseable one, otherwise
-  // suggest tomorrow.
-  const [dateValue, setDateValue] = useState(() => {
-    if (todo.dueDate) {
-      const d = new Date(todo.dueDate);
-      if (!isNaN(d.getTime())) return dayKey(d);
-    }
-    const tomorrow = startOfLocalDay(new Date());
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    return dayKey(tomorrow);
-  });
-  const [anchor, setAnchor] = useState(() => {
-    const d = new Date(`${dateValue}T00:00:00`);
-    return isNaN(d.getTime()) ? startOfLocalDay(new Date()) : d;
-  });
-
-  const quickLabels: Record<string, string> = {
-    today: t("todo.quick_today"),
-    tomorrow: t("todo.quick_tomorrow"),
-    weekend: t("todo.quick_next_weekend"),
-    week: t("todo.quick_next_week"),
-  };
-
-  return (
-    <Dialog open onOpenChange={(open) => { if (!open) onCancel(); }}>
-      <DialogContent className="w-[19rem] gap-2">
-        <DialogHeader>
-          <DialogTitle className="text-sm">{t("todo.move_date_title")}</DialogTitle>
-        </DialogHeader>
-        <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">{todo.title}</p>
-
-        <div className="grid grid-cols-4 gap-1.5">
-          {quickDateTargets().map(({ key, date }) => {
-            const keyStr = dayKey(date);
-            return (
-              <button
-                key={key}
-                onClick={() => {
-                  setDateValue(keyStr);
-                  setAnchor(date);
-                }}
-                className={`flex flex-col items-center gap-0.5 rounded-md border px-1 py-1.5 text-center transition-colors ${
-                  dateValue === keyStr
-                    ? "border-primary/50 bg-primary/10 text-primary"
-                    : "border-border/50 text-muted-foreground hover:bg-accent/40 hover:text-foreground"
-                }`}
-              >
-                <span className="text-2xs font-medium">{quickLabels[key]}</span>
-                <span className="text-3xs tabular-nums opacity-80">{dayFormatter.format(date)}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        <MonthCalendarGrid anchor={anchor} value={dateValue} onPick={setDateValue} onAnchorChange={setAnchor} />
-
-        <DialogFooter className="gap-2">
-          <Button variant="outline" size="sm" onClick={onCancel}>
-            {t("todo.cancel")}
-          </Button>
-          <Button size="sm" onClick={() => onConfirm(dateValue)}>
-            {t("todo.move_date_confirm")}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/**
  * The board itself. Drag & drop is plain HTML5 DnD (no dependency): cards
  * set data on dragstart, columns highlight while hovered and commit the
  * move on drop. Same-column drops are no-ops. Dropping on 近期任务 opens
@@ -335,12 +217,21 @@ export function TodoKanbanView({
   onSelect,
   onToggle,
   onMoveKanban,
+  onDelete,
+  onExport,
+  onOpenSource,
 }: {
   todos: TodoItem[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   onToggle: (id: string) => void;
   onMoveKanban: (todo: TodoItem, target: KanbanMoveTarget) => void;
+  /** Card context menu actions — see TodoCardContextMenu. */
+  onDelete: (id: string) => void;
+  /** Present when connections are enabled; per-card export gating happens in the menu. */
+  onExport?: (todo: TodoItem) => void;
+  /** Present only when the todo carries a resolvable source note. */
+  onOpenSource?: (todo: TodoItem) => void;
 }) {
   const { t } = useTranslation();
   const columns = useMemo(() => kanbanColumns(todos), [todos]);
@@ -436,20 +327,30 @@ export function TodoKanbanView({
               }}
             >
               {items.map((todo) => (
-                <KanbanCard
+                <TodoCardContextMenu
                   key={todo.id}
                   todo={todo}
-                  active={selectedId === todo.id}
-                  dragging={draggingId === todo.id}
-                  onSelect={() => onSelect(todo.id)}
+                  onEdit={() => onSelect(todo.id)}
                   onToggle={() => onToggle(todo.id)}
-                  onToggleStar={() => handleToggleStar(todo)}
-                  onDragStart={() => setDraggingId(todo.id)}
-                  onDragEnd={() => {
-                    setDraggingId(null);
-                    setOverColumn(null);
-                  }}
-                />
+                  onDelete={() => onDelete(todo.id)}
+                  onMoveKanban={onMoveKanban}
+                  onExport={onExport}
+                  onOpenSource={onOpenSource ? () => onOpenSource(todo) : undefined}
+                >
+                  <KanbanCard
+                    todo={todo}
+                    active={selectedId === todo.id}
+                    dragging={draggingId === todo.id}
+                    onSelect={() => onSelect(todo.id)}
+                    onToggle={() => onToggle(todo.id)}
+                    onToggleStar={() => handleToggleStar(todo)}
+                    onDragStart={() => setDraggingId(todo.id)}
+                    onDragEnd={() => {
+                      setDraggingId(null);
+                      setOverColumn(null);
+                    }}
+                  />
+                </TodoCardContextMenu>
               ))}
             </KanbanColumn>
           );

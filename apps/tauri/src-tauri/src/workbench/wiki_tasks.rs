@@ -3,7 +3,7 @@ use super::*;
 
 tokio::task_local! { static OPERATION: String; }
 tokio::task_local! { static PROFILE: Option<Value>; }
-pub(super) const UNKNOWN: &str = "Model outcome is unknown; retry explicitly";
+pub(in crate::workbench) const UNKNOWN: &str = "Model outcome is unknown; retry explicitly";
 const STATUS_CONFLICT: &str = "Lynclaw synthesis failed (HTTP 409)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

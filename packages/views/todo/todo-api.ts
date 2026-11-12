@@ -33,6 +33,8 @@ export interface TodoItem {
   statusVersion?: number;
   statusHistory?: { from: TodoStatus; to: TodoStatus; at: string; version: number }[];
   kanbanLane?: KanbanLane;
+  /** Board watchlist flag — starred cards gather in the 重点追踪 column. */
+  starred?: boolean;
   sourceRef?: SourceRef;
   workbenchScope?: string;
   id: string;
@@ -277,6 +279,7 @@ export function normalizeStored(raw: unknown): TodoItem {
   return {
     ...(typeof t.status === "string" && ["open", "doing", "done", "cancelled"].includes(t.status) ? { status: t.status as TodoStatus, statusVersion: Number(t.statusVersion ?? 0), statusHistory: t.statusHistory as TodoItem["statusHistory"] } : {}),
     ...(t.kanbanLane === "pool" || t.kanbanLane === "ready" ? { kanbanLane: t.kanbanLane } : {}),
+    ...(t.starred === true ? { starred: true } : {}),
     id: String(t.id ?? (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `todo-${Date.now()}`)),
     title: String(t.title ?? "").trim() || "(无标题待办)",
     completed: typeof t.status === "string" && ["open", "doing", "done", "cancelled"].includes(t.status) ? t.status === "done" : t.completed === true || t.completed === 1,
@@ -407,13 +410,19 @@ export async function setTodoStatus(todo: TodoItem, status: TodoStatus, operatio
  */
 export async function moveTodoKanban(
   todo: TodoItem,
-  target: { status?: TodoStatus | null; lane?: KanbanLane | null; dueDate?: string | null },
+  target: {
+    status?: TodoStatus | null;
+    lane?: KanbanLane | null;
+    dueDate?: string | null;
+    starred?: boolean | null;
+  },
 ): Promise<TodoItem> {
   const status =
     target.status === undefined || target.status === null ? todoStatus(todo) : target.status;
   const completed = status === "done";
   const dueDate = target.dueDate === undefined ? todo.dueDate ?? undefined : target.dueDate || undefined;
   const lane = target.lane === undefined ? todo.kanbanLane ?? undefined : target.lane ?? undefined;
+  const starred = target.starred === undefined ? todo.starred ?? undefined : target.starred || undefined;
   const updatedAt = new Date().toISOString();
 
   if (!todo.backend) {
@@ -424,13 +433,13 @@ export async function moveTodoKanban(
         if (todoStatus(todo) !== status) {
           saved = await setTodoStatus(todo, status, crypto.randomUUID());
         }
-        const updated: TodoItem = { ...saved, kanbanLane: lane, dueDate, updatedAt };
+        const updated: TodoItem = { ...saved, kanbanLane: lane, dueDate, starred, updatedAt };
         return normalizeStored(await bridge.save({ ...updated }));
       } catch (e) {
         console.error("[Todo] kanban move failed, falling back to plain save:", e);
       }
     }
-    const updated: TodoItem = { ...todo, status, completed, kanbanLane: lane, dueDate, updatedAt };
+    const updated: TodoItem = { ...todo, status, completed, kanbanLane: lane, dueDate, starred, updatedAt };
     await saveTodo(updated);
     return updated;
   }
@@ -443,11 +452,15 @@ export async function moveTodoKanban(
   next.updatedAt = updatedAt;
   if (lane === undefined) delete next.kanbanLane;
   else next.kanbanLane = lane;
+  if (starred === undefined) delete next.starred;
+  else next.starred = starred;
   overrides[todo.id] = next;
   saveOverrides(overrides);
   const merged: TodoItem = { ...todo, status, completed, dueDate, updatedAt };
   if (lane !== undefined) merged.kanbanLane = lane;
   else delete merged.kanbanLane;
+  if (starred !== undefined) merged.starred = starred;
+  else delete merged.starred;
   return merged;
 }
 

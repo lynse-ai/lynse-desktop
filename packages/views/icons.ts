@@ -63,6 +63,7 @@ export {
   Scan,              // Viewfinder corners; report composer capture/retake button
   MoreHorizontal,   // Context menu trigger
   Pin,              // Pin optional sidebar destinations
+  Star,             // Todo kanban watchlist (重点追踪)
   GripVertical,     // Drag handle
   ZoomIn,           // Image viewer zoom in
   ZoomOut,          // Image viewer zoom out

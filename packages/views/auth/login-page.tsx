@@ -1048,7 +1048,7 @@ export function LoginPage() {
           <img
             src={LOGIN_ARTWORK_SRC_WEB}
             alt=""
-            className="w-full max-w-md select-none rounded-2xl object-cover shadow-sm"
+            className="max-h-[72vh] w-full select-none rounded-2xl object-cover shadow-sm"
           />
           <p className="mt-8 text-center text-lg font-semibold tracking-tight">
             {t("auth.brand_title")}

@@ -31,7 +31,7 @@ mod page_commits;
 #[path = "wiki_synthesis_transport_tests.rs"]
 mod synthesis_transport_tests;
 #[path = "wiki_tasks.rs"]
-mod tasks;
+pub(super) mod tasks;
 #[path = "wiki_topic_archive.rs"]
 mod topic_archive;
 #[path = "wiki_topics.rs"]
@@ -1382,7 +1382,7 @@ async fn direct_synthesis(
 /// One pooled HTTP client per endpoint. A first-run organization issues
 /// thousands of synthesis calls; a fresh client per call paid a TLS handshake
 /// every time and kept no connection pool alive across calls.
-async fn shared_synthesis_client(
+pub(super) async fn shared_synthesis_client(
     state: &WorkbenchState,
     endpoint: &str,
 ) -> CommandResult<reqwest::Client> {

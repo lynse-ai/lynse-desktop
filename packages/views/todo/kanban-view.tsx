@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Calendar, User } from "../icons";
+import { Calendar, Star, User } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import {
   Dialog,
@@ -15,13 +15,11 @@ import {
   type TodoItem,
   type KanbanLane,
   todoClosed,
-  todoStatus,
 } from "./todo-api";
 import { dayKey, formatDueDisplay, isOverdueTodo, startOfLocalDay } from "./grouping";
 import { MonthCalendarGrid, quickDateTargets } from "./date-time-picker";
 import {
   KANBAN_COLUMNS,
-  TODAY_WIP_HINT,
   isGenericOwner,
   kanbanColumnFor,
   kanbanColumns,
@@ -29,25 +27,22 @@ import {
 } from "./kanban";
 
 /**
- * Kanban board view of the todo page — a time-triage workflow: 需求池
- * backlog pool on the left, then 今日执行 and 近期执行. 已完成 exists but is
- * hidden behind a toolbar toggle (completed cards leave the board by
- * default). Native HTML5 drag & drop between columns; dropping on 近期执行
- * pops a date dialog so the move always lands on a concrete day; click opens
- * the shared edit sidebar via `onSelect`.
- *
- * The pool absorbs undated / later-than-this-week open todos so the two
- * execution columns only hold work actually being pushed. Card surface stays
- * minimal (title + deadline + real owner); anonymous speaker labels and the
- * source note live in the detail panel.
+ * Kanban board view of the todo page — a triage workflow: 未整理 (no date
+ * yet), 近期任务 (carries a due date), and the 重点追踪 starred watchlist.
+ * 已完成 exists but is hidden behind a toolbar toggle. Native HTML5 drag &
+ * drop between columns; dropping on 近期任务 always pops the date dialog so
+ * the move lands on a concrete day; the card's star icon files it into
+ * 重点追踪 with one click. Clicking a card opens the shared edit sidebar via
+ * `onSelect`.
  */
 
 /** A board move target: all fields optional — undefined keeps the current
- *  value, null clears (see moveTodoKanban). */
+ *  value, null/false clears (see moveTodoKanban). */
 export type KanbanMoveTarget = {
   status?: "open" | "doing" | "done" | null;
   lane?: KanbanLane | null;
   dueDate?: string | null;
+  starred?: boolean | null;
 };
 
 /** yyyy-MM-dd with the todo's existing time-of-day preserved (if any). */
@@ -69,6 +64,7 @@ function KanbanCard({
   dragging,
   onSelect,
   onToggle,
+  onToggleStar,
   onDragStart,
   onDragEnd,
 }: {
@@ -77,7 +73,8 @@ function KanbanCard({
   dragging: boolean;
   onSelect: () => void;
   onToggle: () => void;
-  onDragStart: () => void;
+  onToggleStar: () => void;
+  onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
 }) {
   const { t } = useTranslation();
@@ -91,7 +88,13 @@ function KanbanCard({
       role="button"
       tabIndex={0}
       draggable
-      onDragStart={onDragStart}
+      onDragStart={(e) => {
+        // Standard payload — WKWebView drag sessions are more reliable when
+        // the transfer carries data.
+        e.dataTransfer.setData("text/plain", todo.id);
+        e.dataTransfer.effectAllowed = "move";
+        onDragStart(e);
+      }}
       onDragEnd={onDragEnd}
       onClick={onSelect}
       onKeyDown={(e) => {
@@ -122,6 +125,26 @@ function KanbanCard({
         >
           {todo.title}
         </span>
+        {/* Star = file into 重点追踪. One click, no dialog; clicking again
+            returns the card to its date-based column. */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleStar();
+          }}
+          className="-m-0.5 shrink-0 rounded p-0.5 transition-colors hover:bg-accent/50"
+          aria-label={t("todo.star_toggle")}
+          aria-pressed={Boolean(todo.starred)}
+          title={t("todo.star_toggle")}
+        >
+          <Star
+            className={`size-3.5 transition-colors ${
+              todo.starred
+                ? "fill-warning text-warning"
+                : "text-muted-foreground/35 hover:text-warning"
+            }`}
+          />
+        </button>
       </div>
 
       {(dueText || owner) && (
@@ -157,7 +180,6 @@ function KanbanColumn({
   count,
   muted = false,
   fixedWidth = false,
-  overWip = false,
   isDropTarget,
   hint,
   children,
@@ -171,7 +193,6 @@ function KanbanColumn({
   /** Pool / done styling: slightly recessed so the workflow columns stand out. */
   muted?: boolean;
   fixedWidth?: boolean;
-  overWip?: boolean;
   isDropTarget: boolean;
   /** Shown when the column has no cards. */
   hint?: string;
@@ -198,14 +219,7 @@ function KanbanColumn({
     >
       <div className="flex items-center gap-2 border-b border-border/40 px-3 py-2">
         <span className={`text-sm font-medium ${muted ? "text-muted-foreground" : "text-foreground"}`}>{label}</span>
-        <span
-          className={`rounded-full px-1.5 text-xs tabular-nums ${
-            overWip ? "bg-warning/15 text-warning-text" : "text-muted-foreground"
-          }`}
-          title={overWip ? `${count} > ${TODAY_WIP_HINT}` : undefined}
-        >
-          {count}
-        </span>
+        <span className="rounded-full px-1.5 text-xs tabular-nums text-muted-foreground">{count}</span>
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto overscroll-contain p-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {children}
@@ -220,7 +234,7 @@ function KanbanColumn({
 }
 
 /**
- * Drop follow-up for 近期执行: pick the concrete day the task moves to.
+ * Drop follow-up for 近期任务: pick the concrete day the task moves to.
  * Quick slots (今天/明天/下周末/下周) prefill the selection; the month grid
  * picks anything else; 确认 commits — cancelling abandons the move entirely.
  */
@@ -311,10 +325,9 @@ function MoveDateDialog({
 /**
  * The board itself. Drag & drop is plain HTML5 DnD (no dependency): cards
  * set data on dragstart, columns highlight while hovered and commit the
- * move on drop. Same-column drops are no-ops (this also keeps cancelled
- * cards from being silently rewritten to done inside the shared closed
- * column). Dropping on 近期执行 opens the date dialog instead of moving
- * blindly; dropping on 今日执行 rebases the deadline onto today.
+ * move on drop. Same-column drops are no-ops. Dropping on 近期任务 opens
+ * the date dialog instead of moving blindly; 未整理 clears the date (that
+ * is what "not organized yet" means); 重点追踪 stars the card.
  */
 export function TodoKanbanView({
   todos,
@@ -344,35 +357,35 @@ export function TodoKanbanView({
     setOverColumn(null);
     setDraggingId(null);
     if (!todo || kanbanColumnFor(todo) === columnKey) return;
-    // Reopening a closed card is implicit in every non-done target.
-    const reopen = todoClosed(todo) ? "open" as const : undefined;
     switch (columnKey) {
-      // Parking rejects closed cards; a doing card going back to the pool is
-      // deprioritized to plain open. The due date is kept — parking is
-      // reversible, deleting data isn't.
-      case "pool":
-        if (!todoClosed(todo)) {
-          onMoveKanban(todo, { status: todoStatus(todo) === "doing" ? "open" : undefined, lane: "pool" });
-        }
+      // "Not organized yet" means no date and not tracked — parking here
+      // clears both (explicit drag intent, same as picking 无 in the panel).
+      case "unsorted":
+        if (!todoClosed(todo)) onMoveKanban(todo, { dueDate: null, starred: false });
         break;
-      case "today":
-        onMoveKanban(todo, { status: reopen, lane: null, dueDate: rebaseDate(todo, dayKey(startOfLocalDay(new Date()))) });
-        break;
-      case "week":
-        // Needs a concrete day — pop the dialog; the move commits on confirm.
+      case "near":
+        // Always needs a concrete day — pop the dialog; the move commits on
+        // confirm (and reopens closed cards).
         setPendingMove(todo);
         break;
+      case "star":
+        if (!todoClosed(todo)) onMoveKanban(todo, { starred: true });
+        break;
       case "done":
-        onMoveKanban(todo, { status: "done", lane: null });
+        onMoveKanban(todo, { status: "done" });
         break;
     }
   };
 
   const columnLabels: Record<KanbanColumnKey, string> = {
-    pool: t("todo.pool_title"),
-    today: t("todo.kanban_today"),
-    week: t("todo.kanban_week"),
+    unsorted: t("todo.pool_title"),
+    near: t("todo.kanban_near"),
+    star: t("todo.kanban_star"),
     done: t("memory_manager.todo_done"),
+  };
+
+  const handleToggleStar = (todo: TodoItem) => {
+    onMoveKanban(todo, { starred: !todo.starred });
   };
 
   return (
@@ -400,7 +413,7 @@ export function TodoKanbanView({
       <div className="flex min-h-0 flex-1 gap-3 px-4 pb-3">
         {KANBAN_COLUMNS.map(({ key, optional }) => {
           if (optional && !showDone) return null;
-          const isPool = key === "pool";
+          const isDone = key === "done";
           const items = columns.get(key)!;
           return (
             <KanbanColumn
@@ -408,11 +421,10 @@ export function TodoKanbanView({
               columnKey={key}
               label={columnLabels[key]}
               count={items.length}
-              muted={isPool || key === "done"}
-              fixedWidth={isPool || key === "done"}
-              overWip={key === "today" && items.length > TODAY_WIP_HINT}
+              muted={isDone}
+              fixedWidth={isDone}
               isDropTarget={overColumn === key}
-              hint={isPool ? t("todo.pool_hint") : undefined}
+              hint={key === "unsorted" ? t("todo.pool_hint") : undefined}
               onDragOver={(e) => {
                 e.preventDefault();
                 if (overColumn !== key) setOverColumn(key);
@@ -431,6 +443,7 @@ export function TodoKanbanView({
                   dragging={draggingId === todo.id}
                   onSelect={() => onSelect(todo.id)}
                   onToggle={() => onToggle(todo.id)}
+                  onToggleStar={() => handleToggleStar(todo)}
                   onDragStart={() => setDraggingId(todo.id)}
                   onDragEnd={() => {
                     setDraggingId(null);
@@ -452,8 +465,8 @@ export function TodoKanbanView({
             setPendingMove(null);
             onMoveKanban(todo, {
               status: todoClosed(todo) ? "open" : undefined,
-              lane: null,
               dueDate: rebaseDate(todo, dateValue),
+              starred: false,
             });
           }}
         />

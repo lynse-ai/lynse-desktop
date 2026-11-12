@@ -12,8 +12,14 @@ function percent(completed: number, total: number): number | null {
 }
 
 export function isWikiProcessingComplete(status: WorkbenchStatus | null, error?: string | null): boolean {
-  return !!status?.enabled && status.initialComplete && status.allowAi && status.phase === "ready"
-    && status.wikiProgress?.stage === "complete" && status.wikiProgress.failed === 0
+  if (!status?.enabled || !status.initialComplete || !status.allowAi) return false;
+  // The backend worker is a permanent heartbeat, not a one-shot job: it keeps
+  // re-entering a pass every two minutes. Waiting for a stable terminal state
+  // (phase "ready" + zero failures + no error) therefore never resolves once a
+  // historical failure is recorded. A finished pass is enough to retire the
+  // progress UI; remaining failures stay visible in the page's error banner.
+  if (status.wikiProgress?.stage === "complete" && status.phase === "ready") return true;
+  return status.phase === "ready" && !status.wikiProgress
     && status.conflicts === 0 && !status.error && !error;
 }
 

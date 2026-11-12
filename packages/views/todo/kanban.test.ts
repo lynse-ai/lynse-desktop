@@ -28,64 +28,46 @@ describe("kanbanColumnFor", () => {
     expect(kanbanColumnFor(todo({ completed: true }))).toBe("done");
   });
 
-  it("defaults open todos to time triage: today/overdue → 今日, this week → 近期, rest → pool", () => {
-    expect(kanbanColumnFor(todo({ dueDate: dayOffset(0) }))).toBe("today");
-    expect(kanbanColumnFor(todo({ dueDate: dayOffset(-1) }))).toBe("today");
-    expect(kanbanColumnFor(todo({}))).toBe("pool"); // undated
-    expect(kanbanColumnFor(todo({ dueDate: dayOffset(10) }))).toBe("pool"); // beyond this week
-    // A future day still inside the current week (today itself on Saturdays).
-    const inWeekOffset = 6 - new Date().getDay();
-    expect(kanbanColumnFor(todo({ dueDate: dayOffset(inWeekOffset) }))).toBe(
-      inWeekOffset === 0 ? "today" : "week",
-    );
+  it("starred todos go to the watchlist regardless of date", () => {
+    expect(kanbanColumnFor(todo({ starred: true }))).toBe("star");
+    expect(kanbanColumnFor(todo({ starred: true, dueDate: dayOffset(0) }))).toBe("star");
   });
 
-  it("an explicit lane pins open todos against the date triage", () => {
-    expect(kanbanColumnFor(todo({ kanbanLane: "ready" }))).toBe("week"); // promoted, undated
-    expect(kanbanColumnFor(todo({ kanbanLane: "pool", dueDate: dayOffset(0) }))).toBe("pool");
-  });
-
-  it("active work without a date sits in today's focus column", () => {
-    expect(kanbanColumnFor(todo({ status: "doing" }))).toBe("today");
-    expect(kanbanColumnFor(todo({ status: "doing", dueDate: dayOffset(10) }))).toBe("today");
-    // Lanes don't touch closed todos.
-    expect(kanbanColumnFor(todo({ completed: true, kanbanLane: "pool" }))).toBe("done");
+  it("dated open todos sit in near-term, undated ones stay unsorted", () => {
+    expect(kanbanColumnFor(todo({ dueDate: dayOffset(0) }))).toBe("near"); // today
+    expect(kanbanColumnFor(todo({ dueDate: dayOffset(-1) }))).toBe("near"); // overdue
+    expect(kanbanColumnFor(todo({ dueDate: dayOffset(30) }))).toBe("near"); // far future, still dated
+    expect(kanbanColumnFor(todo({}))).toBe("unsorted"); // undated
+    expect(kanbanColumnFor(todo({ status: "doing" }))).toBe("unsorted"); // active but undated
+    // The old lane pins are retired — they no longer move cards anywhere.
+    expect(kanbanColumnFor(todo({ kanbanLane: "ready" }))).toBe("unsorted");
+    expect(kanbanColumnFor(todo({ kanbanLane: "pool", dueDate: dayOffset(0) }))).toBe("near");
   });
 });
 
 describe("kanbanColumns", () => {
-  it("sorts the today column: overdue first, then dated, undated last", () => {
+  it("sorts the near column: overdue first, then by due date ascending", () => {
     const items = [
-      todo({ id: "undated", status: "doing" }),
+      todo({ id: "far", dueDate: "2099-01-01" }),
+      todo({ id: "old", dueDate: "2020-01-01" }), // overdue
       todo({ id: "today1", dueDate: dayOffset(0) }),
-      todo({ id: "old", dueDate: "2020-01-01" }), // overdue → today column
     ];
-    const today = kanbanColumns(items).get("today")!;
-    expect(today.map((x) => x.id)).toEqual(["old", "today1", "undated"]);
+    const near = kanbanColumns(items).get("near")!;
+    expect(near.map((x) => x.id)).toEqual(["old", "today1", "far"]);
   });
 
-  it("sorts the week column by due date ascending", () => {
-    const items = [
-      todo({ id: "later2", kanbanLane: "ready", dueDate: "2099-01-02" }),
-      todo({ id: "later1", kanbanLane: "ready", dueDate: "2099-01-01" }),
-    ];
-    const week = kanbanColumns(items).get("week")!;
-    expect(week.map((x) => x.id)).toEqual(["later1", "later2"]);
-  });
-
-  it("routes todos into pool, the two execution columns and done", () => {
+  it("routes todos into unsorted, near, the watchlist and done", () => {
     const items = [
       todo({ id: "a", status: "doing" }),
       todo({ id: "b", completed: true }),
       todo({ id: "c", status: "cancelled" }),
       todo({ id: "d", dueDate: dayOffset(0) }),
-      todo({ id: "e", dueDate: dayOffset(10) }),
-      todo({ id: "f", kanbanLane: "ready" }),
+      todo({ id: "e", starred: true }),
     ];
     const columns = kanbanColumns(items);
-    expect(columns.get("pool")!.map((x) => x.id)).toEqual(["e"]);
-    expect(columns.get("today")!.map((x) => x.id)).toEqual(["d", "a"]); // dated before undated
-    expect(columns.get("week")!.map((x) => x.id)).toEqual(["f"]);
+    expect(columns.get("unsorted")!.map((x) => x.id)).toEqual(["a"]);
+    expect(columns.get("near")!.map((x) => x.id)).toEqual(["d"]);
+    expect(columns.get("star")!.map((x) => x.id)).toEqual(["e"]);
     expect(columns.get("done")!.map((x) => x.id)).toEqual(["b", "c"]);
   });
 });

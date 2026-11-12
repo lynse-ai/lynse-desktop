@@ -63,7 +63,9 @@ fn connection(root: &Path) -> CommandResult<Connection> {
             next_attempt_at INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL DEFAULT '');
         CREATE TABLE IF NOT EXISTS render_receipts (
-            path TEXT PRIMARY KEY, hash TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT '');",
+            path TEXT PRIMARY KEY, hash TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT '');
+        CREATE TABLE IF NOT EXISTS publish_config (
+            key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT '');",
     )
     .map_err(|e| e.to_string())?;
     Ok(conn)
@@ -369,6 +371,406 @@ fn queue_pending(conn: &Connection, source_id: &str, extraction: &str) -> Comman
 }
 
 // ---------------------------------------------------------------------------
+// Publication uplink: the desktop publishes each distilled meeting to the
+// gateway, which re-verifies the transcript fingerprint and every citation
+// against the business cloud before the write transaction runs.
+// ---------------------------------------------------------------------------
+
+/// Shared transcript normalization for publication fingerprints. Byte-for-
+/// byte parity with the gateway's `normalize_transcript` (runtime/
+/// knowledge_proxy.py): strip each line, drop empties, join with single
+/// newlines. The fingerprint test vectors below pin both sides together.
+fn normalize_transcript(text: &str) -> String {
+    let lines: Vec<String> = text
+        .lines()
+        .map(|line| line.trim().to_owned())
+        .filter(|line| !line.is_empty())
+        .collect();
+    lines.join("\n")
+}
+
+fn transcript_fingerprint(text: &str) -> String {
+    store::digest(normalize_transcript(text))
+}
+
+fn config_get(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT value FROM publish_config WHERE key=?1",
+        params![key],
+        |row| row.get(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+}
+
+fn config_set(conn: &Connection, key: &str, value: &str) {
+    let _ = conn.execute(
+        "INSERT INTO publish_config (key, value, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        params![key, value, crate::now()],
+    );
+}
+
+fn device_identity(conn: &Connection) -> (String, String) {
+    let device = config_get(conn, "device_id").unwrap_or_else(|| {
+        let device = uuid::Uuid::new_v4().to_string();
+        config_set(conn, "device_id", &device);
+        device
+    });
+    let credential = config_get(conn, "device_credential").unwrap_or_else(|| {
+        let credential = uuid::Uuid::new_v4().to_string();
+        config_set(conn, "device_credential", &credential);
+        credential
+    });
+    (device, credential)
+}
+
+/// What to do given the server's writer state. Auto-takeover is deliberately
+/// absent: displacing another device needs an explicit user action in
+/// settings, so this state machine only ever pauses.
+#[derive(Debug, PartialEq, Eq)]
+enum WriterAction {
+    Register,
+    CommitWithGeneration(u64),
+    AdoptServerGeneration(u64),
+    PauseNeedTakeover { device_id: String },
+}
+
+fn writer_decision(
+    local_device: &str,
+    local_generation: u64,
+    server: Option<(&str, u64)>,
+) -> WriterAction {
+    match server {
+        None => WriterAction::Register,
+        Some((device_id, generation)) if device_id == local_device => {
+            if generation == local_generation {
+                WriterAction::CommitWithGeneration(generation)
+            } else {
+                WriterAction::AdoptServerGeneration(generation)
+            }
+        }
+        Some((device_id, _)) => WriterAction::PauseNeedTakeover {
+            device_id: device_id.to_owned(),
+        },
+    }
+}
+
+async fn memory_request(
+    client: &reqwest::Client,
+    session: &Session,
+    method: &str,
+    path: &str,
+    payload: Option<&Value>,
+    operation: &str,
+) -> Result<(u16, Value), String> {
+    let prefix = if session.agent_url == session.base_url {
+        "/api/business/ai/memory"
+    } else {
+        "/api/memory"
+    };
+    let mut request = match method {
+        "GET" => client.get(format!("{}{prefix}{path}", session.agent_url)),
+        _ => {
+            let mut request = client
+                .post(format!("{}{prefix}{path}", session.agent_url))
+                .header("Operation-Id", operation);
+            if let Some(payload) = payload {
+                request = request.json(payload);
+            }
+            request
+        }
+    };
+    request = request.header("Authorization", &session.token);
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(error) => {
+            let kind = if error.is_timeout() {
+                "timeout"
+            } else if error.is_connect() {
+                "connect"
+            } else {
+                "request"
+            };
+            log::warn!("[meeting-publish] gateway transport failure ({kind})");
+            return Err(wiki::tasks::UNKNOWN.to_owned());
+        }
+    };
+    let status = response.status().as_u16();
+    let value: Value = match response.json().await {
+        Ok(value) => value,
+        Err(_) => return Err(format!("Gateway returned invalid publication JSON (HTTP {status})")),
+    };
+    Ok((status, value))
+}
+
+fn publish_entries(conn: &Connection, scope: &str, source_id: &str) -> CommandResult<Vec<Value>> {
+    let mut statement = conn
+        .prepare(
+            "SELECT id, kind, status, text, event_date, event_time_ms, citations
+             FROM candidate_entries
+             WHERE source_id=?1 AND status IN ('candidate','confirmed') AND superseded_by=''
+             ORDER BY event_time_ms IS NULL, event_time_ms ASC, created_at ASC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = statement
+        .query_map(params![source_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, kind, _status, text, event_time_ms, citations)| {
+            let citations: Value = serde_json::from_str(&citations).unwrap_or_else(|_| json!([]));
+            let gateway_kind = if kind == "decision" { "decision" } else { "project_fact" };
+            let _ = scope;
+            json!({
+                "client_id": id,
+                "kind": gateway_kind,
+                "text": text,
+                "event_time": event_time_ms.map(|ms| format!("1970-01-01T00:{:02}:{:02}Z", ms / 60_000 % 60, ms / 1000 % 60)),
+                "citations": citations,
+            })
+        })
+        .collect())
+}
+
+/// Publish uplink for one pending source per pass. Conflicts self-heal
+/// (server-provided head/generation), credential refusals pause the queue
+/// until the user takes over in settings, and a changed transcript retires
+/// the receipt so the next pass re-distills instead of publishing stale text.
+async fn publish_pending(
+    app: &AppHandle,
+    state: &WorkbenchState,
+    session: &Session,
+    root: &Path,
+) -> CommandResult<()> {
+    let conn = connection(root)?;
+    let Some((source_id, extraction)) = (|| {
+        let mut statement = conn
+            .prepare(
+                "SELECT source_id, extraction_id FROM publish_queue
+                 WHERE state='pending' AND next_attempt_at<=?1
+                 ORDER BY updated_at ASC LIMIT 1",
+            )
+            .ok()?;
+        statement
+            .query_row(params![epoch_secs()], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .optional()
+            .ok()
+            .flatten()
+    })() else {
+        return Ok(());
+    };
+    let (device_id, credential) = device_identity(&conn);
+    let local_generation: u64 = config_get(&conn, "writer_generation")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    // The feed is the authority on head version and writer state.
+    let (status, feed) = memory_request(
+        &wiki::shared_synthesis_client(state, &session.agent_url).await?,
+        session,
+        "GET",
+        "/meeting-publications?limit=1",
+        None,
+        &uuid::Uuid::new_v4().to_string(),
+    )
+    .await
+    .map_err(|error| {
+        queue_defer(&conn, &source_id, 600);
+        error
+    })?;
+    if status != 200 {
+        queue_defer(&conn, &source_id, 600);
+        return Err(format!("Publication feed request failed (HTTP {status})"));
+    }
+    let head = feed["head"].as_u64().unwrap_or(0);
+    let server_writer = feed["writer"].as_object().and_then(|writer| {
+        let device = writer.get("device_id").and_then(Value::as_str)?;
+        let generation = writer.get("generation").and_then(Value::as_u64)?;
+        Some((device, generation))
+    });
+    match writer_decision(&device_id, local_generation, server_writer) {
+        WriterAction::PauseNeedTakeover { device_id: holder } => {
+            log::warn!(
+                "[meeting-publish] publishing held for {source_id}: device {holder} owns the writer; take over in settings"
+            );
+            queue_defer(&conn, &source_id, 3600);
+            return Ok(());
+        }
+        WriterAction::Register | WriterAction::AdoptServerGeneration(_) => {
+            let expected = match writer_decision(&device_id, local_generation, server_writer) {
+                WriterAction::Register => None,
+                WriterAction::AdoptServerGeneration(generation) => Some(generation),
+                _ => None,
+            };
+            let mut payload = json!({"device_id": device_id, "device_credential": credential});
+            if let Some(expected) = expected {
+                payload["expected_generation"] = json!(expected);
+            }
+            let (status, value) = memory_request(
+                &wiki::shared_synthesis_client(state, &session.agent_url).await?,
+                session,
+                "POST",
+                "/meeting-publications/writer",
+                Some(&payload),
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .await
+            .map_err(|error| {
+                queue_defer(&conn, &source_id, 600);
+                error
+            })?;
+            let generation = value["generation"].as_u64().ok_or_else(|| {
+                queue_defer(&conn, &source_id, 600);
+                format!("Writer registration failed (HTTP {status})")
+            })?;
+            config_set(&conn, "writer_generation", &generation.to_string());
+            log::info!("[meeting-publish] writer generation {generation} for device {device_id}");
+        }
+        WriterAction::CommitWithGeneration(generation) => {
+            config_set(&conn, "writer_generation", &generation.to_string());
+        }
+    }
+    // The receipt pins the distilled revision; a changed transcript must not
+    // publish stale fingerprints.
+    let Some(receipt) = receipt(&conn, &source_id)? else {
+        queue_cancel(&conn, &source_id, "receipt_missing");
+        return Ok(());
+    };
+    let manifest = load_state(app, session)?;
+    let entry = manifest.entries.get(&source_id).filter(|entry| store::eligible(entry));
+    let Some(entry) = entry else {
+        queue_cancel(&conn, &source_id, "source_gone");
+        forget_source_entries(root, &source_id);
+        return Ok(());
+    };
+    if entry.revision != receipt.source_revision {
+        let _ = conn.execute(
+            "DELETE FROM extraction_receipts WHERE source_id=?1",
+            params![source_id],
+        );
+        queue_cancel(&conn, &source_id, "transcript_changed");
+        log::info!("[meeting-publish] transcript changed for {source_id}; re-distill scheduled");
+        return Ok(());
+    }
+    let document = store::read_document(&root, entry)?;
+    let entries = publish_entries(&conn, &session.scope, &source_id)?;
+    let payload = json!({
+        "writer": {"device_id": device_id, "device_credential": credential},
+        "writer_generation": config_get(&conn, "writer_generation")
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(1),
+        "base_version": head,
+        "meeting_id": source_id,
+        "meeting_date": document.created_at.chars().take(10).collect::<String>(),
+        "transcript_fingerprint": transcript_fingerprint(&document.transcript),
+        "rules_version": RULES_VERSION,
+        "source_complete": true,
+        "entries": entries,
+    });
+    let (status, value) = memory_request(
+        &wiki::shared_synthesis_client(state, &session.agent_url).await?,
+        session,
+        "POST",
+        "/meeting-publications/commit",
+        Some(&payload),
+        &uuid::Uuid::new_v4().to_string(),
+    )
+    .await
+    .map_err(|error| {
+        queue_defer(&conn, &source_id, 600);
+        error
+    })?;
+    if (200..300).contains(&status) {
+        let published_version = value["version"].as_u64().unwrap_or(head + 1);
+        queue_done(&conn, &source_id, published_version);
+        log::info!(
+            "[meeting-publish] published {source_id} at version {published_version} ({} entries)",
+            payload["entries"].as_array().map(Vec::len).unwrap_or(0)
+        );
+        return Ok(());
+    }
+    let code = value["error"]["code"].as_str().unwrap_or_default();
+    match (status, code) {
+        (409, "version_conflict") => {
+            // The feed moved while we were publishing; the next pass retries
+            // on the fresh head from this response.
+            if let Some(head) = value["error"]["details"]["head_version"].as_u64() {
+                log::info!("[meeting-publish] head moved to {head}; retrying {source_id} next pass");
+            }
+            queue_defer(&conn, &source_id, 5);
+        }
+        (409, "writer_conflict") | (403, "writer_credential_mismatch") | (403, "writer_unregistered") => {
+            // Generation/credential state changed on the server; dropping the
+            // cached generation makes the next pass re-decide from the feed.
+            let _ = conn.execute("DELETE FROM publish_config WHERE key='writer_generation'", []);
+            queue_defer(&conn, &source_id, 60);
+        }
+        (409, "transcript_fingerprint_mismatch") | (409, "transcript_unavailable") => {
+            // 网关回源不一致: local transcript is stale or unreachable from the
+            // cloud; retire the receipt so re-distillation uses fresh text.
+            let _ = conn.execute(
+                "DELETE FROM extraction_receipts WHERE source_id=?1",
+                params![source_id],
+            );
+            queue_cancel(&conn, &source_id, "fingerprint_rejected");
+        }
+        (422, "citation_outside_transcript") => {
+            // 伪造或漂移引用: cancel publishing this source; the entries stay
+            // local and the failure is visible in the queue.
+            queue_cancel(&conn, &source_id, "citation_rejected");
+            log::warn!("[meeting-publish] gateway rejected citations for {source_id}; queue cancelled");
+        }
+        _ => {
+            queue_defer(&conn, &source_id, 1800);
+            return Err(format!("Publication commit failed (HTTP {status}): {code}"));
+        }
+    }
+    Ok(())
+}
+
+fn queue_defer(conn: &Connection, source_id: &str, seconds: u64) {
+    let _ = conn.execute(
+        "UPDATE publish_queue SET attempts=attempts+1, next_attempt_at=?2, updated_at=?3
+         WHERE source_id=?1",
+        params![source_id, epoch_secs() + seconds as i64, crate::now()],
+    );
+}
+
+fn queue_done(conn: &Connection, source_id: &str, version: u64) {
+    let _ = conn.execute(
+        "UPDATE publish_queue SET state='done', attempts=0, next_attempt_at=0, updated_at=?2 WHERE source_id=?1",
+        params![source_id, crate::now()],
+    );
+    let _ = conn.execute(
+        "INSERT INTO publish_config (key, value, updated_at) VALUES (?1,?2,?3)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        params![format!("published_version:{source_id}"), version.to_string(), crate::now()],
+    );
+}
+
+fn queue_cancel(conn: &Connection, source_id: &str, reason: &str) {
+    let _ = conn.execute(
+        "UPDATE publish_queue SET state='cancelled', updated_at=?2 WHERE source_id=?1",
+        params![source_id, crate::now()],
+    );
+    log::warn!("[meeting-publish] queue cancelled for {source_id}: {reason}");
+}
+
+// ---------------------------------------------------------------------------
 // L1/L2 rendering: entries first, Markdown second, external edits preserved.
 // ---------------------------------------------------------------------------
 
@@ -613,7 +1015,8 @@ pub(super) async fn run(
         }
     }
     let Some(job) = planned else {
-        return Ok(());
+        // Nothing to distill; still drain the pending publication queue.
+        return publish_pending(app, state, session, &root).await;
     };
     match job {
         Job::Rebind {
@@ -680,7 +1083,7 @@ pub(super) async fn run(
                 "[meeting-candidates] distilled {stored} candidates from {source_id} (revision {})",
                 &source_revision[..source_revision.len().min(8)]
             );
-            Ok(())
+            publish_pending(app, state, session, &root).await
         }
     }
 }

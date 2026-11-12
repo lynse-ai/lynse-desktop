@@ -742,7 +742,9 @@ export function TodoPage() {
   const sheetAvailable = featureFlags.inspiration && Boolean(getDesktopInspirationApi());
   const completedCount = todos.filter((x) => x.completed).length;
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"list" | "kanban" | "calendar">("list");
+  // The board is the default landing view — the triage columns beat the
+  // flat list for day-to-day use.
+  const [viewMode, setViewMode] = useState<"list" | "kanban" | "calendar">("kanban");
   // Export selection (PRD FR-2). Only cloud todos carry an id the export
   // contract understands, so local ones stay unselectable.
   const exportSelection = useTodoExportSelection(todos);
@@ -799,7 +801,7 @@ export function TodoPage() {
    *  override layer for cloud ones). Reload reconciles on failure so a
    *  rejected move springs the card back. */
   const handleMoveKanban = useCallback(
-    (todo: TodoItem, target: { status?: TodoStatus | null; lane?: KanbanLane | null; dueDate?: string | null }) => {
+    (todo: TodoItem, target: { status?: TodoStatus | null; lane?: KanbanLane | null; dueDate?: string | null; starred?: boolean | null }) => {
       const status = target.status === undefined || target.status === null ? todoStatus(todo) : target.status;
       const optimistic: TodoItem = {
         ...todo,
@@ -812,6 +814,10 @@ export function TodoPage() {
       if (target.dueDate !== undefined) {
         if (target.dueDate) optimistic.dueDate = target.dueDate;
         else delete optimistic.dueDate;
+      }
+      if (target.starred !== undefined) {
+        if (target.starred) optimistic.starred = true;
+        else delete optimistic.starred;
       }
       patchLocal(optimistic);
       void moveTodoKanban(todo, target)

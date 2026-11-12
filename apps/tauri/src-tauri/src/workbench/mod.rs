@@ -534,6 +534,24 @@ pub async fn workbench_bind(
     };
     let mut manifest = load_state(&app, &session)?;
     wiki::resume_session(&app, &session, &mut manifest)?;
+    // A pass interrupted by app exit leaves phase="processing" and a partial
+    // progress snapshot on disk. Restoring it verbatim makes every launch look
+    // like an endless organization run and immediately wakes the wiki lane.
+    // Treat an unfinished pass as ended; the heartbeat re-evaluates real work.
+    if manifest.phase == "processing"
+        && !manifest
+            .wiki_progress
+            .as_ref()
+            .is_some_and(|progress| progress.stage == "complete")
+    {
+        manifest.wiki_progress = None;
+        manifest.phase = if manifest.initial_complete {
+            "ready"
+        } else {
+            "incomplete"
+        }
+        .into();
+    }
     for entry in manifest.entries.values_mut() {
         entry.failed_download_revision.clear();
     }
@@ -764,12 +782,12 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                     Box::pin(wiki::run(&app, &state, &session)).await
                 };
                 if let Err(error) = result {
-                    if error == wiki::TEXT_MODEL_CHANGED {
+                    if error == wiki::TEXT_MODEL_CHANGED || error == SESSION_CHANGED {
                         request_wiki(&state);
-                        continue;
-                    }
-                    if error == SESSION_CHANGED {
-                        request_wiki(&state);
+                        // A bare continue skips the 120s heartbeat sleep below;
+                        // without a floor, a flapping model/session makes this
+                        // lane spin with no delay and keep the UI "organizing".
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         continue;
                     }
                     record_worker_error(&app, &state, &session, error, false).await;

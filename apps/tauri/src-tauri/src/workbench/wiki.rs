@@ -13,6 +13,8 @@ mod validation_failure;
 pub use validation_failure::ValidationDetails;
 #[path = "wiki_analysis.rs"]
 mod analysis;
+#[path = "wiki_direct.rs"]
+mod direct;
 #[path = "wiki_automation.rs"]
 mod automation;
 #[path = "wiki_collections.rs"]
@@ -54,7 +56,7 @@ use std::{
 };
 use tauri::{AppHandle, Manager, State};
 
-const MEMORY_KIND_GUIDANCE: &str = "For every memoryItems[].kind, use exactly one English value: \"observation\", \"proposal\", \"decision\", or \"unresolved\". Do not translate these values, combine them, or copy the pipe-separated schema as a value. Use observation for reported facts, proposal for suggestions, decision only for explicitly agreed decisions, and unresolved for open questions or conflicts. Source kinds such as meeting are not memory kinds.";
+pub(super) const MEMORY_KIND_GUIDANCE: &str = "For every memoryItems[].kind, use exactly one English value: \"observation\", \"proposal\", \"decision\", or \"unresolved\". Do not translate these values, combine them, or copy the pipe-separated schema as a value. Use observation for reported facts, proposal for suggestions, decision only for explicitly agreed decisions, and unresolved for open questions or conflicts. Source kinds such as meeting are not memory kinds.";
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -233,7 +235,7 @@ fn models(app: &AppHandle, session: &Session) -> CommandResult<Models> {
     Ok(config)
 }
 
-fn model_cache_identity(value: &Value) -> Value {
+pub(super) fn model_cache_identity(value: &Value) -> Value {
     match value {
         Value::Object(fields) => Value::Object(
             fields
@@ -247,10 +249,7 @@ fn model_cache_identity(value: &Value) -> Value {
     }
 }
 
-fn text_model_revision(session: &Session, profile: Option<&Value>) -> String {
-    let processor = profile
-        .and_then(|profile| profile["processorVersion"].as_str())
-        .unwrap_or("desktop-evidence-v2");
+fn text_model_revision_with(session: &Session, profile: Option<&Value>, processor: &str) -> String {
     let selected = session
         .model_override
         .as_ref()
@@ -270,6 +269,22 @@ fn text_model_revision(session: &Session, profile: Option<&Value>) -> String {
         ])
         .to_string(),
     )
+}
+
+/// The gateway-era revision: results the server processor produced before the
+/// desktop took synthesis over. Direct mode can adopt that stored work on the
+/// same model through `compatible_legacy_models`.
+fn gateway_text_model_revision(session: &Session, profile: Option<&Value>) -> String {
+    let processor = profile
+        .and_then(|profile| profile["processorVersion"].as_str())
+        .unwrap_or("desktop-evidence-v2");
+    text_model_revision_with(session, profile, processor)
+}
+
+/// Direct synthesis changes the processor identity, so cached results move to
+/// the legacy-compatible list instead of being reused as same-processor work.
+fn text_model_revision(session: &Session, profile: Option<&Value>) -> String {
+    text_model_revision_with(session, profile, direct::DIRECT_PROCESSOR_VERSION)
 }
 
 pub(super) fn update_server_profile(
@@ -299,7 +314,7 @@ pub(super) fn update_server_profile(
     if config.server_profile.is_none() && profile["processorVersion"] == "desktop-evidence-v2" {
         // The first verified profile establishes the baseline for legacy work;
         // later model/provider/processor changes must never adopt that work again.
-        profile["legacyTextRevision"] = json!(text_model_revision(session, None));
+        profile["legacyTextRevision"] = json!(gateway_text_model_revision(session, None));
     }
     config.server_profile = Some(profile);
     write_json(&path, &config)?;
@@ -307,38 +322,44 @@ pub(super) fn update_server_profile(
 }
 
 fn compatible_legacy_models(session: &Session, config: &Models) -> Vec<Models> {
-    if config.server_profile.as_ref().is_some_and(|profile| {
+    let mut revisions: Vec<String> = Vec::new();
+    if session.model_override.is_some() {
+        // Direct mode may adopt the gateway processor's stored results on the
+        // same model; downstream citation checks still verify every reuse.
+        revisions.push(gateway_text_model_revision(session, config.server_profile.as_ref()));
+    }
+    if !config.server_profile.as_ref().is_some_and(|profile| {
         profile["processorVersion"] != "desktop-evidence-v2"
             || (session.model_override.is_none() && profile.get("legacyTextRevision").is_none())
     }) {
-        return Vec::new();
+        revisions.extend([
+            store::digest(
+                json!([
+                    "lynclaw-wiki-v3",
+                    super::markdown::INPUT_VERSION,
+                    session.locale,
+                    session.model_override
+                ])
+                .to_string(),
+            ),
+            config.legacy_text_revision.clone(),
+            config
+                .server_profile
+                .as_ref()
+                .and_then(|profile| profile["legacyTextRevision"].as_str())
+                .unwrap_or_default()
+                .to_owned(),
+        ]);
     }
-    [
-        store::digest(
-            json!([
-                "lynclaw-wiki-v3",
-                super::markdown::INPUT_VERSION,
-                session.locale,
-                session.model_override
-            ])
-            .to_string(),
-        ),
-        config.legacy_text_revision.clone(),
-        config
-            .server_profile
-            .as_ref()
-            .and_then(|profile| profile["legacyTextRevision"].as_str())
-            .unwrap_or_default()
-            .into(),
-    ]
-    .into_iter()
-    .filter(|revision| !revision.is_empty())
-    .map(|revision| {
-        let mut old = config.clone();
-        old.text_revision = revision;
-        old
-    })
-    .collect()
+    revisions
+        .into_iter()
+        .filter(|revision| !revision.is_empty())
+        .map(|revision| {
+            let mut old = config.clone();
+            old.text_revision = revision;
+            old
+        })
+        .collect()
 }
 fn topics(root: &Path) -> CommandResult<Vec<Topic>> {
     let mut result = topic_archive::load(root)?;
@@ -400,6 +421,10 @@ fn is_service_failure(error: &str) -> bool {
         || error.starts_with("Lynclaw synthesis failed (HTTP 429)")
         || [500, 502, 503, 504].iter().any(|status| {
             error.starts_with(&format!("Lynclaw synthesis failed (HTTP {status})"))
+        })
+        || error.starts_with("Model provider failed (HTTP 429)")
+        || [500, 502, 503, 504].iter().any(|status| {
+            error.starts_with(&format!("Model provider failed (HTTP {status})"))
         })
         || matches!(
             error,
@@ -1159,6 +1184,16 @@ async fn request_model_report(
             .collect::<CommandResult<Vec<_>>>()?
     };
     knowledge_cloud::authorize(app, session, &authority_docs, "wiki_compile").await?;
+    if task != "graph_extract" {
+        // Direct mode: the desktop is the synthesis processor. Prompts,
+        // passage numbering, citation restoration and validation run locally;
+        // the provider sees only the user's endpoint and vaulted key. Lynse
+        // credentials stay on business endpoints, such as the source
+        // eligibility check that just ran above.
+        return direct_synthesis(app, session, &state, task, payload, report).await;
+    }
+    // Gateway path, retained for graph extraction only: graph runs on server
+    // credentials by design and must never see a user key.
     let client = shared_synthesis_client(&state, &session.agent_url).await?;
     if session.agent_url != session.base_url {
         let response = client
@@ -1290,6 +1325,60 @@ async fn request_model_report(
     }
     Ok(result)
 }
+/// Direct synthesis wrapper: account, scope and model checks before and
+/// after the model work, dispatch marking, and queue rate-limit feedback.
+/// Usage receipts do not apply: the model runs on the user's own endpoint,
+/// so there is no platform-billable step to acknowledge.
+async fn direct_synthesis(
+    app: &AppHandle,
+    session: &Session,
+    state: &WorkbenchState,
+    task: &str,
+    payload: Value,
+    report: &mut SynthesisControl,
+) -> CommandResult<Value> {
+    require_current(state, session)?;
+    super::require_beta(state)?;
+    let manifest = load_state(app, session)?;
+    ready(&manifest)?;
+    validate_request_sources(&roots(app, session)?.0, &manifest, &payload)?;
+    require_task_model(state, session, task)?;
+    if let Some(operation) = tasks::current_operation() {
+        tasks::dispatched(&wiki_root(app, session)?, &operation)?;
+    }
+    let model_started = std::time::Instant::now();
+    let model_sources = payload["sources"].as_array().map(|rows| rows.len()).unwrap_or(0);
+    let model_operation = tasks::current_operation()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+        .chars()
+        .take(8)
+        .collect::<String>();
+    let result = direct::synthesize_direct(app, session, state, task, payload, report).await;
+    match &result {
+        Ok(_) => log::info!(
+            "[wiki-direct] task={} sources={} op={} ok in {:.1}s",
+            task,
+            model_sources,
+            model_operation,
+            model_started.elapsed().as_secs_f64()
+        ),
+        Err(error) => log::warn!(
+            "[wiki-direct] task={} sources={} op={} failed after {:.1}s: {}",
+            task,
+            model_sources,
+            model_operation,
+            model_started.elapsed().as_secs_f64(),
+            error
+        ),
+    }
+    if let Some(seconds) = report.retry_after {
+        state.synthesis_queue.rate_limited(seconds).await;
+    }
+    let result = result?;
+    require_task_model(state, session, task)?;
+    Ok(result)
+}
+
 /// One pooled HTTP client per endpoint. A first-run organization issues
 /// thousands of synthesis calls; a fresh client per call paid a TLS handshake
 /// every time and kept no connection pool alive across calls.
@@ -1664,7 +1753,7 @@ pub(super) async fn synthesize(
     }
     request_model(app, session, task, json!({"topic":query,"sources":sources})).await
 }
-fn sources_for(root: &Path, manifest: &Manifest) -> Vec<Document> {
+pub(super) fn sources_for(root: &Path, manifest: &Manifest) -> Vec<Document> {
     manifest
         .entries
         .values()

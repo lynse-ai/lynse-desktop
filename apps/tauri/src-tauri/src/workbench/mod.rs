@@ -2,6 +2,7 @@ mod fulltext;
 mod knowledge_cloud;
 mod knowledge_transport;
 mod markdown;
+mod meeting_candidates;
 mod memory;
 mod memory_cloud;
 mod sources;
@@ -772,6 +773,12 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                         continue;
                     }
                     record_worker_error(&app, &state, &session, error, false).await;
+                }
+                // Candidate memory rides the wiki lane: transcripts are ready
+                // exactly when the wiki pass is, and one distillation per
+                // pass keeps the provider load bounded. Best-effort only.
+                if let Err(error) = meeting_candidates::run(&app, &state, &session).await {
+                    log::warn!("[meeting-candidates] pass deferred: {error}");
                 }
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {},

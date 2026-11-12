@@ -220,6 +220,11 @@ pub struct Entry {
     pub revision: String,
     pub status: String,
     pub markdown_hash: String,
+    /// The markdown hash the chunk full-text index has actually absorbed.
+    /// Empty (or stale) means an indexing debt: later sync rounds repay it
+    /// instead of the debt being lost to a crash between commit and index.
+    #[serde(default)]
+    pub indexed_hash: String,
     #[serde(default)]
     pub error: String,
     #[serde(default)]

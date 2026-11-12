@@ -21,13 +21,17 @@ export type MarkdownEditorAction =
   | "paragraph"
   | "bold"
   | "italic"
+  | "strikethrough"
   | "inline-code"
+  | "link"
   | "bullet-list"
   | "ordered-list"
   | "task-list"
   | "blockquote"
+  | "horizontal-rule"
   | "image"
   | "undo"
+  | "redo"
   | "blur";
 
 // ── Core action executor ──────────────────────────────────
@@ -35,6 +39,7 @@ export type MarkdownEditorAction =
 /**
  * Execute a formatting action on the active Milkdown editor.
  * For the "image" action, pass payload { url, alt? }.
+ * For the "link" action, pass payload { url } (applied as href).
  *
  * Tolaria-inspired: always focus the editor before dispatching commands
  * to prevent selection loss. Wraps each command in try/catch.
@@ -88,8 +93,15 @@ export function resolveCommand(
       return callCommand("ToggleStrong");
     case "italic":
       return callCommand("ToggleEmphasis");
+    case "strikethrough":
+      return callCommand("ToggleStrikeThrough");
     case "inline-code":
       return callCommand("ToggleInlineCode");
+    case "link":
+      if (payload?.url) {
+        return callCommand("ToggleLink", { href: payload.url });
+      }
+      return null;
     case "bullet-list":
       return callCommand("WrapInBulletList");
     case "ordered-list":
@@ -108,6 +120,8 @@ export function resolveCommand(
       };
     case "blockquote":
       return callCommand("WrapInBlockquote");
+    case "horizontal-rule":
+      return callCommand("InsertHr");
     case "image":
       if (payload?.url) {
         return callCommand("InsertImage", {
@@ -119,6 +133,8 @@ export function resolveCommand(
       return null;
     case "undo":
       return callCommand("Undo");
+    case "redo":
+      return callCommand("Redo");
     case "blur":
       return (ctx: Ctx) => {
         const view = ctx.get(editorViewCtx);

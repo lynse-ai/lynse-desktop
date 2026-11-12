@@ -28,7 +28,7 @@ function addDays(d: Date, n: number): Date {
  * Monday and 下周末 the Saturday of that week (Monday-based weeks), matching
  * Apple Reminders.
  */
-function quickDateTargets(): { key: string; date: Date }[] {
+export function quickDateTargets(): { key: string; date: Date }[] {
   const start = startOfLocalDay(new Date());
   const nextMonday = addDays(start, 7 - ((start.getDay() + 6) % 7));
   return [
@@ -37,6 +37,89 @@ function quickDateTargets(): { key: string; date: Date }[] {
     { key: "weekend", date: addDays(nextMonday, 5) },
     { key: "week", date: nextMonday },
   ];
+}
+
+
+/**
+ * The month grid shared by the date popover and the kanban move dialog:
+ * month header (prev/title/next) + weekday row + 6×7 day cells, picking a
+ * day reports its yyyy-MM-dd key.
+ */
+export function MonthCalendarGrid({
+  anchor,
+  value,
+  onPick,
+  onAnchorChange,
+}: {
+  anchor: Date;
+  value: string;
+  onPick: (key: string) => void;
+  onAnchorChange: (next: Date) => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const locale = i18n.language || "en";
+  const cells = useMemo(() => monthGrid(anchor), [anchor]);
+  const monthTitle = new Intl.DateTimeFormat(locale, { year: "numeric", month: "long" }).format(anchor);
+  const weekdayFormatter = useMemo(
+    () => new Intl.DateTimeFormat(locale, { weekday: "short" }),
+    [locale],
+  );
+  const todayKey = dayKey(new Date());
+
+  return (
+    <div>
+      <div className="flex items-center justify-between px-1 pb-1">
+        <button
+          onClick={() => onAnchorChange(new Date(anchor.getFullYear(), anchor.getMonth() - 1, 1))}
+          className="rounded p-1 text-muted-foreground hover:bg-accent/50"
+          aria-label={t("todo.cal_prev_month")}
+        >
+          <ChevronLeft className="size-4" />
+        </button>
+        <span className="text-sm font-medium tabular-nums text-foreground">{monthTitle}</span>
+        <button
+          onClick={() => onAnchorChange(new Date(anchor.getFullYear(), anchor.getMonth() + 1, 1))}
+          className="rounded p-1 text-muted-foreground hover:bg-accent/50"
+          aria-label={t("todo.cal_next_month")}
+        >
+          <ChevronRight className="size-4" />
+        </button>
+      </div>
+      <div className="grid grid-cols-7">
+        {Array.from({ length: 7 }, (_, i) => (
+          <span key={i} className="flex h-6 w-8 items-center justify-center text-3xs text-muted-foreground">
+            {/* 2023-01-01 was a Sunday — indices 0..6 walk exactly one week. */}
+            {weekdayFormatter.format(new Date(2023, 0, 1 + i))}
+          </span>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-y-0.5">
+        {cells.map((day) => {
+          const key = dayKey(day);
+          const selected = key === value;
+          const inMonth = day.getMonth() === anchor.getMonth();
+          const isToday = key === todayKey;
+          return (
+            <button
+              key={key}
+              onClick={() => onPick(key)}
+              className={`inline-flex size-8 items-center justify-center rounded-full text-xs tabular-nums transition-colors ${
+                selected
+                  ? "bg-primary font-semibold text-primary-foreground"
+                  : isToday
+                    ? "font-semibold text-primary ring-1 ring-inset ring-primary/50 hover:bg-accent/50"
+                    : inMonth
+                      ? "text-foreground hover:bg-accent/50"
+                      : "text-muted-foreground/40 hover:bg-accent/40"
+              }`}
+            >
+              {day.getDate()}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -52,9 +135,6 @@ export function DatePickerPopover({ value, onChange }: { value: string; onChange
   const [anchor, setAnchor] = useState(() => parseDayKey(value) ?? new Date());
 
   const locale = i18n.language || "en";
-  const cells = useMemo(() => monthGrid(anchor), [anchor]);
-  const monthTitle = new Intl.DateTimeFormat(locale, { year: "numeric", month: "long" }).format(anchor);
-  const weekdayFormatter = useMemo(() => new Intl.DateTimeFormat(locale, { weekday: "short" }), [locale]);
   const chipFormatter = useMemo(() => new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" }), [locale]);
   const dateFormatter = useMemo(
     () => new Intl.DateTimeFormat(locale, { year: "numeric", month: "numeric", day: "numeric" }),
@@ -146,58 +226,7 @@ export function DatePickerPopover({ value, onChange }: { value: string; onChange
             </button>
           </div>
         ) : (
-          <div>
-            <div className="flex items-center justify-between px-1 pb-1">
-              <button
-                onClick={() => setAnchor(new Date(anchor.getFullYear(), anchor.getMonth() - 1, 1))}
-                className="rounded p-1 text-muted-foreground hover:bg-accent/50"
-                aria-label={t("todo.cal_prev_month")}
-              >
-                <ChevronLeft className="size-4" />
-              </button>
-              <span className="text-sm font-medium tabular-nums text-foreground">{monthTitle}</span>
-              <button
-                onClick={() => setAnchor(new Date(anchor.getFullYear(), anchor.getMonth() + 1, 1))}
-                className="rounded p-1 text-muted-foreground hover:bg-accent/50"
-                aria-label={t("todo.cal_next_month")}
-              >
-                <ChevronRight className="size-4" />
-              </button>
-            </div>
-            <div className="grid grid-cols-7">
-              {Array.from({ length: 7 }, (_, i) => (
-                <span key={i} className="flex h-6 w-8 items-center justify-center text-3xs text-muted-foreground">
-                  {/* 2023-01-01 was a Sunday — indices 0..6 walk exactly one week. */}
-                  {weekdayFormatter.format(new Date(2023, 0, 1 + i))}
-                </span>
-              ))}
-            </div>
-            <div className="grid grid-cols-7 gap-y-0.5">
-              {cells.map((day) => {
-                const key = dayKey(day);
-                const selected = key === value;
-                const inMonth = day.getMonth() === anchor.getMonth();
-                const isToday = key === todayKey;
-                return (
-                  <button
-                    key={key}
-                    onClick={() => pick(key)}
-                    className={`inline-flex size-8 items-center justify-center rounded-full text-xs tabular-nums transition-colors ${
-                      selected
-                        ? "bg-primary font-semibold text-primary-foreground"
-                        : isToday
-                          ? "font-semibold text-primary ring-1 ring-inset ring-primary/50 hover:bg-accent/50"
-                          : inMonth
-                            ? "text-foreground hover:bg-accent/50"
-                            : "text-muted-foreground/40 hover:bg-accent/40"
-                    }`}
-                  >
-                    {day.getDate()}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          <MonthCalendarGrid anchor={anchor} value={value} onPick={pick} onAnchorChange={setAnchor} />
         )}
       </PopoverContent>
     </Popover>

@@ -26,11 +26,23 @@ function isThisWeek(dateStr: string): boolean {
 }
 
 /** Still-open todo dated before today. Closed ones keep normal date grouping. */
-function isOverdue(dateKey: string, todo: TodoItem): boolean {
+function isOverdue(dateKey: string, todo: Pick<TodoItem, "status" | "completed">): boolean {
   if (todoClosed(todo)) return false;
   const d = new Date(dateKey);
   if (isNaN(d.getTime())) return false;
   return d < startOfLocalDay(new Date());
+}
+
+/** Time bucket for a due date, or null when undated / unparseable. Closed
+ *  todos never land in overdue (same rule the list grouping applies). */
+export function dateGroup(dateKey: string | undefined, todo: Pick<TodoItem, "status" | "completed">): GroupKey | null {
+  if (!dateKey) return null;
+  const d = new Date(dateKey);
+  if (isNaN(d.getTime())) return null;
+  if (isOverdue(dateKey, todo)) return "overdue";
+  if (isToday(dateKey)) return "today";
+  if (isThisWeek(dateKey)) return "thisWeek";
+  return "later";
 }
 
 /** Group order: overdue → today → this week → catch-all (undated / beyond this week). */
@@ -43,15 +55,49 @@ export function groupTodos(todos: TodoItem[]): Map<GroupKey, TodoItem[]> {
   for (const todo of todos) {
     // Undated todos always land in the catch-all group; no createdAt fallback.
     const dateKey = todo.dueDate || todo.calendarStartAt;
-    let key: GroupKey = "later";
-    if (dateKey) {
-      if (isOverdue(dateKey, todo)) key = "overdue";
-      else if (isToday(dateKey)) key = "today";
-      else if (isThisWeek(dateKey)) key = "thisWeek";
-    }
+    const key = dateGroup(dateKey, todo) ?? "later";
     map.get(key)!.push(todo);
   }
   return map;
+}
+
+/** Human due-date label shared by the list cards and the kanban cards:
+ *  HH:mm when a calendar start exists, otherwise "M月D日 周x" (+ time when
+ *  the stored value carries one). Empty string when nothing is parseable. */
+export function formatDueDisplay(todo: Pick<TodoItem, "dueDate" | "calendarStartAt">): string {
+  if (todo.calendarStartAt) {
+    try {
+      const d = new Date(todo.calendarStartAt);
+      if (!isNaN(d.getTime())) {
+        const hh = String(d.getHours()).padStart(2, "0");
+        const mm = String(d.getMinutes()).padStart(2, "0");
+        return `${hh}:${mm}`;
+      }
+    } catch { /* fall through */ }
+  }
+  if (!todo.dueDate) return "";
+  try {
+    const d = new Date(todo.dueDate);
+    if (isNaN(d.getTime())) return "";
+    const month = d.getMonth() + 1;
+    const day = d.getDate();
+    const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+    const wd = weekdays[d.getDay()];
+    if (todo.dueDate.length <= 10) return `${month}月${day}日 周${wd}`;
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${month}月${day}日 周${wd} ${hh}:${mm}`;
+  } catch { return ""; }
+}
+
+/** True when an open todo's due date lies before today (danger styling). */
+export function isOverdueTodo(todo: Pick<TodoItem, "dueDate" | "calendarStartAt" | "status" | "completed">): boolean {
+  if (todoClosed(todo)) return false;
+  const dateKey = todo.dueDate || todo.calendarStartAt;
+  if (!dateKey) return false;
+  const d = new Date(dateKey);
+  if (isNaN(d.getTime())) return false;
+  return d < startOfLocalDay(new Date());
 }
 
 // ── Calendar grid helpers (shared by the month view and the date picker) ──

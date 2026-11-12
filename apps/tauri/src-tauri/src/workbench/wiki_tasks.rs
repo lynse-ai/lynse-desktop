@@ -30,11 +30,15 @@ impl Outcome {
             || [500, 502, 503, 504].iter().any(|status| {
                 error.starts_with(&format!("Lynclaw synthesis failed (HTTP {status})"))
             })
+            || [500, 502, 503, 504].iter().any(|status| {
+                error.starts_with(&format!("Model provider failed (HTTP {status})"))
+            })
         {
             Self::Unknown
         } else if is_session_failure(error) || error.contains("authorization rejected") {
             Self::AuthorizationFailed
         } else if error.starts_with("Lynclaw synthesis failed (HTTP 429)")
+            || error.starts_with("Model provider failed (HTTP 429)")
             || super::super::knowledge_transport::transient(error)
         {
             Self::Retryable

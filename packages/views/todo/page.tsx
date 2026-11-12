@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { Plus, Calendar, Trash2, X, RefreshCw, Loader2, Upload, List, User } from "../icons";
+import { Plus, Calendar, Trash2, X, RefreshCw, Loader2, Upload, List, User, Columns2 } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { SqueezePanel } from "../squeeze-panel";
 import { Button } from "@lynse/ui/components/ui/button";
@@ -10,13 +10,14 @@ import { featureFlags, isConnectionsEnabled } from "../feature-flags";
 import { getDesktopInspirationApi } from "../inspiration/desktop-api";
 import { isWebPlatform } from "../platform";
 import { useInspirationCaptureStore } from "../inspiration/capture-store";
-import { type TodoItem, todoStatus, todoClosed, addTodoToSystemCalendar, isCalendarAvailable, saveTodo } from "./todo-api";
-import { groupTodos, type GroupKey } from "./grouping";
+import { type TodoItem, type TodoStatus, type KanbanLane, todoStatus, todoClosed, addTodoToSystemCalendar, isCalendarAvailable, saveTodo, moveTodoKanban } from "./todo-api";
+import { groupTodos, formatDueDisplay, type GroupKey } from "./grouping";
 import { DatePickerPopover, TimePickerPopover } from "./date-time-picker";
 import { TodoStateControl } from "./state-control";
 import { useTodos } from "./use-todos";
 import { TodoExportBar, TodoExportDialog, useTodoExportSelection } from "./export-action-items";
 import { TodoCalendarView } from "./calendar-view";
+import { TodoKanbanView } from "./kanban-view";
 import { useWorkbench } from "../workbench";
 import { useNavigation } from "../navigation";
 import { getWorkspaceState } from "../workspace/store";
@@ -35,32 +36,6 @@ function toLocalDateInput(d: Date): string {
 /** Local-time HH:mm for <input type="time"> / display. */
 function toLocalTimeInput(d: Date): string {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-}
-
-function formatDueDisplay(todo: TodoItem): string {
-  if (todo.calendarStartAt) {
-    try {
-      const d = new Date(todo.calendarStartAt);
-      if (!isNaN(d.getTime())) {
-        const hh = String(d.getHours()).padStart(2, "0");
-        const mm = String(d.getMinutes()).padStart(2, "0");
-        return `${hh}:${mm}`;
-      }
-    } catch { /* fall through */ }
-  }
-  if (!todo.dueDate) return "";
-  try {
-    const d = new Date(todo.dueDate);
-    if (isNaN(d.getTime())) return "";
-    const month = d.getMonth() + 1;
-    const day = d.getDate();
-    const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
-    const wd = weekdays[d.getDay()];
-    if (todo.dueDate.length <= 10) return `${month}月${day}日 周${wd}`;
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mm = String(d.getMinutes()).padStart(2, "0");
-    return `${month}月${day}日 周${wd} ${hh}:${mm}`;
-  } catch { return ""; }
 }
 
 /** True when the todo carries a resolvable extraction source. */
@@ -767,7 +742,7 @@ export function TodoPage() {
   const sheetAvailable = featureFlags.inspiration && Boolean(getDesktopInspirationApi());
   const completedCount = todos.filter((x) => x.completed).length;
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
+  const [viewMode, setViewMode] = useState<"list" | "kanban" | "calendar">("list");
   // Export selection (PRD FR-2). Only cloud todos carry an id the export
   // contract understands, so local ones stay unselectable.
   const exportSelection = useTodoExportSelection(todos);
@@ -819,6 +794,36 @@ export function TodoPage() {
     [todos, remove, selectedId],
   );
 
+  /** Kanban drag: optimistic lane/status/date patch, then persist (bridge
+   *  statusAction + plain save for local four-state todos, update endpoint +
+   *  override layer for cloud ones). Reload reconciles on failure so a
+   *  rejected move springs the card back. */
+  const handleMoveKanban = useCallback(
+    (todo: TodoItem, target: { status?: TodoStatus | null; lane?: KanbanLane | null; dueDate?: string | null }) => {
+      const status = target.status === undefined || target.status === null ? todoStatus(todo) : target.status;
+      const optimistic: TodoItem = {
+        ...todo,
+        status,
+        completed: status === "done",
+        updatedAt: new Date().toISOString(),
+      };
+      if (target.lane != null) optimistic.kanbanLane = target.lane;
+      else if (target.lane === null) delete optimistic.kanbanLane;
+      if (target.dueDate !== undefined) {
+        if (target.dueDate) optimistic.dueDate = target.dueDate;
+        else delete optimistic.dueDate;
+      }
+      patchLocal(optimistic);
+      void moveTodoKanban(todo, target)
+        .then((saved) => patchLocal(saved))
+        .catch((e) => {
+          console.error("[Todo] kanban move failed:", e);
+          void load({ force: true });
+        });
+    },
+    [patchLocal, load],
+  );
+
   const groups = useMemo(() => groupTodos(todos), [todos]);
   const selected = todos.find((x) => x.id === selectedId) ?? null;
 
@@ -833,14 +838,29 @@ export function TodoPage() {
       <TitleBarSlot
         actions={
           <>
-            <button
-              onClick={() => setViewMode((prev) => (prev === "list" ? "calendar" : "list"))}
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50"
-              title={t(viewMode === "list" ? "todo.view_calendar" : "todo.view_list")}
-            >
-              {viewMode === "list" ? <Calendar className="size-3.5" /> : <List className="size-3.5" />}
-              {t(viewMode === "list" ? "todo.view_calendar" : "todo.view_list")}
-            </button>
+            {/* View switcher — list / kanban / calendar as a compact
+                segmented control now that there are three modes. */}
+            <div className="flex items-center gap-0.5 rounded-md border border-border/50 bg-muted/30 p-0.5">
+              {([
+                { mode: "list" as const, icon: <List className="size-3.5" />, label: t("todo.view_list") },
+                { mode: "kanban" as const, icon: <Columns2 className="size-3.5" />, label: t("todo.view_kanban") },
+                { mode: "calendar" as const, icon: <Calendar className="size-3.5" />, label: t("todo.view_calendar") },
+              ]).map(({ mode, icon, label }) => (
+                <button
+                  key={mode}
+                  onClick={() => setViewMode(mode)}
+                  className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors ${
+                    viewMode === mode
+                      ? "bg-background text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                  title={label}
+                >
+                  {icon}
+                  {label}
+                </button>
+              ))}
+            </div>
             {isConnectionsEnabled() && exportSelection.exportableIds.size > 0 && (
               <button
                 onClick={() => {
@@ -913,8 +933,17 @@ export function TodoPage() {
               web falls back to the inline input. */}
           {sheetAvailable ? <AddTodoTrigger onOpen={() => openCapture("todo")} /> : <AddTodoInput onAdd={handleAdd} />}
 
-          {/* List / calendar — one view at a time; the edit panel works on both. */}
-          {viewMode === "calendar" ? (
+          {/* List / kanban / calendar — one view at a time; the edit panel
+              works on all of them. */}
+          {viewMode === "kanban" ? (
+            <TodoKanbanView
+              todos={todos}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              onToggle={handleToggle}
+              onMoveKanban={handleMoveKanban}
+            />
+          ) : viewMode === "calendar" ? (
             <TodoCalendarView
               todos={todos}
               selectedId={selectedId}

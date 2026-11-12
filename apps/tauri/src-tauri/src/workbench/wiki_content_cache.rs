@@ -131,9 +131,17 @@ mod tests {
         let mut changed = profile.clone();
         changed["model"] = json!("default-b");
         assert_ne!(text_model_revision(&session, Some(&changed)), default);
-        changed = profile;
+        // Direct mode: the desktop is the processor, so the server profile's
+        // processorVersion no longer moves the direct revision — processor
+        // identity is the separation between direct and gateway revisions.
+        changed = profile.clone();
         changed["processorVersion"] = json!("desktop-evidence-v3");
-        assert_ne!(text_model_revision(&session, Some(&changed)), default);
+        assert_eq!(text_model_revision(&session, Some(&changed)), default);
+        assert_ne!(gateway_text_model_revision(&session, Some(&profile)), default);
+        assert_ne!(
+            gateway_text_model_revision(&session, Some(&profile)),
+            gateway_text_model_revision(&session, Some(&changed))
+        );
     }
     #[test]
     fn rebinding_accepts_metadata_changes_but_never_changed_or_revoked_quotes() {

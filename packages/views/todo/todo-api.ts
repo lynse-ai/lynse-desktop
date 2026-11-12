@@ -32,6 +32,7 @@ export interface TodoItem {
   status?: TodoStatus;
   statusVersion?: number;
   statusHistory?: { from: TodoStatus; to: TodoStatus; at: string; version: number }[];
+  kanbanLane?: KanbanLane;
   sourceRef?: SourceRef;
   workbenchScope?: string;
   id: string;
@@ -54,6 +55,14 @@ export interface TodoItem {
 }
 
 export type TodoStatus = "open" | "doing" | "done" | "cancelled";
+/**
+ * Kanban backlog lane. The board's default triage puts this-week-or-earlier
+ * open todos in 待开始 and everything further out in the 需求池 pool; an
+ * explicit lane pins a todo against that default ("ready" = promoted, "pool"
+ * = parked). Cloud todos never carry it on the wire — it survives via the
+ * localStorage override layer (see moveTodoKanban).
+ */
+export type KanbanLane = "pool" | "ready";
 export function todoStatus(todo: Pick<TodoItem, "status" | "completed">): TodoStatus {
   return todo.status ?? (todo.completed ? "done" : "open");
 }
@@ -87,11 +96,22 @@ function normalizeCloudDate(value: string | null | undefined): string | undefine
 
 /** Coerce a cloud record into the app's TodoItem shape. */
 export function mapCloudTodo(raw: CloudTodo): TodoItem {
+  const dueDate = normalizeCloudDate(raw.expectedCompleteTime);
+  // Local midnight means the deadline was a bare date on the way in — fold
+  // it back to date-only using LOCAL parts (ISO slicing would shift the day
+  // in UTC+ timezones).
+  const due =
+    dueDate && isLocalMidnight(dueDate)
+      ? (() => {
+          const d = new Date(dueDate);
+          return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+        })()
+      : dueDate;
   return {
     id: String(raw.id ?? ""),
     title: String(raw.todoContent ?? "").trim() || "(无标题待办)",
     completed: raw.isCompleted === 1 || raw.isCompleted === true,
-    dueDate: normalizeCloudDate(raw.expectedCompleteTime),
+    dueDate: due,
     owner: raw.owner ? String(raw.owner) : undefined,
     sourceFileId: raw.fileId ? String(raw.fileId) : undefined,
     sourceTitle: undefined,
@@ -176,10 +196,29 @@ export function noteTitleMapFromItems(items: WorkspaceItem[]): Map<string, strin
   return map;
 }
 
-/** Toggle a cloud todo's completed state and/or persist its title. The
- *  update endpoint treats each present key as "change this field" (contract
- *  per lynse-cli `todos update`), so todoContent is only sent when non-empty
- *  — the server rejects empty content, and omitting it means "no change". */
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+/** Local `yyyy-MM-dd HH:mm:ss` — the exact format the todo update contract
+ *  validates (`expectedCompleteTime`, per lynse-cli). Null when unparseable. */
+function toCloudTime(value: string): string | null {
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+
+/** True when the ISO value lands exactly on local midnight — the server
+ *  round-trip of a date-only deadline, normalized back to date-only so the
+ *  UI keeps showing a bare date instead of a meaningless 00:00. */
+function isLocalMidnight(iso: string): boolean {
+  const d = new Date(iso);
+  return !isNaN(d.getTime()) && d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0;
+}
+
+/** Toggle a cloud todo's completed state and/or persist its title/deadline.
+ *  The update endpoint treats each present key as "change this field"
+ *  (contract per lynse-cli `todos update`): todoContent is only sent when
+ *  non-empty, an absent expectedCompleteTime means "no change", and a null
+ *  one explicitly clears the deadline. */
 export async function updateCloudTodo(todo: TodoItem): Promise<void> {
   const content = todo.title.trim();
   await api().post("/api/business/file/todo/update", {
@@ -188,6 +227,9 @@ export async function updateCloudTodo(todo: TodoItem): Promise<void> {
         todoId: todo.id,
         ...(content ? { todoContent: content } : {}),
         isCompleted: todo.completed ? 1 : 0,
+        ...(todo.dueDate !== undefined
+          ? { expectedCompleteTime: todo.dueDate ? toCloudTime(todo.dueDate) : null }
+          : {}),
       },
     ],
   });
@@ -234,6 +276,7 @@ export function normalizeStored(raw: unknown): TodoItem {
   const t = (raw ?? {}) as Record<string, unknown>;
   return {
     ...(typeof t.status === "string" && ["open", "doing", "done", "cancelled"].includes(t.status) ? { status: t.status as TodoStatus, statusVersion: Number(t.statusVersion ?? 0), statusHistory: t.statusHistory as TodoItem["statusHistory"] } : {}),
+    ...(t.kanbanLane === "pool" || t.kanbanLane === "ready" ? { kanbanLane: t.kanbanLane } : {}),
     id: String(t.id ?? (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `todo-${Date.now()}`)),
     title: String(t.title ?? "").trim() || "(无标题待办)",
     completed: typeof t.status === "string" && ["open", "doing", "done", "cancelled"].includes(t.status) ? t.status === "done" : t.completed === true || t.completed === 1,
@@ -287,10 +330,9 @@ export async function fetchTodos(): Promise<{ items: TodoItem[]; cloudFailed: bo
   // localStorage overrides and is merged back in here.
   const overrides = getOverrides();
   const scope = useWorkbench.getState().status?.scope;
-  const items = [...cloud, ...local.filter((item) => !item.workbenchScope || item.workbenchScope === scope)].map((item) => {
-    const override = overrides[item.id];
-    return override ? { ...item, ...override } : item;
-  });
+  const items = [...cloud, ...local.filter((item) => !item.workbenchScope || item.workbenchScope === scope)].map((item) =>
+    applyTodoOverride(item, overrides[item.id]),
+  );
   // Resolve "which note was this todo extracted from" — only cloud items
   // carry a sourceFileId, and only they need the extra notes request. Fired
   // only when the cloud gave us todos; signed-out / offline loads skip it.
@@ -311,6 +353,20 @@ export async function fetchTodos(): Promise<{ items: TodoItem[]; cloudFailed: bo
 export async function saveTodo(todo: TodoItem): Promise<TodoItem> {
   if (todo.backend) {
     await updateCloudTodo(todo);
+    // Keep the kanban lane override in step with the cloud completed flag —
+    // otherwise a stale doing/open override would outrank isCompleted on the
+    // next merge (todoStatus reads status first). Only existing lanes are
+    // touched; todos never dragged on the board stay override-free.
+    const overrides = getOverrides();
+    if (overrides[todo.id]?.status !== undefined) {
+      overrides[todo.id] = {
+        ...overrides[todo.id],
+        status: todo.completed ? "done" : "open",
+        completed: todo.completed,
+        updatedAt: todo.updatedAt,
+      };
+      saveOverrides(overrides);
+    }
     return todo;
   }
   const bridge = getTodoBridge();
@@ -334,6 +390,65 @@ export async function setTodoStatus(todo: TodoItem, status: TodoStatus, operatio
   const bridge = getTodoBridge();
   if (todo.backend || !bridge?.statusAction || !await localTodoFourStates()) throw new Error("Todo state capability unavailable");
   return normalizeStored(await bridge.statusAction(todo.id, { status, baseVersion: todo.statusVersion ?? 0, operationId }));
+}
+
+/**
+ * Kanban board move: persist a status and/or backlog-lane and/or due-date
+ * change. Field semantics in `target`: `undefined` = keep as-is, `null` =
+ * clear, a value = set.
+ *
+ * Local todos with the four-state bridge go through statusAction for the
+ * status part (plain saves can't change status of versioned todos) and a
+ * plain bridge save for the rest — preserve_status leaves unknown extra
+ * fields alone, so the lane survives alongside. Cloud todos carry isCompleted
+ * and now expectedCompleteTime on the wire (contract per lynse-cli), so only
+ * the lane and status live in the localStorage override layer, with
+ * `completed` kept in sync so todoStatus()/todoClosed() agree.
+ */
+export async function moveTodoKanban(
+  todo: TodoItem,
+  target: { status?: TodoStatus | null; lane?: KanbanLane | null; dueDate?: string | null },
+): Promise<TodoItem> {
+  const status =
+    target.status === undefined || target.status === null ? todoStatus(todo) : target.status;
+  const completed = status === "done";
+  const dueDate = target.dueDate === undefined ? todo.dueDate ?? undefined : target.dueDate || undefined;
+  const lane = target.lane === undefined ? todo.kanbanLane ?? undefined : target.lane ?? undefined;
+  const updatedAt = new Date().toISOString();
+
+  if (!todo.backend) {
+    const bridge = getTodoBridge();
+    if (bridge && (await localTodoFourStates())) {
+      try {
+        let saved = todo;
+        if (todoStatus(todo) !== status) {
+          saved = await setTodoStatus(todo, status, crypto.randomUUID());
+        }
+        const updated: TodoItem = { ...saved, kanbanLane: lane, dueDate, updatedAt };
+        return normalizeStored(await bridge.save({ ...updated }));
+      } catch (e) {
+        console.error("[Todo] kanban move failed, falling back to plain save:", e);
+      }
+    }
+    const updated: TodoItem = { ...todo, status, completed, kanbanLane: lane, dueDate, updatedAt };
+    await saveTodo(updated);
+    return updated;
+  }
+
+  await updateCloudTodo({ ...todo, completed, dueDate });
+  const overrides = getOverrides();
+  const next: Partial<TodoItem> & Record<string, unknown> = { ...(overrides[todo.id] ?? {}) };
+  next.status = status;
+  next.completed = completed;
+  next.updatedAt = updatedAt;
+  if (lane === undefined) delete next.kanbanLane;
+  else next.kanbanLane = lane;
+  overrides[todo.id] = next;
+  saveOverrides(overrides);
+  const merged: TodoItem = { ...todo, status, completed, dueDate, updatedAt };
+  if (lane !== undefined) merged.kanbanLane = lane;
+  else delete merged.kanbanLane;
+  return merged;
 }
 
 /** Delete a single todo (cloud or local). */
@@ -383,6 +498,31 @@ export function saveLocalTodos(items: TodoItem[]) {
 
 export function getOverrides(): Record<string, Partial<TodoItem>> {
   return (safeGet(OVERRIDE_KEY) as Record<string, Partial<TodoItem>>) ?? {};
+}
+
+/**
+ * Merge one item's localStorage override back in. A status override written
+ * on this device must not outrank a completed flag that changed in the cloud
+ * since it was written (another device toggled the todo): in that case the
+ * cloud truth wins and the lane is recomputed from it.
+ */
+export function applyTodoOverride(
+  item: TodoItem,
+  override: Partial<TodoItem> | undefined,
+): TodoItem {
+  if (!override) return item;
+  const merged: TodoItem = { ...item, ...override };
+  if (
+    item.backend &&
+    override.status !== undefined &&
+    override.completed !== undefined &&
+    typeof item.completed === "boolean" &&
+    item.completed !== override.completed
+  ) {
+    merged.status = item.completed ? "done" : "open";
+    merged.completed = item.completed;
+  }
+  return merged;
 }
 
 export function saveOverrides(overrides: Record<string, Partial<TodoItem>>) {

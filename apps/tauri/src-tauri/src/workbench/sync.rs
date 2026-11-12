@@ -416,6 +416,33 @@ pub(super) async fn commit_document(
     commit_document_inner(app, state, session, document, true).await
 }
 
+/// Index (or clean) the chunk full-text index for one committed entry and
+/// record the receipt. A failure records an empty receipt so later rounds
+/// repay the debt; the commit itself and search's legacy fallback stand.
+fn index_receipt(entry: &mut Entry, root: &std::path::Path, document: &Document) {
+    entry.indexed_hash =
+        if matches!(entry.status.as_str(), "synced" | "awaiting_transcription") {
+            match super::fulltext::index_document(root, document, &entry.markdown_hash) {
+                Ok(()) => entry.markdown_hash.clone(),
+                Err(error) => {
+                    log::warn!(
+                        "[workbench] fulltext indexing deferred for {}: {error}",
+                        document.id
+                    );
+                    String::new()
+                }
+            }
+        } else {
+            super::fulltext::remove_document(root, &document.id);
+            entry.markdown_hash.clone()
+        };
+}
+
+/// A current receipt means this round may skip the entry entirely.
+fn receipt_current(entry: &Entry) -> bool {
+    !entry.markdown_hash.is_empty() && entry.indexed_hash == entry.markdown_hash
+}
+
 async fn commit_document_inner(
     app: &AppHandle,
     state: &WorkbenchState,
@@ -446,8 +473,11 @@ async fn commit_document_inner(
         }
     }
     let old = manifest.entries.get(&document.id);
+    // An unchanged source still needs a pass when its full-text receipt lags
+    // (a crash between the vault write and the index write left a debt).
     if old.is_some_and(|entry| {
         entry.revision == document.revision
+            && receipt_current(entry)
             && eligible(entry)
             && read_document(&root, entry).is_ok()
     }) {
@@ -459,12 +489,11 @@ async fn commit_document_inner(
         .and_then(|entry| read_document(&root, entry).ok());
     let mut entry = write_document(&root, &document, old)?;
     entry.excluded = entry.excluded || manifest.excluded_sources.contains(&document.id);
-    // Keep the chunk-level full-text index in lockstep with the vault copy.
-    if matches!(entry.status.as_str(), "synced" | "awaiting_transcription") {
-        super::fulltext::index_document(&root, &document, &entry.markdown_hash)?;
-    } else {
-        super::fulltext::remove_document(&root, &document.id);
-    }
+    // Keep the chunk-level full-text index in lockstep with the vault copy,
+    // as a tracked follow-up rather than a gate: a failed or interrupted
+    // index leaves the receipt empty so later rounds repay the debt, and
+    // search degrades to the legacy keyword index meanwhile.
+    index_receipt(&mut entry, &root, &document);
     if entry.status != "conflict" {
         if let Some(previous) = previous_document {
             store::preserve_summary_revision(&mut manifest, &previous, &document);
@@ -472,6 +501,8 @@ async fn commit_document_inner(
     }
     if entry.status == "conflict" || !document.ai_context_enabled {
         forget_source(&mut manifest, &document.id);
+        // Derived candidates stop being used with the source's eligibility.
+        super::meeting_candidates::forget_source_entries(&root, &document.id);
     } else if changed {
         manifest.memories.retain(|item| {
             item["sourceId"] != document.id || item["pinned"] == true || item["userEdited"] == true
@@ -1443,6 +1474,58 @@ mod tests {
         );
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn indexing_debt_survives_and_is_repaid_by_the_next_round() {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let mut document = Document {
+            id: "debt".into(),
+            kind: "meeting".into(),
+            transcript: "Searchable repayment evidence".into(),
+            ai_context_enabled: true,
+            ..Default::default()
+        };
+        document.refresh_revision();
+        let mut entry = write_document(&root, &document, None).unwrap();
+        entry.status = "synced".into();
+        // Block the chunk database (a directory in its place) so indexing
+        // fails like a crash or an IO error would: the source stays
+        // committed and the missing receipt keeps the entry in play.
+        std::fs::create_dir_all(root.join("fulltext.sqlite")).unwrap();
+        index_receipt(&mut entry, &root, &document);
+        assert_eq!(entry.indexed_hash, "");
+        assert!(!receipt_current(&entry));
+        // The next round repays the debt once indexing works again.
+        std::fs::remove_dir_all(root.join("fulltext.sqlite")).unwrap();
+        index_receipt(&mut entry, &root, &document);
+        assert!(receipt_current(&entry));
+        let mut manifest = Manifest::default();
+        manifest.entries.insert(document.id.clone(), entry);
+        assert_eq!(store::search(&root, &manifest, "repayment", 10).len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn non_searchable_entries_carry_a_clean_receipt() {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let mut document = Document {
+            id: "gated".into(),
+            kind: "meeting".into(),
+            transcript: "Hidden after conflict".into(),
+            ai_context_enabled: true,
+            ..Default::default()
+        };
+        document.refresh_revision();
+        let mut entry = write_document(&root, &document, None).unwrap();
+        entry.status = "conflict".into();
+        index_receipt(&mut entry, &root, &document);
+        // Cleaning counts as in-sync, so no round retries it forever.
+        assert!(receipt_current(&entry));
+        let mut manifest = Manifest::default();
+        manifest.entries.insert(document.id.clone(), entry);
+        assert_eq!(store::search(&root, &manifest, "Hidden", 10).len(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     fn test_session(base: String) -> Session {
         Session {
             agent_url: base.clone(),

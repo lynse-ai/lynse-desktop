@@ -31,7 +31,7 @@ import { api } from "@lynse/core/api/client";
 import type { MeetingNotes } from "@lynse/core/api";
 import { emitPluginEvent } from "../plugins";
 import { SummaryMarkdownEditor } from "./summary-editor";
-import { FloatingMarkdownToolbar } from "./center-panel/markdown-toolbar";
+import { DockedMarkdownToolbar } from "./center-panel/docked-toolbar";
 import { DeleteConfirmDialog } from "./delete-confirm-dialog";
 import { TaskState, type TaskRecoveryAction } from "./task-state";
 import { Button } from "@lynse/ui/components/ui/button";
@@ -1717,14 +1717,19 @@ export function ContentPanel() {
                           </>
                         );
                       })() : (
-                        <>
-                          <SummaryMarkdownEditor
-                            content={block.text}
-                            onChange={(markdown) => handleConclusionChange(block.id, markdown, block.lynclawFormat)}
-                            onEditorReady={setSummaryEditor}
-                          />
-                          <FloatingMarkdownToolbar editor={summaryEditor} />
-                        </>
+                        /* Markdown summary + always-visible docked editing rail:
+                           the rail stays pinned to the left edge while the user
+                           browses, so formatting stays one click away. */
+                        <div className="flex min-h-0 flex-1 items-stretch gap-2">
+                          <DockedMarkdownToolbar editor={summaryEditor} />
+                          <div className="min-w-0 flex-1">
+                            <SummaryMarkdownEditor
+                              content={block.text}
+                              onChange={(markdown) => handleConclusionChange(block.id, markdown, block.lynclawFormat)}
+                              onEditorReady={setSummaryEditor}
+                            />
+                          </div>
+                        </div>
                       );
                     })()}
 
@@ -1860,6 +1865,7 @@ function NoteContent({ fileId, noteId }: { fileId: string | null; noteId: string
     return localStorage.getItem(storageKey) ?? "";
   });
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [noteEditor, setNoteEditor] = useState<import("@milkdown/kit/core").Editor | null>(null);
 
   const handleChange = useCallback((markdown: string) => {
     setContent(markdown);
@@ -1875,7 +1881,14 @@ function NoteContent({ fileId, noteId }: { fileId: string | null; noteId: string
     return <SourceView code={content} language="markdown" />;
   }
 
-  return <SummaryMarkdownEditor content={content} onChange={handleChange} />;
+  return (
+    <div className="flex min-h-0 flex-1 items-stretch gap-2">
+      <DockedMarkdownToolbar editor={noteEditor} />
+      <div className="min-w-0 flex-1">
+        <SummaryMarkdownEditor content={content} onChange={handleChange} onEditorReady={setNoteEditor} />
+      </div>
+    </div>
+  );
 }
 
 function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {

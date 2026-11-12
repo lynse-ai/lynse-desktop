@@ -39,6 +39,7 @@ export {
   Trash2,           // Trash virtual folder
   FolderPlus,       // Add folder button
   Hash,             // Note-group mention (# in chat composer)
+  Inbox,            // Todo kanban backlog pool
 
   // ── Chevron / Disclosure ──────────────────────────────
   ChevronDown,
@@ -82,8 +83,10 @@ export {
   // ── Markdown Toolbar ─────────────────────────────────
   Bold,             // Bold mark
   Italic,           // Italic mark
+  Strikethrough,    // Strikethrough mark
   Code,             // Inline code
   CodeXml,          // Source view toggle (</>)
+  Link2,            // Insert / remove link
   ListOrdered,      // Ordered list
   ListChecks,       // Task list
   Quote,            // Blockquote
@@ -93,6 +96,7 @@ export {
   Heading3,         // Heading level 3
   Type,             // Paragraph / body text
   Undo,             // Undo history
+  Redo2,            // Redo history
 
   // ── Membership / Credits ──────────────────────────────
   Crown,            // Membership tier

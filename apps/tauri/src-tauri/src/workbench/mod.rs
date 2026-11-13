@@ -711,8 +711,15 @@ async fn run_worker_lanes(
     wiki: impl std::future::Future<Output = ()>,
     graph: impl std::future::Future<Output = ()>,
     cloud: impl std::future::Future<Output = ()>,
+    candidates: impl std::future::Future<Output = ()>,
 ) {
-    tokio::select! { _ = sources => {}, _ = wiki => {}, _ = graph => {}, _ = cloud => {} }
+    tokio::select! {
+        _ = sources => {},
+        _ = wiki => {},
+        _ = graph => {},
+        _ = cloud => {},
+        _ = candidates => {},
+    }
 }
 
 pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
@@ -813,12 +820,6 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                     }
                     record_worker_error(&app, &state, &session, error, false).await;
                 }
-                // Candidate memory rides the wiki lane: transcripts are ready
-                // exactly when the wiki pass is, and one distillation per
-                // pass keeps the provider load bounded. Best-effort only.
-                if let Err(error) = meeting_candidates::run(&app, &state, &session).await {
-                    log::warn!("[meeting-candidates] pass deferred: {error}");
-                }
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {},
                     _ = state.wiki_wakeup.notified() => {},
@@ -910,7 +911,33 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                 }
             }
         };
-        run_worker_lanes(source_loop, wiki_loop, discovery_loop, cloud_loop).await;
+        // Candidate memory rides its own heartbeat lane: distillation must
+        // not wait behind an organize pass that can occupy the wiki lane for
+        // hours, and one distillation per tick keeps the provider load flat.
+        let candidates_loop = async {
+            loop {
+                let state = app.state::<WorkbenchState>();
+                let session = match current(&state) {
+                    Ok(session) => session,
+                    Err(_) => {
+                        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                        continue;
+                    }
+                };
+                if let Err(error) = meeting_candidates::run(&app, &state, &session).await {
+                    log::warn!("[meeting-candidates] pass deferred: {error}");
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {},
+                    _ = state.wiki_wakeup.notified() => {},
+                }
+                if !worker_is_current(&app, &state, &session) {
+                    tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+                    continue;
+                }
+            }
+        };
+        run_worker_lanes(source_loop, wiki_loop, discovery_loop, cloud_loop, candidates_loop).await;
     }));
 }
 
@@ -1929,6 +1956,7 @@ mod worker_lane_tests {
             std::time::Duration::from_secs(1),
             run_worker_lanes(
                 source,
+                std::future::pending(),
                 std::future::pending(),
                 std::future::pending(),
                 std::future::pending(),

@@ -17,12 +17,16 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-const RULES_VERSION: &str = "meeting-candidates-v1";
+// v2: distillation input switched to the meeting summary (纪要优先). The
+// version bump retires every v1 receipt and candidate — v1 entries cite the
+// raw transcript, which the gateway rightly rejects against summary-based
+// verification.
+const RULES_VERSION: &str = "meeting-candidates-v2";
 const RETRY_BACKOFF_SECS: u64 = 600;
 const MAX_RETRY_BACKOFF_SECS: u64 = 86_400;
 const KINDS: [&str; 4] = ["observation", "proposal", "decision", "unresolved"];
 
-const EXTRACT_QUERY: &str = "Extract durable project facts and explicit decisions from this meeting for the user's memory. Keep proposals as proposal, unresolved conflicts and open questions as unresolved, and negated or refused items as observation preserving the negation. Use kind decision only when the source states an explicit decision; a newer date alone never resolves a conflict. ";
+const EXTRACT_QUERY: &str = "Extract durable project facts and explicit decisions from this meeting for the user's memory. Keep proposals as proposal, unresolved conflicts and open questions as unresolved, and negated or refused items as observation preserving the negation. Use kind decision only when the source states an explicit decision; a newer date alone never resolves a conflict. Output budget: return at most 12 items total, cite at most 2 passages per item, and keep every quote under 120 characters; prefer dropping minor items over verbose output. ";
 
 // ---------------------------------------------------------------------------
 // Store: per-account SQLite next to the wiki state.
@@ -667,7 +671,17 @@ async fn publish_pending(
         return Ok(());
     }
     let document = store::read_document(&root, entry)?;
+    if summary_text(&document).trim().is_empty() {
+        // 无纪要: the citation basis is not publishable yet; wait for the
+        // cloud summary instead of cancelling the queue entry.
+        queue_defer(&conn, &source_id, 1800);
+        log::info!("[meeting-publish] {source_id} has no summary yet; deferred");
+        return Ok(());
+    }
     let entries = publish_entries(&conn, &session.scope, &source_id)?;
+    // The fingerprint covers the distillation input (summary first, transcript
+    // fallback) — the exact text the gateway re-verifies citations against.
+    let evidence_text = summary_text(&document);
     let payload = json!({
         "writer": {"device_id": device_id, "device_credential": credential},
         "writer_generation": config_get(&conn, "writer_generation")
@@ -676,7 +690,7 @@ async fn publish_pending(
         "base_version": head,
         "meeting_id": source_id,
         "meeting_date": document.created_at.chars().take(10).collect::<String>(),
-        "transcript_fingerprint": transcript_fingerprint(&document.transcript),
+        "transcript_fingerprint": transcript_fingerprint(&evidence_text),
         "rules_version": RULES_VERSION,
         "source_complete": true,
         "entries": entries,
@@ -733,6 +747,11 @@ async fn publish_pending(
             // local and the failure is visible in the queue.
             queue_cancel(&conn, &source_id, "citation_rejected");
             log::warn!("[meeting-publish] gateway rejected citations for {source_id}; queue cancelled");
+        }
+        (503, _) | (502, _) | (504, _) => {
+            // memory 服务缩零冷启动窗口: GET 唤醒实例后紧接的 POST 会撞连接
+            // 拒绝。短退避重试，实例拉起后即可通过。
+            queue_defer(&conn, &source_id, 60);
         }
         _ => {
             queue_defer(&conn, &source_id, 1800);
@@ -939,6 +958,28 @@ pub(super) fn render_markdown(root: &Path) -> CommandResult<()> {
 // The extraction pass.
 // ---------------------------------------------------------------------------
 
+/// The distillation input text: the meeting's own summary when the cloud
+/// produced one, falling back to the transcript. 纪要优先: summaries are a
+/// fraction of the transcript size (31k-char transcripts truncated the model
+/// output and starved the tail of the meeting), and the gateway verifies
+/// published citations against the same summary text. Segments are dropped:
+/// summary text has no audio positions.
+fn summary_text(document: &Document) -> String {
+    let mut parts: Vec<String> = document
+        .conclusions
+        .iter()
+        .filter_map(|item| item.get("conclusionText").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if parts.is_empty() {
+        return document.transcript.trim().to_owned();
+    }
+    parts.dedup();
+    parts.join("\n\n")
+}
+
 #[derive(Debug)]
 enum Job {
     Extract {
@@ -990,19 +1031,34 @@ pub(super) async fn run(
     state: &WorkbenchState,
     session: &Session,
 ) -> CommandResult<()> {
+    log::info!("[meeting-candidates] heartbeat check");
     let manifest = load_state(app, session)?;
-    if wiki::ready(&manifest).is_err() || session.model_override.is_none() {
+    if wiki::ready(&manifest).is_err() {
+        log::info!("[meeting-candidates] skip: sync not ready");
+        return Ok(());
+    }
+    if session.model_override.is_none() {
+        log::info!("[meeting-candidates] waiting for a knowledge model binding");
         return Ok(());
     }
     let (root, _) = roots(app, session)?;
     let conn = connection(&root)?;
     let model_identity = wiki::model_cache_identity(session.model_override.as_ref().unwrap());
     let documents = wiki::sources_for(&root, &manifest);
+    if documents.is_empty() {
+        log::info!("[meeting-candidates] no eligible sources in scope");
+        return Ok(());
+    }
     // 逐篇: pick the first source that actually owes work, in stable order.
     let mut planned: Option<Job> = None;
     for document in &documents {
         if document.transcript.trim().is_empty() {
             // 只有大纲的会议等待转写; memory tasks wait for the transcript.
+            continue;
+        }
+        // 纪要没生成的默认跳过: distillation input and gateway verification
+        // both pin the summary; a summary-less meeting waits for the cloud.
+        if summary_text(document).trim().is_empty() {
             continue;
         }
         if backoff_until(&conn, &document.id)? {
@@ -1015,6 +1071,10 @@ pub(super) async fn run(
         }
     }
     let Some(job) = planned else {
+        log::info!(
+            "[meeting-candidates] all {} sources are current; draining publish queue",
+            documents.len()
+        );
         // Nothing to distill; still drain the pending publication queue.
         return publish_pending(app, state, session, &root).await;
     };
@@ -1037,11 +1097,16 @@ pub(super) async fn run(
         } => {
             let source_revision = document.revision.clone();
             let event_date = document.created_at.chars().take(10).collect::<String>();
+            // 纪要优先: distill from the summary, never the raw transcript.
+            let mut input = document.clone();
+            input.transcript = summary_text(&document);
+            input.segments = Vec::new();
+            input.conclusions = Vec::new();
             let result = wiki::synthesize(
                 app,
                 session,
                 "memory_extract",
-                std::slice::from_ref(&document),
+                std::slice::from_ref(&input),
                 Some(&(EXTRACT_QUERY.to_owned() + super::wiki::MEMORY_KIND_GUIDANCE)),
             )
             .await;

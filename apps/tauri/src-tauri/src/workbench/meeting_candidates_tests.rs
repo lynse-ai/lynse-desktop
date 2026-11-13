@@ -381,3 +381,31 @@ fn publish_entries_map_desktop_kinds_to_gateway_kinds() {
     );
     cleanup(&root);
 }
+
+#[test]
+fn distillation_input_prefers_the_summary_over_the_transcript() {
+    // 纪要优先: a 31k-char transcript truncated the model output; the
+    // summary is the distillation input and the publication fingerprint.
+    let mut document = doc("m1", &"原始转写".repeat(2000));
+    document.conclusions = vec![
+        json!({"conclusionText": "团队决定采用方案A"}),
+        json!({"conclusionText": "团队决定采用方案A"}),
+        json!({"other": "非结论文段"}),
+    ];
+    let summary = summary_text(&document);
+    assert_eq!(summary, "团队决定采用方案A");
+    // 无纪要: fall back to the (trimmed) transcript.
+    document.conclusions = vec![];
+    assert_eq!(summary_text(&document), "原始转写".repeat(2000).trim());
+    // 空纪要字段: same fallback.
+    document.conclusions = vec![json!({"conclusionText": "  "})];
+    assert_eq!(summary_text(&document), "原始转写".repeat(2000).trim());
+}
+
+#[test]
+fn publication_fingerprint_covers_the_summary_text() {
+    let mut document = doc("m1", "冗长转写不参与指纹");
+    document.conclusions = vec![json!({"conclusionText": "决定采用方案A"})];
+    assert_eq!(transcript_fingerprint(&summary_text(&document)),
+               transcript_fingerprint("决定采用方案A"));
+}

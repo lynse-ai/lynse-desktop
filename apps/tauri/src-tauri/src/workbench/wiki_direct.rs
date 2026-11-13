@@ -2022,9 +2022,22 @@ async fn run_with_correction(
     messages: &[(&'static str, String)],
     report: &mut SynthesisControl,
 ) -> Result<Value, Outcome> {
-    let text = generate(client, direct, messages, FIRST_ATTEMPT_TIMEOUT, report)
-        .await
-        .map_err(Outcome::Service)?;
+    let text = match generate(client, direct, messages, FIRST_ATTEMPT_TIMEOUT, report).await {
+        Ok(text) => text,
+        Err(DirectError::Truncated) => {
+            // A reasoning-heavy endpoint can spend the whole completion
+            // budget before emitting the JSON. One bounded retry with an
+            // explicit brevity instruction instead of failing the batch.
+            log::warn!("[wiki-direct] output truncated; retrying once with a brevity instruction");
+            let mut retried = messages.to_vec();
+            retried.push(("user", "Your previous answer was cut off before it was complete. Return the same JSON object but much shorter: fewer items (at most 10), at most 2 citations per item, and every quote under 120 characters. Keep the JSON well-formed and complete.".to_owned()));
+            match generate(client, direct, &retried, CORRECTION_TIMEOUT, report).await {
+                Ok(text) => text,
+                Err(error) => return Err(Outcome::Service(error)),
+            }
+        }
+        Err(error) => return Err(Outcome::Service(error)),
+    };
     let failure = match evaluate(task, &text, bank, sources, query) {
         Ok(value) => return Ok(value),
         Err(failure) => failure,

@@ -481,26 +481,38 @@ async fn loopback_endpoints_run_without_a_key() {
 }
 
 #[tokio::test]
-async fn truncated_output_is_reported_without_correction() {
-    let (endpoint, server) = provider_server(vec![(
-        200,
-        json!({"choices": [{"finish_reason": "length", "message": {"content": "{\"topics\":"}}]}).to_string(),
-        None,
-    )]);
+async fn truncated_output_retries_once_with_a_brevity_instruction() {
+    let (endpoint, server) = provider_server(vec![
+        (
+            200,
+            json!({"choices": [{"finish_reason": "length", "message": {"content": "{\"topics\":"}}]}).to_string(),
+            None,
+        ),
+        (
+            200,
+            completion(r#"{"summary":"","insufficientEvidence":true,"citations":[],"memoryItems":[],"todoSuggestions":[],"decisions":[]}"#),
+            None,
+        ),
+    ]);
     let direct = direct_model(&endpoint, Some("k"));
     let mut report = SynthesisControl::default();
-    let error = run(
+    run(
         &direct,
-        "wiki_catalog",
-        &catalog_query(),
+        "source_analysis",
+        "Project Alpha purpose",
         json!(sources()),
         json!(null),
         &mut report,
     )
     .await
-    .unwrap_err();
-    assert_eq!(error, "Model output was truncated");
-    assert_eq!(server.join().unwrap().len(), 1);
+    .unwrap();
+    let captured = server.join().unwrap();
+    assert_eq!(captured.len(), 2);
+    let retry_messages = captured[1].1["messages"].as_array().unwrap();
+    assert_eq!(retry_messages.len(), 3);
+    let instruction = retry_messages[2]["content"].as_str().unwrap();
+    assert!(instruction.contains("cut off"));
+    assert!(instruction.contains("fewer items"));
 }
 
 #[tokio::test]

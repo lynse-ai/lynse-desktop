@@ -3,6 +3,7 @@
 import { useEffect, type ReactNode } from "react";
 import { useAuthStore } from "@lynse/core/auth";
 import { getDesktopAppApi } from "../app-update";
+import { useChatSession } from "../workspace/hooks/use-chat";
 import { LoginPage } from "./login-page";
 import { LYNSE_SPLASH_SRC } from "./splash-image";
 
@@ -20,6 +21,7 @@ import { LYNSE_SPLASH_SRC } from "./splash-image";
 export function AuthGate({ children }: { children: ReactNode }) {
   const isLoading = useAuthStore((s) => s.isLoading);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  useChatSession();
 
   // Splash counts as compact: the window is born that size, and flipping it
   // to dashboard-sized for a one-frame splash would visibly jump.

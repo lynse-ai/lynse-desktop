@@ -113,6 +113,7 @@ export function ChatPage() {
   const { push } = useNavigation();
   const {
     messages,
+    ready: chatReady,
     isLoading,
     conversations,
     activeConversationId,
@@ -125,7 +126,7 @@ export function ChatPage() {
     answerConfirm,
     dismissConfirm,
     setActiveAssistant,
-  } = useChat({ persistHistory: true });
+  } = useChat();
   const [input, setInput] = useComposerDraft(activeConversationId, activeAssistant);
   const isWorkBuddy = activeAssistant === "workbuddy";
   const images = useChatImages(`${activeAssistant}:${activeConversationId ?? "new"}`);
@@ -176,10 +177,7 @@ export function ChatPage() {
   const isLegacyWorkBuddy = isWorkBuddyCloud && activeConversation?.provider === "workbuddy" && !activeConversation.workbuddySession;
   // Active conversation's provider drives the per-message label/avatar (one
   // conversation never mixes providers, so a single lookup covers the buffer).
-  const activeProvider = useMemo(
-    () => conversations.find((c) => c.id === activeConversationId)?.provider,
-    [conversations, activeConversationId],
-  );
+  const activeProvider = activeConversation?.provider;
   const streamingMessageId = isLoading ? messages[messages.length - 1]?.id : undefined;
 
   // ── WorkBuddy authorization state ───────────────────────
@@ -502,7 +500,7 @@ export function ChatPage() {
 
   const handleSend = (content = input) => {
     const trimmedContent = content.trim();
-    if ((!trimmedContent && !images.drafts.length) || isLoading || images.reading) return;
+    if (!chatReady || (!trimmedContent && !images.drafts.length) || isLoading || images.reading) return;
     if (isWorkBuddy) {
       // The WorkBuddy thread has no local context channel (mentions, files):
       // the turn is plain text, authorization is a precondition.
@@ -972,7 +970,9 @@ export function ChatPage() {
                 </Button>
               </div>
               <span className="ml-1 min-w-0 flex-1 truncate text-2xs text-muted-foreground/55 dark:text-muted-foreground/65">
-                {isLoading
+                {!chatReady
+                  ? t("workspace.loading")
+                  : isLoading
                   ? t("chat.responding")
                   : hasUploadingAttachments
                     ? t("chat.attachment_uploading")
@@ -1001,7 +1001,7 @@ export function ChatPage() {
                   className="size-8 bg-foreground text-background shadow-[0_1px_2px_rgba(0,0,0,0.12)] transition-[background-color,box-shadow] hover:bg-foreground/85 hover:shadow-[0_2px_7px_rgba(0,0,0,0.12)] disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none dark:bg-primary dark:text-primary-foreground dark:hover:bg-primary/90"
                   onClick={() => handleSend()}
                   disabled={
-                    (!input.trim() && !images.drafts.length) ||
+                    !chatReady || (!input.trim() && !images.drafts.length) ||
                     images.reading ||
                     hasUploadingAttachments ||
                     (isWorkBuddy && (wbAuth !== "ok" || wbAuthorizing || isLegacyWorkBuddy))

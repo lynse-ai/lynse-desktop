@@ -33,7 +33,6 @@ export function initCore(
 
   const apiClient = new ApiClient(effectiveUrl, {
     onUnauthorized: () => {
-      storage.removeItem("lynse_token");
       // The saved credential is dead. Drop the whole session so the AuthGate
       // swaps to the launch page — the user can sign in again there (or
       // re-enter the API key via its corner link) instead of staring at
@@ -65,13 +64,6 @@ export function initCore(
   apiClient.setIntegrationsBaseUrl(savedIntegrationsUrl || DEFAULT_INTEGRATIONS_API_URL);
   setApiInstance(apiClient);
 
-  if (!cookieAuth) {
-    const token = storage.getItem("lynse_token");
-    const apiKey = storage.getItem("lynse_api_key");
-    if (token) apiClient.setToken(token);
-    if (apiKey) apiClient.setApiKey(apiKey);
-  }
-
   authStore = createAuthStore({ api: apiClient, storage, onLogin, onLogout, cookieAuth });
   registerAuthStore(authStore);
 
@@ -102,7 +94,7 @@ export function CoreProvider({
   );
 
   return (
-    <QueryProvider>
+    <QueryProvider storage={storage}>
       {children}
     </QueryProvider>
   );

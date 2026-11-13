@@ -4,9 +4,7 @@
    and radii come from packages/ui/styles/tokens.css and adapt to dark mode. */
 
 .content-preview-inner {
-  /* Editorial heading stack matches the app pairing: Inter + OPPO Sans */
-  --content-font-heading: "Inter", "OPPO Sans 4.0", "OPPO Sans", "PingFang SC",
-    "Microsoft YaHei", sans-serif;
+  --content-font-heading: var(--font-system);
 
   /* Comfortable reading column: ~52 CJK characters per line */
   width: 100%;
@@ -16,7 +14,7 @@
   /* Body copy sits one Tailwind step below the UI's 1rem; every size inside
      this scope (code, tables, lists) is em-relative and scales from here. */
   font-size: 0.9375rem;
-  font-weight: 300;
+  font-weight: 400;
   line-height: 1.65;
   color: var(--foreground);
   word-break: break-word;
@@ -401,8 +399,7 @@
    Editor typography themes — switched via <html data-editor-theme="…">
    (see workspace/editor-theme.ts). Ported from Typora's default themes
    (github.css / newsprint.css) and re-based onto design tokens so both
-   light and dark mode adapt automatically. CJK keeps the Apple/OPPO sans
-   stack in every theme — serif restyles Latin glyphs only.
+   light and dark mode adapt automatically.
    ════════════════════════════════════════════════════════════════════ */
 
 /* ── GitHub — Typora default look: dense doc rhythm, ruled h1/h2, zebra tables ── */
@@ -887,7 +884,7 @@
 
 :root[data-editor-theme="white"] .content-preview-inner {
   /* white */
-  font-family: "Inter", "OPPO Sans 4.0", "OPPO Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-family: var(--font-system);
   --vm-bg: #ffffff;
   --vm-bg2: #eeeeee;
   --vm-text: #1a1a1a;

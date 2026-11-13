@@ -1,6 +1,6 @@
 "use client";
 
-import { lazy, Suspense, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@lynse/ui/components/ui/dialog";
@@ -11,7 +11,7 @@ import { WikiFailureReport } from "./wiki-failure-report";
 import type { SourceRef, WikiRequest, WikiTopic } from "./types";
 import type { useWiki } from "./wiki";
 
-const SettingsDialog = lazy(() => import("../settings/settings-dialog").then(module => ({ default: module.SettingsDialog })));
+import { SettingsDialog } from "../settings/settings-dialog";
 type Wiki = ReturnType<typeof useWiki>;
 const stages: Record<string, string> = {
   matching: "workbench.collection_matching_stage",
@@ -103,6 +103,6 @@ export function WikiFailures({ wiki }: { wiki: Wiki }) {
     <Dialog open={!!excluding} onOpenChange={open => { if (!open) setExcluding(null); }}><DialogContent><DialogHeader><DialogTitle>{t("workbench.wiki_failure_exclude_title", { title: excluding?.title })}</DialogTitle><DialogDescription>{t("workbench.wiki_failure_exclude_help")}</DialogDescription></DialogHeader>{actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}<div className="flex flex-wrap justify-end gap-2"><Button variant="outline" onClick={() => setExcluding(null)}>{t("workbench.cancel")}</Button><Button disabled={wiki.busy} onClick={() => { if (excluding) void apply([exclusion(excluding, true)], () => setExcluding(null)); }}>{t("workbench.wiki_failure_exclude")}</Button></div></DialogContent></Dialog>
     <Dialog open={!!correcting} onOpenChange={open => { if (!open) setCorrecting(null); }}><DialogContent><DialogHeader><DialogTitle>{t("workbench.wiki_failure_correct")}</DialogTitle><DialogDescription>{t("workbench.auto_correction_hint")}</DialogDescription></DialogHeader><label className="space-y-2 text-sm"><span>{t("workbench.auto_user_notes")}</span><textarea className="min-h-36 w-full rounded-md border border-input bg-background p-3" value={notes} maxLength={20000} onChange={event => setNotes(event.target.value)} /></label>{actionError && <p role="alert" className="text-sm text-destructive">{actionError}</p>}<Button disabled={wiki.busy} onClick={() => { if (correcting) void apply([{ action: "correction", id: correcting.id, notes }, { action: "retry", id: correcting.id }], () => setCorrecting(null)); }}>{t("workbench.wiki_failure_save_retry")}</Button></DialogContent></Dialog>
     <Dialog open={!!source} onOpenChange={open => { if (!open) setSource(null); }}><DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>{t("workbench.auto_source_meetings")}</DialogTitle><DialogDescription>{t("workbench.auto_source_hint")}</DialogDescription></DialogHeader>{source && <GraphSourceNote key={source.id} source={source} />}</DialogContent></Dialog>
-    {settings && <Suspense fallback={null}><SettingsDialog open onOpenChange={open => { if (!open) setSettings(null); }} initialSectionId={settings} /></Suspense>}
+    {settings && <SettingsDialog open onOpenChange={open => { if (!open) setSettings(null); }} initialSectionId={settings} />}
   </div>;
 }

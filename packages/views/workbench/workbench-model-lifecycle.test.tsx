@@ -21,7 +21,7 @@ vi.mock("./api", () => ({
 }));
 vi.mock("../feature-flags", async original => ({ ...await original<Record<string, unknown>>(), isWikiEnabled: () => true }));
 
-import { WorkbenchSupervisor } from "./components";
+import { WorkbenchSupervisor } from "./supervisor";
 import { upsertCustomModel } from "../custom-models";
 import { saveWorkbenchModelBinding, WORKBENCH_MODEL_STORAGE_KEY } from "./workbench-model";
 

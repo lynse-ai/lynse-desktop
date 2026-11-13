@@ -59,6 +59,7 @@ beforeEach(async () => {
   queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false, gcTime: Infinity } } });
   (await import("@lynse/core/query-client")).setActiveQueryClient(queryClient);
   store = (await import("./use-chat-store")).useChatStore;
+  store.getState().switchUser("test-user");
 });
 
 afterEach(() => {
@@ -78,8 +79,24 @@ function conversationByUserText(text: string) {
 }
 
 describe("concurrent chat conversations", () => {
+  it("keeps unowned legacy history on disk without opening it for a restored account", () => {
+    store.getState().switchUser(null);
+    const key = "lynse_ai_chat_history_v1:user";
+    const legacy = JSON.stringify({ activeConversationId: "legacy", conversations: [{
+      id: "legacy", title: "Previous session", provider: "cloud", createdAt: 1, updatedAt: 1,
+      messages: [{ id: "legacy-message", role: "user", content: "Old prompt", timestamp: 1 }],
+    }] });
+    window.localStorage.setItem(key, legacy);
+    store.getState().openLatestUnread();
+    store.getState().sendMessage("Wait for session");
+    expect(fake.runs).toHaveLength(0);
+    store.getState().switchUser("u1");
+    expect(store.getState().conversations).toEqual([]);
+    expect(window.localStorage.getItem(key)).toBe(legacy);
+  });
+
   it("keeps and persists connector-only replies without duplicated streaming cards", async () => {
-    store.getState().setUserId("connector-user");
+    store.getState().switchUser("connector-user");
     store.getState().sendMessage("Read Notion");
     const run = fake.runs[0]!;
     const request = { request_id: "req-1", provider: "notion", provider_display_name: "Notion", status: "waiting_auth" as const, action_url: "https://auth.invalid/start" };
@@ -94,7 +111,7 @@ describe("concurrent chat conversations", () => {
   });
 
   it("switches accounts without copying old history or accepting old stream events", async () => {
-    store.getState().setUserId("u1");
+    store.getState().switchUser("u1");
     store.getState().sendMessage("Private u1 context");
     const oldRun = fake.runs[0]!;
     const cancel = vi.spyOn(oldRun, "cancel").mockImplementation(() => {});
@@ -635,7 +652,7 @@ describe("meeting transcription refresh", () => {
 
 describe("interrupted reply details", () => {
   it("keeps streamed content and the actual failure separate, including history", async () => {
-    store.getState().setUserId("error-user");
+    store.getState().switchUser("error-user");
     store.getState().sendMessage("做成图文纪要");
     const run = fake.runs[0]!;
     emit(run, { type: "content", delta: "**会议纪要**" });

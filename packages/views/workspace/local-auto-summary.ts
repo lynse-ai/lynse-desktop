@@ -11,7 +11,6 @@ import {
   isPlaybackTime,
   LynclawSummaryError,
   MAX_SUMMARY_TRANSCRIPT_CHARS,
-  MIN_SUMMARY_TRANSCRIPT_CHARS,
   readLynclawSummary,
   readSummaryMarks,
   summaryOutput,
@@ -96,6 +95,7 @@ async function summarizeLocalRecording(
     const result = await summarizeTranscript({
       transcriptionText: formatTimedSummaryTranscript(rows, transcript),
       recordingTime: formatSummaryRecordingTime(recordingStart),
+      recordingDurationSeconds: record.durationMs === undefined ? undefined : record.durationMs / 1000,
       recordingStartedAt: cloud.images.length ? recordingStart : undefined,
       recordMarkResults: marks,
       markImages: cloud.images,
@@ -113,7 +113,7 @@ export async function generateLocalLynclawSummary(fileId: string, format: Lyncla
   const session = getSummarySession();
   const record = await getDesktopLocalTranscriptionApi()?.get(fileId);
   const transcript = record?.transcriptText?.trim() ?? "";
-  if (!record || record.id !== fileId || record.status !== "completed" || transcript.length < MIN_SUMMARY_TRANSCRIPT_CHARS) {
+  if (!record || record.id !== fileId || record.status !== "completed" || !transcript) {
     throw new LynclawSummaryError("workspace.lynclaw_summary_needs_transcript");
   }
   if (transcript.length > MAX_SUMMARY_TRANSCRIPT_CHARS) {
@@ -146,12 +146,16 @@ export async function triggerLocalAutoSummary(
     if (!record || record.status !== "completed" || !session.isCurrent()
       || (!options.force && record.summaryMarkdown)) return false;
     const transcript = record.transcriptText?.trim() ?? "";
-    if (transcript.length < MIN_SUMMARY_TRANSCRIPT_CHARS || transcript.length > MAX_SUMMARY_TRANSCRIPT_CHARS) return false;
+    if (!transcript || transcript.length > MAX_SUMMARY_TRANSCRIPT_CHARS) return false;
 
     const previous = readLynclawSummary(record.summaryMarkdown ?? "");
     const format = previous?.format ?? "markdown";
     const result = await summarizeLocalRecording(record, transcript, format, session);
     if (!session.isCurrent()) return false;
+    if (result.skipped_too_short) {
+      if (options.force) toast.info(result.content);
+      return false;
+    }
     const output = summaryOutput(result, format);
     await localApi.saveSummary(update.id, result.title, previous ? encodeLynclawSummary(format, output) : output);
     toast.success(t("workspace.local_summary_done"), { description: update.title });

@@ -276,7 +276,6 @@ interface ChatStoreState {
   chatVisible: number;
   /** Current user id, pushed in from React so non-React callbacks can persist. */
   userId: string;
-  setUserId: (userId: string) => void;
   /** Flush the old account, cancel its runs, and load only the new account's history. */
   switchUser: (userId: string | null) => void;
   hydrate: () => void;
@@ -609,8 +608,8 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     confirmToken?: string | null,
     opts?: { assistant?: ChatAssistant; contextFileId?: string; images?: string[]; documents?: {name:string;dataUrl:string}[] },
   ) => {
-    if (!content.trim()) return;
     const userId = get().userId;
+    if (!userId || !content.trim()) return;
     const assistant = opts?.assistant ?? get().activeAssistant;
     const contextFileId = opts?.contextFileId;
     if ((opts?.images?.length || opts?.documents?.length) && assistant !== "lynse") return;
@@ -839,9 +838,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     workingConversationIds: [],
     unreadCounts: {},
     chatVisible: 0,
-    userId: "user",
-
-    setUserId: (userId) => get().switchUser(userId),
+    userId: "",
 
     switchUser: (userId) => {
       const nextUserId = userId ?? "";
@@ -873,7 +870,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => {
     },
 
     hydrate: () => {
-      if (hydrated) return;
+      if (hydrated || !get().userId) return;
       hydrated = true;
       const userId = get().userId;
       const history = loadChatHistory(userId);

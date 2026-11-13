@@ -1,29 +1,24 @@
-//! Per-meeting candidate memory: the desktop distills project facts and
-//! explicit decisions from each transcript into locally stored candidate
-//! entries before anything is published. Entries live in a per-account
-//! SQLite store, keyed by a stable identity so re-extraction of the same
-//! content is idempotent; a receipt per source tracks the extraction
-//! identity (account, source, effective input fingerprint, rules version,
-//! model identity) so transcript backfills and body changes reprocess while
-//! metadata-only changes merely rebind citation revisions. Nothing here is
-//! publishable until the explicit confirmation flow (publication phase)
-//! admits it; the pending queue only records what is ready to hand over.
+//! Distill one meeting at a time, checkpoint the result, and publish the pinned evidence.
 use super::*;
+#[path = "meeting_candidate_markdown.rs"]
+mod markdown_view;
+#[path = "meeting_candidate_publication.rs"]
+mod publication;
+use markdown_view::{mark_render_pending, render_markdown, render_pending};
+pub(super) use publication::publish_pending;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-// v2: distillation input switched to the meeting summary (纪要优先). The
-// version bump retires every v1 receipt and candidate — v1 entries cite the
-// raw transcript, which the gateway rightly rejects against summary-based
-// verification.
-const RULES_VERSION: &str = "meeting-candidates-v2";
-const RETRY_BACKOFF_SECS: u64 = 600;
-const MAX_RETRY_BACKOFF_SECS: u64 = 86_400;
+// Retain the rules version used by existing v3 receipts.
+const RULES_VERSION: &str = "meeting-candidates-v3";
+const RETRY_BACKOFF_SECS: i64 = 600;
+const MAX_RETRY_BACKOFF_SECS: i64 = 86_400;
 const KINDS: [&str; 4] = ["observation", "proposal", "decision", "unresolved"];
 
 const EXTRACT_QUERY: &str = "Extract durable project facts and explicit decisions from this meeting for the user's memory. Keep proposals as proposal, unresolved conflicts and open questions as unresolved, and negated or refused items as observation preserving the negation. Use kind decision only when the source states an explicit decision; a newer date alone never resolves a conflict. Output budget: return at most 12 items total, cite at most 2 passages per item, and keep every quote under 120 characters; prefer dropping minor items over verbose output. ";
@@ -59,6 +54,9 @@ fn connection(root: &Path) -> CommandResult<Connection> {
         CREATE TABLE IF NOT EXISTS extraction_backoff (
             source_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0,
             next_attempt_at INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS extraction_inputs (
+            source_id TEXT PRIMARY KEY, source_revision TEXT NOT NULL,
+            processor TEXT NOT NULL, fingerprint TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS publish_queue (
             source_id TEXT PRIMARY KEY, extraction_id TEXT NOT NULL,
             state TEXT NOT NULL DEFAULT 'pending',
@@ -66,6 +64,9 @@ fn connection(root: &Path) -> CommandResult<Connection> {
             attempts INTEGER NOT NULL DEFAULT 0,
             next_attempt_at INTEGER NOT NULL DEFAULT 0,
             updated_at TEXT NOT NULL DEFAULT '');
+        CREATE INDEX IF NOT EXISTS publish_due ON publish_queue(state, next_attempt_at);
+        CREATE TABLE IF NOT EXISTS publication_attempts (
+            source_id TEXT PRIMARY KEY, extraction_id TEXT NOT NULL, body TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS render_receipts (
             path TEXT PRIMARY KEY, hash TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT '');
         CREATE TABLE IF NOT EXISTS publish_config (
@@ -90,9 +91,35 @@ fn identity_char(ch: char) -> bool {
         || ch.is_ascii_punctuation()
         || matches!(
             ch,
-            '。' | '，' | '、' | '；' | '：' | '！' | '？' | '·' | '…' | '—' | '‘' | '’' | '“'
-                | '”' | '（' | '）' | '【' | '】' | '《' | '》' | '「' | '」' | '『' | '』' | '〔'
-                | '〕' | '．' | '､' | '﹐' | '﹔'
+            '。' | '，'
+                | '、'
+                | '；'
+                | '：'
+                | '！'
+                | '？'
+                | '·'
+                | '…'
+                | '—'
+                | '‘'
+                | '’'
+                | '“'
+                | '”'
+                | '（'
+                | '）'
+                | '【'
+                | '】'
+                | '《'
+                | '》'
+                | '「'
+                | '」'
+                | '『'
+                | '』'
+                | '〔'
+                | '〕'
+                | '．'
+                | '､'
+                | '﹐'
+                | '﹔'
         ))
 }
 
@@ -108,18 +135,117 @@ fn entry_id(scope: &str, source_id: &str, kind: &str, normalized: &str) -> Strin
     store::digest(json!(["meeting-candidate-v1", scope, source_id, kind, normalized]).to_string())
 }
 
-/// The extraction identity: rules version, account, source, effective input
-/// fingerprint and model identity. Metadata-only changes never move it.
-fn extraction_id(scope: &str, document: &Document, model_identity: &Value) -> String {
-    let segments: Vec<Value> = document
+#[derive(Debug, PartialEq, Eq)]
+struct Evidence {
+    text: String,
+    fingerprint: String,
+}
+
+fn evidence(document: &Document) -> Option<Evidence> {
+    let summaries: Vec<_> = document
+        .conclusions
+        .iter()
+        .filter_map(|item| {
+            [
+                "conclusionText",
+                "content",
+                "text",
+                "summary",
+                "conclusionContent",
+            ]
+            .into_iter()
+            .filter_map(|key| item[key].as_str().map(str::trim))
+            .find(|text| !text.is_empty())
+        })
+        .collect();
+    let text = summaries
+        .iter()
+        .copied()
+        .filter(|text| markdown::is_markdown(text))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if text.is_empty() {
+        let transcript = document.transcript.trim();
+        return (!transcript.is_empty() && markdown::is_markdown(transcript)).then(|| Evidence {
+            text: transcript.to_owned(),
+            fingerprint: transcript_fingerprint(transcript),
+        });
+    }
+    Some(Evidence {
+        text,
+        fingerprint: transcript_fingerprint(&summaries.join("\n")),
+    })
+}
+
+fn extraction_id(processor: &str, input: &Evidence) -> String {
+    store::digest(json!([processor, input.fingerprint, input.text]).to_string())
+}
+
+#[derive(Debug)]
+struct ReceiptRow {
+    extraction_id: String,
+    source_revision: String,
+}
+
+fn receipts(conn: &Connection) -> CommandResult<HashMap<String, ReceiptRow>> {
+    let mut query = conn
+        .prepare("SELECT source_id, extraction_id, source_revision FROM extraction_receipts")
+        .map_err(|error| error.to_string())?;
+    let rows = query
+        .query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                ReceiptRow {
+                    extraction_id: row.get(1)?,
+                    source_revision: row.get(2)?,
+                },
+            ))
+        })
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<_, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn scanned_revisions(conn: &Connection, processor: &str) -> CommandResult<HashMap<String, String>> {
+    let mut query = conn
+        .prepare("SELECT source_id, source_revision FROM extraction_inputs WHERE processor=?1")
+        .map_err(|error| error.to_string())?;
+    let rows = query
+        .query_map([processor], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<_, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn record_input(
+    conn: &Connection,
+    document: &Document,
+    processor: &str,
+    fingerprint: &str,
+) -> CommandResult<()> {
+    conn.execute(
+        "INSERT INTO extraction_inputs (source_id, source_revision, processor, fingerprint)
+         VALUES (?1,?2,?3,?4)
+         ON CONFLICT(source_id) DO UPDATE SET source_revision=excluded.source_revision,
+            processor=excluded.processor, fingerprint=excluded.fingerprint",
+        params![document.id, document.revision, processor, fingerprint],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+// Recognize valid v3 receipts once. Their key included the entire document;
+// matching it lets existing batches adopt the content key without a model call.
+fn legacy_extraction_id(scope: &str, document: &Document, model: &Value) -> String {
+    let segments: Vec<_> = document
         .segments
         .iter()
         .map(|segment| {
             json!([
-                segment.get("id").cloned().unwrap_or(Value::Null),
-                segment.get("text").cloned().unwrap_or(Value::Null),
-                segment.get("startMs").cloned().unwrap_or(Value::Null),
-                segment.get("endMs").cloned().unwrap_or(Value::Null),
+                segment["id"],
+                segment["text"],
+                segment["startMs"],
+                segment["endMs"]
             ])
         })
         .collect();
@@ -130,71 +256,53 @@ fn extraction_id(scope: &str, document: &Document, model_identity: &Value) -> St
             document.id,
             document.text(),
             segments,
-            model_identity,
+            model
         ])
         .to_string(),
     )
 }
 
-pub(super) struct ReceiptRow {
-    pub extraction_id: String,
-    pub source_revision: String,
-}
-
-fn receipt(conn: &Connection, source_id: &str) -> CommandResult<Option<ReceiptRow>> {
-    let mut statement = conn
-        .prepare("SELECT extraction_id, source_revision FROM extraction_receipts WHERE source_id=?1")
-        .map_err(|e| e.to_string())?;
-    let row = statement
-        .query_row(params![source_id], |row| {
-            Ok(ReceiptRow {
-                extraction_id: row.get(0)?,
-                source_revision: row.get(1)?,
-            })
-        })
-        .optional()
-        .map_err(|e| e.to_string())?;
-    Ok(row)
-}
-
-fn backoff_until(conn: &Connection, source_id: &str) -> CommandResult<bool> {
-    let mut statement = conn
-        .prepare("SELECT next_attempt_at FROM extraction_backoff WHERE source_id=?1")
-        .map_err(|e| e.to_string())?;
-    let next = statement
-        .query_row(params![source_id], |row| row.get::<_, i64>(0))
-        .optional()
-        .map_err(|e| e.to_string())?;
-    Ok(next.is_some_and(|at| (epoch_secs() as i64) < at))
-}
-
-fn record_failure(root: &Path, source_id: &str) {
-    let Ok(conn) = connection(root) else {
-        return;
+fn legacy_evidence_matches(document: &Document, input: &Evidence) -> bool {
+    let mut parts: Vec<_> = document
+        .conclusions
+        .iter()
+        .filter_map(|item| item["conclusionText"].as_str())
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect();
+    parts.dedup();
+    let text = if parts.is_empty() {
+        document.transcript.trim().to_owned()
+    } else {
+        parts.join("\n\n")
     };
-    let attempts = conn
-        .query_row(
-            "SELECT attempts FROM extraction_backoff WHERE source_id=?1",
-            params![source_id],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()
-        .ok()
-        .flatten()
-        .unwrap_or(0)
-        + 1;
-    let delay = RETRY_BACKOFF_SECS
-        .saturating_mul(attempts as u64)
-        .min(MAX_RETRY_BACKOFF_SECS);
-    let _ = conn.execute(
-        "INSERT INTO extraction_backoff (source_id, attempts, next_attempt_at) VALUES (?1,?2,?3)
-         ON CONFLICT(source_id) DO UPDATE SET attempts=excluded.attempts, next_attempt_at=excluded.next_attempt_at",
-        params![source_id, attempts, (epoch_secs() as i64) + delay as i64],
-    );
+    transcript_fingerprint(&text) == input.fingerprint
 }
 
-fn clear_backoff(conn: &Connection, source_id: &str) {
-    let _ = conn.execute("DELETE FROM extraction_backoff WHERE source_id=?1", params![source_id]);
+fn deferred_extractions(conn: &Connection) -> CommandResult<std::collections::HashSet<String>> {
+    let mut statement = conn
+        .prepare("SELECT source_id FROM extraction_backoff WHERE next_attempt_at>?1")
+        .map_err(|e| e.to_string())?;
+    let rows = statement
+        .query_map([epoch_secs()], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
+fn record_failure(conn: &Connection, source_id: &str) -> CommandResult<()> {
+    conn.execute(
+        "INSERT INTO extraction_backoff (source_id, attempts, next_attempt_at) VALUES (?1,1,?2+?3)
+         ON CONFLICT(source_id) DO UPDATE SET attempts=attempts+1,
+            next_attempt_at=?2+MIN(?3*(attempts+1),?4)",
+        params![
+            source_id,
+            epoch_secs(),
+            RETRY_BACKOFF_SECS,
+            MAX_RETRY_BACKOFF_SECS
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 /// Upsert one extraction batch. Confirmed and rejected entries keep their
@@ -210,6 +318,7 @@ fn store_batch(
     items: &[Value],
 ) -> CommandResult<usize> {
     let mut stored = 0;
+    let now = crate::now();
     for item in items {
         let kind = item
             .get("kind")
@@ -228,33 +337,18 @@ fn store_batch(
             continue;
         }
         let citations = item.get("citations").cloned().unwrap_or_else(|| json!([]));
-        let event_time_ms = citations
-            .as_array()
-            .and_then(|refs| {
-                refs.iter()
-                    .find_map(|reference| reference.get("startMs").and_then(Value::as_i64))
-            });
+        let event_time_ms = citations.as_array().and_then(|refs| {
+            refs.iter()
+                .find_map(|reference| reference.get("startMs").and_then(Value::as_i64))
+        });
         let id = entry_id(scope, source_id, kind, &normalized);
-        let existing_status: String = conn
-            .query_row(
-                "SELECT status FROM candidate_entries WHERE id=?1",
-                params![id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?
-            .unwrap_or_default();
-        // 人工修订与确认优先: a human decision is never demoted by a rerun.
-        let status = match existing_status.as_str() {
-            "confirmed" | "rejected" => existing_status.clone(),
-            _ => "candidate".to_owned(),
-        };
-        let now = crate::now();
         conn.execute(
             "INSERT INTO candidate_entries (id, source_id, kind, status, text, event_date,
                 event_time_ms, citations, source_revision, extraction_id, created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11)
-             ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, status=excluded.status,
+             VALUES (?1,?2,?3,'candidate',?4,?5,?6,?7,?8,?9,?10,?10)
+             ON CONFLICT(id) DO UPDATE SET
+                status=CASE WHEN candidate_entries.status IN ('confirmed','rejected')
+                    THEN candidate_entries.status ELSE excluded.status END,
                 text=excluded.text, event_date=excluded.event_date,
                 event_time_ms=excluded.event_time_ms, citations=excluded.citations,
                 source_revision=excluded.source_revision, extraction_id=excluded.extraction_id,
@@ -263,7 +357,6 @@ fn store_batch(
                 id,
                 source_id,
                 kind,
-                status,
                 text,
                 event_date,
                 event_time_ms,
@@ -281,7 +374,7 @@ fn store_batch(
     conn.execute(
         "UPDATE candidate_entries SET status='superseded', updated_at=?3
          WHERE source_id=?1 AND extraction_id!=?2 AND status='candidate'",
-        params![source_id, extraction, crate::now()],
+        params![source_id, extraction, now],
     )
     .map_err(|e| e.to_string())?;
     Ok(stored)
@@ -344,22 +437,46 @@ fn rebind_entries(
     Ok(())
 }
 
-/// Eligibility lost (AI off, conflict, deletion, scope removal): derived
-/// content stops being used first, pending work is cancelled.
-pub(super) fn forget_source_entries(root: &Path, source_id: &str) {
-    let Ok(conn) = connection(root) else {
-        return;
-    };
-    let _ = conn.execute(
+fn forget_source_entries(conn: &Connection, source_id: &str) -> CommandResult<()> {
+    conn.execute(
         "DELETE FROM candidate_entries WHERE source_id=?1 AND status IN ('candidate','superseded')",
-        params![source_id],
-    );
-    let _ = conn.execute(
-        "UPDATE publish_queue SET state='cancelled', updated_at=?2 WHERE source_id=?1",
-        params![source_id, crate::now()],
-    );
-    let _ = conn.execute("DELETE FROM extraction_receipts WHERE source_id=?1", params![source_id]);
-    let _ = conn.execute("DELETE FROM extraction_backoff WHERE source_id=?1", params![source_id]);
+        [source_id],
+    )
+    .map_err(|error| error.to_string())?;
+    conn.execute("DELETE FROM publish_queue WHERE source_id=?1", [source_id])
+        .map_err(|error| error.to_string())?;
+    conn.execute(
+        "DELETE FROM publication_attempts WHERE source_id=?1",
+        [source_id],
+    )
+    .map_err(|error| error.to_string())?;
+    conn.execute(
+        "DELETE FROM extraction_receipts WHERE source_id=?1",
+        [source_id],
+    )
+    .map_err(|error| error.to_string())?;
+    conn.execute(
+        "DELETE FROM extraction_backoff WHERE source_id=?1",
+        [source_id],
+    )
+    .map_err(|error| error.to_string())?;
+    conn.execute(
+        "DELETE FROM extraction_inputs WHERE source_id=?1",
+        [source_id],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub(super) fn withdraw_source(root: &Path, source_id: &str) -> CommandResult<()> {
+    if db_path(root).is_file() {
+        let mut conn = connection(root)?;
+        let tx = conn.transaction().map_err(|error| error.to_string())?;
+        forget_source_entries(&tx, source_id)?;
+        mark_render_pending(&tx)?;
+        tx.commit().map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn queue_pending(conn: &Connection, source_id: &str, extraction: &str) -> CommandResult<()> {
@@ -367,10 +484,15 @@ fn queue_pending(conn: &Connection, source_id: &str, extraction: &str) -> Comman
         "INSERT INTO publish_queue (source_id, extraction_id, state, updated_at)
          VALUES (?1,?2,'pending',?3)
          ON CONFLICT(source_id) DO UPDATE SET extraction_id=excluded.extraction_id,
-            state='pending', updated_at=excluded.updated_at",
+            state='pending', operation_id='', attempts=0, next_attempt_at=0, updated_at=excluded.updated_at",
         params![source_id, extraction, crate::now()],
     )
     .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM publication_attempts WHERE source_id=?1",
+        [source_id],
+    )
+    .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -385,572 +507,36 @@ fn queue_pending(conn: &Connection, source_id: &str, extraction: &str) -> Comman
 /// knowledge_proxy.py): strip each line, drop empties, join with single
 /// newlines. The fingerprint test vectors below pin both sides together.
 fn normalize_transcript(text: &str) -> String {
-    let lines: Vec<String> = text
-        .lines()
-        .map(|line| line.trim().to_owned())
-        .filter(|line| !line.is_empty())
-        .collect();
-    lines.join("\n")
+    text.split([
+        '\r', '\n', '\x0b', '\x0c', '\x1c', '\x1d', '\x1e', '\u{85}', '\u{2028}', '\u{2029}',
+    ])
+    .map(str::trim)
+    .filter(|line| !line.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n")
 }
 
 fn transcript_fingerprint(text: &str) -> String {
     store::digest(normalize_transcript(text))
 }
 
-fn config_get(conn: &Connection, key: &str) -> Option<String> {
+fn config_get(conn: &Connection, key: &str) -> CommandResult<Option<String>> {
     conn.query_row(
         "SELECT value FROM publish_config WHERE key=?1",
-        params![key],
+        [key],
         |row| row.get(0),
     )
     .optional()
-    .ok()
-    .flatten()
+    .map_err(|error| error.to_string())
 }
 
-fn config_set(conn: &Connection, key: &str, value: &str) {
-    let _ = conn.execute(
+fn config_set(conn: &Connection, key: &str, value: &str) -> CommandResult<()> {
+    conn.execute(
         "INSERT INTO publish_config (key, value, updated_at) VALUES (?1,?2,?3)
          ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
         params![key, value, crate::now()],
-    );
-}
-
-fn device_identity(conn: &Connection) -> (String, String) {
-    let device = config_get(conn, "device_id").unwrap_or_else(|| {
-        let device = uuid::Uuid::new_v4().to_string();
-        config_set(conn, "device_id", &device);
-        device
-    });
-    let credential = config_get(conn, "device_credential").unwrap_or_else(|| {
-        let credential = uuid::Uuid::new_v4().to_string();
-        config_set(conn, "device_credential", &credential);
-        credential
-    });
-    (device, credential)
-}
-
-/// What to do given the server's writer state. Auto-takeover is deliberately
-/// absent: displacing another device needs an explicit user action in
-/// settings, so this state machine only ever pauses.
-#[derive(Debug, PartialEq, Eq)]
-enum WriterAction {
-    Register,
-    CommitWithGeneration(u64),
-    AdoptServerGeneration(u64),
-    PauseNeedTakeover { device_id: String },
-}
-
-fn writer_decision(
-    local_device: &str,
-    local_generation: u64,
-    server: Option<(&str, u64)>,
-) -> WriterAction {
-    match server {
-        None => WriterAction::Register,
-        Some((device_id, generation)) if device_id == local_device => {
-            if generation == local_generation {
-                WriterAction::CommitWithGeneration(generation)
-            } else {
-                WriterAction::AdoptServerGeneration(generation)
-            }
-        }
-        Some((device_id, _)) => WriterAction::PauseNeedTakeover {
-            device_id: device_id.to_owned(),
-        },
-    }
-}
-
-async fn memory_request(
-    client: &reqwest::Client,
-    session: &Session,
-    method: &str,
-    path: &str,
-    payload: Option<&Value>,
-    operation: &str,
-) -> Result<(u16, Value), String> {
-    let prefix = if session.agent_url == session.base_url {
-        "/api/business/ai/memory"
-    } else {
-        "/api/memory"
-    };
-    let mut request = match method {
-        "GET" => client.get(format!("{}{prefix}{path}", session.agent_url)),
-        _ => {
-            let mut request = client
-                .post(format!("{}{prefix}{path}", session.agent_url))
-                .header("Operation-Id", operation);
-            if let Some(payload) = payload {
-                request = request.json(payload);
-            }
-            request
-        }
-    };
-    request = request.header("Authorization", &session.token);
-    let response = match request.send().await {
-        Ok(response) => response,
-        Err(error) => {
-            let kind = if error.is_timeout() {
-                "timeout"
-            } else if error.is_connect() {
-                "connect"
-            } else {
-                "request"
-            };
-            log::warn!("[meeting-publish] gateway transport failure ({kind})");
-            return Err(wiki::tasks::UNKNOWN.to_owned());
-        }
-    };
-    let status = response.status().as_u16();
-    let value: Value = match response.json().await {
-        Ok(value) => value,
-        Err(_) => return Err(format!("Gateway returned invalid publication JSON (HTTP {status})")),
-    };
-    Ok((status, value))
-}
-
-fn publish_entries(conn: &Connection, scope: &str, source_id: &str) -> CommandResult<Vec<Value>> {
-    let mut statement = conn
-        .prepare(
-            "SELECT id, kind, status, text, event_date, event_time_ms, citations
-             FROM candidate_entries
-             WHERE source_id=?1 AND status IN ('candidate','confirmed') AND superseded_by=''
-             ORDER BY event_time_ms IS NULL, event_time_ms ASC, created_at ASC",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = statement
-        .query_map(params![source_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<i64>>(5)?,
-                row.get::<_, String>(6)?,
-            ))
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    Ok(rows
-        .into_iter()
-        .map(|(id, kind, _status, text, event_time_ms, citations)| {
-            let citations: Value = serde_json::from_str(&citations).unwrap_or_else(|_| json!([]));
-            let gateway_kind = if kind == "decision" { "decision" } else { "project_fact" };
-            let _ = scope;
-            json!({
-                "client_id": id,
-                "kind": gateway_kind,
-                "text": text,
-                "event_time": event_time_ms.map(|ms| format!("1970-01-01T00:{:02}:{:02}Z", ms / 60_000 % 60, ms / 1000 % 60)),
-                "citations": citations,
-            })
-        })
-        .collect())
-}
-
-/// Publish uplink for one pending source per pass. Conflicts self-heal
-/// (server-provided head/generation), credential refusals pause the queue
-/// until the user takes over in settings, and a changed transcript retires
-/// the receipt so the next pass re-distills instead of publishing stale text.
-async fn publish_pending(
-    app: &AppHandle,
-    state: &WorkbenchState,
-    session: &Session,
-    root: &Path,
-) -> CommandResult<()> {
-    let conn = connection(root)?;
-    let Some((source_id, extraction)) = (|| {
-        let mut statement = conn
-            .prepare(
-                "SELECT source_id, extraction_id FROM publish_queue
-                 WHERE state='pending' AND next_attempt_at<=?1
-                 ORDER BY updated_at ASC LIMIT 1",
-            )
-            .ok()?;
-        statement
-            .query_row(params![epoch_secs()], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .optional()
-            .ok()
-            .flatten()
-    })() else {
-        return Ok(());
-    };
-    let (device_id, credential) = device_identity(&conn);
-    let local_generation: u64 = config_get(&conn, "writer_generation")
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0);
-    // The feed is the authority on head version and writer state.
-    let (status, feed) = memory_request(
-        &wiki::shared_synthesis_client(state, &session.agent_url).await?,
-        session,
-        "GET",
-        "/meeting-publications?limit=1",
-        None,
-        &uuid::Uuid::new_v4().to_string(),
     )
-    .await
-    .map_err(|error| {
-        queue_defer(&conn, &source_id, 600);
-        error
-    })?;
-    if status != 200 {
-        queue_defer(&conn, &source_id, 600);
-        return Err(format!("Publication feed request failed (HTTP {status})"));
-    }
-    let head = feed["head"].as_u64().unwrap_or(0);
-    let server_writer = feed["writer"].as_object().and_then(|writer| {
-        let device = writer.get("device_id").and_then(Value::as_str)?;
-        let generation = writer.get("generation").and_then(Value::as_u64)?;
-        Some((device, generation))
-    });
-    match writer_decision(&device_id, local_generation, server_writer) {
-        WriterAction::PauseNeedTakeover { device_id: holder } => {
-            log::warn!(
-                "[meeting-publish] publishing held for {source_id}: device {holder} owns the writer; take over in settings"
-            );
-            queue_defer(&conn, &source_id, 3600);
-            return Ok(());
-        }
-        WriterAction::Register | WriterAction::AdoptServerGeneration(_) => {
-            let expected = match writer_decision(&device_id, local_generation, server_writer) {
-                WriterAction::Register => None,
-                WriterAction::AdoptServerGeneration(generation) => Some(generation),
-                _ => None,
-            };
-            let mut payload = json!({"device_id": device_id, "device_credential": credential});
-            if let Some(expected) = expected {
-                payload["expected_generation"] = json!(expected);
-            }
-            let (status, value) = memory_request(
-                &wiki::shared_synthesis_client(state, &session.agent_url).await?,
-                session,
-                "POST",
-                "/meeting-publications/writer",
-                Some(&payload),
-                &uuid::Uuid::new_v4().to_string(),
-            )
-            .await
-            .map_err(|error| {
-                queue_defer(&conn, &source_id, 600);
-                error
-            })?;
-            let generation = value["generation"].as_u64().ok_or_else(|| {
-                queue_defer(&conn, &source_id, 600);
-                format!("Writer registration failed (HTTP {status})")
-            })?;
-            config_set(&conn, "writer_generation", &generation.to_string());
-            log::info!("[meeting-publish] writer generation {generation} for device {device_id}");
-        }
-        WriterAction::CommitWithGeneration(generation) => {
-            config_set(&conn, "writer_generation", &generation.to_string());
-        }
-    }
-    // The receipt pins the distilled revision; a changed transcript must not
-    // publish stale fingerprints.
-    let Some(receipt) = receipt(&conn, &source_id)? else {
-        queue_cancel(&conn, &source_id, "receipt_missing");
-        return Ok(());
-    };
-    let manifest = load_state(app, session)?;
-    let entry = manifest.entries.get(&source_id).filter(|entry| store::eligible(entry));
-    let Some(entry) = entry else {
-        queue_cancel(&conn, &source_id, "source_gone");
-        forget_source_entries(root, &source_id);
-        return Ok(());
-    };
-    if entry.revision != receipt.source_revision {
-        let _ = conn.execute(
-            "DELETE FROM extraction_receipts WHERE source_id=?1",
-            params![source_id],
-        );
-        queue_cancel(&conn, &source_id, "transcript_changed");
-        log::info!("[meeting-publish] transcript changed for {source_id}; re-distill scheduled");
-        return Ok(());
-    }
-    let document = store::read_document(&root, entry)?;
-    if summary_text(&document).trim().is_empty() {
-        // 无纪要: the citation basis is not publishable yet; wait for the
-        // cloud summary instead of cancelling the queue entry.
-        queue_defer(&conn, &source_id, 1800);
-        log::info!("[meeting-publish] {source_id} has no summary yet; deferred");
-        return Ok(());
-    }
-    let entries = publish_entries(&conn, &session.scope, &source_id)?;
-    // The fingerprint covers the distillation input (summary first, transcript
-    // fallback) — the exact text the gateway re-verifies citations against.
-    let evidence_text = summary_text(&document);
-    let payload = json!({
-        "writer": {"device_id": device_id, "device_credential": credential},
-        "writer_generation": config_get(&conn, "writer_generation")
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(1),
-        "base_version": head,
-        "meeting_id": source_id,
-        "meeting_date": document.created_at.chars().take(10).collect::<String>(),
-        "transcript_fingerprint": transcript_fingerprint(&evidence_text),
-        "rules_version": RULES_VERSION,
-        "source_complete": true,
-        "entries": entries,
-    });
-    let (status, value) = memory_request(
-        &wiki::shared_synthesis_client(state, &session.agent_url).await?,
-        session,
-        "POST",
-        "/meeting-publications/commit",
-        Some(&payload),
-        &uuid::Uuid::new_v4().to_string(),
-    )
-    .await
-    .map_err(|error| {
-        queue_defer(&conn, &source_id, 600);
-        error
-    })?;
-    if (200..300).contains(&status) {
-        let published_version = value["version"].as_u64().unwrap_or(head + 1);
-        queue_done(&conn, &source_id, published_version);
-        log::info!(
-            "[meeting-publish] published {source_id} at version {published_version} ({} entries)",
-            payload["entries"].as_array().map(Vec::len).unwrap_or(0)
-        );
-        return Ok(());
-    }
-    let code = value["error"]["code"].as_str().unwrap_or_default();
-    match (status, code) {
-        (409, "version_conflict") => {
-            // The feed moved while we were publishing; the next pass retries
-            // on the fresh head from this response.
-            if let Some(head) = value["error"]["details"]["head_version"].as_u64() {
-                log::info!("[meeting-publish] head moved to {head}; retrying {source_id} next pass");
-            }
-            queue_defer(&conn, &source_id, 5);
-        }
-        (409, "writer_conflict") | (403, "writer_credential_mismatch") | (403, "writer_unregistered") => {
-            // Generation/credential state changed on the server; dropping the
-            // cached generation makes the next pass re-decide from the feed.
-            let _ = conn.execute("DELETE FROM publish_config WHERE key='writer_generation'", []);
-            queue_defer(&conn, &source_id, 60);
-        }
-        (409, "transcript_fingerprint_mismatch") | (409, "transcript_unavailable") => {
-            // 网关回源不一致: local transcript is stale or unreachable from the
-            // cloud; retire the receipt so re-distillation uses fresh text.
-            let _ = conn.execute(
-                "DELETE FROM extraction_receipts WHERE source_id=?1",
-                params![source_id],
-            );
-            queue_cancel(&conn, &source_id, "fingerprint_rejected");
-        }
-        (422, "citation_outside_transcript") => {
-            // 伪造或漂移引用: cancel publishing this source; the entries stay
-            // local and the failure is visible in the queue.
-            queue_cancel(&conn, &source_id, "citation_rejected");
-            log::warn!("[meeting-publish] gateway rejected citations for {source_id}; queue cancelled");
-        }
-        (503, _) | (502, _) | (504, _) => {
-            // memory 服务缩零冷启动窗口: GET 唤醒实例后紧接的 POST 会撞连接
-            // 拒绝。短退避重试，实例拉起后即可通过。
-            queue_defer(&conn, &source_id, 60);
-        }
-        _ => {
-            queue_defer(&conn, &source_id, 1800);
-            return Err(format!("Publication commit failed (HTTP {status}): {code}"));
-        }
-    }
-    Ok(())
-}
-
-fn queue_defer(conn: &Connection, source_id: &str, seconds: u64) {
-    let _ = conn.execute(
-        "UPDATE publish_queue SET attempts=attempts+1, next_attempt_at=?2, updated_at=?3
-         WHERE source_id=?1",
-        params![source_id, epoch_secs() + seconds as i64, crate::now()],
-    );
-}
-
-fn queue_done(conn: &Connection, source_id: &str, version: u64) {
-    let _ = conn.execute(
-        "UPDATE publish_queue SET state='done', attempts=0, next_attempt_at=0, updated_at=?2 WHERE source_id=?1",
-        params![source_id, crate::now()],
-    );
-    let _ = conn.execute(
-        "INSERT INTO publish_config (key, value, updated_at) VALUES (?1,?2,?3)
-         ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-        params![format!("published_version:{source_id}"), version.to_string(), crate::now()],
-    );
-}
-
-fn queue_cancel(conn: &Connection, source_id: &str, reason: &str) {
-    let _ = conn.execute(
-        "UPDATE publish_queue SET state='cancelled', updated_at=?2 WHERE source_id=?1",
-        params![source_id, crate::now()],
-    );
-    log::warn!("[meeting-publish] queue cancelled for {source_id}: {reason}");
-}
-
-// ---------------------------------------------------------------------------
-// L1/L2 rendering: entries first, Markdown second, external edits preserved.
-// ---------------------------------------------------------------------------
-
-pub(super) struct DayView {
-    pub event_date: String,
-    pub rows: Vec<Value>,
-}
-
-pub(super) fn day_views(conn: &Connection) -> CommandResult<Vec<DayView>> {
-    let mut statement = conn
-        .prepare(
-            "SELECT event_date, id, kind, status, text, citations FROM candidate_entries
-             WHERE status IN ('candidate','confirmed') AND superseded_by=''
-             ORDER BY event_date DESC, event_time_ms IS NULL, event_time_ms ASC, created_at ASC",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                json!({
-                    "id": row.get::<_, String>(1)?,
-                    "kind": row.get::<_, String>(2)?,
-                    "status": row.get::<_, String>(3)?,
-                    "text": row.get::<_, String>(4)?,
-                    "citations": serde_json::from_str::<Value>(&row.get::<_, String>(5)?)
-                        .unwrap_or_else(|_| json!([])),
-                }),
-            ))
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    let mut views: Vec<DayView> = Vec::new();
-    for (event_date, row) in rows {
-        match views.last_mut() {
-            Some(view) if view.event_date == event_date => view.rows.push(row),
-            _ => views.push(DayView {
-                event_date,
-                rows: vec![row],
-            }),
-        }
-    }
-    Ok(views)
-}
-
-fn render_entry(row: &Value) -> String {
-    let kind_label = match row["kind"].as_str() {
-        Some("decision") => "决定",
-        Some("proposal") => "提议",
-        Some("unresolved") => "未决",
-        _ => "事实",
-    };
-    let mut line = format!("- 【{kind_label}】{}", row["text"].as_str().unwrap_or_default());
-    if let Some(refs) = row["citations"].as_array() {
-        let evidence: Vec<String> = refs
-            .iter()
-            .take(3)
-            .map(|reference| {
-                let time = reference
-                    .get("startMs")
-                    .and_then(Value::as_i64)
-                    .map(|ms| {
-                        let seconds = (ms / 1000).max(0);
-                        format!(" · {:02}:{:02}", seconds / 60, seconds % 60)
-                    })
-                    .unwrap_or_default();
-                format!(
-                    "「{}」{}",
-                    reference
-                        .get("quote")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                    time
-                )
-            })
-            .collect();
-        if !evidence.is_empty() {
-            line.push_str(&format!("  证据:{}", evidence.join("；")));
-        }
-    }
-    line.push_str("  <!--candidate:");
-    line.push_str(row["id"].as_str().unwrap_or_default());
-    line.push_str("-->");
-    line
-}
-
-/// Render the L1 day view (plus the L2 confirmed section). An externally
-/// edited file is preserved verbatim and the fresh render goes to a separate
-/// incoming file for manual merging.
-pub(super) fn render_markdown(root: &Path) -> CommandResult<()> {
-    let Some(memory_root) = root.parent().map(Path::to_path_buf) else {
-        return Ok(());
-    };
-    let relative = "entries/meeting-candidates.md";
-    let target = memory::safe_path(&memory_root, relative)?;
-    let incoming = memory::safe_path(&memory_root, "entries/meeting-candidates.incoming.md")?;
-    let conn = connection(root)?;
-    let views = day_views(&conn)?;
-    let mut document = String::from("# 会议候选记忆\n\n待确认条目由桌面逐篇提炼；确认后才会进入发布与召回。\n");
-    for view in &views {
-        let day = if view.event_date.is_empty() {
-            "未知日期"
-        } else {
-            &view.event_date
-        };
-        document.push_str(&format!("\n## {day}\n\n"));
-        let confirmed = view
-            .rows
-            .iter()
-            .filter(|row| row["status"] == "confirmed")
-            .count();
-        for row in &view.rows {
-            if row["status"] == "confirmed" {
-                document.push_str(&render_entry(row));
-                document.push_str("（已确认）\n");
-            } else {
-                document.push_str(&render_entry(row));
-                document.push('\n');
-            }
-        }
-        if confirmed > 0 {
-            document.push_str(&format!("\n本日已确认 {confirmed} 条。\n"));
-        }
-    }
-    let receipt_hash: Option<String> = conn
-        .query_row(
-            "SELECT hash FROM render_receipts WHERE path=?1",
-            params![relative],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-    let existing = fs::read(&target).ok();
-    let externally_edited = match (&existing, &receipt_hash) {
-        (Some(bytes), Some(hash)) => store::digest(bytes) != *hash,
-        (Some(_), None) => true,
-        (None, _) => false,
-    };
-    let write_target = if externally_edited { &incoming } else { &target };
-    if externally_edited {
-        log::warn!(
-            "[meeting-candidates] externally edited export preserved; fresh render staged at {}",
-            incoming.display()
-        );
-    }
-    let bytes = document.as_bytes();
-    if fs::read(write_target).is_ok_and(|previous| previous == bytes) {
-        return Ok(());
-    }
-    fs::create_dir_all(write_target.parent().ok_or("Invalid memory path")?)
-        .map_err(|e| e.to_string())?;
-    crate::atomic_write(write_target, bytes).map_err(|e| e.to_string())?;
-    if !externally_edited {
-        conn.execute(
-            "INSERT INTO render_receipts (path, hash, updated_at) VALUES (?1,?2,?3)
-             ON CONFLICT(path) DO UPDATE SET hash=excluded.hash, updated_at=excluded.updated_at",
-            params![relative, store::digest(bytes), crate::now()],
-        )
-        .map_err(|e| e.to_string())?;
-    }
+    .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -958,199 +544,252 @@ pub(super) fn render_markdown(root: &Path) -> CommandResult<()> {
 // The extraction pass.
 // ---------------------------------------------------------------------------
 
-/// The distillation input text: the meeting's own summary when the cloud
-/// produced one, falling back to the transcript. 纪要优先: summaries are a
-/// fraction of the transcript size (31k-char transcripts truncated the model
-/// output and starved the tail of the meeting), and the gateway verifies
-/// published citations against the same summary text. Segments are dropped:
-/// summary text has no audio positions.
-fn summary_text(document: &Document) -> String {
-    let mut parts: Vec<String> = document
-        .conclusions
-        .iter()
-        .filter_map(|item| item.get("conclusionText").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(str::to_owned)
-        .collect();
-    if parts.is_empty() {
-        return document.transcript.trim().to_owned();
-    }
-    parts.dedup();
-    parts.join("\n\n")
+fn is_meeting(entry: &store::Entry) -> bool {
+    store::eligible(entry) && entry.kind == "meeting"
 }
 
-#[derive(Debug)]
-enum Job {
-    Extract {
-        source_id: String,
-        document: Document,
-        extraction: String,
-    },
-    Rebind {
-        source_id: String,
-        extraction: String,
-        from: String,
-        to: String,
-    },
+fn allowed(document: &Document, manifest: &Manifest) -> bool {
+    document.ai_context_enabled && wiki::allows_source(document, manifest)
 }
 
-fn plan_job(
+fn save_extraction(
+    conn: &mut Connection,
     scope: &str,
-    entry_revision: &str,
     document: &Document,
-    model_identity: &Value,
-    receipt: Option<&ReceiptRow>,
-) -> Option<Job> {
-    let extraction = extraction_id(scope, document, model_identity);
-    match receipt {
-        None => Some(Job::Extract {
-            source_id: document.id.clone(),
-            document: document.clone(),
-            extraction,
-        }),
-        Some(prior) if prior.extraction_id != extraction => Some(Job::Extract {
-            source_id: document.id.clone(),
-            document: document.clone(),
-            extraction,
-        }),
-        Some(prior) if prior.source_revision != entry_revision => Some(Job::Rebind {
-            source_id: document.id.clone(),
-            extraction: prior.extraction_id.clone(),
-            from: prior.source_revision.clone(),
-            to: entry_revision.to_owned(),
-        }),
-        _ => None,
-    }
+    processor: &str,
+    input: &Evidence,
+    items: &[Value],
+) -> CommandResult<()> {
+    let extraction = extraction_id(processor, input);
+    let date = document.created_at.chars().take(10).collect::<String>();
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    store_batch(
+        &tx,
+        scope,
+        &document.id,
+        &document.revision,
+        &date,
+        &extraction,
+        items,
+    )?;
+    record_receipt(&tx, &document.id, &extraction, &document.revision)?;
+    record_input(&tx, document, processor, &input.fingerprint)?;
+    tx.execute(
+        "DELETE FROM extraction_backoff WHERE source_id=?1",
+        [&document.id],
+    )
+    .map_err(|error| error.to_string())?;
+    queue_pending(&tx, &document.id, &extraction)?;
+    mark_render_pending(&tx)?;
+    tx.commit().map_err(|error| error.to_string())
 }
 
-/// Wiki-lane follow-up: distill one eligible meeting per pass. Errors are
-/// recorded as per-source backoff and never fail the lane.
-pub(super) async fn run(
+fn reuse_extraction(
+    conn: &mut Connection,
+    document: &Document,
+    processor: &str,
+    input: &Evidence,
+    previous: &ReceiptRow,
+) -> CommandResult<()> {
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    let id = &document.id;
+    let extraction = extraction_id(processor, input);
+    let date = document.created_at.chars().take(10).collect::<String>();
+    rebind_entries(&tx, id, &previous.source_revision, &document.revision)?;
+    let changed = tx
+        .execute(
+            "UPDATE candidate_entries SET extraction_id=?3, event_date=?4
+         WHERE source_id=?1 AND extraction_id=?2 AND (event_date!=?4 OR extraction_id!=?3)",
+            params![id, previous.extraction_id, extraction, date],
+        )
+        .map_err(|error| error.to_string())?;
+    tx.execute(
+        "UPDATE publish_queue SET extraction_id=?3 WHERE source_id=?1 AND extraction_id=?2",
+        params![id, previous.extraction_id, extraction],
+    )
+    .map_err(|error| error.to_string())?;
+    tx.execute(
+        "UPDATE publication_attempts SET extraction_id=?3 WHERE source_id=?1 AND extraction_id=?2",
+        params![id, previous.extraction_id, extraction],
+    )
+    .map_err(|error| error.to_string())?;
+    record_receipt(&tx, id, &extraction, &document.revision)?;
+    record_input(&tx, document, processor, &input.fingerprint)?;
+    if changed != 0 {
+        mark_render_pending(&tx)?;
+    }
+    tx.commit().map_err(|error| error.to_string())
+}
+
+fn plan_extraction(
+    conn: &mut Connection,
+    root: &Path,
+    manifest: &Manifest,
+    scope: &str,
+    model: &Value,
+    receipts: &HashMap<String, ReceiptRow>,
+) -> CommandResult<Option<(Document, Evidence, String)>> {
+    let model = wiki::model_cache_identity(model);
+    let processor = store::digest(json!([RULES_VERSION, model]).to_string());
+    let scanned = scanned_revisions(conn, &processor)?;
+    let deferred = deferred_extractions(conn)?;
+    for entry in manifest.entries.values().filter(|entry| is_meeting(entry)) {
+        if scanned.get(&entry.id) == Some(&entry.revision) || deferred.contains(&entry.id) {
+            continue;
+        }
+        let Ok(raw) = store::read_document(root, entry) else {
+            continue;
+        };
+        if !allowed(&raw, manifest) {
+            continue;
+        }
+        let Some(input) = evidence(&raw) else {
+            record_input(conn, &raw, &processor, "")?;
+            continue;
+        };
+        let document = raw;
+        let extraction = extraction_id(&processor, &input);
+        if let Some(previous) = receipts.get(&entry.id).filter(|previous| {
+            previous.extraction_id == extraction
+                || (previous.source_revision == entry.revision
+                    && markdown::source(document.clone()).is_some_and(|legacy| {
+                        previous.extraction_id == legacy_extraction_id(scope, &legacy, &model)
+                            && legacy_evidence_matches(&legacy, &input)
+                    }))
+        }) {
+            reuse_extraction(conn, &document, &processor, &input, previous)?;
+            continue;
+        }
+        return Ok(Some((document, input, processor)));
+    }
+    Ok(None)
+}
+
+fn prune_sources(
+    conn: &mut Connection,
+    manifest: &Manifest,
+    active: &HashMap<String, ReceiptRow>,
+) -> CommandResult<()> {
+    let removed: Vec<_> = active
+        .keys()
+        .filter(|id| !manifest.entries.get(*id).is_some_and(is_meeting))
+        .collect();
+    if removed.is_empty() {
+        return Ok(());
+    }
+    let tx = conn.transaction().map_err(|error| error.to_string())?;
+    for id in removed {
+        forget_source_entries(&tx, id)?;
+    }
+    mark_render_pending(&tx)?;
+    tx.commit().map_err(|error| error.to_string())
+}
+
+pub(super) async fn extract_pending(
     app: &AppHandle,
     state: &WorkbenchState,
     session: &Session,
-) -> CommandResult<()> {
-    log::info!("[meeting-candidates] heartbeat check");
-    let manifest = load_state(app, session)?;
-    if wiki::ready(&manifest).is_err() {
-        log::info!("[meeting-candidates] skip: sync not ready");
-        return Ok(());
-    }
-    if session.model_override.is_none() {
-        log::info!("[meeting-candidates] waiting for a knowledge model binding");
-        return Ok(());
-    }
-    let (root, _) = roots(app, session)?;
-    let conn = connection(&root)?;
-    let model_identity = wiki::model_cache_identity(session.model_override.as_ref().unwrap());
-    let documents = wiki::sources_for(&root, &manifest);
-    if documents.is_empty() {
-        log::info!("[meeting-candidates] no eligible sources in scope");
-        return Ok(());
-    }
-    // 逐篇: pick the first source that actually owes work, in stable order.
-    let mut planned: Option<Job> = None;
-    for document in &documents {
-        if document.transcript.trim().is_empty() {
-            // 只有大纲的会议等待转写; memory tasks wait for the transcript.
-            continue;
+) -> CommandResult<bool> {
+    let (root, document, input, processor) = {
+        let _guard = state.serial.lock().await;
+        require_current(state, session)?;
+        let manifest = load_state(app, session)?;
+        if !manifest.enabled {
+            return Ok(false);
         }
-        // 纪要没生成的默认跳过: distillation input and gateway verification
-        // both pin the summary; a summary-less meeting waits for the cloud.
-        if summary_text(document).trim().is_empty() {
-            continue;
+        let (root, memory_root) = roots(app, session)?;
+        let model = session
+            .model_override
+            .as_ref()
+            .filter(|_| wiki::ready(&manifest).is_ok());
+        if model.is_none() && !db_path(&root).is_file() {
+            return Ok(false);
         }
-        if backoff_until(&conn, &document.id)? {
-            continue;
-        }
-        let prior = receipt(&conn, &document.id)?;
-        if let Some(job) = plan_job(&session.scope, &document.revision, document, &model_identity, prior.as_ref()) {
-            planned = Some(job);
-            break;
-        }
-    }
-    let Some(job) = planned else {
-        log::info!(
-            "[meeting-candidates] all {} sources are current; draining publish queue",
-            documents.len()
-        );
-        // Nothing to distill; still drain the pending publication queue.
-        return publish_pending(app, state, session, &root).await;
-    };
-    match job {
-        Job::Rebind {
-            source_id,
-            extraction,
-            from,
-            to,
-        } => {
-            rebind_entries(&conn, &source_id, &from, &to)?;
-            record_receipt(&conn, &source_id, &extraction, &to)?;
-            log::info!("[meeting-candidates] rebound {source_id} to revision {to}");
-            Ok(())
-        }
-        Job::Extract {
-            source_id,
-            document,
-            extraction,
-        } => {
-            let source_revision = document.revision.clone();
-            let event_date = document.created_at.chars().take(10).collect::<String>();
-            // 纪要优先: distill from the summary, never the raw transcript.
-            let mut input = document.clone();
-            input.transcript = summary_text(&document);
-            input.segments = Vec::new();
-            input.conclusions = Vec::new();
-            let result = wiki::synthesize(
-                app,
-                session,
-                "memory_extract",
-                std::slice::from_ref(&input),
-                Some(&(EXTRACT_QUERY.to_owned() + super::wiki::MEMORY_KIND_GUIDANCE)),
-            )
-            .await;
-            let result = match result {
-                Ok(value) => value,
-                Err(error) => {
-                    record_failure(&root, &source_id);
-                    return Err(error);
-                }
-            };
-            let items = result
-                .get("memoryItems")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            if result.get("insufficientEvidence").and_then(Value::as_bool) == Some(true)
-                && items.is_empty()
-            {
-                // A stable empty receipt still counts: no re-spam per pass.
-                record_receipt(&conn, &source_id, &extraction, &source_revision)?;
-                log::info!("[meeting-candidates] no supported candidates for {source_id}");
-                return Ok(());
+        let mut conn = connection(&root)?;
+        let receipts = receipts(&conn)?;
+        prune_sources(&mut conn, &manifest, &receipts)?;
+        let job = model
+            .map(|model| {
+                plan_extraction(
+                    &mut conn,
+                    &root,
+                    &manifest,
+                    &session.scope,
+                    model,
+                    &receipts,
+                )
+            })
+            .transpose()?
+            .flatten();
+        if render_pending(&conn)? {
+            if let Err(error) = render_markdown(&conn, &memory_root) {
+                log::warn!("[meeting-candidates] Markdown export deferred: {error}");
             }
-            let stored = store_batch(
-                &conn,
-                &session.scope,
-                &source_id,
-                &source_revision,
-                &event_date,
-                &extraction,
-                &items,
-            )?;
-            record_receipt(&conn, &source_id, &extraction, &source_revision)?;
-            clear_backoff(&conn, &source_id);
-            queue_pending(&conn, &source_id, &extraction)?;
-            drop(conn);
-            render_markdown(&root)?;
-            log::info!(
-                "[meeting-candidates] distilled {stored} candidates from {source_id} (revision {})",
-                &source_revision[..source_revision.len().min(8)]
-            );
-            publish_pending(app, state, session, &root).await
         }
+        let Some((document, input, processor)) = job else {
+            return Ok(false);
+        };
+        (root, document, input, processor)
+    };
+
+    let source = json!({
+        "id": document.id, "revision": document.revision, "kind": document.kind,
+        "title": document.title, "text": input.text.chars().take(12_000).collect::<String>(),
+        "segments": [],
+    });
+    let result = wiki::synthesize_source(
+        app,
+        session,
+        "memory_extract",
+        source,
+        &(EXTRACT_QUERY.to_owned() + wiki::MEMORY_KIND_GUIDANCE),
+    )
+    .await;
+    let _guard = state.serial.lock().await;
+    require_current(state, session)?;
+    if wiki::require_task_model(state, session, "memory_extract").is_err()
+        || matches!(result.as_ref(), Err(error) if error == wiki::TEXT_MODEL_CHANGED)
+    {
+        return Ok(true);
     }
+    let manifest = load_state(app, session)?;
+    if wiki::ready(&manifest).is_err()
+        || !manifest.entries.get(&document.id).is_some_and(|entry| {
+            is_meeting(entry)
+                && entry.revision == document.revision
+                && store::read_document(&root, entry).is_ok()
+        })
+        || !allowed(&document, &manifest)
+    {
+        return Ok(false);
+    }
+    let mut conn = connection(&root)?;
+    let items = match result
+        .as_ref()
+        .map(|result| result["memoryItems"].as_array())
+    {
+        Ok(Some(items)) => items,
+        Ok(None) => {
+            record_failure(&conn, &document.id)?;
+            log::warn!("[meeting-candidates] model returned no candidate list");
+            return Ok(true);
+        }
+        Err(error) => {
+            record_failure(&conn, &document.id)?;
+            log::warn!("[meeting-candidates] extraction deferred: {error}");
+            return Ok(true);
+        }
+    };
+    save_extraction(
+        &mut conn,
+        &session.scope,
+        &document,
+        &processor,
+        &input,
+        items,
+    )?;
+    state.publication_wakeup.notify_one();
+    Ok(true)
 }
 
 #[cfg(test)]

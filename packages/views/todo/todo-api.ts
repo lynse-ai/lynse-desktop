@@ -315,19 +315,12 @@ async function fetchLocalTodos(): Promise<TodoItem[]> {
  * API client missing) we degrade to local-only without failing the load.
  */
 export async function fetchTodos(): Promise<{ items: TodoItem[]; cloudFailed: boolean }> {
-  let cloud: TodoItem[] = [];
-  let cloudFailed = false;
-  try {
-    cloud = await fetchCloudTodos();
-  } catch {
-    cloudFailed = true;
-  }
-  let local: TodoItem[] = [];
-  try {
-    local = await fetchLocalTodos();
-  } catch {
-    local = getLocalTodos();
-  }
+  const [cloudResult, local] = await Promise.all([
+    fetchCloudTodos().catch(() => null),
+    fetchLocalTodos().catch(() => getLocalTodos()),
+  ]);
+  const cloud = cloudResult ?? [];
+  const cloudFailed = cloudResult === null;
   // Cloud todos have no local Rust store, so their calendar metadata
   // (added when the user puts them on the system calendar) lives in
   // localStorage overrides and is merged back in here.

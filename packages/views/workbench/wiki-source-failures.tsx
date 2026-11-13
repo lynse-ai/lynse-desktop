@@ -1,6 +1,6 @@
 "use client";
 
-import { lazy, Suspense, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@lynse/ui/components/ui/dialog";
@@ -11,7 +11,7 @@ import { WikiFailureReport } from "./wiki-failure-report";
 import type { SourceRef } from "./types";
 import type { useWiki } from "./wiki";
 
-const SettingsDialog = lazy(() => import("../settings/settings-dialog").then(module => ({ default: module.SettingsDialog })));
+import { SettingsDialog } from "../settings/settings-dialog";
 
 export function WikiSourceFailures({ wiki }: { wiki: ReturnType<typeof useWiki> }) {
   const { t, i18n } = useTranslation();
@@ -59,6 +59,6 @@ export function WikiSourceFailures({ wiki }: { wiki: ReturnType<typeof useWiki> 
       </details>;
     })}
     <Dialog open={!!source} onOpenChange={open => { if (!open) setSource(null); }}><DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl"><DialogHeader><DialogTitle>{t("workbench.auto_source_meetings")}</DialogTitle><DialogDescription>{t("workbench.auto_source_hint")}</DialogDescription></DialogHeader>{source && <GraphSourceNote key={source.id} source={source} />}</DialogContent></Dialog>
-    {settings && <Suspense fallback={null}><SettingsDialog open onOpenChange={open => { if (!open) setSettings(null); }} initialSectionId={settings} /></Suspense>}
+    {settings && <SettingsDialog open onOpenChange={open => { if (!open) setSettings(null); }} initialSectionId={settings} />}
   </section>;
 }

@@ -23,9 +23,7 @@ import { editorViewCtx } from "@milkdown/kit/core";
 import { TextSelection } from "@milkdown/kit/prose/state";
 import { resolveCommand, type MarkdownEditorAction } from "./editor-actions";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { getAuthStore } from "@lynse/core/auth";
-import { getWorkspaceState } from "../store";
-import { useChatStore } from "../hooks/use-chat-store";
+import { sendSelectedNotePrompt } from "../hooks/use-chat";
 import { buildSelectionPrompt, SELECTION_AI_ACTIONS, type SelectionAiActionId } from "./selection-ai";
 
 interface FloatingMarkdownToolbarProps {
@@ -249,26 +247,6 @@ export function FloatingMarkdownToolbar({ editor }: FloatingMarkdownToolbarProps
     setImageOpen(false);
   }, []);
 
-  /**
-   * Hand a built prompt to 小灵 in the side panel: open the panel when hidden,
-   * make sure the chat store is hydrated for this user (the panel mounts its
-   * own useChat only while visible), then send scoped to the selected note —
-   * the same channel and file scoping the panel composer uses.
-   */
-  const sendSelectionPrompt = useCallback((prompt: string) => {
-    const fileId = getWorkspaceState().selectedItemId;
-    if (!fileId) return;
-    const ws = getWorkspaceState();
-    if (!ws.chatPanelVisible) ws.toggleChatPanel();
-    const chat = useChatStore.getState();
-    chat.setUserId(getAuthStore()?.getState().user?.id ?? "user");
-    chat.hydrate();
-    chat.setActiveAssistant("lynse");
-    // Self-guarding: no-op when the active conversation is already this file.
-    chat.openFileChat(fileId);
-    chat.sendMessage(prompt, fileId, true, undefined, { assistant: "lynse", contextFileId: fileId });
-  }, []);
-
   /** Read the saved selection and dispatch the picked AI action as a prompt. */
   const runAiAction = useCallback(
     (actionId: SelectionAiActionId) => {
@@ -286,9 +264,9 @@ export function FloatingMarkdownToolbar({ editor }: FloatingMarkdownToolbarProps
       });
       const passage = selection.trim();
       if (!passage) return;
-      sendSelectionPrompt(buildSelectionPrompt(t(`toolbar.ai_prompt_${actionId}`), passage));
+      sendSelectedNotePrompt(buildSelectionPrompt(t(`toolbar.ai_prompt_${actionId}`), passage));
     },
-    [editor, t, sendSelectionPrompt],
+    [editor, t],
   );
 
   if (!editor || !isOpen) return null;

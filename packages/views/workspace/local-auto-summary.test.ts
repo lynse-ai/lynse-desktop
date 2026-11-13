@@ -3,7 +3,7 @@ import { ApiClient, setApiInstance, setApiTransportMode } from "@lynse/core/api/
 import { generateLocalLynclawSummary, triggerLocalAutoSummary } from "./local-auto-summary";
 import type { LocalTranscriptionRecord } from "./types";
 
-vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 const original = "The team agreed that the north route needs a second test before rollout. The first delivery window remains open until Thursday.";
 const recordingStart = "2026-11-06T01:00:00.000Z";
@@ -21,6 +21,7 @@ const record: LocalTranscriptionRecord = {
   startedAt: "2026-11-06T08:00:00.000Z",
   updatedAt: "2026-11-06T08:02:00.000Z",
   transcriptText: original,
+  durationMs: 132000,
   language: "en",
   segments: [{ id: "seg", text: original, speakerName: "Lina", startMs: 120250, endMs: 130000 }],
   markers: [{ id: "note", kind: "highlight", note: "Check the alternate route", startMs: 125000 }],
@@ -76,6 +77,7 @@ describe("Desktop automatic meeting summary", () => {
     expect(request?.headers.Authorization).toBe("test-session");
     expect(JSON.parse(request?.body)).toMatchObject({
       transcription_text: "[00:02:00.250-00:02:10.000] Lina: " + original,
+      recording_duration_seconds: 132,
       recording_started_at: recordingStart,
       recordMarkResults: [
         { outline: "Check the alternate route", timeoffset: 125000 },
@@ -105,6 +107,18 @@ describe("Desktop automatic meeting summary", () => {
     });
     expect(await triggerLocalAutoSummary(update)).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(saveSummary).not.toHaveBeenCalled();
+  });
+
+  it("does not save a short-content notice as a summary", async () => {
+    const message = "There is too little content to summarize.";
+    fetchMock.mockImplementation(async (url: string) => {
+      if (new URL(url).pathname === "/api/business/file/info") return json({ id: "cloud-file" });
+      return json({ content: message, skipped_too_short: true });
+    });
+
+    expect(await triggerLocalAutoSummary(update, { force: true })).toBe(false);
+    await expect(generateLocalLynclawSummary(record.id, "html")).rejects.toThrow(message);
     expect(saveSummary).not.toHaveBeenCalled();
   });
 });

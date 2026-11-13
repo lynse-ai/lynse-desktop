@@ -77,6 +77,19 @@ type FilesRequest = {
   includeLocalRecords: boolean;
 };
 
+async function fetchMeetingList(
+  request: FilesRequest,
+  signal?: AbortSignal,
+): Promise<WorkspaceItem[]> {
+  const localApi = request.includeLocalRecords ? getDesktopLocalTranscriptionApi() : null;
+  const authenticated = getAuthStore()?.getState().isAuthenticated ?? false;
+  const [localRecords, data] = await Promise.all([
+    localApi?.list() ?? [],
+    authenticated ? api().getWithParams<unknown>(request.path, request.params, { signal }) : [],
+  ]);
+  return mergeCloudAndLocalFiles(extractRowArray(data).map(fileRowToItem), localRecords);
+}
+
 /** Unwrap the API's flexible list envelope (raw array or {list|records|data}). */
 function extractRowArray(data: unknown): Record<string, unknown>[] {
   if (Array.isArray(data)) return data as Record<string, unknown>[];
@@ -113,18 +126,12 @@ function fileRowToItem(raw: Record<string, unknown>): WorkspaceItem {
 export async function fetchNotesList(params: {
   startTime?: string;
   endTime?: string;
-}): Promise<WorkspaceItem[]> {
-  const localApi = getDesktopLocalTranscriptionApi();
-  const localRecords = localApi ? await localApi.list() : [];
-  if (!(getAuthStore()?.getState().isAuthenticated ?? false)) {
-    return mergeCloudAndLocalFiles([], localRecords);
-  }
-  const data = await api().getWithParams<unknown>("/api/business/file/timeRange/list", {
-    startTime: params.startTime,
-    endTime: params.endTime,
-  });
-  const cloudItems = extractRowArray(data).map(fileRowToItem);
-  return mergeCloudAndLocalFiles(cloudItems, localRecords);
+}, signal?: AbortSignal): Promise<WorkspaceItem[]> {
+  return fetchMeetingList({
+    path: "/api/business/file/timeRange/list",
+    params: { startTime: params.startTime, endTime: params.endTime },
+    includeLocalRecords: true,
+  }, signal);
 }
 
 export interface SummaryTabModel {
@@ -261,24 +268,7 @@ export async function fetchFilesList(params: {
   originalFilename?: string;
   folderId?: string;
 }): Promise<WorkspaceItem[]> {
-  const request = buildFilesRequest(params);
-  const localApi = getDesktopLocalTranscriptionApi();
-  const localRecords = localApi && request.includeLocalRecords ? await localApi.list() : [];
-  if (!(getAuthStore()?.getState().isAuthenticated ?? false)) {
-    return mergeCloudAndLocalFiles([], localRecords);
-  }
-  const data = await api().getWithParams<unknown>(request.path, request.params);
-  const cloudItems = extractRowArray(data).map((raw) => ({
-    id: String(raw.id ?? ""),
-    type: "file" as const,
-    title: String(raw.originalFilename ?? ""),
-    updatedAt: String(raw.updateTime ?? ""),
-    createdAt: String(raw.createTime ?? ""),
-    folderId: raw.folderId as string | undefined,
-    tags: parseFileTags(raw),
-    teamId: typeof raw.teamId === "string" ? raw.teamId : undefined,
-  }));
-  return mergeCloudAndLocalFiles(cloudItems, localRecords);
+  return fetchMeetingList(buildFilesRequest(params));
 }
 
 export function mergePendingSummaryTab({
@@ -317,16 +307,17 @@ export function useFiles(params: {
   enabled?: boolean;
 }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const request = buildFilesRequest(params);
 
   return useQuery({
     // Include auth state in the key so that queries cached while unauthenticated
     // (e.g. the always-mounted "__all__" query from FolderTreeSection) are
     // re-fetched once the user is authenticated, instead of showing stale empties.
-    queryKey: ["files", params, isAuthenticated],
+    queryKey: ["files", { ...request.params, folderId: request.includeLocalRecords ? undefined : "__trash__" }, isAuthenticated],
     // Keep the previous folder's list visible while the next folder loads,
     // instead of flashing an empty grid mid-switch.
     placeholderData: keepPreviousData,
-    queryFn: () => fetchFilesList(params),
+    queryFn: ({ signal }) => fetchMeetingList(request, signal),
     staleTime: LIST_STALE_TIME_MS,
     enabled: (isAuthenticated || !!getDesktopLocalTranscriptionApi()) && (params.enabled ?? true),
   });
@@ -367,7 +358,7 @@ export function useNotes(params: {
     queryKey: ["notes", params.startTime, params.endTime, isAuthenticated],
     // Keep the previous list visible while a refetch is in flight.
     placeholderData: keepPreviousData,
-    queryFn: () => fetchNotesList({ startTime: params.startTime, endTime: params.endTime }),
+    queryFn: ({ signal }) => fetchNotesList({ startTime: params.startTime, endTime: params.endTime }, signal),
     staleTime: LIST_STALE_TIME_MS,
     enabled: (isAuthenticated || !!getDesktopLocalTranscriptionApi()) && (params.enabled ?? true),
   });
@@ -579,14 +570,6 @@ export function useReplaceSummaryTemplate() {
       qc.invalidateQueries({ queryKey: ["notes"] });
     },
   });
-}
-
-export function useInvalidateOnAuth() {
-  const queryClient = useQueryClient();
-
-  return function invalidateAll() {
-    queryClient.invalidateQueries();
-  };
 }
 
 // ── Template & Upload pipeline hooks ─────────────────────

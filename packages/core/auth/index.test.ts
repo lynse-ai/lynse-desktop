@@ -3,6 +3,8 @@ import { createAuthStore } from "./index";
 import { CLOUDBASE_AGENT_URL } from "../config";
 import { ApiClient, setApiTransportMode } from "../api/client";
 import type { StorageAdapter } from "../types/storage";
+import { createQueryClient, setActiveQueryClient } from "../query-client";
+import { attachListQueryPersistence } from "../query-persistence";
 
 let client: ApiClient;
 let storage: StorageAdapter;
@@ -25,6 +27,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setActiveQueryClient(null);
   client.setToken(null);
   vi.unstubAllGlobals();
   setApiTransportMode("proxy");
@@ -41,6 +44,19 @@ function expectRegistration(token: string, host = "https://api.lynse.cn") {
 }
 
 describe("auth backend-host registration", () => {
+  it("clears the shared query cache and a queued disk write on logout", () => {
+    const queryClient = createQueryClient();
+    setActiveQueryClient(queryClient);
+    const detach = attachListQueryPersistence(queryClient, storage);
+    const key = ["notes", "a", "b", true];
+    queryClient.setQueryData(key, [{ id: "old-account-note" }]);
+    const store = createAuthStore({ api: client, storage });
+    store.getState().logout();
+    detach();
+    expect(queryClient.getQueryData(key)).toBeUndefined();
+    expect(storage.getItem("lynse.query-cache.v2")).toBeNull();
+  });
+
   it("registers the selected gateway and the newly minted API login token", async () => {
     const store = createAuthStore({ api: client, storage });
     await store.getState().login("dk-key", "https://gapp.lynse.cn");

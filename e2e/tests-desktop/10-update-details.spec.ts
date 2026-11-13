@@ -1,9 +1,35 @@
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Page } from "@playwright/test";
 import { test, expect, openWorkspace } from "../fixtures/desktop-fixture";
 
-const releaseNotes = JSON.parse(readFileSync(resolve(__dirname, "../../apps/tauri/release-notes/1.3.0.json"), "utf8")) as Record<string, string>;
+const releaseNotes = {
+  en: `### New features
+
+• Record meetings from the desktop.
+• Add chapters to transcripts.
+
+### Improvements
+
+• Search results load sooner.
+• The editor restores its scroll position.
+
+### Fixes
+
+• Drafts are preserved after an interruption.`,
+  "zh-Hans": `### 新功能
+
+• 支持在桌面录制会议。
+• 可在转写中添加章节。
+
+### 改进
+
+• 更快显示搜索结果。
+• 编辑器会恢复上次的滚动位置。
+
+### 错误修复
+
+• 中断时保留草稿。`,
+};
 const updateModule = `/@fs${resolve(__dirname, "../../packages/views/app-update.ts")}`;
 const languageModule = `/@fs${resolve(__dirname, "../../packages/core/i18n/react.ts")}`;
 

@@ -40,8 +40,8 @@ export const MOCK_FILES = [
 
 export const MOCK_TODOS = [
   {
-    todoId: "todo-1",
-    content: "Send the Q3 summary to the team",
+    id: "todo-1",
+    todoContent: "Send the Q3 summary to the team",
     isCompleted: 0,
     fileId: "file-q3-review",
     createTime: "2026-09-01T11:05:00Z",

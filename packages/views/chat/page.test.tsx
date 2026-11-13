@@ -5,6 +5,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { ChatPage } from "./page";
 
 const chat = vi.hoisted(() => ({
+  ready: true,
   messages: [] as Array<Record<string, unknown>>,
   isLoading: false,
   conversations: [] as Array<Record<string, unknown>>,

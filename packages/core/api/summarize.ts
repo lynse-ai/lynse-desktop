@@ -24,6 +24,7 @@ export interface SummarizeTranscriptInput {
   transcriptionText: string;
   /** YYYYMMDDHHmm — when the recording happened; anchors relative dates in the summary. */
   recordingTime?: string;
+  recordingDurationSeconds?: number;
   /** Recording start with timezone. Used to align absolute photo timestamps. */
   recordingStartedAt?: string;
   recordMarkResults?: readonly SummaryTextMark[];
@@ -43,6 +44,7 @@ export interface SummarizeTranscriptResult {
   degraded?: boolean;
   /** Present when html was requested but rendering degraded to Markdown only. */
   html_error?: string;
+  skipped_too_short?: boolean;
 }
 
 /**
@@ -64,6 +66,9 @@ export async function summarizeTranscript(
     {
       transcription_text: text,
       ...(input.recordingTime ? { recording_time: input.recordingTime } : {}),
+      ...(typeof input.recordingDurationSeconds === "number"
+        && Number.isFinite(input.recordingDurationSeconds) && input.recordingDurationSeconds > 0
+        ? { recording_duration_seconds: input.recordingDurationSeconds } : {}),
       ...(input.recordingStartedAt ? { recording_started_at: input.recordingStartedAt } : {}),
       ...(input.recordMarkResults?.length ? {
         recordMarkResults: input.recordMarkResults.slice(0, MAX_SUMMARY_TEXT_MARKS),

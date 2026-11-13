@@ -30,7 +30,7 @@ pub(in crate::workbench) fn validate_automation(
     Ok(())
 }
 
-pub(super) fn allows(doc: &Document, manifest: &Manifest) -> bool {
+pub(in crate::workbench) fn allows(doc: &Document, manifest: &Manifest) -> bool {
     if !knowledge_cloud::local_allows(doc, manifest) {
         return false;
     }

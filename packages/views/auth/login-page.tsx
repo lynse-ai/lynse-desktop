@@ -16,7 +16,6 @@ import {
   completeGoogleRedirect,
   isGoogleConfigured,
   signInWithGoogle,
-  warmUpGoogleAuth,
 } from "@lynse/core/auth/google";
 import {
   isAppleAuthorizeUrlConfigured,
@@ -57,7 +56,7 @@ import {
   isTestMode,
   setTestMode,
 } from "../feature-flags";
-import { WindowControls, showWindowControls } from "../layout/app-title-bar";
+import { WindowControls, showWindowControls } from "../layout/window-controls";
 import { cn } from "@lynse/ui/lib/utils";
 import { AgreementCheckbox } from "./agreement-checkbox";
 import { WechatIcon } from "./wechat-icon";
@@ -125,7 +124,6 @@ export function LoginPage() {
   const [smsError, setSmsError] = useState<string | null>(null);
   const [googleBusy, setGoogleBusy] = useState(false);
   const [appleBusy, setAppleBusy] = useState(false);
-  const [googleDiag, setGoogleDiag] = useState<string | null>(null);
   // Which identity provider the active bind form completes.
   const [bindAuthType, setBindAuthType] = useState<"WECHAT_SCAN" | "GOOGLE" | "APPLE">("WECHAT_SCAN");
 
@@ -270,12 +268,6 @@ export function LoginPage() {
     if (digits.length === SMS_CODE_LENGTH) void handleSmsLogin(digits);
   }
 
-  // Warm up Firebase Auth on mount so the Google popup opens synchronously
-  // inside the click handler (see core/auth/google.ts).
-  useEffect(() => {
-    warmUpGoogleAuth();
-  }, []);
-
   /** Google popup flow; first-time identities continue into the dedicated
    *  binding screen (intl binds an email, cn binds a phone). */
   async function handleGoogleLogin() {
@@ -300,23 +292,6 @@ export function LoginPage() {
       }
     } catch (e: unknown) {
       setError(authErrorText(e, t, "auth.login_failed"));
-      const message = e instanceof Error ? e.message : String(e).slice(0, 160);
-      const data = e && typeof e === "object" && "data" in e
-        ? JSON.stringify((e as { data: unknown }).data).slice(0, 200)
-        : "-";
-      // Decode the ID token payload (base64 JSON, no signature verification
-      // client-side) so the exact iss/aud presented to the backend is visible
-      // for configuration alignment.
-      let claims = "-";
-      try {
-        const token = (window as unknown as { __lastGoogleIdentityToken?: string }).__lastGoogleIdentityToken ?? "";
-        const claimsB64 = token.split(".")[1];
-        if (claimsB64) {
-          const payload = JSON.parse(atob(claimsB64.replace(/-/g, "+").replace(/_/g, "/"))) as Record<string, unknown>;
-          claims = JSON.stringify({ iss: payload.iss ?? "-", aud: payload.aud ?? "-", sub: String(payload.sub ?? "-").slice(0, 20), email: payload.email ?? "-" });
-        }
-      } catch { /* token not captured */ }
-      setGoogleDiag("error: " + message + " | data: " + data + " | tokenClaims: " + claims);
       setGoogleBusy(false);
     }
   }
@@ -996,7 +971,6 @@ export function LoginPage() {
         )}
 
         {error && <p className="mt-3 text-center text-xs text-destructive">{error}</p>}
-        {googleDiag && <p className="mt-2 break-all text-center text-2xs text-muted-foreground">[google] {googleDiag}</p>}
         </div>
 
         {/* ── More ways to sign in (phone view) / WeChat wait state.

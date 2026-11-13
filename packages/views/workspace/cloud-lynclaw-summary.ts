@@ -1,14 +1,13 @@
 import { api, summarizeTranscript } from "@lynse/core/api";
 import { matchLocale } from "@lynse/core/i18n";
 import { cloudTranscriptionToChapterSegments } from "./cloud-chapters";
-import { fetchCloudFileTranscription, fetchFileDetail } from "./hooks/use-files";
+import { fetchCloudFileTranscription, fetchFileDetail, parseFileDurationSeconds } from "./hooks/use-files";
 import {
   formatSummaryRecordingTime,
   formatTimedSummaryTranscript,
   logLynclawSummaryFailure,
   LynclawSummaryError,
   MAX_SUMMARY_TRANSCRIPT_CHARS,
-  MIN_SUMMARY_TRANSCRIPT_CHARS,
   readSummaryMarks,
   summaryOutput,
   summaryTimeout,
@@ -29,7 +28,7 @@ function prepareCloudTranscript(payload: unknown): string {
   }
   const spoken = rows.map((row) => row.text.trim()).filter(Boolean).join("\n");
   const text = spoken || plain;
-  if (text.length < MIN_SUMMARY_TRANSCRIPT_CHARS) {
+  if (!text) {
     throw new LynclawSummaryError("workspace.lynclaw_summary_needs_transcript");
   }
   if (text.length > MAX_SUMMARY_TRANSCRIPT_CHARS) {
@@ -96,6 +95,7 @@ export async function generateCloudLynclawSummary(
     const result = await summarizeTranscript({
       transcriptionText,
       recordingTime: formatSummaryRecordingTime(recordingStart ?? detail.createdAt),
+      recordingDurationSeconds: parseFileDurationSeconds(detail),
       recordingStartedAt: recordingStart,
       recordMarkResults: marks.text,
       markImages: marks.images,

@@ -1,6 +1,6 @@
 "use client";
 
-import { lazy, Suspense, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
 import { ArrowLeft, Brain, BookOpen, List, Network, Settings } from "../icons";
@@ -18,7 +18,7 @@ import { WorkbenchSettingsContent } from "./components";
 import { isWikiProcessingComplete, WorkbenchProgress } from "./progress";
 import { wikiModelErrorKey, workbenchErrorCopy } from "./errors";
 
-const AssistantSettingsDialog = lazy(() => import("../settings/settings-dialog").then(module => ({ default: module.SettingsDialog })));
+import { SettingsDialog } from "../settings/settings-dialog";
 
 export function KnowledgePage() {
   const { t } = useTranslation();
@@ -83,7 +83,7 @@ export function KnowledgePage() {
         {tab === "settings" && <SwapFade viewKey="settings"><VaultConfigCard key={status?.scope} wikiSettings /></SwapFade>}
       </div>
     </div>}
-    {assistantSettingsOpen && <Suspense fallback={null}><AssistantSettingsDialog open onOpenChange={setAssistantSettingsOpen} initialSectionId="ai_assistant" /></Suspense>}
+    {assistantSettingsOpen && <SettingsDialog open onOpenChange={setAssistantSettingsOpen} initialSectionId="ai_assistant" />}
   </main>;
 }
 

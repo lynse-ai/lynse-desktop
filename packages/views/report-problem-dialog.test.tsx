@@ -21,13 +21,18 @@ vi.mock("./app-update", () => ({
   getAppInfoSync: () => ({ version: "test", platform: "win32" }), openExternalUrl: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: { error: mocks.toastError } }));
-// The mount-point dispatcher imports the feedback center (feature-request
-// face), which value-imports the feedback API — stub it so the CNB tests
-// below never touch it.
+// The mount-point dispatcher imports the suggestion center (FeedLog face),
+// which value-imports the feedlog API — stub it so the CNB tests below never
+// touch it.
 vi.mock("@lynse/core/api", () => ({
   api: () => ({ getToken: () => "test-token", getAgentBaseUrl: () => "https://agent.test", getBaseUrl: () => "https://api.test" }),
-  createFeedbackTicket: mocks.create,
-  listFeedbackTickets: mocks.listTickets,
+  FEEDLOG_BASE_URL: "https://feedback.lynse.ai",
+  FEEDLOG_FEATURE_BOARD_HINT: /^feature/i,
+  mintFeedlogGuestToken: vi.fn(),
+  listFeedlogBoards: vi.fn().mockResolvedValue([]),
+  createFeedlogPost: vi.fn(),
+  listFeedlogMyPosts: vi.fn().mockResolvedValue([]),
+  feedlogPostUrl: (slug: string) => `https://feedback.lynse.ai/p/${slug}`,
 }));
 
 const screenshot = {

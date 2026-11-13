@@ -1,46 +1,25 @@
-import { WorkbenchSupervisor, WorkbenchDialog, MemoryPage } from "@lynse/views/workbench";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense } from "react";
 import { CoreProvider } from "@lynse/core/platform";
 import { ThemeProvider } from "@lynse/ui/components/common/theme-provider";
 import { Toaster } from "@lynse/ui/components/ui/sonner";
-import { DashboardLayout } from "@lynse/views/layout";
+import { AuthGate } from "@lynse/views/auth/auth-gate";
+import { featureFlags, configureBuildChannel, type BuildChannel } from "@lynse/views/feature-flags";
 import { useNavigation } from "@lynse/views/navigation";
-import { WorkspaceLayout } from "@lynse/views/workspace";
-import { HomePage } from "@lynse/views/home";
-import { ChatPage } from "@lynse/views/chat";
-import { TodoPage } from "@lynse/views/todo";
-import { NotesPage } from "@lynse/views/notes";
-import { InspirationCaptureSheet, InspirationPage, InspirationPrivacySupervisor } from "@lynse/views/inspiration";
-import { NotificationsPage, AppUpdateNotifier, ContextInboxNotifier } from "@lynse/views/notifications";
-import { SettingsDialog, useWebdavAutoSync } from "@lynse/views/settings";
-import { AboutWindow } from "@lynse/views/about";
-import { FeedbackWindow } from "@lynse/views/feedback";
-import { ReportProblemWindow } from "@lynse/views/report-problem-dialog";
-import { BotAgent, BotAuthSupervisor } from "@lynse/views/bots";
-import { PluginHost } from "@lynse/views/plugins";
-import { AudioEditorPage } from "@lynse/views/audio-editor";
-import {
-  LiveSubtitleOverlay,
-  MeetingAutoRecordAgent,
-  RecordingIslandWindow,
-  RecordingTrayAgent,
-  TranscriptDetailPage,
-} from "@lynse/views/live-translation";
+import { WorkbenchSupervisor } from "@lynse/views/workbench/supervisor";
+import { useWorkbench } from "@lynse/views/workbench/api";
+import { InspirationPrivacySupervisor } from "@lynse/views/inspiration/privacy-supervisor";
+import { ContextInboxNotifier } from "@lynse/views/notifications/context-inbox";
+import { useWebdavAutoSync } from "@lynse/views/settings/webdav-sync";
+import { BotAuthSupervisor } from "@lynse/views/bots/auth-supervisor";
 import { RESOURCES } from "@lynse/views/locales";
-import {
-  configureBuildChannel,
-  type BuildChannel,
-} from "@lynse/views/feature-flags";
-import { featureFlags } from "@lynse/views/feature-flags";
-import { AuthGate, ApiConfigPage } from "@lynse/views/auth";
-import { PermissionOnboardingGate } from "@lynse/views/onboarding";
-import { useMaximized } from "@lynse/views/layout";
-import { cn } from "@lynse/ui/lib/utils";
 import { DesktopNavigationProvider } from "./platform/navigation";
 import { NativeThemeSync } from "./platform/native-theme";
 import { AppThemeSync } from "@lynse/views/settings/app-theme";
-import { clearAuthSecrets, secureStorage } from "./secure-storage";
+import { useMaximized } from "@lynse/views/layout/use-maximized";
+import { secureStorage } from "./secure-storage";
 import { setReportChannel } from "@lynse/views/diagnostics";
+import type { DesktopApi } from "./tauri-bridge";
+import { Loading } from "./Loading";
 
 // Legacy feature-exposure overrides do not select login methods or servers.
 // Development and packaged apps share the standard default.
@@ -58,236 +37,79 @@ setReportChannel({
   endpoint: import.meta.env.VITE_CNB_REPORT_URL || DEFAULT_REPORT_ENDPOINT,
 });
 
-// How long the recording page's slide layers stay mounted — must cover the
-// longer slide duration in globals.css (300ms in / 260ms out).
-const RECORDING_SLIDE_HOLD_MS = 320;
-
-function PageRouter() {
-  const { pathname, push } = useNavigation();
-
-  let page: ReactNode = <WorkspaceLayout />;
-  let route = "workspace";
-  if (pathname === "/" || pathname.startsWith("/home")) {
-    page = <HomePage />;
-    route = "home";
-  } else if (pathname.startsWith("/chat")) {
-    page = <ChatPage />;
-    route = "chat";
-  } else if (pathname.startsWith("/todo")) {
-    page = <TodoPage />;
-    route = "todo";
-  } else if (pathname.startsWith("/recording")) {
-    page = <TranscriptDetailPage />;
-    route = "recording";
-  } else if (pathname.startsWith("/settings")) {
-    // Settings is shown in a popup dialog, not an inline page. Visiting the
-    // /settings route pops the dialog (closing it navigates back to the workspace).
-    page = <SettingsDialog open onOpenChange={() => push("/")} />;
-    route = "settings";
-  } else if (featureFlags.inspiration && pathname.startsWith("/inspiration")) {
-    page = <InspirationPage />;
-    route = "inspiration";
-  } else if (pathname.startsWith("/notifications")) {
-    page = <NotificationsPage />;
-    route = "notifications";
-  } else if (pathname.startsWith("/audio-editor")) {
-    page = <AudioEditorPage />;
-    route = "audio-editor";
-  } else if (pathname.startsWith("/notes")) {
-    page = <NotesPage />;
-    route = "notes";
-  } else if (pathname.startsWith("/memory")) {
-    page = <MemoryPage />;
-    route = "memory";
-  }
-  // Flag-gated WIP features fall through to the workspace above, so a stale
-  // link can't reach the unfinished page.
-
-  // ── Recording page sheet choreography ──
-  // The recording page is the app's pushed surface: it slides in from the
-  // right edge when opened (sidebar / float dock / tray) and slides back out
-  // to the right when the user leaves it — typically right after a recording
-  // has ended. The page on the other side holds still beneath the sheet, so
-  // the motion reads as slide-over / reveal. Every other route keeps the
-  // plain fade-up swap.
-  const [slide, setSlide] = useState<{
-    direction: "in" | "out";
-    /** The page held beneath (going in) or the recording page leaving (going out). */
-    node: ReactNode;
-  } | null>(null);
-  const [prevRoute, setPrevRoute] = useState(route);
-  const recordingRoute = route === "recording";
-  const lastPageRef = useRef({ route, node: page });
-  if (prevRoute !== route) {
-    // Derived during render (React's adjust-state-on-prop-change pattern) so
-    // the swap commits in a single paint — the outgoing page never drops for
-    // a frame before the sheet layer takes over.
-    const from = prevRoute;
-    setPrevRoute(route);
-    if (from === "recording") {
-      setSlide({ direction: "out", node: lastPageRef.current.node });
-    } else if (recordingRoute) {
-      setSlide({ direction: "in", node: lastPageRef.current.node });
-    } else {
-      setSlide(null);
-    }
-  }
-  lastPageRef.current = { route, node: page };
-
-  // Retire the slide layer (and the page held beneath it) once the sheet has
-  // landed — must cover the longer slide duration in globals.css.
-  useEffect(() => {
-    if (!slide) return;
-    const timer = setTimeout(() => setSlide(null), RECORDING_SLIDE_HOLD_MS);
-    return () => clearTimeout(timer);
-  }, [slide]);
-
-  const sheetLeaving = slide?.direction === "out";
-
-  // Keyed by top-level route so switching sidebar destinations (待办 / 笔记 /
-  // AI 助手 / …) replays the page-enter animation; sub-navigation within a
-  // page (e.g. /chat/<id>) keeps the key and doesn't re-animate.
-  return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
-      {/* Base layer — the destination page, or the previous page held still
-          while the recording sheet slides over it. */}
-      {recordingRoute ? (
-        slide?.direction === "in" && (
-          <div className="flex min-h-0 flex-1 flex-col">{slide.node}</div>
-        )
-      ) : (
-        <div key={route} className="animate-page-in flex min-h-0 flex-1 flex-col">
-          {page}
-        </div>
-      )}
-      {/* The recording sheet itself. It stays mounted in this slot in steady
-          state, so the page revealed by the slide-in is the same node that
-          keeps rendering — no remount, no replayed entrance. */}
-      {(recordingRoute || sheetLeaving) && (
-        <div
-          className={cn(
-            "absolute inset-0 z-10 flex min-h-0 flex-col bg-background",
-            sheetLeaving ? "animate-page-out-right" : "animate-page-in-right",
-          )}
-        >
-          {recordingRoute ? page : slide?.node}
-        </div>
-      )}
-    </div>
-  );
-}
+const Dashboard = lazy(() => import("./Dashboard"));
+const ApiConfigPage = lazy(() => import("@lynse/views/auth/api-config-page").then(({ ApiConfigPage }) => ({ default: ApiConfigPage })));
+const WorkbenchDialog = lazy(() => import("@lynse/views/workbench/components").then(({ WorkbenchDialog }) => ({ default: WorkbenchDialog })));
+const RecordingIslandWindow = lazy(() => import("@lynse/views/live-translation/recording-island-window").then(({ RecordingIslandWindow }) => ({ default: RecordingIslandWindow })));
+const LiveSubtitleOverlay = lazy(() => import("@lynse/views/live-translation/subtitle-overlay").then(({ LiveSubtitleOverlay }) => ({ default: LiveSubtitleOverlay })));
+const AboutWindow = lazy(() => import("@lynse/views/about/about-window").then(({ AboutWindow }) => ({ default: AboutWindow })));
+const FeedbackWindow = lazy(() => import("@lynse/views/feedback/feedback-window").then(({ FeedbackWindow }) => ({ default: FeedbackWindow })));
+const ReportProblemWindow = lazy(() => import("@lynse/views/report-problem-dialog").then(({ ReportProblemWindow }) => ({ default: ReportProblemWindow })));
 
 function AppShell() {
   const { pathname } = useNavigation();
-
-  // API configuration is reachable pre-login from the login page's corner
-  // link, so it must bypass the auth gate.
   if (pathname.startsWith("/api-config")) {
-    return <ApiConfigPage />;
+    return <Suspense fallback={<Loading />}><ApiConfigPage /></Suspense>;
   }
-
   return (
     <AuthGate>
-      {/* First-launch permission onboarding (desktop only): holds the whole
-          shell — recording agents included — until mic/system-audio setup is
-          answered, so nothing starts recording behind the user's back. */}
-      <PermissionOnboardingGate>
-        <DashboardLayout>
-          <PageRouter />
-        </DashboardLayout>
-        {/* Answers the tray menu's "start live recording" no matter which page
-            is open; the island answers tray pause/stop while a session runs. */}
-        <RecordingTrayAgent />
-        {/* Answers IM chat messages (Feishu today; DingTalk next) through the
-            Rust bot long connection — headless, works with any page open or the
-            window hidden. */}
-        <BotAgent />
-        {/* Headless plugin subscribers (event listeners) for installed + enabled
-            plugins; renders nothing until a plugin contributes one. */}
-        <PluginHost />
-        {/* Starts/stops a recording when the Rust meeting detector spots a
-            whitelisted meeting app doing audio (user opt-in from Settings). */}
-        {featureFlags.autoRecord && <MeetingAutoRecordAgent />}
-        {/* Pops the flomo-style capture panel over any page (sidebar icon,
-            home quick actions). */}
-        {featureFlags.inspiration && <InspirationCaptureSheet />}
-        <AppUpdateNotifier />
-      </PermissionOnboardingGate>
+      <Suspense fallback={<Loading />}><Dashboard /></Suspense>
     </AuthGate>
   );
 }
 
-function AppContent() {
-  // Launch-time + periodic WebDAV sync of records and settings (no-op unless
-  // enabled in settings; main window only).
+function WorkbenchPanel() {
+  const open = useWorkbench((state) => state.open);
+  return open ? <Suspense><WorkbenchDialog /></Suspense> : null;
+}
+
+function MainWindow() {
   useWebdavAutoSync();
+  useMaximized();
   return (
     <DesktopNavigationProvider>
-      {/* Bot channel lifecycle (pause on logout, resume on login) must sit
-          OUTSIDE the AuthGate: after logout the gate unmounts its children,
-          and this supervisor is what stops the bots and aborts in-flight
-          answers. */}
+      {/* Supervisors also handle logout, after the dashboard has unmounted. */}
       <BotAuthSupervisor />
       <WorkbenchSupervisor />
       {featureFlags.inspiration && <InspirationPrivacySupervisor />}
-      <WorkbenchDialog />
+      <WorkbenchPanel />
       <ContextInboxNotifier />
       <AppShell />
     </DesktopNavigationProvider>
   );
 }
 
-export default function App() {
-  const windowKind = new URLSearchParams(window.location.search).get("window");
-  const subtitleWindow = windowKind === "live-subtitles";
-  const recordingIslandWindow = windowKind === "recording-island";
-  const aboutWindow = windowKind === "about";
-  const feedbackWindow = windowKind === "feedback";
-  const reportWindow = windowKind === "report";
-  const identity = useMemo(() => {
-    const appInfo = (window as unknown as { desktopAPI?: { appInfo?: { version: string } } })
-      .desktopAPI?.appInfo;
-    return { platform: "desktop" as const, version: appInfo?.version ?? "0.1.0" };
-  }, []);
-
-  // Reflect the main window's maximized state on <html> so layout CSS can keep
-  // a comfortable reading column when the window is maximized.
-  useMaximized();
-
-  return (
-    <ThemeProvider>
-      {/* Keep the native window material (vibrancy) on the appearance and
-          repaint the per-mode appearance customization on every flip — both
-          key off the resolved light/dark, not the system's. Every window kind
-          renders inside ThemeProvider, so the island and subtitle overlay
-          sync too. */}
-      <NativeThemeSync />
-      <AppThemeSync />
-      {recordingIslandWindow ? (
-        <RecordingIslandWindow />
-      ) : subtitleWindow ? (
-        <LiveSubtitleOverlay />
-      ) : aboutWindow ? (
-        <AboutWindow />
-      ) : feedbackWindow ? (
-        <FeedbackWindow getStoredValue={(key) => secureStorage.getItem(key)} />
-      ) : reportWindow ? (
-        <ReportProblemWindow />
-      ) : (
+function renderWindow(kind: string | null) {
+  switch (kind) {
+    case "recording-island": return <RecordingIslandWindow />;
+    case "live-subtitles": return <LiveSubtitleOverlay />;
+    case "about": return <AboutWindow />;
+    case "feedback": return <FeedbackWindow getStoredValue={secureStorage.getItem} />;
+    case "report": return <ReportProblemWindow />;
+    default: {
+      const desktop = (window as Window & { desktopAPI?: DesktopApi }).desktopAPI;
+      return (
         <CoreProvider
           apiBaseUrl={import.meta.env.VITE_API_URL}
           wsUrl={import.meta.env.VITE_WS_URL}
           storage={secureStorage}
-          identity={identity}
+          identity={{ platform: "desktop", version: desktop?.appInfo?.version ?? "0.1.0" }}
           resources={RESOURCES}
-          onLogout={() => {
-            // Logout must not leave credentials in the OS keychain.
-            void clearAuthSecrets();
-          }}
         >
-          <AppContent />
+          <MainWindow />
         </CoreProvider>
-      )}
+      );
+    }
+  }
+}
+
+export default function App() {
+  const kind = new URLSearchParams(window.location.search).get("window");
+  return (
+    <ThemeProvider>
+      <NativeThemeSync />
+      <AppThemeSync />
+      <Suspense>{renderWindow(kind)}</Suspense>
       <Toaster />
     </ThemeProvider>
   );

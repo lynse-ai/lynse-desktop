@@ -1736,7 +1736,7 @@ async fn generate(
     timeout: Duration,
     report: &mut SynthesisControl,
 ) -> Result<String, DirectError> {
-    let body = json!({
+    let mut body = json!({
         "model": direct.model,
         "messages": messages
             .iter()
@@ -1748,6 +1748,14 @@ async fn generate(
         "max_tokens": direct.max_tokens,
         "temperature": 0.1,
     });
+    // GLM thinking models burn tens of thousands of reasoning chars per call
+    // (measured 10k–57k on 2026-11-13) with no citation-accuracy gain — the
+    // heaviest thinkers still failed validation while a light one passed.
+    // The switch is GLM-family specific: OpenAI-compatible endpoints of
+    // other providers must not receive the field.
+    if direct.model.to_ascii_lowercase().starts_with("glm") {
+        body["thinking"] = json!({"type": "disabled"});
+    }
     let mut request = client
         .post(format!(
             "{}/chat/completions",
@@ -1786,14 +1794,60 @@ async fn generate(
         return Err(DirectError::RateLimited);
     }
     if !(200..300).contains(&status) {
+        // Surface the provider's own rejection text (quota, auth, filter):
+        // the status alone hides which lane is actually broken.
+        let body = response
+            .bytes()
+            .await
+            .map(|bytes| {
+                String::from_utf8_lossy(&bytes)
+                    .chars()
+                    .take(200)
+                    .collect::<String>()
+            })
+            .unwrap_or_default();
+        log::warn!("[wiki-direct] provider HTTP {status}: {body}");
         return Err(DirectError::Service(status));
     }
-    let value: Value = match response.json().await {
-        Ok(value) => value,
+    let response_bytes = match response.bytes().await {
+        Ok(bytes) => bytes,
         Err(_) => return Err(DirectError::Unknown),
+    };
+    let value: Value = match serde_json::from_slice(&response_bytes) {
+        Ok(value) => value,
+        Err(_) => {
+            let prefix = String::from_utf8_lossy(&response_bytes)
+                .chars()
+                .take(120)
+                .collect::<String>();
+            log::warn!(
+                "[wiki-direct] non-JSON provider body: status={} bytes={} prefix={prefix:?}",
+                status,
+                response_bytes.len()
+            );
+            return Err(DirectError::Unknown);
+        }
     };
     report.model = Some(direct.model.clone());
     let choice = &value["choices"][0];
+    // Reply shape without payload: the counts tell an empty content (thinking
+    // burn or an instant cut) from a real reply that then fails validation.
+    let message = choice.get("message");
+    log::info!(
+        "[wiki-direct] provider reply status={} finish={:?} content_chars={} reasoning_chars={}",
+        status,
+        choice.get("finish_reason").and_then(Value::as_str),
+        message
+            .and_then(|m| m.get("content"))
+            .and_then(Value::as_str)
+            .map(|c| c.chars().count())
+            .unwrap_or(0),
+        message
+            .and_then(|m| m.get("reasoning_content"))
+            .and_then(Value::as_str)
+            .map(|c| c.chars().count())
+            .unwrap_or(0),
+    );
     if choice.get("finish_reason").and_then(Value::as_str) == Some("length") {
         return Err(DirectError::Truncated);
     }

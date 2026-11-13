@@ -12,7 +12,7 @@ import { todoClosed } from "../todo/todo-api";
  * footer carries "view all records".
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
 import { useNavigation } from "../navigation";
@@ -50,13 +50,14 @@ import {
   InspirationDetailDialog,
   type InspirationRecord,
 } from "../inspiration";
-import { TodoEditPanel } from "../todo";
 import { isCalendarAvailable } from "../todo/todo-api";
 import { useHomeFeed, groupByDay, type DayGroup, type FeedEntry, type FeedKind } from "./feed";
 import { useDailyQuotes, QUOTE_ROTATE_MS } from "./daily-quote";
 import { WeatherStrip } from "./weather-card";
 import { GlobalSearchDialog } from "./global-search-dialog";
 import { PasteLinkDialog } from "./paste-link-dialog";
+
+const TodoEditPanel = lazy(() => import("../todo").then(({ TodoEditPanel }) => ({ default: TodoEditPanel })));
 
 type FeedFilter = "all" | FeedKind;
 
@@ -106,11 +107,15 @@ export function HomePage() {
   // of navigating away. The id resolves against the live store so edits made
   // elsewhere are reflected, and a deleted item closes the panel.
   const [editingTodoId, setEditingTodoId] = useState<string | null>(null);
+  const [openedTodo, setOpenedTodo] = useState(false);
   const editingTodo = editingTodoId
     ? todosStore.todos.find((todo) => todo.id === editingTodoId) ?? null
     : null;
   const calendarAvailable = useMemo(() => isCalendarAvailable(), []);
-  const openTodoDetail = (todo: TodoItem) => setEditingTodoId(todo.id);
+  const openTodoDetail = (todo: TodoItem) => {
+    setOpenedTodo(true);
+    setEditingTodoId(todo.id);
+  };
 
   const startRecording = async () => {
     if (startingRecord) return;
@@ -497,24 +502,28 @@ export function HomePage() {
             todo page) open in place instead of navigating away. */}
         <InspirationDetailDialog />
       </div>
-      <TodoEditPanel
-        todo={editingTodo}
-        calendarAvailable={calendarAvailable}
-        onClose={() => setEditingTodoId(null)}
-        onDelete={() => {
-          if (editingTodo) void todosStore.remove(editingTodo);
-          setEditingTodoId(null);
-        }}
-        onCalendarAdded={() => {
-          void todosStore.load();
-          setEditingTodoId(null);
-        }}
-        onSaved={todosStore.patchLocal}
-        onToggle={(id) => {
-          const todo = todosStore.todos.find((x) => x.id === id);
-          if (todo) todosStore.toggle(todo);
-        }}
-      />
+      <Suspense>
+        {openedTodo && (
+          <TodoEditPanel
+            todo={editingTodo}
+            calendarAvailable={calendarAvailable}
+            onClose={() => setEditingTodoId(null)}
+            onDelete={() => {
+              if (editingTodo) void todosStore.remove(editingTodo);
+              setEditingTodoId(null);
+            }}
+            onCalendarAdded={() => {
+              void todosStore.load();
+              setEditingTodoId(null);
+            }}
+            onSaved={todosStore.patchLocal}
+            onToggle={(id) => {
+              const todo = todosStore.todos.find((x) => x.id === id);
+              if (todo) todosStore.toggle(todo);
+            }}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

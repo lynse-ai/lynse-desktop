@@ -7,15 +7,15 @@ import { startMockServer } from "../fixtures/mock-server";
  * crashing against the mocked backend.
  */
 
-// /todo, /notes, /notifications have no routes in the web app yet (sidebar
-// links exist but the pages 404) — excluded until the routes ship.
 const routes: { path: string; proof: () => string }[] = [
   { path: "/home", proof: () => "h1, main, [role=main]" },
   { path: "/chat", proof: () => 'textarea[placeholder^="Ask about your recordings"]' },
   { path: "/recordings", proof: () => "main, [role=main]" },
   { path: "/meetings", proof: () => "main, [role=main]" },
   { path: "/files", proof: () => "main, [role=main]" },
-  { path: "/knowledge", proof: () => "main, [role=main]" },
+  { path: "/memory/manage", proof: () => "main, [role=main]" },
+  { path: "/notes", proof: () => "main, [role=main]" },
+  { path: "/todo", proof: () => "main, [role=main]" },
 ];
 
 for (const route of routes) {

@@ -27,7 +27,7 @@ beforeEach(async () => {
   vi.resetModules(); vi.clearAllMocks(); window.localStorage.clear(); fake.runs.length = 0;
   fake.history.mockResolvedValue({ messages: [], attachments: [] });
   store = (await import("./use-chat-store")).useChatStore;
-  store.getState().setUserId("wb-user"); store.getState().setActiveAssistant("workbuddy");
+  store.getState().switchUser("wb-user"); store.getState().setActiveAssistant("workbuddy");
 });
 afterEach(() => { store.getState().switchUser(null); });
 function emit(index: number, event: ChatStreamEvent) { fake.runs[index]!.opts!.onEvent(event); }

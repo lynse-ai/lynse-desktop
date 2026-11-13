@@ -11,8 +11,8 @@ import { useAuthStore } from "@lynse/core/auth";
 import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useAppUpdate, getAppInfoSync } from "../app-update";
 import { openAboutWindow } from "../about/open-about";
-import { openReportProblem } from "../diagnostics";
-import { openFeedbackWindow, openChangelog } from "../feedback/open-feedback";
+import { openFeatureRequests, openReportProblem } from "../diagnostics";
+import { openChangelog } from "../feedback/open-feedback";
 import { useUserCredits, useMembership, useUpdateNickname } from "./use-user-credits";
 import { UserActivityHeatmap } from "./user-activity-heatmap";
 import {
@@ -30,7 +30,7 @@ import {
   Settings,
   Palette,
   Globe,
-  HelpCircle,
+  Bug,
   MessageSquarePlus,
   Megaphone,
   Zap,
@@ -289,14 +289,14 @@ export function UserProfileDropdown({
           </DropdownMenuSubContent>
         </DropdownMenuSub>
 
-        {/* ── Help & Feedback ─────────────────────────── */}
+        {/* ── Problem report (software bugs, CNB channel) ── */}
         <DropdownMenuItem onClick={openReportProblem}>
-          <HelpCircle className="size-4 text-muted-foreground" strokeWidth={1.5} />
+          <Bug className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_help_feedback")}</span>
         </DropdownMenuItem>
 
-        {/* ── Feature requests — the FeedLog widget window ── */}
-        <DropdownMenuItem onClick={openFeedbackWindow}>
+        {/* ── Feature suggestions — the in-app FeedLog center ── */}
+        <DropdownMenuItem onClick={() => openFeatureRequests()}>
           <MessageSquarePlus className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_feature_requests")}</span>
         </DropdownMenuItem>

@@ -6,19 +6,14 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
-import { isTauri, isMacDesktop, useMaximized } from "./use-maximized";
-import { ArrowLeft, ArrowRight, PanelLeft, PanelRight, Minus, Square, Copy, X } from "../icons";
+import { isTauri, isMacDesktop } from "./use-maximized";
+import { WindowControls, showWindowControls } from "./window-controls";
+import { ArrowLeft, ArrowRight, PanelLeft, PanelRight } from "../icons";
 import { RecordingTitleBarPill, useRecordingPillVisible } from "./recording-title-pill";
 import { isWebPlatform } from "../platform";
 import { DESKTOP_SIDEBAR_WIDTH, WEB_SIDEBAR_WIDTH } from "./sidebar-metrics";
 
 export const TITLE_BAR_HEIGHT = 34;
-
-// Windows/Linux desktop windows ship without native title bar (see
-// `tauri.windows.conf.json`), so the app bar is the only caption area there and
-// has to carry the window buttons itself. macOS keeps its traffic lights.
-// The login page keys off this too: it mounts a caption band of its own.
-export const showWindowControls = isTauri && !isMacDesktop;
 
 /* ── Slot store ────────────────────────────────────────────────────────────
  * The shell-level bar is one strip for the whole window, but only the mounted
@@ -300,74 +295,4 @@ function BarButton({
 
 function ZoneDivider() {
   return <div data-slot="title-bar-divider" className="mx-1 h-[18px] w-px shrink-0 bg-border/60" aria-hidden="true" />;
-}
-
-/**
- * Caption buttons for the frameless Windows/Linux window. Flush to the top-right
- * corner and full bar height, matching where the OS put them before: the close
- * target sits at the window edge, not inset by the app's own padding.
- *
- * Renders nothing on macOS (native traffic lights) and in the web build. The
- * login page mounts this in its own caption band with `allowMaximize: false` —
- * the welcome window keeps its normal look but the maximize button is a no-op.
- */
-export function WindowControls({ allowMaximize = true }: { allowMaximize?: boolean }) {
-  const { t } = useTranslation();
-  const maximized = useMaximized();
-
-  if (!showWindowControls) return null;
-
-  return (
-    <div
-      className="flex h-full shrink-0 items-stretch self-stretch"
-      data-tauri-drag-region={false}
-    >
-      <CaptionButton label={t("layout.window_minimize")} onClick={() => void getCurrentWindow().minimize()}>
-        <Minus className="size-3.5" strokeWidth={1.5} />
-      </CaptionButton>
-      <CaptionButton
-        label={t(maximized ? "layout.window_restore" : "layout.window_maximize")}
-        onClick={allowMaximize ? () => void getCurrentWindow().toggleMaximize() : undefined}
-      >
-        {maximized ? (
-          <Copy className="size-3.5" strokeWidth={1.5} />
-        ) : (
-          <Square className="size-3.5" strokeWidth={1.5} />
-        )}
-      </CaptionButton>
-      <CaptionButton label={t("layout.window_close")} danger onClick={() => void getCurrentWindow().close()}>
-        <X className="size-3.5" strokeWidth={1.5} />
-      </CaptionButton>
-    </div>
-  );
-}
-
-function CaptionButton({
-  label,
-  danger,
-  onClick,
-  children,
-}: {
-  label: string;
-  danger?: boolean;
-  onClick?: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      data-tauri-drag-region={false}
-      onClick={onClick}
-      className={cn(
-        "flex w-[46px] shrink-0 items-center justify-center transition-colors",
-        danger
-          ? "text-muted-foreground hover:bg-destructive hover:text-destructive-foreground"
-          : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
-      )}
-    >
-      {children}
-    </button>
-  );
 }

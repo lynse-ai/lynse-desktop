@@ -53,10 +53,10 @@ export const APP_THEME_BOOT_SNIPPET = `
       + 0.0722 * linear(parseInt(hex.slice(4, 6), 16));
     style.setProperty("--primary-foreground", luminance > 0.45 ? "#15110a" : "#ffffff");
     var fonts = {
-      sans: '"Inter", "OPPO Sans", "OPPO Sans 4.0", ui-sans-serif, system-ui, sans-serif',
+      sans: '"Inter", var(--font-system)',
       serif: '"Noto Serif SC Variable", "Songti SC", "SimSun", serif',
-      mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace'
-      ,geist: '"Geist Variable", "Inter", "OPPO Sans", "OPPO Sans 4.0", ui-sans-serif, system-ui, sans-serif'
+      mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+      geist: '"Geist Variable", "Inter", var(--font-system)'
     };
     if (fonts[raw.font]) style.setProperty("--font-sans", fonts[raw.font]);
   } catch (error) {}

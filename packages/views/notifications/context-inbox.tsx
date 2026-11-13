@@ -45,19 +45,10 @@ export async function openContextNotification(notification: NotificationItem, pu
   await controller.open(context.item, push);
 }
 
-/** Account isolation remains active even while suggestions are disabled. */
 export function ContextInboxNotifier() {
   const authenticated = useAuthStore((s) => s.isAuthenticated);
   const userId = useAuthStore((s) => s.user?.id || null);
   const enabled = useContextInboxEnabled(authenticated ? userId : null);
-  const identityRef = useRef<string | null>(null);
-  useLayoutEffect(() => {
-    const identity = `${authenticated ? "signed-in" : "signed-out"}:${userId ?? "pending"}`;
-    if (identityRef.current !== identity) {
-      identityRef.current = identity;
-      useChatStore.getState().switchUser(null);
-    }
-  }, [authenticated, userId]);
   return enabled ? <EnabledContextInboxNotifier /> : null;
 }
 
@@ -187,8 +178,7 @@ function EnabledContextInboxNotifier() {
         if (!current()) return;
         if (detail.user_id !== userId || detail.item.status !== "pending") throw new Error("Context suggestion changed");
         const chat = useChatStore.getState();
-        chat.setUserId(userId);
-        chat.hydrate();
+        chat.switchUser(userId);
         chat.setActiveAssistant("lynse");
         chat.clearMessages();
         push("/chat");

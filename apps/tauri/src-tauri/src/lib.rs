@@ -3,19 +3,18 @@ use chrono::{DateTime, Utc};
 use highlandcows_eventkit::{
     CalendarEvent, CalendarFullAccessToken, CalendarStore, EkAuthStatus, EventKitError,
 };
-use percent_encoding::{percent_decode_str, utf8_percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::http::{header, Request, Response, StatusCode};
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::webview::PageLoadEvent;
@@ -31,6 +30,7 @@ mod logging;
 mod todo_state;
 static TODO_STATE_LOCK: Mutex<()> = Mutex::new(());
 mod desktop_mcp;
+mod feedlog;
 mod inspiration_cloud;
 mod inspiration_private;
 mod inspiration_voice;
@@ -56,6 +56,7 @@ mod vault;
 #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 mod audio_contract;
 mod cloud_audio;
+mod local_media;
 // Windows in-process capture engine for dual-track meeting recording
 // (WASAPI loopback + microphone through the shared echo-canceller ABI).
 #[cfg(target_os = "windows")]
@@ -3531,7 +3532,7 @@ fn local_transcription_audio_url(app: AppHandle, id: String) -> CommandResult<Op
 }
 
 /// Audio URL for one track of a dual-channel recording (`file` must be
-/// listed in the record's track manifest — see `media_response_body`).
+/// listed in the record's track manifest — see `local_media::respond`).
 #[tauri::command]
 fn local_transcription_track_audio_url(
     app: AppHandle,
@@ -4371,214 +4372,6 @@ fn update_vault_entry(app: &AppHandle, account: &str, value: Option<String>) -> 
     }
     let raw = serde_json::to_string(&vault).map_err(|error| error.to_string())?;
     secret_set(app, SECRET_VAULT_ACCOUNT, &raw)
-}
-
-fn resolve_local_media_path(app: &AppHandle, id: String) -> CommandResult<PathBuf> {
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| error.to_string())?;
-    // Paths come in two shapes: `<id>` resolves the record's audio file,
-    // `<id>/<file>` picks a concrete asset (a saved inspiration image),
-    // and `staging:<file>` previews an attachment that is not saved yet.
-    let (id, asset_file) = match id.split_once('/') {
-        Some((id, file)) => (id.to_owned(), Some(file.to_owned())),
-        None => (id, None),
-    };
-    if let Some(file) = asset_file.as_deref() {
-        if !is_safe_asset_file_name(file) {
-            return Err("Unsafe local media asset name".to_owned());
-        }
-    }
-    let path = if cloud_audio::is_cached_id(&id) && asset_file.is_none() {
-        cloud_audio::path_for_id(app, &id)?
-    } else if let Some(file) = id.strip_prefix("staging:") {
-        if !is_safe_asset_file_name(file) {
-            return Err("Unsafe local media asset name".to_owned());
-        }
-        data_dir.join("inspirations").join("staging").join(file)
-    } else if let Some(inspiration_uuid) = id.strip_prefix("inspiration:") {
-        let file = match asset_file {
-            Some(file) => file,
-            None => {
-                let index = local_store_path(app, "local-inspirations")?;
-                let record = read_array(&index)?
-                    .into_iter()
-                    .find(|value| value.get("id").and_then(Value::as_str) == Some(id.as_str()))
-                    .ok_or("Unknown local media id")?;
-                record
-                    .get("audio")
-                    .and_then(|audio| audio.get("file"))
-                    .and_then(Value::as_str)
-                    .ok_or("Missing audio file")?
-                    .to_owned()
-            }
-        };
-        if !is_safe_asset_file_name(&file) {
-            return Err("Unsafe local media asset name".to_owned());
-        }
-        let record = get_store_value(app, "local-inspirations", &id)?.ok_or("Unknown inspiration")?;
-        if inspiration_private::protected(&record) { return Err("protected_media_requires_capability".into()); }
-        let allowed = record.get("images").and_then(Value::as_array).is_some_and(|items| items.iter().any(|item| item.get("file").and_then(Value::as_str) == Some(file.as_str()))) || record.get("audio").and_then(|a| a.get("file")).and_then(Value::as_str) == Some(file.as_str());
-        if !allowed { return Err("Unknown inspiration attachment".into()); }
-        inspiration_dir(app, inspiration_uuid)?.join(file)
-    } else {
-        let index = data_dir.join("local-transcriptions").join("index.json");
-        let record = read_array(&index)?
-            .into_iter()
-            .find(|value| value.get("id").and_then(Value::as_str) == Some(id.as_str()))
-            .ok_or("Unknown local media id")?;
-        let source = PathBuf::from(
-            record
-                .get("sourcePath")
-                .and_then(Value::as_str)
-                .ok_or("Missing source path")?,
-        );
-        // `<id>/<file>` on a recording picks a concrete audio track from
-        // the session directory (本机/远端 per-track listening). Only
-        // files listed in the record's track manifest are servable.
-        match asset_file.as_deref() {
-            Some(file) => {
-                let allowed = record
-                    .get("trackManifest")
-                    .and_then(|manifest| manifest.get("tracks"))
-                    .and_then(Value::as_array)
-                    .map(|tracks| {
-                        tracks
-                            .iter()
-                            .any(|track| track.get("file").and_then(Value::as_str) == Some(file))
-                    })
-                    .unwrap_or(false);
-                if !allowed {
-                    return Err("Unknown recording track".to_owned());
-                }
-                source
-                    .parent()
-                    .map(|dir| dir.join(file))
-                    .ok_or("Missing session directory")?
-            }
-            None => source,
-        }
-    };
-    Ok(path)
-}
-
-#[tauri::command]
-async fn local_audio_waveform(
-    app: AppHandle,
-    src: String,
-    record_id: Option<String>,
-) -> CommandResult<audio_contract::waveform::Waveform> {
-    let url = tauri::Url::parse(&src).map_err(|e| e.to_string())?;
-    if !(url.scheme() == "local-media" && url.host_str() == Some("localhost"))
-        && !(["http", "https"].contains(&url.scheme())
-            && url.host_str() == Some("local-media.localhost"))
-    {
-        // The uploaded object path identifies the exact remote audio version.
-        // A bare cloud id is insufficient after an edit or replacement.
-        let record_id = record_id.ok_or("Only local media URLs are supported")?;
-        let records = read_array(&app.path().app_data_dir().map_err(|e| e.to_string())?.join("local-transcriptions").join("index.json"))?;
-        let record = records.iter().find(|record| record.get("cloudFileId").and_then(Value::as_str) == Some(record_id.as_str())).ok_or("No local waveform for this cloud recording")?;
-        let cache = record.get("uploadedWaveform").cloned().ok_or("No waveform for this uploaded audio version")?;
-        let uploaded = serde_json::from_value::<audio_contract::waveform::UploadedWaveform>(cache).map_err(|e| e.to_string())?;
-        return uploaded.for_path(url.path()).ok_or_else(|| "Cloud audio version changed".to_owned());
-    }
-    let id = percent_decode_str(url.path().trim_start_matches('/'))
-        .decode_utf8()
-        .map_err(|e| e.to_string())?
-        .into_owned();
-    let is_cached_cloud = cloud_audio::is_cached_id(&id);
-    let path = resolve_local_media_path(&app, id)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        use audio_contract::waveform::{self, Waveform};
-        if !is_cached_cloud {
-            return waveform::cached(&path);
-        }
-        waveform::cached_with(&path, || waveform::extract(&path).or_else(|_| {
-            let analysis = cloud_audio::analyze(&app, &path)?;
-            Ok(Waveform {
-                peaks: cloud_audio::summarize_peaks(&analysis.peaks, 256),
-                duration_ms: (analysis.duration_sec * 1000.0).round() as u64,
-            })
-        }))
-    })
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-fn media_response_body(app: &AppHandle, request: Request<Vec<u8>>) -> Response<Vec<u8>> {
-    let id = request
-        .uri()
-        .path()
-        .strip_prefix('/')
-        .map(|value| percent_decode_str(value).decode_utf8_lossy().into_owned());
-    if let Some(private) = id.as_deref().filter(|id| id.starts_with("private-cap:") || id.starts_with("private-stage:")) {
-        let result = inspiration_private::media_bytes(app, private);
-        return match result {
-            Ok((bytes,mime)) => Response::builder().header(header::CONTENT_TYPE,mime).header(header::CACHE_CONTROL,"no-store").header("Content-Security-Policy","default-src 'none'").header(header::ACCESS_CONTROL_ALLOW_ORIGIN,"*").body(bytes.to_vec()).unwrap(),
-            Err(_) => Response::builder().status(StatusCode::FORBIDDEN).header(header::CACHE_CONTROL,"no-store").body(Vec::new()).unwrap()
-        };
-    }
-    let result = (|| -> CommandResult<(PathBuf, u64, u64, bool, u64)> {
-        let id = id.ok_or("Missing local media id")?;
-        let path = resolve_local_media_path(app, id)?;
-        let total = fs::metadata(&path).map_err(|error| error.to_string())?.len();
-        let range = request.headers().get(header::RANGE).and_then(|value| value.to_str().ok());
-        let (start, end, partial) = parse_range(range, total);
-        Ok((path, start, end, partial, total))
-    })();
-    let Ok((path, start, end, partial, total)) = result else {
-        return Response::builder()
-            // WKWebView treats custom-scheme fetches as cross-origin; without
-            // this header `fetch("local-media://…")` fails and waveform
-            // decoding (editor + player scrubber) never sees the bytes.
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .status(StatusCode::NOT_FOUND)
-            .body(Vec::new())
-            .unwrap();
-    };
-    let mut file = match File::open(&path) {
-        Ok(file) => file,
-        // Same header as every other error path above: a reply without it is
-        // rejected by the webview as a CORS failure, so a plain "file vanished"
-        // 404 surfaces to the UI as `TypeError: Failed to fetch` and the
-        // waveform sits on "loading audio" forever with no usable reason.
-        Err(_) => return Response::builder()
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .status(StatusCode::NOT_FOUND)
-            .body(Vec::new())
-            .unwrap(),
-    };
-    // Read exactly the requested span. WebKit probes media with offset
-    // ranges (an m4a's moov atom sits at the tail), so a range response must
-    // carry `end - start + 1` bytes — a full-file buffer overruns EOF here
-    // and fails every such load.
-    let span = end.saturating_sub(start).saturating_add(1);
-    let mut body = vec![0; span as usize];
-    if file.seek(SeekFrom::Start(start)).and_then(|_| file.read_exact(&mut body)).is_err() {
-        return Response::builder()
-            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Vec::new())
-            .unwrap();
-    }
-    let mut builder = Response::builder()
-        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(header::CONTENT_TYPE, mime_guess::from_path(&path).first_or_octet_stream().essence_str())
-        .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CONTENT_LENGTH, body.len());
-    if partial {
-        builder = builder.status(StatusCode::PARTIAL_CONTENT).header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{total}"));
-    }
-    builder.body(body).unwrap()
-}
-
-fn parse_range(range: Option<&str>, length: u64) -> (u64, u64, bool) {
-    let Some(range) = range.and_then(|value| value.strip_prefix("bytes=")) else { return (0, length.saturating_sub(1), false) };
-    let Some((start, end)) = range.split_once('-') else { return (0, length.saturating_sub(1), false) };
-    let start = start.parse::<u64>().unwrap_or(0).min(length.saturating_sub(1));
-    let end = end.parse::<u64>().unwrap_or_else(|_| length.saturating_sub(1)).min(length.saturating_sub(1));
-    (start, end.max(start), true)
 }
 
 fn copy_directory(source: &Path, destination: &Path) -> std::io::Result<()> {
@@ -5570,7 +5363,7 @@ pub fn run() {
             // thread or the whole UI stalls while the editor / player loads.
             let app = context.app_handle().clone();
             tauri::async_runtime::spawn_blocking(move || {
-                responder.respond(media_response_body(&app, request));
+                responder.respond(local_media::respond(&app, request));
             });
         })
         .setup(|app| {
@@ -5817,6 +5610,7 @@ pub fn run() {
             report_screenshot::report_stage_attachment,
             cnb_report::report_submit_cnb_issue,
             cnb_report::report_upload_screenshot,
+            feedlog::feedlog_api_request,
             open_logs_folder,
             wechat_auth::wechat_auth_window, wechat_auth::wechat_auth_window_close,
             diagnostics_read_logs, diagnostics_prepare_report, attachment_save,
@@ -5845,7 +5639,7 @@ pub fn run() {
             live_translation::live_translation_update_tray,
             live_translation::live_translation_set_mode,
             live_translation::live_translation_set_sources,
-            local_audio_waveform,
+            local_media::local_audio_waveform,
             live_translation::live_translation_marker, live_translation::live_notes_save,
             meeting_detector::meeting_detector_set_config,
             meeting_detector::meeting_detector_get_state,
@@ -5923,17 +5717,7 @@ mod tests {
         assert_eq!(result, Ok(None));
     }
 
-    #[test]
-    fn parses_partial_ranges() {
-        assert_eq!(parse_range(Some("bytes=10-19"), 100), (10, 19, true));
-        assert_eq!(parse_range(Some("bytes=10-"), 100), (10, 99, true));
-        assert_eq!(parse_range(None, 100), (0, 99, false));
-    }
 
-    /// FunASR ships pinned GGUF artifacts through the generic downloader now.
-    /// The digest/size assertions are the guard: upstream republishes these GGUFs
-    /// under the same repo path, so a silent content change must fail a test here
-    /// rather than surface as a hash-mismatched download on a user's machine.
     #[test]
     fn funasr_is_a_selectable_catalog_engine_with_pinned_gguf_files() {
         let entry = stt_model_entry("funasr", stt::FUNASR_DEFAULT_MODEL_ID).expect("funasr catalog entry");

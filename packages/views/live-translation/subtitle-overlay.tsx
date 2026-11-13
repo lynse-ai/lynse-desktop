@@ -6,6 +6,13 @@ import { initI18n } from "@lynse/core/i18n";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { RESOURCES } from "../locales";
 import { useLiveTranslation } from "./use-live-translation";
+import type { LiveTranslationSegment } from "./types";
+
+function latestSubtitle(segments: LiveTranslationSegment[], source: "system" | "mic") {
+  return segments.findLast((segment) =>
+    segment.source === source && !segment.echoOf && (segment.translatedText || segment.recognizedText),
+  );
+}
 
 export function LiveSubtitleOverlay() {
   // This overlay window renders outside CoreProvider, so bootstrap i18n
@@ -15,15 +22,9 @@ export function LiveSubtitleOverlay() {
   useMemo(() => initI18n({ resources: RESOURCES }), []);
   const { t } = useTranslation();
   const { api, view } = useLiveTranslation();
-  const active = useMemo(() => {
-    const visible = view.segments.filter(
-      (segment) => !segment.echoOf && (segment.translatedText || segment.recognizedText),
-    );
-    return (["system", "mic"] as const).flatMap((source) => {
-      const segment = visible.filter((item) => item.source === source).at(-1);
-      return segment ? [segment] : [];
-    });
-  }, [view.segments]);
+  const active = useMemo(() =>
+    [latestSubtitle(view.segments, "system"), latestSubtitle(view.segments, "mic")]
+      .filter((segment) => segment !== undefined), [view.segments]);
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-transparent p-2">

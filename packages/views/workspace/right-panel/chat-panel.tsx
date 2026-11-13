@@ -34,6 +34,7 @@ export function ChatPanel() {
   const selectItem = useWorkspaceStore((s) => s.selectItem);
   const {
     messages,
+    ready: chatReady,
     isLoading,
     activeConversationId,
     workingConversationIds,
@@ -44,7 +45,7 @@ export function ChatPanel() {
     answerConfirm,
     dismissConfirm,
     setActiveAssistant,
-  } = useChat({ persistHistory: true });
+  } = useChat();
   // The panel is the lynclaw surface: it stays on the cloud channel even
   // while the chat page (the only switcher) is parked on WorkBuddy.
   const workbuddyDetached = useChatStore((s) => s.activeAssistant === "workbuddy");
@@ -70,10 +71,13 @@ export function ChatPanel() {
   const { data: files } = useFiles({ pageSize: 200 });
 
   useLayoutEffect(() => {
-    openFileChat(selectedItemId);
     setInput("");
     setHistoryOpen(false);
-  }, [selectedItemId, openFileChat]);
+  }, [selectedItemId]);
+
+  useLayoutEffect(() => {
+    if (chatReady) openFileChat(selectedItemId);
+  }, [chatReady, selectedItemId, openFileChat]);
 
   const selectedFileName = useMemo(() => {
     if (!selectedItemId) return null;
@@ -84,7 +88,7 @@ export function ChatPanel() {
   useAutoScroll(scrollRef, { resetKey: viewActiveId });
 
   const handleSend = () => {
-    if (!selectedItemId || (!input.trim() && !images.drafts.length) || images.reading || viewLoading) return;
+    if (!chatReady || !selectedItemId || (!input.trim() && !images.drafts.length) || images.reading || viewLoading) return;
     if (getWorkspaceState().selectedItemId !== selectedItemId) return;
     // A selected meeting scopes the assistant to that meeting. The send is
     // pinned to the cloud channel even while the page is on WorkBuddy.
@@ -110,7 +114,7 @@ export function ChatPanel() {
   // Backend-suggested follow-up: sent as the next user turn, same channel and
   // file scoping as the composer.
   const sendFollowUp = (question: string) => {
-    if (!selectedItemId || viewLoading) return;
+    if (!chatReady || !selectedItemId || viewLoading) return;
     if (getWorkspaceState().selectedItemId !== selectedItemId) return;
     sendMessage(question, selectedItemId, true, undefined, {
       assistant: "lynse",
@@ -254,7 +258,7 @@ export function ChatPanel() {
                     )}
                   </>
                 ) : msg.content || msg.error ? (
-                  <ChatReplyBody message={msg} isStreaming={viewLoading} />
+                  <ChatReplyBody message={msg} isStreaming={messageIsStreaming} />
                 ) : msg.attachments?.length || msg.sources?.length || msg.humanSupportLink?.url || msg.connectionRequests?.length ? (
                   // Attachment-only reply (empty body server-side): the cards
                   // render below — don't keep "typing" forever.
@@ -341,7 +345,7 @@ export function ChatPanel() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
               placeholder={t("workspace.chat_placeholder")}
-              disabled={!selectedItemId}
+              disabled={!chatReady || !selectedItemId}
               className="h-8 text-xs"
             />
           </div>

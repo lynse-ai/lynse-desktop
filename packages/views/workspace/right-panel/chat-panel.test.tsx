@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
@@ -28,7 +28,7 @@ vi.mock("@lynse/core/i18n/react", () => ({
 }));
 vi.mock("@lynse/core/auth", () => ({
   useAuthStore: (selector: (state: { user: { id: string } | null }) => unknown) =>
-    selector({ user: { id: "user" } }),
+    selector({ user: { id: "panel-user" } }),
 }));
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -50,6 +50,10 @@ function seedConversations(conversations: ChatConversation[]) {
     messages: active?.messages ?? [],
   });
 }
+
+beforeEach(() => {
+  useChatStore.getState().switchUser("panel-user");
+});
 
 afterEach(() => {
   cleanup();

@@ -11,7 +11,7 @@ import {
   Plus,
   Grid3X3,
   Globe,
-  HelpCircle,
+  Bug,
   Check,
   LogOut,
   Megaphone,
@@ -64,9 +64,9 @@ import { SettingsDialog } from "../settings/settings-dialog";
 import { UploadDialog } from "../workspace/upload-dialog";
 import { TemplateManager } from "../workspace/template-manager";
 import { AppUpdateDialog } from "../app-update-dialog";
-import { openReportProblem } from "../diagnostics";
+import { openFeatureRequests, openReportProblem } from "../diagnostics";
 import { ReportProblemDialog } from "../report-problem-dialog";
-import { openFeedbackWindow, openChangelog } from "../feedback/open-feedback";
+import { openChangelog } from "../feedback/open-feedback";
 import { LayoutTemplate, MessageSquarePlus } from "lucide-react";
 
 function isNavActive(pathname: string, href: string): boolean {
@@ -500,14 +500,14 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
           </DropdownMenuSubContent>
         </DropdownMenuSub>
 
-        {/* ── Help & Feedback ─────────────────────────── */}
+        {/* ── Problem report (software bugs, CNB channel) ── */}
         <DropdownMenuItem onClick={openReportProblem}>
-          <HelpCircle className="size-4 text-muted-foreground" strokeWidth={1.5} />
+          <Bug className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_help_feedback")}</span>
         </DropdownMenuItem>
 
-        {/* ── Feature requests (FeedLog widget window) ── */}
-        <DropdownMenuItem onClick={openFeedbackWindow}>
+        {/* ── Feature suggestions (in-app FeedLog center) ── */}
+        <DropdownMenuItem onClick={() => openFeatureRequests()}>
           <MessageSquarePlus className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_feature_requests")}</span>
         </DropdownMenuItem>

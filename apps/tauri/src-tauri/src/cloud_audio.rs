@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 use tauri::{ipc::Channel, AppHandle};
 use tokio::io::AsyncWriteExt;
@@ -13,7 +15,24 @@ const PREFIX: &str = "cloud-audio:";
 const EXTENSIONS: &[&str] = &[
     "mp3", "wav", "m4a", "mp4", "flac", "aac", "ogg", "opus", "webm", "mov", "caf", "aiff", "amr",
 ];
-static DOWNLOAD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+type DownloadLock = tokio::sync::Mutex<()>;
+static DOWNLOADS: OnceLock<Mutex<HashMap<String, Weak<DownloadLock>>>> = OnceLock::new();
+static TRANSFERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(3);
+static CLIENT: OnceLock<CommandResult<reqwest::Client>> = OnceLock::new();
+
+fn download_lock(digest: &str) -> CommandResult<Arc<DownloadLock>> {
+    let mut locks = DOWNLOADS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| "Audio download registry unavailable")?;
+    locks.retain(|_, lock| lock.strong_count() != 0);
+    if let Some(lock) = locks.get(digest).and_then(Weak::upgrade) {
+        return Ok(lock);
+    }
+    let lock = Arc::new(DownloadLock::new(()));
+    locks.insert(digest.to_owned(), Arc::downgrade(&lock));
+    Ok(lock)
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,7 +104,8 @@ pub(crate) async fn cloud_audio_download(
 ) -> CommandResult<String> {
     let dir = app_data_dir(&app)?.join("cloud-audio");
     let digest = key.digest();
-    let _download = DOWNLOAD.lock().await;
+    let lock = download_lock(&digest)?;
+    let _download = lock.lock().await;
     if let Some(id) = find_download(&dir, &digest) {
         return Ok(id);
     }
@@ -94,13 +114,15 @@ pub(crate) async fn cloud_audio_download(
         .as_deref()
         .filter(|ext| EXTENSIONS.contains(ext))
         .unwrap_or("m4a");
-    let client = reqwest::Client::builder()
+    let _transfer = TRANSFERS.acquire().await.map_err(|_| "Audio download queue unavailable")?;
+    let client = CLIENT.get_or_init(|| reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
         .read_timeout(Duration::from_secs(45))
         .build()
-        .map_err(|error| error.without_url().to_string())?;
+        .map_err(|error| error.without_url().to_string()))
+        .as_ref().map_err(Clone::clone)?;
     let path = download_to(
-        &client,
+        client,
         &url,
         &dir.join(format!("{digest}.{ext}")),
         |progress| {

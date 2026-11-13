@@ -16,11 +16,6 @@ import { dirname, join, relative, resolve, extname, sep } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "packages", "views");
-const LOCALE_DIR = join(ROOT, "locales");
-// Every locale registered in packages/views/locales/index.ts. `zh-Hant` and
-// `ko` were missing from this list, so translations added to the other three
-// silently shipped without them.
-const LOCALES = ["en", "zh", "zh-Hant", "ja", "ko"];
 
 /** Load trusted, local locale modules with their relative imports. */
 const moduleCache = new Map();
@@ -41,10 +36,6 @@ function loadModule(path) {
   moduleCache.set(path, module.exports);
   return module.exports;
 }
-function loadLocale(name) {
-  return loadModule(join(LOCALE_DIR, `${name}.ts`)).default;
-}
-
 function flatten(obj, prefix = "", out = new Map()) {
   for (const [k, v] of Object.entries(obj)) {
     const path = prefix ? `${prefix}.${k}` : k;
@@ -54,15 +45,10 @@ function flatten(obj, prefix = "", out = new Map()) {
   return out;
 }
 
-// Match the runtime resource merge in packages/views/locales/index.ts.
-const workbench = loadModule(join(ROOT, "workbench", "locales.ts")).workbenchLocales;
-const inspirationPrivacy = loadModule(join(ROOT, "inspiration", "privacy-locales.ts")).inspirationPrivacyLocales;
+const { RESOURCES } = loadModule(join(ROOT, "locales", "index.ts"));
+const LOCALES = Object.keys(RESOURCES);
 const flat = Object.fromEntries(
-  LOCALES.map((l) => [l, flatten({
-    ...loadLocale(l),
-    workbench: workbench[l === "zh" ? "zh-Hans" : l],
-    inspiration_private: inspirationPrivacy[l === "zh" ? "zh-Hans" : l],
-  })])
+  LOCALES.map((locale) => [locale, flatten(RESOURCES[locale].translation)]),
 );
 
 // ---- Collect call sites -----------------------------------------------------

@@ -2,41 +2,35 @@
 
 import i18next from "i18next";
 import { toast } from "sonner";
+import { FEEDLOG_BASE_URL } from "@lynse/core/api";
 import { getDesktopAppApi } from "../app-update";
 import { isMacDesktop } from "../layout/use-maximized";
 
-/** The self-hosted FeedLog workspace (Cloudflare, custom domain). */
-export const FEEDLOG_BASE_URL = "https://feedback.lynse.ai";
-
-/** Public board (ideas portal) — the browser-tab fallback surface. */
-export const FEEDBACK_BOARD_URL = FEEDLOG_BASE_URL;
+/** Public suggestion board (the FeedLog portal) — the browser-tab surface. */
+export const FEEDLOG_BOARD_URL = FEEDLOG_BASE_URL;
 
 /** Public changelog page — version announcements published in FeedLog. */
 export const CHANGELOG_URL = `${FEEDLOG_BASE_URL}/changelog`;
 
 /**
- * Open the feedback board: a standalone OS window hosting the FeedLog
- * widget on desktop (created by the Rust `open_feedback_window` command,
- * mirroring the About window), the public board in a browser tab elsewhere.
- * `title` must be localized and only the frontend knows the active locale,
- * so it is resolved here and passed to the host command.
+ * Open the standalone FeedLog widget window (macOS OS window via the Rust
+ * `open_feedback_window` command). No menu entry points here since the
+ * in-app suggestion center took over, but the window chain stays wired —
+ * call sites can use it as a "browse the board" surface later.
  */
 export function openFeedbackWindow(): void {
-  // macOS-only OS window, same split as `openAboutWindow`: the Windows popup
-  // never appears, so Windows/Linux open the public board in the browser.
   const api = isMacDesktop ? getDesktopAppApi() : null;
   if (api?.openFeedbackWindow) {
     const title = i18next.isInitialized ? i18next.t("feedback.title") : "Lynse";
-    // Never swallow a failed host command (the OS window failing to appear
-    // was a real bug report on Windows): surface the error and fall back to
-    // the public board in a browser tab.
+    // Never swallow a failed host command: surface the error and fall back
+    // to the public board in a browser tab.
     api.openFeedbackWindow(title).catch((error) => {
       toast.error(String(error));
-      window.open(FEEDBACK_BOARD_URL, "_blank", "noopener");
+      window.open(FEEDLOG_BOARD_URL, "_blank", "noopener");
     });
     return;
   }
-  window.open(FEEDBACK_BOARD_URL, "_blank", "noopener");
+  window.open(FEEDLOG_BOARD_URL, "_blank", "noopener");
 }
 
 /** Open the FeedLog changelog (version announcements) in a browser tab. */

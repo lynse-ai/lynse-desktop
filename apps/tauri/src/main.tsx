@@ -1,5 +1,4 @@
 import ReactDOM from "react-dom/client";
-import App from "./App";
 import "./globals.css";
 import { installTauriBridge } from "./tauri-bridge";
 import { installLogger } from "./logger";
@@ -44,7 +43,7 @@ async function bootstrap() {
   // mounts; index.html already painted the bare color trio pre-bundle.
   initAppTheme();
 
-  await installTauriBridge();
+  const [{ default: App }] = await Promise.all([import("./App"), installTauriBridge(windowKind)]);
   syncWindowEffects();
   ReactDOM.createRoot(document.getElementById("root")!).render(<App />);
 }

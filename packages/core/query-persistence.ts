@@ -66,6 +66,7 @@ function trimRows(data: unknown, maxRows: number): unknown {
 }
 
 function collectEntries(client: QueryClient): PersistedQueryEntry[] {
+  const oldest = Date.now() - MAX_AGE_MS;
   return client
     .getQueryCache()
     .getAll()
@@ -73,21 +74,22 @@ function collectEntries(client: QueryClient): PersistedQueryEntry[] {
       (query: Query) =>
         isPersistableListKey(query.queryKey) &&
         isListPayload(query.state.data) &&
+        query.state.dataUpdatedAt >= oldest &&
         !query.state.isInvalidated,
     )
     .slice(0, MAX_QUERIES)
     .map((query) => ({
       key: [...query.queryKey],
-      data: trimRows(query.state.data, MAX_ROWS_PER_LIST),
+      data: query.state.data,
       dataUpdatedAt: query.state.dataUpdatedAt,
     }));
 }
 
-function writeCache(client: QueryClient, storage: StorageAdapter, maxRows: number): boolean {
+function writeCache(queries: PersistedQueryEntry[], storage: StorageAdapter, maxRows: number): boolean {
   const payload: PersistedPayload = {
     version: 1,
     savedAt: Date.now(),
-    queries: collectEntries(client).map((entry) => ({
+    queries: queries.map((entry) => ({
       ...entry,
       data: trimRows(entry.data, maxRows),
     })),
@@ -112,15 +114,21 @@ export function attachListQueryPersistence(
   const flush = () => {
     if (!dirty) return;
     dirty = false;
+    const entries = collectEntries(client);
+    if (entries.length === 0) {
+      clearListQueryCache(storage);
+      return;
+    }
     // First attempt at full size; on quota pressure retry once with half
     // the rows, then give up silently.
-    if (!writeCache(client, storage, MAX_ROWS_PER_LIST)) {
-      writeCache(client, storage, Math.floor(MAX_ROWS_PER_LIST / 2));
+    if (!writeCache(entries, storage, MAX_ROWS_PER_LIST)) {
+      writeCache(entries, storage, Math.floor(MAX_ROWS_PER_LIST / 2));
     }
   };
   const cache = client.getQueryCache();
   const unsubscribe = cache.subscribe((event: QueryCacheNotifyEvent) => {
-    if (event.type !== "updated") return;
+    if (event.type !== "updated" || !isPersistableListKey(event.query.queryKey)) return;
+    if (event.action.type !== "success" && event.action.type !== "invalidate") return;
     dirty = true;
     if (timer) return;
     timer = setTimeout(() => {
@@ -197,7 +205,7 @@ export function hydrateListQueryCache(client: QueryClient, storage: StorageAdapt
 
   const now = Date.now();
   for (const entry of payload.queries) {
-    if (!Array.isArray(entry.key) || !isPersistableListKey(entry.key)) continue;
+    if (!Array.isArray(entry?.key) || !isPersistableListKey(entry.key)) continue;
     if (typeof entry.dataUpdatedAt !== "number" || now - entry.dataUpdatedAt > MAX_AGE_MS) continue;
     if (!isListPayload(entry.data)) continue;
     client.setQueryData(entry.key, entry.data, { updatedAt: entry.dataUpdatedAt });

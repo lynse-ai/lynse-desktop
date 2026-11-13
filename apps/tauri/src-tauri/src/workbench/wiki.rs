@@ -36,7 +36,7 @@ pub(super) mod tasks;
 mod topic_archive;
 #[path = "wiki_topics.rs"]
 mod topic_store;
-pub(super) use automation::{ai_manifest, validate_automation};
+pub(super) use automation::{ai_manifest, allows as allows_source, validate_automation};
 pub(super) fn in_automatic_scope(doc: &Document, manifest: &Manifest) -> bool {
     manifest.wiki_automation.is_some() && automation::allows(doc, manifest)
 }
@@ -456,7 +456,7 @@ fn tolerate_compilation_failure(error: &str) -> bool {
 
 pub(super) const TEXT_MODEL_CHANGED: &str = "Text model changed; processing will resume";
 
-fn require_task_model(state: &WorkbenchState, session: &Session, task: &str) -> CommandResult<()> {
+pub(super) fn require_task_model(state: &WorkbenchState, session: &Session, task: &str) -> CommandResult<()> {
     if task != "graph_extract"
         && current(state)?
             .model_override
@@ -1743,6 +1743,16 @@ pub(super) async fn synthesize(
         return Err("No Markdown meeting text is available for AI processing".into());
     }
     request_model(app, session, task, json!({"topic":query,"sources":sources})).await
+}
+
+pub(super) async fn synthesize_source(
+    app: &AppHandle,
+    session: &Session,
+    task: &str,
+    source: Value,
+    query: &str,
+) -> CommandResult<Value> {
+    request_model(app, session, task, json!({"topic":query,"sources":[source]})).await
 }
 pub(super) fn sources_for(root: &Path, manifest: &Manifest) -> Vec<Document> {
     manifest

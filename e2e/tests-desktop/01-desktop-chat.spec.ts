@@ -20,7 +20,7 @@ test.describe("desktop chat panel", () => {
     // Notes workspace surface once a note is open (title bar → Ask AI).
     await page
       .getByRole("complementary")
-      .getByRole("button", { name: "Notes" })
+      .getByRole("button", { name: "Notes", exact: true })
       .click();
     await page.getByRole("button", { name: /Q3 review\.m4a/ }).click();
     const askAi = page.getByTitle("Ask AI");

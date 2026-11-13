@@ -103,6 +103,7 @@ export class ApiClient {
   }
 
   setApiKey(apiKey: string | null) {
+    if (apiKey !== this.apiKey) this.clearAgentSession();
     this.apiKey = apiKey;
   }
 
@@ -237,6 +238,17 @@ export class ApiClient {
     }
   }
 
+  private requireCurrentRequest(revision: number, signal?: AbortSignal | null) {
+    if (signal?.aborted) throw new DOMException("Request aborted", "AbortError");
+    if (revision !== this.sessionRevision) throw new ApiError(401, "Session changed or unavailable");
+  }
+
+  private handleUnauthorized(baseUrl: string, path: string, status: number) {
+    if (baseUrl !== this.backendUrl) return;
+    console.warn(`[auth] Session rejected (${status}) at ${path.split("?", 1)[0]}`);
+    this.onUnauthorized?.();
+  }
+
   private async request<T>(
     path: string,
     options: RequestOptions = {},
@@ -251,10 +263,9 @@ export class ApiClient {
     if ((requireToken && !requestToken) || (sessionToken !== undefined && sessionToken !== requestToken)) {
       throw new ApiError(401, "Session changed or unavailable");
     }
-    if (init.signal?.aborted) throw new DOMException("Request aborted", "AbortError");
+    this.requireCurrentRequest(revision, init.signal);
     if (agentChat) await this.waitForAgentSession(revision, init.signal);
-    if (init.signal?.aborted) throw new DOMException("Request aborted", "AbortError");
-    if (requireToken && (this.token !== requestToken || this.sessionRevision !== revision)) throw new ApiError(401, "Session changed or unavailable");
+    this.requireCurrentRequest(revision, init.signal);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       // Tell the proxy where to forward
@@ -278,29 +289,15 @@ export class ApiClient {
       ...init,
       headers,
     });
-    if (requireToken && (this.token !== requestToken || this.sessionRevision !== revision)) {
-      throw new ApiError(401, "Session changed or unavailable");
-    }
+    this.requireCurrentRequest(revision, init.signal);
 
-    if (res.status === 401) {
-      if (authScope === "session") {
-        // Name the culprit request: a silent onUnauthorized here reads as a
-        // spontaneous logout with zero trace (the login-kick investigation).
-        console.warn(`[auth-kick] HTTP 401 on ${init.method ?? "GET"} ${baseUrl}${path} (scope=${authScope}, hadToken=${!!requestToken})`);
-        // A rejection from a NON-main backend (the AI-assistant deployment)
-        // reflects that deployment's view of the token — its host whitelist,
-        // its binding state — not the session itself. The main gateway
-        // enforces its own expiry, so dropping the session here only ever
-        // logged users out while their Lynse session was still alive (the
-        // context-inbox 401 one second after every login).
-        if (baseUrl === this.backendUrl) {
-          this.onUnauthorized?.();
-        }
-        throw new ApiError(res.status, "Unauthorized");
-      }
+    if (res.status === 401 && authScope === "session") {
+      this.handleUnauthorized(baseUrl, path, res.status);
+      throw new ApiError(res.status, "Unauthorized");
     }
     if (!res.ok) {
       const body = await res.text().catch(() => "");
+      this.requireCurrentRequest(revision, init.signal);
       // Gateways often wrap failures in the same { code, msg } envelope even
       // with a non-200 HTTP status — surface `msg` instead of the raw JSON.
       let message = body || res.statusText;
@@ -324,12 +321,9 @@ export class ApiClient {
       throw new ApiError(res.status, message, data);
     }
     if (res.status === 204) return undefined as T;
-    if (responseType === "blob") return await res.blob() as T;
-
-    const json = await res.json();
-    if (requireToken && (this.token !== requestToken || this.sessionRevision !== revision)) {
-      throw new ApiError(401, "Session changed or unavailable");
-    }
+    const json = responseType === "blob" ? await res.blob() : await res.json();
+    this.requireCurrentRequest(revision, init.signal);
+    if (responseType === "blob") return json as T;
 
     if (json && typeof json === "object" && "code" in json && "data" in json) {
       if (json.code !== 200) {
@@ -346,13 +340,7 @@ export class ApiClient {
           json.code === GATEWAY_SESSION_EXPIRED_CODE ||
           /not logged in|session has expired/i.test(envelopeMessage)
         )) {
-          console.warn(`[auth-kick] envelope ${json.code} "${envelopeMessage}" on ${init.method ?? "GET"} ${baseUrl}${path} (scope=${authScope}, hadToken=${!!requestToken})`);
-          // Non-main backends judge the token through their own host
-          // whitelist/binding — their verdict must not drop the session
-          // (see the HTTP 401 branch above for the full rationale).
-          if (baseUrl === this.backendUrl) {
-            this.onUnauthorized?.();
-          }
+          this.handleUnauthorized(baseUrl, path, json.code);
         }
         // `data` may carry useful fields even on failure (e.g. `cooldown`
         // alongside error.operation.too.frequent).
@@ -449,36 +437,33 @@ export class ApiClient {
 
     const url = apiRequestUrl(baseUrl, path);
 
-    (async () => {
+    void (async () => {
+      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
       try {
         if ((agentChat && !requestToken) || (options?.sessionToken !== undefined && options.sessionToken !== requestToken)) {
           throw new ApiError(401, "Session changed or unavailable");
         }
         if (agentChat) await this.waitForAgentSession(revision, controller.signal);
-        if (controller.signal.aborted) throw new DOMException("Request aborted", "AbortError");
-        if (agentChat && (this.token !== requestToken || this.sessionRevision !== revision)) throw new ApiError(401, "Session changed or unavailable");
+        this.requireCurrentRequest(revision, controller.signal);
         const res = await fetch(url, {
           method: "POST",
           headers,
           body: JSON.stringify(body),
           signal: controller.signal,
         });
-        if (agentChat && (this.token !== requestToken || this.sessionRevision !== revision)) throw new ApiError(401, "Session changed or unavailable");
+        this.requireCurrentRequest(revision, controller.signal);
 
         if (res.status === 401) {
-          console.warn(`[auth-kick] HTTP 401 on stream POST ${baseUrl}${path} (agentChat=${agentChat}, hadToken=${!!requestToken})`);
-          if (baseUrl === this.backendUrl) {
-            this.onUnauthorized?.();
-          }
+          this.handleUnauthorized(baseUrl, path, res.status);
           throw new ApiError(res.status, "Unauthorized");
         }
         if (!res.ok) {
           const text = await res.text().catch(() => "");
-          console.error(`[api-stream] ${res.status} response:`, text.slice(0, 500));
+          this.requireCurrentRequest(revision, controller.signal);
           throw new ApiError(res.status, text || res.statusText);
         }
 
-        const reader = res.body?.getReader();
+        reader = res.body?.getReader();
         if (!reader) throw new Error("No response body");
 
         const decoder = new TextDecoder();
@@ -486,7 +471,7 @@ export class ApiClient {
 
         while (true) {
           const { done, value } = await reader.read();
-          if (agentChat && (this.token !== requestToken || this.sessionRevision !== revision)) throw new ApiError(401, "Session changed or unavailable");
+          this.requireCurrentRequest(revision, controller.signal);
           if (done) break;
 
           buffer += decoder.decode(value, { stream: true });
@@ -512,12 +497,18 @@ export class ApiClient {
           }
         }
       } catch (err) {
+        controller.abort();
         if ((err as Error).name === "AbortError") {
           onComplete?.();
           return;
         }
         onError?.(err as Error);
         return;
+      } finally {
+        if (reader) {
+          if (controller.signal.aborted) void reader.cancel().catch(() => {});
+          reader.releaseLock();
+        }
       }
 
       onComplete?.();

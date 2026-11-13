@@ -232,12 +232,12 @@ test("knowledge settings preserve graph, directory and topic reading state",asyn
 });
 
 test("Chinese knowledge settings reflow at narrow widths, 200 percent zoom and RTL",async({page,mockServer})=>{
+  await page.setViewportSize({width:680,height:900});
   await openWorkspace(page,mockServer.url);await installAutomaticWiki(page);await openWiki(page);
   await page.evaluate(async url=>{await (await import(url)).changeLanguage("zh-Hans");},`/@fs${resolve(__dirname,"../../packages/core/i18n/react.ts")}`);
   await page.getByRole("button",{name:"知识库设置",exact:true}).click();
   const settings=page.getByRole("main",{name:"知识库设置",exact:true});
   await expect(settings.getByRole("heading",{name:"整理范围与自动整理",exact:true})).toBeVisible();
-  await settings.getByText("高级设置",{exact:true}).click();
   for(const zoom of ["1","2"]){
     await page.setViewportSize({width:zoom==="1"?680:1280,height:900});
     await page.evaluate(zoom=>{document.documentElement.style.zoom=zoom;},zoom);
@@ -247,6 +247,7 @@ test("Chinese knowledge settings reflow at narrow widths, 200 percent zoom and R
     await expect(settings.getByRole("button",{name:"保存范围",exact:true})).toBeInViewport();
     await page.screenshot({path:test.info().outputPath(`knowledge-settings-zh-zoom-${zoom}.png`),animations:"disabled"});
   }
+  await settings.getByText("高级设置",{exact:true}).click();
   await page.evaluate(()=>{document.documentElement.dir="rtl";});
   expect(await settings.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
   await page.screenshot({path:test.info().outputPath("knowledge-settings-rtl.png"),animations:"disabled"});

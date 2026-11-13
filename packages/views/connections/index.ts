@@ -12,7 +12,11 @@ export {
 export { ConnectionsCard } from "./connections-card";
 export { ReminderSettingsCard } from "./reminder-settings-card";
 export { useSummaryExport } from "./export-summary";
-export { SummaryExportMenuItem } from "./summary-export-menu-item";
+export {
+  SummaryExportMenuItem,
+  useSummaryExportAvailability,
+  type SummaryExportAvailability,
+} from "./summary-export-menu-item";
 export { ProviderRow, type ProviderKind, type ProviderRowProps } from "./provider-row";
 export {
   cancelConnect,

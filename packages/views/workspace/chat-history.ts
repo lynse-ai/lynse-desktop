@@ -10,7 +10,7 @@ export interface StoredChatHistory {
 }
 
 function storageKey(userId: string): string {
-  return `${CHAT_HISTORY_STORAGE_PREFIX}:${userId || "user"}`;
+  return `${CHAT_HISTORY_STORAGE_PREFIX}:${userId}`;
 }
 
 function isChatMessage(value: unknown): value is ChatMessage {
@@ -78,9 +78,9 @@ export function conversationTitle(firstMessage: string): string {
 
 /** Persisted chat assistant choice ("小灵助手" vs WorkBuddy), per user. */
 export function loadAssistantChoice(userId: string): ChatAssistant {
-  if (typeof window === "undefined") return "lynse";
+  if (!userId || typeof window === "undefined") return "lynse";
   try {
-    return window.localStorage.getItem(`${ASSISTANT_STORAGE_PREFIX}:${userId || "user"}`) ===
+    return window.localStorage.getItem(`${ASSISTANT_STORAGE_PREFIX}:${userId}`) ===
       "workbuddy"
       ? "workbuddy"
       : "lynse";
@@ -90,10 +90,10 @@ export function loadAssistantChoice(userId: string): ChatAssistant {
 }
 
 export function saveAssistantChoice(userId: string, assistant: ChatAssistant): void {
-  if (typeof window === "undefined") return;
+  if (!userId || typeof window === "undefined") return;
   try {
     window.localStorage.setItem(
-      `${ASSISTANT_STORAGE_PREFIX}:${userId || "user"}`,
+      `${ASSISTANT_STORAGE_PREFIX}:${userId}`,
       assistant,
     );
   } catch {
@@ -102,7 +102,7 @@ export function saveAssistantChoice(userId: string, assistant: ChatAssistant): v
 }
 
 export function loadChatHistory(userId: string): StoredChatHistory {
-  if (typeof window === "undefined") {
+  if (!userId || typeof window === "undefined") {
     return { activeConversationId: null, conversations: [] };
   }
   try {
@@ -124,7 +124,7 @@ export function loadChatHistory(userId: string): StoredChatHistory {
 }
 
 export function saveChatHistory(userId: string, history: StoredChatHistory): void {
-  if (typeof window === "undefined") return;
+  if (!userId || typeof window === "undefined") return;
   const conversations = history.conversations.map((conversation) => ({
     ...conversation,
     messages: messagesForStorage(conversation.messages),

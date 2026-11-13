@@ -9,10 +9,10 @@ import type { ContextInboxItem } from "@lynse/core/api";
 import { ContextInboxNotifier, actOnContextNotification, isBenignContextOpenError, openContextNotification } from "./context-inbox";
 import { NotificationList } from "./notification-list";
 import { useNotificationStore } from "./use-notification-store";
-import { useChat } from "../workspace/hooks/use-chat";
+import { useChatSession } from "../workspace/hooks/use-chat";
 import { setContextInboxEnabled } from "./context-inbox-preferences";
 
-const fakeChat = vi.hoisted(() => ({ setUserId: vi.fn(), switchUser: vi.fn(), hydrate: vi.fn(), setChatVisible: vi.fn(), setActiveAssistant: vi.fn(), clearMessages: vi.fn(), sendMessage: vi.fn(), unreadCounts: {} }));
+const fakeChat = vi.hoisted(() => ({ switchUser: vi.fn(), setActiveAssistant: vi.fn(), clearMessages: vi.fn(), sendMessage: vi.fn(), unreadCounts: {} }));
 vi.mock("../workspace/hooks/use-chat-store", () => ({
   useChatStore: Object.assign((selector: (state: typeof fakeChat) => unknown) => selector(fakeChat), { getState: () => fakeChat }),
 }));
@@ -35,7 +35,8 @@ let canDisplay: boolean;
 const observers: IntersectionObserverCallback[] = [];
 
 function start(showList = false) {
-  return render(<QueryClientProvider client={queryClient}><ContextInboxNotifier />{showList && <NotificationList />}</QueryClientProvider>);
+  function Session() { useChatSession(); return null; }
+  return render(<QueryClientProvider client={queryClient}><Session /><ContextInboxNotifier />{showList && <NotificationList />}</QueryClientProvider>);
 }
 function actionCalls() {
   return fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/actions"));
@@ -250,9 +251,8 @@ describe("persistent context inbox bridge", () => {
     await openContextNotification(useNotificationStore.getState().items[0]!, push);
     expect(push).toHaveBeenCalledWith("/chat");
     expect(fakeChat.sendMessage).toHaveBeenCalledWith("notifications.context_open_prompt:proposal-1", undefined, false, undefined, { assistant: "lynse" });
-    expect(fakeChat.hydrate).toHaveBeenCalled();
-    expect(fakeChat.setUserId.mock.invocationCallOrder[0]).toBeLessThan(fakeChat.hydrate.mock.invocationCallOrder[0]!);
-    expect(fakeChat.hydrate.mock.invocationCallOrder[0]).toBeLessThan(fakeChat.sendMessage.mock.invocationCallOrder[0]!);
+    expect(fakeChat.switchUser).toHaveBeenLastCalledWith("u1");
+    expect(fakeChat.switchUser.mock.invocationCallOrder.at(-1)).toBeLessThan(fakeChat.sendMessage.mock.invocationCallOrder[0]!);
     expect(actionCalls()).toHaveLength(0);
     userId = "u2";
     fakeChat.sendMessage.mockClear();
@@ -268,10 +268,7 @@ describe("persistent context inbox bridge", () => {
     await waitFor(() => expect(auth.getState().user?.id).toBe("u1"));
     await waitFor(() => expect(useNotificationStore.getState().items).toHaveLength(1));
     await openContextNotification(useNotificationStore.getState().items[0]!, vi.fn());
-    function ChatMount() { useChat(); return null; }
-    render(<ChatMount />);
-    expect(fakeChat.setUserId).toHaveBeenCalledWith("u1");
-    expect(fakeChat.setUserId.mock.calls.at(-1)?.[0]).toBe("u1");
+    expect(fakeChat.switchUser).toHaveBeenLastCalledWith("u1");
     expect(fakeChat.sendMessage).toHaveBeenCalled();
     expect(auth.getState().user?.id).not.toBe("user");
   });
@@ -291,7 +288,7 @@ describe("persistent context inbox bridge", () => {
       resolveDetail(Response.json({ status: "ok", user_id: "u1", item }));
       await opening.catch(() => undefined);
     });
-    expect(fakeChat.hydrate).not.toHaveBeenCalled();
+    expect(fakeChat.switchUser).toHaveBeenLastCalledWith("u2");
     expect(fakeChat.sendMessage).not.toHaveBeenCalled();
   });
 

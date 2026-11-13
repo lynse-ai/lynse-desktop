@@ -1,7 +1,7 @@
 {
   "name": "@lynse/tauri",
   "productName": "Lynse",
-  "version": "1.2.9",
+  "version": "1.2.10",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,6 +16,7 @@
     "test:audio-capture": "bash ./audio-capture/scripts/test-audio-capture.sh",
     "tauri": "tauri",
     "check": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "publish:cloudbase": "bash ./scripts/publish-cloudbase.sh",
     "mirror:cloudbase": "bash ./scripts/mirror-release-to-cloudbase.sh"

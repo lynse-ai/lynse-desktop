@@ -50,6 +50,7 @@ export {
   Plus,             // Create / Add
   MessageSquarePlus, // Feature request / feedback board entry
   Megaphone,        // Version updates / changelog entry
+  Bug,              // Problem report (software bugs) entry
   Search,           // Search inputs
   Filter,           // Filter controls
   Send,             // Send message (chat)

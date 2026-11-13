@@ -27,9 +27,7 @@ import { editorViewCtx } from "@milkdown/kit/core";
 import { TextSelection } from "@milkdown/kit/prose/state";
 import { resolveCommand, type MarkdownEditorAction } from "./editor-actions";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { getAuthStore } from "@lynse/core/auth";
-import { getWorkspaceState } from "../store";
-import { useChatStore } from "../hooks/use-chat-store";
+import { sendSelectedNotePrompt } from "../hooks/use-chat";
 import { buildSelectionPrompt, SELECTION_AI_ACTIONS, type SelectionAiActionId } from "./selection-ai";
 
 interface DockedMarkdownToolbarProps {
@@ -220,23 +218,6 @@ export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
     [],
   );
 
-  /**
-   * Hand a built prompt to 小灵 in the side panel — same channel and file
-   * scoping the floating toolbar used before it.
-   */
-  const sendSelectionPrompt = useCallback((prompt: string) => {
-    const fileId = getWorkspaceState().selectedItemId;
-    if (!fileId) return;
-    const ws = getWorkspaceState();
-    if (!ws.chatPanelVisible) ws.toggleChatPanel();
-    const chat = useChatStore.getState();
-    chat.setUserId(getAuthStore()?.getState().user?.id ?? "user");
-    chat.hydrate();
-    chat.setActiveAssistant("lynse");
-    chat.openFileChat(fileId);
-    chat.sendMessage(prompt, fileId, true, undefined, { assistant: "lynse", contextFileId: fileId });
-  }, []);
-
   /** Read the saved selection and dispatch the picked AI action as a prompt. */
   const runAiAction = useCallback(
     (actionId: SelectionAiActionId) => {
@@ -254,9 +235,9 @@ export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
       });
       const passage = selection.trim();
       if (!passage) return;
-      sendSelectionPrompt(buildSelectionPrompt(t(`toolbar.ai_prompt_${actionId}`), passage));
+      sendSelectedNotePrompt(buildSelectionPrompt(t(`toolbar.ai_prompt_${actionId}`), passage));
     },
-    [editor, t, sendSelectionPrompt],
+    [editor, t],
   );
 
   const active = (block: string) => snapshot.block === block;

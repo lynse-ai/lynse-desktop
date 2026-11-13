@@ -19,7 +19,7 @@ use std::{
     fs,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Mutex,
     },
 };
@@ -52,6 +52,8 @@ pub struct WorkbenchState {
     pub(super) knowledge_capabilities: tokio::sync::Mutex<Option<(u64, u64, Value)>>,
     sync_requested: tokio::sync::Notify,
     wiki_wakeup: tokio::sync::Notify,
+    candidate_wakeup: tokio::sync::Notify,
+    publication_wakeup: tokio::sync::Notify,
     pub(super) cloud_wakeup: tokio::sync::Notify,
     wiki_requested: AtomicBool,
     refresh_existing: AtomicBool,
@@ -93,11 +95,8 @@ pub(super) fn roots(app: &AppHandle, session: &Session) -> CommandResult<(PathBu
 pub(super) fn load_state(app: &AppHandle, session: &Session) -> CommandResult<Manifest> {
     let mut state = store::load(&state_path(app, session)?)?;
     let vault = crate::vault::load_vault_config(app)?;
-    let expected_root = roots(app, session)
-        .ok()
-        .map(|(root, _)| root.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    if !state.bootstrap_valid(&expected_root) {
+    let vault_roots = roots(app, session).ok();
+    if !vault_roots.as_ref().is_some_and(|(root, _)| state.bootstrap_valid(&root.to_string_lossy())) {
         state.initial_complete = false;
     }
     if !vault.enabled
@@ -109,7 +108,7 @@ pub(super) fn load_state(app: &AppHandle, session: &Session) -> CommandResult<Ma
         state.enabled = false;
         state.phase = "disabled".into();
     }
-    if let Ok((_, memory)) = roots(app, session) {
+    if let Some((_, memory)) = vault_roots {
         let path = memory.join("derived.json");
         if path.exists() {
             let value: Value = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
@@ -140,6 +139,10 @@ pub(super) fn load_state(app: &AppHandle, session: &Session) -> CommandResult<Ma
         ("local-inspirations", "inspiration:"),
         ("local-todos", "task:"),
     ] {
+        let entry_prefix = if prefix.is_empty() { "local:" } else { prefix };
+        if !state.entries.keys().any(|id| id.starts_with(entry_prefix)) {
+            continue;
+        }
         let rows = if prefix == "inspiration:" && !crate::inspiration_cloud::SYNC_ENABLED {
             Vec::new()
         } else {
@@ -154,17 +157,9 @@ pub(super) fn load_state(app: &AppHandle, session: &Session) -> CommandResult<Ma
         let inspiration_owner = (prefix == "inspiration:")
             .then(|| crate::inspiration_private::scope(app).ok())
             .flatten();
-        let ids: Vec<String> = state
-            .entries
-            .values()
-            .filter(|entry| {
-                if prefix.is_empty() {
-                    entry.id.starts_with("local:")
-                } else {
-                    entry.id.starts_with(prefix)
-                }
-            })
-            .map(|entry| entry.id.clone())
+        let ids: Vec<String> = state.entries.keys()
+            .filter(|id| id.starts_with(entry_prefix))
+            .cloned()
             .collect();
         for id in ids {
             let raw = id.strip_prefix(prefix).unwrap_or(&id);
@@ -648,13 +643,8 @@ pub async fn workbench_status(
 pub(super) fn request_wiki(state: &WorkbenchState) {
     state.wiki_requested.store(true, Ordering::SeqCst);
     state.wiki_wakeup.notify_one();
-}
-
-fn worker_is_current(app: &AppHandle, state: &WorkbenchState, session: &Session) -> bool {
-    is_current(state, session)
-        && crate::vault::load_vault_config(app)
-            .map(|config| config.enabled)
-            .unwrap_or(false)
+    state.candidate_wakeup.notify_one();
+    state.publication_wakeup.notify_one();
 }
 
 fn record_source_error(manifest: &mut Manifest, error: String) {
@@ -712,14 +702,9 @@ async fn run_worker_lanes(
     graph: impl std::future::Future<Output = ()>,
     cloud: impl std::future::Future<Output = ()>,
     candidates: impl std::future::Future<Output = ()>,
+    publications: impl std::future::Future<Output = ()>,
 ) {
-    tokio::select! {
-        _ = sources => {},
-        _ = wiki => {},
-        _ = graph => {},
-        _ = cloud => {},
-        _ = candidates => {},
-    }
+    tokio::join!(sources, wiki, graph, cloud, candidates, publications);
 }
 
 pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
@@ -739,10 +724,6 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                 let state = app.state::<WorkbenchState>();
                 let session = match current(&state) {
                     Ok(session) => session,
-                    // A transient session gap (rebind in flight) must not kill
-                    // the worker: run_worker_lanes select! takes every lane
-                    // down when one returns, and nothing respawns until the
-                    // next bind.
                     Err(_) => {
                         tokio::time::sleep(std::time::Duration::from_secs(120)).await;
                         continue;
@@ -779,16 +760,6 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {},
                     _ = state.sync_requested.notified() => {},
                 }
-                if !worker_is_current(&app, &state, &session) {
-                    // Epoch changed or the vault check failed transiently.
-                    // Lanes re-read the current session every pass, so parking
-                    // keeps the worker serving whatever session is live;
-                    // exiting here silently killed every lane through the
-                    // select! and nothing respawned until the next bind.
-                    log::warn!("[workbench-worker] lane parked: worker state stale, re-checking in 120s");
-                    tokio::time::sleep(std::time::Duration::from_secs(120)).await;
-                    continue;
-                }
             }
         };
         let wiki_loop = async {
@@ -824,16 +795,6 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {},
                     _ = state.wiki_wakeup.notified() => {},
                 }
-                if !worker_is_current(&app, &state, &session) {
-                    // Epoch changed or the vault check failed transiently.
-                    // Lanes re-read the current session every pass, so parking
-                    // keeps the worker serving whatever session is live;
-                    // exiting here silently killed every lane through the
-                    // select! and nothing respawned until the next bind.
-                    log::warn!("[workbench-worker] lane parked: worker state stale, re-checking in 120s");
-                    tokio::time::sleep(std::time::Duration::from_secs(120)).await;
-                    continue;
-                }
             }
         };
         let discovery_loop = async {
@@ -860,16 +821,6 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                         _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {},
                         _ = state.discovery_requested.notified() => {},
                     }
-                }
-                if !worker_is_current(&app, &state, &session) {
-                    // Epoch changed or the vault check failed transiently.
-                    // Lanes re-read the current session every pass, so parking
-                    // keeps the worker serving whatever session is live;
-                    // exiting here silently killed every lane through the
-                    // select! and nothing respawned until the next bind.
-                    log::warn!("[workbench-worker] lane parked: worker state stale, re-checking in 120s");
-                    tokio::time::sleep(std::time::Duration::from_secs(120)).await;
-                    continue;
                 }
             }
         };
@@ -899,45 +850,57 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(if more { 3 } else { 120 })) => {},
                     _ = state.cloud_wakeup.notified() => {},
                 }
-                if !worker_is_current(&app, &state, &session) {
-                    // Epoch changed or the vault check failed transiently.
-                    // Lanes re-read the current session every pass, so parking
-                    // keeps the worker serving whatever session is live;
-                    // exiting here silently killed every lane through the
-                    // select! and nothing respawned until the next bind.
-                    log::warn!("[workbench-worker] lane parked: worker state stale, re-checking in 120s");
-                    tokio::time::sleep(std::time::Duration::from_secs(120)).await;
-                    continue;
-                }
             }
         };
-        // Candidate memory rides its own heartbeat lane: distillation must
-        // not wait behind an organize pass that can occupy the wiki lane for
-        // hours, and one distillation per tick keeps the provider load flat.
         let candidates_loop = async {
             loop {
                 let state = app.state::<WorkbenchState>();
-                let session = match current(&state) {
-                    Ok(session) => session,
-                    Err(_) => {
-                        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
-                        continue;
+                let more = if let Ok(session) = current(&state) {
+                    match meeting_candidates::extract_pending(&app, &state, &session).await {
+                        Ok(more) => more,
+                        Err(error) => {
+                            log::warn!("[meeting-candidates] pass deferred: {error}");
+                            false
+                        }
                     }
+                } else {
+                    false
                 };
-                if let Err(error) = meeting_candidates::run(&app, &state, &session).await {
-                    log::warn!("[meeting-candidates] pass deferred: {error}");
-                }
                 tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(120)) => {},
-                    _ = state.wiki_wakeup.notified() => {},
-                }
-                if !worker_is_current(&app, &state, &session) {
-                    tokio::time::sleep(std::time::Duration::from_secs(120)).await;
-                    continue;
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(if more { 1 } else { 120 })) => {},
+                    _ = state.candidate_wakeup.notified() => {},
                 }
             }
         };
-        run_worker_lanes(source_loop, wiki_loop, discovery_loop, cloud_loop, candidates_loop).await;
+        let publications_loop = async {
+            loop {
+                let state = app.state::<WorkbenchState>();
+                let more = if let Ok(session) = current(&state) {
+                    match meeting_candidates::publish_pending(&app, &state, &session).await {
+                        Ok(more) => more,
+                        Err(error) => {
+                            log::warn!("[meeting-candidates] publication deferred: {error}");
+                            false
+                        }
+                    }
+                } else {
+                    false
+                };
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(if more { 1 } else { 120 })) => {},
+                    _ = state.publication_wakeup.notified() => {},
+                }
+            }
+        };
+        run_worker_lanes(
+            source_loop,
+            wiki_loop,
+            discovery_loop,
+            cloud_loop,
+            candidates_loop,
+            publications_loop,
+        )
+        .await;
     }));
 }
 
@@ -1163,10 +1126,9 @@ pub async fn workbench_read(
     } else {
         store::read_document(&root, entry)?
     };
-    if wiki::ai_manifest(&root, &manifest)
-        .entries
-        .get(actual)
-        .is_none_or(|entry| entry.excluded)
+    if entry.excluded
+        || (manifest.wiki_automation.is_some()
+            && (entry.status == "conflict" || !wiki::allows_source(&document, &manifest)))
     {
         document.ai_context_enabled = false;
     }
@@ -1222,7 +1184,8 @@ pub async fn workbench_review(
     let manifest = load_state(&app, &session)?;
     let (root, _) = roots(&app, &session)?;
     if documents.iter().any(|document| {
-        !store::is_current_document(&root, &wiki::ai_manifest(&root, &manifest), document)
+        !wiki::allows_source(document, &manifest)
+            || !store::is_current_document(&root, &manifest, document)
     }) {
         return Err("Sources changed; prepare the brief again".into());
     }
@@ -1363,13 +1326,17 @@ pub async fn workbench_regenerate(
         let _guard = state.serial.lock().await;
         let manifest = load_state(&app, &session)?;
         wiki::ready(&manifest)?;
-        let scoped = wiki::ai_manifest(&roots(&app, &session)?.0, &manifest);
-        let entry = scoped
+        let (root, _) = roots(&app, &session)?;
+        let entry = manifest
             .entries
             .get(&id)
             .filter(|e| store::eligible(e))
             .ok_or("Meeting is excluded or unavailable")?;
-        store::read_document(&roots(&app, &session)?.0, entry)?
+        let document = store::read_document(&root, entry)?;
+        if !document.ai_context_enabled || !wiki::allows_source(&document, &manifest) {
+            return Err("Meeting is excluded or unavailable".into());
+        }
+        document
     };
     let result =
         wiki::synthesize(&app, &session, "meeting_summary", &[document.clone()], None).await?;
@@ -1377,11 +1344,10 @@ pub async fn workbench_regenerate(
     require_current(&state, &session)?;
     let mut manifest = load_state(&app, &session)?;
     wiki::ready(&manifest)?;
-    if !store::is_current_document(
-        &roots(&app, &session)?.0,
-        &wiki::ai_manifest(&roots(&app, &session)?.0, &manifest),
-        &document,
-    ) {
+    let (root, _) = roots(&app, &session)?;
+    if !wiki::allows_source(&document, &manifest)
+        || !store::is_current_document(&root, &manifest, &document)
+    {
         return Err("Source changed; retry the summary".into());
     }
     sync::validate_result(&[document.clone()], &manifest, &result)?;
@@ -1943,27 +1909,43 @@ mod worker_lane_tests {
     use super::*;
 
     #[tokio::test]
-    async fn source_lane_keeps_progressing_while_wiki_and_cloud_are_waiting() {
-        let progressed = std::sync::Arc::new(AtomicUsize::new(0));
-        let source_progress = progressed.clone();
+    async fn sources_and_publications_progress_while_models_and_cloud_are_waiting() {
+        let (progressed, mut progress) = tokio::sync::mpsc::channel(6);
+        let published = progressed.clone();
         let source = async move {
-            for _ in 0..3 {
+            for step in 1..=3 {
                 tokio::task::yield_now().await;
-                source_progress.fetch_add(1, Ordering::SeqCst);
+                progressed.send(("source", step)).await.unwrap();
             }
         };
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            run_worker_lanes(
-                source,
-                std::future::pending(),
-                std::future::pending(),
-                std::future::pending(),
-                std::future::pending(),
-            ),
-        )
-        .await
-        .unwrap();
-        assert_eq!(progressed.load(Ordering::SeqCst), 3);
+        let publication = async move {
+            for step in 1..=3 {
+                tokio::task::yield_now().await;
+                published.send(("publication", step)).await.unwrap();
+            }
+        };
+        let worker = tokio::spawn(run_worker_lanes(
+            source,
+            std::future::pending(),
+            std::future::pending(),
+            std::future::pending(),
+            std::future::pending(),
+            publication,
+        ));
+        let mut received = Vec::new();
+        for _ in 0..6 {
+            received.push(
+                tokio::time::timeout(std::time::Duration::from_secs(1), progress.recv())
+                    .await
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
+        assert_eq!(
+            received.iter().filter(|(lane, _)| *lane == "source").count(),
+            3,
+        );
+        assert_eq!(received.iter().filter(|(lane, _)| *lane == "publication").count(), 3);
+        worker.abort();
     }
 }

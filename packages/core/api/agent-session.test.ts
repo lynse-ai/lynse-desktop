@@ -43,6 +43,20 @@ afterEach(() => {
 });
 
 describe("CloudBase login binding", () => {
+  it.each([200, 401])("discards an old business response with HTTP %s after a new login", async (status) => {
+    const unauthorized = vi.fn();
+    const business = new ApiClient(backend, { onUnauthorized: unauthorized });
+    business.setToken("old-account");
+    let finish!: (response: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { finish = resolve; }));
+    const result = business.get("/api/business/file/page");
+    business.setToken("new-account");
+    finish(Response.json({ items: ["old-account"] }, { status }));
+    await expect(result).rejects.toThrow("Session changed");
+    expect(unauthorized).not.toHaveBeenCalled();
+    expect(business.getToken()).toBe("new-account");
+  });
+
   it("holds the first chat until the login's backend registration succeeds", async () => {
     let finish!: (response: Response) => void;
     fetchMock.mockImplementation((url: string) => url.endsWith("/api/session/backend")

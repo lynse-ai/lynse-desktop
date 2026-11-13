@@ -37,71 +37,122 @@ fn item(text: &str, kind: &str) -> Value {
     ]})
 }
 
-// --- extraction identity (2.2) ----------------------------------------------
-
-#[test]
-fn metadata_changes_do_not_move_the_extraction_identity() {
-    let model = json!({"model": "m", "baseUrl": "https://provider.invalid"});
-    let mut document = doc("m1", "已确认采用方案A。");
-    let first = extraction_id("scope", &document, &model);
-    // Metadata-only: title, folder, tags, timestamps, revision.
-    document.title = "renamed".into();
-    document.folder_id = "other".into();
-    document.tags = vec!["x".into()];
+fn put_document(root: &Path, manifest: &mut Manifest, document: &mut Document) {
     document.refresh_revision();
-    assert_eq!(extraction_id("scope", &document, &model), first);
-    // Effective input change: transcript moves the identity.
-    document.transcript = "改为方案B。".into();
-    assert_ne!(extraction_id("scope", &document, &model), first);
-    // Model identity moves the identity.
-    assert_ne!(
-        extraction_id("scope", &document, &json!({"model": "other"})),
-        extraction_id("scope", &document, &json!({"model": "m"}))
-    );
-    // Account scope is part of the identity.
-    assert_ne!(
-        extraction_id("other", &document, &model),
-        extraction_id("scope", &document, &model)
-    );
+    let entry = store::write_document(root, document, manifest.entries.get(&document.id)).unwrap();
+    manifest.entries.insert(document.id.clone(), entry);
+}
+
+fn next_extraction(
+    conn: &mut Connection,
+    root: &Path,
+    manifest: &Manifest,
+    model: &Value,
+) -> Option<(Document, Evidence, String)> {
+    let existing = receipts(conn).unwrap();
+    plan_extraction(conn, root, manifest, "scope", model, &existing).unwrap()
 }
 
 #[test]
-fn planning_routes_extract_rebind_and_skip() {
+fn planning_skips_completed_inputs_and_rebinds_only_metadata() {
+    let root = temp_root();
+    let mut conn = connection(&root).unwrap();
+    let mut manifest = Manifest::default();
+    let mut document = doc("m1", "原转写。");
+    document.conclusions = vec![json!({"conclusionText": "已确认采用方案A"})];
+    put_document(&root, &mut manifest, &mut document);
     let model = json!({"model": "m"});
-    let mut document = doc("m1", "已确认采用方案A。");
+    let (_, input, processor) = next_extraction(&mut conn, &root, &manifest, &model).unwrap();
+    let mut candidate = item("已确认采用方案A", "decision");
+    candidate["citations"][0]["revision"] = json!(document.revision);
+    save_extraction(
+        &mut conn,
+        "scope",
+        &document,
+        &processor,
+        &input,
+        &[candidate],
+    )
+    .unwrap();
+
+    // Already-receipted sources skip disk reads. Simulate an unavailable source file.
+    let (_, file) = store::paths(&root, &document.id);
+    let hidden = file.with_extension("hidden");
+    fs::rename(&file, &hidden).unwrap();
+    assert!(next_extraction(&mut conn, &root, &manifest, &model).is_none());
+    fs::rename(hidden, file).unwrap();
+
+    document.transcript = "修改转写，但纪要不变。".into();
+    document.title = "新标题".into();
+    put_document(&root, &mut manifest, &mut document);
+    assert!(next_extraction(&mut conn, &root, &manifest, &model).is_none());
+    assert_eq!(
+        receipts(&conn).unwrap()["m1"].source_revision,
+        document.revision
+    );
+    assert!(next_extraction(&mut conn, &root, &manifest, &json!({"model": "other"})).is_some());
+
+    document.conclusions[0]["conclusionText"] = json!("改为方案B");
+    put_document(&root, &mut manifest, &mut document);
+    assert!(next_extraction(&mut conn, &root, &manifest, &model).is_some());
+    cleanup(&root);
+}
+
+#[test]
+fn current_legacy_receipts_are_reused_without_requeueing() {
+    let root = temp_root();
+    let mut conn = connection(&root).unwrap();
+    let mut manifest = Manifest::default();
+    let mut document = doc("m1", "方案A");
+    document.conclusions = vec![json!({"conclusionText": "已确认采用方案A"})];
+    put_document(&root, &mut manifest, &mut document);
+    let model = json!({"model":"m"});
+    let legacy = legacy_extraction_id("scope", &document, &model);
+    record_receipt(&conn, "m1", &legacy, &document.revision).unwrap();
+    queue_pending(&conn, "m1", &legacy).unwrap();
+    conn.execute("UPDATE publish_queue SET state='done'", [])
+        .unwrap();
+    assert!(next_extraction(&mut conn, &root, &manifest, &model).is_none());
+    assert_ne!(receipts(&conn).unwrap()["m1"].extraction_id, legacy);
+    let state: String = conn
+        .query_row("SELECT state FROM publish_queue", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(state, "done");
+    cleanup(&root);
+}
+
+#[test]
+fn candidate_receipt_and_outbox_commit_together() {
+    let root = temp_root();
+    let mut conn = connection(&root).unwrap();
+    let mut document = doc("m1", "已确认采用方案A");
     document.refresh_revision();
-    // No receipt: extract.
-    assert!(matches!(
-        plan_job("scope", &document.revision, &document, &model, None),
-        Some(Job::Extract { .. })
-    ));
-    // Same receipt: skip entirely.
-    let extraction = extraction_id("scope", &document, &model);
-    let receipt = Some(ReceiptRow {
-        extraction_id: extraction.clone(),
-        source_revision: document.revision.clone(),
-    });
-    assert!(plan_job("scope", &document.revision, &document, &model, receipt.as_ref()).is_none());
-    // Metadata-only revision change: rebind, no model call.
-    let mut rebinding = document.clone();
-    rebinding.folder_id = "moved".into();
-    rebinding.refresh_revision();
-    assert_ne!(rebinding.revision, document.revision);
-    match plan_job("scope", &rebinding.revision, &rebinding, &model, receipt.as_ref()) {
-        Some(Job::Rebind { from, to, .. }) => {
-            assert_eq!(from, document.revision);
-            assert_eq!(to, rebinding.revision);
-        }
-        other => panic!("expected rebind, got {other:?}"),
-    }
-    // Transcript backfill moves the identity: re-extract.
-    let mut backfilled = document.clone();
-    backfilled.transcript = "已确认采用方案A。追加决策记录。".into();
-    backfilled.refresh_revision();
-    assert!(matches!(
-        plan_job("scope", &backfilled.revision, &backfilled, &model, receipt.as_ref()),
-        Some(Job::Extract { .. })
-    ));
+    let input = evidence(&document).unwrap();
+    conn.execute_batch("CREATE TRIGGER fail_outbox BEFORE INSERT ON publish_queue BEGIN SELECT RAISE(ABORT, 'test'); END;").unwrap();
+    assert!(save_extraction(
+        &mut conn,
+        "scope",
+        &document,
+        "processor",
+        &input,
+        &[item("已确认采用方案A", "decision")]
+    )
+    .is_err());
+    assert!(receipts(&conn).unwrap().is_empty());
+    let count: i64 = conn
+        .query_row("SELECT count(*) FROM candidate_entries", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 0);
+    conn.execute("DROP TRIGGER fail_outbox", []).unwrap();
+    save_extraction(&mut conn, "scope", &document, "processor", &input, &[]).unwrap();
+    assert_eq!(receipts(&conn).unwrap().len(), 1);
+    let state: String = conn
+        .query_row("SELECT state FROM publish_queue", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(state, "pending");
+    cleanup(&root);
 }
 
 // --- batch storage (2.3 + 2.4) ----------------------------------------------
@@ -112,20 +163,35 @@ fn batches_are_idempotent_and_keep_human_status() {
     let conn = connection(&root).unwrap();
     let extraction = "ex-1";
     let stored = store_batch(
-        &conn, "scope", "m1", "r1", "2026-11-12", extraction,
-        &[item("已确认采用方案A", "decision"), item("预算仍未批准", "unresolved")],
+        &conn,
+        "scope",
+        "m1",
+        "r1",
+        "2026-11-12",
+        extraction,
+        &[
+            item("已确认采用方案A", "decision"),
+            item("预算仍未批准", "unresolved"),
+        ],
     )
     .unwrap();
     assert_eq!(stored, 2);
     // Deterministic identity: rewording punctuation/spacing keeps the id.
     let again = store_batch(
-        &conn, "scope", "m1", "r1", "2026-11-12", extraction,
+        &conn,
+        "scope",
+        "m1",
+        "r1",
+        "2026-11-12",
+        extraction,
         &[item("已确认  采用方案a。", "decision")],
     )
     .unwrap();
     assert_eq!(again, 1);
     let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM candidate_entries", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM candidate_entries", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_eq!(count, 2);
     // Human status survives a rerun; unsupported earlier candidates supersede.
@@ -135,7 +201,12 @@ fn batches_are_idempotent_and_keep_human_status() {
     )
     .unwrap();
     store_batch(
-        &conn, "scope", "m1", "r1", "2026-11-12", "ex-2",
+        &conn,
+        "scope",
+        "m1",
+        "r1",
+        "2026-11-12",
+        "ex-2",
         &[item("已确认采用方案A", "decision")],
     )
     .unwrap();
@@ -164,7 +235,12 @@ fn invalid_or_unsupported_items_are_dropped() {
     let root = temp_root();
     let conn = connection(&root).unwrap();
     let stored = store_batch(
-        &conn, "scope", "m1", "r1", "2026-11-12", "ex-1",
+        &conn,
+        "scope",
+        "m1",
+        "r1",
+        "2026-11-12",
+        "ex-1",
         &[
             json!({"text": "  ", "kind": "decision"}),
             json!({"text": "no kind"}),
@@ -184,7 +260,12 @@ fn rebind_updates_citation_revisions_without_touching_text() {
     let root = temp_root();
     let conn = connection(&root).unwrap();
     store_batch(
-        &conn, "scope", "m1", "r1", "2026-11-12", "ex-1",
+        &conn,
+        "scope",
+        "m1",
+        "r1",
+        "2026-11-12",
+        "ex-1",
         &[item("已确认采用方案A", "decision")],
     )
     .unwrap();
@@ -213,36 +294,31 @@ fn rebind_updates_citation_revisions_without_touching_text() {
 // --- eligibility cleanup (2.2) ----------------------------------------------
 
 #[test]
-fn forgetting_a_source_purges_candidates_and_cancels_the_queue() {
+fn removing_a_source_prunes_its_candidates_and_marks_the_view_dirty() {
     let root = temp_root();
-    let conn = connection(&root).unwrap();
-    store_batch(
-        &conn, "scope", "m1", "r1", "2026-11-12", "ex-1",
-        &[item("已确认采用方案A", "decision"), item("普通候选", "observation")],
+    let mut conn = connection(&root).unwrap();
+    let mut document = doc("m1", "已确认采用方案A");
+    document.refresh_revision();
+    save_extraction(
+        &mut conn,
+        "scope",
+        &document,
+        "processor",
+        &evidence(&document).unwrap(),
+        &[item("已确认采用方案A", "decision")],
     )
     .unwrap();
-    queue_pending(&conn, "m1", "ex-1").unwrap();
-    drop(conn);
-    forget_source_entries(&root, "m1");
-    let conn = connection(&root).unwrap();
-    let candidates: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM candidate_entries WHERE source_id='m1' AND status IN ('candidate','superseded')",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(candidates, 0);
-    let queue: String = conn
-        .query_row(
-            "SELECT state FROM publish_queue WHERE source_id='m1'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(queue, "cancelled");
-    let receipt = receipt(&conn, "m1").unwrap();
-    assert!(receipt.is_none());
+    let existing = receipts(&conn).unwrap();
+    prune_sources(&mut conn, &Manifest::default(), &existing).unwrap();
+    for table in ["candidate_entries", "publish_queue", "extraction_receipts"] {
+        let count: i64 = conn
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "{table}");
+    }
+    assert!(render_pending(&conn).unwrap());
     cleanup(&root);
 }
 
@@ -253,17 +329,26 @@ fn markdown_export_groups_days_and_preserves_external_edits() {
     let root = temp_root();
     let conn = connection(&root).unwrap();
     store_batch(
-        &conn, "scope", "m1", "r1", "2026-11-12", "ex-1",
+        &conn,
+        "scope",
+        "m1",
+        "r1",
+        "2026-11-12",
+        "ex-1",
         &[item("已确认采用方案A", "decision")],
     )
     .unwrap();
     store_batch(
-        &conn, "scope", "m2", "r1", "2026-11-10", "ex-1",
+        &conn,
+        "scope",
+        "m2",
+        "r1",
+        "2026-11-10",
+        "ex-1",
         &[item("客户希望月底交付", "observation")],
     )
     .unwrap();
-    drop(conn);
-    render_markdown(&root).unwrap();
+    render_markdown(&conn, root.parent().unwrap()).unwrap();
     let target = root
         .parent()
         .unwrap()
@@ -274,11 +359,11 @@ fn markdown_export_groups_days_and_preserves_external_edits() {
     assert!(first.contains("【决定】已确认采用方案A"));
     assert!(first.contains("已确认采用方案A") && first.contains("00:30"));
     // A second render with no change is a no-op.
-    render_markdown(&root).unwrap();
+    render_markdown(&conn, root.parent().unwrap()).unwrap();
     assert_eq!(fs::read_to_string(&target).unwrap(), first);
     // External edit: the user file is preserved, the fresh render is staged.
     fs::write(&target, "# 我的手工笔记\n").unwrap();
-    render_markdown(&root).unwrap();
+    render_markdown(&conn, root.parent().unwrap()).unwrap();
     assert_eq!(fs::read_to_string(&target).unwrap(), "# 我的手工笔记\n");
     let incoming = root
         .parent()
@@ -294,18 +379,21 @@ fn markdown_export_groups_days_and_preserves_external_edits() {
 fn empty_days_render_without_entries_and_backoff_blocks_retry() {
     let root = temp_root();
     let conn = connection(&root).unwrap();
-    render_markdown(&root).unwrap();
+    render_markdown(&conn, root.parent().unwrap()).unwrap();
     let target = root
         .parent()
         .unwrap()
         .join("entries")
         .join("meeting-candidates.md");
-    assert!(fs::read_to_string(&target).unwrap().contains("# 会议候选记忆"));
+    assert!(fs::read_to_string(&target)
+        .unwrap()
+        .contains("# 会议候选记忆"));
     // Backoff: within the window the planner may be skipped by the caller.
-    record_failure(&root, "m1");
-    let conn = connection(&root).unwrap();
-    assert!(backoff_until(&conn, "m1").unwrap());
-    assert!(!backoff_until(&conn, "missing").unwrap());
+    record_failure(&conn, "m1").unwrap();
+    assert_eq!(
+        deferred_extractions(&conn).unwrap(),
+        ["m1".to_owned()].into()
+    );
     cleanup(&root);
 }
 
@@ -318,11 +406,26 @@ fn empty_days_render_without_entries_and_backoff_blocks_retry() {
 fn transcript_fingerprint_matches_the_gateway_spec() {
     // Shared vectors: digests computed by the gateway normalize_transcript.
     let cases = [
-        ("  第一行\n\n第二行  \n\n\n  第三行", "ae4f6df039c62b53932681965f7c478cc013f6f05c9ded1c881b56cb47c97fb2"),
-        ("会议开始\n我们最终决定采用方案A\n散会\n", "bf73b0ed29c91898e077c91ea229d4fd234b5663a22cf25c66db25c11d25eeb7"),
-        ("", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
-        ("   \n  \n", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
-        ("中文 内容 与 English mixed\r\nwindows 换行", "79034818544a75d77716ebfaf126118520d1b96b46748209824f1d0897edca3c"),
+        (
+            "  第一行\n\n第二行  \n\n\n  第三行",
+            "ae4f6df039c62b53932681965f7c478cc013f6f05c9ded1c881b56cb47c97fb2",
+        ),
+        (
+            "会议开始\n我们最终决定采用方案A\n散会\n",
+            "bf73b0ed29c91898e077c91ea229d4fd234b5663a22cf25c66db25c11d25eeb7",
+        ),
+        (
+            "",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+        (
+            "   \n  \n",
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ),
+        (
+            "中文 内容 与 English mixed\r\nwindows 换行",
+            "79034818544a75d77716ebfaf126118520d1b96b46748209824f1d0897edca3c",
+        ),
     ];
     for (text, expected) in cases {
         assert_eq!(transcript_fingerprint(text), expected, "vector {text:?}");
@@ -330,82 +433,24 @@ fn transcript_fingerprint_matches_the_gateway_spec() {
 }
 
 #[test]
-fn writer_decisions_never_auto_take_over_another_device() {
-    // No server writer: register fresh.
-    assert_eq!(
-        writer_decision("d1", 0, None),
-        WriterAction::Register
-    );
-    // Same device with a moved server generation: adopt, never commit stale.
-    assert_eq!(
-        writer_decision("d1", 1, Some(("d1", 3))),
-        WriterAction::AdoptServerGeneration(3)
-    );
-    // Same device in sync: commit.
-    assert_eq!(
-        writer_decision("d1", 2, Some(("d1", 2))),
-        WriterAction::CommitWithGeneration(2)
-    );
-    // Another device owns the writer: pause, never auto-take-over.
-    assert_eq!(
-        writer_decision("d1", 1, Some(("d2", 1))),
-        WriterAction::PauseNeedTakeover {
-            device_id: "d2".into()
-        }
-    );
-}
-
-#[test]
-fn publish_entries_map_desktop_kinds_to_gateway_kinds() {
-    let root = temp_root();
-    let conn = connection(&root).unwrap();
-    store_batch(
-        &conn, "scope", "m1", "r1", "2026-11-12", "ex-1",
-        &[
-            item("已确认采用方案A", "decision"),
-            item("客户要求月底上线", "observation"),
-            item("预算仍在讨论", "unresolved"),
-        ],
-    )
-    .unwrap();
-    let entries = publish_entries(&conn, "scope", "m1").unwrap();
-    assert_eq!(entries.len(), 3);
-    assert_eq!(entries[0]["kind"], json!("decision"));
-    assert_eq!(entries[1]["kind"], json!("project_fact"));
-    assert_eq!(entries[2]["kind"], json!("project_fact"));
-    assert!(entries[0]["client_id"].as_str().unwrap().len() == 64);
-    // Citations travel verbatim for the gateway's transcript verification.
-    assert_eq!(
-        entries[0]["citations"][0]["quote"],
-        json!("已确认采用方案A")
-    );
-    cleanup(&root);
-}
-
-#[test]
-fn distillation_input_prefers_the_summary_over_the_transcript() {
-    // 纪要优先: a 31k-char transcript truncated the model output; the
-    // summary is the distillation input and the publication fingerprint.
-    let mut document = doc("m1", &"原始转写".repeat(2000));
+fn summary_selection_matches_the_gateway_fingerprint_and_excludes_html_from_model_input() {
+    let mut document = doc("m1", "冗长转写");
     document.conclusions = vec![
-        json!({"conclusionText": "团队决定采用方案A"}),
-        json!({"conclusionText": "团队决定采用方案A"}),
-        json!({"other": "非结论文段"}),
+        json!({"conclusionText": "决定采用方案A"}),
+        json!({"conclusionText": "决定采用方案A"}),
+        json!({"content": "另一份摘要"}),
+        json!({"conclusionText": "<html><p>Visual report</p></html>"}),
     ];
-    let summary = summary_text(&document);
-    assert_eq!(summary, "团队决定采用方案A");
-    // 无纪要: fall back to the (trimmed) transcript.
-    document.conclusions = vec![];
-    assert_eq!(summary_text(&document), "原始转写".repeat(2000).trim());
-    // 空纪要字段: same fallback.
-    document.conclusions = vec![json!({"conclusionText": "  "})];
-    assert_eq!(summary_text(&document), "原始转写".repeat(2000).trim());
-}
-
-#[test]
-fn publication_fingerprint_covers_the_summary_text() {
-    let mut document = doc("m1", "冗长转写不参与指纹");
-    document.conclusions = vec![json!({"conclusionText": "决定采用方案A"})];
-    assert_eq!(transcript_fingerprint(&summary_text(&document)),
-               transcript_fingerprint("决定采用方案A"));
+    let input = evidence(&document).unwrap();
+    assert_eq!(input.text, "决定采用方案A\n\n决定采用方案A\n\n另一份摘要");
+    assert_eq!(
+        input.fingerprint,
+        transcript_fingerprint(
+            "决定采用方案A\n决定采用方案A\n另一份摘要\n<html><p>Visual report</p></html>"
+        )
+    );
+    document.conclusions.clear();
+    assert_eq!(evidence(&document).unwrap().text, "冗长转写");
+    document.transcript.clear();
+    assert!(evidence(&document).is_none());
 }

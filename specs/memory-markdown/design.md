@@ -23,7 +23,7 @@
 - Purpose: 直接查找和维护跨会议积累的专题记忆，不暴露内部状态分类。
 - Direction: Industrial/utilitarian，沿用现有文件管理和文档阅读习惯。
 - Palette: 项目现有语义 token；浅色参考 background #fafafa、foreground #202023、primary #5f67d8；暗色随现有主题。
-- Typography: 现有 Inter / OPPO Sans；这是既有品牌约束，覆盖 UI 技能的默认字体/配色禁用建议。
+- Typography: 默认使用共享系统字体，遵循应用外观的字体选择。
 - Layout: 左侧目录与文件列表，右侧文档；窄窗口列表/正文顺序展示。搜索、新建、刷新常驻，其他操作放入文件菜单。没有固定行业分类或状态标签栏。
 - Content: 用户可见名称以 .md 呈现，文件标题英文，正文语言由内容决定；中文名称和原文引用可检索。确认、舍弃和删除预览留在文件内部。
 

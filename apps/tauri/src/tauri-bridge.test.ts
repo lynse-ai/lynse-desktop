@@ -12,10 +12,13 @@ vi.mock("./secure-storage", () => ({
 vi.mock("./workbuddy-bridge", () => ({ installWorkBuddyBridge: vi.fn() }));
 vi.mock("./mcp-bridge", () => ({ desktopMcpApi: {}, installDesktopMcpBridge: vi.fn() }));
 vi.mock("@lynse/core/api/client", () => ({ setApiTransportMode: vi.fn() }));
-vi.mock("@lynse/views/live-translation", () => ({
+vi.mock("@lynse/views/live-translation/providers", () => ({
   listSecretVaultKeys: () => [], listProviders: () => [], getProvider: vi.fn(),
+  secretVaultKey: vi.fn(),
+}));
+vi.mock("@lynse/views/live-translation/provider-migration", () => ({
   collectLegacyLiveTranslationSnapshot: vi.fn(), migrateLegacyProviderSettings: vi.fn(),
-  parsePersistedSettings: vi.fn(), secretVaultKey: vi.fn(), LEGACY_VOLC_APP_KEY: "legacy",
+  parsePersistedSettings: vi.fn(), LEGACY_VOLC_APP_KEY: "legacy",
 }));
 
 function diagnostics(): DesktopDiagnosticsApi {

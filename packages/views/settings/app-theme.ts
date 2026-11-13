@@ -71,10 +71,10 @@ const ACCENT_FAMILY_KEYS = [
 
 const APP_FONT_STACKS: Record<AppFontId, string | null> = {
   system: null,
-  sans: `"Inter", "OPPO Sans", "OPPO Sans 4.0", ui-sans-serif, system-ui, sans-serif`,
+  sans: `"Inter", var(--font-system)`,
   serif: `"Noto Serif SC Variable", "Songti SC", "SimSun", serif`,
   mono: `ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace`,
-  geist: `"Geist Variable", "Inter", "OPPO Sans", "OPPO Sans 4.0", ui-sans-serif, system-ui, sans-serif`,
+  geist: `"Geist Variable", "Inter", var(--font-system)`,
 };
 
 const PRESET_PAIRS: Array<[

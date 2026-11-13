@@ -20,14 +20,11 @@ import { desktopMcpApi, installDesktopMcpBridge, type DesktopMcpApi } from "./mc
 import { hydrateSecrets, refreshSecret, registerSecretKeys, removeSecret, secureStorage, setSecret } from "./secure-storage";
 import {
   collectLegacyLiveTranslationSnapshot,
-  getProvider,
   LEGACY_VOLC_APP_KEY,
-  listProviders,
-  listSecretVaultKeys,
   migrateLegacyProviderSettings,
   parsePersistedSettings,
-  secretVaultKey,
-} from "@lynse/views/live-translation";
+} from "@lynse/views/live-translation/provider-migration";
+import { getProvider, listProviders, listSecretVaultKeys, secretVaultKey } from "@lynse/views/live-translation/providers";
 import type { PersistedLiveTranslationSettings } from "@lynse/views/live-translation";
 import type {
   SttDownloadProgress,
@@ -106,7 +103,7 @@ export type UpdateDownloadProgress = {
   total: number;
 };
 
-type DesktopApi = {
+export type DesktopApi = {
   mcp: DesktopMcpApi;
   openExternal: (url: string) => Promise<void>;
   // Asks where to save with a native dialog, then Rust fetches the remote
@@ -185,6 +182,16 @@ type DesktopApi = {
     // returns its public download URL for the feedback ticket.
     uploadScreenshot: (req: { endpoint: string; path: string }) =>
       Promise<{ downloadUrl: string }>;
+    // Native-HTTP transport for the self-hosted FeedLog suggestion board.
+    // The webview cannot call FeedLog directly (better-auth origin check +
+    // no CORS on /api/posts), so requests ride through the Rust command.
+    feedlogRequest: (req: {
+      baseUrl: string;
+      method: string;
+      path: string;
+      body?: unknown;
+      bearer?: string | null;
+    }) => Promise<{ status: number; body: unknown }>;
     // Open an image file dialog and stage the picked file as a report
     // attachment (copied into the report staging dir). Null on cancel.
     pickReportAttachment: () => Promise<{ path: string; url: string } | null>;
@@ -374,10 +381,12 @@ const liveTranslationTrayListeners = new Set<
   (action: LiveTranslationTrayAction) => void
 >();
 
-export async function installTauriBridge(): Promise<void> {
+export async function installTauriBridge(windowKind: string | null = null): Promise<void> {
   // Load credentials from the OS keychain into the in-memory cache before the
   // app renders, so the auth store can read them synchronously.
-  await hydrateSecrets();
+  const secrets = windowKind === "about" || windowKind === "live-subtitles"
+    ? Promise.resolve()
+    : hydrateSecrets();
 
   // Keep WKWebView's fetch implementation. Routing every fetch through the
   // Tauri HTTP IPC bridge can monopolize the renderer on macOS.
@@ -389,7 +398,7 @@ export async function installTauriBridge(): Promise<void> {
   // and its refresh flow stay in core.
   installWorkBuddyBridge();
 
-  await getCurrentWebview().listen<LiveTranslationTrayAction>(
+  const tray = windowKind ? Promise.resolve() : getCurrentWebview().listen<LiveTranslationTrayAction>(
     LIVE_TRANSLATION_TRAY_EVENT,
     (event) => {
       if (event.payload !== "start" && event.payload !== "pause" && event.payload !== "stop") return;
@@ -705,6 +714,23 @@ export async function installTauriBridge(): Promise<void> {
       uploadScreenshot: (req: { endpoint: string; path: string }) =>
         command<{ downloadUrl: string }>("report_upload_screenshot", {
           req: { endpoint: req.endpoint, path: req.path },
+        }),
+      // Native-HTTP transport for the FeedLog suggestion board (see the
+      // interface comment): never fails on HTTP status — {status, body} comes
+      // back either way so the caller interprets guest gating itself.
+      feedlogRequest: (req: {
+        baseUrl: string;
+        method: string;
+        path: string;
+        body?: unknown;
+        bearer?: string | null;
+      }) =>
+        command<{ status: number; body: unknown }>("feedlog_api_request", {
+          baseUrl: req.baseUrl,
+          method: req.method,
+          path: req.path,
+          body: req.body ?? null,
+          bearer: req.bearer ?? null,
         }),
       // Pick one image from disk and stage it as a report attachment; the
       // host copies it into the report staging dir and hands back the same
@@ -1022,15 +1048,13 @@ export async function installTauriBridge(): Promise<void> {
   };
 
   (window as Window & { desktopAPI?: DesktopApi }).desktopAPI = desktopAPI;
-  await installDesktopMcpBridge();
-
-  // Replace the hardcoded fallback with the authoritative version reported by
-  // the Rust host (package_info), so the UI version stays correct across
-  // releases without manual edits. Failures keep the static fallback so the
-  // app still boots.
-  try {
-    desktopAPI.appInfo = await desktopAPI.app.getInfo();
-  } catch {
-    /* keep fallback */
-  }
+  await Promise.all([
+    secrets,
+    tray,
+    windowKind ? Promise.resolve() : installDesktopMcpBridge(),
+    desktopAPI.app.getInfo().then(
+      (info) => { desktopAPI.appInfo = info; },
+      () => { /* Keep the fallback version when package info is unavailable. */ },
+    ),
+  ]);
 }

@@ -113,9 +113,13 @@ describe("Local memory MCP consent and stale-result guards", () => {
   function memory() {
     const status = {scope:"account-a",enabled:true,allowAi:true,initialComplete:true,updatedAt:"r1",memories:[{id:"m1",text:"Friday is a proposal",excluded:false,stale:false},{id:"private",text:"Private",excluded:true},{id:"stale",text:"Old",stale:true}],entries:[{id:"s1",status:"synced",excluded:false}]};
     const bridge = {wiki:vi.fn().mockResolvedValue({topics:[{id:"topic-1",title:"Launch",published:{markdown:"Friday is a proposal",review:"approved",citations:[]}},{id:"private",excluded:true,published:{review:"approved"}},{id:"stale",stale:true,published:{review:"approved"}},{id:"candidate",published:null,candidate:{markdown:"Unreviewed"}}]}),status:vi.fn().mockImplementation(async()=>status),search:vi.fn().mockResolvedValue({items:[{id:"s1"}],initialComplete:true}),read:vi.fn().mockResolvedValue({document:{id:"s1",aiContextEnabled:true,transcript:"Original"},markdown:"Original"})};
-    Object.assign(bridge, { readForAi: vi.fn().mockImplementation(async (id: string) => id.startsWith("wiki:") ? { document: { id, kind: "wiki", citations: [] }, markdown: "Friday is a proposal" } : bridge.read(id)) });
-    deps.memory = bridge as unknown as NonNullable<McpDataDependencies["memory"]>;
-    return {status,bridge};
+    const memoryBridge = {
+      ...bridge,
+      readForAi: vi.fn().mockImplementation(async (id: string) => id.startsWith("wiki:") ? { document: { id, kind: "wiki", citations: [] }, markdown: "Friday is a proposal" } : bridge.read(id)),
+      sourceFragment: undefined as ReturnType<typeof vi.fn> | undefined,
+    };
+    deps.memory = memoryBridge as unknown as NonNullable<McpDataDependencies["memory"]>;
+    return {status,bridge:memoryBridge};
   }
   it("uses the AI-filtered local index and omits withdrawn or stale memories", async()=>{
     const {bridge}=memory();

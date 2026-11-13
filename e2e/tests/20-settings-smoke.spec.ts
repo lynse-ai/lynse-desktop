@@ -7,14 +7,6 @@ import { startMockServer } from "../fixtures/mock-server";
  * sections render (STT/hotwords/voiceprints are desktop-only and hidden).
  */
 
-const SETTING_SECTIONS = [
-  /appearance/i,
-  /theme/i,
-  /live|translat/i,
-  /vault/i,
-  /webdav|sync/i,
-];
-
 test("settings dialog opens and lists its sections", async ({ page }) => {
   const server = await startMockServer();
   await bootstrapApp(page, server.url);
@@ -24,25 +16,8 @@ test("settings dialog opens and lists its sections", async ({ page }) => {
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible({ timeout: 15_000 });
 
-  // Config cards render lazily/async — give them a beat.
-  let found = 0;
-  await expect
-    .poll(
-      async () => {
-        found = 0;
-        for (const section of SETTING_SECTIONS) {
-          if (await dialog.getByText(section).first().isVisible().catch(() => false)) {
-            found += 1;
-          }
-        }
-        return found;
-      },
-      { timeout: 15_000 },
-    )
-    // Live-translation/Vault/WebDAV cards render only when their backend or
-    // desktop capabilities are present — with plain mocks only the Appearance
-    // card (title + theme row) is guaranteed.
-    .toBeGreaterThanOrEqual(2);
+  await dialog.getByRole("button", { name: "Appearance", exact: true }).click();
+  await expect(dialog.getByRole("heading", { name: "Appearance", exact: true })).toBeVisible();
 
   await server.close();
 });

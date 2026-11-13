@@ -54,8 +54,22 @@ export type DesktopDiagnosticsApi = {
     screenshotPath?: string | null;
   }) => Promise<{ issueUrl: string; number: number }>;
   // Uploads a staged screenshot to the report channel's object storage and
-  // returns its public download URL (the feedback-center ticket field).
+  // returns its public download URL. Unused since the suggestion center
+  // moved to FeedLog (posts are text-only); kept as host surface.
   uploadScreenshot?: (request: { endpoint: string; path: string }) => Promise<{ downloadUrl: string }>;
+  // Native-HTTP transport for the self-hosted FeedLog suggestion board (see
+  // core/api/feedlog.ts). The webview cannot call FeedLog directly — the
+  // anonymous sign-in enforces better-auth's same-host origin check and
+  // /api/posts has no CORS headers — so requests ride through the Rust
+  // `feedlog_api_request` command. Never rejects on HTTP status; the caller
+  // interprets {status, body}.
+  feedlogRequest?: (req: {
+    baseUrl: string;
+    method: string;
+    path: string;
+    body?: unknown;
+    bearer?: string | null;
+  }) => Promise<{ status: number; body: unknown }>;
   // Opens an image file dialog and stages the picked file as a report
   // attachment (same {path, url} shape as a captured screenshot). Null when
   // the user cancels; missing on an older host build — the composer then
@@ -171,14 +185,20 @@ export function resolveCaptureBackground(): string | null {
 async function openReportDialog(mode: ReportDialogMode): Promise<void> {
   // Capture while the main window still shows what the user was looking at —
   // the in-app dialog would otherwise cover it. In the standalone window the
-  // retake button re-captures the main window directly.
-  const api = getDesktopDiagnosticsApi();
-  pendingScreenshot = api?.captureScreenshot
-    ? await api.captureScreenshot(resolveCaptureBackground()).catch((error: unknown) => {
-        showScreenshotCaptureError(error);
-        return null;
-      })
-    : null;
+  // retake button re-captures the main window directly. Only the bug-report
+  // face uses screenshots; the suggestion center is text-only, and a
+  // pointless capture would flash the window for nothing.
+  if (mode === "report") {
+    const api = getDesktopDiagnosticsApi();
+    pendingScreenshot = api?.captureScreenshot
+      ? await api.captureScreenshot(resolveCaptureBackground()).catch((error: unknown) => {
+          showScreenshotCaptureError(error);
+          return null;
+        })
+      : null;
+  } else {
+    pendingScreenshot = null;
+  }
   reportDialogMode = mode;
   setReportDialogOpen(true);
 }

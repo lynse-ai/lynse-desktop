@@ -2,7 +2,7 @@ use super::Document;
 
 pub(super) const INPUT_VERSION: &str = "wiki-markdown-v1";
 
-fn is_markdown(text: &str) -> bool {
+pub(super) fn is_markdown(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     if lower.contains("data:image/")
         || lower.contains(";base64,")

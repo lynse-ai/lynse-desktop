@@ -164,6 +164,7 @@ describe("chat streaming performance", () => {
   beforeEach(() => {
     resetCounters();
     localStorage.clear();
+    useChatStore.getState().switchUser("perf-user");
     useChatStore.setState({
       messages: [],
       conversations: [],

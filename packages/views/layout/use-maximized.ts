@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
 /**
@@ -22,41 +22,55 @@ export const isTauri =
 export const isMacDesktop =
   isTauri && /Mac/i.test(navigator.platform || navigator.userAgent);
 
-/**
- * Tracks the main window's maximized/fullscreen state and reflects it onto
- * `<html data-maximized="true|false">` so layout CSS can adapt to wide/large
- * windows (e.g. center the reading column instead of letting it stretch
- * edge-to-edge). Also returns the current boolean for components that need to
- * branch on it.
- */
-export function useMaximized(): boolean {
-  const [isLarge, setIsLarge] = useState(false);
+let maximized = false;
+const listeners = new Set<() => void>();
+let stopWatching: (() => void) | undefined;
 
-  useEffect(() => {
-    if (!isTauri) return;
+function subscribe(listener: () => void) {
+  if (!isTauri) return () => {};
+  listeners.add(listener);
+  if (listeners.size === 1) {
     const win = getCurrentWindow();
     let unlisten: (() => void) | undefined;
+    let stopped = false;
+    let revision = 0;
 
     const sync = () => {
+      const current = ++revision;
       Promise.all([win.isMaximized(), win.isFullscreen()])
-        .then(([max, fs]) => setIsLarge(max || fs))
+        .then(([max, full]) => {
+          if (stopped || current !== revision) return;
+          const next = max || full;
+          document.documentElement.dataset.maximized = String(next);
+          if (maximized === next) return;
+          maximized = next;
+          listeners.forEach((notify) => notify());
+        })
         .catch(() => {});
     };
 
     sync();
     win.onResized(sync)
       .then((fn) => {
-        unlisten = fn;
+        if (stopped) fn();
+        else unlisten = fn;
       })
       .catch(() => {});
 
-    return () => unlisten?.();
-  }, []);
+    stopWatching = () => {
+      stopped = true;
+      unlisten?.();
+    };
+  }
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size !== 0) return;
+    stopWatching?.();
+    stopWatching = undefined;
+  };
+}
 
-  useEffect(() => {
-    if (!isTauri) return;
-    document.documentElement.dataset.maximized = isLarge ? "true" : "false";
-  }, [isLarge]);
-
-  return isLarge;
+/** Shares the native window state with React subscribers and layout CSS. */
+export function useMaximized(): boolean {
+  return useSyncExternalStore(subscribe, () => maximized, () => false);
 }

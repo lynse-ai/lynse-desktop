@@ -19,7 +19,7 @@ const SECTIONS: DocSection[] = [
       {
         heading: "1. 复制 MCP 服务地址",
         lines: [
-          "在「我的授权」标签复制服务地址（当前部署为 " + "https://www.lynse.ai/mcp" + "）。",
+          "在「我的授权」标签复制服务地址（当前部署为 " + "https://mcp.lynse.ai/mcp" + "）。",
           "在支持 MCP（连接器）的 AI 应用（Codex、Claude Code、WorkBuddy、Cursor 等）的设置中添加该地址。",
         ],
       },
@@ -88,7 +88,7 @@ const SECTIONS: DocSection[] = [
   },
 ];
 
-const MCP_URL_STANDIN = "https://www.lynse.ai/mcp";
+const MCP_URL_STANDIN = "https://mcp.lynse.ai/mcp";
 
 /** 开发文档 tab: TOC + short zh-primary developer documentation. */
 export function DocsTab() {

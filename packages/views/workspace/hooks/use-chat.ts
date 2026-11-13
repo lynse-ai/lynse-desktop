@@ -1,21 +1,45 @@
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect } from "react";
 import { useChatStore } from "./use-chat-store";
-import { useAuthStore } from "@lynse/core/auth";
+import { getAuthStore, useAuthStore } from "@lynse/core/auth";
+import { getWorkspaceState } from "../store";
+import i18next from "i18next";
+import { toast } from "sonner";
 
 export { WAITING_POOL, classifyStatus } from "./use-chat-store";
 
-export interface UseChatOptions {
-  persistHistory?: boolean;
+export function sendSelectedNotePrompt(prompt: string) {
+  const workspace = getWorkspaceState();
+  const fileId = workspace.selectedItemId;
+  if (!fileId) return;
+  const session = getAuthStore()?.getState();
+  const userId = session?.isAuthenticated ? session.user?.id : undefined;
+  if (!userId) {
+    toast.info(i18next.t("workspace.loading"));
+    return;
+  }
+  if (!workspace.chatPanelVisible) workspace.toggleChatPanel();
+  const chat = useChatStore.getState();
+  chat.switchUser(userId);
+  chat.setActiveAssistant("lynse");
+  chat.openFileChat(fileId);
+  chat.sendMessage(prompt, fileId, true, undefined, { assistant: "lynse", contextFileId: fileId });
+}
+
+/** Bind history and background runs to the current account across page changes. */
+export function useChatSession() {
+  const userId = useAuthStore((s) => s.isAuthenticated ? s.user?.id ?? null : null);
+  useLayoutEffect(() => {
+    useChatStore.getState().switchUser(userId);
+  }, [userId]);
 }
 
 /**
  * Thin React binding over the module-level chat store. All chat state and the
  * streaming engine live in `useChatStore`, so the conversation survives page
  * navigation — the assistant keeps working in the background and the result is
- * preserved. This hook only (re)hydrates history and tracks whether a chat UI
- * is currently on screen (so the store can notify on background completion).
+ * preserved. Track whether a chat UI is visible for background notifications.
  */
-export function useChat(_options?: UseChatOptions) {
+export function useChat() {
   const messages = useChatStore((s) => s.messages);
   const isLoading = useChatStore((s) => s.isLoading);
   const conversations = useChatStore((s) => s.conversations);
@@ -35,19 +59,17 @@ export function useChat(_options?: UseChatOptions) {
   const setActiveAssistant = useChatStore((s) => s.setActiveAssistant);
   const syncWorkBuddyThread = useChatStore((s) => s.syncWorkBuddyThread);
 
-  const userId = useAuthStore((s) => s.user?.id ?? "user");
-  useEffect(() => {
-    useChatStore.getState().setUserId(userId);
-  }, [userId]);
+  const userId = useAuthStore((s) => s.user?.id || null);
+  const activeUserId = useChatStore((s) => s.userId);
 
   useEffect(() => {
-    useChatStore.getState().hydrate();
     useChatStore.getState().setChatVisible(true);
     return () => useChatStore.getState().setChatVisible(false);
   }, []);
 
   return {
     messages,
+    ready: userId !== null && userId === activeUserId,
     isLoading,
     conversations,
     activeConversationId,

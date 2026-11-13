@@ -6,14 +6,6 @@
 @import "../../../packages/ui/styles/base.css";
 @import "../../../packages/ui/styles/solid-glass-status.css";
 
-/* One step lighter: plain text inherits the variable Light (300) cut of the
-   bundled Inter + OPPO Sans pairing (see packages/ui/styles/fonts.css).
-   Explicit font-medium / semibold / bold utilities are untouched, so labels
-   and headings keep their hierarchy. */
-body {
-  font-weight: 300;
-}
-
 /* ── Native window material (macOS vibrancy, Codex-style shell) ────────────
    Rust installs an NSVisualEffectView (sidebar material) behind the webview —
    the frosted panel Notes and Codex use. The page must stay transparent so the

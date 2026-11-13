@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { AGENT_API_URL_STORAGE_KEY, CLOUDBASE_AGENT_URL } from "@lynse/core/config";
-import { FEEDLOG_BASE_URL } from "./open-feedback";
+import { FEEDLOG_BASE_URL } from "@lynse/core/api";
 
 /**
  * Path on the lynclaw gateway that mints a FeedLog SSO token (HS256 JWT,

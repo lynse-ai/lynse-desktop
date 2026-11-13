@@ -1,4 +1,5 @@
-import { getWorkbenchApi, useWorkbench, type DesktopWorkbenchApi } from "@lynse/views/workbench";
+import { getWorkbenchApi, useWorkbench } from "@lynse/views/workbench/api";
+import type { DesktopWorkbenchApi } from "@lynse/views/workbench";
 import { api } from "@lynse/core/api";
 import { getAuthStore } from "@lynse/core/auth";
 import { memoryApi } from "@lynse/core/api/memory";
@@ -71,10 +72,10 @@ export async function readDesktopMcpTool(name: string, args: Args, deps: McpData
   const capturedOrigin = deps.cloud.getBaseUrl();
   async function eligible(rows: Row[], kind: "meeting" | "note"): Promise<Row[]> {
     if (deps.cloud.getToken() !== capturedToken || deps.cloud.getBaseUrl() !== capturedOrigin || !deps.authenticated()) throw new McpInputError("Account or server changed; retry");
-    if (!deps.authenticated() || !capturedToken || !deps.authorizeSources) throw new McpInputError("Cloud source eligibility unavailable");
-    const allowed = await deps.authorizeSources(rows.map(row => String(row.id)), kind);
+    if (!capturedToken || !deps.authorizeSources) throw new McpInputError("Cloud source eligibility unavailable");
+    const allowed = new Set(await deps.authorizeSources(rows.map(row => String(row.id)), kind));
     if (!deps.authenticated() || deps.cloud.getToken() !== capturedToken || deps.cloud.getBaseUrl() !== capturedOrigin) throw new McpInputError("Account or server changed; retry");
-    return rows.filter(row => allowed.includes(String(row.id)));
+    return rows.filter(row => allowed.has(String(row.id)));
   }
   async function eligiblePage(value: unknown): Promise<unknown> {
     if (!value || typeof value !== "object") throw new McpInputError("Unrecognized meeting page");
@@ -126,7 +127,7 @@ export async function readDesktopMcpTool(name: string, args: Args, deps: McpData
         if (!bridge.sourceFragment) throw new McpInputError("Fragment retrieval unavailable; update the desktop bridge");
         const fragment = await bridge.sourceFragment(id, chunkId, segmentId || undefined);
         if (!fragment?.quote) throw new McpInputError("Fragment not found in this source");
-        result = { id: fragment.id, ...fragment };
+        result = fragment;
       } else {
         const record = await bridge.readForAi(id);
         if (record.document.aiContextEnabled === false) throw new McpInputError("Source excluded from AI");

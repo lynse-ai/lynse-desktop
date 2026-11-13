@@ -34,7 +34,7 @@ const gateway = fakeGateway({
     return { ok: true };
   },
 });
-const identity = fakeIdentity({ tokens: { "tok-A": "user-A", "tok-B": "user-B" } });
+const identity = fakeIdentity({ tokens: { "tok-A": "user-A", "tok-B": "user-B", "tok-burst": "user-burst" } });
 
 const gwPort = await listen(gateway.server);
 const idPort = await listen(identity.server);
@@ -83,6 +83,14 @@ test("unauthenticated and foreign-token requests are rejected", async () => {
   assert.equal(gatewayKey.status, 401, "a gateway key is not a Lynse identity");
   const badToken = await call("/api/v2/integrations/google-calendar/status", { token: "bogus" });
   assert.equal(badToken.status, 401);
+});
+
+test("simultaneous requests share one identity lookup for a new token", async () => {
+  const before = identity.hits.count;
+  const replies = await Promise.all(Array.from({ length: 8 }, () =>
+    call("/api/v2/integrations/google-calendar/status", { token: "tok-burst" })));
+  assert.ok(replies.every((reply) => reply.status === 200));
+  assert.equal(identity.hits.count - before, 1);
 });
 
 test("concurrent authorizations bind to their own user only", async () => {

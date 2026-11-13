@@ -13,9 +13,11 @@ import { createHash } from "node:crypto";
 import { config } from "./env.mjs";
 
 const cache = new Map(); // token hash -> { principal, at }
+const pending = new Map();
 
 export function clearIdentityCache() {
   cache.clear();
+  pending.clear();
 }
 
 export function bearerToken(authorization) {
@@ -25,7 +27,10 @@ export function bearerToken(authorization) {
 }
 
 export function cachedPrincipal(token) {
-  const key = sha256(token);
+  return lookup(sha256(token));
+}
+
+function lookup(key) {
   const hit = cache.get(key);
   if (!hit) return null;
   if (Date.now() - hit.at >= config.identityCacheTtlMs) {
@@ -39,14 +44,12 @@ function sha256(text) {
   return createHash("sha256").update(String(text ?? "")).digest("hex");
 }
 
-function remember(token, principal) {
-  const key = sha256(token);
+function remember(key, principal) {
+  cache.delete(key);
   cache.set(key, { principal, at: Date.now() });
-  if (cache.size > config.identityCacheMax) {
-    for (const [k, v] of [...cache.entries()].sort((a, b) => a[1].at - b[1].at)) {
-      cache.delete(k);
-      if (cache.size <= config.identityCacheMax) break;
-    }
+  const limit = config.identityCacheMax;
+  while (cache.size > limit && cache.size > 0) {
+    cache.delete(cache.keys().next().value);
   }
 }
 
@@ -57,8 +60,23 @@ function remember(token, principal) {
 export async function resolvePrincipal(authorization) {
   const token = bearerToken(authorization);
   if (!token || !config.identityUrl) return null;
-  const cached = cachedPrincipal(token);
+  const key = sha256(token);
+  const cached = lookup(key);
   if (cached) return cached;
+  const current = pending.get(key);
+  if (current) return current;
+  const request = verify(token).then((principal) => {
+    if (pending.get(key) === request) {
+      pending.delete(key);
+      if (principal) remember(key, principal);
+    }
+    return principal;
+  });
+  pending.set(key, request);
+  return request;
+}
+
+async function verify(token) {
   try {
     const res = await fetch(`${config.identityUrl}`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -66,10 +84,7 @@ export async function resolvePrincipal(authorization) {
     });
     if (!res.ok) return null;
     const json = await res.json().catch(() => null);
-    const principal = String(json?.user_id ?? "").trim();
-    if (!principal) return null;
-    remember(token, principal);
-    return principal;
+    return typeof json?.user_id === "string" ? json.user_id.trim() || null : null;
   } catch {
     return null;
   }

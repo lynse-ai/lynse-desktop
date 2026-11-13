@@ -3,7 +3,7 @@ import {
   SETTINGS_DIALOG_CONTENT_CLASS,
   SETTINGS_NAV_CLASS,
   SETTINGS_BODY_CLASS,
-} from "./settings-dialog";
+} from "./settings-dialog-content";
 
 describe("settings dialog layout", () => {
   it("keeps the dialog at a fixed size so switching sections never resizes it", () => {

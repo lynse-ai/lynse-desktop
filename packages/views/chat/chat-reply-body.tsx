@@ -1,9 +1,10 @@
+import { memo } from "react";
 import { StreamingMarkdown } from "@lynse/ui/markdown";
 import { useTranslation } from "@lynse/core/i18n/react";
 import type { ChatMessage } from "../workspace/types";
 
 /** Preserve partial answers while making a failed turn explicit. */
-export function ChatReplyBody({ message, isStreaming, className }: {
+export const ChatReplyBody = memo(function ChatReplyBody({ message, isStreaming, className }: {
   message: Pick<ChatMessage, "content" | "error" | "errorMessage">;
   isStreaming: boolean;
   className?: string;
@@ -23,4 +24,4 @@ export function ChatReplyBody({ message, isStreaming, className }: {
       {detail && <p className="whitespace-pre-wrap break-words">{detail}</p>}
     </div>}
   </>;
-}
+});

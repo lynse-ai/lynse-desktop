@@ -22,7 +22,10 @@ import {
   Clock,
 } from "../icons";
 import { getWorkspaceState, useWorkspaceStore } from "./store";
-import { SummaryExportMenuItem } from "../connections/summary-export-menu-item";
+import {
+  SummaryExportMenuItem,
+  useSummaryExportAvailability,
+} from "../connections/summary-export-menu-item";
 import { useAudioEditorStore } from "../audio-editor/store";
 import { useCloudAudio } from "./use-cloud-audio";
 import { useNavigation } from "../navigation";
@@ -200,6 +203,10 @@ export function ContentPanel() {
     error: conclusionsError,
   } = useFileConclusions(selectedItemId);
   const { data: transcription, isLoading: transLoading } = useFileTranscription(selectedItemId);
+  // Whether the Notion export entry renders in the header menu; the menu's
+  // trailing separator must follow it or the hidden entry leaves an empty
+  // separator-only group between "Resummarize" and "Share".
+  const summaryExportVisible = useSummaryExportAvailability().visible;
   const isCloudSelectedItem = !!selectedItemId && !isLocalFileId(selectedItemId);
   // Dual-channel recordings: per-track listening (全部／本机／远端) and the
   // echo-cancellation status banner.
@@ -1295,12 +1302,14 @@ export function ContentPanel() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               {/* Export the current summary to a connected document provider
-                  (PRD FR-3). Renders nothing while Connections is off. */}
+                  (PRD FR-3). Renders nothing while Connections is off; the
+                  separator below follows its visibility so the hidden entry
+                  never leaves a double line before "Share". */}
               <SummaryExportMenuItem
                 fileId={selectedItemId}
                 disabled={currentFileSummarizing || !activeSummary?.id}
               />
-              <DropdownMenuSeparator />
+              {summaryExportVisible && <DropdownMenuSeparator />}
               {/* Share the whole note as markdown / PDF / themed image. The
                   dialog renders at panel level — see ShareNoteMenuItem doc. */}
               <ShareNoteMenuItem

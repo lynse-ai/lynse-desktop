@@ -4,20 +4,17 @@ import { completeOAuth, setDefaultDestination, setPaywall } from "../fixtures/in
 /**
  * The UI-level Connections flow, verified against the stateful mock.
  *
- * Opt-in: `featureFlags.connections` is off until the backend deploys, so this
- * suite skips unless BOTH the flag is flipped locally and the run is marked
- * with `LYNSE_E2E_CONNECTIONS=on`. That keeps CI honest about the shipped
- * state while leaving a runnable proof of the whole flow:
+ * The desktop fixture enables test mode for the beta Connections surface.
+ * Run the opt-in suite with:
  *
- *   pnpm --filter @lynse/tauri exec vite build   # not needed; dev:e2e serves it
- *   LYNSE_E2E_CONNECTIONS=on npx playwright test --config playwright.desktop.config.ts 31-connections
+ *   LYNSE_E2E_CONNECTIONS=on pnpm test:desktop 31-connections-ui
  *
  * What it covers: the section renders with its five groups, the reminder card
  * shows, Connect drives the real handshake (browser step completed from the
  * mock side, exactly as the backend's web relay would), the connected account
  * plus Sync/Notify appear, and a Pro provider surfaces the paywall copy.
  */
-test.skip(process.env.LYNSE_E2E_CONNECTIONS !== "on", "flip featureFlags.connections to run");
+test.skip(process.env.LYNSE_E2E_CONNECTIONS !== "on", "opt into the Connections UI suite");
 
 // One at a time: each test drives the same compile-time feature and shares the
 // mock's OAuth state machine semantics, so parallel workers make a row look
@@ -73,11 +70,11 @@ test("connections UI renders and a connect completes end to end", async ({ page,
   expect(dumped).not.toMatch(/access_token|refresh_token|authorization_code/i);
   expect(dumped).not.toMatch(/access_token|refresh_token/);
 
-  await page.screenshot({ path: "connections-ui.png", fullPage: false });
+  await page.screenshot({ path: test.info().outputPath("connections-ui.png"), fullPage: false });
 });
 
-/** FR-2: multi-select on the Todos page, then export to a connected provider. */
-test("action items can be selected and exported to Todoist", async ({ page, mockServer }) => {
+/** FR-2: export one cloud todo from its card menu. */
+test("a cloud todo can be exported to Todoist from its card menu", async ({ page, mockServer }) => {
   // Connect Todoist and give it a project over HTTP first: this test covers the
   // selection UI and the export call, not the handshake (proved in test 1).
   const st = (
@@ -91,14 +88,10 @@ test("action items can be selected and exported to Todoist", async ({ page, mock
   await openWorkspace(page, mockServer.url);
   await page.getByRole("complementary").getByRole("button", { name: "Todos" }).click();
 
-  // Enter selection mode from the title bar, then take everything.
-  await page.getByRole("button", { name: "Export" }).click();
-  await page.getByRole("button", { name: "Select all" }).click();
-  await expect(page.getByText("1 selected")).toBeVisible();
-
-  await page.getByRole("button", { name: "Export" }).click();
-  const dialog = page.getByRole("dialog").last();
-  await expect(dialog.getByText("Export action items")).toBeVisible();
+  await page.getByText("Send the Q3 summary to the team", { exact: true }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Export", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Export action items" });
+  await expect(dialog).toBeVisible();
 
   // Pick a destination — without one the backend bounces with 409.
   await dialog.getByRole("combobox").nth(1).click();
@@ -147,7 +140,7 @@ test("a note summary can be exported to a connected document provider", async ({
   });
 
   await openWorkspace(page, mockServer.url);
-  await page.getByRole("complementary").getByRole("button", { name: "Notes" }).click();
+  await page.getByRole("complementary").getByRole("button", { name: "Notes", exact: true }).click();
   await page.getByRole("button", { name: /Q3 review\.m4a/ }).click();
 
   // The export item acts on the *selected* summary, so open its tab first.

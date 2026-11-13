@@ -26,7 +26,7 @@ import {
 } from "./diagnostics";
 import { ReportProblemAnnotator } from "./report-problem-annotator";
 import { ReportAttachmentComposer } from "./report-attachment-composer";
-import { FeedbackCenterDialog } from "./feedback-center/feedback-center-dialog";
+import { FeedbackCenterDialog } from "./feedback/suggestion-center";
 import { RESOURCES } from "./locales";
 import { isTauri } from "./layout/use-maximized";
 

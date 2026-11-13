@@ -62,6 +62,29 @@ fn retry_after(value: &str) -> Option<Duration> {
         })
 }
 
+fn binding_key(session: &Session) -> String {
+    store::digest(
+        json!([
+            session.scope,
+            session.generation,
+            session.user_id,
+            session.base_url,
+            session.agent_url,
+            store::digest(&session.token)
+        ])
+        .to_string(),
+    )
+}
+
+fn memory_url(session: &Session, path: &str) -> String {
+    let prefix = if session.agent_url == session.base_url {
+        "/api/business/ai/memory"
+    } else {
+        "/api/memory"
+    };
+    format!("{}{prefix}{path}", session.agent_url)
+}
+
 impl Transport {
     fn client(&self) -> CommandResult<&reqwest::Client> {
         self.client
@@ -85,9 +108,9 @@ impl Transport {
         deadline: Instant,
         check: &impl Fn() -> CommandResult<()>,
     ) -> CommandResult<Value> {
-    for attempt in 0..2 {
-        check()?;
-        let attempt_started = Instant::now();
+        for attempt in 0..2 {
+            check()?;
+            let attempt_started = Instant::now();
             let cooldown = self
                 .cooldown
                 .lock()
@@ -184,28 +207,14 @@ impl Transport {
         unreachable!()
     }
 
-    pub(super) async fn request(
+    async fn ensure_binding(
         &self,
         session: &Session,
-        path: &str,
-        body: Option<Value>,
-        operation: Option<&str>,
-        check: impl Fn() -> CommandResult<()>,
-    ) -> CommandResult<Value> {
-        check()?;
-        let deadline = Instant::now() + REQUEST_BUDGET;
-        let key = store::digest(
-            json!([
-                session.scope,
-                session.generation,
-                session.user_id,
-                session.base_url,
-                session.agent_url,
-                store::digest(&session.token)
-            ])
-            .to_string(),
-        );
-        let client = self.client()?;
+        client: &reqwest::Client,
+        key: &str,
+        deadline: Instant,
+        check: &impl Fn() -> CommandResult<()>,
+    ) -> CommandResult<()> {
         if session.agent_url != session.base_url {
             // Single-flight binding is separate from the local commit lock.
             let mut binding = tokio::time::timeout(REQUEST_BUDGET, self.binding.lock())
@@ -216,7 +225,7 @@ impl Transport {
             check()?;
             if !binding
                 .as_ref()
-                .is_some_and(|(cached, until)| cached == &key && *until > Instant::now())
+                .is_some_and(|(cached, until)| cached == key && *until > Instant::now())
             {
                 *binding = None;
                 let value = self
@@ -227,9 +236,9 @@ impl Transport {
                             .json(&json!({"host": session.base_url})),
                         "identity_binding",
                         true,
-                        &key,
+                        key,
                         deadline,
-                        &check,
+                        check,
                     )
                     .await?;
                 if value["user_id"].as_str() != Some(&session.user_id)
@@ -241,20 +250,81 @@ impl Transport {
                     return Err("Cloud knowledge identity mismatch".into());
                 }
                 check()?;
-                *binding = Some((key.clone(), Instant::now() + BINDING_TTL));
+                *binding = Some((key.to_owned(), Instant::now() + BINDING_TTL));
             }
         }
-        let prefix = if session.agent_url == session.base_url {
-            "/api/business/ai/memory"
+        Ok(())
+    }
+
+    pub(super) async fn publication_request(
+        &self,
+        session: &Session,
+        path: &str,
+        body: Option<&Value>,
+        operation: Option<&str>,
+        check: impl Fn() -> CommandResult<()>,
+    ) -> CommandResult<(u16, Value)> {
+        let deadline = Instant::now() + REQUEST_BUDGET;
+        let key = binding_key(session);
+        let client = self.client()?;
+        self.ensure_binding(session, client, &key, deadline, &check)
+            .await?;
+        check()?;
+        let url = memory_url(session, path);
+        let call = if let Some(body) = body {
+            client.post(url).json(body)
         } else {
-            "/api/memory"
+            client.get(url)
         };
+        let call = if let Some(operation) = operation {
+            call.header("Operation-Id", operation)
+        } else {
+            call
+        };
+        let response = call
+            .header("Authorization", &session.token)
+            .timeout(deadline.saturating_duration_since(Instant::now()))
+            .send()
+            .await
+            .map_err(|error| connection_error(&error, "meeting_publication"))?;
+        let status = response.status();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            let mut binding = self.binding.lock().await;
+            if binding.as_ref().is_some_and(|(cached, _)| cached == &key) {
+                *binding = None;
+            }
+        }
+        let value = response.json().await.or_else(|error| {
+            if status.is_success() {
+                Err(connection_error(&error, "meeting_publication"))
+            } else {
+                Ok(Value::Null)
+            }
+        })?;
+        check()?;
+        Ok((status.as_u16(), value))
+    }
+
+    pub(super) async fn request(
+        &self,
+        session: &Session,
+        path: &str,
+        body: Option<Value>,
+        operation: Option<&str>,
+        check: impl Fn() -> CommandResult<()>,
+    ) -> CommandResult<Value> {
+        check()?;
+        let deadline = Instant::now() + REQUEST_BUDGET;
+        let key = binding_key(session);
+        let client = self.client()?;
+        self.ensure_binding(session, client, &key, deadline, &check)
+            .await?;
         let stage = if path == "/capabilities" {
             "capabilities"
         } else {
             "cloud_access"
         };
-        let url = format!("{}{prefix}{path}", session.agent_url);
+        let url = memory_url(session, path);
         let read = body.is_none();
         let mut call = if read {
             client.get(url)

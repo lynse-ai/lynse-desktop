@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { getAuthStore, useAuthStore } from "@lynse/core/auth";
 import {
   type TodoItem,
@@ -34,9 +35,8 @@ function nowIso(): string {
  * home summary strip, home feed, global search, activity heatmap, todo
  * page — shares one list and a toggle is reflected everywhere instantly.
  *
- * Startup cache: the last loaded list is mirrored to localStorage and seeds
- * the store, so consumers paint real content immediately and the mount load
- * refreshes in the background. Remount loads are throttled (TODO_LOAD_
+ * Startup cache: device-local items seed the store, and account-owned items
+ * are loaded for the active session. Remount loads are throttled (TODO_LOAD_
  * THROTTLE_MS) — every consumer mount used to re-fetch the whole cloud list;
  * now only loads outside the window, auth flips, errors and explicit
  * `force` refreshes hit the network.
@@ -71,12 +71,13 @@ interface TodoStore {
 /** Concurrent load dedupe: several consumers mount together and each fires
  *  the initial load; they share one fetch instead of racing. */
 let loadInFlight: Promise<void> | null = null;
+let sessionGeneration = 0;
 
 /** Re-fetch window for consumer remounts. Explicit refreshes (`force`) and
  *  auth flips always reload. */
 export const TODO_LOAD_THROTTLE_MS = 60_000;
 
-// ── Startup cache (localStorage mirror of the merged list) ──
+// Device-local startup cache.
 
 const TODO_CACHE_KEY = "lynse.todos.cache.v1";
 /** The persisted copy exists for instant paint; real stores stay the source
@@ -96,6 +97,8 @@ function readTodoCache(): TodoItem[] {
           typeof entry === "object" &&
           entry !== null &&
           typeof (entry as TodoItem).id === "string" &&
+          !(entry as TodoItem).backend &&
+          !(entry as TodoItem).workbenchScope &&
           typeof (entry as TodoItem).title === "string",
       )
       .slice(0, TODO_CACHE_LIMIT);
@@ -107,7 +110,8 @@ function readTodoCache(): TodoItem[] {
 function writeTodoCache(items: TodoItem[]): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(TODO_CACHE_KEY, JSON.stringify(items.slice(0, TODO_CACHE_LIMIT)));
+    const local = items.filter((item) => !item.backend && !item.workbenchScope);
+    localStorage.setItem(TODO_CACHE_KEY, JSON.stringify(local.slice(0, TODO_CACHE_LIMIT)));
   } catch {
     /* quota / privacy mode — the cache is best-effort */
   }
@@ -140,7 +144,8 @@ const useTodoStore = create<TodoStore>((set, get) => ({
       return Promise.resolve();
     }
     if (loadInFlight) return loadInFlight;
-    loadInFlight = (async () => {
+    const generation = sessionGeneration;
+    const request = (async () => {
       // Full skeleton only before the first load has landed; later loads
       // (remounts, auth flips) keep the list visible behind the refresh
       // spinner.
@@ -149,6 +154,7 @@ const useTodoStore = create<TodoStore>((set, get) => ({
       set({ error: null });
       try {
         const { items, cloudFailed } = await fetchTodos();
+        if (generation !== sessionGeneration) return;
         set({ todos: items, loaded: true, lastLoadedAt: Date.now(), lastLoadedAuthed: authed });
         // Only surface the failure when the user is signed in — otherwise
         // the cloud being unreachable is expected (local-only mode).
@@ -156,18 +162,20 @@ const useTodoStore = create<TodoStore>((set, get) => ({
           set({ error: "云端待办获取失败，已显示本地待办" });
         }
       } catch (e) {
+        if (generation !== sessionGeneration) return;
         // Keep whatever we already had; surface the failure.
         set({ todos: getLocalTodos(), loaded: true });
         set({
           error: e instanceof Error ? `待办加载失败：${e.message}` : "待办加载失败",
         });
       } finally {
-        set({ loading: false, refreshing: false });
+        if (generation === sessionGeneration) set({ loading: false, refreshing: false });
       }
     })().finally(() => {
-      loadInFlight = null;
+      if (loadInFlight === request) loadInFlight = null;
     });
-    return loadInFlight;
+    loadInFlight = request;
+    return request;
   },
 
   addLocal: async (title) => {
@@ -216,14 +224,14 @@ const useTodoStore = create<TodoStore>((set, get) => ({
   },
 
   clearCompleted: async () => {
+    const generation = sessionGeneration;
     const completed = get().todos.filter((t) => t.completed);
     if (completed.length === 0) return;
     set({ clearing: true });
     // Optimistic removal so the UI feels instant.
     set((s) => ({ todos: s.todos.filter((x) => !x.completed) }));
 
-    // Cloud: one server call clears every completed todo; fall back to
-    // per-item deletes if the bulk endpoint fails.
+    // Try the bulk endpoint first. Individual fallback preserves partial success.
     const cloudIds = completed.filter((t) => t.backend).map((t) => t.id);
     const localCompleted = completed.filter((t) => !t.backend);
     const failures: string[] = [];
@@ -231,14 +239,15 @@ const useTodoStore = create<TodoStore>((set, get) => ({
       try {
         await clearCloudCompleted();
       } catch (e) {
-        console.error("[Todo] cloud clear failed, falling back to per-item delete:", e);
-        await Promise.all(
-          cloudIds.map((id) =>
-            deleteCloudTodos([id]).catch(() => {
-              failures.push(id);
-            }),
-          ),
-        );
+        if (generation !== sessionGeneration) return;
+        console.error("[Todo] cloud clear failed, falling back to individual deletes:", e);
+        await Promise.all(cloudIds.map(async (id) => {
+          try {
+            await deleteCloudTodos([id]);
+          } catch {
+            failures.push(id);
+          }
+        }));
       }
     }
     // Local: per-item delete through the bridge.
@@ -250,13 +259,14 @@ const useTodoStore = create<TodoStore>((set, get) => ({
         }),
       ),
     );
+    if (generation !== sessionGeneration) return;
     set({ clearing: false });
-    if (failures.length > 0) {
-      set({ error: `有 ${failures.length} 条已完成待办未能删除，已为您重新载入。` });
-    }
     // Reconcile with the real stores so any item whose deletion failed
     // reappears instead of silently staying gone.
     await get().load({ force: true });
+    if (generation === sessionGeneration && failures.length > 0) {
+      set({ error: `有 ${failures.length} 条已完成待办未能删除，已为您重新载入。` });
+    }
   },
 
   upsert: (todo) => {
@@ -278,6 +288,27 @@ useTodoStore.subscribe((state, prev) => {
   cacheWriteTimer = setTimeout(() => writeTodoCache(state.todos), 800);
 });
 
+let observedAuthStore: ReturnType<typeof getAuthStore>;
+
+function observeTodoSession() {
+  const auth = getAuthStore();
+  if (!auth?.subscribe || observedAuthStore === auth) return;
+  observedAuthStore = auth;
+  auth.subscribe((current, previous) => {
+    if (current.isAuthenticated === previous.isAuthenticated
+      && (!previous.user || previous.user.id === current.user?.id)) return;
+    sessionGeneration += 1;
+    loadInFlight = null;
+    if (cacheWriteTimer) clearTimeout(cacheWriteTimer);
+    const todos = useTodoStore.getState().todos.filter((todo) => !todo.backend && !todo.workbenchScope);
+    useTodoStore.setState({
+      todos, loaded: todos.length > 0, lastLoadedAt: 0, lastLoadedAuthed: null,
+      loading: false, refreshing: false, clearing: false, error: null,
+    });
+    writeTodoCache(todos);
+  });
+}
+
 /**
  * Hook façade over the shared store. `enabled: false` skips triggering the
  * initial load from this mount — used by consumers that mount eagerly but
@@ -286,13 +317,28 @@ useTodoStore.subscribe((state, prev) => {
  */
 export function useTodos({ enabled = true }: { enabled?: boolean } = {}) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-  const store = useTodoStore();
+  const userId = useAuthStore((s) => s.user?.id);
+  const store = useTodoStore(useShallow((state) => ({
+    todos: state.todos,
+    loading: state.loading,
+    refreshing: state.refreshing,
+    clearing: state.clearing,
+    error: state.error,
+    loaded: state.loaded,
+    load: state.load,
+    addLocal: state.addLocal,
+    toggle: state.toggle,
+    remove: state.remove,
+    patchLocal: state.patchLocal,
+    clearCompleted: state.clearCompleted,
+  })));
+  const { load } = store;
 
-  // Reload on auth flips (login / logout) so the list matches the session.
   useEffect(() => {
+    observeTodoSession();
     if (!enabled) return;
-    void store.load({ initial: true });
-  }, [enabled, isAuthenticated, store.load]);
+    void load({ initial: true });
+  }, [enabled, isAuthenticated, userId, load]);
 
   // Skeleton from the very first paint for mounts that will trigger the
   // initial load — the store's own `loading` only flips inside the effect.
@@ -304,7 +350,7 @@ export function useTodos({ enabled = true }: { enabled?: boolean } = {}) {
     refreshing: store.refreshing,
     clearing: store.clearing,
     error: store.error,
-    load: store.load,
+    load,
     addLocal: store.addLocal,
     toggle: store.toggle,
     remove: store.remove,

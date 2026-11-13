@@ -103,13 +103,8 @@
 }
 
 :root {
-    /* Bundled pairing — Inter for Latin, OPPO Sans 4.0 for CJK (@font-face in
-       fonts.css). System families below are pure fallback for environments
-       without the bundled fonts and for glyphs neither family covers. */
-    --font-sans: "Inter", "OPPO Sans", "OPPO Sans 4.0", ui-sans-serif, system-ui,
-        -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-        "Microsoft YaHei", "Noto Sans CJK SC", sans-serif,
-        "Apple Color Emoji", "Segoe UI Emoji";
+    --font-system: system-ui, sans-serif;
+    --font-sans: var(--font-system);
     --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
         "Liberation Mono", "Courier New", monospace;
     /* Serif display face — the bundled Noto Serif SC variable also covers

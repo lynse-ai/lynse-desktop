@@ -501,8 +501,9 @@ async fn commit_document_inner(
     }
     if entry.status == "conflict" || !document.ai_context_enabled {
         forget_source(&mut manifest, &document.id);
-        // Derived candidates stop being used with the source's eligibility.
-        super::meeting_candidates::forget_source_entries(&root, &document.id);
+        if let Err(error) = super::meeting_candidates::withdraw_source(&root, &document.id) {
+            log::warn!("Candidate withdrawal deferred: {error}");
+        }
     } else if changed {
         manifest.memories.retain(|item| {
             item["sourceId"] != document.id || item["pinned"] == true || item["userEdited"] == true

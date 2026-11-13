@@ -34,9 +34,10 @@ export default function RootLayout({
       suppressHydrationWarning
       className="antialiased font-sans h-full"
     >
-      {/* Pre-paint pass of the appearance customization (colors only) so a
-          customized theme never flashes the stock look before hydration. */}
-      <script dangerouslySetInnerHTML={{ __html: APP_THEME_BOOT_SNIPPET }} />
+      <head>
+        {/* Apply the saved appearance before the first paint. */}
+        <script dangerouslySetInnerHTML={{ __html: APP_THEME_BOOT_SNIPPET }} />
+      </head>
       <body className="h-full overflow-hidden">
         <ThemeProvider>
           <WebProviders>

@@ -1,6 +1,6 @@
 "use client";
 
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
 import {
@@ -25,7 +25,7 @@ import {
   WORKBENCH_MODEL_CHANGED_EVENT,
 } from "./workbench-model";
 
-const SettingsDialog = lazy(() => import("../settings/settings-dialog").then(module => ({ default: module.SettingsDialog })));
+import { SettingsDialog } from "../settings/settings-dialog";
 
 /**
  * Picks which custom model knowledge organization runs on. Organization
@@ -110,6 +110,6 @@ export function WikiModelProfile({ disabled = false }: { disabled?: boolean }) {
     {notice && <p role="status" className={`text-sm ${notice === "workbench.organize_model_empty" ? "text-muted-foreground" : "text-destructive"}`}>{t(notice)}</p>}
     {error && <p role="alert" className="break-words text-sm text-destructive">{error}</p>}
     <Button type="button" size="sm" variant="outline" onClick={() => setSettingsOpen(true)}>{t("workbench.organize_model_manage")}</Button>
-    {settingsOpen && <Suspense fallback={null}><SettingsDialog open onOpenChange={setSettingsOpen} initialSectionId="custom_models" /></Suspense>}
+    {settingsOpen && <SettingsDialog open onOpenChange={setSettingsOpen} initialSectionId="custom_models" />}
   </section>;
 }

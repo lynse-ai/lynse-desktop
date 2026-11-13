@@ -1,7 +1,11 @@
-/** The remote MCP endpoint for the current deployment. The web app and the
- *  MCP service share the origin (nginx proxies /mcp), so the connector
- *  address derives from where the page is served. */
+/** The remote MCP endpoint for the current deployment. Production serves the
+ *  connector on the dedicated mcp.* hosts (oauth resource identity); the legacy
+ *  www origin still proxies /mcp for existing sessions. Local/dev keeps the
+ *  same-origin path. */
 export function mcpEndpointUrl(): string {
   if (typeof window === "undefined") return "";
-  return `${window.location.origin}/mcp`;
+  const { origin, hostname } = window.location;
+  if (hostname === "www.lynse.ai" || hostname === "lynse.ai") return "https://mcp.lynse.ai/mcp";
+  if (hostname === "www.lynse.cn" || hostname === "lynse.cn") return "https://mcp.lynse.cn/mcp";
+  return `${origin}/mcp`;
 }

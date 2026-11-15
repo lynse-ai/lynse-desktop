@@ -145,6 +145,10 @@ async function request<T>(path: string, body?: unknown, operationId?: string, si
 }
 
 export const memoryApi = {
+  searchKnowledge: (query: string, signal?: AbortSignal) => request<{
+    items: { id: string; title: string; kind: string; excerpt: string; source: { id: string; revision: string; quote: string } }[];
+    retrieval?: { mode: "lexical" | "hybrid"; degraded: boolean };
+  }>("/knowledge-search", { query }, undefined, signal),
   files: (signal?: AbortSignal) => request<{ files: MemoryFileDescriptor[] }>("/files", undefined, undefined, signal),
   readFile: (path: string, signal?: AbortSignal) => request<MemoryFileDocument>(`/files/read?path=${encodeURIComponent(path)}`, undefined, undefined, signal),
   saveFile: (body: { path: string; revision: string; markdown: string }, operationId: string) => request<MemoryFileDocument>("/files/save", { ...body, operation_id: operationId }, operationId),

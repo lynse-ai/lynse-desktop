@@ -13,6 +13,7 @@ import { GraphSourceNote } from "./graph-source-note";
 import { GraphInsights } from "./graph-insights";
 import { KnowledgeGraphScene } from "./knowledge-graph-scene";
 import { useWiki } from "./wiki";
+import { WikiConflictDialog } from "./wiki-conflict-dialog";
 import { CreateWikiTopic, CollectionContent } from "./wiki-collection";
 import { GroupWikiTopics } from "./wiki-grouping";
 import { browsingGraph, browsableTopics, parentTopics, topLevelTopics, recentWikiChanges, topicChanges, topicDetails, topicOverview, topicSources } from "./wiki-browse";
@@ -151,6 +152,7 @@ export function WikiWorkspace() {
           <p>{t(topic.published?.review === "auto_validated" ? "workbench.auto_authored" : "workbench.published")}{topic.published?.createdAt ? ` · ${date(topic.published.createdAt)}` : ""}</p>
         </div>
         {topic.published?.partial && <p className="text-sm font-medium text-amber-600">{t("workbench.wiki_partial")}</p>}
+        {wiki.data?.syncConflicts?.includes(topic.id) && <WikiConflictDialog key={`${scope}:${topic.id}`} topicId={topic.id} resolve={wiki.mutate} />}
         {topic.stale && <p className="text-sm text-muted-foreground">{t("workbench.auto_stale")}</p>}
         {topic.error && <div role="alert" className="space-y-2">
           <p className="text-sm text-destructive">{t("workbench.auto_update_failed")}</p>
@@ -161,6 +163,18 @@ export function WikiWorkspace() {
         {parents.map(parent => <Button key={parent.id} size="sm" variant="outline" className="h-auto min-h-7 max-w-full whitespace-normal text-start" onClick={() => openLinkedTopic(parent)}>{t("workbench.hierarchy_parent_link", { title: parent.title })}</Button>)}
       </div>}
       {!topic.collection && <Markdown mode="full">{topic.published?.markdown.replace(/^# [^\n]+\n/, "") ?? ""}</Markdown>}
+      {topic.candidate && <details className="space-y-3 rounded-lg border border-border p-4">
+        <summary className="cursor-pointer text-sm font-medium">{t("workbench.candidate")}</summary>
+        <p className="text-sm text-muted-foreground">{t("workbench.wiki_draft_hint")}</p>
+        <Markdown mode="full">{topic.candidate.markdown}</Markdown>
+        <div className="flex flex-wrap gap-2">
+          {topic.candidate.citations.map((ref, index) => <Button key={`${ref.id}:${index}`} size="sm" variant="ghost" title={ref.quote} onClick={() => setSource(ref)}>{sourceName(ref)}</Button>)}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" disabled={wiki.busy || !wiki.status?.allowAi} onClick={() => void wiki.mutate({ action: "review", id: topic.id, candidateId: topic.candidate!.id, approve: true }).catch(() => undefined)}>{t("workbench.publish")}</Button>
+          <Button size="sm" variant="ghost" disabled={wiki.busy} onClick={() => void wiki.mutate({ action: "review", id: topic.id, candidateId: topic.candidate!.id, approve: false }).catch(() => undefined)}>{t("workbench.reject")}</Button>
+        </div>
+      </details>}
       {topic.notes && <section className="space-y-2 rounded-lg bg-muted/40 p-4">
         <h3 className="text-sm font-semibold">{t("workbench.auto_user_notes")}</h3>
         <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{topic.notes}</p>

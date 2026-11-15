@@ -5,15 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 #[path = "wiki_batch_layout.rs"]
 mod batch_layout;
-#[path = "wiki_cache_upgrade.rs"]
-mod cache_upgrade;
 #[path = "wiki_catalog_retrieval.rs"]
 mod retrieval;
-#[path = "wiki_scope_cache.rs"]
-mod scope_cache;
 #[path = "wiki_source_layout.rs"]
 mod source_layout;
-pub(super) use scope_cache::migrate as migrate_scope_cache;
 
 pub(in crate::workbench) fn validate_automation(
     config: &store::WikiAutomation,
@@ -259,7 +254,8 @@ pub(super) fn transport_payload(
         "title":mask(&doc.title),"text":mask(doc.text().trim()),"segments":[]})
         })
         .collect();
-    let mut evidence = evidence;
+    // Audio positions are restored locally after matching verbatim quotes.
+    let mut evidence = content_cache::without_audio_positions(&evidence);
     fn mask_value(value: &mut Value) {
         match value {
             Value::String(text) => *text = mask(text),
@@ -368,147 +364,6 @@ pub(super) fn source_failures(root: &Path) -> CommandResult<Value> {
     Ok(json!(failures))
 }
 
-// Only adopt receipts whose complete old input identity and current citations match.
-fn migrate_catalog_revision(
-    root: &Path,
-    local: &Path,
-    catalog: &mut Catalog,
-    docs: &[Document],
-    manifest: &Manifest,
-    config: &Models,
-    previous: &str,
-) -> CommandResult<()> {
-    if previous.is_empty() || previous == config.text_revision {
-        return Ok(());
-    }
-    let mut old = config.clone();
-    old.text_revision = previous.into();
-    migrate_scope_cache(root, local, docs, manifest, &old)?;
-    let mut values = topics(root)?;
-    let mut page_sources = PageSources::new(local, manifest);
-    let mut catalog_changed = false;
-    let mut topics_changed = false;
-    for doc in docs {
-        for text in source_chunks(doc, catalog) {
-            let key = catalog_chunk_key(doc, &text, config);
-            let old_key = catalog_chunk_key(doc, &text, &old);
-            if catalog.chunks.contains_key(&key) {
-                continue;
-            }
-            let Some(rows) = catalog.chunks.get(&old_key).cloned() else {
-                continue;
-            };
-            if rows.iter().all(|row| {
-                row.citations.iter().any(|r| r.id == doc.id)
-                    && sync::validate_result(docs, manifest, &json!({"citations":row.citations}))
-                        .is_ok()
-            }) {
-                catalog.chunks.insert(key.clone(), rows);
-                catalog.failed.remove(&key);
-                catalog.details.remove(&key);
-                catalog.failed.remove(&old_key);
-                catalog.details.remove(&old_key);
-                catalog_changed = true;
-            }
-        }
-    }
-    // Recover associations from validated receipts, including state damaged by older retries.
-    let mut links: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    for doc in docs {
-        for text in source_chunks(doc, catalog) {
-            if let Some(rows) = catalog.chunks.get(&catalog_chunk_key(doc, &text, config)) {
-                for row in rows {
-                    let identity = format!("{}:{}:{}", row.kind, doc.id, normalize(&row.key));
-                    if let Some(id) = row
-                        .existing_id
-                        .as_ref()
-                        .or_else(|| catalog.identities.get(&identity))
-                    {
-                        links.entry(id.clone()).or_default().insert(doc.id.clone());
-                        links
-                            .entry(id.clone())
-                            .or_default()
-                            .extend(row.citations.iter().map(|r| r.id.clone()));
-                    }
-                }
-            }
-        }
-    }
-    for topic in &mut values {
-        if topic.collection.is_some() {
-            continue;
-        }
-        if topic.source_ids.is_empty() {
-            if let Some(ids) = links.get(&topic.id).filter(|ids| !ids.is_empty()) {
-                topic.source_ids = ids.iter().cloned().collect();
-                topics_changed = true;
-            }
-        }
-        let selected: Vec<_> = docs
-            .iter()
-            .filter(|doc| topic.source_ids.contains(&doc.id))
-            .cloned()
-            .collect();
-        if selected.is_empty() || topic.force_refresh || !topic.error.is_empty() {
-            continue;
-        }
-        let current_version = page_version(topic, &selected, manifest, config);
-        if topic.last_fingerprint == current_version {
-            continue;
-        }
-        if (topic.last_fingerprint == page_version(topic, &selected, manifest, &old)
-            || manifest.wiki_automation.as_ref().is_some_and(|scope| {
-                topic.last_fingerprint == scope_cache::legacy_version(topic, &selected, scope, &old)
-            }))
-            && topic.published.as_ref().is_some_and(|page| {
-                page_sources.valid_page(page) && page.content_hash == store::digest(&page.markdown)
-            })
-        {
-            let expected = page_fingerprint(
-                topic,
-                manifest,
-                &old,
-                &topic.published.as_ref().unwrap().citations,
-            );
-            let legacy_expected = manifest.wiki_automation.as_ref().map(|scope| {
-                page_fingerprint_with_legacy_scope(
-                    topic,
-                    manifest,
-                    &old,
-                    &topic.published.as_ref().unwrap().citations,
-                    Some(scope),
-                )
-            });
-            let replacement = page_fingerprint(
-                topic,
-                manifest,
-                config,
-                &topic.published.as_ref().unwrap().citations,
-            );
-            if !topic.published.as_ref().is_some_and(|page| {
-                page.fingerprint == expected || legacy_expected.as_ref() == Some(&page.fingerprint)
-            }) {
-                continue;
-            }
-            topic.last_fingerprint = current_version;
-            topic.last_attempt_fingerprint = topic.last_fingerprint.clone();
-            if let Some(page) = topic.published.as_mut() {
-                page.fingerprint = replacement;
-                page.cache_key = topic.last_fingerprint.clone();
-                write_json(&root.join(&topic.id).join("published.json"), page)?;
-            }
-            topics_changed = true;
-        }
-    }
-    if topics_changed {
-        save_topics(root, &values)?;
-    }
-    if catalog_changed {
-        write_json(&catalog_path(root), catalog)?;
-    }
-    Ok(())
-}
-
 fn reconcile_sources(
     values: &mut [Topic],
     active: &BTreeMap<String, BTreeSet<String>>,
@@ -549,9 +404,21 @@ fn catalog_path(root: &Path) -> PathBuf {
     root.join("automatic-catalog.json")
 }
 
+fn merge_recent_catalog(root: &Path, catalog: &mut Catalog) -> CommandResult<()> {
+    // Other devices' validated cache slices can arrive while the model runs.
+    let recent: Catalog = read_json(&catalog_path(root))?;
+    for (key, rows) in recent.chunks {
+        catalog.chunks.entry(key).or_insert(rows);
+    }
+    for (key, topic) in recent.identities {
+        catalog.identities.entry(key).or_insert(topic);
+    }
+    Ok(())
+}
+
 /// Per-source projection of the extraction cache for cross-device sync.
 /// Chunk keys are content-addressed, so the slices stay valid on any device
-/// that holds the same source text and model configuration.
+/// that holds the same source text and knowledge contract.
 pub(super) fn source_catalog_slices(
     root: &Path,
     docs: &[Document],
@@ -561,10 +428,14 @@ pub(super) fn source_catalog_slices(
     let mut slices: BTreeMap<String, Value> = BTreeMap::new();
     for doc in docs {
         let mut chunks = BTreeMap::new();
-        for text in source_chunks(doc, &catalog) {
+        for text in source_layout::prepare(root, doc)? {
             let key = catalog_chunk_key(doc, &text, config);
             if let Some(rows) = catalog.chunks.get(&key) {
-                chunks.insert(key, rows.clone());
+                let mut rows = rows.clone();
+                for row in &mut rows {
+                    row.citations.retain(|reference| reference.id == doc.id);
+                }
+                chunks.insert(key, rows);
             }
         }
         let marker = format!(":{}:", doc.id);
@@ -704,6 +575,17 @@ fn normalize(text: &str) -> String {
         .flat_map(char::to_lowercase)
         .collect()
 }
+
+fn automatic_topic_id(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!("lynse-wiki-topic-v2:{key}"));
+    let mut bytes = [0; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    uuid::Builder::from_custom_bytes(bytes)
+        .into_uuid()
+        .to_string()
+}
+
 fn apply_catalog(
     topics: &mut Vec<Topic>,
     catalog: &mut Catalog,
@@ -717,7 +599,7 @@ fn apply_catalog(
             .existing_id
             .clone()
             .or_else(|| catalog.identities.get(&key).cloned())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            .unwrap_or_else(|| automatic_topic_id(&key));
         catalog.identities.insert(key.clone(), id.clone());
         if catalog.deleted.contains(&id) {
             ids.push(String::new());
@@ -828,29 +710,6 @@ fn prepare_catalog<'a>(
     plan
 }
 
-fn adopt_legacy_sources(topics: &mut [Topic]) -> bool {
-    let mut changed = false;
-    for topic in topics {
-        if topic.source_ids.is_empty() && topic.automatic_key.is_empty() {
-            if let Some(page) = topic
-                .published
-                .as_ref()
-                .filter(|page| matches!(page.review.as_str(), "approved" | "auto_validated"))
-            {
-                topic.source_ids = page
-                    .citations
-                    .iter()
-                    .map(|reference| reference.id.clone())
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect();
-                changed |= !topic.source_ids.is_empty();
-            }
-        }
-    }
-    changed
-}
-
 fn citations_key(value: &Value) -> Vec<Value> {
     value
         .as_array()
@@ -893,51 +752,31 @@ fn catalog_chunk_key(doc: &Document, text: &str, config: &Models) -> String {
     )
 }
 
-fn legacy_input_key(doc: &Document, config: &Models) -> String {
-    store::digest(
-        json!([
-            "wiki-auto-source-v2",
-            doc.id,
-            doc.revision,
-            doc.kind,
-            doc.text(),
-            config.text_revision
-        ])
-        .to_string(),
-    )
-}
-
 fn page_version(topic: &Topic, docs: &[Document], _manifest: &Manifest, config: &Models) -> String {
     // Authorization selects docs before this point; unrelated range settings are not model inputs.
     let sources: Vec<_> = docs.iter().map(|doc| input_key(doc, config)).collect();
     page_version_keys(topic, sources, &config.text_revision)
 }
 
-fn page_version_keys(topic: &Topic, mut sources: Vec<String>, text_revision: &str) -> String {
-    sources.sort();
-    store::digest(
-        json!([
-            "wiki-auto-page-v3",
-            topic.id,
-            topic.title,
-            topic.purpose,
-            topic.notes,
-            sources,
-            text_revision
-        ])
-        .to_string(),
-    )
+pub(super) fn adopt_page_identity(
+    topic: &mut Topic,
+    page: &mut Revision,
+    docs: &[Document],
+    manifest: &Manifest,
+    config: &Models,
+) -> CommandResult<()> {
+    let version = page_version(topic, docs, manifest, config);
+    if page.cache_key != version {
+        return Err("Synced Wiki page does not match its complete source inputs".into());
+    }
+    page.fingerprint = page_fingerprint(topic, manifest, config, &page.citations);
+    page.cache_key = version.clone();
+    topic.last_fingerprint = version.clone();
+    topic.last_attempt_fingerprint = version;
+    Ok(())
 }
 
-fn legacy_page_version(topic: &Topic, docs: &[Document], config: &Models) -> String {
-    let sources: Vec<_> = docs
-        .iter()
-        .map(|doc| legacy_input_key(doc, config))
-        .collect();
-    legacy_page_version_keys(topic, sources, &config.text_revision)
-}
-
-fn legacy_page_version_keys(
+pub(super) fn page_version_keys(
     topic: &Topic,
     mut sources: Vec<String>,
     text_revision: &str,
@@ -945,7 +784,7 @@ fn legacy_page_version_keys(
     sources.sort();
     store::digest(
         json!([
-            "wiki-auto-page-v2",
+            "wiki-auto-page-v4",
             topic.id,
             topic.title,
             topic.purpose,
@@ -955,6 +794,73 @@ fn legacy_page_version_keys(
         ])
         .to_string(),
     )
+}
+
+fn refresh_page_references(
+    root: &Path,
+    topics: &mut [Topic],
+    docs: &[Document],
+    manifest: &Manifest,
+    config: &Models,
+) -> CommandResult<bool> {
+    let mut changed = false;
+    let mut source_keys = BTreeMap::new();
+    for topic in topics {
+        if topic.excluded || topic.collection.is_some() {
+            continue;
+        }
+        for candidate in [false, true] {
+            let page = if candidate {
+                &topic.candidate
+            } else {
+                &topic.published
+            };
+            let Some(page) = page else { continue };
+            if page.fingerprint == page_fingerprint(topic, manifest, config, &page.citations)
+                || page.content_hash != store::digest(&page.markdown)
+                || page.cache_key.is_empty()
+            {
+                continue;
+            }
+            let keys = topic
+                .source_ids
+                .iter()
+                .filter_map(|id| {
+                    let doc = docs.iter().find(|doc| &doc.id == id)?;
+                    Some(
+                        source_keys
+                            .entry(id.clone())
+                            .or_insert_with(|| input_key(doc, config))
+                            .clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if keys.len() != topic.source_ids.len()
+                || keys.is_empty()
+                || page.cache_key != page_version_keys(topic, keys, &config.text_revision)
+            {
+                continue;
+            }
+            let Ok(value) = content_cache::rebind(
+                serde_json::to_value(page).map_err(|error| error.to_string())?,
+                docs,
+                manifest,
+            ) else {
+                continue;
+            };
+            let mut rebound: Revision =
+                serde_json::from_value(value).map_err(|error| error.to_string())?;
+            rebound.fingerprint = page_fingerprint(topic, manifest, config, &rebound.citations);
+            save_page(root, topic, &rebound, candidate)?;
+            if candidate {
+                topic.candidate = Some(rebound);
+            } else {
+                topic.published = Some(rebound);
+            }
+            changed = true;
+        }
+    }
+    Ok(changed)
 }
 
 fn source_evidence_key(doc: &Document, config: &Models) -> String {
@@ -964,7 +870,7 @@ fn source_evidence_key(doc: &Document, config: &Models) -> String {
 fn batch_compilation_key(topic: &Topic, config: &Models, batch: &[CompilationEvidence]) -> String {
     store::digest(
         json!([
-            "wiki-auto-compile-v2",
+            "wiki-auto-compile-v3",
             topic.id,
             topic.title,
             topic.purpose,
@@ -1025,7 +931,16 @@ fn processing_inputs(docs: &[Document], topics: &[Topic], config: &Models) -> St
             })
             .collect()
     };
-    store::digest(json!(["wiki-auto-run-v1", sources, config, collections, members]).to_string())
+    store::digest(
+        json!([
+            "wiki-auto-run-v1",
+            sources,
+            config.text_revision,
+            collections,
+            members
+        ])
+        .to_string(),
+    )
 }
 
 fn pending_compilation(
@@ -1044,10 +959,6 @@ fn pending_compilation(
             .source_ids
             .iter()
             .any(|id| failed_sources.contains(id))
-        || topic
-            .published
-            .as_ref()
-            .is_some_and(|page| page.content_hash != store::digest(&page.markdown))
     {
         return None;
     }
@@ -1199,9 +1110,31 @@ async fn compile_automatic_profile(
     config: &Models,
 ) -> Result<Revision, WikiFailure> {
     let query = format!("{}\n{}\nUser corrections (user-provided context, not verified meeting evidence): {}\nWrite Current situation, Important changes and Open questions in the requested language. Preserve source uncertainty. Do not treat unsupported user notes as meeting facts.",topic.title,topic.purpose,topic.notes);
+    let previous = topic.candidate.as_ref().or(topic.published.as_ref());
+    let mut sections = Vec::new();
     let mut evidence = Vec::new();
     let mut analysis_failures = Vec::new();
     for doc in docs {
+        let source_key = section_source_key(topic, doc, config);
+        if let Some(page) = previous.filter(|page| !topic.force_refresh && !page.partial) {
+            let saved: Vec<_> = page
+                .sections
+                .iter()
+                .filter(|section| section.source_key == source_key)
+                .collect();
+            if !saved.is_empty() {
+                let rebound =
+                    content_cache::rebind(json!(saved), std::slice::from_ref(doc), manifest)
+                        .and_then(|value| {
+                            serde_json::from_value::<Vec<WikiSection>>(value)
+                                .map_err(|error| error.to_string())
+                        });
+                if let Ok(saved) = rebound {
+                    sections.extend(saved);
+                    continue;
+                }
+            }
+        }
         let chunks = {
             let _guard = state.serial.lock().await;
             require_current(state, session)?;
@@ -1215,16 +1148,28 @@ async fn compile_automatic_profile(
             {
                 value
             } else {
+                let prepare = |value| {
+                    require_current(state, session)?;
+                    let value =
+                        content_cache::rebind(value, std::slice::from_ref(&part), manifest)?;
+                    sync::validate_result(std::slice::from_ref(&part), manifest, &value)?;
+                    // The stored row feeds compile evidence batches. Apply the
+                    // same row rules the compiler preflight enforces: a cached
+                    // row with broken citations (older processor shapes) must
+                    // invalidate here and re-extract instead of wedging every
+                    // future compile batch.
+                    let sources = [json!({"id":part.id,"revision":part.revision,
+                        "kind":part.kind,"title":mask(&part.title),
+                        "text":mask(part.text().trim()),"segments":[]})];
+                    super::validate_row(&content_cache::without_audio_positions(&value), &sources)
+                        .map_err(|detail| format!("analysis row invalid: {detail}"))?;
+                    Ok(value)
+                };
                 match cached_compilation_prepared(
                 root,
                 &key,
                 &state.serial,
-                |value| {
-                    require_current(state, session)?;
-                    let value = content_cache::rebind(value, std::slice::from_ref(&part), manifest)?;
-                    sync::validate_result(std::slice::from_ref(&part), manifest, &value)?;
-                    Ok(value)
-                },
+                prepare,
                 true,
                 request(
                     app,
@@ -1256,7 +1201,7 @@ async fn compile_automatic_profile(
             });
         }
     }
-    if evidence.is_empty() {
+    if evidence.is_empty() && sections.is_empty() {
         let failures = analysis_failures.len();
         return Err(WikiFailure::new(
             format!("No relevant source evidence found for this topic; {failures} chunks failed analysis"),
@@ -1264,25 +1209,49 @@ async fn compile_automatic_profile(
             Vec::new(),
         ));
     }
-    let batches = batch_layout::plan(root, topic, evidence, &config)?;
-    let mut bodies = Vec::new();
-    let mut refs = Vec::new();
-    let mut changes = Vec::new();
-    let mut overview = String::new();
+    let batches = batch_layout::plan(root, topic, evidence, config)?;
     let mut batch_failures = Vec::new();
+    let published_sections: BTreeMap<_, _> = topic
+        .candidate
+        .as_ref()
+        .or(topic.published.as_ref())
+        .into_iter()
+        .flat_map(|page| &page.sections)
+        .map(|section| (section.key.as_str(), section))
+        .collect();
     for batch in batches {
         let parts = compilation_parts(&batch)?;
         let key = batch_compilation_key(topic, &config, &batch);
+        let source = docs
+            .iter()
+            .find(|doc| doc.id == batch[0].source.id)
+            .ok_or("Wiki section source disappeared")?;
+        let source_key = section_source_key(topic, source, config);
+        if !topic.force_refresh {
+            if let Some(section) = published_sections.get(key.as_str()) {
+                let value = content_cache::rebind(json!(section), &parts, manifest);
+                if let Ok(section) = value.and_then(|value| {
+                    serde_json::from_value::<WikiSection>(value).map_err(|error| error.to_string())
+                }) {
+                    sections.push(WikiSection {
+                        source_key,
+                        ..section
+                    });
+                    continue;
+                }
+            }
+        }
+        let prepare = |value| {
+            require_current(state, session)?;
+            let value = content_cache::rebind(value, &parts, manifest)?;
+            sync::validate_result(&parts, manifest, &value)?;
+            Ok(value)
+        };
         let value = cached_compilation_prepared(
             root,
             &key,
             &state.serial,
-            |value| {
-                require_current(state, session)?;
-                let value = content_cache::rebind(value, &parts, manifest)?;
-                sync::validate_result(&parts, manifest, &value)?;
-                Ok(value)
-            },
+            prepare,
             !topic.force_refresh,
             request(
                 app,
@@ -1310,19 +1279,19 @@ async fn compile_automatic_profile(
             }
         };
         if value["insufficientEvidence"] == true {
+            sections.push(WikiSection {
+                key: batch_key,
+                source_key,
+                ..Default::default()
+            });
             continue;
         }
-        bodies.push(
-            value["summary"]
-                .as_str()
-                .ok_or("Wiki page has no Markdown")?
-                .to_owned(),
-        );
+        let body = value["summary"]
+            .as_str()
+            .ok_or("Wiki page has no Markdown")?;
         let citations: Vec<SourceRef> = serde_json::from_value(value["citations"].clone())
             .map_err(|_| "Invalid Wiki citations")?;
-        if overview.is_empty() {
-            overview = value["overview"].as_str().unwrap_or_default().to_owned();
-        }
+        let mut changes = Vec::new();
         if let Some(rows) = value["changes"].as_array() {
             for row in rows {
                 sync::validate_result(&parts, manifest, &json!({"citations":row["citations"]}))?;
@@ -1342,9 +1311,16 @@ async fn compile_automatic_profile(
                 });
             }
         }
-        refs.extend(citations);
+        sections.push(WikiSection {
+            key: batch_key,
+            source_key,
+            body: page_body(&topic.title, body).0,
+            overview: value["overview"].as_str().unwrap_or_default().to_owned(),
+            citations,
+            changes,
+        });
     }
-    if bodies.is_empty() || refs.is_empty() {
+    if sections.is_empty() || !sections.iter().any(|section| !section.citations.is_empty()) {
         let failures = analysis_failures.len() + batch_failures.len();
         return Err(WikiFailure::new(
             format!("Wiki page has no supported evidence; {failures} units failed"),
@@ -1352,25 +1328,71 @@ async fn compile_automatic_profile(
             Vec::new(),
         ));
     }
-    let markdown = assemble_page(&topic.title, &bodies);
-    if overview.is_empty() {
-        overview = topic.purpose.clone();
-    }
+    let order: BTreeMap<_, _> = docs
+        .iter()
+        .enumerate()
+        .map(|(index, doc)| (section_source_key(topic, doc, config), index))
+        .collect();
+    sections.sort_by_key(|section| {
+        order
+            .get(&section.source_key)
+            .copied()
+            .unwrap_or(usize::MAX)
+    });
+    let markdown = assemble_page(
+        &topic.title,
+        &sections
+            .iter()
+            .map(|section| section.body.clone())
+            .collect::<Vec<_>>(),
+    );
+    let dates: BTreeMap<_, _> = docs
+        .iter()
+        .map(|doc| {
+            (
+                section_source_key(topic, doc, config),
+                doc.created_at.as_str(),
+            )
+        })
+        .collect();
+    let overview = sections
+        .iter()
+        .filter(|section| !section.overview.is_empty())
+        .max_by_key(|section| dates.get(&section.source_key))
+        .map(|section| section.overview.clone())
+        .unwrap_or_else(|| topic.purpose.clone());
+    let citations = sections
+        .iter()
+        .flat_map(|section| section.citations.clone())
+        .collect();
+    let changes = sections
+        .iter()
+        .flat_map(|section| section.changes.clone())
+        .collect();
     Ok(Revision {
         id: uuid::Uuid::new_v4().to_string(),
         content_hash: store::digest(&markdown),
         markdown,
-        citations: refs,
-        fingerprint: page_fingerprint(topic, manifest, &models(app, session)?, &[]),
+        citations,
+        fingerprint: page_fingerprint(topic, manifest, config, &[]),
         cache_key: version.into(),
         created_at: crate::now(),
         review: "auto_validated".into(),
         overview,
         changes,
+        sections,
         partial: !analysis_failures.is_empty() || !batch_failures.is_empty(),
         partial_failure_keys: [analysis_failures, batch_failures].concat(),
         ..Default::default()
     })
+}
+
+pub(super) fn section_source_key(topic: &Topic, source: &Document, config: &Models) -> String {
+    page_version_keys(
+        topic,
+        vec![input_key(source, config)],
+        &config.text_revision,
+    )
 }
 
 pub(super) fn publish_automatic(
@@ -1383,6 +1405,19 @@ pub(super) fn publish_automatic(
         .published
         .as_ref()
         .is_some_and(|old| old.markdown == page.markdown);
+    if !same
+        && current.published.as_ref().is_some_and(|old| {
+            old.review == "approved" || old.content_hash != store::digest(&old.markdown)
+        })
+    {
+        if let Some(draft) = current.candidate.take() {
+            current.history.push(draft);
+        }
+        page.review.clear();
+        save_page(root, current, &page, true)?;
+        current.candidate = Some(page);
+        return Ok(());
+    }
     if let Some(draft) = current.candidate.take() {
         current.history.push(draft);
     }
@@ -1391,6 +1426,7 @@ pub(super) fn publish_automatic(
             old.fingerprint = page.fingerprint.clone();
             old.cache_key = version.into();
             old.citations = page.citations.clone();
+            old.sections = page.sections;
             if old.overview.is_empty() {
                 old.overview = page.overview.clone();
             }
@@ -1506,6 +1542,20 @@ pub(super) async fn run(
             docs,
         )
     };
+    if !docs.is_empty()
+        && manifest.wiki_attempted_fingerprint.is_empty()
+        && manifest.knowledge_policy.as_ref().is_some_and(|policy| {
+            policy["memory_consent"] == true && policy["local_text_consent"] == true
+        })
+    {
+        // Give a new device a bounded opportunity to adopt completed work
+        // before it dispatches its own model requests.
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(8),
+            Box::pin(cloud::background(app, session)),
+        )
+        .await;
+    }
     let mut catalog: Catalog = read_json(&catalog_path(&root))?;
     catalog.deleted.extend(topic_store::deleted(&root)?);
     tasks::recover_abandoned(&root)?;
@@ -1532,76 +1582,22 @@ pub(super) async fn run(
     {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
+        catalog = read_json(&catalog_path(&root))?;
+        catalog.deleted.extend(topic_store::deleted(&root)?);
         for doc in &docs {
             catalog
                 .layouts
                 .insert(doc.id.clone(), source_layout::prepare(&root, doc)?);
         }
-        for previous in compatible_legacy_models(session, &config) {
-            migrate_catalog_revision(
-                &root,
-                &local,
-                &mut catalog,
-                &docs,
-                &manifest,
-                &config,
-                &previous.text_revision,
-            )?;
-        }
-        migrate_scope_cache(&root, &local, &docs, &manifest, &config)?;
-        cache_upgrade::refresh(
-            &root,
-            &mut catalog,
-            &docs,
-            &manifest,
-            &config,
-            &compatible_legacy_models(session, &config),
-        )?;
     }
-    // An idle vault must not sweep the whole catalog on every worker wakeup:
-    // the heartbeat re-enters this run every two minutes, and the sweep alone
-    // (one topics() parse per chunk) keeps the UI in "organizing" for minutes
-    // with zero model work to show for it.
     let initial_topics = {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
+        // Rebind completed evidence for metadata-only changes before deciding
+        // whether this pass needs any model work.
         let mut values = topics(&root)?;
-        // Same spaced retry as catalog chunks: pure HTTP 503 rejections never
-        // started server-side work, so release them after a cool-down instead
-        // of latching topics until the next bind. This must run BEFORE the
-        // idle check: failed topics leave the inputs fingerprint untouched,
-        // so an idle pass would otherwise strand them forever.
-        let cutoff = chrono::Utc::now() - chrono::Duration::seconds(600);
-        let mut released = 0usize;
-        for topic in &mut values {
-            let stale_503 = topic
-                .failure
-                .as_ref()
-                .is_some_and(|failure| {
-                    // The stored message is the bare UNKNOWN text for both
-                    // 503 rejections and network send failures; neither
-                    // started server-side work. Gateway cuts (504) keep an
-                    // unknown outcome and stay latched.
-                    (failure.message.contains(tasks::UNKNOWN)
-                        || failure
-                            .message
-                            .starts_with("Lynclaw synthesis failed (HTTP 503)"))
-                        && chrono::DateTime::parse_from_rfc3339(&failure.occurred_at)
-                            .map(|at| at < cutoff)
-                            .unwrap_or(false)
-                });
-            if stale_503 {
-                topic.error.clear();
-                topic.failure = None;
-                topic.last_attempt_fingerprint.clear();
-                released += 1;
-            }
-        }
-        if released > 0 {
-            log::info!(
-                "[wiki-run] releasing {} server-rejected topics for spaced retry",
-                released
-            );
+        let current = load_state(app, session)?;
+        if refresh_page_references(&root, &mut values, &docs, &current, &config)? {
             save_topics(&root, &values)?;
         }
         values
@@ -1679,9 +1675,8 @@ pub(super) async fn run(
     } = {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
-        backup_legacy(app, session)?;
+        merge_recent_catalog(&root, &mut catalog)?;
         let mut values = topics(&root)?;
-        adopt_legacy_sources(&mut values);
         // Restore cached identities and source links in one pass without
         // re-entering the model queue or reporting analysis for cached text.
         let plan = prepare_catalog(&mut values, &mut catalog, &docs, &config);
@@ -1793,6 +1788,7 @@ pub(super) async fn run(
                     catalog.chunks.insert(job.key.clone(), rows.clone());
                     catalog.failed.remove(&job.key);
                     catalog.details.remove(&job.key);
+                    merge_recent_catalog(&root, &mut catalog)?;
                     let mut existing = topics(&root)?;
                     apply_catalog_sources(
                         &mut existing,
@@ -1805,6 +1801,9 @@ pub(super) async fn run(
                     save_topics(&root, &existing)?;
                     write_json(&catalog_path(&root), &catalog)?;
                 }
+                Err(error) if error == TEXT_MODEL_CHANGED || error == TEXT_MODEL_KEY_REQUIRED => {
+                    wave_error.get_or_insert(error);
+                }
                 // Service failures apply to the whole run, never to an individual source.
                 Err(error) if is_service_failure(&error) => {
                     log::warn!(
@@ -1814,6 +1813,7 @@ pub(super) async fn run(
                         error
                     );
                     catalog.details.remove(&job.key);
+                    merge_recent_catalog(&root, &mut catalog)?;
                     record_failure(&mut catalog, &job.key, job.doc, &error);
                     write_json(&catalog_path(&root), &catalog)?;
                     wave_error.get_or_insert(error);
@@ -1826,6 +1826,7 @@ pub(super) async fn run(
                         error
                     );
                     catalog.details.remove(&job.key);
+                    merge_recent_catalog(&root, &mut catalog)?;
                     record_failure(&mut catalog, &job.key, job.doc, &error);
                     failed_sources.insert(job.doc.id.clone());
                     catalog_failures += 1;
@@ -1848,6 +1849,9 @@ pub(super) async fn run(
         }
         values
     };
+    if !jobs.is_empty() {
+        state.cloud_wakeup.notify_one();
+    }
     let active_topics: Vec<_> = initial
         .into_iter()
         .filter(|topic| {
@@ -1855,10 +1859,6 @@ pub(super) async fn run(
                 && !topic.excluded
                 && !topic.pinned
                 && !topic.source_ids.is_empty()
-                && !topic
-                    .published
-                    .as_ref()
-                    .is_some_and(|page| page.content_hash != store::digest(&page.markdown))
         })
         .collect();
     let total_topics = active_topics.len();
@@ -1899,8 +1899,11 @@ pub(super) async fn run(
     let mut topic_failures_run = 0usize;
     // Compile requests run in waves so a first-run backlog uses the shared
     // model queue concurrently; per-topic state changes still apply serially
-    // in the original order after each wave completes.
-    let compile_wave = state.synthesis_queue.capacity().min(3).max(1);
+    // in the original order after each wave completes. The cap follows the
+    // queue capacity (LYNSE_WIKI_CONCURRENCY, default 4) up to 6: with a cap
+    // of 3, one hung provider request stalls a third of the pipeline's
+    // throughput for minutes at a time.
+    let compile_wave = state.synthesis_queue.capacity().min(6).max(1);
     log::info!(
         "[wiki-run] compile phase: {} topics pending, {} already settled (wave size {})",
         pending.len(),
@@ -1955,13 +1958,6 @@ pub(super) async fn run(
             else {
                 continue;
             };
-            if current
-                .published
-                .as_ref()
-                .is_some_and(|page| page.content_hash != store::digest(&page.markdown))
-            {
-                continue;
-            }
             let latest_docs: Vec<_> = documents(&local, &latest)
                 .into_iter()
                 .filter(|doc| current.source_ids.contains(&doc.id))
@@ -1972,6 +1968,13 @@ pub(super) async fn run(
             let mut discarded = false;
             match result {
                 Ok(mut page) => {
+                    if let Ok(value) = content_cache::rebind(
+                        serde_json::to_value(&page).map_err(|error| error.to_string())?,
+                        &latest_docs,
+                        &latest,
+                    ) {
+                        page = serde_json::from_value(value).map_err(|error| error.to_string())?;
+                    }
                     page.fingerprint = page_fingerprint(current, &latest, &config, &page.citations);
                     if !valid_page(&local, &latest, &page) {
                         // Sources moved mid-compile (e.g. a deferred meeting
@@ -2020,6 +2023,7 @@ pub(super) async fn run(
                         current.failure = None;
                         current.last_fingerprint = version.clone();
                         completed += 1;
+                        state.cloud_wakeup.notify_one();
                         log::info!(
                             "[wiki-compile] topic {} ({}) published (partial={})",
                             current.title,

@@ -295,6 +295,7 @@ fn filter_authorized_items(
                             id,
                             item["revision"]
                                 .as_str()
+                                .or(item["source"]["revision"].as_str())
                                 .or(item["document"]["revision"].as_str()),
                         )
                     })
@@ -353,20 +354,30 @@ pub(super) async fn filter_items(
         "local":doc.id.starts_with("local:"),"revision":doc.revision})
         })
         .collect();
-    let result = request(
-        app,
-        session,
-        "/source-eligibility",
-        Some(json!({"sources":sources})),
-        None,
-    )
-    .await?;
-    let allowed = result["allowed_source_ids"]
-        .as_array()
-        .ok_or("Cloud source eligibility unavailable")?;
+    let mut allowed = Vec::new();
+    for batch in sources.chunks(200) {
+        let result = request(
+            app,
+            session,
+            "/source-eligibility",
+            Some(json!({"sources":batch})),
+            None,
+        )
+        .await?;
+        allowed.extend(
+            result["allowed_source_ids"]
+                .as_array()
+                .ok_or("Cloud source eligibility unavailable")?
+                .iter()
+                .cloned(),
+        );
+    }
     // A cloud allowance cannot restore a local source withdrawn while the
     // authorization request was in flight, or approve a different revision.
     let latest = load_state(app, session)?;
+    if !latest.enabled || !latest.allow_ai {
+        return Ok(Vec::new());
+    }
     docs.retain(|doc| {
         latest
             .entries
@@ -375,7 +386,7 @@ pub(super) async fn filter_items(
             && !crate::inspiration_private::source_is_protected(app, &doc.id)
     });
     require_current(&state, session)?;
-    Ok(filter_authorized_items(items, &docs, allowed))
+    Ok(filter_authorized_items(items, &docs, &allowed))
 }
 
 pub(super) async fn policy_action(

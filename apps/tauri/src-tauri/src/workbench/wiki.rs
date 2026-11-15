@@ -13,6 +13,7 @@ mod validation_failure;
 pub use validation_failure::ValidationDetails;
 #[path = "wiki_analysis.rs"]
 mod analysis;
+pub(super) use analysis::part as analysis_part;
 #[path = "wiki_direct.rs"]
 mod direct;
 #[path = "wiki_automation.rs"]
@@ -37,6 +38,10 @@ mod topic_archive;
 #[path = "wiki_topics.rs"]
 mod topic_store;
 pub(super) use automation::{ai_manifest, allows as allows_source, validate_automation};
+// Row-level synthesis validator: the automation cache reuses it so poisoned
+// analysis rows (empty/broken citations from older processors) invalidate at
+// load time and re-extract instead of wedging every compile preflight.
+pub(super) use direct::validate_row;
 pub(super) fn in_automatic_scope(doc: &Document, manifest: &Manifest) -> bool {
     manifest.wiki_automation.is_some() && automation::allows(doc, manifest)
 }
@@ -69,8 +74,6 @@ pub struct Model {
 pub struct Models {
     #[serde(skip_deserializing)]
     pub text_revision: String,
-    #[serde(skip)]
-    pub legacy_text_revision: String,
     pub embedding: Model,
     pub revision: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -80,7 +83,6 @@ impl Default for Models {
     fn default() -> Self {
         Self {
             text_revision: String::new(),
-            legacy_text_revision: String::new(),
             embedding: Model {
                 base_url: "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
                     .into(),
@@ -105,10 +107,22 @@ pub struct Revision {
     pub review: String,
     pub overview: String,
     pub changes: Vec<WikiChange>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    sections: Vec<WikiSection>,
     #[serde(default)]
     pub partial: bool,
     #[serde(default)]
     pub partial_failure_keys: Vec<String>,
+}
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", default)]
+struct WikiSection {
+    key: String,
+    source_key: String,
+    body: String,
+    overview: String,
+    citations: Vec<SourceRef>,
+    changes: Vec<WikiChange>,
 }
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -221,18 +235,20 @@ fn read_models(path: &Path) -> CommandResult<Models> {
 }
 fn models(app: &AppHandle, session: &Session) -> CommandResult<Models> {
     let mut config = read_models(&models_path(app, session)?)?;
-    config.legacy_text_revision = store::digest(
+    config.text_revision = text_content_revision(&session.locale);
+    Ok(config)
+}
+
+fn text_content_revision(locale: &str) -> String {
+    store::digest(
         json!([
-            "lynclaw-wiki-v2",
+            "wiki-content-v1",
             super::markdown::INPUT_VERSION,
-            session.agent_url,
-            session.model_override.as_ref().map(model_cache_identity)
+            locale,
+            direct::DIRECT_PROCESSOR_VERSION
         ])
         .to_string(),
-    );
-    // Routing changes do not change the model input or invalidate completed work.
-    config.text_revision = text_model_revision(session, config.server_profile.as_ref());
-    Ok(config)
+    )
 }
 
 pub(super) fn model_cache_identity(value: &Value) -> Value {
@@ -254,44 +270,6 @@ pub(super) fn model_cache_identity(value: &Value) -> Value {
     }
 }
 
-fn text_model_revision_with(session: &Session, profile: Option<&Value>, processor: &str) -> String {
-    let selected = session
-        .model_override
-        .as_ref()
-        .map(model_cache_identity)
-        .unwrap_or_else(|| {
-            profile
-                .map(|profile| json!({"model":profile["model"],"provider":profile["provider"]}))
-                .unwrap_or(Value::Null)
-        });
-    store::digest(
-        json!([
-            "lynclaw-wiki-v4",
-            super::markdown::INPUT_VERSION,
-            session.locale,
-            processor,
-            selected
-        ])
-        .to_string(),
-    )
-}
-
-/// The gateway-era revision: results the server processor produced before the
-/// desktop took synthesis over. Direct mode can adopt that stored work on the
-/// same model through `compatible_legacy_models`.
-fn gateway_text_model_revision(session: &Session, profile: Option<&Value>) -> String {
-    let processor = profile
-        .and_then(|profile| profile["processorVersion"].as_str())
-        .unwrap_or("desktop-evidence-v2");
-    text_model_revision_with(session, profile, processor)
-}
-
-/// Direct synthesis changes the processor identity, so cached results move to
-/// the legacy-compatible list instead of being reused as same-processor work.
-fn text_model_revision(session: &Session, profile: Option<&Value>) -> String {
-    text_model_revision_with(session, profile, direct::DIRECT_PROCESSOR_VERSION)
-}
-
 pub(super) fn update_server_profile(
     app: &AppHandle,
     session: &Session,
@@ -306,7 +284,7 @@ pub(super) fn update_server_profile(
     {
         return Ok(false);
     }
-    let mut profile = json!({"schemaVersion":1,"processorVersion":profile["processorVersion"],"model":profile["model"],"provider":profile["provider"]});
+    let profile = json!({"schemaVersion":1,"processorVersion":profile["processorVersion"],"model":profile["model"],"provider":profile["provider"]});
     let path = models_path(app, session)?;
     let mut config = read_models(&path)?;
     if config.server_profile.as_ref().is_some_and(|saved| {
@@ -316,56 +294,11 @@ pub(super) fn update_server_profile(
     }) {
         return Ok(false);
     }
-    if config.server_profile.is_none() && profile["processorVersion"] == "desktop-evidence-v2" {
-        // The first verified profile establishes the baseline for legacy work;
-        // later model/provider/processor changes must never adopt that work again.
-        profile["legacyTextRevision"] = json!(gateway_text_model_revision(session, None));
-    }
     config.server_profile = Some(profile);
     write_json(&path, &config)?;
     Ok(true)
 }
 
-fn compatible_legacy_models(session: &Session, config: &Models) -> Vec<Models> {
-    let mut revisions: Vec<String> = Vec::new();
-    if session.model_override.is_some() {
-        // Direct mode may adopt the gateway processor's stored results on the
-        // same model; downstream citation checks still verify every reuse.
-        revisions.push(gateway_text_model_revision(session, config.server_profile.as_ref()));
-    }
-    if !config.server_profile.as_ref().is_some_and(|profile| {
-        profile["processorVersion"] != "desktop-evidence-v2"
-            || (session.model_override.is_none() && profile.get("legacyTextRevision").is_none())
-    }) {
-        revisions.extend([
-            store::digest(
-                json!([
-                    "lynclaw-wiki-v3",
-                    super::markdown::INPUT_VERSION,
-                    session.locale,
-                    session.model_override
-                ])
-                .to_string(),
-            ),
-            config.legacy_text_revision.clone(),
-            config
-                .server_profile
-                .as_ref()
-                .and_then(|profile| profile["legacyTextRevision"].as_str())
-                .unwrap_or_default()
-                .to_owned(),
-        ]);
-    }
-    revisions
-        .into_iter()
-        .filter(|revision| !revision.is_empty())
-        .map(|revision| {
-            let mut old = config.clone();
-            old.text_revision = revision;
-            old
-        })
-        .collect()
-}
 fn topics(root: &Path) -> CommandResult<Vec<Topic>> {
     let mut result = topic_archive::load(root)?;
     let deleted = topic_store::deleted(root)?;
@@ -422,6 +355,7 @@ fn is_service_failure(error: &str) -> bool {
         || super::knowledge_transport::transient(error)
         || error == TEXT_MODEL_CHANGED
         || error == TEXT_MODEL_KEY_REQUIRED
+        || error == tasks::NOT_SUBMITTED
         || error == "Lynclaw synthesis failed (HTTP 422): Unknown synthesis task"
         || error.starts_with("Lynclaw synthesis failed (HTTP 429)")
         || [500, 502, 503, 504].iter().any(|status| {
@@ -476,26 +410,8 @@ pub(super) fn resume_session(
 ) -> CommandResult<()> {
     let root = crate::vault::vault_user_dir(app)?
         .map(|root| root.join("Memory").join(&session.scope).join("wiki"));
-    resume_session_at(root.as_deref(), manifest)?;
-    if let Some(root) = root.filter(|root| root.exists()) {
-        if manifest.wiki_automation.is_some() {
-            let local = roots(app, session)?.0;
-            let docs = automation::documents(&local, manifest);
-            let retained = automation::migrate_scope_cache(
-                &root,
-                &local,
-                &docs,
-                manifest,
-                &models(app, session)?,
-            )?;
-            if retained > 0 {
-                log::info!(
-                    "[wiki-cache] retained {retained} completed topics after scope-cache migration"
-                );
-            }
-        }
-    }
-    Ok(())
+
+    resume_session_at(root.as_deref(), manifest)
 }
 
 fn resume_session_at(root: Option<&Path>, manifest: &mut Manifest) -> CommandResult<()> {
@@ -698,7 +614,7 @@ fn db(root: &Path) -> CommandResult<Connection> {
     let schema="PRAGMA journal_mode=DELETE;
         CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, state TEXT NOT NULL, output TEXT, error TEXT, updated_at TEXT);
         CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, revision TEXT NOT NULL, title TEXT, body TEXT);
-        CREATE TABLE IF NOT EXISTS vectors (id TEXT PRIMARY KEY, revision TEXT NOT NULL, model_revision TEXT NOT NULL, embedding TEXT NOT NULL);";
+        CREATE TABLE IF NOT EXISTS passage_vectors (chunk_id INTEGER NOT NULL, input_key TEXT NOT NULL, model_revision TEXT NOT NULL, embedding TEXT NOT NULL, PRIMARY KEY (chunk_id, model_revision));";
     if let Err(error) = conn.execute_batch(schema) {
         if matches!(&error,rusqlite::Error::SqliteFailure(e,_) if matches!(e.code,rusqlite::ErrorCode::DatabaseCorrupt|rusqlite::ErrorCode::NotADatabase))
         {
@@ -781,6 +697,10 @@ async fn report_progress(
     persist(app, session, &manifest)
 }
 fn fingerprint(topic: &Topic, manifest: &Manifest, config: &Models) -> String {
+    scoped_fingerprint(topic, manifest, json!(config.text_revision))
+}
+
+fn scoped_fingerprint(topic: &Topic, manifest: &Manifest, text_input: Value) -> String {
     let versions: Vec<_> = manifest
         .entries
         .values()
@@ -791,7 +711,7 @@ fn fingerprint(topic: &Topic, manifest: &Manifest, config: &Models) -> String {
             topic.title,
             topic.purpose,
             topic.notes,
-            config,
+            text_input,
             manifest.sync_root,
             versions
         ])
@@ -804,7 +724,7 @@ fn inputs_fingerprint(manifest: &Manifest, config: &Models) -> String {
         .values()
         .map(|entry| json!([entry.id, entry.revision, entry.excluded, entry.status]))
         .collect();
-    store::digest(json!([config, manifest.sync_root, versions]).to_string())
+    store::digest(json!([config.text_revision, manifest.sync_root, versions]).to_string())
 }
 fn needs_compilation(topic: &Topic, manifest: &Manifest, config: &Models) -> bool {
     if topic.collection.is_some() || topic.pinned || topic.excluded {
@@ -944,16 +864,6 @@ fn page_fingerprint(
     config: &Models,
     citations: &[SourceRef],
 ) -> String {
-    page_fingerprint_with_legacy_scope(topic, manifest, config, citations, None)
-}
-
-fn page_fingerprint_with_legacy_scope(
-    topic: &Topic,
-    manifest: &Manifest,
-    config: &Models,
-    citations: &[SourceRef],
-    legacy_scope: Option<&store::WikiAutomation>,
-) -> String {
     let versions: std::collections::BTreeMap<_, _> = citations
         .iter()
         .map(|r| {
@@ -966,16 +876,11 @@ fn page_fingerprint_with_legacy_scope(
             )
         })
         .collect();
-    let model_input = if manifest.wiki_automation.is_some() {
-        json!(config.text_revision)
-    } else {
-        json!(config)
-    };
     let mut inputs = json!([
         topic.title,
         topic.purpose,
         topic.notes,
-        model_input,
+        config.text_revision,
         manifest.sync_root,
         versions
     ]);
@@ -992,10 +897,10 @@ fn page_fingerprint_with_legacy_scope(
                 ])
             })
             .collect();
-        inputs.as_array_mut().unwrap().push(match legacy_scope {
-            Some(policy) => json!([policy, summaries]),
-            None => json!(["wiki-auto-evidence-v2", summaries]),
-        });
+        inputs
+            .as_array_mut()
+            .unwrap()
+            .push(json!(["wiki-auto-evidence-v2", summaries]));
     }
     store::digest(inputs.to_string())
 }
@@ -1025,6 +930,8 @@ fn updated_models(current: &Models, mut next: Models) -> CommandResult<Models> {
     next.embedding.base_url = next.embedding.base_url.trim().trim_end_matches('/').into();
     next.embedding.model = next.embedding.model.trim().into();
     validate_model(&next.embedding)?;
+    // The history records which revisions compiled the existing work; an
+    // embedding-settings save must not erase it.
     let unchanged = next.embedding.base_url
         == current.embedding.base_url.trim().trim_end_matches('/')
         && next.embedding.model == current.embedding.model.trim();
@@ -1332,7 +1239,39 @@ async fn direct_synthesis(
     super::require_beta(state)?;
     let manifest = load_state(app, session)?;
     ready(&manifest)?;
-    validate_request_sources(&roots(app, session)?.0, &manifest, &payload)?;
+    let local = roots(app, session)?.0;
+    validate_request_sources(&local, &manifest, &payload)?;
+    let documents: Vec<_> = payload["sources"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|source| manifest.entries.get(source["id"].as_str()?))
+        .map(|entry| store::read_document(&local, entry))
+        .collect::<CommandResult<_>>()?;
+    if manifest
+        .knowledge_policy
+        .as_ref()
+        .is_some_and(|policy| policy["enrolled"] == true)
+    {
+        let shared: Vec<_> = documents
+            .iter()
+            .filter(|doc| doc.kind == "meeting" && !doc.id.starts_with("local:"))
+            .cloned()
+            .collect();
+        if !shared.is_empty() {
+            knowledge_cloud::authorize(app, session, &shared, task).await?;
+        }
+    }
+    let latest = load_state(app, session)?;
+    ready(&latest)?;
+    require_current(state, session)?;
+    validate_request_sources(&local, &latest, &payload)?;
+    if documents
+        .iter()
+        .any(|doc| crate::inspiration_private::source_is_protected(app, &doc.id))
+    {
+        return Err("Encrypted inspirations are unavailable to AI".into());
+    }
     require_task_model(state, session, task)?;
     if let Some(operation) = tasks::current_operation() {
         tasks::dispatched(&wiki_root(app, session)?, &operation)?;
@@ -1344,7 +1283,7 @@ async fn direct_synthesis(
         .chars()
         .take(8)
         .collect::<String>();
-    let result = direct::synthesize_direct(app, session, state, task, payload, report).await;
+    let result = direct::synthesize_direct(app, session, state, task, &payload, report).await;
     match &result {
         Ok(_) => log::info!(
             "[wiki-direct] task={} sources={} op={} ok in {:.1}s",
@@ -1367,6 +1306,9 @@ async fn direct_synthesis(
     }
     let result = result?;
     require_task_model(state, session, task)?;
+    let latest = load_state(app, session)?;
+    ready(&latest)?;
+    validate_request_sources(&local, &latest, &payload)?;
     Ok(result)
 }
 
@@ -1851,7 +1793,6 @@ impl<'a> PageSources<'a> {
 }
 const CONTEXT_PAGE_LIMIT: usize = 4;
 const CONTEXT_EXCERPT_CHARS: usize = 2400;
-const CONTEXT_RELATED_LIMIT: usize = 3;
 
 pub(super) fn context(
     app: &AppHandle,
@@ -1861,29 +1802,24 @@ pub(super) fn context(
 ) -> CommandResult<Vec<Value>> {
     let (root, _) = roots(app, session)?;
     let all = topics(&wiki_root(app, session)?)?;
+    let config = models(app, session)?;
+    let terms = store::query_terms(query);
     let mut pages = Vec::new();
     for topic in &all {
         if topic.excluded {
             continue;
         }
         if let Some(ref page) = topic.published {
-            if citable(&topic, &root, manifest, &models(app, session)?)
+            if citable(topic, &root, manifest, &config)
                 && (query.is_empty()
-                    || store::query_terms(query).iter().any(|term| {
+                    || terms.iter().any(|term| {
                         format!("{} {} {}", topic.title, topic.purpose, page.markdown)
                             .to_lowercase()
                             .contains(term)
                     }))
             {
                 // Cite the reviewed page as a page; its reader exposes every underlying meeting citation.
-                let excerpt = page.markdown.chars().take(CONTEXT_EXCERPT_CHARS).collect::<String>();
-                let excerpt = match related_titles(&all, topic, CONTEXT_RELATED_LIMIT) {
-                    // Neighbors via shared evidence give the model the surrounding topic map.
-                    related if !related.is_empty() => {
-                        format!("{excerpt}\n\nRelated topics: {}", related.join(", "))
-                    }
-                    _ => excerpt,
-                };
+                let excerpt = store::evidence_excerpt(&page.markdown, query, CONTEXT_EXCERPT_CHARS);
                 pages.push(json!({"id":format!("wiki:{}",topic.id),"title":topic.title,"kind":"wiki","excerpt":excerpt,"source":{"id":format!("wiki:{}",topic.id),"kind":"wiki","revision":page.content_hash,"quote":store::evidence_excerpt(&page.markdown,query,CONTEXT_EXCERPT_CHARS)},"citations":page.citations}));
             }
         }
@@ -1892,27 +1828,6 @@ pub(super) fn context(
     Ok(pages)
 }
 
-/// Topics sharing source evidence with `topic`, strongest overlap first.
-fn related_titles(topics: &[Topic], topic: &Topic, limit: usize) -> Vec<String> {
-    let mut ranked: Vec<(usize, &str)> = topics
-        .iter()
-        .filter(|other| !other.excluded && other.id != topic.id)
-        .filter_map(|other| {
-            let shared = other
-                .source_ids
-                .iter()
-                .filter(|id| topic.source_ids.contains(*id))
-                .count();
-            (shared > 0).then(|| (shared, other.title.as_str()))
-        })
-        .collect();
-    ranked.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
-    ranked
-        .into_iter()
-        .take(limit)
-        .map(|(_, title)| title.to_owned())
-        .collect()
-}
 fn citable(topic: &Topic, local: &Path, manifest: &Manifest, config: &Models) -> bool {
     !topic.excluded
         && topic.candidate.is_none()
@@ -2123,7 +2038,7 @@ async fn compile_profile(
                     topic.title,
                     topic.purpose,
                     topic.notes,
-                    config,
+                    config.text_revision,
                     doc.id,
                     doc.revision,
                     index
@@ -2210,8 +2125,15 @@ async fn compile_profile(
         ));
     }
     let page_query = compilation_query(&query);
-    let cache_key =
-        store::digest(json!(["topic-compile-v2", page_query, config, evidence]).to_string());
+    let cache_key = store::digest(
+        json!([
+            "topic-compile-v2",
+            page_query,
+            config.text_revision,
+            evidence
+        ])
+        .to_string(),
+    );
     if let Some(value) = receipt(root, &cache_key)?.filter(|_| !topic.force_refresh) {
         if let Ok(mut page) = serde_json::from_value::<Revision>(value) {
             if uuid::Uuid::parse_str(&page.id).is_ok()
@@ -2253,7 +2175,14 @@ async fn compile_profile(
     for (index, batch) in batches.into_iter().enumerate() {
         let sources = compile_sources(&batch)?;
         let key = store::digest(
-            json!(["topic-batch-v1", page_query, config, batch, sources]).to_string(),
+            json!([
+                "topic-batch-v1",
+                page_query,
+                config.text_revision,
+                batch,
+                sources
+            ])
+            .to_string(),
         );
         let result = cached_compilation(
             root,
@@ -2338,17 +2267,11 @@ pub(super) async fn run(
 ) -> CommandResult<()> {
     let manifest = load_state(app, session)?;
     if manifest.wiki_automation.is_some() {
-        // Organization runs on the user's own model key. Stop the pass here
-        // while it is missing so a keyless run cannot fail topics one by one.
-        // A paused or disabled workbench keeps running keyless without nagging.
-        if manifest.enabled && manifest.allow_ai {
-            text_model_override(app, session).await?;
-        }
         // These orchestration futures contain very large state. Keep their
         // coroutine state on the heap so nested model-task work does not
         // exhaust the runtime worker stack.
-        Box::pin(hierarchy::run(app, state, session)).await?;
         Box::pin(automation::run(app, state, session)).await?;
+        Box::pin(hierarchy::run(app, state, session)).await?;
         if publish_memory_events(app, state, session).await.is_err() {
             log::warn!("[knowledge-memory] candidate dispatch pending; Wiki publication preserved");
         }
@@ -2581,16 +2504,42 @@ async fn embedding(
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| e.to_string())?;
-    let mut request = client.post(format!(
-        "{}/embeddings",
-        config.embedding.base_url.trim_end_matches('/')
-    ));
+    // Vision/multimodal embedding models speak a different contract: a
+    // /embeddings/multimodal endpoint whose input is a typed-part array and
+    // whose reply nests the vector at data.embedding (an object, not an
+    // array). Volcano Ark retired its plain text embeddings, so their
+    // multimodal model is the supported path there.
+    let multimodal =
+        config.embedding.model.contains("vision") || config.embedding.model.contains("multimodal");
+    let mut request = client.post(if multimodal {
+        format!(
+            "{}/embeddings/multimodal",
+            config.embedding.base_url.trim_end_matches('/')
+        )
+    } else {
+        format!(
+            "{}/embeddings",
+            config.embedding.base_url.trim_end_matches('/')
+        )
+    });
     if let Some(key) = api_key {
         request = request.bearer_auth(key);
     }
     require_current(state, session)?;
     ready(&load_state(app, session)?)?;
-    let response=request.json(&json!({"model":config.embedding.model,"input":text.chars().take(8000).collect::<String>()})).send().await.map_err(|_|"Embedding API is unavailable")?;
+    let body = if multimodal {
+        json!({
+            "model": config.embedding.model,
+            "input": [{"type": "text", "text": text.chars().take(8000).collect::<String>()}],
+        })
+    } else {
+        json!({"model":config.embedding.model,"input":text.chars().take(8000).collect::<String>()})
+    };
+    let response = request
+        .json(&body)
+        .send()
+        .await
+        .map_err(|_| "Embedding API is unavailable")?;
     if !response.status().is_success() {
         return Err(format!(
             "Embedding request failed (HTTP {})",
@@ -2601,8 +2550,14 @@ async fn embedding(
         .json()
         .await
         .map_err(|_| "Invalid embedding response")?;
-    let vector: Vec<f64> = serde_json::from_value(value["data"][0]["embedding"].clone())
-        .map_err(|_| "Invalid embedding vector")?;
+    // Standard /embeddings replies data as an array; multimodal replies it as
+    // a single object.
+    let vector: Vec<f64> = serde_json::from_value(if value["data"].is_array() {
+        value["data"][0]["embedding"].clone()
+    } else {
+        value["data"]["embedding"].clone()
+    })
+    .map_err(|_| "Invalid embedding vector")?;
     if vector.is_empty() || vector.len() > 65536 || vector.iter().any(|n| !n.is_finite()) {
         return Err("Invalid embedding dimensions".into());
     }
@@ -2623,15 +2578,18 @@ fn cosine(left: &[f64], right: &[f64]) -> Option<f64> {
 fn embedding_revision(config: &Models) -> String {
     store::digest(json!([super::markdown::INPUT_VERSION, config.revision]).to_string())
 }
-fn embedding_cached(root: &Path, doc: &Document, config: &Models) -> CommandResult<bool> {
-    db(root)?
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM vectors WHERE id=?1 AND revision=?2 AND model_revision=?3)",
-            params![doc.id, doc.revision, embedding_revision(config)],
-            |row| row.get(0),
-        )
-        .map_err(|error| error.to_string())
+fn passage_embedding_key(passage: &super::fulltext::ChunkHit) -> String {
+    store::digest(
+        json!([
+            "wiki-passage-v1",
+            passage.doc_id,
+            passage.heading,
+            &passage.quote
+        ])
+        .to_string(),
+    )
 }
+
 pub(super) async fn semantic_search(
     app: &AppHandle,
     state: &WorkbenchState,
@@ -2646,7 +2604,8 @@ pub(super) async fn semantic_search(
     if !embedding_ready(&config.embedding, key.as_deref()) {
         return Ok(vec![]);
     }
-    let vector = embedding(app, state, session, &config, query, key.as_deref()).await?;
+    let query = mask_memory_text(query);
+    let vector = embedding(app, state, session, &config, &query, key.as_deref()).await?;
     let _guard = state.serial.lock().await;
     require_current(state, session)?;
     let manifest = load_state(app, session)?;
@@ -2655,41 +2614,67 @@ pub(super) async fn semantic_search(
     let local = roots(app, session)?.0;
     let conn = db(&root)?;
     let mut stmt = conn
-        .prepare("SELECT id,revision,embedding FROM vectors WHERE model_revision=?")
-        .map_err(|e| e.to_string())?;
+        .prepare("SELECT chunk_id,input_key,embedding FROM passage_vectors WHERE model_revision=?")
+        .map_err(|error| error.to_string())?;
     let rows = stmt
-        .query_map([embedding_revision(&config)], |r| {
+        .query_map([embedding_revision(&config)], |row| {
             Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
             ))
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| error.to_string())?;
     let mut ranked = Vec::new();
     for row in rows {
-        let (id, revision, raw) = row.map_err(|e| e.to_string())?;
-        let Some(entry) = manifest
-            .entries
-            .get(&id)
-            .filter(|e| store::eligible(e) && e.revision == revision)
-        else {
-            continue;
-        };
-        let Some(doc) = store::read_document(&local, entry)
-            .ok()
-            .and_then(super::markdown::source)
-            .filter(|doc| automation::allows(doc, &manifest))
-        else {
-            continue;
-        };
+        let (id, input_key, raw) = row.map_err(|error| error.to_string())?;
         let other: Vec<f64> = serde_json::from_str(&raw).unwrap_or_default();
-        if let Some(score) = cosine(&vector, &other).filter(|s| s.is_finite() && *s > 0.25) {
-            ranked.push((score, doc));
+        if let Some(score) = cosine(&vector, &other).filter(|score| *score > 0.25) {
+            ranked.push((score, id, input_key));
         }
     }
     ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
-    Ok(ranked.into_iter().take(10).map(|(_,doc)|json!({"id":doc.id,"title":doc.title,"kind":doc.kind,"excerpt":store::evidence_excerpt(&doc.text(),query,1800),"source":doc.reference()})).collect())
+    let mut items = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for (_, id, input_key) in ranked.into_iter().take(100) {
+        let Some(hit) = super::fulltext::chunk(&local, id)? else {
+            continue;
+        };
+        if seen.contains(&hit.doc_id) || passage_embedding_key(&hit) != input_key {
+            continue;
+        }
+        let Some(entry) = manifest
+            .entries
+            .get(&hit.doc_id)
+            .filter(|entry| store::eligible(entry) && entry.revision == hit.revision)
+        else {
+            continue;
+        };
+        let Ok(doc) = store::read_document(&local, entry) else {
+            continue;
+        };
+        if !doc.ai_context_enabled
+            || !automation::allows(&doc, &manifest)
+            || crate::inspiration_private::source_is_protected(app, &doc.id)
+        {
+            continue;
+        }
+        seen.insert(doc.id.clone());
+        let excerpt: String = hit.quote.chars().take(1800).collect();
+        let source = SourceRef {
+            quote: excerpt.clone(),
+            segment_id: hit.segment_id.clone(),
+            start_ms: hit.start_ms,
+            end_ms: hit.end_ms,
+            ..doc.reference()
+        };
+        items.push(json!({"id":doc.id,"title":doc.title,"kind":doc.kind,
+            "excerpt":excerpt,"source":source,"matches":[hit.evidence()]}));
+        if items.len() == 10 {
+            break;
+        }
+    }
+    Ok(items)
 }
 async fn embed_sources(
     app: &AppHandle,
@@ -2710,15 +2695,88 @@ async fn embed_sources(
     }
     let manifest = load_state(app, session)?;
     ready(&manifest)?;
+    let ids: std::collections::BTreeSet<_> = sources_for(local, &manifest)
+        .into_iter()
+        .filter(|doc| !crate::inspiration_private::source_is_protected(app, &doc.id))
+        .map(|doc| doc.id)
+        .collect();
+    let passages = super::fulltext::passages(local)?;
+    let revision = embedding_revision(config);
+    let conn = db(root)?;
+    let saved = {
+        let mut statement = conn
+            .prepare("SELECT chunk_id, input_key FROM passage_vectors WHERE model_revision=?1")
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([&revision], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| error.to_string())?;
+        rows.collect::<Result<std::collections::BTreeMap<_, _>, _>>()
+            .map_err(|error| error.to_string())?
+    };
+    let mut pending = Vec::new();
+    let mut eligible = std::collections::BTreeSet::new();
+    for passage in passages {
+        if !ids.contains(&passage.doc_id)
+            || !manifest
+                .entries
+                .get(&passage.doc_id)
+                .is_some_and(|entry| entry.revision == passage.revision)
+        {
+            continue;
+        }
+        eligible.insert(passage.chunk_id);
+        let input = passage_embedding_key(&passage);
+        if saved.get(&passage.chunk_id) != Some(&input) {
+            pending.push((passage, input));
+        }
+    }
+    for id in saved.keys().filter(|id| !eligible.contains(id)) {
+        conn.execute(
+            "DELETE FROM passage_vectors WHERE chunk_id=?1 AND model_revision=?2",
+            params![id, revision],
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    drop(conn);
     let mut failures = 0;
-    let mut cached = 0usize;
-    let mut embedded = 0usize;
-    let docs = sources_for(local, &manifest);
-    let total = docs.len();
-    log::info!("[wiki-embed] phase started: sources={total}");
-    for (index, doc) in docs.into_iter().enumerate() {
-        if embedding_cached(root, &doc, config)? {
-            cached += 1;
+    let total = pending.len();
+    let mut authorized = std::collections::BTreeMap::new();
+    for (index, (passage, input)) in pending.into_iter().enumerate() {
+        let latest = load_state(app, session)?;
+        if validate_request_sources(
+            local,
+            &latest,
+            &json!({"sources":[{"id":passage.doc_id,"revision":passage.revision}]}),
+        )
+        .is_err()
+        {
+            continue;
+        }
+        let entry = &latest.entries[&passage.doc_id];
+        let doc = store::read_document(local, entry)?;
+        let allowed = match authorized.get(&doc.id) {
+            Some(&(allowed, checked))
+                if std::time::Instant::elapsed(&checked) < Duration::from_secs(15) =>
+            {
+                allowed
+            }
+            _ => {
+                let allowed = knowledge_cloud::authorize(
+                    app,
+                    session,
+                    std::slice::from_ref(&doc),
+                    "embedding",
+                )
+                .await
+                .is_ok();
+                authorized.insert(doc.id.clone(), (allowed, std::time::Instant::now()));
+                allowed
+            }
+        };
+        if !allowed {
+            failures += 1;
             continue;
         }
         report_progress(
@@ -2735,57 +2793,35 @@ async fn embed_sources(
             },
         )
         .await?;
-        let latest = load_state(app, session)?;
-        if validate_request_sources(
-            local,
-            &latest,
-            &json!({"sources":[{"id":doc.id,"revision":doc.revision}]}),
-        )
-        .is_err()
-        {
+        let request = json!({"sources":[{"id":doc.id,"revision":doc.revision}]});
+        validate_request_sources(local, &load_state(app, session)?, &request)?;
+        if crate::inspiration_private::source_is_protected(app, &doc.id) {
             continue;
         }
-        let vector = match embedding(app, state, session, config, &doc.text(), key.as_deref()).await
-        {
+        let text = mask_memory_text(&format!("{}\n{}", passage.heading, passage.quote));
+        let vector = match embedding(app, state, session, config, &text, key.as_deref()).await {
             Ok(vector) => vector,
             Err(error) => {
-                log::warn!(
-                    "[wiki-embed] source {} ({}) failed: {}",
-                    doc.id,
-                    doc.title,
-                    &error.chars().take(300).collect::<String>()
-                );
-                require_current(state, session)?;
+                log::warn!("[wiki-embed] passage {} failed: {error}", passage.chunk_id);
                 failures += 1;
-                continue;
+                break;
             }
         };
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
         let latest = load_state(app, session)?;
-        ready(&latest)?;
-        if store::is_current_document(local, &latest, &doc) {
+        if validate_request_sources(local, &latest, &request).is_ok()
+            && super::fulltext::chunk(local, passage.chunk_id)?
+                .is_some_and(|current| passage_embedding_key(&current) == input)
+        {
             db(root)?
                 .execute(
-                    "INSERT OR REPLACE INTO vectors VALUES (?1,?2,?3,?4)",
-                    params![
-                        doc.id,
-                        doc.revision,
-                        embedding_revision(config),
-                        json!(vector).to_string()
-                    ],
+                    "INSERT OR REPLACE INTO passage_vectors VALUES (?1,?2,?3,?4)",
+                    params![passage.chunk_id, input, revision, json!(vector).to_string()],
                 )
-                .map_err(|e| e.to_string())?;
-            embedded += 1;
+                .map_err(|error| error.to_string())?;
         }
     }
-    log::info!(
-        "[wiki-embed] phase finished: sources={} cached={} embedded={} failed={}",
-        total,
-        cached,
-        embedded,
-        failures
-    );
     Ok(failures)
 }
 
@@ -2801,6 +2837,7 @@ pub async fn workbench_wiki(
     let incremental_action = matches!(
         action,
         "topic"
+            | "sync_conflict_resolve"
             | "topic_link"
             | "topic_group"
             | "topic_groups_retry"
@@ -2819,9 +2856,14 @@ pub async fn workbench_wiki(
     );
     let session = if action == "state" || incremental_action {
         current(&state)?
+    } else if action == "sync_conflict_preview" {
+        return cloud::conflict_action(&app, &current(&state)?, &request).await;
     } else {
         invalidate_runtime(&state)?
     };
+    if action == "sync_conflict_resolve" {
+        cloud::conflict_action(&app, &session, &request).await?;
+    }
     let _guard = state.serial.lock().await;
     require_current(&state, &session)?;
     let root = wiki_root(&app, &session)?;
@@ -2833,7 +2875,7 @@ pub async fn workbench_wiki(
     let mut config = models(&app, &session)?;
     let mut created_topic_id: Option<String> = None;
     match action {
-        "state" => {}
+        "state" | "sync_conflict_resolve" => {}
         "source_folders" => {
             let ids: Vec<String> = serde_json::from_value(request["ids"].clone())
                 .map_err(|_| "Invalid moved meetings")?;
@@ -2890,6 +2932,10 @@ pub async fn workbench_wiki(
             }
             require_current(&state, &session)?;
             write_json(&models_path(&app, &session)?, &next)?;
+            let mut manifest = load_state(&app, &session)?;
+            manifest.wiki_attempted_fingerprint.clear();
+            persist(&app, &session, &manifest)?;
+            super::request_wiki(&state);
             config = next;
         }
         "purpose" => {
@@ -2971,8 +3017,29 @@ pub async fn workbench_wiki(
             if request["approve"] == true {
                 let manifest = load_state(&app, &session)?;
                 ready(&manifest)?;
-                if page.fingerprint != page_fingerprint(topic, &manifest, &config, &page.citations)
-                    || !valid_page(&roots(&app, &session)?.0, &manifest, &page)
+                let local = roots(&app, &session)?.0;
+                let cache_matches = if manifest.wiki_automation.is_some()
+                    && topic.collection.is_none()
+                {
+                    let selected = automation::documents(&local, &manifest)
+                        .into_iter()
+                        .filter(|doc| topic.source_ids.contains(&doc.id))
+                        .map(|doc| automation::input_key(&doc, &config))
+                        .collect::<Vec<_>>();
+                    selected.len() == topic.source_ids.len()
+                        && !selected.is_empty()
+                        && page.cache_key
+                            == automation::page_version_keys(topic, selected, &config.text_revision)
+                } else {
+                    true
+                };
+                if !cache_matches
+                    || page.citations.iter().any(|reference| {
+                        crate::inspiration_private::source_is_protected(&app, &reference.id)
+                    })
+                    || page.fingerprint
+                        != page_fingerprint(topic, &manifest, &config, &page.citations)
+                    || !valid_page(&local, &manifest, &page)
                 {
                     return Err(
                         "Sources changed; regenerate this candidate before publishing".into(),
@@ -2982,7 +3049,10 @@ pub async fn workbench_wiki(
                     if markdown.trim().is_empty() || markdown.chars().count() > 200000 {
                         return Err("Invalid page content".into());
                     }
-                    page.markdown = markdown.into();
+                    if page.markdown != markdown {
+                        page.sections.clear();
+                        page.markdown = markdown.into();
+                    }
                 }
                 page.content_hash = store::digest(&page.markdown);
                 page.reviewed_at = crate::now();
@@ -3024,6 +3094,9 @@ pub async fn workbench_wiki(
     if action != "state" || reconciled {
         persist(&app, &session, &manifest)?;
         if action != "state" && crate::vault::load_vault_config(&app)?.enabled {
+            if matches!(action, "review" | "topic_delete") {
+                state.cloud_wakeup.notify_one();
+            }
             if matches!(
                 action,
                 "retry" | "topic" | "topic_link" | "topic_groups_retry" | "correction"
@@ -3082,7 +3155,7 @@ pub async fn workbench_wiki(
     let source_dates = page_sources.dates(&values);
     require_current(&state, &session)?;
     Ok(
-        json!({"topics":items,"sourceDates":source_dates,"hierarchy":hierarchy::status(&root)?,"sourceFailures":automation::source_failures(&root)?,"models":config,"sources":super::sources::config(&app,&session)?,"graph":graph,"topicGraph":topic_graph,"automation":manifest.wiki_automation,"purpose":manifest.purpose,"createdTopicId":created_topic_id}),
+        json!({"topics":items,"sourceDates":source_dates,"hierarchy":hierarchy::status(&root)?,"sourceFailures":automation::source_failures(&root)?,"syncConflicts":cloud::conflicts(&app, &session).unwrap_or_default(),"models":config,"sources":super::sources::config(&app,&session)?,"graph":graph,"topicGraph":topic_graph,"automation":manifest.wiki_automation,"purpose":manifest.purpose,"createdTopicId":created_topic_id}),
     )
 }
 
@@ -3532,7 +3605,6 @@ mod tests {
             },
             revision: "existing-vector-version".into(),
             text_revision: "existing-text-version".into(),
-            legacy_text_revision: String::new(),
             server_profile: None,
         };
         let request = json!({
@@ -3558,71 +3630,6 @@ mod tests {
             assert_ne!(embedding_revision(&changed), embedding_revision(&saved));
             assert_eq!(changed.text_revision, current.text_revision);
         }
-    }
-    #[test]
-    fn vectors_survive_reopen_and_invalidate_only_for_changed_inputs() {
-        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
-        let path = root.join("wiki-models.json");
-        let config = Models {
-            embedding: Model {
-                base_url: "http://localhost:11434/v1".into(),
-                model: "local-embedding".into(),
-            },
-            revision: "already-built".into(),
-            ..Default::default()
-        };
-        let mut first = Document {
-            id: "first-meeting".into(),
-            transcript: "Original meeting text".into(),
-            ..Default::default()
-        };
-        first.refresh_revision();
-        let mut second = first.clone();
-        second.id = "second-meeting".into();
-        second.refresh_revision();
-        let conn = db(&root).unwrap();
-        for doc in [&first, &second] {
-            conn.execute(
-                "INSERT INTO vectors VALUES (?1,?2,?3,?4)",
-                params![
-                    doc.id,
-                    doc.revision,
-                    embedding_revision(&config),
-                    "[1.0,0.0]"
-                ],
-            )
-            .unwrap();
-        }
-        drop(conn);
-        write_json(&path, &config).unwrap();
-        let loaded = read_models(&path).unwrap();
-        let saved = updated_models(&loaded, loaded.clone()).unwrap();
-        write_json(&path, &saved).unwrap();
-        let reopened = read_models(&path).unwrap();
-        assert!(embedding_cached(&root, &first, &reopened).unwrap());
-        assert!(embedding_cached(&root, &second, &reopened).unwrap());
-        first.transcript = "Updated meeting text".into();
-        first.refresh_revision();
-        assert!(!embedding_cached(&root, &first, &reopened).unwrap());
-        assert!(embedding_cached(&root, &second, &reopened).unwrap());
-        let new_doc = Document {
-            id: "new-meeting".into(),
-            ..second.clone()
-        };
-        assert!(!embedding_cached(&root, &new_doc, &reopened).unwrap());
-        let mut changed = reopened.clone();
-        changed.embedding.model = "different-embedding".into();
-        let changed = updated_models(&reopened, changed).unwrap();
-        assert!(!embedding_cached(&root, &second, &changed).unwrap());
-        assert_eq!(
-            db(&root)
-                .unwrap()
-                .query_row("SELECT COUNT(*) FROM vectors", [], |row| row
-                    .get::<_, i64>(0))
-                .unwrap(),
-            2
-        );
-        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn embedding_defaults_upgrade_unconfigured_files_and_preserve_user_choices() {

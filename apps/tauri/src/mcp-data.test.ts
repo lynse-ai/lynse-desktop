@@ -123,8 +123,10 @@ describe("Local memory MCP consent and stale-result guards", () => {
   }
   it("uses the AI-filtered local index and omits withdrawn or stale memories", async()=>{
     const {bridge}=memory();
+    bridge.search.mockResolvedValue({items:[{id:"s1"},{id:"wiki:topic-1",kind:"wiki",excerpt:"Friday is a proposal",citations:[]}],initialComplete:true});
     expect(await readDesktopMcpTool("search_local_memory",{},deps)).toEqual({sources:[{id:"s1"}],memories:[{id:"wiki:topic-1",text:"Friday is a proposal",citations:[]}]});
     expect(bridge.search).toHaveBeenCalledWith("",true);
+    expect(bridge.wiki).not.toHaveBeenCalled();
     for(const id of ["private","stale","candidate","m1"])await expect(readDesktopMcpTool("get_local_memory",{id},deps)).rejects.toThrow("excluded");
   });
   it.each(["enabled","allowAi","initialComplete"] as const)("requires %s before reading memory",async(flag)=>{

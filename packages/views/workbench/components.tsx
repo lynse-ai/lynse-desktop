@@ -182,10 +182,10 @@ function MeetingReader({ id }: { id: string }) {
   const qc = useQueryClient();
   const selectedSource = useWorkbench((s) => s.selectedSource);
   useEffect(() => {
-    if (selectedSource?.id === id && selectedSource.startMs != null && audioUrl) {
+    if (selectedSource?.id === id && selectedSource.revision === query.data?.document.revision && selectedSource.startMs != null && audioUrl) {
       player.current?.seekTo(selectedSource.startMs / 1000);
     }
-  }, [selectedSource, id, audioUrl]);
+  }, [selectedSource, id, audioUrl, query.data?.document.revision]);
   useEffect(() => {
     if (selectedSource?.id === id && query.data) transcriptView.current?.querySelector("[data-source-match='true']")?.scrollIntoView({ block: "center" });
   }, [selectedSource, id, query.data]);
@@ -233,10 +233,15 @@ function MeetingReader({ id }: { id: string }) {
       {id.startsWith("local:") && <Button size="sm" disabled={transcribing} onClick={() => void transcribe()}>{transcribing && <Loader2 className="size-3.5 animate-spin" />}{t("workbench.transcribe")}</Button>}
     </div>}
     <section ref={transcriptView}><h3 className="mb-3 text-sm font-medium">{t("workbench.transcript")}</h3>
-      {document.segments.length ? document.segments.map((segment, index) => <button key={segment.id || index} type="button" data-source-match={!!selectedSource?.quote && (segment.text || segment.recognizedText || "").includes(selectedSource.quote)} className={`mb-2 block w-full rounded p-2 text-left text-sm leading-relaxed hover:bg-accent ${selectedSource?.quote && (segment.text || segment.recognizedText || "").includes(selectedSource.quote) ? "bg-accent ring-1 ring-ring" : ""}`} onClick={() => segment.startMs != null && player.current?.seekTo(segment.startMs / 1000)}>
-        {segment.startMs != null && <span className="mr-2 text-xs tabular-nums text-muted-foreground">{new Date(segment.startMs).toISOString().slice(11, 19)}</span>}
-        {segment.speakerName && <strong className="mr-2">{segment.speakerName}</strong>}{segment.text || segment.recognizedText}
-      </button>) : <p className="whitespace-pre-wrap text-sm leading-relaxed"><QuotedText text={document.transcript} quote={selectedSource?.quote} /></p>}
+      {document.segments.length ? document.segments.map((segment, index) => {
+        const text = segment.text || segment.recognizedText || "";
+        const match = selectedSource?.revision === document.revision &&
+          (selectedSource.segmentId ? segment.id === selectedSource.segmentId : !!selectedSource.quote && text.includes(selectedSource.quote));
+        return <button key={segment.id || index} type="button" data-source-match={match} className={`mb-2 block w-full rounded p-2 text-left text-sm leading-relaxed hover:bg-accent ${match ? "bg-accent ring-1 ring-ring" : ""}`} onClick={() => segment.startMs != null && player.current?.seekTo(segment.startMs / 1000)}>
+          {segment.startMs != null && <span className="mr-2 text-xs tabular-nums text-muted-foreground">{new Date(segment.startMs).toISOString().slice(11, 19)}</span>}
+          {segment.speakerName && <strong className="mr-2">{segment.speakerName}</strong>}{text}
+        </button>;
+      }) : <p className="whitespace-pre-wrap text-sm leading-relaxed"><QuotedText text={document.transcript} quote={selectedSource?.quote} /></p>}
     </section>
     {document.conclusions.map((summary, index) => <section key={summary.id ?? index}><h3 className="mb-2 text-sm font-medium">{normalizeSummaryTemplateName(summary.templateName) ?? t("workbench.summary")}</h3><Markdown mode="full">{summary.conclusionText}</Markdown></section>)}
     {latest && result.artifacts && result.artifacts.summaries.length > 1 && <details><summary className="cursor-pointer text-xs text-muted-foreground">{t("workbench.summary")} · {result.artifacts.summaries.length}</summary>
@@ -279,8 +284,9 @@ export function WorkbenchDialog() {
         <aside className="w-56 shrink-0 space-y-1 overflow-y-auto border-r border-border bg-muted/20 p-2 sm:w-64" aria-label={t("workbench.knowledge")}>
           <Progress />
           {!panel.status?.enabled && <p className="p-2 text-xs text-muted-foreground">{t("workbench.empty")}</p>}
-          {items.map((item) => <button key={item.id} type="button" onClick={() => { panel.select(item.id); setBrief(null); }} className={`block w-full rounded-md px-3 py-2 text-left text-sm ${item.id === panel.selectedId ? "bg-accent text-accent-foreground" : "hover:bg-accent/60"}`}>
+          {items.map((item) => <button key={item.id} type="button" onClick={() => { if ("source" in item) panel.showSource(item.source); else panel.select(item.id); setBrief(null); }} className={`block w-full rounded-md px-3 py-2 text-left text-sm ${item.id === panel.selectedId ? "bg-accent text-accent-foreground" : "hover:bg-accent/60"}`}>
             <span className="line-clamp-2">{item.title}</span>{"status" in item && item.status === "awaiting_transcription" && <span className="text-xs text-muted-foreground">{t("workbench.waiting")}</span>}
+            {"excerpt" in item && <span className="mt-1 line-clamp-3 text-xs text-muted-foreground">{item.excerpt}</span>}
           </button>)}
           {query && !items.length && <p className="p-2 text-xs text-muted-foreground">{t("workbench.no_results")}</p>}
         </aside>

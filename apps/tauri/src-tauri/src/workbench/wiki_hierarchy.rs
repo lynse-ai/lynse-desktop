@@ -69,13 +69,13 @@ fn version(topic: &Topic, locale: &str, config: &Models) -> String {
             VERSION,
             locale,
             config.text_revision,
-            topic.title,
-            topic.purpose,
-            topic.published.as_ref().map(|p| &p.overview)
+            metadata(topic, &topic.id),
+            topic.purpose
         ])
         .to_string(),
     )
 }
+
 fn metadata(topic: &Topic, id: &str) -> Value {
     json!({"id":id,"title":topic.title,
         "overview":topic.published.as_ref().unwrap().overview.chars().take(500).collect::<String>(),
@@ -408,8 +408,8 @@ fn pending_topics(
                     .is_some_and(|c| c.links.iter().any(|l| l.target_id == t.id && l.manual))
             })
         })
-        .filter(|t| t.grouping_revision != version(t, locale, config))
         .filter(|t| t.published.as_ref().is_some_and(|p| sources.valid_page(p)))
+        .filter(|t| t.grouping_revision != version(t, locale, config))
         .cloned()
         .collect()
 }

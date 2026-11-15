@@ -44,6 +44,7 @@ pub struct WorkbenchState {
     pub(super) worker: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
     pub(super) serial: tokio::sync::Mutex<()>,
     pub(super) wiki_run: tokio::sync::Mutex<()>,
+    pub(super) wiki_cloud_run: tokio::sync::Mutex<()>,
     pub(super) graph_run: tokio::sync::Mutex<()>,
     pub(super) synthesis_queue: synthesis_scheduler::Scheduler,
     pub(super) synthesis_http: tokio::sync::Mutex<Option<(String, reqwest::Client)>>,
@@ -230,6 +231,7 @@ fn wiki_content_revision(
         memory.join("derived.json"),
         settings.join("wiki-models.json"),
         settings.join("wiki-sources.json"),
+        settings.join("wiki-sync-outbox.json"),
     ]
     .into_iter()
     .map(|path| {
@@ -616,8 +618,6 @@ pub async fn workbench_set_text_model(
         let mut manifest = load_state(&app, &session)?;
         if wiki::ready(&manifest).is_ok() {
             wiki::resume_session(&app, &session, &mut manifest)?;
-            manifest.phase = "processing".into();
-            manifest.error.clear();
             persist(&app, &session, &manifest)?;
             request_wiki(&state);
             state.sync_requested.notify_one();
@@ -1027,25 +1027,36 @@ pub async fn workbench_search(
     ai_only: Option<bool>,
 ) -> CommandResult<Value> {
     let session = current(&state)?;
-    let ai_mode = ai_only.unwrap_or(false);
+    let (items, complete) =
+        knowledge_search(&app, &state, &session, &query, ai_only.unwrap_or(false)).await?;
+    Ok(json!({"items":items,"initialComplete":complete}))
+}
+
+async fn knowledge_search(
+    app: &AppHandle,
+    state: &WorkbenchState,
+    session: &Session,
+    query: &str,
+    ai_mode: bool,
+) -> CommandResult<(Vec<Value>, bool)> {
     let (keyword, complete, semantic, topics) = {
         let _guard = state.serial.lock().await;
-        require_current(&state, &session)?;
-        let manifest = load_state(&app, &session)?;
-        if ai_mode && wiki::ready(&manifest).is_err() {
-            return Ok(json!({"items":[],"initialComplete":false}));
+        require_current(state, session)?;
+        let manifest = load_state(app, session)?;
+        if ai_mode && (!manifest.enabled || !manifest.allow_ai) {
+            return Ok((Vec::new(), false));
         }
-        let (root, _) = roots(&app, &session)?;
+        let (root, _) = roots(app, session)?;
         let keyword = if ai_mode {
-            store::search(&root, &wiki::ai_manifest(&root, &manifest), &query, 30)
+            store::search(&root, &wiki::ai_manifest(&root, &manifest), query, 30)
         } else {
-            store::browse(&root, &manifest, &query, 100)
+            store::browse(&root, &manifest, query, 100)
         };
         let semantic = wiki::ready(&manifest).is_ok();
         // AI retrieval also merges compiled wiki pages; keyword matching there
         // is cheap because published pages are few.
-        let topics = if ai_mode && semantic {
-            wiki::context(&app, &session, &manifest, &query).unwrap_or_default()
+        let topics = if semantic {
+            wiki::context(app, session, &manifest, query).unwrap_or_default()
         } else {
             Vec::new()
         };
@@ -1053,18 +1064,21 @@ pub async fn workbench_search(
     };
     let mut lanes = vec![keyword, topics];
     if semantic {
-        if let Ok(matches) = wiki::semantic_search(&app, &state, &session, &query).await {
+        let lookup = wiki::semantic_search(app, state, session, query);
+        if let Ok(Ok(matches)) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), lookup).await
+        {
             lanes.push(matches);
         }
     }
     let mut items = rrf_merge(lanes);
-    require_current(&state, &session)?;
+    require_current(state, session)?;
     if ai_mode {
-        items = knowledge_cloud::filter_items(&app, &session, items)
+        items = knowledge_cloud::filter_items(app, session, items)
             .await
             .unwrap_or_default();
     }
-    Ok(json!({"items":items,"initialComplete":complete}))
+    Ok((items, complete))
 }
 
 /// Reciprocal-rank fusion across retrieval lanes (k=60): each lane votes for
@@ -1145,32 +1159,40 @@ pub async fn workbench_review(
     query: String,
 ) -> CommandResult<Value> {
     let session = current(&state)?;
+    let (items, _) = knowledge_search(&app, &state, &session, &query, true).await?;
     let documents = {
         let _guard = state.serial.lock().await;
+        require_current(&state, &session)?;
         let manifest = load_state(&app, &session)?;
         if !manifest.enabled || !manifest.allow_ai || !manifest.initial_complete {
             return Err("Finish knowledge-base sync and enable AI processing first".into());
         }
         let (root, _) = roots(&app, &session)?;
-        let scoped = wiki::ai_manifest(&root, &manifest);
-        let mut documents = store::search(&root, &scoped, &query, 18)
+        items
             .iter()
-            .filter_map(|row| manifest.entries.get(row["id"].as_str()?))
-            .filter_map(|entry| store::read_document(&root, entry).ok())
-            .collect::<Vec<_>>();
-        // Only reviewed Wiki pages join automatic context; legacy memory remains editable.
-        for document in &mut documents {
-            document.transcript = store::evidence_excerpt(&document.text(), &query, 12_000);
-            document.outline.clear();
-            document.conclusions.clear();
-            document.todos.clear();
-            document.segments.retain(|segment| {
-                document
-                    .transcript
-                    .contains(segment["text"].as_str().unwrap_or_default())
-            });
-        }
-        documents
+            .filter_map(|row| {
+                let id = row["id"].as_str()?;
+                let entry = manifest
+                    .entries
+                    .get(id)
+                    .filter(|entry| store::eligible(entry))?;
+                let reference = &row["source"];
+                if reference["revision"] != entry.revision {
+                    return None;
+                }
+                let doc = store::read_document(&root, entry).ok()?;
+                let quote = reference["quote"].as_str()?;
+                if !doc.text().contains(quote)
+                    || !doc.ai_context_enabled
+                    || !wiki::allows_source(&doc, &manifest)
+                    || crate::inspiration_private::source_is_protected(&app, id)
+                {
+                    return None;
+                }
+                Some(wiki::analysis_part(&doc, quote.to_owned()))
+            })
+            .take(18)
+            .collect::<Vec<_>>()
     };
     if documents.is_empty() {
         return Ok(
@@ -1621,35 +1643,11 @@ pub async fn workbench_context(
     query: String,
 ) -> CommandResult<Value> {
     let session = current(&state)?;
-    // Semantic recall acquires the serial lock itself; it must run before this
-    // command takes the same lock. Failures degrade to keyword-only recall.
-    let semantic = wiki::semantic_search(&app, &state, &session, &query)
-        .await
-        .unwrap_or_default();
-    let _guard = state.serial.lock().await;
-    require_current(&state, &session)?;
-    let manifest = load_state(&app, &session)?;
-    if wiki::ready(&manifest).is_err() {
+    let (mut sources, complete) = knowledge_search(&app, &state, &session, &query, true).await?;
+    if !complete && sources.is_empty() {
         return Ok(Value::Null);
     }
-    let (root, _) = roots(&app, &session)?;
-    let mut sources = store::search(&root, &wiki::ai_manifest(&root, &manifest), &query, 3);
-    sources.extend(wiki::context(&app, &session, &manifest, &query)?);
-    // Merge semantic hits without duplicating keyword results; a small slice
-    // keeps the chat payload bounded.
-    for item in semantic.into_iter().take(3) {
-        let id = item["id"].as_str().unwrap_or_default();
-        if !sources
-            .iter()
-            .any(|source| source["id"].as_str() == Some(id))
-        {
-            sources.push(item);
-        }
-    }
-    drop(_guard);
-    let sources = knowledge_cloud::filter_items(&app, &session, sources)
-        .await
-        .unwrap_or_default();
+    sources.truncate(10);
     Ok(json!({"version":1,"sources":sources,"scope":session.scope}))
 }
 
@@ -1865,7 +1863,7 @@ pub async fn workbench_source_fragment(
     }
     let mut fragment = if let Some(chunk_id) = chunk_id {
         let hit = fulltext::chunk(&root, chunk_id)?
-            .filter(|hit| hit.doc_id == actual)
+            .filter(|hit| hit.doc_id == actual && hit.revision == document.revision)
             .ok_or("Chunk is not part of this source")?;
         json!({"chunkId":hit.chunk_id,"quote":hit.quote,"heading":hit.heading,
             "segmentId":hit.segment_id,"startMs":hit.start_ms,"endMs":hit.end_ms})
@@ -1886,6 +1884,7 @@ pub async fn workbench_source_fragment(
         return Err("Provide chunkId or segmentId".into());
     };
     fragment["id"] = json!(document.id);
+    fragment["revision"] = json!(document.revision);
     drop(_guard);
     let authorized = knowledge_cloud::filter_items(&app, &session, vec![fragment.clone()]).await?;
     if authorized.is_empty() {

@@ -12,6 +12,9 @@ fn identity(item: &CompilationEvidence, config: &Models) -> String {
 }
 fn fits(batch: &[CompilationEvidence]) -> bool {
     batch.len() <= 100
+        && batch
+            .first()
+            .is_none_or(|first| batch.iter().all(|item| item.source.id == first.source.id))
         && serde_json::to_vec(batch).is_ok_and(|bytes| bytes.len() <= 50000)
         && compile_sources(batch).is_ok()
 }
@@ -82,34 +85,46 @@ pub(super) fn plan(
     config: &Models,
 ) -> CommandResult<Vec<Vec<CompilationEvidence>>> {
     let path = root
-        .join("compilation-layouts")
+        .join("source-compilation-layouts")
         .join(format!("{}.json", topic.id));
-    let previous: Vec<Vec<String>> = read_json(&path)?;
-    let mut remaining: BTreeMap<String, Vec<CompilationEvidence>> = BTreeMap::new();
+    let mut layouts: BTreeMap<String, Vec<Vec<String>>> = read_json(&path)?;
+    let mut sources: BTreeMap<String, Vec<CompilationEvidence>> = BTreeMap::new();
     for item in evidence {
-        remaining
-            .entry(identity(&item, config))
+        sources
+            .entry(item.source.id.clone())
             .or_default()
             .push(item);
     }
     let mut batches = Vec::new();
-    for anchors in previous {
-        let mut preserved = Vec::new();
-        for key in anchors {
-            if let Some(items) = remaining.get_mut(&key) {
-                if let Some(item) = items.pop() {
-                    preserved.push(item);
+    for (id, items) in sources {
+        let mut planned = Vec::new();
+        let mut remaining = BTreeMap::<String, Vec<CompilationEvidence>>::new();
+        for item in items {
+            remaining
+                .entry(identity(&item, config))
+                .or_default()
+                .push(item);
+        }
+        for anchors in layouts.get(&id).into_iter().flatten() {
+            let mut preserved = Vec::new();
+            for key in anchors {
+                if let Some(items) = remaining.get_mut(key) {
+                    preserved.extend(items.pop());
                 }
             }
+            append(&mut planned, preserved)?;
         }
-        append(&mut batches, preserved)?;
+        append(&mut planned, remaining.into_values().flatten().collect())?;
+        layouts.insert(
+            id,
+            planned
+                .iter()
+                .map(|batch| batch.iter().map(|item| identity(item, config)).collect())
+                .collect(),
+        );
+        batches.extend(planned);
     }
-    append(&mut batches, remaining.into_values().flatten().collect())?;
-    let layout: Vec<Vec<_>> = batches
-        .iter()
-        .map(|batch| batch.iter().map(|item| identity(item, config)).collect())
-        .collect();
-    write_json(&path, &layout)?;
+    write_json(&path, &layouts)?;
     Ok(batches)
 }
 
@@ -145,15 +160,49 @@ mod tests {
         let mut added = items.clone();
         added.insert(0, evidence("a"));
         let second = plan(&root, &topic, added, &config).unwrap();
-        assert_eq!(second.len(), 2);
-        assert_eq!(batch_compilation_key(&topic, &config, &second[0]), key);
-        let mut rebound = second[0].clone();
+        assert_eq!(second.len(), 3);
+        let unchanged = second
+            .iter()
+            .find(|batch| batch[0].source.id == "b")
+            .unwrap();
+        assert_eq!(batch_compilation_key(&topic, &config, unchanged), key);
+        let mut rebound = unchanged.clone();
         for item in &mut rebound {
             item.source.folder_id = "new-folder".into();
             item.source.refresh_revision();
             item.value["citations"][0]["revision"] = json!(item.source.revision);
         }
         assert_eq!(batch_compilation_key(&topic, &config, &rebound), key);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn one_changed_source_in_a_large_topic_leaves_other_sections_reusable() {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let topic = Topic {
+            id: uuid::Uuid::new_v4().to_string(),
+            ..Default::default()
+        };
+        let config = Models::default();
+        let original: Vec<_> = (0..200)
+            .map(|index| evidence(&format!("source-{index:03}")))
+            .collect();
+        let before = plan(&root, &topic, original.clone(), &config).unwrap();
+        let keys = |batches: Vec<Vec<CompilationEvidence>>| -> BTreeSet<_> {
+            batches
+                .iter()
+                .map(|batch| batch_compilation_key(&topic, &config, batch))
+                .collect()
+        };
+        let before = keys(before);
+        let mut changed = original;
+        changed[100].source.transcript.push_str(" Revised.");
+        changed[100].source.refresh_revision();
+        changed[100].value["citations"][0]["revision"] = json!(changed[100].source.revision);
+        let after = keys(plan(&root, &topic, changed, &config).unwrap());
+        assert_eq!(before.len(), 200);
+        assert_eq!(before.intersection(&after).count(), 199);
+        assert_eq!(after.difference(&before).count(), 1);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -190,12 +239,13 @@ mod tests {
             assert_eq!(sources.len(), 1);
             covered.push_str(sources[0]["text"].as_str().unwrap());
             assert!(batch.iter().all(|item| {
-                item.value["citations"].as_array().is_none_or(|rows| rows
-                    .iter()
-                    .all(|row| row["quote"].as_str().is_none_or(|quote| item
-                        .source
-                        .text()
-                        .contains(quote))))
+                item.value["citations"].as_array().is_none_or(|rows| {
+                    rows.iter().all(|row| {
+                        row["quote"]
+                            .as_str()
+                            .is_none_or(|quote| item.source.text().contains(quote))
+                    })
+                })
             }));
         }
         assert!(covered.contains("结尾"));

@@ -132,6 +132,7 @@ async fn resolve(app: &AppHandle, session: &Session) -> CommandResult<DirectMode
 /// Retry timing rides on `SynthesisControl::retry_after`, not the variant.
 enum DirectError {
     Unknown,
+    NotSubmitted,
     RateLimited,
     Service(u16),
     Truncated,
@@ -208,6 +209,7 @@ fn invalid_error_string(
 fn service_error_string(error: &DirectError) -> String {
     match error {
         DirectError::Unknown => tasks::UNKNOWN.to_owned(),
+        DirectError::NotSubmitted => tasks::NOT_SUBMITTED.to_owned(),
         DirectError::RateLimited => "Model provider failed (HTTP 429): Model rate limited".into(),
         DirectError::Service(status) => format!("Model provider failed (HTTP {status})"),
         DirectError::Truncated => "Model output was truncated".into(),
@@ -403,9 +405,12 @@ fn citation_failure(
 }
 
 fn citations(raw: &Value, sources: &[Value], location: &str) -> Result<Vec<Value>, EvalFailure> {
+    // The extraction contract allows up to 50 events, and one event can carry
+    // several references — a legitimately extracted row can exceed 40. The
+    // old 40 cap rejected real analysis rows and wedged their topics forever.
     let references = raw
         .as_array()
-        .filter(|rows| (1..=40).contains(&rows.len()))
+        .filter(|rows| (1..=100).contains(&rows.len()))
         .ok_or_else(|| {
             citation_failure(
                 "Every claim needs source citations",
@@ -806,6 +811,15 @@ fn invalid_reference(location: &str, index: Option<usize>) -> EvalFailure {
 // Task validators (mirrors of validate_result, desktop_wiki,
 // desktop_topic_match and desktop_topic_groups).
 // ---------------------------------------------------------------------------
+
+/// Cache self-heal check: apply the compiler's row rules to a stored analysis
+/// row without exposing validation internals. A failing row must invalidate
+/// its cache entry so the next pass re-extracts it.
+pub(in crate::workbench) fn validate_row(raw: &Value, sources: &[Value]) -> Result<(), String> {
+    validate_result(raw, sources)
+        .map(|_| ())
+        .map_err(|failure| failure.message.to_owned())
+}
 
 fn validate_result(raw: &Value, sources: &[Value]) -> Result<Value, EvalFailure> {
     if !raw.is_object() {
@@ -1779,7 +1793,11 @@ async fn generate(
                 "request"
             };
             log::warn!("[wiki-direct] provider transport failure ({kind})");
-            return Err(DirectError::Unknown);
+            return Err(if error.is_connect() && !error.is_timeout() {
+                DirectError::NotSubmitted
+            } else {
+                DirectError::Unknown
+            });
         }
     };
     let status = response.status().as_u16();
@@ -1834,7 +1852,11 @@ async fn generate(
     // burn or an instant cut) from a real reply that then fails validation.
     let message = choice.get("message");
     log::info!(
-        "[wiki-direct] provider reply status={} finish={:?} content_chars={} reasoning_chars={}",
+        "[wiki-direct] provider reply {}@{} status={} finish={:?} content_chars={} reasoning_chars={}",
+        direct.model,
+        url::Url::parse(&direct.base_url).ok()
+            .and_then(|u| u.host_str().map(str::to_owned))
+            .unwrap_or_default(),
         status,
         choice.get("finish_reason").and_then(Value::as_str),
         message
@@ -1958,15 +1980,52 @@ pub(super) async fn run_pipeline(
             return Err("Invalid Wiki evidence budget".into());
         }
         let mut validated = Vec::new();
+        let mut dropped = 0usize;
+        let mut last_failure: Option<EvalFailure> = None;
         for row in rows {
             match validate_result(&row, &sources) {
                 Ok(item) => validated.push(item),
                 Err(failure) => {
-                    return Err(invalid_error_string(&failure, task, &sources_json, false))
+                    // One poisoned row must not wedge the whole topic: cached
+                    // rows from older processors can carry citation shapes the
+                    // current validator rejects. Drop the row (the compiled
+                    // page simply leans on the remaining evidence) and only
+                    // fail when nothing usable remains.
+                    dropped += 1;
+                    last_failure = Some(failure);
+                    let shape = json!({
+                        "keys": row.as_object()
+                            .map(|fields| fields.keys().cloned().collect::<Vec<_>>()),
+                        "citations": row.get("citations").map(|value| match value {
+                            Value::Array(rows) => Value::from(rows.len()),
+                            other => other.clone(),
+                        }),
+                        "insufficient": row.get("insufficientEvidence").cloned(),
+                        "summaryChars": row.get("summary")
+                            .and_then(Value::as_str)
+                            .map(|summary| summary.chars().count()),
+                    });
+                    log::warn!("[wiki-direct] evidence row invalid: {shape}");
                 }
             }
         }
-        validated
+        if dropped > 0 {
+            let detail = last_failure
+                .as_ref()
+                .map(|failure| failure.message)
+                .unwrap_or("unknown");
+            log::warn!(
+                "[wiki-direct] dropped {dropped} invalid evidence rows ({detail}); {} remain",
+                validated.len()
+            );
+        }
+        match (validated.is_empty(), last_failure) {
+            (false, _) => validated,
+            (true, Some(failure)) => {
+                return Err(invalid_error_string(&failure, task, &sources_json, false))
+            }
+            (true, None) => return Err("Invalid Wiki evidence budget".into()),
+        }
     } else {
         Vec::new()
     };
@@ -2171,7 +2230,7 @@ pub(super) async fn synthesize_direct(
     session: &Session,
     state: &WorkbenchState,
     task: &str,
-    payload: Value,
+    payload: &Value,
     report: &mut SynthesisControl,
 ) -> CommandResult<Value> {
     let direct = resolve(app, session).await?;

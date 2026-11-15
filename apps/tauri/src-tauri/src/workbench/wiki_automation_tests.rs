@@ -138,7 +138,7 @@ fn automatic_scheduler_only_recompiles_topics_with_changed_inputs() {
         revision: "new-embedding".into(),
         ..config.clone()
     };
-    assert!(needs_automatic_processing(
+    assert!(!needs_automatic_processing(
         &manifest,
         &values[..1],
         &sources,
@@ -320,6 +320,69 @@ fn page(topic: &Topic, doc: &Document, manifest: &Manifest, text: &str) -> Revis
         ..Default::default()
     }
 }
+
+#[test]
+fn moving_a_source_rebinds_a_reviewed_revision_without_a_new_page() {
+    let root = root();
+    let local = root.join("sources");
+    let wiki = root.join("wiki");
+    let config = Models::default();
+    let source = doc("source", "work");
+    let mut manifest = manifest();
+    manifest
+        .wiki_automation
+        .as_mut()
+        .unwrap()
+        .folder_ids
+        .push("archive".into());
+    add(&local, &mut manifest, &source);
+    let mut topic = Topic {
+        id: uuid::Uuid::new_v4().to_string(),
+        title: "预算".into(),
+        source_ids: vec![source.id.clone()],
+        ..Default::default()
+    };
+    let mut original = page(&topic, &source, &manifest, "已审核的预算");
+    original.review = "approved".into();
+    original.cache_key = page_version(&topic, std::slice::from_ref(&source), &manifest, &config);
+    topic.last_fingerprint = original.cache_key.clone();
+    topic.published = Some(original.clone());
+    save_page(&wiki, &topic, &original, false).unwrap();
+    save_topics(&wiki, &[topic.clone()]).unwrap();
+
+    let mut moved = source;
+    moved.folder_id = "archive".into();
+    moved.refresh_revision();
+    add(&local, &mut manifest, &moved);
+    assert!(!citable(&topic, &local, &manifest, &config));
+    assert!(refresh_page_references(
+        &wiki,
+        std::slice::from_mut(&mut topic),
+        std::slice::from_ref(&moved),
+        &manifest,
+        &config,
+    )
+    .unwrap());
+    assert!(citable(&topic, &local, &manifest, &config));
+    assert!(pending_compilation(
+        &topic,
+        &[moved.clone()],
+        &manifest,
+        &config,
+        &BTreeSet::new(),
+        None
+    )
+    .is_none());
+    let rebound = topic.published.unwrap();
+    assert_eq!(rebound.id, original.id);
+    assert_eq!(rebound.markdown, original.markdown);
+    assert_eq!(rebound.review, original.review);
+    assert_eq!(rebound.citations[0].revision, moved.revision);
+    assert_eq!(rebound.changes[0].citations[0].revision, moved.revision);
+    assert!(topic.history.is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn setup_requires_an_explicit_nonempty_range_and_keeps_unfiled_separate() {
     assert!(validate_automation(&store::WikiAutomation {
@@ -637,6 +700,31 @@ fn publication_is_idempotent_preserves_human_notes_and_keeps_legacy_drafts_in_hi
     fs::remove_dir_all(root).unwrap();
 }
 #[test]
+fn updating_a_reviewed_page_keeps_the_original_and_creates_a_candidate() {
+    let root = root();
+    let manifest = manifest();
+    let source = doc("one", "work");
+    let mut topic = Topic {
+        id: uuid::Uuid::new_v4().to_string(),
+        ..Default::default()
+    };
+    let mut original = page(&topic, &source, &manifest, "# Topic\n\nReviewed text");
+    original.review = "approved".into();
+    publish_automatic(&root, &mut topic, original.clone(), "v1").unwrap();
+    let next = page(&topic, &source, &manifest, "# Topic\n\nNew evidence");
+    publish_automatic(&root, &mut topic, next, "v2").unwrap();
+    assert_eq!(topic.published.as_ref().unwrap().id, original.id);
+    assert!(topic.candidate.as_ref().unwrap().review.is_empty());
+    assert!(topic
+        .candidate
+        .as_ref()
+        .unwrap()
+        .markdown
+        .contains("New evidence"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn page_cache_changes_only_for_actual_topic_inputs() {
     let mut manifest = manifest();
     let mut topic = Topic::default();
@@ -727,173 +815,6 @@ async fn range_changes_reuse_compilation_and_only_changed_evidence_calls_the_mod
             Ok(json!({"summary":"Updated page", "citations":[{"kind":"meeting","id":changed.id,"revision":changed.revision,"quote":changed.text()}]}))
         }).await.unwrap();
     assert_eq!(calls.get(), 2);
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn scoped_legacy_pages_migrate_only_when_complete_inputs_and_quotes_match() {
-    let root = root();
-    let local = root.join("sources");
-    let mut manifest = manifest();
-    let config = Models {
-        text_revision: "same-model-language-prompt".into(),
-        ..Default::default()
-    };
-    let source = doc("existing", "work");
-    add(&local, &mut manifest, &source);
-    let mut catalog = Catalog::default();
-    let mut values = Vec::new();
-    apply_catalog(&mut values, &mut catalog, &source.id, &[row(&source)]);
-    let topic = &mut values[0];
-    topic.pinned = true;
-    topic.notes = "Keep this correction".into();
-    let version = scope_cache::legacy_version(
-        topic,
-        &[source.clone()],
-        manifest.wiki_automation.as_ref().unwrap(),
-        &config,
-    );
-    let mut saved = page(topic, &source, &manifest, "Saved and reviewed page");
-    // Prior gateway-only migrations advanced the completed version without rewriting this field.
-    saved.cache_key = "pre-gateway-cache-key".into();
-    saved.fingerprint = page_fingerprint_with_legacy_scope(
-        topic,
-        &manifest,
-        &config,
-        &saved.citations,
-        manifest.wiki_automation.as_ref(),
-    );
-    saved.review = "approved".into();
-    topic.published = Some(saved.clone());
-    topic.last_fingerprint = version.clone();
-    topic.last_attempt_fingerprint = version;
-    save_page(&root, topic, &saved, false).unwrap();
-    save_topics(&root, &values).unwrap();
-
-    manifest
-        .wiki_automation
-        .as_mut()
-        .unwrap()
-        .folder_ids
-        .extend(["new-folder".into(), "third-folder".into()]);
-    let docs = vec![source.clone()];
-    assert_eq!(
-        migrate_scope_cache(&root, &local, &docs, &manifest, &config).unwrap(),
-        1
-    );
-    assert_eq!(
-        migrate_scope_cache(&root, &local, &docs, &manifest, &config).unwrap(),
-        0
-    );
-    let migrated = topics(&root).unwrap();
-    assert_eq!(
-        migrated[0].last_fingerprint,
-        page_version(&migrated[0], &docs, &manifest, &config)
-    );
-    let current = migrated[0].published.as_ref().unwrap();
-    assert_eq!(current.id, saved.id);
-    assert_eq!(current.markdown, saved.markdown);
-    assert_eq!(current.review, "approved");
-    assert_eq!(migrated[0].notes, "Keep this correction");
-    assert!(migrated[0].pinned);
-    assert_eq!(
-        fs::read_to_string(root.join(&migrated[0].id).join("published.md")).unwrap(),
-        saved.markdown
-    );
-    assert!(citable(&migrated[0], &local, &manifest, &config));
-
-    for mutation in [
-        "notes",
-        "source",
-        "model",
-        "refresh",
-        "excluded",
-        "range-revoked",
-        "external-edit",
-    ] {
-        let mut trial = values.clone();
-        let mut docs = vec![source.clone()];
-        let mut model = config.clone();
-        match mutation {
-            "notes" => trial[0].notes.push_str(" New instruction"),
-            "source" => {
-                docs[0].transcript.push_str("Changed evidence");
-                docs[0].refresh_revision();
-                add(&local, &mut manifest, &docs[0]);
-            }
-            "model" => model.text_revision = "different-model-or-language".into(),
-            "refresh" => trial[0].force_refresh = true,
-            "excluded" => manifest.entries.get_mut(&source.id).unwrap().excluded = true,
-            "range-revoked" => {
-                manifest.wiki_automation.as_mut().unwrap().folder_ids = vec!["other".into()]
-            }
-            _ => {
-                fs::write(root.join(&trial[0].id).join("published.md"), "Manual edit").unwrap();
-            }
-        }
-        save_topics(&root, &trial).unwrap();
-        assert_eq!(
-            migrate_scope_cache(&root, &local, &docs, &manifest, &model).unwrap(),
-            0,
-            "{mutation}"
-        );
-        assert_eq!(
-            topics(&root).unwrap()[0].last_fingerprint,
-            trial[0].last_fingerprint
-        );
-        manifest.wiki_automation.as_mut().unwrap().folder_ids =
-            vec!["work".into(), "new-folder".into(), "third-folder".into()];
-        add(&local, &mut manifest, &source);
-    }
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn migrating_a_failed_attempt_does_not_retry_it_or_turn_it_into_success() {
-    let root = root();
-    let local = root.join("sources");
-    let mut manifest = manifest();
-    let config = Models::default();
-    let source = doc("failed", "work");
-    add(&local, &mut manifest, &source);
-    let mut catalog = Catalog::default();
-    let mut values = Vec::new();
-    apply_catalog(&mut values, &mut catalog, &source.id, &[row(&source)]);
-    values[0].error = "Invalid Wiki citations".into();
-    values[0].failure = Some(WikiFailure::new(
-        &values[0].error,
-        "compiling",
-        vec![source.id.clone()],
-    ));
-    values[0].last_attempt_fingerprint = scope_cache::legacy_version(
-        &values[0],
-        &[source.clone()],
-        manifest.wiki_automation.as_ref().unwrap(),
-        &config,
-    );
-    save_topics(&root, &values).unwrap();
-    manifest
-        .wiki_automation
-        .as_mut()
-        .unwrap()
-        .folder_ids
-        .push("new-folder".into());
-    assert_eq!(
-        migrate_scope_cache(&root, &local, &[source.clone()], &manifest, &config).unwrap(),
-        0
-    );
-    let restored = topics(&root).unwrap();
-    assert_eq!(
-        restored[0].last_attempt_fingerprint,
-        page_version(&restored[0], &[source], &manifest, &config)
-    );
-    assert_eq!(restored[0].error, values[0].error);
-    assert_eq!(
-        restored[0].failure.as_ref().unwrap().message,
-        values[0].failure.as_ref().unwrap().message
-    );
-    assert!(restored[0].published.is_none());
-    assert!(restored[0].last_fingerprint.is_empty());
     fs::remove_dir_all(root).unwrap();
 }
 #[test]
@@ -1089,45 +1010,6 @@ fn every_model_request_rechecks_current_scope_version_and_per_source_consent() {
 }
 
 #[test]
-fn legacy_published_ids_and_exclusions_survive_adoption_without_publishing_drafts() {
-    let source = doc("one", "work");
-    let manifest = manifest();
-    let mut old = Topic {
-        id: uuid::Uuid::new_v4().to_string(),
-        title: "A项目".into(),
-        notes: "人工备注".into(),
-        ..Default::default()
-    };
-    old.published = Some(page(&old, &source, &manifest, "# Existing page"));
-    let draft = Topic {
-        id: uuid::Uuid::new_v4().to_string(),
-        candidate: old.published.clone(),
-        ..Default::default()
-    };
-    let mut values = vec![old.clone(), draft];
-    assert!(adopt_legacy_sources(&mut values));
-    assert!(values[1].source_ids.is_empty());
-    let mut row = row(&source);
-    row.existing_id = Some(old.id.clone());
-    let mut catalog = Catalog::default();
-    assert_eq!(
-        apply_catalog(&mut values, &mut catalog, &source.id, &[row.clone()])[0],
-        old.id
-    );
-    assert_eq!(values[0].notes, old.notes);
-    assert_eq!(
-        values[0].published.as_ref().unwrap().id,
-        old.published.as_ref().unwrap().id
-    );
-    values[0].excluded = true;
-    assert_eq!(
-        apply_catalog(&mut values, &mut catalog, &source.id, &[row])[0],
-        ""
-    );
-    assert!(values[0].excluded);
-}
-
-#[test]
 fn manual_retry_preserves_completed_pages_catalog_and_progress() {
     let root = root();
     let local = root.join("sources");
@@ -1249,74 +1131,6 @@ fn failed_catalog_preserves_saved_source_links_and_does_not_compile_partial_topi
     assert_eq!(values[0].source_ids, vec![source.id]);
     reconcile_sources(&mut values, &BTreeMap::new(), &failed, &[]);
     assert!(values[0].source_ids.is_empty());
-}
-
-#[test]
-fn gateway_migration_reuses_only_matching_validated_inputs_and_completed_pages() {
-    let root = root();
-    let local = root.join("sources");
-    let mut manifest = manifest();
-    let source = preferred(doc("ready", "work"), &manifest);
-    add(&local, &mut manifest, &source);
-    let old = Models {
-        text_revision: "old-gateway".into(),
-        ..Default::default()
-    };
-    let new = Models {
-        text_revision: "same-model-new-identity".into(),
-        ..Default::default()
-    };
-    let mut catalog = Catalog::default();
-    let mut values = Vec::new();
-    apply_catalog(&mut values, &mut catalog, &source.id, &[row(&source)]);
-    values[0].published = Some(page(&values[0], &source, &manifest, "Saved content"));
-    values[0].last_fingerprint = page_version(&values[0], &[source.clone()], &manifest, &old);
-    let old_fingerprint = page_fingerprint(
-        &values[0],
-        &manifest,
-        &old,
-        &values[0].published.as_ref().unwrap().citations,
-    );
-    values[0].published.as_mut().unwrap().fingerprint = old_fingerprint;
-    values[0].published.as_mut().unwrap().cache_key = values[0].last_fingerprint.clone();
-    let expected = page_version(&values[0], &[source.clone()], &manifest, &new);
-    let saved_id = values[0].published.as_ref().unwrap().id.clone();
-    values[0].source_ids.clear();
-    save_topics(&root, &values).unwrap();
-    catalog.chunks.insert(
-        format!("{}:0", input_key(&source, &old)),
-        vec![row(&source)],
-    );
-    migrate_catalog_revision(
-        &root,
-        &local,
-        &mut catalog,
-        &[source.clone()],
-        &manifest,
-        &new,
-        &old.text_revision,
-    )
-    .unwrap();
-    assert!(catalog
-        .chunks
-        .contains_key(&format!("{}:0", input_key(&source, &new))));
-    let restored = topics(&root).unwrap();
-    assert_eq!(restored[0].source_ids, vec![source.id.clone()]);
-    assert_eq!(restored[0].last_fingerprint, expected);
-    assert_eq!(restored[0].published.as_ref().unwrap().id, saved_id);
-    assert_eq!(
-        restored[0].published.as_ref().unwrap().markdown,
-        "Saved content"
-    );
-    assert!(citable(&restored[0], &local, &manifest, &new));
-    let changed_model = Models {
-        text_revision: "other-model".into(),
-        ..Default::default()
-    };
-    assert!(!catalog
-        .chunks
-        .contains_key(&format!("{}:0", input_key(&source, &changed_model))));
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -1737,78 +1551,6 @@ fn local_wiki_state_source_reads_are_shared_across_pages() {
         sources.documents.len(),
         started.elapsed().as_millis()
     );
-}
-
-#[test]
-#[ignore = "Requires an explicitly supplied offline recovery copy; never calls a model"]
-fn local_completed_wiki_cache_recovery() {
-    let fixture =
-        PathBuf::from(std::env::var("LYNSE_WIKI_RECOVERY_DIR").expect("Offline recovery copy"));
-    let manifest: Manifest = read_json(&fixture.join("state.json")).unwrap();
-    let local = PathBuf::from(&manifest.sync_root);
-    let root = fixture.join("wiki");
-    let docs = documents(&local, &manifest);
-    let settings: Value = read_json(&fixture.join("recovery.json")).unwrap();
-    let config = Models {
-        text_revision: settings["textRevision"].as_str().unwrap().into(),
-        ..Default::default()
-    };
-    let before = topics(&root).unwrap();
-    let mut catalog: Catalog = read_json(&catalog_path(&root)).unwrap();
-    for revision in settings["previousRevisions"].as_array().unwrap() {
-        migrate_catalog_revision(
-            &root,
-            &local,
-            &mut catalog,
-            &docs,
-            &manifest,
-            &config,
-            revision.as_str().unwrap(),
-        )
-        .unwrap();
-    }
-    let retained = migrate_scope_cache(&root, &local, &docs, &manifest, &config).unwrap();
-    println!("Scope cache migration retained {retained} completed pages without model requests");
-    let after = topics(&root).unwrap();
-    assert_eq!(before.len(), after.len());
-    for (old, new) in before.iter().zip(&after) {
-        assert_eq!(old.id, new.id);
-        if let Some(page) = &old.published {
-            let saved = new.published.as_ref().unwrap();
-            assert_eq!(page.id, saved.id);
-            assert_eq!(page.markdown, saved.markdown);
-            assert_eq!(page.citations, saved.citations);
-        }
-    }
-    let total: usize = docs
-        .iter()
-        .map(|doc| sync::split_text(doc.text().trim(), 12000).len())
-        .sum();
-    let cached = docs
-        .iter()
-        .map(|doc| {
-            (0..sync::split_text(doc.text().trim(), 12000).len())
-                .filter(|index| {
-                    catalog
-                        .chunks
-                        .contains_key(&format!("{}:{index}", input_key(doc, &config)))
-                })
-                .count()
-        })
-        .sum::<usize>();
-    let completed = after
-        .iter()
-        .filter(|topic| {
-            let selected: Vec<_> = docs
-                .iter()
-                .filter(|doc| topic.source_ids.contains(&doc.id))
-                .cloned()
-                .collect();
-            topic.published.is_some()
-                && topic.last_fingerprint == page_version(topic, &selected, &manifest, &config)
-        })
-        .count();
-    println!("Offline recovery: {} sources, {cached}/{total} cached chunks, {completed} unchanged completed topics, {} restored source links",docs.len(),after.iter().filter(|topic| !topic.source_ids.is_empty()).count());
 }
 
 #[test]

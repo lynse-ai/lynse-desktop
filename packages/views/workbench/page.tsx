@@ -2,8 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { memoryApi } from "@lynse/core/api/memory";
+import { api } from "@lynse/core/api";
+import { useAuthStore } from "@lynse/core/auth";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@lynse/ui/components/ui/button";
-import { ArrowLeft, Brain, BookOpen, List, Network, Settings } from "../icons";
+import { Input } from "@lynse/ui/components/ui/input";
+import { ArrowLeft, Brain, BookOpen, List, Network, Search, Settings } from "../icons";
 import { useNavigation } from "../navigation";
 import { BetaBadge } from "../beta-badge";
 import { SwapFade } from "../swap-fade";
@@ -58,6 +63,7 @@ export function KnowledgePage() {
         {tab === "settings" && <p className="mt-1 text-xs text-muted-foreground">{t("workbench.memory_hint")}</p>}
       </div>
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2" data-tauri-drag-region={false}>
+        {tab === "wiki" && status?.enabled && <Button size="sm" variant="ghost" onClick={() => useWorkbench.getState().show()}><Search className="size-4" aria-hidden="true" />{t("workbench.search")}</Button>}
         {tab === "wiki" ? <Button size="icon-sm" variant="ghost" aria-label={t("workbench.memory_settings")} onClick={() => changeTab("settings")}><Settings className="size-4" aria-hidden="true" /></Button> : <Button size="sm" variant="ghost" onClick={() => tab === "library" ? setAssistantSettingsOpen(true) : changeTab("wiki")}><ArrowLeft className="size-4 rtl:rotate-180" aria-hidden="true" />{t(tab === "library" ? "workbench.memory_back_assistant" : "workbench.auto_back")}</Button>}
       </div>
     </header>
@@ -94,5 +100,40 @@ export function MemoryPage() {
     if (legacyLibrary) navigation.replace("/memory/manage?view=files");
   }, [legacyLibrary, navigation]);
   if (legacyLibrary) return null;
-  return navigation.pathname === "/memory/manage" ? <MemoryManagementPage /> : <KnowledgePage />;
+  if (navigation.pathname === "/memory/manage") return <MemoryManagementPage />;
+  return getWorkbenchApi() ? <KnowledgePage /> : <AccountKnowledgeSearch />;
+}
+
+function AccountKnowledgeSearch() {
+  const { t } = useTranslation();
+  const user = useAuthStore(state => state.user);
+  const [draft, setDraft] = useState("");
+  const [query, setQuery] = useState("");
+  const result = useQuery({
+    queryKey: ["account-knowledge-search", api().getBaseUrl(), api().getAgentBaseUrl(), user?.id, query],
+    queryFn: ({ signal }) => memoryApi.searchKnowledge(query, signal),
+    enabled: !!user && !!query,
+    gcTime: 0,
+    retry: false,
+  });
+  const items = user && result.isSuccess && !result.isFetching ? result.data.items : undefined;
+  return <main className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
+    <div className="mx-auto max-w-3xl space-y-5">
+      <h1 className="text-lg font-semibold">{t("workbench.auto_title")}</h1>
+      <form className="flex gap-2" onSubmit={event => { event.preventDefault(); setQuery(draft.trim()); }}>
+        <Input type="search" value={draft} maxLength={512} onChange={event => setDraft(event.target.value)} aria-label={t("workbench.search")} placeholder={t("workbench.search")} />
+        <Button type="submit" disabled={!user || !draft.trim()}>{t("workbench.search")}</Button>
+      </form>
+      {!user && <p role="status" className="text-sm text-muted-foreground">{t("memory_manager.sign_in")}</p>}
+      {result.isFetching && <p role="status" className="text-sm text-muted-foreground">{t("memory_manager.loading")}</p>}
+      {result.error && <p role="alert" className="text-sm text-destructive">{t("memory_manager.connection_failed")}</p>}
+      {items && result.data?.retrieval?.degraded && <p role="status" className="text-sm text-muted-foreground">{t("workbench.knowledge_keyword_fallback")}</p>}
+      {items && !items.length && <p role="status" className="text-sm text-muted-foreground">{t("workbench.no_results")}</p>}
+      {items?.map(item => <article key={item.id} className="space-y-2 rounded-lg border border-border p-4">
+        <h2 className="break-words text-sm font-semibold">{item.title}</h2>
+        <blockquote className="whitespace-pre-wrap break-words text-sm leading-relaxed">{item.excerpt}</blockquote>
+        <p className="break-all text-xs text-muted-foreground">{t("workbench.source")} {item.source.id}</p>
+      </article>)}
+    </div>
+  </main>;
 }

@@ -129,7 +129,7 @@ export interface MemoryEvidence {
   speaker?: string;
 }
 export interface SearchResult {
-  items: { id: string; title: string; kind: string; excerpt: string; source: SourceRef; matches?: MemoryEvidence[] }[];
+  items: { id: string; title: string; kind: string; excerpt: string; source: SourceRef; matches?: MemoryEvidence[]; citations?: SourceRef[] }[];
   initialComplete: boolean;
 }
 export interface DesktopContext {
@@ -203,5 +203,17 @@ export interface GraphCrossLink { source: string; target: string; sourceTitle: s
 export interface WikiGraphInsights { communities: GraphCommunity[]; isolatedTopics: GraphIsolatedTopic[]; sparseCommunities: GraphCommunity[]; bridgeTopics: GraphBridgeTopic[]; crossCommunityLinks: GraphCrossLink[] }
 export type TopicGraph = KnowledgeGraph & { insights?: WikiGraphInsights }
 export interface WikiSourceFailure { id: string; sourceId: string; title: string; stage: string; message: string; occurredAt: string; retrying?: boolean; validation?: WikiValidationDetails | null }
-export interface WikiState { sourceDates?: Record<string, string>; hierarchy?: { error?: string | null }; sourceFailures?: WikiSourceFailure[]; createdTopicId?: string | null; automation?: WikiAutomationConfig | null; topicGraph?: TopicGraph; purpose?: string; topics: WikiTopic[]; models: WikiModelsConfig; sources?: WikiSources; graph?: KnowledgeGraph }
-export type WikiRequest = { action: "topic_group"; ids: string[]; targetId?: string; title?: string } | { action: "topic_groups_retry" } | { action: "source_folders"; ids: string[]; folderId: string } | { action: "correction"; id: string; notes: string } | { action: "state" } | { action: "models"; models: WikiModelsConfig; embeddingKey?: string } | { action: "purpose"; purpose: string } | { action: "topic"; mode?: "collection" | "group"; id?: string; title: string; purpose: string; notes?: string; pinned?: boolean; excluded?: boolean } | { action: "topic_link"; id: string; targetId: string; state: "included" | "excluded" } | { action: "topic_delete"; id: string } | { action: "review"; id: string; candidateId: string; approve: boolean; markdown?: string } | { action: "retry"; id?: string } | { action: "sources"; sources: WikiSources } | { action: "tracking"; enabled: boolean } | { action: "tracking_retry" | "tracking_refresh" } | { action: "tracking_sources"; ids: string[] } | { action: "tracking_todo"; id: string } | { action: "tracking_merge"; id: string; target: string } | { action: "tracking_unmerge"; id: string } | { action: "tracking_review"; id: string; review: "candidate" | "confirmed"; description?: string; status?: GraphStatus; modality?: GraphModality } | { action: "tracking_dismiss" | "tracking_restore" | "tracking_reset"; id: string };
+export interface WikiSyncConflict {
+  localVersion: string;
+  cloudVersion: string;
+  local: { title: string; markdown: string; purpose?: string; notes?: string };
+  cloud: { title: string; markdown: string; purpose?: string; notes?: string };
+  suggestedMarkdown?: string | null;
+  canMerge: boolean;
+}
+export interface WikiState { syncConflict?: WikiSyncConflict; sourceDates?: Record<string, string>; hierarchy?: { error?: string | null }; sourceFailures?: WikiSourceFailure[]; syncConflicts?: string[]; createdTopicId?: string | null; automation?: WikiAutomationConfig | null; topicGraph?: TopicGraph; purpose?: string; topics: WikiTopic[]; models: WikiModelsConfig; sources?: WikiSources; graph?: KnowledgeGraph }
+export type WikiConflictResolution = {
+  action: "sync_conflict_resolve"; id: string; choice: "local" | "cloud" | "merge";
+  localVersion: string; cloudVersion: string; markdown?: string; details?: "local" | "cloud";
+};
+export type WikiRequest = WikiConflictResolution | { action: "sync_conflict_preview"; id: string } | { action: "topic_group"; ids: string[]; targetId?: string; title?: string } | { action: "topic_groups_retry" } | { action: "source_folders"; ids: string[]; folderId: string } | { action: "correction"; id: string; notes: string } | { action: "state" } | { action: "models"; models: WikiModelsConfig; embeddingKey?: string } | { action: "purpose"; purpose: string } | { action: "topic"; mode?: "collection" | "group"; id?: string; title: string; purpose: string; notes?: string; pinned?: boolean; excluded?: boolean } | { action: "topic_link"; id: string; targetId: string; state: "included" | "excluded" } | { action: "topic_delete"; id: string } | { action: "review"; id: string; candidateId: string; approve: boolean; markdown?: string } | { action: "retry"; id?: string } | { action: "sources"; sources: WikiSources } | { action: "tracking"; enabled: boolean } | { action: "tracking_retry" | "tracking_refresh" } | { action: "tracking_sources"; ids: string[] } | { action: "tracking_todo"; id: string } | { action: "tracking_merge"; id: string; target: string } | { action: "tracking_unmerge"; id: string } | { action: "tracking_review"; id: string; review: "candidate" | "confirmed"; description?: string; status?: GraphStatus; modality?: GraphModality } | { action: "tracking_dismiss" | "tracking_restore" | "tracking_reset"; id: string };

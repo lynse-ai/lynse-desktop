@@ -98,16 +98,11 @@ export async function readDesktopMcpTool(name: string, args: Args, deps: McpData
       const keyword = stringArg(args, "keyword");
       const limit = numberArg(args, "limit", 20, 100);
       const sources = await bridge.search(keyword, true);
-      const wiki = await bridge.wiki({ action: "state" });
-      const memories = [];
-      for (const topic of wiki.topics.filter(topic => !!topic.published && !topic.excluded && !topic.stale && ["approved", "auto_validated"].includes(topic.published?.review ?? "") && topic.inScope !== false
-        && (!keyword || `${topic.title} ${topic.published.markdown}`.toLocaleLowerCase().includes(keyword.toLocaleLowerCase()))).slice(0, limit)) {
-        try {
-          const record = await bridge.readForAi(`wiki:${topic.id}`);
-          memories.push({ id: `wiki:${topic.id}`, text: record.markdown.slice(0, 12000), citations: record.document.citations ?? [] });
-        } catch { /* Ineligible pages remain browsable but never enter MCP context. */ }
-      }
-      result = { sources: sources.items.slice(0, limit), memories };
+      result = {
+        sources: sources.items.filter(item => item.kind !== "wiki").slice(0, limit),
+        memories: sources.items.filter(item => item.kind === "wiki").slice(0, limit)
+          .map(item => ({ id: item.id, text: item.excerpt, citations: item.citations ?? [] })),
+      };
     } else if (name === "get_local_memory") {
       const id = stringArg(args, "id", true);
       const wiki = await bridge.wiki({ action: "state" });

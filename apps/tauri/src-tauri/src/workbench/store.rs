@@ -888,14 +888,15 @@ fn search_impl(
     ai_only: bool,
 ) -> Vec<Value> {
     if query_terms(query).is_empty() {
-        return legacy_search(root, state, query, limit, ai_only);
+        return fallback_keyword_search(root, state, query, limit, ai_only);
     }
     if let Ok(hits) = super::fulltext::search(root, query, 80) {
-        if !hits.is_empty() {
-            return render_chunk_hits(root, state, hits, limit, ai_only);
+        let items = render_chunk_hits(root, state, hits, limit, ai_only);
+        if !items.is_empty() {
+            return items;
         }
     }
-    legacy_search(root, state, query, limit, ai_only)
+    fallback_keyword_search(root, state, query, limit, ai_only)
 }
 
 /// Group chunk hits per document in bm25 order and render the established
@@ -910,6 +911,13 @@ fn render_chunk_hits(
     let mut order: Vec<String> = Vec::new();
     let mut grouped: BTreeMap<String, Vec<super::fulltext::ChunkHit>> = BTreeMap::new();
     for hit in hits {
+        if !state
+            .entries
+            .get(&hit.doc_id)
+            .is_some_and(|entry| entry.revision == hit.revision)
+        {
+            continue;
+        }
         if !grouped.contains_key(&hit.doc_id) {
             order.push(hit.doc_id.clone());
         }
@@ -957,11 +965,8 @@ fn render_chunk_hits(
     items
 }
 
-/// Pre-FTS5 keyword search over the deduped bigram term list. Kept as the
-/// fallback when the full-text database is missing or a query tokenizes to
-/// nothing; scheduled for removal once the chunk index has shipped for a
-/// full release cycle.
-fn legacy_search(
+/// Search cached terms when the full-text index is unavailable or has no matches.
+fn fallback_keyword_search(
     root: &Path,
     state: &Manifest,
     query: &str,
@@ -996,7 +1001,9 @@ fn legacy_search(
     candidates.into_iter().filter_map(|(_,entry)|{
         let document=read_document(root,entry).ok()?;
         if ai_only && !document.ai_context_enabled{return None;}
-        Some(json!({"id":document.id,"title":document.title,"kind":document.kind,"updatedAt":document.updated_at,"excerpt":evidence_excerpt(&document.text(),query,1800),"source":document.reference()}))
+        let excerpt = evidence_excerpt(&document.text(),query,1800);
+        let source = SourceRef { quote: excerpt.clone(), ..document.reference() };
+        Some(json!({"id":document.id,"title":document.title,"kind":document.kind,"updatedAt":document.updated_at,"excerpt":excerpt,"source":source}))
     }).take(limit.min(100)).collect()
 }
 

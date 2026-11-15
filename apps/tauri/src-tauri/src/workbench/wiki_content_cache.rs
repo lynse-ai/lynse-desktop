@@ -2,24 +2,32 @@
 use super::*;
 
 pub(super) fn canonical(value: &Value) -> Value {
+    strip_reference_fields(value, &["revision", "segmentId", "startMs", "endMs"])
+}
+
+pub(super) fn without_audio_positions(value: &Value) -> Value {
+    strip_reference_fields(value, &["segmentId", "startMs", "endMs"])
+}
+
+fn strip_reference_fields(value: &Value, fields_to_remove: &[&str]) -> Value {
     match value {
         Value::Object(fields) => {
             let reference = fields.contains_key("quote") && fields.contains_key("id");
             Value::Object(
                 fields
                     .iter()
-                    .filter(|(key, _)| {
-                        !reference
-                            || !matches!(
-                                key.as_str(),
-                                "revision" | "segmentId" | "startMs" | "endMs"
-                            )
+                    .filter(|(key, _)| !reference || !fields_to_remove.contains(&key.as_str()))
+                    .map(|(key, value)| {
+                        (key.clone(), strip_reference_fields(value, fields_to_remove))
                     })
-                    .map(|(key, value)| (key.clone(), canonical(value)))
                     .collect(),
             )
         }
-        Value::Array(rows) => json!(rows.iter().map(canonical).collect::<Vec<_>>()),
+        Value::Array(rows) => Value::Array(
+            rows.iter()
+                .map(|row| strip_reference_fields(row, fields_to_remove))
+                .collect(),
+        ),
         _ => value.clone(),
     }
 }
@@ -50,23 +58,21 @@ pub(super) fn rebind(
                 if !automation::allows(doc, manifest) || !doc.text().contains(quote) {
                     return Err("Cached quotation no longer matches an authorized source".into());
                 }
-                let segment = fields
-                    .get("startMs")
-                    .and_then(Value::as_u64)
-                    .and_then(|start| {
-                        doc.segments.iter().find(|segment| {
-                            segment["startMs"].as_u64() == Some(start)
-                                && segment["text"]
-                                    .as_str()
-                                    .or_else(|| segment["recognizedText"].as_str())
-                                    .is_some_and(|text| text.contains(quote))
-                        })
-                    });
+                let mut matches = doc.segments.iter().filter(|segment| {
+                    segment["startMs"].is_u64()
+                        && segment["text"]
+                            .as_str()
+                            .or_else(|| segment["recognizedText"].as_str())
+                            .is_some_and(|text| text.contains(quote))
+                });
+                let first = matches.next();
+                let segment = first.filter(|_| matches.next().is_none());
                 if doc.kind == "meeting_summary" || segment.is_none() {
                     for field in ["segmentId", "startMs", "endMs"] {
                         fields.remove(field);
                     }
                 } else if let Some(segment) = segment {
+                    fields.insert("startMs".into(), segment["startMs"].clone());
                     if let Some(id) = segment["id"].as_str().filter(|id| !id.is_empty()) {
                         fields.insert("segmentId".into(), json!(id));
                     } else {
@@ -110,39 +116,7 @@ pub(super) fn rebind(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn model_identity_ignores_credentials_but_tracks_actual_default_model_and_processor() {
-        let mut session = Session {
-            scope: "scope".into(),
-            user_id: "user".into(),
-            base_url: "https://business.invalid".into(),
-            agent_url: "https://agent.invalid".into(),
-            token: "test".into(),
-            generation: 1,
-            locale: "zh".into(),
-            model_override: Some(json!({"preset":"provider","model":"model-a","apiKey":"first"})),
-        };
-        let profile = json!({"processorVersion":"desktop-evidence-v2","model":"default-a","provider":"https://provider.invalid"});
-        let first = text_model_revision(&session, Some(&profile));
-        session.model_override.as_mut().unwrap()["apiKey"] = json!("rotated");
-        assert_eq!(text_model_revision(&session, Some(&profile)), first);
-        session.model_override = None;
-        let default = text_model_revision(&session, Some(&profile));
-        let mut changed = profile.clone();
-        changed["model"] = json!("default-b");
-        assert_ne!(text_model_revision(&session, Some(&changed)), default);
-        // Direct mode: the desktop is the processor, so the server profile's
-        // processorVersion no longer moves the direct revision — processor
-        // identity is the separation between direct and gateway revisions.
-        changed = profile.clone();
-        changed["processorVersion"] = json!("desktop-evidence-v3");
-        assert_eq!(text_model_revision(&session, Some(&changed)), default);
-        assert_ne!(gateway_text_model_revision(&session, Some(&profile)), default);
-        assert_ne!(
-            gateway_text_model_revision(&session, Some(&profile)),
-            gateway_text_model_revision(&session, Some(&changed))
-        );
-    }
+
     #[test]
     fn rebinding_accepts_metadata_changes_but_never_changed_or_revoked_quotes() {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());

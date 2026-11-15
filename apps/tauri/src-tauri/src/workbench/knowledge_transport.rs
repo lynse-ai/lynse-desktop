@@ -155,6 +155,19 @@ impl Transport {
                     return Ok(value);
                 }
                 Ok(response) => {
+                    if stage == "wiki_sync" && response.status() == reqwest::StatusCode::CONFLICT {
+                        let value = response.json::<Value>().await.unwrap_or_default();
+                        check()?;
+                        return Err(match value["error"]["code"].as_str() {
+                            Some("wiki_topic_conflict") => "Wiki topic has conflicting edits",
+                            Some("wiki_topic_deleted") => "Wiki topic was deleted in the cloud",
+                            Some("wiki_sync_quota_exceeded") => {
+                                "Wiki sync storage budget is exhausted"
+                            }
+                            _ => "Cloud knowledge policy changed; reload before saving",
+                        }
+                        .into());
+                    }
                     let error = http_error(response.status(), stage);
                     log::warn!(
                         "[cloud-transport] stage={stage} HTTP {} after {:.1}s{}",
@@ -321,6 +334,8 @@ impl Transport {
             .await?;
         let stage = if path == "/capabilities" {
             "capabilities"
+        } else if path.starts_with("/wiki-topics/") && body.is_some() {
+            "wiki_sync"
         } else {
             "cloud_access"
         };

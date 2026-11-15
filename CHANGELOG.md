@@ -19,6 +19,34 @@
 > advertised it (its manifest mirror failed and the rollout was cancelled), so
 > that work plus the todo card redesign shipped together as 1.2.7.
 
+## 1.2.11 (2026-11-15)
+
+### New Features
+
+- Rebuilt the knowledge base around source passages, with original-text search and recording navigation when timestamps are available.
+- Compare conflicting Wiki revisions side by side, review suggested merges, and publish while keeping both versions in history.
+- Search authorized account knowledge on the web with keyword and semantic matching when the service is configured.
+- Open the feedback center in its own window.
+
+### Improvements
+
+- Update only the Wiki sections affected by new or revised sources. Reuse completed work after a restart, repeat sync, or writing-model change.
+- Prepare meeting-memory candidates independently from Wiki organization and prefer meeting summaries as evidence.
+- Refresh desktop navigation and shared views.
+
+### 新功能
+
+- 知识库支持原文段落检索，有可靠时间戳时可从引文跳到对应录音位置。
+- Wiki 支持并排比较冲突版本、确认合并稿，并在历史中保留原版本。
+- Web 支持检索已授权的账号知识，服务配置完成后可融合关键词与语义匹配。
+- 反馈中心支持独立窗口。
+
+### 改进
+
+- 新增或修订来源时，只更新受影响的 Wiki 小节。重启、重复同步或切换写作模型时复用已完成的结果。
+- 会议候选记忆独立提取，并优先使用会议纪要作为证据。
+- 更新桌面导航与共享页面布局。
+
 ## 1.2.10 (2026-11-12)
 
 ### New Features

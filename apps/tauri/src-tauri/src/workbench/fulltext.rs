@@ -66,6 +66,7 @@ fn match_expression(query: &str) -> Option<String> {
 pub(super) struct ChunkHit {
     pub chunk_id: i64,
     pub doc_id: String,
+    pub revision: String,
     pub heading: String,
     pub quote: String,
     pub segment_id: Option<String>,
@@ -95,6 +96,7 @@ fn db(root: &Path) -> CommandResult<Connection> {
         CREATE TABLE IF NOT EXISTS documents (doc_id TEXT PRIMARY KEY, revision TEXT NOT NULL, markdown_hash TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS chunks (chunk_id INTEGER PRIMARY KEY, doc_id TEXT NOT NULL, idx INTEGER NOT NULL, heading TEXT NOT NULL DEFAULT '', seg_from TEXT NOT NULL DEFAULT '', seg_to TEXT NOT NULL DEFAULT '', start_ms INTEGER, end_ms INTEGER, body TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS chunks_doc ON chunks(doc_id);
+        CREATE TABLE IF NOT EXISTS chunk_sequence (id INTEGER PRIMARY KEY CHECK(id = 1), last_id INTEGER NOT NULL);
         CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(heading, body, content='', contentless_delete=1);";
     if let Err(error) = conn.execute_batch(schema) {
         if matches!(&error, rusqlite::Error::SqliteFailure(e, _) if matches!(e.code, rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)) {
@@ -120,6 +122,7 @@ struct Segment {
     text: String,
 }
 
+#[derive(Eq, Ord, PartialEq, PartialOrd)]
 struct Chunk {
     heading: String,
     seg_from: String,
@@ -338,50 +341,85 @@ fn build_chunks(document: &Document) -> Vec<Chunk> {
     chunks
 }
 
-/// Replace the stored chunks of one document with freshly built ones.
+/// Reconcile one committed document, keeping the locators of identical chunks.
 pub(super) fn index_document(root: &Path, document: &Document, markdown_hash: &str) -> CommandResult<()> {
     let chunks = build_chunks(document);
-    let conn = db(root)?;
-    let clear = |conn: &Connection| -> CommandResult<()> {
-        let mut stmt = conn
-            .prepare("SELECT chunk_id FROM chunks WHERE doc_id=?1")
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(params![document.id], |row| row.get(0))
-            .map_err(|e| e.to_string())?;
-        let ids: Vec<i64> = rows
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-        for id in ids {
-            conn.execute("DELETE FROM chunk_fts WHERE rowid=?1", params![id])
-                .map_err(|e| e.to_string())?;
+    let mut conn = db(root)?;
+    let conn = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|error| error.to_string())?;
+    let mut existing = std::collections::BTreeMap::<_, std::collections::VecDeque<_>>::new();
+    {
+        let mut statement = conn
+            .prepare(
+                "SELECT chunk_id, idx, heading, seg_from, seg_to, start_ms, end_ms, body
+             FROM chunks WHERE doc_id=?1 ORDER BY idx",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([&document.id], |row| {
+                Ok((
+                    (row.get::<_, i64>(0)?, row.get::<_, i64>(1)?),
+                    Chunk {
+                        heading: row.get(2)?,
+                        seg_from: row.get(3)?,
+                        seg_to: row.get(4)?,
+                        start_ms: row
+                            .get::<_, Option<i64>>(5)?
+                            .and_then(|value| u64::try_from(value).ok()),
+                        end_ms: row
+                            .get::<_, Option<i64>>(6)?
+                            .and_then(|value| u64::try_from(value).ok()),
+                        body: row.get(7)?,
+                    },
+                ))
+            })
+            .map_err(|error| error.to_string())?;
+        for row in rows {
+            let (locator, chunk) = row.map_err(|error| error.to_string())?;
+            existing.entry(chunk).or_default().push_back(locator);
         }
-        conn.execute("DELETE FROM chunks WHERE doc_id=?1", params![document.id])
-            .map_err(|e| e.to_string())?;
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO chunk_sequence SELECT 1, COALESCE(MAX(chunk_id), 0) FROM chunks",
+        [],
+    )
+    .map_err(|error| error.to_string())?;
+    conn.execute("UPDATE chunk_sequence SET last_id=MAX(last_id, (SELECT COALESCE(MAX(chunk_id), 0) FROM chunks))", [])
+        .map_err(|error| error.to_string())?;
+    for (index, chunk) in (0_i64..).zip(&chunks) {
+        if let Some((id, previous)) = existing.get_mut(chunk).and_then(|rows| rows.pop_front()) {
+            if previous != index {
+                conn.execute(
+                    "UPDATE chunks SET idx=?1 WHERE chunk_id=?2",
+                    params![index, id],
+                )
+                .map_err(|error| error.to_string())?;
+            }
+            continue;
+        }
+        let chunk_id: i64 = conn
+            .query_row(
+                "UPDATE chunk_sequence SET last_id=last_id+1 WHERE id=1 RETURNING last_id",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
         conn.execute(
-            "INSERT OR REPLACE INTO documents VALUES (?1,?2,?3,?4)",
-            params![document.id, document.revision, markdown_hash, document.updated_at],
-        )
-        .map_err(|e| e.to_string())?;
-        Ok(())
-    };
-    clear(&conn)?;
-    for (index, chunk) in chunks.iter().enumerate() {
-        conn.execute(
-            "INSERT INTO chunks (doc_id, idx, heading, seg_from, seg_to, start_ms, end_ms, body) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            "INSERT INTO chunks (doc_id, idx, heading, seg_from, seg_to, start_ms, end_ms, body, chunk_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![
                 document.id,
-                index as i64,
+                index,
                 chunk.heading,
                 chunk.seg_from,
                 chunk.seg_to,
                 chunk.start_ms.map(|ms| ms as i64),
                 chunk.end_ms.map(|ms| ms as i64),
                 chunk.body,
+                chunk_id,
             ],
         )
         .map_err(|e| e.to_string())?;
-        let chunk_id = conn.last_insert_rowid();
         conn.execute(
             "INSERT INTO chunk_fts (rowid, heading, body) VALUES (?1, ?2, ?3)",
             params![
@@ -392,11 +430,30 @@ pub(super) fn index_document(root: &Path, document: &Document, markdown_hash: &s
         )
         .map_err(|e| e.to_string())?;
     }
-    Ok(())
+    for (id, _) in existing.into_values().flatten() {
+        conn.execute("DELETE FROM chunk_fts WHERE rowid=?1", [id])
+            .map_err(|error| error.to_string())?;
+        conn.execute("DELETE FROM chunks WHERE chunk_id=?1", [id])
+            .map_err(|error| error.to_string())?;
+    }
+    conn.execute(
+        "INSERT OR REPLACE INTO documents VALUES (?1,?2,?3,?4)",
+        params![
+            document.id,
+            document.revision,
+            markdown_hash,
+            document.updated_at
+        ],
+    )
+    .map_err(|error| error.to_string())?;
+    conn.commit().map_err(|error| error.to_string())
 }
 
 pub(super) fn remove_document(root: &Path, doc_id: &str) {
     let Ok(conn) = db(root) else { return };
+    let Ok(conn) = conn.unchecked_transaction() else {
+        return;
+    };
     let ids: Vec<i64> = conn
         .prepare("SELECT chunk_id FROM chunks WHERE doc_id=?1")
         .and_then(|mut stmt| {
@@ -405,17 +462,30 @@ pub(super) fn remove_document(root: &Path, doc_id: &str) {
         })
         .unwrap_or_default();
     for id in ids {
-        let _ = conn.execute("DELETE FROM chunk_fts WHERE rowid=?1", params![id]);
+        if conn
+            .execute("DELETE FROM chunk_fts WHERE rowid=?1", [id])
+            .is_err()
+        {
+            return;
+        }
     }
-    let _ = conn.execute("DELETE FROM chunks WHERE doc_id=?1", params![doc_id]);
-    let _ = conn.execute("DELETE FROM documents WHERE doc_id=?1", params![doc_id]);
+    if conn
+        .execute("DELETE FROM chunks WHERE doc_id=?1", [doc_id])
+        .is_ok()
+        && conn
+            .execute("DELETE FROM documents WHERE doc_id=?1", [doc_id])
+            .is_ok()
+    {
+        let _ = conn.commit();
+    }
 }
 
 pub(super) fn chunk(root: &Path, chunk_id: i64) -> CommandResult<Option<ChunkHit>> {
     let conn = db(root)?;
     let mut stmt = conn
         .prepare(
-            "SELECT chunk_id, doc_id, heading, body, seg_from, start_ms, end_ms FROM chunks WHERE chunk_id=?1",
+            "SELECT c.chunk_id, c.doc_id, c.heading, c.body, c.seg_from, c.start_ms, c.end_ms, d.revision
+             FROM chunks c JOIN documents d USING (doc_id) WHERE c.chunk_id=?1",
         )
         .map_err(|e| e.to_string())?;
     let hit = stmt
@@ -423,6 +493,7 @@ pub(super) fn chunk(root: &Path, chunk_id: i64) -> CommandResult<Option<ChunkHit
             Ok(ChunkHit {
                 chunk_id: row.get(0)?,
                 doc_id: row.get(1)?,
+                revision: row.get(7)?,
                 heading: row.get(2)?,
                 quote: row.get(3)?,
                 segment_id: row.get::<_, Option<String>>(4)?,
@@ -436,6 +507,33 @@ pub(super) fn chunk(root: &Path, chunk_id: i64) -> CommandResult<Option<ChunkHit
     Ok(hit)
 }
 
+pub(super) fn passages(root: &Path) -> CommandResult<Vec<ChunkHit>> {
+    let conn = db(root)?;
+    let mut statement = conn
+        .prepare(
+            "SELECT c.chunk_id, c.doc_id, d.revision, c.heading, c.body
+         FROM chunks c JOIN documents d USING (doc_id) ORDER BY c.doc_id, c.idx",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(ChunkHit {
+                chunk_id: row.get(0)?,
+                doc_id: row.get(1)?,
+                revision: row.get(2)?,
+                heading: row.get(3)?,
+                quote: row.get(4)?,
+                segment_id: None,
+                start_ms: None,
+                end_ms: None,
+                score: 0.0,
+            })
+        })
+        .map_err(|error| error.to_string())?;
+    rows.collect::<Result<_, _>>()
+        .map_err(|error| error.to_string())
+}
+
 /// BM25-ranked chunk hits. Smaller bm25 scores match better.
 pub(super) fn search(root: &Path, query: &str, limit: usize) -> CommandResult<Vec<ChunkHit>> {
     let Some(expression) = match_expression(query) else {
@@ -444,31 +542,34 @@ pub(super) fn search(root: &Path, query: &str, limit: usize) -> CommandResult<Ve
     let conn = db(root)?;
     let mut stmt = conn
         .prepare(
-            "SELECT c.chunk_id, c.doc_id, c.heading, c.body, c.seg_from, c.start_ms, c.end_ms, bm25(chunk_fts, 2.0, 1.0) AS score
+            "SELECT c.chunk_id, c.doc_id, c.heading, c.body, c.seg_from, c.start_ms, c.end_ms, bm25(chunk_fts, 2.0, 1.0) AS score, d.revision
              FROM chunk_fts
              JOIN chunks c ON c.chunk_id = chunk_fts.rowid
+             JOIN documents d ON d.doc_id = c.doc_id
              WHERE chunk_fts MATCH ?1
              ORDER BY score ASC
              LIMIT ?2",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(
-            params![expression, limit.min(MAX_HITS) as i64],
-            |row| {
-                let seg_from: String = row.get(4)?;
-                Ok(ChunkHit {
-                    chunk_id: row.get(0)?,
-                    doc_id: row.get(1)?,
-                    heading: row.get(2)?,
-                    quote: row.get(3)?,
-                    segment_id: if seg_from.is_empty() { None } else { Some(seg_from) },
-                    start_ms: row.get::<_, Option<i64>>(5)?.map(|ms| ms.max(0) as u64),
-                    end_ms: row.get::<_, Option<i64>>(6)?.map(|ms| ms.max(0) as u64),
-                    score: row.get(7)?,
-                })
-            },
-        )
+        .query_map(params![expression, limit.min(MAX_HITS) as i64], |row| {
+            let seg_from: String = row.get(4)?;
+            Ok(ChunkHit {
+                chunk_id: row.get(0)?,
+                doc_id: row.get(1)?,
+                revision: row.get(8)?,
+                heading: row.get(2)?,
+                quote: row.get(3)?,
+                segment_id: if seg_from.is_empty() {
+                    None
+                } else {
+                    Some(seg_from)
+                },
+                start_ms: row.get::<_, Option<i64>>(5)?.map(|ms| ms.max(0) as u64),
+                end_ms: row.get::<_, Option<i64>>(6)?.map(|ms| ms.max(0) as u64),
+                score: row.get(7)?,
+            })
+        })
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
@@ -601,6 +702,30 @@ mod tests {
         let leftovers = std::fs::read_dir(&dir).unwrap().count();
         assert!(leftovers >= 2, "corrupt file must be kept aside");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn indexing_preserves_unchanged_locators_and_retires_removed_chunks() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let mut source = document(&[], "Uniquealpha passage.");
+        index_document(&dir, &source, "one").unwrap();
+        let first = search(&dir, "Uniquealpha", 5).unwrap().remove(0);
+        source.folder_id = "Folder".into();
+        source.refresh_revision();
+        index_document(&dir, &source, "two").unwrap();
+        let same = search(&dir, "Uniquealpha", 5).unwrap().remove(0);
+        assert_eq!(first.chunk_id, same.chunk_id);
+        assert_eq!(same.revision, source.revision);
+        source.transcript = "Uniquebeta passage.".into();
+        source.refresh_revision();
+        index_document(&dir, &source, "three").unwrap();
+        assert!(chunk(&dir, first.chunk_id).unwrap().is_none());
+        let changed = search(&dir, "Uniquebeta", 5).unwrap().remove(0);
+        remove_document(&dir, &source.id);
+        assert!(chunk(&dir, changed.chunk_id).unwrap().is_none());
+        index_document(&dir, &source, "three").unwrap();
+        assert!(search(&dir, "Uniquebeta", 5).unwrap()[0].chunk_id > changed.chunk_id);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

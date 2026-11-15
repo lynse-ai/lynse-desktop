@@ -4,7 +4,7 @@ use std::future::Future;
 
 const RECOVERY_CHARS: usize = 4_000;
 
-pub(super) fn part(doc: &Document, text: String) -> Document {
+pub(in crate::workbench) fn part(doc: &Document, text: String) -> Document {
     let mut part = doc.clone();
     part.transcript = text;
     part.outline.clear();

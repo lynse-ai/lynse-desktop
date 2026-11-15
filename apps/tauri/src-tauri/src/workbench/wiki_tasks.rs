@@ -4,6 +4,7 @@ use super::*;
 tokio::task_local! { static OPERATION: String; }
 tokio::task_local! { static PROFILE: Option<Value>; }
 pub(in crate::workbench) const UNKNOWN: &str = "Model outcome is unknown; retry explicitly";
+pub(super) const NOT_SUBMITTED: &str = "Model endpoint could not be reached before submission";
 const STATUS_CONFLICT: &str = "Lynclaw synthesis failed (HTTP 409)";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,7 +25,9 @@ impl Outcome {
         )
     }
     pub(super) fn classify(error: &str) -> Self {
-        if error.contains(UNKNOWN)
+        if error == NOT_SUBMITTED {
+            Self::Retryable
+        } else if error.contains(UNKNOWN)
             || error == STATUS_CONFLICT
             || error.starts_with("Lynclaw returned invalid synthesis JSON")
             || [500, 502, 503, 504].iter().any(|status| {
@@ -171,13 +174,10 @@ fn claim(root: &Path, key: &str) -> CommandResult<String> {
         )
         .optional()
         .map_err(|error| error.to_string())?;
-    if existing
-        .as_ref()
-        .is_some_and(|(_, state, _, _)| matches!(state.as_str(), "running" | "unknown"))
-    {
-        return Err(UNKNOWN.into());
-    }
     if let Some((_, state, error, retry_at)) = &existing {
+        if matches!(state.as_str(), "running" | "unknown") {
+            return Err(UNKNOWN.into());
+        }
         if state == "retryable" && *retry_at > chrono::Utc::now().timestamp() {
             return Err(error.clone());
         }
@@ -232,6 +232,20 @@ fn finish(
     Ok(())
 }
 
+pub(super) fn completed(root: &Path, key: &str) -> CommandResult<Option<Value>> {
+    let saved: Option<String> = connection(root)?
+        .query_row(
+            "SELECT output FROM model_tasks WHERE id=? AND state='done'",
+            [key],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    saved
+        .map(|value| serde_json::from_str(&value).map_err(|error| error.to_string()))
+        .transpose()
+}
+
 async fn execute_budgeted(
     root: &Path,
     key: &str,
@@ -263,16 +277,8 @@ async fn execute_budgeted(
     };
     let _guard = gate.lock().await;
     if reuse {
-        let saved: Option<String> = connection(root)?
-            .query_row(
-                "SELECT output FROM model_tasks WHERE id=? AND state='done'",
-                [key],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())?;
-        if let Some(saved) = saved {
-            return serde_json::from_str(&saved).map_err(|error| error.to_string());
+        if let Some(saved) = completed(root, key)? {
+            return Ok(saved);
         }
     }
     let operation = claim(root, key)?;
@@ -310,16 +316,15 @@ pub(super) fn retry_unknown(root: &Path) -> CommandResult<()> {
 }
 
 /// At worker startup no claim can belong to this process. Releasing an old
-/// running row is safe because the next call reuses its operation id; unknown
-/// provider outcomes still wait for an explicit retry.
+/// A stale dispatched attempt has an unknown provider outcome.
 pub(super) fn recover_abandoned(root: &Path) -> CommandResult<bool> {
     let changed = connection(root)?
         .execute(
             "UPDATE model_tasks
-             SET state='ready',error='',retry_at=0,updated_at=?
+             SET state='unknown',error=?1,retry_at=0,updated_at=?2
              WHERE state='running'
                AND datetime(updated_at) < datetime('now','-5 minutes')",
-            [crate::now()],
+            params![UNKNOWN, crate::now()],
         )
         .map_err(|error| error.to_string())?;
     Ok(changed > 0)
@@ -562,7 +567,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_abandoned_running_claim_resumes_with_its_operation_identity() {
+    async fn an_abandoned_running_claim_waits_before_reusing_its_operation_identity() {
         let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
         let first = claim(&root, "abandoned").unwrap();
         dispatched(&root, &first).unwrap();
@@ -575,6 +580,8 @@ mod tests {
             .unwrap();
         assert!(recover_abandoned(&root).unwrap());
         assert!(!recover_abandoned(&root).unwrap());
+        assert_eq!(claim(&root, "abandoned").unwrap_err(), UNKNOWN);
+        retry_unknown(&root).unwrap();
         let value = execute(&root, "abandoned", true, async {
             assert_eq!(current_operation().unwrap(), first);
             Ok(json!({"recovered":true}))

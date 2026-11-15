@@ -1,7 +1,6 @@
 //! Bounded cloud reads and a short-lived, verified backend binding.
 use super::*;
 use std::{
-    sync::OnceLock,
     time::{Duration, Instant},
 };
 
@@ -10,7 +9,10 @@ const BINDING_TTL: Duration = Duration::from_secs(240);
 
 #[derive(Default)]
 pub(super) struct Transport {
-    client: OnceLock<CommandResult<reqwest::Client>>,
+    // Mutable instead of OnceLock: the cached client snapshots the system
+    // proxy at build time, and a VPN/proxy toggled off later must not pin
+    // every cloud lane to a dead port for the rest of the process lifetime.
+    client: Mutex<Option<Result<reqwest::Client, String>>>,
     binding: tokio::sync::Mutex<Option<(String, Instant)>>,
     cooldown: Mutex<Option<(String, Instant, String)>>,
 }
@@ -86,17 +88,28 @@ fn memory_url(session: &Session, path: &str) -> String {
 }
 
 impl Transport {
-    fn client(&self) -> CommandResult<&reqwest::Client> {
-        self.client
-            .get_or_init(|| {
-                reqwest::Client::builder()
-                    .connect_timeout(Duration::from_secs(8))
-                    .redirect(reqwest::redirect::Policy::none())
-                    .build()
-                    .map_err(|_| "Cloud knowledge unavailable".to_owned())
-            })
-            .as_ref()
-            .map_err(Clone::clone)
+    fn client(&self) -> CommandResult<reqwest::Client> {
+        let mut cached = self
+            .client
+            .lock()
+            .map_err(|_| "Cloud knowledge unavailable")?;
+        if let Some(existing) = cached.as_ref() {
+            return existing.clone();
+        }
+        let built = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(8))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| "Cloud knowledge unavailable".to_owned());
+        let client = built.clone();
+        *cached = Some(built);
+        client
+    }
+
+    fn drop_client(&self) {
+        if let Ok(mut cached) = self.client.lock() {
+            *cached = None;
+        }
     }
 
     async fn send(
@@ -198,6 +211,12 @@ impl Transport {
                     error
                 }
                 Err(error) => {
+                    if error.is_connect() {
+                        // Instant connect refusals usually mean the cached
+                        // client still points at a system proxy that has gone
+                        // away; rebuild against the current environment.
+                        self.drop_client();
+                    }
                     let message = connection_error(&error, stage);
                     log::warn!(
                         "[cloud-transport] stage={stage} transport failure after {:.1}s: {message}{}",
@@ -280,7 +299,7 @@ impl Transport {
         let deadline = Instant::now() + REQUEST_BUDGET;
         let key = binding_key(session);
         let client = self.client()?;
-        self.ensure_binding(session, client, &key, deadline, &check)
+        self.ensure_binding(session, &client, &key, deadline, &check)
             .await?;
         check()?;
         let url = memory_url(session, path);
@@ -330,7 +349,7 @@ impl Transport {
         let deadline = Instant::now() + REQUEST_BUDGET;
         let key = binding_key(session);
         let client = self.client()?;
-        self.ensure_binding(session, client, &key, deadline, &check)
+        self.ensure_binding(session, &client, &key, deadline, &check)
             .await?;
         let stage = if path == "/capabilities" {
             "capabilities"

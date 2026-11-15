@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { ArrowUpRight, Copy, Eraser, Loader2, Minus, Pencil, Plus, Type, Undo, X } from "./icons";
+import { ArrowUpRight, Check, Copy, Eraser, Loader2, Minus, Pencil, Plus, Type, Undo, X } from "./icons";
 import type { StagedScreenshot } from "./diagnostics";
 
 type Tool = "pen" | "arrow" | "text" | "eraser";
@@ -210,13 +210,23 @@ function ToolButton({
  */
 export function ReportProblemAnnotator({
   screenshot,
+  canCopyImage = false,
   onClose,
   onSave,
+  onCopyImage,
 }: {
   screenshot: StagedScreenshot;
+  /** Host without the clipboard-copy command: the copy button stays hidden. */
+  canCopyImage?: boolean;
   onClose: () => void;
   /** Receives the overlay as a PNG data URL; a rejection keeps the editor open. */
   onSave: (overlayDataUrl: string) => Promise<void>;
+  /**
+   * Copies the capture (marks burned in when strokes exist) to the system
+   * clipboard via the host; a rejection has already surfaced its toast. The
+   * editor stays open either way — copy and save are independent actions.
+   */
+  onCopyImage?: (overlayDataUrl: string) => Promise<void>;
 }) {
   const { t } = useTranslation();
   const [tool, setTool] = useState<Tool>("pen");
@@ -227,6 +237,7 @@ export function ReportProblemAnnotator({
   const [zoom, setZoom] = useState(1);
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [saving, setSaving] = useState(false);
+  const [copying, setCopying] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -444,6 +455,22 @@ export function ReportProblemAnnotator({
     }
   }
 
+  /** Clipboard copy: with the marks burned in, or the plain capture when
+   * nothing was drawn. A rejection keeps the editor open for a retry. */
+  async function copyImage() {
+    const canvas = canvasRef.current;
+    if (!onCopyImage || copying) return;
+    setCopying(true);
+    try {
+      const overlay = strokes.length > 0 && canvas ? canvas.toDataURL("image/png") : "";
+      await onCopyImage(overlay);
+    } catch {
+      // The host already surfaced the error.
+    } finally {
+      setCopying(false);
+    }
+  }
+
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     if (event.key !== "Escape" || saving) return;
     // The dialog hosting the editor also closes on Escape (document-level
@@ -537,6 +564,19 @@ export function ReportProblemAnnotator({
       </p>
 
       <div className="absolute right-4 top-4 z-10 flex items-center gap-2">
+        {canCopyImage && (
+          <button
+            type="button"
+            data-testid="report-annotator-copy"
+            title={t("settings.report_annotate_copy")}
+            aria-label={t("settings.report_annotate_copy")}
+            disabled={copying || !natural}
+            onClick={() => void copyImage()}
+            className="rounded-full bg-neutral-900/90 p-2 text-white ring-1 ring-white/15 transition-colors hover:bg-neutral-800 disabled:opacity-50"
+          >
+            {copying ? <Loader2 className="size-4 animate-spin" /> : <Copy className="size-4" />}
+          </button>
+        )}
         <button
           type="button"
           data-testid="report-annotator-done"
@@ -546,7 +586,7 @@ export function ReportProblemAnnotator({
           onClick={() => void save()}
           className="rounded-full bg-neutral-900/90 p-2 text-white ring-1 ring-white/15 transition-colors hover:bg-neutral-800 disabled:opacity-50"
         >
-          {saving ? <Loader2 className="size-4 animate-spin" /> : <Copy className="size-4" />}
+          {saving ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
         </button>
         <button
           type="button"

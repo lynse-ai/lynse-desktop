@@ -365,7 +365,10 @@ pub(in crate::workbench) async fn publish_pending(
         Err(error) => {
             settle_publication(&mut conn, &job, "pending", 600, false)?;
             log::warn!("[meeting-candidates] publication deferred: {error}");
-            Ok(true)
+            // The job is already settled 600s out; tell the loop to idle so a
+            // dead gateway/session doesn't parade the whole queue past it at
+            // the 1s cadence.
+            Ok(false)
         }
     }
 }

@@ -8,8 +8,9 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
 import { isTauri, isMacDesktop } from "./use-maximized";
 import { WindowControls, showWindowControls } from "./window-controls";
-import { ArrowLeft, ArrowRight, PanelLeft, PanelRight } from "../icons";
+import { ArrowLeft, ArrowRight, Bug, PanelLeft, PanelRight } from "../icons";
 import { RecordingTitleBarPill, useRecordingPillVisible } from "./recording-title-pill";
+import { openReportProblem } from "../diagnostics";
 import { isWebPlatform } from "../platform";
 import { DESKTOP_SIDEBAR_WIDTH, WEB_SIDEBAR_WIDTH } from "./sidebar-metrics";
 
@@ -224,11 +225,16 @@ export function AppTitleBar() {
         <RecordingTitleBarPill />
       </div>
 
-      {/* Only pages with right-side controls get the closing divider; with an
-          empty actions zone the line would just dangle at the window edge. */}
-      {(slotActions != null || middleToggle?.side === "right") && <ZoneDivider />}
+      {/* The report shortcut below is permanent, so the closing divider is
+          always drawn — pages without right-side controls no longer leave the
+          title zone running to the window edge. */}
+      <ZoneDivider />
 
-      {/* ── Right: page actions (same 2px optical correction) ── */}
+      {/* ── Right: page actions (same 2px optical correction), then the
+            permanent report shortcut. The shortcut lives here rather than in
+            the sidebar menu because secondary pages (recording detail, notes,
+            workbench) cover or crowd the sidebar; the title bar is visible on
+            every route. ── */}
       <div
         className="flex shrink-0 translate-y-0.5 items-center gap-1"
         data-tauri-drag-region={false}
@@ -245,6 +251,9 @@ export function AppTitleBar() {
             <PanelRight className="size-4" />
           </BarButton>
         )}
+        <BarButton label={t("settings.report_issue")} onClick={openReportProblem}>
+          <Bug className="size-4" />
+        </BarButton>
       </div>
 
       {showWindowControls && <WindowControls />}

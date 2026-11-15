@@ -170,6 +170,10 @@ export type DesktopApi = {
     // staged capture; returns the fresh staged file that replaces it.
     saveAnnotatedScreenshot: (path: string, overlayDataUrl: string) =>
       Promise<{ path: string; url: string }>;
+    // Stage a clipboard-ready PNG copy of the capture (annotations burned in
+    // when the overlay is non-empty). Missing on older host builds.
+    composeScreenshotCopy: (path: string, overlayDataUrl: string) =>
+      Promise<{ path: string; url: string }>;
     // File the report through the CloudBase cnb-report function (which owns
     // the CNB token server-side); returns the created issue number.
     submitCnbIssue: (req: {
@@ -694,6 +698,20 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
         const screenshot = await command<{ path: string; url: string }>(
           "report_save_annotated_screenshot",
           { path, overlay: overlayDataUrl.slice(overlayDataUrl.indexOf(",") + 1) },
+        );
+        return { ...screenshot, url: toStagedPreviewUrl(screenshot.url) };
+      },
+      // Stages a clipboard-ready PNG copy of the capture (annotations burned
+      // in when the overlay is non-empty). The annotator's copy button fetches
+      // this file back over local-media and writes the bytes to the clipboard.
+      // Missing on older host builds — the copy button stays disabled there.
+      composeScreenshotCopy: async (path: string, overlayDataUrl: string) => {
+        const screenshot = await command<{ path: string; url: string }>(
+          "report_stage_screenshot_copy",
+          {
+            path,
+            overlay: overlayDataUrl ? overlayDataUrl.slice(overlayDataUrl.indexOf(",") + 1) : "",
+          },
         );
         return { ...screenshot, url: toStagedPreviewUrl(screenshot.url) };
       },

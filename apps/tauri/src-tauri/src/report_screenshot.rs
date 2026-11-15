@@ -123,12 +123,45 @@ fn is_report_capture_file(path: &str) -> bool {
         .is_some_and(|name| name.starts_with("report-") && name.ends_with(".jpg"))
 }
 
-/// Alpha-blend the overlay onto the base capture and re-encode as JPEG. A
-/// mismatched overlay is resized rather than rejected so the annotation
-/// geometry stays put even if the renderer's canvas rounding drifts a pixel.
-fn composite_annotation(base_jpeg: &[u8], overlay_png: &[u8]) -> CommandResult<Vec<u8>> {
-    use std::io::Cursor;
+/// Stage a clipboard-ready PNG copy of the capture, annotations burned in
+/// when the renderer passes its overlay. The annotator's copy button fetches
+/// the staged file back over `local-media://` (that protocol carries CORS
+/// headers, so `fetch` works where a canvas draw would taint) and hands the
+/// bytes to the async clipboard API — the base pixels still never enter a
+/// renderer canvas. An empty `overlay` means nothing was drawn; the plain
+/// capture is re-encoded as PNG. Staged `report-*.png` copies are wiped with
+/// the staging folder on the next launch.
+#[tauri::command(async)]
+pub async fn report_stage_screenshot_copy(
+    app: AppHandle,
+    path: String,
+    overlay: String,
+) -> CommandResult<Value> {
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let base = crate::cnb_report::read_staged_screenshot(&handle, &path)?;
+        let overlay_bytes = if overlay.is_empty() {
+            Vec::new()
+        } else {
+            use base64::Engine as _;
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(overlay.as_bytes())
+                .map_err(|error| format!("annotation overlay is not valid base64: {error}"))?;
+            if decoded.is_empty() || decoded.len() > MAX_OVERLAY_BYTES {
+                return Err("annotation overlay size out of range".into());
+            }
+            decoded
+        };
+        let composed = compose_annotation_png(&base, &overlay_bytes)?;
+        write_staged_image(&handle, composed, "report", "png")
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
 
+/// Decode the staged capture and blend the (optionally resized) overlay onto
+/// it. Shared by the JPEG save path and the PNG clipboard-copy path.
+fn composited_canvas(base_jpeg: &[u8], overlay_png: &[u8]) -> CommandResult<image::RgbaImage> {
     let mut canvas = image::load_from_memory_with_format(base_jpeg, image::ImageFormat::Jpeg)
         .map_err(|error| format!("screenshot decoding failed: {error}"))?
         .to_rgba8();
@@ -146,6 +179,16 @@ fn composite_annotation(base_jpeg: &[u8], overlay_png: &[u8]) -> CommandResult<V
         )
     };
     image::imageops::overlay(&mut canvas, &overlay, 0, 0);
+    Ok(canvas)
+}
+
+/// Alpha-blend the overlay onto the base capture and re-encode as JPEG. A
+/// mismatched overlay is resized rather than rejected so the annotation
+/// geometry stays put even if the renderer's canvas rounding drifts a pixel.
+fn composite_annotation(base_jpeg: &[u8], overlay_png: &[u8]) -> CommandResult<Vec<u8>> {
+    use std::io::Cursor;
+
+    let canvas = composited_canvas(base_jpeg, overlay_png)?;
 
     // A notch above the capture's quality 85: strokes are thin, high-contrast
     // edges that JPEG ringing would smear.
@@ -155,6 +198,26 @@ fn composite_annotation(base_jpeg: &[u8], overlay_png: &[u8]) -> CommandResult<V
     rgb.write_with_encoder(encoder)
         .map_err(|error| format!("annotated screenshot JPEG encoding failed: {error}"))?;
     Ok(jpeg.into_inner())
+}
+
+/// Composite the overlay onto the capture and encode as PNG — the only image
+/// format the async clipboard API accepts. An empty `overlay_png` (nothing
+/// drawn yet) skips compositing and just re-encodes the capture.
+fn compose_annotation_png(base_jpeg: &[u8], overlay_png: &[u8]) -> CommandResult<Vec<u8>> {
+    use std::io::Cursor;
+
+    let canvas = if overlay_png.is_empty() {
+        image::load_from_memory_with_format(base_jpeg, image::ImageFormat::Jpeg)
+            .map_err(|error| format!("screenshot decoding failed: {error}"))?
+            .to_rgba8()
+    } else {
+        composited_canvas(base_jpeg, overlay_png)?
+    };
+    let mut png = Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(canvas)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .map_err(|error| format!("screenshot PNG encoding failed: {error}"))?;
+    Ok(png.into_inner())
 }
 
 /// Encode an AppKit image snapshot into JPEG bytes. UI captures compress
@@ -547,6 +610,34 @@ mod tests {
         let base = encode(image::RgbaImage::from_pixel(4, 4, RED), image::ImageFormat::Jpeg);
         assert!(composite_annotation(b"not a jpeg", &[]).is_err());
         assert!(composite_annotation(&base, b"not a png").is_err());
+    }
+
+    /// Decode a `compose_annotation_png` product back into RGB probes.
+    fn decode_png_copy(png: &[u8]) -> image::RgbImage {
+        image::load_from_memory_with_format(png, image::ImageFormat::Png)
+            .expect("png copy decodes")
+            .to_rgb8()
+    }
+
+    #[test]
+    fn png_copy_without_overlay_reencodes_the_capture() {
+        let base = encode(image::RgbaImage::from_pixel(8, 8, RED), image::ImageFormat::Jpeg);
+
+        let out = decode_png_copy(&compose_annotation_png(&base, &[]).expect("png copy succeeds"));
+        let pixel = out.get_pixel(4, 4);
+        assert!(pixel[0] > pixel[2], "plain copy stays red, got {pixel:?}");
+    }
+
+    #[test]
+    fn png_copy_blends_overlay_strokes_onto_the_capture() {
+        let base = encode(image::RgbaImage::from_pixel(16, 16, RED), image::ImageFormat::Jpeg);
+        let overlay = encode(half_painted_overlay(16), image::ImageFormat::Png);
+
+        let out = decode_png_copy(&compose_annotation_png(&base, &overlay).expect("png copy succeeds"));
+        let marked = out.get_pixel(2, 2);
+        let untouched = out.get_pixel(13, 13);
+        assert!(marked[2] > marked[0], "stroke pixel should read blue, got {marked:?}");
+        assert!(untouched[0] > untouched[2], "clear pixel should stay red, got {untouched:?}");
     }
 
     #[test]

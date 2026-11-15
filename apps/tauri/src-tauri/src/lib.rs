@@ -5607,6 +5607,7 @@ pub fn run() {
             open_report_window,
             report_screenshot::report_capture_main_screenshot,
             report_screenshot::report_save_annotated_screenshot,
+            report_screenshot::report_stage_screenshot_copy,
             report_screenshot::report_stage_attachment,
             cnb_report::report_submit_cnb_issue,
             cnb_report::report_upload_screenshot,

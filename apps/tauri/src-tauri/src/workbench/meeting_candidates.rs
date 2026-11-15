@@ -305,6 +305,19 @@ fn record_failure(conn: &Connection, source_id: &str) -> CommandResult<()> {
     Ok(())
 }
 
+/// Defer without burning an attempt: cloud/auth outages are not evidence the
+/// source is bad, so a long offline stretch must not push healthy sources
+/// toward the 24h backoff ceiling.
+fn defer_transient(conn: &Connection, source_id: &str, delay: i64) -> CommandResult<()> {
+    conn.execute(
+        "INSERT INTO extraction_backoff (source_id, attempts, next_attempt_at) VALUES (?1,0,?2+?3)
+         ON CONFLICT(source_id) DO UPDATE SET next_attempt_at=MAX(next_attempt_at, ?2+?3)",
+        params![source_id, epoch_secs(), delay],
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 /// Upsert one extraction batch. Confirmed and rejected entries keep their
 /// human status; reproduced candidates update in place, and candidates the
 /// new extraction no longer supports become superseded (still traceable).
@@ -775,7 +788,13 @@ pub(super) async fn extract_pending(
             return Ok(true);
         }
         Err(error) => {
-            record_failure(&conn, &document.id)?;
+            // Cloud/auth outages defer the pass without counting against the
+            // source; only model or protocol failures burn backoff attempts.
+            if super::knowledge_transport::transient(&error) {
+                defer_transient(&conn, &document.id, RETRY_BACKOFF_SECS)?;
+            } else {
+                record_failure(&conn, &document.id)?;
+            }
             log::warn!("[meeting-candidates] extraction deferred: {error}");
             return Ok(true);
         }

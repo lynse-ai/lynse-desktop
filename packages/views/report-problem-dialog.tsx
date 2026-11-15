@@ -26,6 +26,7 @@ import {
 } from "./diagnostics";
 import { ReportProblemAnnotator } from "./report-problem-annotator";
 import { ReportAttachmentComposer } from "./report-attachment-composer";
+import { copyImageBytesToClipboard } from "./workspace/share-note/share-export";
 import { FeedbackCenterDialog } from "./feedback/suggestion-center";
 import { RESOURCES } from "./locales";
 import { isTauri } from "./layout/use-maximized";
@@ -111,6 +112,9 @@ function ReportProblemForm({
   // An older host build without the composite command still shows the
   // preview; it just isn't a way into the editor.
   const [canAnnotate] = useState(() => Boolean(getDesktopDiagnosticsApi()?.saveAnnotatedScreenshot));
+  // Same tolerance for the clipboard-copy command: older hosts keep the
+  // annotator's copy button hidden instead of erroring.
+  const [canCopyImage] = useState(() => Boolean(getDesktopDiagnosticsApi()?.composeScreenshotCopy));
   // The paperclip upload and the capture button degrade on hosts (or web)
   // without the staging commands: hidden / disabled instead of erroring.
   const [canPick] = useState(() => Boolean(getDesktopDiagnosticsApi()?.pickReportAttachment));
@@ -230,6 +234,35 @@ function ReportProblemForm({
     [changeAnnotating, screenshot, t],
   );
 
+  /**
+   * Clipboard copy from inside the annotator: the host composites the
+   * capture with the overlay into a staged PNG (the base pixels can't go
+   * through a renderer canvas — `local-media://` would taint it), then the
+   * bytes are fetched back and written to the system clipboard. Success
+   * keeps the editor open so the user can keep annotating; a rejection has
+   * already surfaced its toast.
+   */
+  const copyScreenshot = useCallback(
+    async (overlayDataUrl: string) => {
+      const api = getDesktopDiagnosticsApi();
+      if (!api?.composeScreenshotCopy || !screenshot) return;
+      try {
+        const staged = await api.composeScreenshotCopy(screenshot.path, overlayDataUrl);
+        const response = await fetch(staged.url, { mode: "cors" });
+        if (!response.ok) throw new Error(`staged copy fetch failed: ${response.status}`);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        if (bytes.length === 0) throw new Error("staged copy is empty");
+        await copyImageBytesToClipboard(bytes);
+        toast.success(t("settings.report_copy_done"));
+      } catch (error) {
+        console.warn("[report-screenshot] clipboard copy failed:", error);
+        toast.error(t("settings.report_copy_failed"));
+        throw error;
+      }
+    },
+    [screenshot, t],
+  );
+
   async function handleSubmit() {
     if (!description.trim() || phase === "submitting") return;
     const api = getDesktopDiagnosticsApi();
@@ -287,8 +320,10 @@ function ReportProblemForm({
     return (
       <ReportProblemAnnotator
         screenshot={screenshot}
+        canCopyImage={canCopyImage}
         onClose={() => changeAnnotating(false)}
         onSave={saveAnnotation}
+        onCopyImage={copyScreenshot}
       />
     );
   }

@@ -34,9 +34,16 @@ function openInBrowser(url: string): void {
  * The About panel body: app icon, name, version, update entry, legal links
  * and copyright — mirroring the classic native About window layout. Rendered
  * inside the standalone desktop window (`AboutWindow`) and the web fallback
- * dialog (`AboutDialog`); the parent supplies the height.
+ * dialog (`AboutDialog`); the parent supplies the height. When embedded in
+ * the settings dialog the parent passes `onOpenReportProblem`, which closes
+ * the settings dialog first — the report screenshot must not photograph it.
  */
-export function AboutContent() {
+export function AboutContent({
+  onOpenReportProblem,
+}: {
+  /** Override for the 报告问题 entry; defaults to the shared report dialog. */
+  onOpenReportProblem?: () => void;
+} = {}) {
   const { t, i18n } = useTranslation();
   // Subscribing also keeps the update entry in sync with the shared 30-min
   // background check, so "update available" shows without a manual check.
@@ -114,7 +121,7 @@ export function AboutContent() {
       <div className="mt-2.5 flex items-center gap-4 text-2xs text-muted-foreground/80">
         <button
           type="button"
-          onClick={openReportProblem}
+          onClick={onOpenReportProblem ?? openReportProblem}
           className="transition-colors hover:text-foreground"
         >
           {t("settings.report_issue")}

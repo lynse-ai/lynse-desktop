@@ -47,6 +47,12 @@ export type DesktopDiagnosticsApi = {
   // Composites a transparent PNG overlay (data URL) onto the staged capture
   // and returns the fresh staged file that replaces it.
   saveAnnotatedScreenshot?: (path: string, overlayDataUrl: string) => Promise<StagedScreenshot>;
+  // Stages a clipboard-ready PNG copy of the capture (annotations burned in
+  // when `overlayDataUrl` is non-empty, plain re-encode otherwise). The
+  // annotator's copy button fetches the returned staged file and writes it to
+  // the clipboard. Missing on an older host build — the copy button is then
+  // hidden rather than erroring.
+  composeScreenshotCopy?: (path: string, overlayDataUrl: string) => Promise<StagedScreenshot>;
   submitCnbIssue?: (request: {
     endpoint: string;
     title: string;
@@ -191,10 +197,18 @@ async function openReportDialog(mode: ReportDialogMode): Promise<void> {
   if (mode === "report") {
     const api = getDesktopDiagnosticsApi();
     pendingScreenshot = api?.captureScreenshot
-      ? await api.captureScreenshot(resolveCaptureBackground()).catch((error: unknown) => {
-          showScreenshotCaptureError(error);
-          return null;
-        })
+      ? await (async () => {
+          // Whatever overlay the entry point sat in (the settings dialog's
+          // About card, a dropdown menu) must actually leave the screen
+          // before the capture runs — same beat as the retake flow.
+          await new Promise((resolve) => setTimeout(resolve, 220));
+          return api
+            .captureScreenshot!(resolveCaptureBackground())
+            .catch((error: unknown) => {
+              showScreenshotCaptureError(error);
+              return null;
+            });
+        })()
       : null;
   } else {
     pendingScreenshot = null;

@@ -37,9 +37,8 @@ interface DockedMarkdownToolbarProps {
 
 /**
  * Which popover is currently open (null = none). Unlike the old selection
- * toolbar these open to the RIGHT of the rail; they render through a portal
- * with fixed coordinates so the rail's own box can scroll internally without
- * clipping them.
+ * toolbar these open ABOVE the pill; they render through a portal with fixed
+ * coordinates so the bar's own layout never clips them.
  */
 type OpenPopover = "link" | "image" | "ai" | null;
 
@@ -56,18 +55,21 @@ interface EditorSnapshot {
 
 const EMPTY_SNAPSHOT: EditorSnapshot = { block: "", marks: [], hasSelection: false };
 
-/** Horizontal gap between a rail trigger and its popover panel. */
+/** Vertical gap between a bottom-bar trigger and its popover panel above it. */
 const POPOVER_GAP = 8;
 
 /**
- * Always-visible vertical Markdown toolbar docked to the left edge of the
+ * Always-visible horizontal Markdown toolbar floating at the bottom of the
  * editing column. Replaces the selection-gated floating bar: every tool stays
  * reachable while the user reads or scrolls, and the full toolset renders at
  * once (desktop windows are large — nothing collapses into submenus except
- * URL/AI popovers, which would be too wide for the rail itself).
+ * URL/AI popovers, which would be too wide for the pill itself).
  *
- * The rail is `position: sticky` within the editing column so it follows the
- * viewport while the document scrolls.
+ * The pill is bottom-`sticky` within the editing column, so it hovers over the
+ * scrollport while the document scrolls and settles below the last paragraph
+ * once the end of the content comes into view. Material is the translucent
+ * frosted-glass overlay (`.glass-overlay` + `.floating-toolbar` lighter coat)
+ * so the text scrolling behind it stays readable.
  */
 export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
   const { t } = useTranslation();
@@ -138,16 +140,16 @@ export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
   // ── Popover trigger coordinates + outside-click closing ────
   useEffect(() => {
     if (!openPopover) return;
-    const trigger = triggerRefs.current[openPopover];
-    if (trigger) {
-      const rect = trigger.getBoundingClientRect();
-      setPopoverAnchor({ top: rect.top, left: rect.right + POPOVER_GAP });
-    }
+      const trigger = triggerRefs.current[openPopover];
+      if (trigger) {
+        const rect = trigger.getBoundingClientRect();
+        setPopoverAnchor({ top: rect.top, left: rect.left });
+      }
     const handlePointerOrResize = () => {
       const current = triggerRefs.current[openPopover];
       if (!current) return;
       const rect = current.getBoundingClientRect();
-      setPopoverAnchor({ top: rect.top, left: rect.right + POPOVER_GAP });
+      setPopoverAnchor({ top: rect.top, left: rect.left });
     };
     const handleMouseDown = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
@@ -210,7 +212,7 @@ export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
         const trigger = triggerRefs.current[popover];
         if (trigger) {
           const rect = trigger.getBoundingClientRect();
-          setPopoverAnchor({ top: rect.top, left: rect.right + POPOVER_GAP });
+          setPopoverAnchor({ top: rect.top, left: rect.left });
         }
         return popover;
       });
@@ -245,19 +247,32 @@ export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
   const hasSelection = snapshot.hasSelection;
 
   if (!editor) {
-    return <div className="w-11 shrink-0 self-start" aria-hidden="true" />;
+    return null;
   }
 
   return (
     <>
       <div
         data-docked-toolbar
-        // Sticky keeps the rail pinned to the scrollport while the note body
-        // scrolls past — "browse and edit at the same time" is the whole point.
-        // On unusually short windows the rail scrolls internally instead of
-        // letting its bottom tools fall below the fold.
-        className="sticky top-0 z-20 flex max-h-[calc(100vh-3rem)] w-11 shrink-0 self-start flex-col items-center gap-0.5 overflow-y-auto rounded-lg border border-border/30 glass-overlay p-1"
+        // Bottom-sticky keeps the pill pinned to the scrollport edge while the
+        // note body scrolls past — "browse and edit at the same time" is the
+        // whole point — and it settles below the last paragraph once the end
+        // of the content scrolls into view.
+        className="floating-toolbar glass-overlay sticky bottom-3 z-20 flex shrink-0 items-center gap-0.5 self-center rounded-full border border-border/30 px-1.5 py-1"
       >
+        {/* ── AI selection actions — pinned first: the most-used tool sits at
+           the head of the pill ── */}
+        <RailButton
+          label={hasSelection ? t("toolbar.ai_menu") : t("toolbar.ai_needs_selection")}
+          disabled={!hasSelection}
+          onClick={() => togglePopover("ai")}
+          triggerRef={(el) => { triggerRefs.current.ai = el; }}
+        >
+          <Sparkles className="size-3.5 text-primary/70" />
+        </RailButton>
+
+        <RailDivider />
+
         {/* ── Block types ── */}
         <RailButton label={t("toolbar.paragraph")} active={active("paragraph")} onClick={() => run("paragraph")}>
           <Type className="size-3.5" />
@@ -322,7 +337,7 @@ export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
 
         <RailDivider />
 
-        {/* ── Insert / AI / history ── */}
+        {/* ── Insert / history ── */}
         <RailButton
           label={t("toolbar.insert_image")}
           onClick={() => togglePopover("image")}
@@ -330,23 +345,15 @@ export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
         >
           <Image className="size-3.5" />
         </RailButton>
-        <RailButton
-          label={hasSelection ? t("toolbar.ai_menu") : t("toolbar.ai_needs_selection")}
-          disabled={!hasSelection}
-          onClick={() => togglePopover("ai")}
-          triggerRef={(el) => { triggerRefs.current.ai = el; }}
-        >
-          <Sparkles className="size-3.5 text-primary/70" />
-        </RailButton>
 
         <RailDivider />
 
-        {/* Undo/redo share one row so the rail stays within short viewports. */}
-        <div className="flex w-full items-center justify-center gap-0.5">
-          <RailButton label={t("toolbar.undo")} onClick={() => run("undo")} className="w-[15px] px-0">
+        {/* Undo/redo share one group row so the pill stays within narrow panes. */}
+        <div className="flex items-center gap-0.5">
+          <RailButton label={t("toolbar.undo")} onClick={() => run("undo")}>
             <Undo className="size-3.5" />
           </RailButton>
-          <RailButton label={t("toolbar.redo")} onClick={() => run("redo")} className="w-[15px] px-0">
+          <RailButton label={t("toolbar.redo")} onClick={() => run("redo")}>
             <Redo2 className="size-3.5" />
           </RailButton>
         </div>
@@ -393,7 +400,7 @@ export function DockedMarkdownToolbar({ editor }: DockedMarkdownToolbarProps) {
 
 // ── Rail primitives ─────────────────────────────────────────
 
-/** Icon button on the rail. Clicks never steal focus from the editor. */
+/** Icon button on the pill. Clicks never steal focus from the editor. */
 function RailButton({
   label,
   active = false,
@@ -435,21 +442,25 @@ function RailButton({
 
 /** Hairline separator between tool groups. */
 function RailDivider() {
-  return <div className="my-0.5 h-px w-6 shrink-0 bg-border/50" />;
+  return <div className="mx-0.5 h-5 w-px shrink-0 bg-border/50" />;
 }
 
 /**
- * Popover panel rendered through a portal at fixed coordinates next to its
- * rail trigger — lets the rail itself scroll without clipping the panel.
+ * Popover panel rendered through a portal at fixed coordinates ABOVE its
+ * bottom-bar trigger — the pill sits at the viewport bottom, so panels grow
+ * upward. Anchoring by `bottom` (instead of top + translate) keeps the panel
+ * growing in the right direction without measuring it first.
  */
 function ToolbarPopover({ anchor, children }: { anchor: { top: number; left: number }; children: React.ReactNode }) {
-  // Clamp vertically so tall panels stay on screen next to bottom-anchored triggers.
-  const top = Math.min(anchor.top, Math.max(8, window.innerHeight - 240));
+  const bottom = window.innerHeight - anchor.top + POPOVER_GAP;
+  // Clamp horizontally so edge-anchored triggers keep their panel on screen
+  // (link/image forms are w-72 ≈ 290px + borders).
+  const left = Math.min(Math.max(8, anchor.left), Math.max(8, window.innerWidth - 296));
   return createPortal(
     <div
       data-docked-popover
       className="floating-toolbar pointer-events-auto z-50"
-      style={{ position: "fixed", top, left: anchor.left }}
+      style={{ position: "fixed", bottom, left }}
       onMouseDown={(e) => e.stopPropagation()}
     >
       {children}

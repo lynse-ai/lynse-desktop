@@ -1,20 +1,16 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
-import { selectReleaseNotes } from "@lynse/core/i18n";
 import { Button } from "@lynse/ui/components/ui/button";
 import {
-  fetchLatestReleaseNotes,
   getAppInfoSync,
   getDesktopAppApi,
   openAppUpdateDialog,
   useAppUpdate,
-  type LatestReleaseNotes,
 } from "../app-update";
 import { openLogsFolder, openReportProblem } from "../diagnostics";
 import { LYNSE_APP_ICON_SRC } from "./app-icon";
-import { ReleaseNotesContent } from "../release-notes-content";
 import { WEBSITE_URL, privacyUrl, termsUrl } from "./links";
 
 // Core/views have no Node types; declare just the shape Next.js injects so
@@ -60,22 +56,6 @@ export function AboutContent() {
   const hasUpdate = Boolean(update?.hasUpdate);
   const year = new Date().getFullYear();
 
-  // "What's new" block: read straight from the CloudBase updater manifest so
-  // the page can show the current release's notes without waiting for a
-  // pending update (the updater plugin only exposes notes then). Desktop
-  // only — the manifest's CORS whitelist is not guaranteed for web origins.
-  const [latestNotes, setLatestNotes] = useState<LatestReleaseNotes | null>(null);
-  useEffect(() => {
-    if (!isDesktop) return;
-    let cancelled = false;
-    void fetchLatestReleaseNotes().then((notes) => {
-      if (!cancelled) setLatestNotes(notes);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [isDesktop]);
-
   const links = [
     { label: t("about.website"), url: WEBSITE_URL },
     { label: t("about.terms"), url: termsUrl(i18n.language) },
@@ -112,24 +92,6 @@ export function AboutContent() {
             ? t("settings.checking_update")
             : t("settings.check_update")}
       </Button>
-
-      {/* What's new in the published release, straight from the updater
-          manifest on CloudBase. Hidden silently when unreachable. */}
-      {latestNotes && (
-        <div className="mt-4 w-full max-w-md rounded-lg border border-border/60 bg-muted/30 px-4 py-4 text-left">
-          <h2 className="text-xs font-semibold text-muted-foreground">
-            {t("about.release_notes")}
-            <span className="ms-1.5 font-normal tabular-nums tracking-normal">
-              v{latestNotes.version}
-            </span>
-          </h2>
-          <ReleaseNotesContent
-            compact
-            className="mt-4"
-            notes={selectReleaseNotes(latestNotes.notes, latestNotes.notesByLocale, i18n.resolvedLanguage ?? i18n.language) ?? ""}
-          />
-        </div>
-      )}
 
       {/* Legal links, separated by hairlines like a native About panel. */}
       <div className="mt-6 flex items-center text-xs text-muted-foreground">

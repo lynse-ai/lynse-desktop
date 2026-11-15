@@ -1726,11 +1726,11 @@ export function ContentPanel() {
                           </>
                         );
                       })() : (
-                        /* Markdown summary + always-visible docked editing rail:
-                           the rail stays pinned to the left edge while the user
-                           browses, so formatting stays one click away. */
-                        <div className="flex min-h-0 flex-1 items-stretch gap-2">
-                          <DockedMarkdownToolbar editor={summaryEditor} />
+                        /* Markdown summary + always-visible editing bar: the
+                           glass pill floats at the bottom of the content view
+                           while the user browses, so formatting stays one
+                           click away. */
+                        <div className="flex min-h-0 flex-1 flex-col gap-2">
                           <div className="min-w-0 flex-1">
                             <SummaryMarkdownEditor
                               content={block.text}
@@ -1738,6 +1738,7 @@ export function ContentPanel() {
                               onEditorReady={setSummaryEditor}
                             />
                           </div>
+                          <DockedMarkdownToolbar editor={summaryEditor} />
                         </div>
                       );
                     })()}
@@ -1891,11 +1892,11 @@ function NoteContent({ fileId, noteId }: { fileId: string | null; noteId: string
   }
 
   return (
-    <div className="flex min-h-0 flex-1 items-stretch gap-2">
-      <DockedMarkdownToolbar editor={noteEditor} />
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="min-w-0 flex-1">
         <SummaryMarkdownEditor content={content} onChange={handleChange} onEditorReady={setNoteEditor} />
       </div>
+      <DockedMarkdownToolbar editor={noteEditor} />
     </div>
   );
 }

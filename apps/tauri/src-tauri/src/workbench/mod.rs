@@ -1647,7 +1647,7 @@ pub async fn workbench_context(
     if !complete && sources.is_empty() {
         return Ok(Value::Null);
     }
-    sources.truncate(10);
+    sources.truncate(8);
     Ok(json!({"version":1,"sources":sources,"scope":session.scope}))
 }
 

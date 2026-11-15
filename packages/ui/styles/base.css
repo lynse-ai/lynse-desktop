@@ -285,13 +285,17 @@
 
 /* Floating markdown toolbar material — a lighter coat than .glass-overlay:
    less popover tint over strong blur so the bar reads as clear glass floating
-   above the text it formats. The compound selector out-specifies the unlayered
-   .glass-overlay rules in tokens.css regardless of import order. */
+   above the text it formats. A soft layered cast shadow sells the hover (the
+   glass coat alone reads as painted onto the page). The compound selector
+   out-specifies the unlayered .glass-overlay rules in tokens.css regardless
+   of import order. */
 .floating-toolbar.glass-overlay {
   background: color-mix(in srgb, var(--popover) 42%, transparent);
   -webkit-backdrop-filter: blur(20px) saturate(160%);
   backdrop-filter: blur(20px) saturate(160%);
   box-shadow:
+    0 12px 32px rgb(0 0 0 / 16%),
+    0 2px 8px rgb(0 0 0 / 12%),
     inset 0 1px 0 rgb(255 255 255 / 18%),
     inset 0 0 0 1px rgb(255 255 255 / 4%);
 }
@@ -299,6 +303,8 @@
 .dark .floating-toolbar.glass-overlay {
   background: color-mix(in srgb, var(--popover) 34%, transparent);
   box-shadow:
+    0 12px 32px rgb(0 0 0 / 45%),
+    0 2px 8px rgb(0 0 0 / 28%),
     inset 0 1px 0 rgb(255 255 255 / 8%),
     inset 0 0 0 1px rgb(255 255 255 / 4%);
 }

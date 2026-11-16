@@ -405,6 +405,7 @@ const en = {
     bookmark: "Bookmark position",
     hide_to_island: "Hide to Dynamic Island",
     expand: "Expand recording view",
+    double_click_hint: "Double-click to open the recording page",
     record_title: "Live Recording",
     start_recording: "Start Recording",
     stop_recording: "Stop Recording",
@@ -570,6 +571,9 @@ const en = {
   },
   settings: {
     context_inbox_title: "Proactive suggestions",
+    notch_island_title: "Dynamic Island",
+    notch_island_enable: "Pin recording status to the display notch",
+    notch_island_hint: "While recording, the island docks flush below the display notch: collapsed it shows only the timer and waveform, hovering reveals the controls, and tapping opens the live transcript. Displays without a notch keep the classic floating pill.",
     context_inbox_enable: "Receive proactive suggestions",
     context_inbox_hint: "When on, the cloud continuously analyzes all of your synced meetings and delivers goal suggestions, follow-ups and review reminders to Notifications. This switch is the authorization: turning it on grants cloud analysis; turning it off stops it, discards in-progress results and applies to every device on this account.",
     context_inbox_sign_in: "Sign in to enable proactive suggestions.",
@@ -1440,6 +1444,11 @@ local_summary_failed: "Deep summary failed",
       uninstall: "Uninstall",
       uninstall_confirm: "Confirm uninstall",
       settings: "Settings",
+      manage: "Manage",
+    },
+    knowledgeBase: {
+      name: "Knowledge Base",
+      description: "Organize recordings and notes into a searchable knowledge wiki with graph insights.",
     },
     workbuddy: {
       name: "WorkBuddy Assistant",
@@ -1448,6 +1457,11 @@ local_summary_failed: "Deep summary failed",
     feishuBot: {
       name: "Feishu Bot",
       description: "Answer questions in Feishu chats and push meeting summaries to your group.",
+    },
+    recordingCardUsb: {
+      name: "Recording card USB",
+      description:
+        "Manage recordings on your recording card over USB — opens the management page in Chrome or Edge.",
     },
     models: {
       title: "Transcription models",

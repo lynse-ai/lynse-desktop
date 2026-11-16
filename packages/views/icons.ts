@@ -28,6 +28,7 @@ export {
   Settings,         // Settings
   HardDrive,        // Device storage
   Cpu,              // Device firmware
+  Usb,              // Recording card USB plugin
   CircleDot,        // Live recording dot
   Signal,           // RSSI / mark button
   AlertCircle,      // Inline error banner

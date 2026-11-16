@@ -115,6 +115,7 @@ export function WechatBindForm({
         thirdPartyId,
         phone: target,
         captchaCode,
+        accountType: intl ? "EMAIL" : "PHONE",
       });
       if (!vo.token || isWechatBindRequired(vo)) {
         console.warn("[wechat-bind] missing session", {

@@ -610,9 +610,13 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
         await emit("lynse:open-recording-page");
       },
       hideIsland: () => command<void>("live_translation_hide_island"),
-      // Payload key must match the Rust command's `expand` parameter exactly;
-      // a mismatch makes the invoke reject and the island silently never grows.
-      setIslandExpanded: (expanded) => command<void>("live_translation_expand_island", { expand: expanded }),
+      // Payload keys must match the Rust command's `expand`/`mode` parameters
+      // exactly; a mismatch makes the invoke reject and the island silently
+      // never grows.
+      setIslandExpanded: (expanded, mode) =>
+        command<void>("live_translation_expand_island", { expand: expanded, mode: mode ?? "drawer" }),
+      collapseIsland: () => command<void>("live_translation_collapse_island"),
+      setNotchIsland: (enabled) => command<void>("live_translation_set_notch_island", { enabled }),
       updateTray: (payload) => command<void>("live_translation_update_tray", { payload }),
       minimizeToTray: () => getCurrentWindow().hide(),
       onTrayAction: async (callback) => {

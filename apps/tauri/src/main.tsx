@@ -4,6 +4,7 @@ import { installTauriBridge } from "./tauri-bridge";
 import { installLogger } from "./logger";
 import { installEventUnlistenGuard } from "./event-guard";
 import { initAppTheme } from "@lynse/views/settings/app-theme";
+import { syncNotchIslandPreference, useIslandPreferences } from "@lynse/views/settings/island-preferences";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -32,6 +33,11 @@ async function bootstrap() {
     if (/Windows/i.test(navigator.userAgent)) {
       document.documentElement.classList.add("recording-island-window-bottom");
     }
+    // Notch-attached "Dynamic Island" build (Rust appended `style=notch`):
+    // the surface turns opaque black and merges with the hardware cutout.
+    if (new URLSearchParams(window.location.search).get("style") === "notch") {
+      document.documentElement.dataset.islandStyle = "notch";
+    }
   }
 
   // Frontend failures (uncaught errors, rejections, console.error/warn) flow
@@ -42,9 +48,19 @@ async function bootstrap() {
   // Full-fidelity appearance pass (colors, fonts, contrast) before React
   // mounts; index.html already painted the bare color trio pre-bundle.
   initAppTheme();
+  // The notch-attached island paints itself opaque black; force dark tokens
+  // so drawer content and controls stay legible on it in every user theme.
+  if (document.documentElement.dataset.islandStyle === "notch") {
+    document.documentElement.classList.add("dark");
+    initAppTheme();
+  }
 
   const [{ default: App }] = await Promise.all([import("./App"), installTauriBridge(windowKind)]);
   syncWindowEffects();
+  // Re-apply the persisted notch-island preference: the Rust flag is an
+  // executor only and resets on launch, so the main window re-syncs it here
+  // (before a recording can pre-create the island window).
+  syncNotchIslandPreference(useIslandPreferences.getState().notchIslandEnabled);
   ReactDOM.createRoot(document.getElementById("root")!).render(<App />);
 }
 

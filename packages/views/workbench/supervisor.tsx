@@ -5,7 +5,7 @@ import { api } from "@lynse/core/api";
 import { useAuthStore } from "@lynse/core/auth";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { CUSTOM_MODELS_CHANGED_EVENT, CUSTOM_MODELS_STORAGE_KEY } from "../custom-models";
-import { featureFlags, isWikiEnabled } from "../feature-flags";
+import { featureFlags, isKnowledgePluginActiveIn, isWikiEnabled } from "../feature-flags";
 import { usePluginStore } from "../plugins/state";
 import { getWorkbenchApi, useWorkbench } from "./api";
 import { useMemoryDrafts } from "./memory-drafts";
@@ -25,6 +25,9 @@ export function WorkbenchSupervisor() {
   }, [hasMemoryDrafts]);
   useEffect(() => { useMemoryDrafts.getState().clear(); useWikiBrowser.getState().setScope(undefined); }, [user?.id, authenticated]);
   const gmailPluginEnabled = usePluginStore((state) => !featureFlags.pluginMarketplace || !!state.entries["lynse.gmail"]?.enabled);
+  // Same idiom as gmailPluginEnabled: disabling the knowledge plugin tears the
+  // native worker down via this effect's cleanup (unbind), enabling re-binds.
+  const wikiPluginActive = usePluginStore((state) => isKnowledgePluginActiveIn(state.entries));
   const [configurationVersion, setConfigurationVersion] = useState(0);
   useEffect(() => {
     const changed = () => setConfigurationVersion((value) => value + 1);
@@ -83,7 +86,7 @@ export function WorkbenchSupervisor() {
       document.removeEventListener("visibilitychange", resume);
       void bridge.unbind();
     };
-  }, [authenticated, user, i18n.language, configurationVersion, gmailPluginEnabled]);
+  }, [authenticated, user, i18n.language, configurationVersion, gmailPluginEnabled, wikiPluginActive]);
   return null;
 }
 

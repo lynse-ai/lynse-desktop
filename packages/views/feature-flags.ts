@@ -1,3 +1,8 @@
+import { detectPluginPlatform } from "./plugins/registry";
+import { usePluginStore } from "./plugins/state";
+import type { PluginStateEntry } from "./plugins/types";
+import { KNOWLEDGE_BASE_PLUGIN_ID } from "./plugins/plugin-ids";
+
 /**
  * Release gates for work-in-progress features.
  *
@@ -69,14 +74,35 @@ export function isConnectionsEnabled(): boolean {
 }
 
 /**
+ * Pure plugin-state half of the knowledge-base gate. The knowledge plugin
+ * counts as active while the marketplace rollback flag is off (the exact
+ * pre-plugin behavior), on platforms that never run the plugin host (web has
+ * no PluginHost, so its store stays empty — the cloud keyword fallback and
+ * /memory/manage must keep working there), or when the plugin is installed +
+ * enabled in the persisted store.
+ */
+export function isKnowledgePluginActiveIn(entries: Record<string, PluginStateEntry>): boolean {
+  if (!featureFlags.pluginMarketplace) return true;
+  if (detectPluginPlatform() !== "desktop") return true;
+  return !!entries[KNOWLEDGE_BASE_PLUGIN_ID]?.enabled;
+}
+
+/** Non-reactive read of the knowledge plugin's install state. */
+export function isKnowledgePluginActive(): boolean {
+  return isKnowledgePluginActiveIn(usePluginStore.getState().entries);
+}
+
+/**
  * Whether the knowledge base (Wiki) is exposed. The single gate every entry
- * point reads: the flag above AND the beta channel gate — debug-channel
- * builds, dev shells and the runtime test mode show it; official builds hide
- * the sidebar entry, the /memory page, the home card and the desktop chat
- * context, and the Rust worker stays disabled (bind sends betaEnabled=false).
+ * point reads: the flag above AND the beta channel gate AND the knowledge
+ * plugin's install state — debug-channel builds, dev shells and the runtime
+ * test mode with the plugin enabled show it; official builds or a disabled/
+ * uninstalled plugin hide the sidebar entry, the /memory page, the home card
+ * and the desktop chat context, and the Rust worker stays disabled (bind
+ * sends betaEnabled=false).
  */
 export function isWikiEnabled(): boolean {
-  return featureFlags.wiki && isBetaFeaturesUnlocked();
+  return featureFlags.wiki && isBetaFeaturesUnlocked() && isKnowledgePluginActive();
 }
 
 /**

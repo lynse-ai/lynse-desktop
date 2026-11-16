@@ -129,12 +129,15 @@ html.recording-island-window-bottom .island-surface {
    card. The fallback matches by absence of the vibrancy attribute rather
    than `="none"`: on Windows (and the web) the attribute is never set at
    all — index.html and syncWindowEffects only touch it on macOS — and no
-   native material exists there, so the 72% wash must not stand. */
-.island-surface {
+   native material exists there, so the 72% wash must not stand.
+   The notch-attached island opts out of the wash entirely: it paints itself
+   opaque black (component classes) so it merges with the hardware cutout,
+   and no vibrancy is installed behind that window anyway. */
+html:not([data-island-style="notch"]) .island-surface {
   background: color-mix(in srgb, var(--background) 72%, transparent);
 }
 
-html:not([data-window-effects="vibrancy"]) .island-surface {
+html:not([data-island-style="notch"]):not([data-window-effects="vibrancy"]) .island-surface {
   background: color-mix(in srgb, var(--background) 96%, transparent);
 }
 

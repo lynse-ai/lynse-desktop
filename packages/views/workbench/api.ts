@@ -1,11 +1,15 @@
 "use client";
 
 import { create } from "zustand";
-import { isWikiEnabled } from "../feature-flags";
+import { isKnowledgePluginActiveIn, isWikiEnabled } from "../feature-flags";
+import { usePluginStore } from "../plugins/state";
 import type { DesktopWorkbenchApi, WorkbenchStatus, SourceRef } from "./types";
 
 export function useWikiEnabled(): boolean {
-  return isWikiEnabled();
+  // Hook call must stay unconditional; the selector subscribes the caller so
+  // enable/disable of the knowledge plugin re-renders gate consumers (sidebar).
+  const pluginActive = usePluginStore((state) => isKnowledgePluginActiveIn(state.entries));
+  return isWikiEnabled() && pluginActive;
 }
 
 export function getWorkbenchApi(): DesktopWorkbenchApi | null {

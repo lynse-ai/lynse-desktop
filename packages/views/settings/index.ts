@@ -23,6 +23,11 @@ export {
   type WebdavSyncSummary,
 } from "./webdav-sync";
 export { RecordingDevicesCard } from "./recording-devices-card";
+export { IslandConfigCard } from "./island-config-card";
+export {
+  syncNotchIslandPreference,
+  useIslandPreferences,
+} from "./island-preferences";
 
 export { McpConfigCard } from "./mcp-config-card";
 

@@ -346,8 +346,16 @@ export interface DesktopLiveTranslationApi {
    * "expand" affordance. No-op outside the desktop app. */
   openRecordingPage: () => Promise<void>;
   /** Toggle the recording-island window between the compact pill and the
-   * expanded live-transcript drawer. No-op outside the desktop app. */
-  setIslandExpanded: (expanded: boolean) => Promise<void>;
+   * expanded live-transcript drawer. No-op outside the desktop app. On notch
+   * islands `mode` picks the expanded target: `"controls"` grows to the full
+   * control bar without the drawer, anything else opens the drawer. */
+  setIslandExpanded: (expanded: boolean, mode?: "controls" | "drawer") => Promise<void>;
+  /** Shrink the island back to its compact state (mini pill on notch
+   * islands) — the hover-left affordance. No-op outside the desktop app. */
+  collapseIsland: () => Promise<void>;
+  /** Toggle the notch-attached "Dynamic Island" style (settings preference
+   * executor; the persisted source of truth lives in the frontend). */
+  setNotchIsland: (enabled: boolean) => Promise<void>;
   updateTray: (payload: { recording: boolean; paused: boolean; elapsed_secs?: number }) => Promise<void>;
   onTrayAction: (callback: (action: LiveTranslationTrayAction) => void) => Promise<() => void>;
   onEvent: (callback: (event: LiveTranslationEvent) => void) => Promise<() => void>;

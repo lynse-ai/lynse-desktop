@@ -12,6 +12,7 @@ import { useNavigation } from "../navigation";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
 import { WechatBindForm } from "./wechat-bind-form";
+import { consumePostLoginRedirect } from "./post-login-redirect";
 import { Loader2 } from "../icons";
 
 type CallbackStatus = "exchanging" | "success" | "denied" | "invalid_state" | "failed";
@@ -49,9 +50,12 @@ export function WechatCallback() {
     window.localStorage.removeItem(STATE_STORAGE_KEY);
     completeLogin(session);
     setStatus("success");
+    // A standalone page (e.g. the recording-card manager) may have parked its
+    // path before the WeChat round trip — return there instead of home.
+    const redirect = consumePostLoginRedirect();
     // Let the success state paint before leaving; replace() keeps the
     // one-time code out of the URL history.
-    setTimeout(() => replace("/"), 800);
+    setTimeout(() => replace(redirect ?? "/"), 800);
   }
 
   useEffect(() => {

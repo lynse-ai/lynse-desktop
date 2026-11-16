@@ -1,4 +1,5 @@
 use crate::audio_contract::sources::{self, SourceSelection};
+use crate::island_notch;
 use crate::{now, remove_store_value, save_store_value, update_store_value, CommandResult};
 use futures_util::{SinkExt, StreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
@@ -3884,6 +3885,76 @@ const RECORDING_ISLAND_WIDTH: f64 = 340.0;
 const RECORDING_ISLAND_HEIGHT: f64 = 44.0;
 const RECORDING_ISLAND_EXPANDED_HEIGHT: f64 = 480.0;
 
+/// Whether the notch-attached "Dynamic Island" style is enabled (settable
+/// from the settings page). The preference itself persists in the frontend;
+/// this flag is just the executor and is re-applied on every app launch.
+static ISLAND_NOTCH_MODE: AtomicBool = AtomicBool::new(true);
+
+/// Notch geometry cached at island-build time. `None` = floating-pill mode
+/// (no cutout detected, preference off, or non-macOS). The island re-detects
+/// on every build, so a settings toggle takes effect on the next (re)build.
+static ISLAND_NOTCH_GEOMETRY: Mutex<Option<island_notch::NotchGeometry>> = Mutex::new(None);
+
+/// Re-runs notch detection on the main thread and caches the outcome.
+/// AppKit requires the main thread while the island builds on the async
+/// runtime; the one-shot round-trip keeps both worlds happy.
+fn refresh_island_notch_geometry(app: &AppHandle) {
+    let geometry = if ISLAND_NOTCH_MODE.load(Ordering::Acquire) {
+        detect_notch_on_main_thread(app)
+    } else {
+        None
+    };
+    *ISLAND_NOTCH_GEOMETRY
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = geometry;
+}
+
+fn detect_notch_on_main_thread(app: &AppHandle) -> Option<island_notch::NotchGeometry> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = sender.send(island_notch::detect_notch());
+    })
+    .ok()?;
+    receiver.recv().ok().flatten()
+}
+
+/// The cached notch geometry when the notch style is active.
+fn island_notch_geometry() -> Option<island_notch::NotchGeometry> {
+    *ISLAND_NOTCH_GEOMETRY
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+/// Island window size for the collapsed state in the current mode: the mini
+/// notch pill, or the floating 340×44 capsule.
+fn island_compact_size() -> (f64, f64) {
+    match island_notch_geometry() {
+        Some(notch) => island_notch::compact_island_size(notch.width, notch.height),
+        None => (RECORDING_ISLAND_WIDTH, RECORDING_ISLAND_HEIGHT),
+    }
+}
+
+/// Where the island window is pinned while it animates. Floating macOS pills
+/// hang from the menu bar (top edge fixed, grow downward); Windows pins the
+/// bottom edge above the taskbar (grow upward); the notch island is flush
+/// with the top edge and horizontally centered on the cutout.
+#[derive(Clone, Copy)]
+enum IslandAnchor {
+    FloatingMac,
+    Bottom(f64),
+    NotchCenterX(f64),
+}
+
+fn island_anchor(app: &AppHandle) -> IslandAnchor {
+    match island_notch_geometry() {
+        Some(notch) => IslandAnchor::NotchCenterX(notch.center_x),
+        None => match island_bottom_anchor(app) {
+            Some(bottom_y) => IslandAnchor::Bottom(bottom_y),
+            None => IslandAnchor::FloatingMac,
+        },
+    }
+}
+
 /// Generation token for the island grow/shrink animation. Each new
 /// `live_translation_expand_island` call bumps it, so a rapid re-toggle makes
 /// the in-flight animation thread bail on its next frame.
@@ -3916,28 +3987,30 @@ fn ease_in_out_cubic(t: f64) -> f64 {
     }
 }
 
-/// Steps the island window height towards `target_height` with an eased curve,
-/// re-anchored to wherever the window currently is each frame. The webview
+/// Steps the island window towards `target_size` (logical width and height)
+/// with an eased curve, re-anchored each frame via `anchor`. The webview
 /// reflows live under the native vibrancy, so the frosted surface and the
 /// transcript drawer unroll downward together — or upward on Windows, where
-/// `bottom_anchor` pins the pill's bottom edge above the taskbar and the
-/// height change moves the top edge instead.
-fn animate_island_height(
-    window: WebviewWindow,
-    target_height: f64,
+/// the bottom anchor pins the pill's bottom edge above the taskbar and the
+/// height change moves the top edge instead. The notch island additionally
+/// stays horizontally centered on the cutout while its width changes (mini
+/// pill ↔ control bar ↔ drawer all grow out of the notch symmetrically).
+fn animate_island_size(
+    window: &WebviewWindow,
+    (target_width, target_height): (f64, f64),
     expand: bool,
     generation: u64,
-    bottom_anchor: Option<f64>,
+    anchor: IslandAnchor,
 ) {
     let scale = window.scale_factor().unwrap_or(1.0);
     let Ok(size) = window.inner_size() else {
         return;
     };
     let from_height = size.height as f64 / scale;
-    if (target_height - from_height).abs() < 0.5 {
+    let from_width = size.width as f64 / scale;
+    if (target_height - from_height).abs() < 0.5 && (target_width - from_width).abs() < 0.5 {
         return;
     }
-    let width = size.width as f64 / scale;
     let duration_ms = if expand { 360.0 } else { 280.0 };
     let start = Instant::now();
     loop {
@@ -3947,9 +4020,10 @@ fn animate_island_height(
         } else {
             ease_in_out_cubic(linear.min(1.0))
         };
+        let width = from_width + (target_width - from_width) * eased;
         let height = from_height + (target_height - from_height) * eased;
         let _ = window.set_size(tauri::LogicalSize::new(width, height));
-        keep_island_bottom(&window, bottom_anchor);
+        keep_island_anchored(window, width, anchor);
         if linear >= 1.0 || ISLAND_ANIMATION_GENERATION.load(Ordering::Relaxed) != generation {
             return;
         }
@@ -3962,6 +4036,8 @@ fn animate_island_height(
 /// above the taskbar's tray area (bottom-right, unrolling upward — the
 /// dynamic island on the opposite screen edge). Falls back to the screen
 /// centre (macOS) / right edge (Windows) when the tray rect is unavailable.
+/// On a notched display with the notch style enabled, the island instead
+/// docks flush against the screen's top edge, centered on the cutout.
 fn position_recording_island(app: &AppHandle, window: &tauri::WebviewWindow) {
     let Some(monitor) = app.primary_monitor().ok().flatten() else {
         return;
@@ -3998,6 +4074,17 @@ fn position_recording_island(app: &AppHandle, window: &tauri::WebviewWindow) {
 
     #[cfg(not(target_os = "windows"))]
     {
+        // Notch mode wins over tray anchoring: flush against the screen's top
+        // edge, centered on the hardware cutout at the island's current width.
+        if let Some(notch) = island_notch_geometry() {
+            let scale = window.scale_factor().unwrap_or(1.0);
+            let width = window
+                .inner_size()
+                .map(|size| size.width as f64 / scale)
+                .unwrap_or(RECORDING_ISLAND_WIDTH);
+            let _ = window.set_position(LogicalPosition::new(notch.center_x - width / 2.0, 0.0));
+            return;
+        }
         let (mut x, mut y) = {
             let tray_x = monitor.position().x as f64 / factor;
             let tray_y = monitor.position().y as f64 / factor;
@@ -4069,6 +4156,22 @@ fn keep_island_bottom(window: &tauri::WebviewWindow, bottom_y: Option<f64>) {
         .map(|size| size.height as f64 / scale)
         .unwrap_or(0.0);
     let _ = window.set_position(LogicalPosition::new(pos.x as f64 / scale, bottom_y - height));
+}
+
+/// Re-anchors the island after every animation frame. `width` is the logical
+/// width just applied, so the notch arm can keep the island centered on the
+/// cutout without re-reading the window size.
+fn keep_island_anchored(window: &tauri::WebviewWindow, width: f64, anchor: IslandAnchor) {
+    match anchor {
+        IslandAnchor::FloatingMac => {}
+        IslandAnchor::Bottom(bottom_y) => keep_island_bottom(window, Some(bottom_y)),
+        IslandAnchor::NotchCenterX(center_x) => {
+            // Flush with the screen's top edge, horizontally centered on the
+            // notch: the island reads as growing out of the cutout at every
+            // size (mini pill, control bar, drawer).
+            let _ = window.set_position(LogicalPosition::new(center_x - width / 2.0, 0.0));
+        }
+    }
 }
 
 /// True when the main window is on screen: visible and not Dock-minimized.
@@ -4147,52 +4250,99 @@ fn build_recording_island_window(app: &AppHandle) -> tauri::Result<tauri::Webvie
     // awaited before showing (pre-load reveals stay invisible on Windows).
     ISLAND_WEBVIEW_READY.store(false, Ordering::Release);
     ISLAND_PENDING_REVEAL.store(false, Ordering::Release);
-    let builder = WebviewWindowBuilder::new(
-        app,
-        "recording-island",
-        WebviewUrl::App("index.html?window=recording-island".into()),
-    )
-    .title("Lynse Recording Island")
-    .inner_size(RECORDING_ISLAND_WIDTH, RECORDING_ISLAND_HEIGHT)
-    .decorations(false)
-    .transparent(true)
-    .always_on_top(true)
-    .resizable(false)
-    .skip_taskbar(true)
-    // The pill renders its own rounded shadow inside the transparent
-    // webview; the system window shadow would trace a rectangle around it.
-    .shadow(false)
-    // Created hidden: `reveal_recording_island` unrolls it at the tray
-    // anchor instead of popping in at full size.
-    .visible(false)
-    .on_page_load(|window, payload| {
-        if payload.event() == PageLoadEvent::Finished {
-            ISLAND_WEBVIEW_READY.store(true, Ordering::Release);
-            // A reveal requested while the page was still loading (Windows
-            // gate below) replays now that showing is safe.
-            if ISLAND_PENDING_REVEAL.swap(false, Ordering::AcqRel) {
-                let app = window.app_handle().clone();
-                reveal_recording_island(&app, &window);
+    // The style is fixed per build: detect fresh (on the main thread) so a
+    // settings toggle or a display change takes effect on the next build.
+    refresh_island_notch_geometry(app);
+    let notch = island_notch_geometry();
+    let (compact_width, compact_height) = island_compact_size();
+    let mut url = String::from("index.html?window=recording-island");
+    if notch.is_some() {
+        // The frontend renders its notch variant (opaque black surface
+        // hugging the cutout) off this flag — see `data-island-style`.
+        url.push_str("&style=notch");
+    }
+    let builder = WebviewWindowBuilder::new(app, "recording-island", WebviewUrl::App(url.into()))
+        .title("Lynse Recording Island")
+        .inner_size(compact_width, compact_height)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .resizable(false)
+        .skip_taskbar(true)
+        // The pill renders its own rounded shadow inside the transparent
+        // webview; the system window shadow would trace a rectangle around it.
+        .shadow(false)
+        // Created hidden: `reveal_recording_island` unrolls it at the tray
+        // anchor instead of popping in at full size.
+        .visible(false)
+        .on_page_load(|window, payload| {
+            if payload.event() == PageLoadEvent::Finished {
+                ISLAND_WEBVIEW_READY.store(true, Ordering::Release);
+                // A reveal requested while the page was still loading (Windows
+                // gate below) replays now that showing is safe.
+                if ISLAND_PENDING_REVEAL.swap(false, Ordering::AcqRel) {
+                    let app = window.app_handle().clone();
+                    reveal_recording_island(&app, &window);
+                }
             }
-        }
-    });
+        });
     let window = builder.build()?;
-    // Native frosted glass behind the webview: the pill reads as a translucent
-    // capsule over whatever is on screen, not a solid card.
-    if let Err(error) =
-        crate::window_effects::apply_island_effects(&window, RECORDING_ISLAND_HEIGHT / 2.0)
-    {
-        log::error!("Failed to apply recording island effects: {error}");
+    if notch.is_some() {
+        // No vibrancy behind the notch island on purpose: it paints itself
+        // opaque black so it merges visually with the hardware cutout.
+        if let Err(error) = apply_island_notch_window_config(&window) {
+            log::error!("Failed to configure notch island window: {error}");
+        }
+    } else {
+        // Native frosted glass behind the webview: the pill reads as a
+        // translucent capsule over whatever is on screen, not a solid card.
+        if let Err(error) =
+            crate::window_effects::apply_island_effects(&window, RECORDING_ISLAND_HEIGHT / 2.0)
+        {
+            log::error!("Failed to apply recording island effects: {error}");
+        }
     }
     Ok(window)
 }
 
-/// The island's entrance: snap back to the tray anchor (even if the user
-/// dragged the pill elsewhere previously), show as a thin sliver hugging the
-/// tray, then unroll to full height with the quintic ease — macOS reads it as
-/// the capsule growing out of the status bar (downward), Windows as it
-/// sprouting up from the taskbar tray area. Any in-flight drawer animation is
-/// superseded via the shared generation token.
+/// Notch-mode window configuration: hover at the menu bar's level so the
+/// island coexists with the status items around the cutout, join every space
+/// (it must stay visible over fullscreen apps during a recording) and stay
+/// out of cmd-tab cycling.
+#[cfg(target_os = "macos")]
+fn apply_island_notch_window_config(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    let window = window.clone();
+    window.with_webview(move |webview| unsafe {
+        use objc2_app_kit::{NSStatusWindowLevel, NSWindow, NSWindowCollectionBehavior};
+
+        let window_ptr = webview.ns_window() as *mut NSWindow;
+        if window_ptr.is_null() {
+            return;
+        }
+        let ns_window: &NSWindow = &*window_ptr;
+        ns_window.setLevel(NSStatusWindowLevel);
+        ns_window.setCollectionBehavior(
+            NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::FullScreenAuxiliary
+                | NSWindowCollectionBehavior::Stationary
+                | NSWindowCollectionBehavior::IgnoresCycle,
+        );
+    })?;
+    Ok(())
+}
+
+/// Floating fallback keeps the default configuration (no notch tweaks).
+#[cfg(not(target_os = "macos"))]
+fn apply_island_notch_window_config(_window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    Ok(())
+}
+
+/// The island's entrance: snap back to its anchor (the notch cutout or the
+/// tray — even if the user dragged the pill elsewhere previously), show as a
+/// thin sliver hugging that anchor, then unroll with the quintic ease —
+/// macOS reads it as the capsule growing out of the notch or status bar
+/// (downward), Windows as it sprouting up from the taskbar tray area. Any
+/// in-flight drawer animation is superseded via the shared generation token.
 fn reveal_recording_island(app: &AppHandle, window: &tauri::WebviewWindow) {
     #[cfg(target_os = "windows")]
     if !ISLAND_WEBVIEW_READY.load(Ordering::Acquire) {
@@ -4202,51 +4352,110 @@ fn reveal_recording_island(app: &AppHandle, window: &tauri::WebviewWindow) {
         return;
     }
     position_recording_island(app, window);
-    let bottom_anchor = island_bottom_anchor(app);
+    let anchor = island_anchor(app);
     let scale = window.scale_factor().unwrap_or(1.0);
     let Ok(size) = window.inner_size() else {
         let _ = window.show();
         return;
     };
-    let width = size.width as f64 / scale;
-    // Re-showing while the transcript drawer is open unrolls back to the
-    // expanded height; normally this is the compact pill height.
-    let target_height = (size.height as f64 / scale).max(RECORDING_ISLAND_HEIGHT);
+    let current_height = size.height as f64 / scale;
+    let (compact_width, compact_height) = island_compact_size();
+    // Re-showing while the transcript drawer is open unrolls straight back to
+    // the drawer; otherwise the island returns to its compact size (mini pill
+    // in notch mode, full capsule in floating mode).
+    let drawer_was_open = current_height > RECORDING_ISLAND_HEIGHT + 40.0;
+    let target_size = if drawer_was_open {
+        (RECORDING_ISLAND_WIDTH, RECORDING_ISLAND_EXPANDED_HEIGHT)
+    } else {
+        (compact_width, compact_height)
+    };
     let generation = ISLAND_ANIMATION_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
-    let _ = window.set_size(tauri::LogicalSize::new(width, 12.0));
-    // Bottom-anchored hosts (Windows) must start the sliver at its final
-    // bottom edge, or the first animation frames would jump it downward.
-    keep_island_bottom(window, bottom_anchor);
+    let _ = window.set_size(tauri::LogicalSize::new(target_size.0, 12.0));
+    // Anchored hosts must start the sliver at its final anchor position, or
+    // the first animation frames would jump it sideways/downward.
+    keep_island_anchored(window, target_size.0, anchor);
     let _ = window.show();
     let window = window.clone();
     thread::spawn(move || {
-        animate_island_height(window, target_height, true, generation, bottom_anchor)
+        animate_island_size(&window, target_size, true, generation, anchor)
     });
 }
 
-/// Grows or shrinks the recording-island window between the compact pill and
-/// the expanded live-transcript drawer. The window is tray-anchored, so
-/// expanding unfolds away from the screen edge it is pinned to — downward on
-/// macOS (menu bar), upward on Windows (taskbar). The height change is eased
-/// over ~1/3 of a second (see `animate_island_height`) instead of snapping,
-/// so the drawer reads as a scroll unrolling.
+/// Grows or shrinks the recording-island window across its states: compact
+/// (pill / notch mini), the hover control bar (notch mode only) and the
+/// expanded live-transcript drawer. The window is anchored (tray or notch),
+/// so expanding unfolds away from the screen edge it is pinned to — downward
+/// on macOS, upward on Windows. The change is eased over ~1/3 of a second
+/// (see `animate_island_size`) instead of snapping, so the drawer reads as a
+/// scroll unrolling.
+///
+/// `mode` selects the expanded target: `"controls"` grows the notch island to
+/// the full-width control bar without opening the drawer; anything else (and
+/// the legacy no-argument calls) targets the drawer. Floating islands only
+/// have pill ↔ drawer, so their `"controls"` request just restates the pill.
 #[tauri::command]
-pub fn live_translation_expand_island(app: AppHandle, expand: bool) -> CommandResult<()> {
+pub fn live_translation_expand_island(
+    app: AppHandle,
+    expand: bool,
+    mode: Option<String>,
+) -> CommandResult<()> {
     let Some(window) = app.get_webview_window("recording-island") else {
         return Ok(());
     };
-    let bottom_anchor = island_bottom_anchor(&app);
+    let anchor = island_anchor(&app);
     let generation = ISLAND_ANIMATION_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
-    let target_height = if expand {
-        RECORDING_ISLAND_EXPANDED_HEIGHT
-    } else {
-        RECORDING_ISLAND_HEIGHT
+    let target_size = match (expand, mode.as_deref()) {
+        (false, _) => island_compact_size(),
+        (true, Some("controls")) => (RECORDING_ISLAND_WIDTH, RECORDING_ISLAND_HEIGHT),
+        _ => (RECORDING_ISLAND_WIDTH, RECORDING_ISLAND_EXPANDED_HEIGHT),
     };
     // The animation runs off the command thread and returns immediately, so
     // the frontend can mount the drawer while the window is still unrolling.
     thread::spawn(move || {
-        animate_island_height(window, target_height, expand, generation, bottom_anchor)
+        animate_island_size(&window, target_size, expand, generation, anchor)
     });
+    Ok(())
+}
+
+/// Shrinks the island back to its compact state — the notch mini pill after a
+/// hover leaves it, or the regular pill for floating mode.
+#[tauri::command]
+pub fn live_translation_collapse_island(app: AppHandle) -> CommandResult<()> {
+    let Some(window) = app.get_webview_window("recording-island") else {
+        return Ok(());
+    };
+    let anchor = island_anchor(&app);
+    let target_size = island_compact_size();
+    let generation = ISLAND_ANIMATION_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    thread::spawn(move || {
+        animate_island_size(&window, target_size, false, generation, anchor)
+    });
+    Ok(())
+}
+
+/// Toggles the notch-attached "Dynamic Island" style (settings page). The
+/// preference persists in the frontend and is re-applied on every app launch;
+/// Rust only executes. A visible island is destroyed and rebuilt so the new
+/// style takes effect immediately; a hidden one rebuilds lazily on next use.
+#[tauri::command]
+pub fn live_translation_set_notch_island(app: AppHandle, enabled: bool) -> CommandResult<()> {
+    if ISLAND_NOTCH_MODE.swap(enabled, Ordering::AcqRel) == enabled {
+        return Ok(());
+    }
+    if let Some(window) = app.get_webview_window("recording-island") {
+        let reveal_wanted = ISLAND_REVEAL_WANTED.load(Ordering::Acquire);
+        let _ = window.destroy();
+        if reveal_wanted {
+            // The rebuild picks up the new mode (fresh detection + URL flag).
+            // If the old window has not finished tearing down when the build
+            // task runs, it just reveals — the new style then lands on the
+            // island's next build instead.
+            spawn_recording_island_build(
+                app.clone(),
+                "Failed to rebuild recording island window",
+            );
+        }
+    }
     Ok(())
 }
 
@@ -4361,7 +4570,6 @@ pub fn live_translation_update_tray(app: AppHandle, payload: TrayUpdatePayload) 
             *guard = crate::TrayUiState {
                 recording: payload.recording,
                 paused: payload.paused,
-                elapsed_secs: payload.elapsed_secs,
             };
         }
         if changed {

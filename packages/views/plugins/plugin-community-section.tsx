@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/ui/card";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { openExternalUrl } from "../app-update";
 import {
   catalogComingSoonEntries,
   catalogOverrideFor,
@@ -177,6 +178,16 @@ function PluginRow({
                   onClick={() => onOpenSection(sectionId)}
                 >
                   {t("plugins.action.settings")}
+                </Button>
+              )}
+              {manifest.manageUrl && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs"
+                  onClick={() => openExternalUrl(manifest.manageUrl?.() ?? "")}
+                >
+                  {t("plugins.action.manage")}
                 </Button>
               )}
               <Button

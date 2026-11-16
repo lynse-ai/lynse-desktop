@@ -406,6 +406,7 @@ const ko = {
     bookmark: "위치 북마크",
     hide_to_island: "아일랜드로 숨기기",
     expand: "녹음 화면 펼치기",
+    double_click_hint: "더블클릭으로 녹음 페이지 열기",
     record_title: "실시간 녹음",
     start_recording: "녹음 시작",
     stop_recording: "녹음 중지",
@@ -571,6 +572,9 @@ const ko = {
   },
   settings: {
     context_inbox_title: "선제적 제안",
+    notch_island_title: "다이내믹 아일랜드",
+    notch_island_enable: "녹음 상태를 디스플레이 노치에 표시",
+    notch_island_hint: "녹음 중 화면 상단 노치 아래에 아일랜드 형태로 상태가 표시됩니다. 축소 시 타이머와 파형만 표시되고, 호버하면 조작이 나타나며, 탭하면 실시간 전사가 열립니다. 노치가 없는 디스플레이는 기존 플로팅 바를 사용합니다.",
     context_inbox_enable: "선제적 제안 받기",
     context_inbox_hint: "켜면 클라우드가 동기화된 모든 회의 자료를 지속적으로 분석하여 목표 제안, 후속 작업 및 검토 알림을 알림에 전달합니다. 이 스위치가 곧 권한 부여입니다. 켜면 클라우드 분석을 허용하고, 끄면 분석을 중지하며 진행 중인 결과를 폐기합니다. 이 계정의 모든 기기에 적용됩니다.",
     context_inbox_sign_in: "선제적 제안을 켜려면 로그인하세요.",
@@ -1442,6 +1446,11 @@ local_summary_failed: "심층 요약 생성 실패",
       uninstall: "제거",
       uninstall_confirm: "제거 확인",
       settings: "설정",
+      manage: "관리",
+    },
+    knowledgeBase: {
+      name: "지식 베이스",
+      description: "녹음과 노트를 검색 가능한 지식 위키와 그래프로 자동 정리합니다.",
     },
     workbuddy: {
       name: "WorkBuddy 어시스턴트",
@@ -1450,6 +1459,10 @@ local_summary_failed: "심층 요약 생성 실패",
     feishuBot: {
       name: "Feishu 봇",
       description: "Feishu 채팅에서 질문에 답하고 회의 요약을 그룹으로 전송합니다.",
+    },
+    recordingCardUsb: {
+      name: "녹음 카드 USB",
+      description: "USB를 통해 녹음 카드의 녹음을 관리합니다. Chrome 또는 Edge에서 관리 페이지를 엽니다.",
     },
     models: {
       title: "전사 모델",

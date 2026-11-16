@@ -125,12 +125,16 @@ export function bindThirdPartyPhone(input: {
   thirdPartyId: string;
   phone: string;
   captchaCode: string;
+  /** Backend enum. The web bind form passes it explicitly: the controller
+   *  treats a missing value as PHONE, which fails email binds on intl. */
+  accountType?: "EMAIL" | "PHONE";
 }): Promise<WechatLoginVo> {
   return api().getWithParams<WechatLoginVo>("/api/auth/bind", {
     authType: input.authType,
     thirdPartyId: input.thirdPartyId,
     username: input.phone,
     captchaCode: input.captchaCode,
+    ...(input.accountType ? { accountType: input.accountType } : {}),
   });
 }
 

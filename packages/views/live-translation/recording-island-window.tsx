@@ -42,6 +42,14 @@ export function RecordingIslandWindow() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMounted, setDrawerMounted] = useState(false);
   const closeTimer = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
+  // Notch-attached "Dynamic Island" build: Rust appends `style=notch` when it
+  // detects the display cutout (see `build_recording_island_window`). The
+  // floating-pill variant ignores the hover state entirely.
+  const notchStyle = useMemo(
+    () => new URLSearchParams(window.location.search).get("style") === "notch",
+    [],
+  );
+  const [hoverControls, setHoverControls] = useState(false);
 
   // Point the running session's live cloud connections at `targetLanguage` —
   // "none" attaches pure transcription, a language code attaches translation.
@@ -82,8 +90,22 @@ export function RecordingIslandWindow() {
     [api, view.sessionId, view.epoch, view.sourceLanguage, view.audioSources, t],
   );
 
+  // Notch hover affordances: the window grows to the control bar while the
+  // pointer rests on the island and shrinks back to the mini pill when it
+  // leaves (the debounce itself lives in DynamicIsland).
+  const expandControls = useCallback(() => {
+    setHoverControls(true);
+    void api?.setIslandExpanded(true, "controls").catch(() => {});
+  }, [api]);
+
+  const collapseControls = useCallback(() => {
+    setHoverControls(false);
+    void api?.collapseIsland().catch(() => {});
+  }, [api]);
+
   const collapseDrawer = useCallback(() => {
     setDrawerOpen(false);
+    setHoverControls(false);
     if (closeTimer.current) clearTimeout(closeTimer.current);
     closeTimer.current = setTimeout(() => {
       setDrawerMounted(false);
@@ -98,7 +120,7 @@ export function RecordingIslandWindow() {
     }
     if (closeTimer.current) clearTimeout(closeTimer.current);
     // Grow the window first so the drawer animates into real space.
-    void api?.setIslandExpanded(true).catch(() => {});
+    void api?.setIslandExpanded(true, "drawer").catch(() => {});
     setDrawerMounted(true);
     setDrawerOpen(true);
     // Opening the drawer only shows the transcript the session is already
@@ -193,6 +215,10 @@ export function RecordingIslandWindow() {
         onPause={() => void togglePause()}
         onStop={() => void api?.stop()}
         onExpand={() => void api?.openRecordingPage()}
+        notchStyle={notchStyle}
+        hoverControls={hoverControls}
+        onHoverExpand={expandControls}
+        onHoverCollapse={collapseControls}
       >
         {drawerMounted && (
           <IslandTranscriptDrawer

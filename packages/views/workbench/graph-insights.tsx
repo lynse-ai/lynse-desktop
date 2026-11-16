@@ -19,15 +19,6 @@ export function GraphInsights({ wiki, onSelect, compact = false }: { wiki: Wiki;
   if (!wiki.status?.enabled || !insights) return null;
   const groups: { title: string; hint: string; entries: Entry[] }[] = [
     {
-      title: t("workbench.graph_bridges"),
-      hint: t("workbench.graph_bridges_hint"),
-      entries: insights.bridgeTopics.map(topic => ({
-        id: topic.id,
-        label: topic.title,
-        meta: t("workbench.graph_bridge_meta", { count: topic.communities }),
-      })),
-    },
-    {
       title: t("workbench.graph_isolated"),
       hint: t("workbench.graph_isolated_hint"),
       entries: insights.isolatedTopics.slice(0, compact ? 3 : 8).map(topic => ({

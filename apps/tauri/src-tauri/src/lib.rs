@@ -26,6 +26,9 @@ mod live_translation;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[path = "live_translation_stub.rs"]
 mod live_translation;
+// Display-notch geometry for the macOS recording island (pure helpers + one
+// AppKit probe; compiles everywhere so its tests run on every platform).
+mod island_notch;
 mod logging;
 mod todo_state;
 static TODO_STATE_LOCK: Mutex<()> = Mutex::new(());
@@ -138,7 +141,6 @@ struct AppState {
 struct TrayUiState {
     recording: bool,
     paused: bool,
-    elapsed_secs: u64,
 }
 
 pub(crate) type CommandResult<T> = Result<T, String>;
@@ -4779,7 +4781,6 @@ unsafe fn show_share_sheet(path: &Path) -> CommandResult<bool> {
     Ok(true)
 }
 
-const TRAY_ELAPSED_ID: &str = "tray_elapsed";
 const TRAY_START_ID: &str = "start_live_recording";
 const TRAY_PAUSE_ID: &str = "pause_live_recording";
 const TRAY_STOP_ID: &str = "stop_live_recording";
@@ -4787,33 +4788,15 @@ const TRAY_SHOW_MAIN_ID: &str = "show_main";
 const TRAY_SHOW_SUBTITLES_ID: &str = "show_subtitles";
 const TRAY_QUIT_ID: &str = "quit";
 
-fn format_elapsed(total: u64) -> String {
-    let m = total / 60;
-    let s = total % 60;
-    format!("{:02}:{:02}", m, s)
-}
-
-/// Build the tray menu reflecting the given recording state. The menu
-/// mirrors the native "Dynamic Island" feel: a disabled header shows
-/// elapsed time / status, followed by recording transport controls whose
-/// enabled state tracks whether a session is active.
+/// Build the tray menu reflecting the given recording state: recording
+/// transport controls whose enabled state tracks whether a session is
+/// active. Deliberately no status header — the 🔴 "recording + elapsed"
+/// row read as a clunky emoji blob. The live timer already lives in the
+/// title-bar pill, the floating island, and the tray tooltip.
 fn build_tray_menu(
     app: &AppHandle,
     st: TrayUiState,
 ) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
-    let elapsed_text = if st.recording {
-        let elapsed = format_elapsed(st.elapsed_secs);
-        if st.paused {
-            format!("⏸  已暂停  {elapsed}")
-        } else {
-            format!("🔴  录音中  {elapsed}")
-        }
-    } else {
-        "Lynse".to_string()
-    };
-    let elapsed = MenuItemBuilder::with_id(TRAY_ELAPSED_ID, elapsed_text)
-        .enabled(false)
-        .build(app)?;
     let start = MenuItemBuilder::with_id(TRAY_START_ID, "▶  开启录音")
         .enabled(!st.recording)
         .build(app)?;
@@ -4829,7 +4812,6 @@ fn build_tray_menu(
         MenuItemBuilder::with_id(TRAY_SHOW_SUBTITLES_ID, "▤  显示实时字幕").build(app)?;
     let quit = MenuItemBuilder::with_id(TRAY_QUIT_ID, "⏻  退出 Lynse").build(app)?;
     MenuBuilder::new(app)
-        .item(&elapsed)
         .item(&start)
         .separator()
         .item(&pause)
@@ -5637,6 +5619,8 @@ pub fn run() {
             live_translation::live_translation_hide_main,
             live_translation::live_translation_hide_island,
             live_translation::live_translation_expand_island,
+            live_translation::live_translation_collapse_island,
+            live_translation::live_translation_set_notch_island,
             live_translation::live_translation_update_tray,
             live_translation::live_translation_set_mode,
             live_translation::live_translation_set_sources,

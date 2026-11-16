@@ -6,3 +6,8 @@ export { WechatBindForm } from "./wechat-bind-form";
 export { WechatIcon } from "./wechat-icon";
 export { AppleBindLanding } from "./apple-bind-landing";
 export { AppleFragmentBootstrap } from "./apple-fragment-bootstrap";
+export {
+  PostLoginRedirectMarker,
+  consumePostLoginRedirect,
+  setPostLoginRedirect,
+} from "./post-login-redirect";

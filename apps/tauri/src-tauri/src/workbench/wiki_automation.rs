@@ -703,6 +703,7 @@ fn prepare_catalog<'a>(
     catalog: &mut Catalog,
     docs: &'a [Document],
     config: &Models,
+    dream_time: bool,
 ) -> CatalogPlan<'a> {
     let mut plan = CatalogPlan {
         jobs: Vec::new(),
@@ -711,6 +712,7 @@ fn prepare_catalog<'a>(
         applied: 0,
         failures: 0,
     };
+    let mut deferred_old_jobs = 0usize;
     for doc in docs {
         for text in source_chunks(doc, catalog) {
             let key = catalog_chunk_key(doc, &text, config);
@@ -724,10 +726,22 @@ fn prepare_catalog<'a>(
             } else if let Some(rows) = catalog.chunks.get(&key).cloned() {
                 apply_catalog_sources(topics, catalog, &doc.id, &rows, docs, &mut plan.active);
                 plan.applied += 1;
+            } else if !dream_time && !source_is_recent(doc) {
+                // Dream mode: analysis of older knowledge waits for the
+                // nightly window. Cached and failed bookkeeping above still
+                // runs so topic membership and failure records stay exact.
+                deferred_old_jobs += 1;
             } else {
                 plan.jobs.push(CatalogJob { doc, key, text });
             }
         }
+    }
+    if deferred_old_jobs > 0 {
+        log::info!(
+            "[wiki-run] dream mode: deferring {} analysis chunks of sources older than {} days until 23:00",
+            deferred_old_jobs,
+            DREAM_KNOWLEDGE_AGE_DAYS
+        );
     }
     plan
 }
@@ -739,6 +753,36 @@ fn citations_key(value: &Value) -> Vec<Value> {
         .flatten()
         .map(|reference| json!([reference["id"], reference["kind"], reference["quote"]]))
         .collect()
+}
+
+/// Knowledge older than this many days is organized in dream mode only.
+const DREAM_KNOWLEDGE_AGE_DAYS: i64 = 30;
+/// Dream window in local time when older knowledge is organized.
+const DREAM_WINDOW_START_HOUR: u32 = 23;
+const DREAM_WINDOW_END_HOUR: u32 = 7;
+
+fn is_dream_time_hour(hour: u32) -> bool {
+    hour >= DREAM_WINDOW_START_HOUR || hour < DREAM_WINDOW_END_HOUR
+}
+
+/// Whether the pipeline is inside the nightly dream window (23:00–07:00).
+fn is_dream_time() -> bool {
+    is_dream_time_hour(chrono::Timelike::hour(&chrono::Local::now()))
+}
+
+/// Whether a document carries knowledge from the last 30 days, judged by its
+/// creation date. Documents without a parsable creation date count as older:
+/// dream mode never loses them, they just wait for the nightly window.
+fn source_is_recent(doc: &Document) -> bool {
+    let Some(date) = doc.created_at.get(..10) else {
+        return false;
+    };
+    let Ok(day) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") else {
+        return false;
+    };
+    let cutoff =
+        chrono::Local::now().date_naive() - chrono::Duration::days(DREAM_KNOWLEDGE_AGE_DAYS);
+    day >= cutoff
 }
 
 fn source_content_key(id: &str, kind: &str, title: &str, text: &str, config: &Models) -> String {
@@ -1701,7 +1745,7 @@ pub(super) async fn run(
         let mut values = topics(&root)?;
         // Restore cached identities and source links in one pass without
         // re-entering the model queue or reporting analysis for cached text.
-        let plan = prepare_catalog(&mut values, &mut catalog, &docs, &config);
+        let plan = prepare_catalog(&mut values, &mut catalog, &docs, &config, is_dream_time());
         save_topics(&root, &values)?;
         write_json(&catalog_path(&root), &catalog)?;
         plan
@@ -1917,6 +1961,40 @@ pub(super) async fn run(
             }
         })
         .collect();
+    // Dream mode keeps daytime capacity on the freshest knowledge: topics
+    // whose sources are all older than 30 days wait for the nightly window
+    // (23:00–07:00). During the window recent topics still run first and the
+    // older backlog follows.
+    let dream_time = is_dream_time();
+    let mut deferred_old_topics = 0usize;
+    let mut pending = {
+        let is_recent =
+            |(_, selected, _): &(Topic, Vec<Document>, String)| selected.iter().any(source_is_recent);
+        if dream_time {
+            let (recent, old): (Vec<_>, Vec<_>) = pending.into_iter().partition(is_recent);
+            if !old.is_empty() {
+                log::info!(
+                    "[wiki-run] dream mode active: {} recent topics first, then {} older than {} days",
+                    recent.len(),
+                    old.len(),
+                    DREAM_KNOWLEDGE_AGE_DAYS
+                );
+            }
+            recent.into_iter().chain(old).collect::<Vec<_>>()
+        } else {
+            let before = pending.len();
+            let kept: Vec<_> = pending.into_iter().filter(|entry| is_recent(entry)).collect();
+            deferred_old_topics = before - kept.len();
+            if deferred_old_topics > 0 {
+                log::info!(
+                    "[wiki-run] dream mode: deferring {} topics older than {} days until 23:00",
+                    deferred_old_topics,
+                    DREAM_KNOWLEDGE_AGE_DAYS
+                );
+            }
+            kept
+        }
+    };
     let had_work = !jobs.is_empty() || !pending.is_empty();
     let mut topic_failures_run = 0usize;
     // Compile requests run in waves so a first-run backlog uses the shared

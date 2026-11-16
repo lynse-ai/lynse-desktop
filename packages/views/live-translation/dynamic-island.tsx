@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
 import { ChevronDown, Maximize2, Pause, Play, Square, X } from "../icons";
@@ -9,6 +9,11 @@ import { AudioSourceControls } from "./audio-source-controls";
 import { recordingLevel } from "./audio-sources";
 import { AudioVisualizer } from "./audio-visualizer";
 import { useLiveTranslation } from "./use-live-translation";
+
+/** Hover debounce in notch mode: how long the pointer must rest on the
+ * island before it grows to the control bar — and how long it must stay off
+ * before shrinking back to the mini pill. Mirrors the MacIsland timing. */
+const HOVER_DELAY_MS = 150;
 
 interface DynamicIslandProps {
   /** Called when user taps the close/dismiss button. */
@@ -23,6 +28,18 @@ interface DynamicIslandProps {
   drawerOpen?: boolean;
   /** Called when user taps the transcript toggle. Absent hides the toggle. */
   onToggleDrawer?: () => void;
+  /** Notch-attached island (macOS "Dynamic Island"): opaque black surface
+   * merging with the hardware cutout — square top corners, rounded bottom.
+   * Collapsed it shrinks to a mini pill (dot + timer + waveform); hovering
+   * reveals the control bar via `hoverControls`. */
+  notchStyle?: boolean;
+  /** Notch mode: the pointer is on the island, so the full control bar
+   * shows. Ignored outside notch style (floating islands always show it). */
+  hoverControls?: boolean;
+  /** Notch mode: hover settled on the island — grow to the control bar. */
+  onHoverExpand?: () => void;
+  /** Notch mode: hover left the island — shrink back to the mini pill. */
+  onHoverCollapse?: () => void;
   /** Live-transcript drawer content rendered beneath the pill row. */
   children?: ReactNode;
   className?: string;
@@ -39,6 +56,10 @@ interface DynamicIslandProps {
  * Tauri window (see `.island-surface` in the app's globals.css), so the pill
  * reads as translucent glass over whatever is on screen.
  *
+ * In notch style the window is pinned to the display's hardware cutout and
+ * paints opaque black instead — dark tokens are forced for the window, so
+ * every control keeps its contrast on the black surface.
+ *
  * Auto-syncs the system tray tooltip via `live_translation_update_tray`.
  */
 export function DynamicIsland({
@@ -48,6 +69,10 @@ export function DynamicIsland({
   onExpand,
   drawerOpen,
   onToggleDrawer,
+  notchStyle,
+  hoverControls,
+  onHoverExpand,
+  onHoverCollapse,
   children,
   className,
 }: DynamicIslandProps) {
@@ -90,14 +115,45 @@ export function DynamicIsland({
     return () => clearTimeout(handle);
   }, [api, recording, paused, view.elapsedMs]);
 
+  // Notch hover state machine: enter arms the grow timer, leaving arms the
+  // shrink timer; the shared handle means re-entering cancels a pending
+  // collapse (and vice versa), so quick pointer crossings never flicker.
+  const hoverTimer = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(hoverTimer.current), []);
+  const clearHoverTimer = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = undefined;
+  };
+  const handleHoverStart = () => {
+    if (!notchStyle || drawerOpen || hoverControls) return;
+    clearHoverTimer();
+    hoverTimer.current = setTimeout(() => onHoverExpand?.(), HOVER_DELAY_MS);
+  };
+  const handleHoverEnd = () => {
+    if (!notchStyle || !hoverControls || drawerOpen) return;
+    clearHoverTimer();
+    hoverTimer.current = setTimeout(() => onHoverCollapse?.(), HOVER_DELAY_MS);
+  };
+
+  // Floating islands always show every control; the notch island collapses
+  // to the mini pill until the pointer (or an open drawer) summons them.
+  const showAllControls = !notchStyle || hoverControls || drawerOpen;
+
   if (!recording && !paused) return null;
 
   return (
     <div
       className={cn(
-        "island-surface flex h-full w-full flex-col overflow-hidden rounded-[22px] border border-border/50",
+        "island-surface flex h-full w-full flex-col overflow-hidden",
+        notchStyle
+          ? // Opaque black merging with the hardware cutout: square top corners
+            // (the notch itself is square), full-round bottom capsule.
+            "rounded-b-[22px] rounded-t-none bg-neutral-950"
+          : "rounded-[22px] border border-border/50",
         className,
       )}
+      onMouseEnter={notchStyle ? handleHoverStart : undefined}
+      onMouseLeave={notchStyle ? handleHoverEnd : undefined}
     >
       {/* Pill row — the entire collapsed island */}
       <div
@@ -123,7 +179,7 @@ export function DynamicIsland({
           {fmt(view.elapsedMs)}
         </span>
 
-        <AudioSourceControls compact />
+        {showAllControls && <AudioSourceControls compact />}
 
         {/* Mini live waveform — the same wave the expanded drawer shows in its
             footer, shrunk to a sliver: just enough to read "recording" at a
@@ -137,62 +193,64 @@ export function DynamicIsland({
           />
         </div>
 
-        {/* Controls */}
-        <div className="ml-auto flex items-center gap-0.5">
-          {onToggleDrawer && (
-            <button
-              type="button"
-              onClick={onToggleDrawer}
-              aria-label={drawerLabel}
-              title={drawerLabel}
-              className={cn(
-                "flex size-6 items-center justify-center rounded-full transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-muted hover:text-foreground active:scale-[0.96]",
-                drawerOpen ? "text-primary" : "text-muted-foreground",
-              )}
-            >
-              {/* Disclosure arrow: points down while collapsed ("pull the
-                  transcript open"), flips up once the drawer is expanded. */}
-              <ChevronDown
+        {/* Controls (hidden on the notch mini pill until hover) */}
+        {showAllControls && (
+          <div className="ml-auto flex items-center gap-0.5">
+            {onToggleDrawer && (
+              <button
+                type="button"
+                onClick={onToggleDrawer}
+                aria-label={drawerLabel}
+                title={drawerLabel}
                 className={cn(
-                  "size-4 transition-transform duration-200",
-                  drawerOpen && "rotate-180",
+                  "flex size-6 items-center justify-center rounded-full transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-muted hover:text-foreground active:scale-[0.96]",
+                  drawerOpen ? "text-primary" : "text-muted-foreground",
                 )}
-              />
-            </button>
-          )}
-          {onExpand && (
+              >
+                {/* Disclosure arrow: points down while collapsed ("pull the
+                    transcript open"), flips up once the drawer is expanded. */}
+                <ChevronDown
+                  className={cn(
+                    "size-4 transition-transform duration-200",
+                    drawerOpen && "rotate-180",
+                  )}
+                />
+              </button>
+            )}
+            {onExpand && (
+              <button
+                type="button"
+                onClick={onExpand}
+                aria-label={t("recording_mode.expand")}
+                title={t("recording_mode.expand")}
+                className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-muted hover:text-foreground active:scale-[0.96]"
+              >
+                <Maximize2 className="size-3" />
+              </button>
+            )}
             <button
               type="button"
-              onClick={onExpand}
-              aria-label={t("recording_mode.expand")}
-              title={t("recording_mode.expand")}
+              onClick={onPause}
+              aria-label={paused ? t("recording_mode.resume") : t("recording_mode.pause")}
               className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-muted hover:text-foreground active:scale-[0.96]"
             >
-              <Maximize2 className="size-3" />
+              <IconSwap stateKey={paused ? "play" : "pause"}>
+                {paused ? <Play className="size-3" /> : <Pause className="size-3" />}
+              </IconSwap>
             </button>
-          )}
-          <button
-            type="button"
-            onClick={onPause}
-            aria-label={paused ? t("recording_mode.resume") : t("recording_mode.pause")}
-            className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-muted hover:text-foreground active:scale-[0.96]"
-          >
-            <IconSwap stateKey={paused ? "play" : "pause"}>
-              {paused ? <Play className="size-3" /> : <Pause className="size-3" />}
-            </IconSwap>
-          </button>
-          <button
-            type="button"
-            onClick={onStop}
-            aria-label={t("recording_mode.stop_recording")}
-            className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-destructive/10 hover:text-destructive active:scale-[0.96]"
-          >
-            <Square className="size-3" />
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={onStop}
+              aria-label={t("recording_mode.stop_recording")}
+              className="flex size-6 items-center justify-center rounded-full text-muted-foreground transition-[color,background-color,transform] duration-(--duration-quick) hover:bg-destructive/10 hover:text-destructive active:scale-[0.96]"
+            >
+              <Square className="size-3" />
+            </button>
+          </div>
+        )}
 
         {/* Dismiss (only if handler provided — e.g. mini-player mode) */}
-        {onDismiss && (
+        {onDismiss && showAllControls && (
           <button
             type="button"
             onClick={onDismiss}

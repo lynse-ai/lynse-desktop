@@ -87,6 +87,10 @@ export interface PluginManifest {
   /** Environment gate on top of `platforms` (e.g. a desktop bridge being
    * present). Mirrors the `getDesktop*Api() != null` idiom. */
   availability?: () => boolean;
+  /** Optional web management console URL. When the plugin is installed and
+   * enabled, the community row shows a manage button that opens this URL in
+   * the system browser (Lynse Web runs the actual management page). */
+  manageUrl?: () => string;
   lifecycle?: PluginLifecycle;
   /** One-shot upgrade probe: runs once when no plugin state is persisted yet;
    * returning true seeds the plugin as installed + enabled (PRD §6). Must be

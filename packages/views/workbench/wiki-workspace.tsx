@@ -114,9 +114,13 @@ export function WikiWorkspace() {
     return <section className="space-y-4" aria-label={t("workbench.auto_recent")}>
       <h2 className="text-base font-semibold">{t("workbench.auto_recent")}</h2>
       {!rows.length && <p className="text-sm leading-relaxed text-muted-foreground">{t("workbench.auto_no_changes")}</p>}
-      <div className="space-y-5">
-        {rows.slice(0, topic ? historyCount : 5).map(change => <div key={`${change.topicId}:${change.id}`} className="space-y-2 border-s-2 border-primary/20 ps-4">
-          <p className="text-xs text-muted-foreground">{date(change.createdAt)}</p>
+        <div className="space-y-5">
+          {rows.slice(0, topic ? historyCount : 5).map((change, changeIndex, list) => <div key={`${change.topicId}:${change.id}`} className="relative space-y-2 ps-4">
+            {/* Dashed connector between rings: 5px breathing room on both ends
+                (space-y-5 gap + dot offsets keep the gaps symmetric). */}
+            {changeIndex < list.length - 1 && <span aria-hidden="true" className="absolute start-[-2px] top-[18px] bottom-[-18px] border-s-2 border-dashed border-primary/20" />}
+            <span aria-hidden="true" className="absolute start-[-6px] top-[3px] size-2.5 rounded-full border-2 border-primary/40 bg-background" />
+            <p className="text-xs text-muted-foreground">{date(change.createdAt)}</p>
           {!topic && <button type="button" className="text-start text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-ring" onClick={() => {
             const target = topics.find(item => item.id === change.topicId);
             if (target) openLinkedTopic(target);
@@ -217,10 +221,14 @@ export function WikiWorkspace() {
   return <><TitleBarSlot middleToggle={!reading && topics.length ? { collapsed: !browse.previewOpen, onToggle: () => update({ previewOpen: !browse.previewOpen }), label: t("workbench.auto_toggle_preview"), side: "right" } : undefined} />
   <div className={`@container flex min-w-0 flex-1 flex-col ${!reading && topics.length && view === "graph" ? "min-h-96" : "min-h-0"}`} aria-label={t("workbench.auto_workspace")}>
     {!topics.length ? <div className="mx-auto flex min-h-80 max-w-lg flex-col items-center justify-center gap-3 px-5 text-center"><Network className="size-8 text-primary" aria-hidden="true" /><h2 className="text-base font-semibold">{t("workbench.auto_empty")}</h2><p className="text-sm leading-relaxed text-muted-foreground">{t("workbench.auto_empty_hint")}</p><CreateWikiTopic wiki={wiki} onCreated={id => navigation.replace(`/memory?tab=wiki&view=catalog&topic=${encodeURIComponent(id)}`)} /><Button size="sm" variant="outline" onClick={() => navigation.replace("/memory?tab=settings")}>{t("workbench.auto_settings")}</Button></div> : <>
-      <div className={reading ? "hidden" : `grid min-w-0 ${browse.previewOpen ? "shrink-0 gap-6 @min-[52rem]:min-h-0 @min-[52rem]:flex-1 @min-[52rem]:grid-cols-[minmax(0,1fr)_clamp(19rem,36cqw,26rem)]" : "min-h-0 flex-1"}`}>
+      <div className={reading ? "hidden" : `grid min-w-0 min-h-0 flex-1 grid-auto-rows-[1fr] ${browse.previewOpen ? "gap-6 @min-[52rem]:grid-cols-[minmax(0,1fr)_clamp(19rem,36cqw,26rem)]" : ""}`}>
         <section className="flex min-h-0 min-w-0 flex-col" aria-label={t(view === "graph" ? "workbench.graph_title" : "workbench.auto_catalog")}>
           <div className={view === "graph" ? "flex min-h-96 flex-1 flex-col" : "hidden"}>
-            <KnowledgeGraphScene fill nodes={graph.nodes.slice(0, 40)} edges={graph.edges} selection={selected ? `wiki:${selected.id}` : null} onSelect={select} nodeLabel={item => item.title} initialCamera={browse.camera ?? { ...DEFAULT_GRAPH_CAMERA, mode: "3d" }} onCameraChange={cameraChanged} colorOf={colorOf} viewKey={scope} />
+            {/* Floor for the canvas: the scene is flex-basis 0, so without a
+                minimum the insights card below can shrink it to zero height. */}
+            <div className="flex min-h-96 flex-1 flex-col">
+              <KnowledgeGraphScene fill nodes={graph.nodes.slice(0, 40)} edges={graph.edges} selection={selected ? `wiki:${selected.id}` : null} onSelect={select} nodeLabel={item => item.title} initialCamera={browse.camera ?? { ...DEFAULT_GRAPH_CAMERA, mode: "3d" }} onCameraChange={cameraChanged} colorOf={colorOf} viewKey={scope} />
+            </div>
             <div className="flex shrink-0 flex-wrap items-center gap-2 pt-2">
               {!!communities.size && <Button size="sm" variant={communityMode ? "secondary" : "ghost"} aria-pressed={communityMode} onClick={() => setCommunityMode(value => !value)}>{t("workbench.graph_by_community")}</Button>}
               {graph.nodes.length > 40 && <Button size="sm" variant="ghost" onClick={() => navigation.replace("/memory?tab=wiki&view=catalog")}>{t("workbench.auto_more_topics", { count: graph.nodes.length - 40 })}</Button>}
@@ -232,10 +240,10 @@ export function WikiWorkspace() {
         {!reading && browse.previewOpen && <aside
           ref={previewRef}
           tabIndex={0}
-          className="min-h-0 min-w-0 border-t border-border pt-5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring @min-[52rem]:overflow-y-auto @min-[52rem]:overscroll-y-contain @min-[52rem]:border-s @min-[52rem]:border-t-0 @min-[52rem]:ps-6 @min-[52rem]:pt-0"
+          className="min-h-0 min-w-0 border-t border-border pt-5 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring @min-[52rem]:border-s @min-[52rem]:border-t-0 @min-[52rem]:ps-6 @min-[52rem]:pt-0"
           aria-label={t("workbench.auto_preview")}
         >
-          {selected ? renderTopic(selected) : <><GraphInsights wiki={wiki} onSelect={select} compact />{timeline()}</>}
+          {selected ? renderTopic(selected) : timeline()}
         </aside>}
       </div>
       {reading && selected && renderTopic(selected)}

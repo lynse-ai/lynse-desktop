@@ -61,7 +61,7 @@ function formatPillTimer(ms: number): string {
  */
 export function RecordingTitleBarPill() {
   const { t } = useTranslation();
-  const { pathname } = useNavigation();
+  const { pathname, push } = useNavigation();
   const {
     available,
     recording,
@@ -116,13 +116,23 @@ export function RecordingTitleBarPill() {
         />
       )}
 
-      {/* Elapsed time — freezes while paused / saving. */}
-      <SmoothTimer
-        elapsedMs={elapsedMs}
-        running={!paused && !stopping}
-        format={formatPillTimer}
-        className="min-w-[3ch] text-center font-mono text-xs font-semibold tabular-nums"
-      />
+      {/* Elapsed time — freezes while paused / saving. Double-click returns
+          to the recording page; a real button so the title bar's
+          double-click-to-maximize handler skips it (it bails on button
+          targets) and the timer stays clickable instead of a drag region. */}
+      <button
+        type="button"
+        onDoubleClick={() => push("/recording")}
+        title={t("recording_mode.double_click_hint")}
+        className="flex cursor-pointer items-center"
+      >
+        <SmoothTimer
+          elapsedMs={elapsedMs}
+          running={!paused && !stopping}
+          format={formatPillTimer}
+          className="min-w-[3ch] text-center font-mono text-xs font-semibold tabular-nums"
+        />
+      </button>
 
       <button
         type="button"

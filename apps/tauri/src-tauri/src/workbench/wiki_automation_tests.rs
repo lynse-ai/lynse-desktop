@@ -1641,3 +1641,31 @@ fn local_compiler_citation_regression() {
     write_json(&fixture.join("fixed-compiler-request.json"), &payload).unwrap();
     fs::remove_dir_all(local).unwrap();
 }
+
+#[test]
+fn dream_mode_classifies_recent_and_old_sources_by_creation_date() {
+    let mut recent = doc("dream-recent", "work");
+    recent.created_at = (chrono::Local::now() - chrono::Duration::days(2))
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    let mut old = doc("dream-old", "work");
+    old.created_at = (chrono::Local::now() - chrono::Duration::days(60))
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    assert!(source_is_recent(&recent));
+    assert!(!source_is_recent(&old));
+    old.created_at.clear();
+    assert!(!source_is_recent(&old));
+    old.created_at = "not-a-date".into();
+    assert!(!source_is_recent(&old));
+}
+
+#[test]
+fn dream_window_covers_the_overnight_range() {
+    assert!(!is_dream_time_hour(22));
+    assert!(is_dream_time_hour(23));
+    assert!(is_dream_time_hour(0));
+    assert!(is_dream_time_hour(6));
+    assert!(!is_dream_time_hour(7));
+    assert!(!is_dream_time_hour(12));
+}

@@ -300,10 +300,6 @@ export function KnowledgeGraphScene({ nodes, edges, selection, onSelect, nodeLab
         <p className="break-words font-medium">{nodeLabel(previewNode)}</p><p className="mt-1 text-muted-foreground">{t("workbench.graph_connections", { count: degree.get(previewNode.id) ?? 0 })}</p>
       </div>}
     </div>
-    <div className="shrink-0 space-y-1 px-3 py-2">
-      <p className="text-xs leading-relaxed text-muted-foreground">{t(simple ? "workbench.auto_graph_hint" : mode === "3d" ? "workbench.graph_gestures_3d" : "workbench.graph_gestures")}</p>
-      {mode === "3d" && connections.length > visibleEdges.length && <p role="status" className="text-xs text-muted-foreground">{t("workbench.graph_edge_budget", { shown: visibleEdges.length, total: connections.length })}</p>}
-    </div>
   </div>;
   return <Dialog open={expanded} onOpenChange={open => { stop(); setHovered(null); setFocused(null); setExpanded(open); }}>
     {!expanded && scene}

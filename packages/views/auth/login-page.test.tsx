@@ -183,6 +183,7 @@ describe("desktop WeChat sign-in", () => {
     expect(bind.origin).toBe("https://gapp.lynse.cn");
     expect(Object.fromEntries(bind.searchParams)).toEqual({
       thirdPartyId: "scan-openid", username: "13800000000", captchaCode: "123456", authType: "WECHAT_SCAN",
+      accountType: "PHONE",
     });
     expect(auth.getState().user?.id).toBe("unified-customer");
     const { api } = await import("@lynse/core/api");

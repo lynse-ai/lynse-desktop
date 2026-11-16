@@ -181,7 +181,7 @@ fn cached_catalog_restores_merged_source_links_without_scheduling_analysis() {
         .insert(cached_key(&docs[1], &config), vec![merged]);
     let mut values = Vec::new();
 
-    let plan = prepare_catalog(&mut values, &mut catalog, &docs, &config);
+    let plan = prepare_catalog(&mut values, &mut catalog, &docs, &config, true);
 
     assert!(plan.jobs.is_empty());
     assert_eq!(plan.applied, 2);
@@ -226,7 +226,7 @@ fn mixed_catalog_schedules_only_new_text_and_retains_failed_source_evidence() {
         .chunks
         .insert(failed_key.clone(), vec![catalog_row(&docs[2], None)]);
 
-    let plan = prepare_catalog(&mut values, &mut catalog, &docs, &config);
+    let plan = prepare_catalog(&mut values, &mut catalog, &docs, &config, true);
 
     assert_eq!(plan.jobs.len(), 1);
     assert_eq!(plan.jobs[0].doc.id, "new");
@@ -283,7 +283,7 @@ fn repeated_cached_replay_preserves_published_history_and_completed_versions() {
     let original_catalog = serde_json::to_value(&catalog).unwrap();
 
     for _ in 0..3 {
-        let plan = prepare_catalog(&mut values, &mut catalog, &docs, &config);
+        let plan = prepare_catalog(&mut values, &mut catalog, &docs, &config, true);
         assert!(plan.jobs.is_empty());
         reconcile_sources(&mut values, &plan.active, &plan.failed_sources, &docs);
         assert_eq!(serde_json::to_value(&values).unwrap(), original_topics);
@@ -333,7 +333,7 @@ fn an_adopted_cloud_payload_schedules_no_model_work_and_keeps_membership() {
     restored_catalog.identities = serde_json::from_value(payload["identities"].clone()).unwrap();
     assert_eq!(restored[0].last_fingerprint, version);
 
-    let plan = prepare_catalog(&mut restored, &mut restored_catalog, &docs, &config);
+    let plan = prepare_catalog(&mut restored, &mut restored_catalog, &docs, &config, true);
     assert!(plan.jobs.is_empty(), "adopted chunks must not re-extract");
     assert_eq!(plan.applied, 2);
     assert_eq!(
@@ -365,7 +365,7 @@ fn cached_empty_catalog_result_remains_a_completed_analysis() {
         .insert(cached_key(&docs[0], &config), Vec::new());
     let mut values = Vec::new();
 
-    let plan = prepare_catalog(&mut values, &mut catalog, &docs, &config);
+    let plan = prepare_catalog(&mut values, &mut catalog, &docs, &config, true);
 
     assert!(plan.jobs.is_empty());
     assert_eq!(plan.applied, 1);

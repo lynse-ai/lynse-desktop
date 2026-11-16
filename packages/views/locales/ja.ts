@@ -407,6 +407,7 @@ const ja = {
     bookmark: "位置をブックマーク",
     hide_to_island: "アイランドに隠す",
     expand: "録音画面を開く",
+    double_click_hint: "ダブルクリックで録音ページを開く",
     record_title: "リアルタイム録音",
     start_recording: "録音を開始",
     stop_recording: "録音を停止",
@@ -572,6 +573,9 @@ const ja = {
   },
   settings: {
     context_inbox_title: "能動的な提案",
+    notch_island_title: "ダイナミックアイランド",
+    notch_island_enable: "録音ステータスをノッチに表示",
+    notch_island_hint: "録音中、画面上部のノッチ下にアイランド型でステータスを表示します。収縮時はタイマーと波形のみ、ホバーで操作を展開、タップでリアルタイム文字起こしを開きます。ノッチのないディスプレイでは従来のフローティングバーを使用します。",
     context_inbox_enable: "能動的な提案を受け取る",
     context_inbox_hint: "オンにすると、同期済みのすべての会議資料をクラウドが継続的に分析し、目標の提案、フォローアップ、振り返りのリマインダーを「通知」に届けます。このスイッチが許可そのものです。オンでクラウド分析を許可し、オフで分析を停止して進行中の結果を破棄します。設定はこのアカウントのすべての端末に適用されます。",
     context_inbox_sign_in: "能動的な提案を有効にするにはログインしてください。",
@@ -1443,6 +1447,11 @@ local_summary_failed: "詳細要約の生成に失敗しました",
       uninstall: "アンインストール",
       uninstall_confirm: "アンインストール確認",
       settings: "設定",
+      manage: "管理",
+    },
+    knowledgeBase: {
+      name: "ナレッジベース",
+      description: "録音とノートを検索可能なナレッジ Wiki とグラフに自動で整理します。",
     },
     workbuddy: {
       name: "WorkBuddy アシスタント",
@@ -1451,6 +1460,10 @@ local_summary_failed: "詳細要約の生成に失敗しました",
     feishuBot: {
       name: "Feishu ボット",
       description: "Feishu チャットで質問に答え、会議のまとめをグループへ送信します。",
+    },
+    recordingCardUsb: {
+      name: "録音カード USB",
+      description: "USB 経由で録音カード内の録音を管理します。Chrome または Edge で管理ページを開きます。",
     },
     models: {
       title: "文字起こしモデル",

@@ -47,6 +47,7 @@ import { SttSettingsSection } from "./stt-settings-section";
 import { LiveTranslationConfigCard } from "./live-translation-config-card";
 import { RecordingDevicesCard } from "./recording-devices-card";
 import { AutoRecordConfigCard } from "./auto-record-config-card";
+import { IslandConfigCard } from "./island-config-card";
 import { VaultConfigCard } from "./vault-config-card";
 import { WebdavSyncConfigCard } from "./webdav-sync-config-card";
 import { AgentServerCard } from "./agent-server-card";
@@ -190,6 +191,7 @@ export function SettingsDialogContent({
       content: (
         <div className="space-y-4">
           <LiveTranslationConfigCard />
+          <IslandConfigCard />
           <RecordingDevicesCard />
         </div>
       ),

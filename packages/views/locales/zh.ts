@@ -403,6 +403,7 @@ const zh = {
     bookmark: "标记",
     hide_to_island: "隐藏到灵动岛",
     expand: "展开录音界面",
+    double_click_hint: "双击跳转到录音页",
     record_title: "实时录音",
     start_recording: "开始录音",
     stop_recording: "停止录音",
@@ -568,6 +569,9 @@ const zh = {
   },
   settings: {
     context_inbox_title: "主动建议",
+    notch_island_title: "灵动岛",
+    notch_island_enable: "录音状态贴合刘海显示",
+    notch_island_hint: "录音时在屏幕顶部刘海下方以灵动岛形式显示状态：收起时只显示计时与波形，悬停展开操作，点击打开实时转写。不带刘海的显示器会自动使用经典悬浮条。",
     context_inbox_enable: "接收主动建议",
     context_inbox_hint: "开启后，云端将持续分析你已同步的全部会议资料，生成目标建议、跟进和复盘提醒，在「通知」中查看。这个开关就是授权：开启即授权云端分析，关闭即停止云端分析并作废进行中的结果，对本账号的所有设备生效。",
     context_inbox_sign_in: "登录后可开启主动建议。",
@@ -1437,6 +1441,11 @@ local_summary_failed: "深度总结生成失败",
       uninstall: "卸载",
       uninstall_confirm: "确认卸载",
       settings: "设置",
+      manage: "管理",
+    },
+    knowledgeBase: {
+      name: "知识库",
+      description: "把录音与笔记自动整理成可检索的知识库与图谱。",
     },
     workbuddy: {
       name: "WorkBuddy 助手",
@@ -1445,6 +1454,10 @@ local_summary_failed: "深度总结生成失败",
     feishuBot: {
       name: "飞书机器人",
       description: "在飞书群聊中回答问题，并把会议总结推送到你的群里。",
+    },
+    recordingCardUsb: {
+      name: "录音卡 USB",
+      description: "通过 USB 管理录音卡内的录音——在 Chrome 或 Edge 中打开管理页。",
     },
     models: {
       title: "转写模型",

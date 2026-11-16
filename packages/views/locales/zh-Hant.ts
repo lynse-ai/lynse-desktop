@@ -403,6 +403,7 @@ const zhHant = {
     bookmark: "標記",
     hide_to_island: "隱藏到靈動島",
     expand: "展開錄音介面",
+    double_click_hint: "雙擊跳轉到錄音頁",
     record_title: "即時錄音",
     start_recording: "開始錄音",
     stop_recording: "停止錄音",
@@ -568,6 +569,9 @@ const zhHant = {
   },
   settings: {
     context_inbox_title: "主動建議",
+    notch_island_title: "靈動島",
+    notch_island_enable: "錄音狀態貼合劉海顯示",
+    notch_island_hint: "錄音時在螢幕頂部劉海下方以靈動島形式顯示狀態：收起時只顯示計時與波形，懸停展開操作，點擊開啟即時轉寫。不帶劉海的顯示器會自動使用經典懸浮條。",
     context_inbox_enable: "接收主動建議",
     context_inbox_hint: "開啟後，雲端將持續分析你已同步的全部會議資料，產生目標建議、跟進與復盤提醒，在「通知」中查看。這個開關就是授權：開啟即授權雲端分析，關閉即停止雲端分析並作廢進行中的結果，對本帳號的所有裝置生效。",
     context_inbox_sign_in: "登入後可開啟主動建議。",
@@ -1437,6 +1441,11 @@ local_summary_failed: "深度總結生成失敗",
       uninstall: "解除安裝",
       uninstall_confirm: "確認解除安裝",
       settings: "設定",
+      manage: "管理",
+    },
+    knowledgeBase: {
+      name: "知識庫",
+      description: "把錄音與筆記自動整理成可檢索的知識庫與圖譜。",
     },
     workbuddy: {
       name: "WorkBuddy 助手",
@@ -1445,6 +1454,10 @@ local_summary_failed: "深度總結生成失敗",
     feishuBot: {
       name: "飛書機器人",
       description: "在飛書群聊中回答問題，並把會議總結推送到你的群裡。",
+    },
+    recordingCardUsb: {
+      name: "錄音卡 USB",
+      description: "透過 USB 管理錄音卡內的錄音——在 Chrome 或 Edge 中開啟管理頁。",
     },
     models: {
       title: "轉寫模型",

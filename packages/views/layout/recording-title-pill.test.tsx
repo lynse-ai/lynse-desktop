@@ -12,6 +12,7 @@ import { RecordingTitleBarPill, useRecordingPillVisible } from "./recording-titl
  */
 const mocks = vi.hoisted(() => ({
   pathname: "/",
+  push: vi.fn(),
   quick: {
     available: true,
     recording: false,
@@ -30,7 +31,7 @@ vi.mock("../live-translation/quick-recording", () => ({
 }));
 
 vi.mock("../navigation", () => ({
-  useNavigation: () => ({ pathname: mocks.pathname }),
+  useNavigation: () => ({ pathname: mocks.pathname, push: mocks.push }),
 }));
 
 vi.mock("@lynse/core/i18n/react", () => ({
@@ -64,6 +65,7 @@ beforeEach(() => {
   mocks.quick.lastError = undefined;
   mocks.quick.togglePause.mockClear();
   mocks.quick.stop.mockClear();
+  mocks.push.mockClear();
 });
 
 afterEach(cleanup);
@@ -142,5 +144,14 @@ describe("RecordingTitleBarPill", () => {
 
     fireEvent.click(screen.getByTitle("recording_mode.stop_recording"));
     expect(mocks.quick.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("jumps to the recording page on a timer double-click", () => {
+    mocks.quick.recording = true;
+    mocks.quick.elapsedMs = 24_000;
+    renderPill();
+
+    fireEvent.doubleClick(screen.getByText("00:24"));
+    expect(mocks.push).toHaveBeenCalledWith("/recording");
   });
 });

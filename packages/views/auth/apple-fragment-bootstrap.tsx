@@ -3,16 +3,21 @@
 import { useEffect } from "react";
 import { useAuthStore } from "@lynse/core/auth";
 import { sessionFromAppleFragment } from "@lynse/core/auth/apple";
+import { useNavigation } from "../navigation";
+import { consumePostLoginRedirect } from "./post-login-redirect";
 
 /**
  * Apple web login success landing: the backend 302s to web-success-url with
  * the session in the URL fragment (`#token=…&expireIn=…`). Fragments never
  * reach any server, so the client parses them here — before AuthGate can
  * bounce an unauthenticated visitor back to the login page — signs in, and
- * scrubs the token out of the address bar history.
+ * scrubs the token out of the address bar history. A standalone page (e.g.
+ * the recording-card manager) may have parked its path before the Apple
+ * round trip; when present, the user continues there instead of home.
  */
 export function AppleFragmentBootstrap() {
   const completeLogin = useAuthStore((s) => s.completeLogin);
+  const { replace } = useNavigation();
   useEffect(() => {
     if (typeof window === "undefined") return;
     const hash = window.location.hash;
@@ -22,6 +27,8 @@ export function AppleFragmentBootstrap() {
     if (!token) return;
     window.history.replaceState(null, "", window.location.pathname + window.location.search);
     completeLogin(sessionFromAppleFragment(token));
-  }, [completeLogin]);
+    const redirect = consumePostLoginRedirect();
+    if (redirect) replace(redirect);
+  }, [completeLogin, replace]);
   return null;
 }

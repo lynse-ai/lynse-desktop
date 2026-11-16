@@ -53,6 +53,10 @@ skills-lock.json
 apps/tauri/src-tauri/resources/sidecars/
 apps/tauri/audio-capture/.build/
 
+# Assistant avatar GIFs mirrored from apps/tauri/public by next.config.ts —
+# never committed, single source of truth stays in the desktop app.
+apps/web/public/
+
 # Python bytecode (MLX / FunASR bridge scripts)
 __pycache__/
 *.pyc

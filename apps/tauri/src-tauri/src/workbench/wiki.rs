@@ -1434,6 +1434,26 @@ async fn send_synthesis(
     send_synthesis_report(client, endpoint, token, body, &mut report, check_current).await
 }
 
+/// Transport grace below which a failed request cannot have been processed
+/// upstream: even the shortest synthesis call outlives it, so an error that
+/// lands this fast (a refused connect, a reused pooled socket that had died)
+/// means the provider never received the request.
+pub(super) const SYNTHESIS_TRANSPORT_GRACE: std::time::Duration =
+    std::time::Duration::from_secs(3);
+
+/// Whether a failed request may still be running on the provider. Connect
+/// failures never established a connection and near-instant transport deaths
+/// never submitted one, so both are known not-submitted outcomes that a
+/// heartbeat may resubmit without double-charging completed work. Response
+/// timeouts and mid-flight cuts keep the conservative unknown outcome.
+pub(super) fn transport_may_have_submitted(
+    is_connect: bool,
+    is_timeout: bool,
+    waited: std::time::Duration,
+) -> bool {
+    !is_connect && (is_timeout || waited >= SYNTHESIS_TRANSPORT_GRACE)
+}
+
 async fn send_synthesis_report(
     client: &reqwest::Client,
     endpoint: &str,
@@ -1445,16 +1465,28 @@ async fn send_synthesis_report(
     let mut correction_attempted = false;
     for attempt in 0..2 {
         check_current()?;
-        let response = match client
-            .post(endpoint)
-            .header("Authorization", token)
-            .json(&body)
-            .send()
-            .await
-        {
-            Ok(response) => response,
-            Err(_) => {
-                return Err("Model outcome is unknown; retry explicitly".into());
+        let response = {
+            let started = std::time::Instant::now();
+            match client
+                .post(endpoint)
+                .header("Authorization", token)
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(response) => response,
+                Err(error)
+                    if !transport_may_have_submitted(
+                        error.is_connect(),
+                        error.is_timeout(),
+                        started.elapsed(),
+                    ) =>
+                {
+                    return Err(tasks::NOT_SUBMITTED.into());
+                }
+                Err(_) => {
+                    return Err(tasks::UNKNOWN.to_string());
+                }
             }
         };
         let status = response.status().as_u16();
@@ -2270,7 +2302,14 @@ pub(super) async fn run(
         // These orchestration futures contain very large state. Keep their
         // coroutine state on the heap so nested model-task work does not
         // exhaust the runtime worker stack.
-        Box::pin(automation::run(app, state, session)).await?;
+        // A silent pass abort discards every in-flight model call in its
+        // waves, so the stop reason must land in the log next to "pass
+        // started" for every restart the heartbeat schedules.
+        if let Err(error) = Box::pin(automation::run(app, state, session)).await {
+            log::warn!("[wiki-run] pass aborted: {error}");
+            return Err(error);
+        }
+        log::info!("[wiki-run] pass completed");
         Box::pin(hierarchy::run(app, state, session)).await?;
         if publish_memory_events(app, state, session).await.is_err() {
             log::warn!("[knowledge-memory] candidate dispatch pending; Wiki publication preserved");
@@ -3155,7 +3194,7 @@ pub async fn workbench_wiki(
     let source_dates = page_sources.dates(&values);
     require_current(&state, &session)?;
     Ok(
-        json!({"topics":items,"sourceDates":source_dates,"hierarchy":hierarchy::status(&root)?,"sourceFailures":automation::source_failures(&root)?,"syncConflicts":cloud::conflicts(&app, &session).unwrap_or_default(),"models":config,"sources":super::sources::config(&app,&session)?,"graph":graph,"topicGraph":topic_graph,"automation":manifest.wiki_automation,"purpose":manifest.purpose,"createdTopicId":created_topic_id}),
+        json!({"topics":items,"sourceDates":source_dates,"hierarchy":hierarchy::status(&root)?,"sourceFailures":automation::source_failures(&root, &automation::documents(&local, &manifest), &config)?,"syncConflicts":cloud::conflicts(&app, &session).unwrap_or_default(),"models":config,"sources":super::sources::config(&app,&session)?,"graph":graph,"topicGraph":topic_graph,"automation":manifest.wiki_automation,"purpose":manifest.purpose,"createdTopicId":created_topic_id}),
     )
 }
 
@@ -3185,6 +3224,28 @@ mod tests {
         assert!(!tolerate_compilation_failure(
             "Insufficient evidence must not contain factual output"
         ));
+    }
+    #[test]
+    fn transport_failures_that_cannot_have_reached_the_provider_are_not_unknown_outcomes() {
+        let grace = SYNTHESIS_TRANSPORT_GRACE;
+        // Connect failures never established a connection, however long they took.
+        assert!(!transport_may_have_submitted(true, false, grace));
+        assert!(!transport_may_have_submitted(true, true, grace));
+        // Response timeouts did submit; an upstream model may still be running.
+        assert!(transport_may_have_submitted(false, true, grace));
+        assert!(transport_may_have_submitted(
+            false,
+            true,
+            std::time::Duration::from_millis(10)
+        ));
+        // An instant non-timeout death (a reused pooled socket that had died)
+        // never submitted; later mid-flight cuts stay conservative.
+        assert!(!transport_may_have_submitted(
+            false,
+            false,
+            std::time::Duration::from_millis(10)
+        ));
+        assert!(transport_may_have_submitted(false, false, grace));
     }
     #[test]
     fn page_validation_sees_the_compiler_markdown_filtered_documents() {

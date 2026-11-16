@@ -14,12 +14,19 @@ BUNDLE=/tmp/lynse-web-bundle
 rsync -a apps/web/.next/standalone/ "$BUNDLE"/
 mkdir -p "$BUNDLE/apps/web/.next"
 cp -R apps/web/.next/static "$BUNDLE/apps/web/.next/static"
+# 小灵助手头像 GIF：next.config.ts 已把 apps/tauri/public/assistant 镜像到
+# apps/web/public/assistant；standalone 不会自带 public/，必须手动带上
+# （next 会按 basePath 前缀在 /app/assistant/ 下伺服）。
+mkdir -p "$BUNDLE/apps/web"
+cp -R apps/web/public "$BUNDLE/apps/web/public"
 
 # 3. 部署（rsync → docker compose → nginx 幂等注入 → 健康检查）
 deploy/www-lynse-ai/deploy.sh "$BUNDLE"
 ```
 
 前置：`ssh tencent` 别名（`ubuntu@43.130.12.243`，密钥 `~/.ssh/lynseWbEd25519.pem`）与免密 sudo（与 `scripts/deploy-revelspark.sh` 同模式，RevelSpark 仓库）。
+
+发版后验证小灵助手头像：`curl -s -o /dev/null -w "%{http_code}\n" https://www.lynse.ai/app/assistant/default.gif` 应为 200（2026-11-16 曾因 bundle 不带 public/ 全线 404，图标裂图）。
 
 ## nginx 行为
 

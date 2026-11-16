@@ -12,6 +12,7 @@ import { useTheme } from "@lynse/ui/components/common/theme-provider";
 import { useAppUpdate, getAppInfoSync } from "../app-update";
 import { openAboutWindow } from "../about/open-about";
 import { openFeatureRequests, openReportProblem } from "../diagnostics";
+import { reportProblemShortcutLabel } from "./report-problem-shortcut";
 import { openChangelog } from "../feedback/open-feedback";
 import { useUserCredits, useMembership, useUpdateNickname } from "./use-user-credits";
 import { UserActivityHeatmap } from "./user-activity-heatmap";
@@ -20,6 +21,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -293,6 +295,7 @@ export function UserProfileDropdown({
         <DropdownMenuItem onClick={openReportProblem}>
           <Bug className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_help_feedback")}</span>
+          <DropdownMenuShortcut>{reportProblemShortcutLabel}</DropdownMenuShortcut>
         </DropdownMenuItem>
 
         {/* ── Feature suggestions — the in-app FeedLog center ── */}

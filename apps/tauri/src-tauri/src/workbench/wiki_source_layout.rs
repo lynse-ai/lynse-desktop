@@ -19,13 +19,22 @@ fn split(text: &str, previous: &[String]) -> Vec<String> {
     result
 }
 
-pub(super) fn prepare(root: &Path, doc: &Document) -> CommandResult<Vec<String>> {
+/// The chunks the pass would process right now, without persisting anything.
+/// Status rendering compares recorded failure keys against this key space, so
+/// it must match `prepare` exactly while leaving the anchor file untouched.
+pub(super) fn chunks(root: &Path, doc: &Document) -> CommandResult<Vec<String>> {
     let path = root
         .join("source-layouts")
         .join(format!("{}.json", store::digest(&doc.id)));
     let previous: Vec<String> = read_json(&path)?;
-    let text = doc.text();
-    let chunks = split(text.trim(), &previous);
+    Ok(split(doc.text().trim(), &previous))
+}
+
+pub(super) fn prepare(root: &Path, doc: &Document) -> CommandResult<Vec<String>> {
+    let chunks = chunks(root, doc)?;
+    let path = root
+        .join("source-layouts")
+        .join(format!("{}.json", store::digest(&doc.id)));
     write_json(&path, &chunks)?;
     Ok(chunks)
 }

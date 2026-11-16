@@ -3,7 +3,8 @@
   "globalEnv": [
     "NEXT_PUBLIC_API_URL",
     "NEXT_PUBLIC_WS_URL",
-    "DESKTOP_RENDERER_PORT"
+    "DESKTOP_RENDERER_PORT",
+    "LYNSE_WIKI_CONCURRENCY"
   ],
   "tasks": {
     "build": {

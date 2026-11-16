@@ -297,13 +297,15 @@ pub(super) async fn execute(
     reuse: bool,
     generate: impl std::future::Future<Output = CommandResult<Value>>,
 ) -> CommandResult<Value> {
-    // HTTP has its own 100 second budget; this catches authorization locks,
-    // stream decoding, and other future-level stalls without masking success.
+    // Slow reasoning providers legitimately run 3–6 minutes on evidence-heavy
+    // compiles (measured 105–175 s on memory_extract alone); this only needs
+    // to catch future-level stalls (authorization locks, stream decoding)
+    // without masking success, so it sits far above legitimate call time.
     execute_budgeted(
         root,
         key,
         reuse,
-        std::time::Duration::from_secs(180),
+        std::time::Duration::from_secs(480),
         generate,
     )
     .await

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ApiError } from "@lynse/core/api";
+import { memoryRequestErrorKey } from "./memory-errors";
 import { memoryApi, memoryOperationId, type MemoryFileDocument, type MemoryFileMember, type MemoryPreview, type ForgetPreview, type ForgetStatus } from "@lynse/core/api/memory";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
@@ -21,7 +22,10 @@ function errorKey(error: unknown): string {
   if (text.includes("english_title_required") || text.includes("English file title")) return "file_english_title";
   if (text.includes("file_structure_changed") || text.includes("section separators") || text.includes("deletion preview")) return "file_structure";
   if (text.includes("file_too_large") || text.includes("Move files into a folder")) return "file_too_large";
-  return error instanceof ApiError && error.status === 409 ? "changed" : "failed";
+  if (error instanceof ApiError && error.status === 409) return "changed";
+  // Session rotation and infrastructure failures get precise wording instead
+  // of the generic unfinished-operation fallback.
+  return memoryRequestErrorKey(error) ?? "failed";
 }
 
 function Sources({ members }: { members: MemoryFileMember[] }) {
@@ -99,6 +103,7 @@ export function TopicMemoryLibrary({ account }: { account: string }) {
   function preview(ids: string[], forget: boolean) {
     const operation = memoryOperationId();
     const contents = [...doc.data?.members ?? [], ...doc.data?.pendingUpdates ?? []];
+    setFailure("");
     action.mutate(async () => {
       const frozen = forget ? await memoryApi.previewForget(ids, operation) : await memoryApi.previewConfirmation(ids, operation);
       setReview({ preview: frozen, contents });
@@ -169,7 +174,7 @@ export function TopicMemoryLibrary({ account }: { account: string }) {
       {form?.action === "split" && <div className="max-h-56 space-y-3 overflow-y-auto">{[...form.base?.members ?? [], ...form.base?.pendingUpdates ?? []].map(member => <label key={member.id} className="flex gap-3 rounded-lg border border-border p-3 text-sm"><input type="checkbox" checked={sections.includes(member.id)} onChange={event => setSections(current => event.target.checked ? [...current, member.id] : current.filter(id => id !== member.id))} /><span className="whitespace-pre-wrap">{member.content}</span></label>)}</div>}
       {failure && <p role="alert" className="text-sm text-destructive">{failure}</p>}<div className="flex justify-end gap-2"><Button type="button" variant="ghost" disabled={busy} onClick={() => setForm(null)}>{t("memory_manager.cancel")}</Button><Button type="submit" disabled={busy || (form?.action !== "move" && form?.action !== "merge" && !name.trim()) || (form?.action === "merge" && (!destination.data || destination.isFetching)) || (form?.action === "split" && (!sections.length || sections.length >= (form.base?.recordIds.length ?? 0)))}>{t("memory_manager.file_save")}</Button></div>
     </form></DialogContent></Dialog>
-    <Dialog open={!!review} onOpenChange={open => { if (!open && !busy) setReview(null); }}><DialogContent><DialogHeader><DialogTitle>{t(review && "plan_id" in review.preview ? "memory_manager.file_delete_title" : "memory_manager.file_confirm_updates")}</DialogTitle><DialogDescription>{t(review && "plan_id" in review.preview ? "memory_manager.forget_hint" : "memory_manager.confirm_hint", { count: review?.preview.items.length ?? 0 })}</DialogDescription></DialogHeader>{review && "plan_id" in review.preview && !!review.preview.affected_file_paths?.length && <p className="text-sm">{t("memory_manager.file_affected_files", { files: review.preview.affected_file_paths.map(path => { const file = files.data?.files.find(item => item.path === path); return file ? `${file.title}.md` : t("memory_manager.related_memory"); }).join(" · ") })}</p>}<ul className="max-h-64 space-y-3 overflow-y-auto text-sm">{review?.preview.items.map(item => <li key={item.id}>{review.contents.find(member => member.id === item.id && member.revision === item.revision)?.content ?? t("memory_manager.related_memory")}</li>)}</ul><div className="flex justify-end gap-2"><Button variant="ghost" disabled={busy} onClick={() => setReview(null)}>{t("memory_manager.cancel")}</Button><Button disabled={busy} onClick={() => {
+    <Dialog open={!!review} onOpenChange={open => { if (!open && !busy) setReview(null); }}><DialogContent><DialogHeader><DialogTitle>{t(review && "plan_id" in review.preview ? "memory_manager.file_delete_title" : "memory_manager.file_confirm_updates")}</DialogTitle><DialogDescription>{t(review && "plan_id" in review.preview ? "memory_manager.forget_hint" : "memory_manager.confirm_hint", { count: review?.preview.items.length ?? 0 })}</DialogDescription></DialogHeader>{failure && <p role="alert" className="text-sm text-destructive">{failure}</p>}{review && "plan_id" in review.preview && !!review.preview.affected_file_paths?.length && <p className="text-sm">{t("memory_manager.file_affected_files", { files: review.preview.affected_file_paths.map(path => { const file = files.data?.files.find(item => item.path === path); return file ? `${file.title}.md` : t("memory_manager.related_memory"); }).join(" · ") })}</p>}<ul className="max-h-64 space-y-3 overflow-y-auto text-sm">{review?.preview.items.map(item => <li key={item.id}>{review.contents.find(member => member.id === item.id && member.revision === item.revision)?.content ?? t("memory_manager.related_memory")}</li>)}</ul><div className="flex justify-end gap-2"><Button variant="ghost" disabled={busy} onClick={() => setReview(null)}>{t("memory_manager.cancel")}</Button><Button disabled={busy} onClick={() => {
       if (!review) return;
       const frozen = review.preview;
       const operation = memoryOperationId();

@@ -8,9 +8,9 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
 import { isTauri, isMacDesktop } from "./use-maximized";
 import { WindowControls, showWindowControls } from "./window-controls";
-import { ArrowLeft, ArrowRight, Bug, PanelLeft, PanelRight } from "../icons";
+import { ArrowLeft, ArrowRight, PanelLeft, PanelRight } from "../icons";
 import { RecordingTitleBarPill, useRecordingPillVisible } from "./recording-title-pill";
-import { openReportProblem } from "../diagnostics";
+import { useReportProblemShortcut } from "./report-problem-shortcut";
 import { isWebPlatform } from "../platform";
 import { DESKTOP_SIDEBAR_WIDTH, WEB_SIDEBAR_WIDTH } from "./sidebar-metrics";
 
@@ -120,6 +120,7 @@ export function AppTitleBar() {
   // pad their right edge so long text truncates instead of sliding under the
   // pill. Center-aligned titles (the chat switcher) are compact and stay put.
   const pillVisible = useRecordingPillVisible();
+  useReportProblemShortcut();
 
   // While a page's middle panel (chat history drawer, notes file list) is
   // open, the bar mirrors the content split below it: the left cluster
@@ -225,16 +226,11 @@ export function AppTitleBar() {
         <RecordingTitleBarPill />
       </div>
 
-      {/* The report shortcut below is permanent, so the closing divider is
-          always drawn — pages without right-side controls no longer leave the
-          title zone running to the window edge. */}
-      <ZoneDivider />
+      {/* ── Right: page actions (same 2px optical correction). The old bug
+            button moved to ⌘⇧B + the profile/sidebar menus, so the closing
+            divider only renders when the zone actually has content. ── */}
+      {(slotActions || middleToggle?.side === "right") && <ZoneDivider />}
 
-      {/* ── Right: page actions (same 2px optical correction), then the
-            permanent report shortcut. The shortcut lives here rather than in
-            the sidebar menu because secondary pages (recording detail, notes,
-            workbench) cover or crowd the sidebar; the title bar is visible on
-            every route. ── */}
       <div
         className="flex shrink-0 translate-y-0.5 items-center gap-1"
         data-tauri-drag-region={false}
@@ -251,9 +247,6 @@ export function AppTitleBar() {
             <PanelRight className="size-4" />
           </BarButton>
         )}
-        <BarButton label={t("settings.report_issue")} onClick={openReportProblem}>
-          <Bug className="size-4" />
-        </BarButton>
       </div>
 
       {showWindowControls && <WindowControls />}

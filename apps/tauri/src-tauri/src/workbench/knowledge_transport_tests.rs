@@ -112,14 +112,13 @@ impl Drop for Server {
 }
 fn transport() -> Transport {
     let transport = Transport::default();
-    assert!(transport
-        .client
-        .set(Ok(reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap()))
-        .is_ok());
+    // The cache is a Mutex<Option<..>> now so connect failures can drop it;
+    // tests seed it the same way the lazy builder would.
+    *transport.client.lock().unwrap() = Some(Ok(reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()));
     transport
 }
 fn binding() -> Value {
@@ -347,4 +346,42 @@ async fn transport_errors_include_safe_phase_codes_and_do_not_expose_request_det
             && !error.contains("private-test-token")
             && !error.contains("127.0.0.1")
     );
+}
+
+#[test]
+fn connect_failure_streak_rebuilds_the_client_and_success_resets_the_streak() {
+    let transport = Transport::default();
+    transport.client().unwrap();
+    assert!(transport.client.lock().unwrap().is_some());
+    for _ in 1..CONNECT_FAILURE_REBUILD_THRESHOLD {
+        transport.note_connect_failure();
+    }
+    assert!(transport.client.lock().unwrap().is_some());
+    transport.note_connect_success();
+    assert_eq!(*transport.connect_failures.lock().unwrap(), 0);
+    for _ in 0..CONNECT_FAILURE_REBUILD_THRESHOLD {
+        transport.note_connect_failure();
+    }
+    assert!(transport.client.lock().unwrap().is_none());
+    transport.client().unwrap();
+    assert!(transport.client.lock().unwrap().is_some());
+}
+
+#[tokio::test]
+async fn on_wire_connect_failures_count_toward_the_rebuild_streak() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let transport = transport();
+    let mut session = Server::start(|_| (200, binding(), None)).session();
+    session.agent_url = url;
+    let error = transport
+        .request(&session, "/capabilities", None, None, || Ok(()))
+        .await
+        .unwrap_err();
+    assert!(error.contains("stage: identity_binding") && error.contains("reason: connect"));
+    // The attempt plus its single read retry were both refused; still below
+    // the rebuild threshold, so one bad request never drops the cached client.
+    assert_eq!(*transport.connect_failures.lock().unwrap(), 2);
+    assert!(transport.client.lock().unwrap().is_some());
 }

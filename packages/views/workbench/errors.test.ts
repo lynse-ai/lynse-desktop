@@ -16,6 +16,7 @@ describe("Wiki failure recovery guidance", () => {
     ["Lynclaw authentication failed; sign in again", "account"],
     ["Cloud knowledge identity verification failed", "account"],
     ["Cloud knowledge offline", "connection"],
+    ["Model endpoint could not be reached before submission", "connection"],
     ["Cloud knowledge request failed (HTTP 503)", "connection"],
     ["Cloud knowledge request failed (HTTP 429)", "connection"],
     ["Cloud knowledge request failed (HTTP 404)", "model"],

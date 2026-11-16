@@ -199,6 +199,39 @@ pub(super) async fn retry_pending_policy(app: &AppHandle, session: &Session) -> 
     }
 }
 
+/// Recently granted eligibility per (user, purpose, source, revision). The
+/// automation re-authorizes the same sources for every compile task, so a
+/// short cache turns hundreds of repeated network calls into one per TTL
+/// window and shields the pipeline from server flaps. Account and consent
+/// changes still abort runs immediately through `require_current`; only a
+/// per-source grant revocation can lag by up to this TTL.
+static ELIGIBILITY_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::BTreeMap<(String, String, String, String), std::time::Instant>>,
+> = std::sync::OnceLock::new();
+const ELIGIBILITY_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
+fn eligibility_cache() -> CommandResult<
+    std::sync::MutexGuard<'static, std::collections::BTreeMap<(String, String, String, String), std::time::Instant>>,
+> {
+    ELIGIBILITY_CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .map_err(|_| "Cloud knowledge unavailable".to_owned())
+}
+
+fn eligibility_key(
+    session: &Session,
+    doc: &Document,
+    purpose: &str,
+) -> (String, String, String, String) {
+    (
+        session.user_id.clone(),
+        purpose.to_owned(),
+        source_id(&doc.id),
+        doc.revision.clone(),
+    )
+}
+
 pub(super) async fn authorize(
     app: &AppHandle,
     session: &Session,
@@ -210,6 +243,18 @@ pub(super) async fn authorize(
         .any(|doc| crate::inspiration_private::source_is_protected(app, &doc.id))
     {
         return Err("Encrypted inspirations are unavailable to AI".into());
+    }
+    {
+        let cache = eligibility_cache()?;
+        let now = std::time::Instant::now();
+        let fresh = |doc: &Document| {
+            cache
+                .get(&eligibility_key(session, doc, purpose))
+                .is_some_and(|granted| now.duration_since(*granted) < ELIGIBILITY_TTL)
+        };
+        if documents.iter().all(fresh) {
+            return Ok(());
+        }
     }
     let sources: Vec<_> = documents
         .iter()
@@ -243,6 +288,13 @@ pub(super) async fn authorize(
         return Err(
             "A source is outside the current cloud policy or stopped from automatic use".into(),
         );
+    }
+    {
+        let mut cache = eligibility_cache()?;
+        let now = std::time::Instant::now();
+        for doc in documents {
+            cache.insert(eligibility_key(session, doc, purpose), now);
+        }
     }
     Ok(())
 }

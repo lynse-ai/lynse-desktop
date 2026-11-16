@@ -1137,16 +1137,20 @@ fn failed_catalog_preserves_saved_source_links_and_does_not_compile_partial_topi
 fn catalog_failures_keep_actionable_diagnostics_until_a_successful_retry() {
     let root = root();
     let source = doc("failed-source", "work");
+    let other = doc("other-source", "work");
+    let config = Models::default();
+    let current = format!("{}:0", input_key(&source, &config));
+    let citation_key = format!("{}:0", input_key(&other, &config));
     let mut catalog = Catalog::default();
     record_failure(
         &mut catalog,
-        "chunk:0",
+        &current,
         &source,
         "Cloud knowledge identity verification failed",
     );
     catalog.chunks.insert("completed:0".into(), vec![]);
     write_json(&catalog_path(&root), &catalog).unwrap();
-    let failures = source_failures(&root).unwrap();
+    let failures = source_failures(&root, &[source.clone(), other.clone()], &config).unwrap();
     assert_eq!(failures[0]["sourceId"], source.id);
     assert_eq!(
         failures[0]["message"],
@@ -1157,7 +1161,7 @@ fn catalog_failures_keep_actionable_diagnostics_until_a_successful_retry() {
     let catalog: Catalog = read_json(&catalog_path(&root)).unwrap();
     assert!(catalog.failed.is_empty());
     assert!(catalog.chunks.contains_key("completed:0"));
-    let queued = source_failures(&root).unwrap();
+    let queued = source_failures(&root, &[source.clone(), other.clone()], &config).unwrap();
     assert_eq!(failures[0]["retrying"], false);
     assert_eq!(queued[0]["retrying"], true);
     assert_eq!(queued[0]["message"], failures[0]["message"]);
@@ -1173,9 +1177,9 @@ fn catalog_failures_keep_actionable_diagnostics_until_a_successful_retry() {
         true,
     );
     let mut catalog: Catalog = read_json(&catalog_path(&root)).unwrap();
-    record_failure(&mut catalog, "citation:1", &source, &annotated);
+    record_failure(&mut catalog, &citation_key, &other, &annotated);
     write_json(&catalog_path(&root), &catalog).unwrap();
-    let details = serde_json::to_value(&catalog.details["citation:1"]).unwrap();
+    let details = serde_json::to_value(&catalog.details[&citation_key]).unwrap();
     assert_eq!(
         details["message"],
         "Citation does not match source evidence"
@@ -1184,15 +1188,53 @@ fn catalog_failures_keep_actionable_diagnostics_until_a_successful_retry() {
     assert_eq!(details["validation"]["citationIssue"]["citationIndex"], 1);
     assert!(!details.to_string().contains("PRIVATE_MODEL_QUOTE"));
     assert_eq!(
-        source_failures(&root)
+        source_failures(&root, &[source, other], &config)
             .unwrap()
             .as_array()
             .unwrap()
             .iter()
-            .find(|row| row["id"] == "citation:1")
+            .find(|row| row["id"] == citation_key)
             .unwrap()["retrying"],
         false
     );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rechunked_sources_drop_superseded_failures_from_the_attention_list() {
+    let root = root();
+    let source = doc("rechunked", "work");
+    let config = Models::default();
+    let current = format!("{}:0", input_key(&source, &config));
+    let mut catalog = Catalog::default();
+    // A ghost from an older chunking: the key is no longer produced, and the
+    // source already succeeded under the current key.
+    record_failure(&mut catalog, "superseded:0", &source, tasks::UNKNOWN);
+    catalog.chunks.insert(current.clone(), vec![]);
+    // A live failure on the current key stays visible.
+    record_failure(
+        &mut catalog,
+        &current,
+        &source,
+        "Cloud knowledge offline",
+    );
+    write_json(&catalog_path(&root), &catalog).unwrap();
+    let rows = source_failures(&root, &[source.clone()], &config)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .to_vec();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], current);
+    assert_eq!(rows[0]["retrying"], false);
+    retry(&root).unwrap();
+    let rows = source_failures(&root, &[source], &config)
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .to_vec();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["retrying"], true);
     fs::remove_dir_all(root).unwrap();
 }
 

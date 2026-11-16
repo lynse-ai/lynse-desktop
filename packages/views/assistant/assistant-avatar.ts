@@ -2,6 +2,11 @@
 
 import { useEffect, useState } from "react";
 
+// Browser package without @types/node; declared the same way as
+// about-content.tsx. Next inlines the NEXT_PUBLIC member expression at build
+// time, and the desktop (Vite) runtime never has `process` at all.
+declare const process: { env: Record<string, string | undefined> } | undefined;
+
 export interface AssistantAvatarDef {
   /** Stable identifier, also used as the persistence key value. */
   id: string;
@@ -12,16 +17,29 @@ export interface AssistantAvatarDef {
 }
 
 /**
+ * Public asset URLs must respect the web deployment's base path — the web app
+ * serves under e.g. https://www.lynse.cn/app/, and a raw root-relative <img>
+ * src would bypass that prefix and 404. Next inlines the literal NEXT_PUBLIC
+ * member expression at build time; the desktop (Vite) runtime has no
+ * `process`, so the typeof guard keeps root-relative paths there (same idiom
+ * as about-content.tsx).
+ */
+export function publicAssetUrl(path: string): string {
+  const base = (typeof process !== "undefined" && process.env.NEXT_PUBLIC_BASE_PATH) || "";
+  return `${base}${path}`;
+}
+
+/**
  * The Lynse desktop AI assistant IP images. Each entry is one of the mascot
  * GIFs shipped in `apps/tauri/public/assistant/`. The first entry is the
  * default appearance.
  */
 export const ASSISTANT_AVATARS: AssistantAvatarDef[] = [
-  { id: "default", i18nKey: "avatar_default", src: "/assistant/default.gif" },
-  { id: "star-hat", i18nKey: "avatar_star_hat", src: "/assistant/star-hat.gif" },
-  { id: "gentleman-hat", i18nKey: "avatar_gentleman_hat", src: "/assistant/gentleman-hat.gif" },
-  { id: "bow", i18nKey: "avatar_bow", src: "/assistant/bow.gif" },
-  { id: "beret", i18nKey: "avatar_beret", src: "/assistant/beret.gif" },
+  { id: "default", i18nKey: "avatar_default", src: publicAssetUrl("/assistant/default.gif") },
+  { id: "star-hat", i18nKey: "avatar_star_hat", src: publicAssetUrl("/assistant/star-hat.gif") },
+  { id: "gentleman-hat", i18nKey: "avatar_gentleman_hat", src: publicAssetUrl("/assistant/gentleman-hat.gif") },
+  { id: "bow", i18nKey: "avatar_bow", src: publicAssetUrl("/assistant/bow.gif") },
+  { id: "beret", i18nKey: "avatar_beret", src: publicAssetUrl("/assistant/beret.gif") },
 ];
 
 const FALLBACK = ASSISTANT_AVATARS[0]!;

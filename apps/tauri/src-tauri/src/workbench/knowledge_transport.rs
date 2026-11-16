@@ -6,13 +6,21 @@ use std::{
 
 const REQUEST_BUDGET: Duration = Duration::from_secs(35);
 const BINDING_TTL: Duration = Duration::from_secs(240);
+/// Connect failures tolerated before rebuilding the cached client. A single
+/// refused connection can be an isolated hiccup; a streak means the cached
+/// client keeps dialing a proxy/port that died after it was built.
+const CONNECT_FAILURE_REBUILD_THRESHOLD: u32 = 3;
 
 #[derive(Default)]
 pub(super) struct Transport {
     // Mutable instead of OnceLock: the cached client snapshots the system
     // proxy at build time, and a VPN/proxy toggled off later must not pin
     // every cloud lane to a dead port for the rest of the process lifetime.
+    // A connect-failure streak forces a rebuild (see
+    // CONNECT_FAILURE_REBUILD_THRESHOLD); isolated failures keep the pooled
+    // connections warm.
     client: Mutex<Option<Result<reqwest::Client, String>>>,
+    connect_failures: Mutex<u32>,
     binding: tokio::sync::Mutex<Option<(String, Instant)>>,
     cooldown: Mutex<Option<(String, Instant, String)>>,
 }
@@ -112,6 +120,23 @@ impl Transport {
         }
     }
 
+    fn note_connect_success(&self) {
+        if let Ok(mut failures) = self.connect_failures.lock() {
+            *failures = 0;
+        }
+    }
+
+    fn note_connect_failure(&self) {
+        let Ok(mut failures) = self.connect_failures.lock() else {
+            return;
+        };
+        *failures += 1;
+        if *failures >= CONNECT_FAILURE_REBUILD_THRESHOLD {
+            *failures = 0;
+            self.drop_client();
+        }
+    }
+
     async fn send(
         &self,
         call: reqwest::RequestBuilder,
@@ -154,6 +179,9 @@ impl Transport {
                     remaining
                 });
             let response = call.send().await;
+            if response.is_ok() {
+                self.note_connect_success();
+            }
             check()?;
             let error = match response {
                 Ok(response) if response.status().is_success() => {
@@ -212,10 +240,7 @@ impl Transport {
                 }
                 Err(error) => {
                     if error.is_connect() {
-                        // Instant connect refusals usually mean the cached
-                        // client still points at a system proxy that has gone
-                        // away; rebuild against the current environment.
-                        self.drop_client();
+                        self.note_connect_failure();
                     }
                     let message = connection_error(&error, stage);
                     log::warn!(
@@ -313,12 +338,23 @@ impl Transport {
         } else {
             call
         };
-        let response = call
+        let response = match call
             .header("Authorization", &session.token)
             .timeout(deadline.saturating_duration_since(Instant::now()))
             .send()
             .await
-            .map_err(|error| connection_error(&error, "meeting_publication"))?;
+        {
+            Ok(response) => {
+                self.note_connect_success();
+                response
+            }
+            Err(error) => {
+                if error.is_connect() {
+                    self.note_connect_failure();
+                }
+                return Err(connection_error(&error, "meeting_publication"));
+            }
+        };
         let status = response.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
             let mut binding = self.binding.lock().await;

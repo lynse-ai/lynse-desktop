@@ -16,6 +16,11 @@ BUNDLE=/tmp/lynse-cn-prod-bundle
 rsync -a apps/web/.next/standalone/ "$BUNDLE"/
 mkdir -p "$BUNDLE/apps/web/.next"
 cp -R apps/web/.next/static "$BUNDLE/apps/web/.next/static"
+# 小灵助手头像 GIF：next.config.ts 已把 apps/tauri/public/assistant 镜像到
+# apps/web/public/assistant；standalone 不会自带 public/，必须手动带上
+# （next 会按 basePath 前缀在 /app/assistant/ 下伺服）。
+mkdir -p "$BUNDLE/apps/web"
+cp -R apps/web/public "$BUNDLE/apps/web/public"
 
 # 3. 打包 → OSS 中转 → ECS 下载（云助手 SendFile 上限 32KiB，大文件走 OSS）
 COPYFILE_DISABLE=1 tar czf /tmp/lynse-cn-web.tar.gz -C "$BUNDLE" .
@@ -25,6 +30,8 @@ aliyun oss sign "oss://dting-02/tmp/lynse-web-cn.tar.gz" -e oss-cn-shenzhen.aliy
 ```
 
 ECS 无 SSH（安全组未开 22）：全部通过云助手执行 —— `python3 scripts/aliyun_cli.py --instance i-uf6j5zu4kakq7pwsnxpt run <script> --timeout 600` + `poll <InvokeId>`（lynse-mcp 仓库脚本）。ECS 上 wget OSS 公网签名 URL 下载（bucket 深圳 region，ECS 上海，内网不通）。
+
+发版后验证小灵助手头像：`curl -s -o /dev/null -w "%{http_code}\n" https://www.lynse.cn/app/assistant/default.gif` 应为 200（2026-11-16 曾因 bundle 不带 public/ 全线 404，图标裂图）。
 
 ## ECS 侧
 

@@ -43,6 +43,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubTrigger,
   DropdownMenuSubContent,
@@ -65,6 +66,7 @@ import { UploadDialog } from "../workspace/upload-dialog";
 import { TemplateManager } from "../workspace/template-manager";
 import { AppUpdateDialog } from "../app-update-dialog";
 import { openFeatureRequests, openReportProblem } from "../diagnostics";
+import { reportProblemShortcutLabel } from "./report-problem-shortcut";
 import { ReportProblemDialog } from "../report-problem-dialog";
 import { openChangelog } from "../feedback/open-feedback";
 import { LayoutTemplate, MessageSquarePlus } from "lucide-react";
@@ -504,6 +506,7 @@ function UserProfileDropdown({ onOpenSettings }: { onOpenSettings: () => void })
         <DropdownMenuItem onClick={openReportProblem}>
           <Bug className="size-4 text-muted-foreground" strokeWidth={1.5} />
           <span>{t("layout.user_help_feedback")}</span>
+          <DropdownMenuShortcut>{reportProblemShortcutLabel}</DropdownMenuShortcut>
         </DropdownMenuItem>
 
         {/* ── Feature suggestions (in-app FeedLog center) ── */}

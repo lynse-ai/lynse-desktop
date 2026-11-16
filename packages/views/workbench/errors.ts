@@ -72,6 +72,7 @@ export function citationIssueLocation(issue?: CitationIssue | null): { key: stri
 }
 
 export function wikiFailureResolution(error: string, validation?: WikiValidationDetails | null): { reason: string; advice: string; settings?: "model" | "account" | "scope" | "connection"; allowContext?: boolean; citation?: boolean; catalog?: boolean } {
+  if (error === "Model endpoint could not be reached before submission") return { reason: "workbench.wiki_failure_connection", advice: "workbench.wiki_failure_connection_help", settings: "connection" };
   const copy = workbenchErrorCopy(error);
   if (copy?.key === "workbench.wiki_failure_catalog_format" || validation?.catalogIssue) {
     const code = validation?.catalogIssue?.code;

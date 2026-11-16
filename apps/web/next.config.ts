@@ -1,9 +1,21 @@
 import type { NextConfig } from "next";
-import { readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 
 // The web build inlines its own package version so the About panel can show
 // it (desktop reads the version from the Rust host bridge instead).
 const webPkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version: string };
+
+// The assistant IP GIFs are owned by the desktop app (apps/tauri/public/
+// assistant) but rendered by shared views code in the web app too. Next serves
+// public/ assets from this app's directory, so mirror them here on every dev
+// or build run. The copies stay untracked (see .gitignore) — the single
+// source of truth stays in the desktop app.
+const assistantGifSrc = new URL("../tauri/public/assistant", import.meta.url);
+const assistantGifDest = new URL("./public/assistant", import.meta.url);
+if (existsSync(assistantGifSrc)) {
+  mkdirSync(assistantGifDest, { recursive: true });
+  cpSync(assistantGifSrc, assistantGifDest, { recursive: true });
+}
 
 const nextConfig: NextConfig = {
   env: {

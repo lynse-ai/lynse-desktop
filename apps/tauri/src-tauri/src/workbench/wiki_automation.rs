@@ -354,13 +354,35 @@ fn record_failure(catalog: &mut Catalog, key: &str, doc: &Document, error: &str)
     );
 }
 
-pub(super) fn source_failures(root: &Path) -> CommandResult<Value> {
+/// Failure cards are recorded per chunk key. An edit or processor change
+/// re-chunks a source into new keys, so entries whose key the source no
+/// longer produces describe superseded attempts that no retry can ever
+/// address and must not linger as a fake "waiting for retry" state.
+pub(super) fn source_failures(
+    root: &Path,
+    docs: &[Document],
+    config: &Models,
+) -> CommandResult<Value> {
     let catalog: Catalog = read_json(&catalog_path(root))?;
-    let failures: Vec<Value> = catalog.details.values().map(|failure| {
-        let mut value = json!(failure);
-        value["retrying"] = json!(!catalog.failed.contains_key(&failure.id));
-        value
-    }).collect();
+    let current: BTreeSet<String> = docs
+        .iter()
+        .flat_map(|doc| {
+            source_layout::chunks(root, doc)
+                .unwrap_or_else(|_| sync::split_text(doc.text().trim(), 12000))
+                .into_iter()
+                .map(move |text| catalog_chunk_key(doc, &text, config))
+        })
+        .collect();
+    let failures: Vec<Value> = catalog
+        .details
+        .values()
+        .filter(|failure| current.contains(&failure.id))
+        .map(|failure| {
+            let mut value = json!(failure);
+            value["retrying"] = json!(!catalog.failed.contains_key(&failure.id));
+            value
+        })
+        .collect();
     Ok(json!(failures))
 }
 
@@ -1899,18 +1921,18 @@ pub(super) async fn run(
     let mut topic_failures_run = 0usize;
     // Compile requests run in waves so a first-run backlog uses the shared
     // model queue concurrently; per-topic state changes still apply serially
-    // in the original order after each wave completes. The cap follows the
-    // queue capacity (LYNSE_WIKI_CONCURRENCY, default 4) up to 6: with a cap
+    // in the original order after each wave completes. The wave width follows
+    // the queue capacity (LYNSE_WIKI_CONCURRENCY, default 4): with a cap
     // of 3, one hung provider request stalls a third of the pipeline's
     // throughput for minutes at a time.
-    let compile_wave = state.synthesis_queue.capacity().min(6).max(1);
+    let compile_wave = state.synthesis_queue.capacity().max(1);
     log::info!(
         "[wiki-run] compile phase: {} topics pending, {} already settled (wave size {})",
         pending.len(),
         completed,
         compile_wave
     );
-    for wave in pending.chunks(compile_wave) {
+    for (wave_index, wave) in pending.chunks(compile_wave).enumerate() {
         report_progress(
             app,
             state,
@@ -1928,6 +1950,14 @@ pub(super) async fn run(
             },
         )
         .await?;
+        log::info!(
+            "[wiki-run] wave {} begin: {}",
+            wave_index,
+            wave.iter()
+                .map(|(topic, _, _)| topic.title.as_str())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
         let results = future::join_all(wave.iter().map(|(topic, selected, version)| {
             let manifest = Arc::clone(&shared_manifest);
             let root = root.clone();
@@ -1940,17 +1970,35 @@ pub(super) async fn run(
         }))
         .await;
         let mut wave_error = None;
+        let mut wave_published = 0usize;
+        let mut wave_discarded = 0usize;
+        let mut wave_failed = 0usize;
+        let mut wave_service_skips = 0usize;
+        let mut wave_drift_skips = 0usize;
         for ((topic, _, version), result) in wave.iter().zip(results) {
             if let Err(error) = &result {
                 if is_service_failure(&error.message) {
+                    log::warn!(
+                        "[wiki-run] wave {} service failure on {}: {}",
+                        wave_index,
+                        topic.title,
+                        error.message
+                    );
                     wave_error.get_or_insert(error.message.clone());
+                    wave_service_skips += 1;
                     continue;
                 }
             }
             let _guard = state.serial.lock().await;
-            require_current(state, session)?;
+            if let Err(error) = require_current(state, session) {
+                log::warn!("[wiki-run] wave {} apply aborted: {error}", wave_index);
+                return Err(error);
+            }
             let latest = load_state(app, session)?;
-            ready(&latest)?;
+            if let Err(error) = ready(&latest) {
+                log::warn!("[wiki-run] wave {} apply aborted: {error}", wave_index);
+                return Err(error);
+            }
             let mut values = topics(&root)?;
             let Some(current) = values
                 .iter_mut()
@@ -1963,6 +2011,12 @@ pub(super) async fn run(
                 .filter(|doc| current.source_ids.contains(&doc.id))
                 .collect();
             if page_version(current, &latest_docs, &latest, &models(app, session)?) != *version {
+                log::warn!(
+                    "[wiki-run] wave {} dropped completed page for {}: source version drifted mid-compile",
+                    wave_index,
+                    topic.title
+                );
+                wave_drift_skips += 1;
                 continue;
             }
             let mut discarded = false;
@@ -1990,6 +2044,7 @@ pub(super) async fn run(
                             current.source_ids
                         );
                         discarded = true;
+                        wave_discarded += 1;
                         current.error.clear();
                         current.failure = None;
                     } else {
@@ -2023,6 +2078,7 @@ pub(super) async fn run(
                         current.failure = None;
                         current.last_fingerprint = version.clone();
                         completed += 1;
+                        wave_published += 1;
                         state.cloud_wakeup.notify_one();
                         log::info!(
                             "[wiki-compile] topic {} ({}) published (partial={})",
@@ -2045,6 +2101,7 @@ pub(super) async fn run(
                         partial.auto_retry_used = true;
                     }
                     topic_failures_run += 1;
+                    wave_failed += 1;
                 }
             }
             if !discarded {
@@ -2054,6 +2111,15 @@ pub(super) async fn run(
             save_topics(&root, &values)?;
             persist(app, session, &latest)?;
         }
+        log::info!(
+            "[wiki-run] wave {} applied: published={} discarded={} failed={} service_skipped={} drift_skipped={}",
+            wave_index,
+            wave_published,
+            wave_discarded,
+            wave_failed,
+            wave_service_skips,
+            wave_drift_skips
+        );
         if let Some(error) = wave_error {
             return Err(error);
         }

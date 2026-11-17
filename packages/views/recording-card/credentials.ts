@@ -15,9 +15,9 @@ import { api } from "@lynse/core/api";
  * backend belongs to a different service and never reaches lynclaw. lynclaw
  * sends per-origin CORS headers, so the browser calls it directly.
  *
- * Vendor/product IDs returned here are only PREFILL values for the page's
- * editable descriptor inputs; the values used at connect time come from the
- * user (see use-recording-card-session).
+ * Vendor/product IDs are optional overrides for the reference hardware pair
+ * the vendor SDK filters on; when the server omits them, connect falls back
+ * to the SDK's built-in filter.
  */
 
 /** Reference hardware descriptors baked into the vendor SDK. */

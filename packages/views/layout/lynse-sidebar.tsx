@@ -34,7 +34,7 @@ import {
   FolderOpen,
   Bot,
   BookOpen,
-  Usb,
+  MergeUp,
   MoreHorizontal,
   Pin,
 } from "../icons";
@@ -154,7 +154,7 @@ export function LynseSidebar() {
   // New optional destinations belong here so they share the More/pinning flow.
   const moreItems: NavItem[] = [
     { key: "wiki", label: t("nav.memory"), icon: BookOpen, path: "/memory", solid: false },
-    { key: "devices", label: t("nav.devices"), icon: Usb, path: "/devices", solid: false },
+    { key: "devices", label: t("nav.devices"), icon: MergeUp, path: "/devices", solid: false },
   ].filter((item) => {
     if (item.key === "wiki") return !isWeb && wikiEnabled && (hasWorkbenchStatus || !!getWorkbenchApi());
     if (item.key === "devices") return recordingCardEnabled;

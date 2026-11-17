@@ -1462,11 +1462,11 @@ local_summary_failed: "심층 요약 생성 실패",
       description: "Feishu 채팅에서 질문에 답하고 회의 요약을 그룹으로 전송합니다.",
     },
     recordingCardUsb: {
-      name: "녹음 카드 USB",
+      name: "녹음 카드 관리",
       description: "USB를 통해 녹음 카드의 녹음을 관리합니다. Chrome 또는 Edge에서 관리 페이지를 엽니다.",
     },
     models: {
-      title: "전사 모델",
+      title: "오프라인 모델",
       hint: "오프라인 전사 모델은 필요한 것만 다운로드하세요. 첫 다운로드 시 런타임이 자동 준비됩니다.",
       badge_recommended: "추천",
       badge_diarization: "화자 분리",

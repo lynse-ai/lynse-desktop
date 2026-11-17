@@ -1463,11 +1463,11 @@ local_summary_failed: "詳細要約の生成に失敗しました",
       description: "Feishu チャットで質問に答え、会議のまとめをグループへ送信します。",
     },
     recordingCardUsb: {
-      name: "録音カード USB",
+      name: "録音カード管理",
       description: "USB 経由で録音カード内の録音を管理します。Chrome または Edge で管理ページを開きます。",
     },
     models: {
-      title: "文字起こしモデル",
+      title: "オフラインモデル",
       hint: "オフライン文字起こしモデルは必要なものだけダウンロード。初回ダウンロード時にランタイムを自動準備します。",
       badge_recommended: "おすすめ",
       badge_diarization: "話者分離",

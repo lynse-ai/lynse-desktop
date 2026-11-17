@@ -138,7 +138,6 @@ describe("desktop recording-card session refresh", () => {
   it("uses the authsn serial reported by Rust on connect", async () => {
     const { result } = renderHook(() => useRecordingCardSessionDesktop());
 
-    act(() => result.current.setAccess(true));
     await act(async () => {
       await result.current.connect();
     });

@@ -22,7 +22,7 @@ import {
   HardDrive,
   Loader2,
   Settings,
-  Usb,
+  MergeUp,
   Wrench,
 } from "../icons";
 import type { RecordingCardMicMode, RecordingCardSessionView } from "./transport";
@@ -155,328 +155,354 @@ export function DeviceOverview({
         <CardContent className="space-y-4 p-4">
           <div className="flex items-center gap-3">
             <span className="flex size-10 items-center justify-center rounded-xl bg-muted">
-              <Usb className="size-5 text-muted-foreground" />
+              <MergeUp className="size-5 text-muted-foreground" />
             </span>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <h2 className="text-base font-medium">{t("recordingCard.overview_title")}</h2>
               <p className="text-2xs text-muted-foreground">
                 {t("recordingCard.overview_subtitle")}
               </p>
             </div>
-          </div>
-
-          <div className="rounded-lg bg-muted/40 p-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 space-y-2">
-                <div>
-                  <p className="text-2xs text-muted-foreground">
-                    {t("recordingCard.device_name")}
-                  </p>
-                  <p className="mt-0.5 truncate text-xs font-medium" title={session.deviceName ?? serial}>
-                    {(session.deviceName ?? serial) || t("recordingCard.auto_off_unknown")}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-2xs text-muted-foreground">
-                    {t("recordingCard.device_sn")}
-                  </p>
-                  <p className="mt-0.5 truncate font-mono text-xs" title={serial}>
-                    {serial || t("recordingCard.auto_off_unknown")}
-                  </p>
-                </div>
-              </div>
+            {session.phase === "connected" ? (
               <Button
                 size="sm"
-                variant="ghost"
+                variant="outline"
                 className="h-7 shrink-0 px-2 text-2xs"
-                onClick={copySerial}
-                disabled={!serial}
+                onClick={session.disconnect}
               >
-                {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-                {copied ? t("recordingCard.copied") : t("recordingCard.copy_sn")}
+                {t("recordingCard.disconnect")}
               </Button>
-            </div>
-            <div className="mt-2 flex items-center gap-1.5 text-2xs text-muted-foreground">
-              <span
-                className={`size-1.5 rounded-full ${
-                  session.clockSynced === false ? "bg-destructive" : "bg-primary"
-                }`}
-                aria-hidden="true"
-              />
-              {clockLabel}
-            </div>
+            ) : (
+              <Button
+                size="sm"
+                className="h-7 shrink-0 px-2 text-2xs"
+                disabled={session.phase === "connecting"}
+                onClick={session.connect}
+              >
+                {session.phase === "connecting" ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : null}
+                {t("recordingCard.connect")}
+              </Button>
+            )}
           </div>
 
-          <button
-            type="button"
-            onClick={onOpenFiles}
-            className="w-full rounded-lg border bg-background p-3 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span className="flex items-center gap-2 text-sm font-medium">
-                <HardDrive className="size-4 text-muted-foreground" />
-                {t("recordingCard.storage_title")}
-              </span>
-              <span className="flex items-center gap-1 text-2xs text-muted-foreground">
-                {t("recordingCard.storage_open")}
-                <ChevronRight className="size-3" />
-              </span>
-            </div>
-            <p className="mt-2 text-2xs text-muted-foreground">
-              {t("recordingCard.storage_total_used", {
-                total: formatBytes(storageTotalBytes),
-                used: formatBytes(storageUsedBytes),
+          {session.phase === "error" && (
+            <p className="break-all text-2xs text-destructive">
+              {t("recordingCard.err_connect_failed", {
+                message: session.errorMessage ?? "",
               })}
-            </p>
-            <div
-              className="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted"
-              role="progressbar"
-              aria-label={t("recordingCard.storage_used", {
-                used: formatBytes(storageUsedBytes),
-              })}
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={Math.round(storageUsedPercent)}
-            >
-              <div
-                className="h-full bg-primary transition-[width] duration-300"
-                style={{
-                  width: `${storageUsedPercent}%`,
-                  minWidth: storageUsedBytes > 0 ? 2 : 0,
-                }}
-              />
-            </div>
-            <p className="mt-1 text-right text-2xs text-muted-foreground">
-              {t("recordingCard.storage_free", { free: formatBytes(storageFreeBytes) })}
-            </p>
-          </button>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="p-0">
-          <SectionHeading icon={Settings} label={t("recordingCard.settings_section")} />
-          <SettingRow
-            label={t("recordingCard.auto_off")}
-            hint={
-              session.autoOffMinutes === null
-                ? t("recordingCard.auto_off_unknown")
-                : t("recordingCard.auto_off_hint", { minutes: session.autoOffMinutes })
-            }
-          >
-            {editingAutoOff ? (
-              <div className="flex items-center gap-1.5">
-                <Input
-                  type="number"
-                  min={1}
-                  max={36000}
-                  value={autoOffDraft}
-                  onChange={(event) => {
-                    setAutoOffDraft(event.target.value);
-                    setAutoOffError(false);
-                  }}
-                  className="h-7 w-20 px-2 text-2xs"
-                  aria-label={t("recordingCard.auto_off")}
-                />
-                <Button
-                  size="sm"
-                  className="h-7 px-2 text-2xs"
-                  disabled={busy}
-                  onClick={() => void saveAutoOff()}
-                >
-                  {busy ? <Loader2 className="size-3 animate-spin" /> : null}
-                  {t("recordingCard.save")}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 px-2 text-2xs"
-                  onClick={() => setEditingAutoOff(false)}
-                >
-                  {t("recordingCard.cancel")}
-                </Button>
-              </div>
-            ) : (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 px-2 text-2xs"
-                onClick={() => setEditingAutoOff(true)}
-              >
-                {t("recordingCard.edit")}
-                <ChevronRight className="size-3" />
-              </Button>
-            )}
-          </SettingRow>
-          {autoOffError && (
-            <p className="px-4 pb-2 text-2xs text-destructive">
-              {t("recordingCard.invalid_minutes")}
             </p>
           )}
-
-          <SettingRow
-            label={t("recordingCard.mic_gain")}
-            hint={
-              session.micGain
-                ? t("recordingCard.mic_gain_hint", {
-                    mic1: session.micGain.mic1,
-                    mic2: session.micGain.mic2,
-                  })
-                : t("recordingCard.auto_off_unknown")
-            }
-          >
-            {editingMic ? (
-              <div className="flex flex-wrap items-center justify-end gap-1.5">
-                <div className="flex items-center rounded-md bg-muted p-0.5 text-2xs">
-                  <button
-                    type="button"
-                    className={`rounded px-1.5 py-1 ${
-                      micMode === 0 ? "bg-background font-medium" : "text-muted-foreground"
-                    }`}
-                    onClick={() => setMicMode(0)}
+          {session.phase === "connected" && (
+            <>
+              <div className="rounded-lg bg-muted/40 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 space-y-2">
+                    <div>
+                      <p className="text-2xs text-muted-foreground">
+                        {t("recordingCard.device_name")}
+                      </p>
+                      <p
+                        className="mt-0.5 truncate text-xs font-medium"
+                        title={session.deviceName ?? serial}
+                      >
+                        {(session.deviceName ?? serial) || t("recordingCard.auto_off_unknown")}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-2xs text-muted-foreground">
+                        {t("recordingCard.device_sn")}
+                      </p>
+                      <p className="mt-0.5 truncate font-mono text-xs" title={serial}>
+                        {serial || t("recordingCard.auto_off_unknown")}
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 shrink-0 px-2 text-2xs"
+                    onClick={copySerial}
+                    disabled={!serial}
                   >
-                    {t("recordingCard.mic_mode_meeting")}
-                  </button>
-                  <button
-                    type="button"
-                    className={`rounded px-1.5 py-1 ${
-                      micMode === 1 ? "bg-background font-medium" : "text-muted-foreground"
-                    }`}
-                    onClick={() => setMicMode(1)}
-                  >
-                    {t("recordingCard.mic_mode_call")}
-                  </button>
+                    {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
+                    {copied ? t("recordingCard.copied") : t("recordingCard.copy_sn")}
+                  </Button>
                 </div>
-                <Input
-                  type="number"
-                  min={0}
-                  max={19}
-                  value={mic1Draft}
-                  onChange={(event) => {
-                    setMic1Draft(event.target.value);
-                    setMicError(false);
-                  }}
-                  className="h-7 w-14 px-2 text-2xs"
-                  aria-label={t("recordingCard.mic1")}
-                />
-                <Input
-                  type="number"
-                  min={0}
-                  max={19}
-                  value={mic2Draft}
-                  onChange={(event) => {
-                    setMic2Draft(event.target.value);
-                    setMicError(false);
-                  }}
-                  className="h-7 w-14 px-2 text-2xs"
-                  aria-label={t("recordingCard.mic2")}
-                />
+                <div className="mt-2 flex items-center gap-1.5 text-2xs text-muted-foreground">
+                  <span
+                    className={`size-1.5 rounded-full ${
+                      session.clockSynced === false ? "bg-destructive" : "bg-primary"
+                    }`}
+                    aria-hidden="true"
+                  />
+                  {clockLabel}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={onOpenFiles}
+                className="w-full rounded-lg border bg-background p-3 text-left transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2 text-sm font-medium">
+                    <HardDrive className="size-4 text-muted-foreground" />
+                    {t("recordingCard.storage_title")}
+                  </span>
+                  <span className="flex items-center gap-1 text-2xs text-muted-foreground">
+                    {t("recordingCard.storage_open")}
+                    <ChevronRight className="size-3" />
+                  </span>
+                </div>
+                <p className="mt-2 text-2xs text-muted-foreground">
+                  {t("recordingCard.storage_total_used", {
+                    total: formatBytes(storageTotalBytes),
+                    used: formatBytes(storageUsedBytes),
+                  })}
+                </p>
+                <div
+                  className="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted"
+                  role="progressbar"
+                  aria-label={t("recordingCard.storage_used", {
+                    used: formatBytes(storageUsedBytes),
+                  })}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(storageUsedPercent)}
+                >
+                  <div
+                    className="h-full bg-primary transition-[width] duration-300"
+                    style={{
+                      width: `${storageUsedPercent}%`,
+                      minWidth: storageUsedBytes > 0 ? 2 : 0,
+                    }}
+                  />
+                </div>
+                <p className="mt-1 text-right text-2xs text-muted-foreground">
+                  {t("recordingCard.storage_free", { free: formatBytes(storageFreeBytes) })}
+                </p>
+              </button>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {session.phase === "connected" && (
+        <>
+          <Card>
+            <CardContent className="p-0">
+              <SectionHeading icon={Settings} label={t("recordingCard.settings_section")} />
+              <SettingRow
+                label={t("recordingCard.auto_off")}
+                hint={
+                  session.autoOffMinutes === null
+                    ? t("recordingCard.auto_off_unknown")
+                    : t("recordingCard.auto_off_hint", { minutes: session.autoOffMinutes })
+                }
+              >
+                {editingAutoOff ? (
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      type="number"
+                      min={1}
+                      max={36000}
+                      value={autoOffDraft}
+                      onChange={(event) => {
+                        setAutoOffDraft(event.target.value);
+                        setAutoOffError(false);
+                      }}
+                      className="h-7 w-20 px-2 text-2xs"
+                      aria-label={t("recordingCard.auto_off")}
+                    />
+                    <Button
+                      size="sm"
+                      className="h-7 px-2 text-2xs"
+                      disabled={busy}
+                      onClick={() => void saveAutoOff()}
+                    >
+                      {busy ? <Loader2 className="size-3 animate-spin" /> : null}
+                      {t("recordingCard.save")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-2xs"
+                      onClick={() => setEditingAutoOff(false)}
+                    >
+                      {t("recordingCard.cancel")}
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-2xs"
+                    onClick={() => setEditingAutoOff(true)}
+                  >
+                    {t("recordingCard.edit")}
+                    <ChevronRight className="size-3" />
+                  </Button>
+                )}
+              </SettingRow>
+              {autoOffError && (
+                <p className="px-4 pb-2 text-2xs text-destructive">
+                  {t("recordingCard.invalid_minutes")}
+                </p>
+              )}
+
+              <SettingRow
+                label={t("recordingCard.mic_gain")}
+                hint={
+                  session.micGain
+                    ? t("recordingCard.mic_gain_hint", {
+                        mic1: session.micGain.mic1,
+                        mic2: session.micGain.mic2,
+                      })
+                    : t("recordingCard.auto_off_unknown")
+                }
+              >
+                {editingMic ? (
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
+                    <div className="flex items-center rounded-md bg-muted p-0.5 text-2xs">
+                      <button
+                        type="button"
+                        className={`rounded px-1.5 py-1 ${
+                          micMode === 0 ? "bg-background font-medium" : "text-muted-foreground"
+                        }`}
+                        onClick={() => setMicMode(0)}
+                      >
+                        {t("recordingCard.mic_mode_meeting")}
+                      </button>
+                      <button
+                        type="button"
+                        className={`rounded px-1.5 py-1 ${
+                          micMode === 1 ? "bg-background font-medium" : "text-muted-foreground"
+                        }`}
+                        onClick={() => setMicMode(1)}
+                      >
+                        {t("recordingCard.mic_mode_call")}
+                      </button>
+                    </div>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={19}
+                      value={mic1Draft}
+                      onChange={(event) => {
+                        setMic1Draft(event.target.value);
+                        setMicError(false);
+                      }}
+                      className="h-7 w-14 px-2 text-2xs"
+                      aria-label={t("recordingCard.mic1")}
+                    />
+                    <Input
+                      type="number"
+                      min={0}
+                      max={19}
+                      value={mic2Draft}
+                      onChange={(event) => {
+                        setMic2Draft(event.target.value);
+                        setMicError(false);
+                      }}
+                      className="h-7 w-14 px-2 text-2xs"
+                      aria-label={t("recordingCard.mic2")}
+                    />
+                    <Button
+                      size="sm"
+                      className="h-7 px-2 text-2xs"
+                      disabled={busy}
+                      onClick={() => void saveMicGain()}
+                    >
+                      {busy ? <Loader2 className="size-3 animate-spin" /> : null}
+                      {t("recordingCard.save")}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-2xs"
+                      onClick={() => setEditingMic(false)}
+                    >
+                      {t("recordingCard.cancel")}
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-2xs"
+                    onClick={() => setEditingMic(true)}
+                  >
+                    {t("recordingCard.edit")}
+                    <ChevronRight className="size-3" />
+                  </Button>
+                )}
+              </SettingRow>
+              {micError && (
+                <p className="px-4 pb-2 text-2xs text-destructive">
+                  {t("recordingCard.invalid_gain")}
+                </p>
+              )}
+
+              <SettingRow label={t("recordingCard.bind_device")} hint={t("recordingCard.bind_hint")}>
                 <Button
                   size="sm"
+                  variant="outline"
                   className="h-7 px-2 text-2xs"
                   disabled={busy}
-                  onClick={() => void saveMicGain()}
+                  onClick={() => void session.setBound(true)}
                 >
-                  {busy ? <Loader2 className="size-3 animate-spin" /> : null}
-                  {t("recordingCard.save")}
+                  {t("recordingCard.bind_action")}
                 </Button>
                 <Button
                   size="sm"
                   variant="ghost"
                   className="h-7 px-2 text-2xs"
-                  onClick={() => setEditingMic(false)}
+                  disabled={busy}
+                  onClick={() => setConfirm("unbind")}
                 >
-                  {t("recordingCard.cancel")}
+                  {t("recordingCard.unbind_action")}
                 </Button>
-              </div>
-            ) : (
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 px-2 text-2xs"
-                onClick={() => setEditingMic(true)}
+              </SettingRow>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-0">
+              <SectionHeading icon={Wrench} label={t("recordingCard.maintenance_section")} />
+              <SettingRow
+                label={t("recordingCard.factory_reset")}
+                hint={t("recordingCard.factory_reset_hint")}
               >
-                {t("recordingCard.edit")}
-                <ChevronRight className="size-3" />
-              </Button>
-            )}
-          </SettingRow>
-          {micError && (
-            <p className="px-4 pb-2 text-2xs text-destructive">
-              {t("recordingCard.invalid_gain")}
-            </p>
-          )}
-
-          <SettingRow label={t("recordingCard.bind_device")} hint={t("recordingCard.bind_hint")}>
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 px-2 text-2xs"
-              disabled={busy}
-              onClick={() => void session.setBound(true)}
-            >
-              {t("recordingCard.bind_action")}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 px-2 text-2xs"
-              disabled={busy}
-              onClick={() => setConfirm("unbind")}
-            >
-              {t("recordingCard.unbind_action")}
-            </Button>
-          </SettingRow>
-
-          <SettingRow
-            label={t("recordingCard.disconnect_device")}
-            hint={t("recordingCard.disconnect_hint")}
-          >
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 px-2 text-2xs"
-              onClick={() => session.setAccess(false)}
-            >
-              <ChevronRight className="size-3" />
-            </Button>
-          </SettingRow>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="p-0">
-          <SectionHeading icon={Wrench} label={t("recordingCard.maintenance_section")} />
-          <SettingRow
-            label={t("recordingCard.factory_reset")}
-            hint={t("recordingCard.factory_reset_hint")}
-          >
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-7 px-2 text-2xs"
-              disabled={busy}
-              onClick={() => setConfirm("factoryReset")}
-            >
-              <ChevronRight className="size-3" />
-            </Button>
-          </SettingRow>
-          <SettingRow
-            label={t("recordingCard.format_storage")}
-            hint={t("recordingCard.format_storage_hint")}
-          >
-            <Button
-              size="sm"
-              variant="destructive"
-              className="h-7 px-2 text-2xs"
-              disabled={busy}
-              onClick={() => setConfirm("formatStorage")}
-            >
-              <ChevronRight className="size-3" />
-            </Button>
-          </SettingRow>
-        </CardContent>
-      </Card>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-2xs"
+                  disabled={busy}
+                  onClick={() => setConfirm("factoryReset")}
+                >
+                  <ChevronRight className="size-3" />
+                </Button>
+              </SettingRow>
+              <SettingRow
+                label={t("recordingCard.format_storage")}
+                hint={t("recordingCard.format_storage_hint")}
+              >
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="h-7 px-2 text-2xs"
+                  disabled={busy}
+                  onClick={() => setConfirm("formatStorage")}
+                >
+                  <ChevronRight className="size-3" />
+                </Button>
+              </SettingRow>
+            </CardContent>
+          </Card>
+        </>
+      )}
 
       <AlertDialog open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>
         <AlertDialogContent size="sm">
@@ -505,7 +531,7 @@ export function DeviceOverview({
   );
 }
 
-function SectionHeading({ icon: Icon, label }: { icon: typeof Usb; label: string }) {
+function SectionHeading({ icon: Icon, label }: { icon: typeof MergeUp; label: string }) {
   return (
     <div className="flex items-center gap-2 border-b px-4 py-2.5">
       <Icon className="size-3.5 text-muted-foreground" />

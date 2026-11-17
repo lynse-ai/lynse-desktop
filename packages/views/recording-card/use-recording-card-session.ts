@@ -72,7 +72,6 @@ function parseAutoOffMinutes(result: NvEasyActionResult): number | null {
 }
 
 export function useRecordingCardSession() {
-  const [usbEnabled, setUsbEnabled] = useState(false);
   const [phase, setPhase] = useState<RecordingCardPhase>("off");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [deviceName, setDeviceName] = useState<string | null>(null);
@@ -188,8 +187,8 @@ export function useRecordingCardSession() {
     }
   }, []);
 
-  const connect = useCallback(async (descriptor?: { vendorId: number; productId: number }) => {
-    if (!usbEnabled || transferringRef.current) return;
+  const connect = useCallback(async () => {
+    if (transferringRef.current) return;
     setPhase("connecting");
     setErrorMessage(null);
     setActionError(null);
@@ -198,19 +197,18 @@ export function useRecordingCardSession() {
         loadNvEasyClient(),
         fetchRecordingCardConfig(),
       ]);
-      // Descriptor precedence: page inputs (user-editable, prefilled with
-      // server values or the reference pair) → server config → omit both and
+      // Descriptor precedence: server config (per-model pair) → omit both and
       // let the SDK apply its built-in reference-hardware filter.
-      const vendorId = descriptor?.vendorId ?? config.vendorId;
-      const productId = descriptor?.productId ?? config.productId;
+      const vendorId = config.vendorId;
+      const productId = config.productId;
       const client = new ctor({
         password: config.password,
         ...(vendorId !== undefined && productId !== undefined
           ? { vendorId, productId }
           : {}),
         onDisconnect: () => {
-          // Unplug or link loss mid-session: full reset, back to the armed
-          // (enabled but disconnected) state so the user can reconnect.
+          // Unplug or link loss mid-session: full reset, back to the idle
+          // state so the user can reconnect.
           void teardown().then(() => {
             if (mountedRef.current) setPhase("off");
           });
@@ -256,21 +254,16 @@ export function useRecordingCardSession() {
       setPhase("error");
       setErrorMessage(err instanceof Error ? err.message : String(err));
     }
-  }, [usbEnabled, refreshFiles, refreshSettings, teardown]);
+  }, [refreshFiles, refreshSettings, teardown]);
 
-  const setAccess = useCallback(
-    (enabled: boolean) => {
-      setUsbEnabled(enabled);
-      if (!enabled) {
-        setErrorMessage(null);
-        setActionError(null);
-        void teardown().then(() => {
-          if (mountedRef.current) setPhase("off");
-        });
-      }
-    },
-    [teardown],
-  );
+  /** Release the device and return to the idle (off) state. */
+  const disconnect = useCallback(() => {
+    setErrorMessage(null);
+    setActionError(null);
+    void teardown().then(() => {
+      if (mountedRef.current) setPhase("off");
+    });
+  }, [teardown]);
 
   /** Run one device action, surface failures, then let the caller refresh. */
   const runAction = useCallback(
@@ -510,8 +503,6 @@ export function useRecordingCardSession() {
   );
 
   return {
-    usbEnabled,
-    setAccess,
     phase,
     errorMessage,
     deviceName,
@@ -527,6 +518,7 @@ export function useRecordingCardSession() {
     actionError,
     supported: isWebUsbAvailable(),
     connect,
+    disconnect,
     refreshFiles: () => void refreshFiles(),
     refreshSettings: () => void refreshSettings(),
     refreshMicGain,

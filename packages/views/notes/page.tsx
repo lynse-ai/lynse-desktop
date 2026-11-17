@@ -67,7 +67,9 @@ import {
   Loader2,
   RefreshCw,
   Monitor,
-  LayersArrowDown,
+  CalendarDays,
+  Clock,
+  MergeUp,
   Upload,
 } from "../icons";
 import { UploadDialog } from "../workspace/upload-dialog";
@@ -872,7 +874,7 @@ export function NotesPage() {
                       {vaultSyncing ? (
                         <Loader2 className="size-4 animate-spin" />
                       ) : (
-                        <LayersArrowDown className="size-4" />
+                        <MergeUp className="size-4" />
                       )}
                     </IconSwap>
                   </button>
@@ -1241,9 +1243,19 @@ function NoteMetadata({ file }: { file: WorkspaceItem }) {
               <Monitor className="size-3" strokeWidth={1.75} />
             </span>
           )}
-          {date && <span>{date}</span>}
+          {date && (
+            <span className="inline-flex items-center gap-1">
+              <CalendarDays className="size-3 shrink-0" strokeWidth={1.75} />
+              {date}
+            </span>
+          )}
           {date && duration && <span aria-hidden="true">·</span>}
-          {duration && <span>{duration}</span>}
+          {duration && (
+            <span className="inline-flex items-center gap-1">
+              <Clock className="size-3 shrink-0" strokeWidth={1.75} />
+              {duration}
+            </span>
+          )}
         </div>
       )}
       {tags.length > 0 && (

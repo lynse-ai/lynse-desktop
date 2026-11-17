@@ -7,7 +7,7 @@ import type { NvEasyDeviceFile } from "./nveasy-types";
 
 /**
  * State-machine tests for the USB session: connect paths (success, wrong
- * password, chooser cancel), teardown discipline (switch off / unplug), and
+ * password, chooser cancel), teardown discipline (disconnect / unplug), and
  * the chunked download protocol (pause at the chunk boundary → resume from
  * `partial.length` → byte-exact completion).
  */
@@ -205,9 +205,8 @@ beforeEach(() => {
 });
 
 describe("recording card USB session", () => {
-  it("starts disarmed and unsupported in jsdom (no navigator.usb)", () => {
+  it("starts off and unsupported in jsdom (no navigator.usb)", () => {
     const { result } = renderHook(() => useRecordingCardSession());
-    expect(result.current.usbEnabled).toBe(false);
     expect(result.current.phase).toBe("off");
     expect(result.current.supported).toBe(false);
   });
@@ -216,7 +215,6 @@ describe("recording card USB session", () => {
     mock.state.fileList = [makeFile(10)];
     const { result } = renderHook(() => useRecordingCardSession());
 
-    act(() => result.current.setAccess(true));
     await act(async () => {
       await result.current.connect();
     });
@@ -239,7 +237,6 @@ describe("recording card USB session", () => {
   it("loads device settings and drives confirmed management actions", async () => {
     const { result } = renderHook(() => useRecordingCardSession());
 
-    act(() => result.current.setAccess(true));
     await act(async () => {
       await result.current.connect();
     });
@@ -265,28 +262,10 @@ describe("recording card USB session", () => {
     expect(result.current.micGain).toEqual({ result: 0, mode: 1, mic1: 7, mic2: 8 });
   });
 
-  it("lets page descriptor inputs override the server prefill", async () => {
-    mock.state.fileList = [];
-    const { result } = renderHook(() => useRecordingCardSession());
-
-    act(() => result.current.setAccess(true));
-    await act(async () => {
-      await result.current.connect({ vendorId: 0x1111, productId: 0x2222 });
-    });
-
-    expect(result.current.phase).toBe("connected");
-    expect(mock.state.lastOptions).toMatchObject({
-      password: "paired-key-123",
-      vendorId: 0x1111,
-      productId: 0x2222,
-    });
-  });
-
   it("surfaces a wrong password as an error and releases the device", async () => {
     mock.state.connectBehavior = "auth-fail";
     const { result } = renderHook(() => useRecordingCardSession());
 
-    act(() => result.current.setAccess(true));
     await act(async () => {
       await result.current.connect();
     });
@@ -302,7 +281,6 @@ describe("recording card USB session", () => {
     mock.state.connectBehavior = "canceled";
     const { result } = renderHook(() => useRecordingCardSession());
 
-    act(() => result.current.setAccess(true));
     await act(async () => {
       await result.current.connect();
     });
@@ -311,17 +289,16 @@ describe("recording card USB session", () => {
     expect(result.current.errorMessage).toBeNull();
   });
 
-  it("tears down when the switch goes off", async () => {
+  it("disconnect releases the device and clears the session", async () => {
     mock.state.fileList = [makeFile(10)];
     const { result } = renderHook(() => useRecordingCardSession());
 
-    act(() => result.current.setAccess(true));
     await act(async () => {
       await result.current.connect();
     });
     expect(result.current.phase).toBe("connected");
 
-    act(() => result.current.setAccess(false));
+    act(() => result.current.disconnect());
     await waitFor(() => expect(result.current.phase).toBe("off"));
     expect(mock.state.disconnectCalls).toBeGreaterThanOrEqual(1);
     expect(result.current.files).toHaveLength(0);
@@ -347,7 +324,6 @@ describe("recording card USB session", () => {
     };
     const { result } = renderHook(() => useRecordingCardSession());
 
-    act(() => result.current.setAccess(true));
     await act(async () => {
       await result.current.connect();
     });
@@ -373,7 +349,6 @@ describe("recording card USB session", () => {
     };
     const { result } = renderHook(() => useRecordingCardSession());
 
-    act(() => result.current.setAccess(true));
     await act(async () => {
       await result.current.connect();
     });
@@ -392,7 +367,6 @@ describe("recording card USB session", () => {
     mock.state.fileList = [makeFile(10), { ...makeFile(20), sn: 2, name: "rec02.wav" }];
     const { result } = renderHook(() => useRecordingCardSession());
 
-    act(() => result.current.setAccess(true));
     await act(async () => {
       await result.current.connect();
     });
@@ -407,7 +381,6 @@ describe("recording card USB session", () => {
     mock.state.deleteResult = 3;
     const { result } = renderHook(() => useRecordingCardSession());
 
-    act(() => result.current.setAccess(true));
     await act(async () => {
       await result.current.connect();
     });

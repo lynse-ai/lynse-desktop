@@ -99,8 +99,6 @@ export function getRecordingCardUsbApi(): DesktopRecordingCardUsbApi | null {
 
 /** View-model returned by both the WebUSB and the desktop USB session hooks. */
 export interface RecordingCardSessionView {
-  usbEnabled: boolean;
-  setAccess: (enabled: boolean) => void;
   phase: "off" | "connecting" | "connected" | "error";
   errorMessage: string | null;
   deviceName: string | null;
@@ -117,7 +115,9 @@ export interface RecordingCardSessionView {
   download: RecordingCardDownloadProgress | null;
   actionError: string | null;
   supported: boolean;
-  connect: (descriptor?: { vendorId: number; productId: number }) => void;
+  connect: () => void;
+  /** Release the USB link and return to the idle (off) state. */
+  disconnect: () => void;
   refreshFiles: () => void;
   refreshSettings: () => void;
   refreshMicGain: (mode: RecordingCardMicMode) => Promise<void>;

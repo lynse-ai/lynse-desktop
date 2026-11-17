@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@lynse/ui/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/ui/card";
+import { Card, CardContent, CardHeader } from "@lynse/ui/components/ui/card";
+import { Collapsible } from "@lynse/ui/components/ui/collapsible";
 import { Progress } from "@lynse/ui/components/ui/progress";
 import { cn } from "@lynse/ui/lib/utils";
 import { useTranslation } from "@lynse/core/i18n/react";
@@ -23,6 +24,7 @@ import {
   NON_MAC_ENGINES,
 } from "../workspace/local-transcription";
 import { isMacDesktop } from "../layout/use-maximized";
+import { ChevronRight } from "../icons";
 import { definePlugin, registerPlugin } from "./registry";
 import type { PluginManifest } from "./types";
 
@@ -238,6 +240,7 @@ export function TranscriptionModelsSection({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     if (!api) return;
@@ -274,6 +277,18 @@ export function TranscriptionModelsSection({
   }, [api]);
 
   if (!api) return null;
+
+  // Directory-row summary: how many of the visible models are installed, so
+  // the collapsed entry still says something about its contents.
+  const visibleModels = visibleModelCatalog();
+  const installedCount = visibleModels.filter((entry) =>
+    models.some(
+      (candidate) =>
+        candidate.provider === entry.engine &&
+        candidate.id === entry.modelId &&
+        candidate.status === "installed",
+    ),
+  ).length;
 
   // Arrow consts (not hoisted declarations) so the `api` narrowing above
   // holds inside the closures.
@@ -323,116 +338,138 @@ export function TranscriptionModelsSection({
 
   return (
     <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-xs">{t("plugins.models.title")}</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        <p className="text-2xs leading-relaxed text-muted-foreground">
-          {t("plugins.models.hint")}
-        </p>
-        {visibleModelCatalog().map((entry) => {
-          const model = models.find(
-            (candidate) => candidate.provider === entry.engine && candidate.id === entry.modelId,
-          );
-          const installed = model?.status === "installed";
-          const isThisDownloading =
-            !!progress &&
-            progress.provider === entry.engine &&
-            progress.modelId === entry.modelId &&
-            progress.phase !== "error" &&
-            progress.phase !== "done";
-          const busyHere = busy || isThisDownloading;
-          const percent = isThisDownloading && progress ? progress.percent : null;
-          const bytesLabel =
-            isThisDownloading && progress && progress.totalBytes > 0
-              ? `${formatBytes(progress.receivedBytes)} / ${formatBytes(progress.totalBytes)}`
-              : null;
-          return (
-            <div key={entry.pluginId} className="flex items-start gap-3 rounded-md border bg-background p-2.5">
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="truncate text-xs font-medium">{t(entry.nameKey)}</span>
-                  {entry.badges.map((badge) => (
-                    <span
-                      key={badge}
-                      className="rounded-full bg-muted px-2 py-0.5 text-2xs font-medium text-muted-foreground"
-                    >
-                      {t(BADGE_LABEL_KEYS[badge])}
-                    </span>
-                  ))}
-                  <span
-                    className={
-                      installed
-                        ? "rounded-full bg-primary/10 px-2 py-0.5 text-2xs font-medium text-primary"
-                        : "rounded-full bg-muted px-2 py-0.5 text-2xs font-medium text-muted-foreground"
-                    }
-                  >
-                    {installed
-                      ? t("settings.stt_status_installed")
-                      : t("settings.stt_status_not_installed")}
-                  </span>
-                </div>
-                <p className="mt-0.5 text-2xs leading-relaxed text-muted-foreground">
-                  {t(entry.descriptionKey)}
-                </p>
-                {isThisDownloading && (
-                  <div className="mt-1.5">
-                    {/* Indeterminate (null percent) pulses until the first
-                        real progress tick from the download pipeline. */}
-                    <Progress
-                      value={percent ?? 0}
-                      className={cn("h-1.5 progress-live", percent === null && "animate-pulse")}
-                    />
-                    <p className="mt-1 text-2xs text-muted-foreground">
-                      {t("settings.stt_status_downloading")}
-                      {percent !== null ? ` · ${Math.round(percent)}%` : ""}
-                      {bytesLabel ? ` · ${bytesLabel}` : ""}
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CardHeader className="pb-2">
+          <button
+            type="button"
+            onClick={() => setOpen((value) => !value)}
+            aria-expanded={open}
+            className="flex w-full items-center gap-1.5 text-left"
+          >
+            <ChevronRight
+              className={cn(
+                "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                open && "rotate-90",
+              )}
+            />
+            <span className="font-heading text-xs leading-snug font-medium">
+              {t("plugins.models.title")}
+            </span>
+            <span className="ml-auto text-2xs tabular-nums text-muted-foreground">
+              {installedCount}/{visibleModels.length}
+            </span>
+          </button>
+        </CardHeader>
+        {open && (
+          <CardContent className="space-y-2">
+            <p className="text-2xs leading-relaxed text-muted-foreground">
+              {t("plugins.models.hint")}
+            </p>
+            {visibleModels.map((entry) => {
+              const model = models.find(
+                (candidate) => candidate.provider === entry.engine && candidate.id === entry.modelId,
+              );
+              const installed = model?.status === "installed";
+              const isThisDownloading =
+                !!progress &&
+                progress.provider === entry.engine &&
+                progress.modelId === entry.modelId &&
+                progress.phase !== "error" &&
+                progress.phase !== "done";
+              const busyHere = busy || isThisDownloading;
+              const percent = isThisDownloading && progress ? progress.percent : null;
+              const bytesLabel =
+                isThisDownloading && progress && progress.totalBytes > 0
+                  ? `${formatBytes(progress.receivedBytes)} / ${formatBytes(progress.totalBytes)}`
+                  : null;
+              return (
+                <div key={entry.pluginId} className="flex items-start gap-3 rounded-md border bg-background p-2.5">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="truncate text-xs font-medium">{t(entry.nameKey)}</span>
+                      {entry.badges.map((badge) => (
+                        <span
+                          key={badge}
+                          className="rounded-full bg-muted px-2 py-0.5 text-2xs font-medium text-muted-foreground"
+                        >
+                          {t(BADGE_LABEL_KEYS[badge])}
+                        </span>
+                      ))}
+                      <span
+                        className={
+                          installed
+                            ? "rounded-full bg-primary/10 px-2 py-0.5 text-2xs font-medium text-primary"
+                            : "rounded-full bg-muted px-2 py-0.5 text-2xs font-medium text-muted-foreground"
+                        }
+                      >
+                        {installed
+                          ? t("settings.stt_status_installed")
+                          : t("settings.stt_status_not_installed")}
+                      </span>
+                    </div>
+                    <p className="mt-0.5 text-2xs leading-relaxed text-muted-foreground">
+                      {t(entry.descriptionKey)}
                     </p>
+                    {isThisDownloading && (
+                      <div className="mt-1.5">
+                        {/* Indeterminate (null percent) pulses until the first
+                            real progress tick from the download pipeline. */}
+                        <Progress
+                          value={percent ?? 0}
+                          className={cn("h-1.5 progress-live", percent === null && "animate-pulse")}
+                        />
+                        <p className="mt-1 text-2xs text-muted-foreground">
+                          {t("settings.stt_status_downloading")}
+                          {percent !== null ? ` · ${Math.round(percent)}%` : ""}
+                          {bytesLabel ? ` · ${bytesLabel}` : ""}
+                        </p>
+                      </div>
+                    )}
+                    {isThisDownloading && RUNTIME_PHASE_LABELS[progress.phase] && (
+                      <p className="text-2xs text-muted-foreground">
+                        {t(RUNTIME_PHASE_LABELS[progress.phase]!)}
+                      </p>
+                    )}
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs"
+                        disabled={busyHere || installed}
+                        onClick={() => void handleDownload(entry)}
+                      >
+                        {t("settings.stt_download_model")}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant={confirmingId === entry.pluginId ? "destructive" : "ghost"}
+                        className="h-7 text-xs"
+                        disabled={busyHere || !installed}
+                        onBlur={() => setConfirmingId((current) => (current === entry.pluginId ? null : current))}
+                        onClick={() => void handleDelete(entry)}
+                      >
+                        {confirmingId === entry.pluginId
+                          ? t("plugins.action.uninstall_confirm")
+                          : t("settings.stt_delete_model")}
+                      </Button>
+                      {onOpenSettings && installed && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 text-xs"
+                          onClick={onOpenSettings}
+                        >
+                          {t("plugins.action.settings")}
+                        </Button>
+                      )}
+                    </div>
                   </div>
-                )}
-                {isThisDownloading && RUNTIME_PHASE_LABELS[progress.phase] && (
-                  <p className="text-2xs text-muted-foreground">
-                    {t(RUNTIME_PHASE_LABELS[progress.phase]!)}
-                  </p>
-                )}
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <Button
-                    size="sm"
-                    className="h-7 text-xs"
-                    disabled={busyHere || installed}
-                    onClick={() => void handleDownload(entry)}
-                  >
-                    {t("settings.stt_download_model")}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant={confirmingId === entry.pluginId ? "destructive" : "ghost"}
-                    className="h-7 text-xs"
-                    disabled={busyHere || !installed}
-                    onBlur={() => setConfirmingId((current) => (current === entry.pluginId ? null : current))}
-                    onClick={() => void handleDelete(entry)}
-                  >
-                    {confirmingId === entry.pluginId
-                      ? t("plugins.action.uninstall_confirm")
-                      : t("settings.stt_delete_model")}
-                  </Button>
-                  {onOpenSettings && installed && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 text-xs"
-                      onClick={onOpenSettings}
-                    >
-                      {t("plugins.action.settings")}
-                    </Button>
-                  )}
                 </div>
-              </div>
-            </div>
-          );
-        })}
-        {error && <p className="text-2xs text-destructive">{error}</p>}
-      </CardContent>
+              );
+            })}
+            {error && <p className="text-2xs text-destructive">{error}</p>}
+          </CardContent>
+        )}
+      </Collapsible>
     </Card>
   );
 }

@@ -22,7 +22,6 @@ import {
  */
 export function useRecordingCardSessionDesktop(): RecordingCardSessionView {
   const api = getRecordingCardUsbApi();
-  const [usbEnabled, setUsbEnabledState] = useState(false);
   const [phase, setPhase] = useState<RecordingCardSessionView["phase"]>("off");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [deviceName, setDeviceName] = useState<string | null>(null);
@@ -67,18 +66,13 @@ export function useRecordingCardSessionDesktop(): RecordingCardSessionView {
     };
   }, [api]);
 
-  const setAccess = useCallback(
-    (enabled: boolean) => {
-      setUsbEnabledState(enabled);
-      if (!enabled) {
-        setErrorMessage(null);
-        void teardown().then(() => {
-          if (mountedRef.current) setPhase("off");
-        });
-      }
-    },
-    [teardown],
-  );
+  /** Release the device and return to the idle (off) state. */
+  const disconnect = useCallback(() => {
+    setErrorMessage(null);
+    void teardown().then(() => {
+      if (mountedRef.current) setPhase("off");
+    });
+  }, [teardown]);
 
   const refreshFiles = useCallback(async () => {
     if (!api) return;
@@ -133,8 +127,8 @@ export function useRecordingCardSessionDesktop(): RecordingCardSessionView {
   );
 
   const connect = useCallback(
-    async (descriptor?: { vendorId: number; productId: number }) => {
-      if (!usbEnabled || !api) return;
+    async () => {
+      if (!api) return;
       setPhase("connecting");
       setErrorMessage(null);
       setActionError(null);
@@ -142,8 +136,8 @@ export function useRecordingCardSessionDesktop(): RecordingCardSessionView {
         const config = await fetchRecordingCardConfig();
         const result: RecordingCardConnectResult = await api.connect(
           config.password,
-          descriptor?.vendorId ?? config.vendorId,
-          descriptor?.productId ?? config.productId,
+          config.vendorId,
+          config.productId,
         );
         if (!mountedRef.current) return;
         setDeviceName(
@@ -160,7 +154,7 @@ export function useRecordingCardSessionDesktop(): RecordingCardSessionView {
         setErrorMessage(err instanceof Error ? err.message : String(err));
       }
     },
-    [usbEnabled, api, refreshFiles, refreshSettings],
+    [api, refreshFiles, refreshSettings],
   );
 
   /** Run one device action, surface failures, then let the caller refresh. */
@@ -302,8 +296,6 @@ export function useRecordingCardSessionDesktop(): RecordingCardSessionView {
   );
 
   return {
-    usbEnabled,
-    setAccess,
     phase,
     errorMessage,
     deviceName,
@@ -319,6 +311,7 @@ export function useRecordingCardSessionDesktop(): RecordingCardSessionView {
     actionError,
     supported: !!api,
     connect,
+    disconnect,
     refreshFiles: () => void refreshFiles(),
     refreshSettings: () => void refreshSettings(),
     refreshMicGain,

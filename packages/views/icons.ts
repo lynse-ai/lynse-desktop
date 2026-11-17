@@ -28,7 +28,6 @@ export {
   Settings,         // Settings
   HardDrive,        // Device storage
   Cpu,              // Device firmware
-  Usb,              // Recording card USB plugin
   CircleDot,        // Live recording dot
   Signal,           // RSSI / mark button
   AlertCircle,      // Inline error banner
@@ -163,7 +162,6 @@ export {
   Repeat,           // Swap / exchange
   ArrowRight,       // Forward / CTA
   Bookmark,         // Bookmark / save position
-  LayersArrowDown,  // Sync notes to vault
   ListMusic,        // Recordings list / audio library
 
   // ── Weather (Home forecast) ──────────────────────────
@@ -226,6 +224,34 @@ export const NotePlus: LucideIcon = createLucideIcon("note-plus", [
   ["path", { d: "M12 11.5v6" }],
   ["path", { d: "M9 14.5h6" }],
 ]);
+
+// Merge-into-one arrow (iconfont export, 1024 grid): scattered streams
+// converge and rise through a single up arrow — the app-wide recording-card
+// mark (devices nav, device pages, plugin row) and the vault sync button's
+// icon. Fill-based source path kept verbatim; paints with currentColor so
+// text-* utilities and hover states apply, unlike the always-colored
+// WorkBuddy mark below.
+export const MergeUp: LucideIcon = forwardRef<SVGSVGElement, LucideProps>(
+  function MergeUp({ size = 24, className, ...props }, ref) {
+    const labelled = props["aria-label"] != null;
+    return createElement(
+      "svg",
+      {
+        ref,
+        width: size,
+        height: size,
+        viewBox: "0 0 1024 1024",
+        fill: "currentColor",
+        className,
+        "aria-hidden": labelled ? undefined : true,
+        ...props,
+      },
+      createElement("path", {
+        d: "M768 405.333333v128a85.333333 85.333333 0 0 1-32 66.56L554.666667 745.813333v170.666667a21.333333 21.333333 0 0 1-21.333334 21.333333h-42.666666a21.333333 21.333333 0 0 1-21.333334-21.333333v-85.333333l-181.333333-145.066667A85.333333 85.333333 0 0 1 256 619.52v-128a21.333333 21.333333 0 0 1 21.333333-21.333333h42.666667a21.333333 21.333333 0 0 1 21.333333 21.333333v128l128 102.4V288.853333H418.986667a31.573333 31.573333 0 0 1-26.453334-49.493333l93.013334-139.946667a32 32 0 0 1 52.906666 0l93.013334 139.946667a31.573333 31.573333 0 0 1-26.453334 49.493333H554.666667v347.733334l128-102.4v-128a21.333333 21.333333 0 0 1 21.333333-21.333334h42.666667a21.333333 21.333333 0 0 1 21.333333 20.48z",
+      }),
+    );
+  },
+);
 
 // Official WorkBuddy brand mark (workbuddy.cn), kept in full color. The
 // gradient/glow/clipped-badge structure needs nested <defs>, which lucide's

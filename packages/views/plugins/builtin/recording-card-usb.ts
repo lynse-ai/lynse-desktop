@@ -2,7 +2,7 @@ import { api } from "@lynse/core/api";
 import { definePlugin } from "../registry";
 import { RECORDING_CARD_PLUGIN_ID } from "../plugin-ids";
 import { buildRecordingCardManageUrl } from "../../recording-card/manage-url";
-import { Usb } from "../../icons";
+import { MergeUp } from "../../icons";
 
 /**
  * Recording card USB — a thin entry point, not a feature plugin: the
@@ -19,7 +19,7 @@ export const recordingCardUsbPlugin = definePlugin({
   minAppVersion: "1.2.11",
   nameKey: "plugins.recordingCardUsb.name",
   descriptionKey: "plugins.recordingCardUsb.description",
-  icon: Usb,
+  icon: MergeUp,
   category: "tool",
   platforms: ["desktop"],
   permissions: [],

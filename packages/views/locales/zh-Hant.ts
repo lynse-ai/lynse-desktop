@@ -1457,11 +1457,11 @@ local_summary_failed: "深度總結生成失敗",
       description: "在飛書群聊中回答問題，並把會議總結推送到你的群裡。",
     },
     recordingCardUsb: {
-      name: "錄音卡 USB",
+      name: "錄音卡管理",
       description: "透過 USB 管理錄音卡內的錄音——在 Chrome 或 Edge 中開啟管理頁。",
     },
     models: {
-      title: "轉寫模型",
+      title: "離線模型",
       hint: "離線轉寫模型按需下載；首次下載某引擎的模型時會自動準備其運行時。",
       badge_recommended: "推薦",
       badge_diarization: "說話人分離",

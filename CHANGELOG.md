@@ -19,6 +19,36 @@
 > advertised it (its manifest mirror failed and the rollout was cancelled), so
 > that work plus the todo card redesign shipped together as 1.2.7.
 
+## 1.2.13 (2026-11-18)
+
+### New Features
+
+- Recording card management moves into the desktop app: connect your card over USB from the devices page, see device info, storage and clock sync at a glance, browse and download the recordings stored on the card with progress and resume support, and adjust device settings (auto power-off, microphone gain, device binding) plus maintenance actions in place.
+- Offline transcription models collapse into a directory row showing how many models are installed; expand it to manage downloads per engine.
+
+### Improvements
+
+- The card manager is simplified: a single Connect/Disconnect button on the device card handles the USB link — no manual vendor/product IDs.
+- Notes list metadata icons are refreshed, the recording card plugin is renamed "Recording card manager", and a unified app mark now covers navigation, device pages and the plugin row.
+
+### Fixed
+
+- Wiki retries now regenerate failed pages for real: a retry bypasses every cache layer so poisoned cached output can no longer replay forever, and rejected citations log exactly which source drifted to speed up diagnosis.
+
+### 新功能
+
+- 录音卡管理进入桌面端：在设备页通过 USB 连接录音卡，一眼查看设备信息、存储与对时状态，浏览卡内录音并下载（带进度与断点续传），就地调整设备设置（空闲关机、麦克风增益、设备绑定）与维护操作。
+- 「离线模型」收起为目录行并显示已安装数量，展开后可按引擎管理下载。
+
+### 改进
+
+- 录音卡管理页简化：设备卡上的「连接设备 / 断开设备」一个按钮完成 USB 连接与断开，无需手动填写 Vendor/Product ID。
+- 笔记列表元信息图标更新；录音卡插件更名为「录音卡管理」，导航、设备页与插件行共用统一图标。
+
+### 错误修复
+
+- 知识整理重试现在会真正重新生成失败页面：重试绕过所有缓存层，中毒的缓存输出不再无限重放；被拒引用会记录具体漂移的来源，便于排查。
+
 ## 1.2.12 (2026-11-17)
 
 ### New Features

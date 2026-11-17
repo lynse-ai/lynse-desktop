@@ -33,8 +33,8 @@ async function bootstrap() {
     if (/Windows/i.test(navigator.userAgent)) {
       document.documentElement.classList.add("recording-island-window-bottom");
     }
-    // Notch-attached "Dynamic Island" build (Rust appended `style=notch`):
-    // the surface turns opaque black and merges with the hardware cutout.
+    // Docked "Dynamic Island" build (Rust appended `style=notch`): the
+    // surface turns opaque black, hanging below the hardware cutout.
     if (new URLSearchParams(window.location.search).get("style") === "notch") {
       document.documentElement.dataset.islandStyle = "notch";
     }

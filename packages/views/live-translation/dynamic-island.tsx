@@ -28,10 +28,10 @@ interface DynamicIslandProps {
   drawerOpen?: boolean;
   /** Called when user taps the transcript toggle. Absent hides the toggle. */
   onToggleDrawer?: () => void;
-  /** Notch-attached island (macOS "Dynamic Island"): opaque black surface
-   * merging with the hardware cutout — square top corners, rounded bottom.
-   * Collapsed it shrinks to a mini pill (dot + timer + waveform); hovering
-   * reveals the control bar via `hoverControls`. */
+  /** Docked island (macOS "Dynamic Island"): opaque black stadium capsule
+   * hanging below the hardware cutout. Collapsed it shrinks to a mini pill
+   * (dot + timer + waveform); hovering reveals the control bar via
+   * `hoverControls`. */
   notchStyle?: boolean;
   /** Notch mode: the pointer is on the island, so the full control bar
    * shows. Ignored outside notch style (floating islands always show it). */
@@ -56,9 +56,9 @@ interface DynamicIslandProps {
  * Tauri window (see `.island-surface` in the app's globals.css), so the pill
  * reads as translucent glass over whatever is on screen.
  *
- * In notch style the window is pinned to the display's hardware cutout and
- * paints opaque black instead — dark tokens are forced for the window, so
- * every control keeps its contrast on the black surface.
+ * In notch style the window hangs just below the display's hardware cutout
+ * and paints opaque black — dark tokens are forced for the window, so every
+ * control keeps its contrast on the black surface.
  *
  * Auto-syncs the system tray tooltip via `live_translation_update_tray`.
  */
@@ -135,9 +135,12 @@ export function DynamicIsland({
     hoverTimer.current = setTimeout(() => onHoverCollapse?.(), HOVER_DELAY_MS);
   };
 
-  // Floating islands always show every control; the notch island collapses
-  // to the mini pill until the pointer (or an open drawer) summons them.
+  // Floating islands always show every control; the docked island collapses
+  // to the mini capsule until the pointer (or an open drawer) summons them.
   const showAllControls = !notchStyle || hoverControls || drawerOpen;
+  // The collapsed mini capsule is slimmer than the control bar row and gets
+  // the full stadium radius; expanded states keep the 22px corners.
+  const miniCapsule = notchStyle && !showAllControls;
 
   if (!recording && !paused) return null;
 
@@ -146,9 +149,9 @@ export function DynamicIsland({
       className={cn(
         "island-surface flex h-full w-full flex-col overflow-hidden",
         notchStyle
-          ? // Opaque black merging with the hardware cutout: square top corners
-            // (the notch itself is square), full-round bottom capsule.
-            "rounded-b-[22px] rounded-t-none bg-neutral-950"
+          ? // Opaque black stadium capsule hanging below the hardware cutout —
+            // same runway silhouette as the floating pill, never a notch fill.
+            cn("bg-neutral-950", miniCapsule ? "rounded-full" : "rounded-[22px]")
           : "rounded-[22px] border border-border/50",
         className,
       )}
@@ -158,7 +161,10 @@ export function DynamicIsland({
       {/* Pill row — the entire collapsed island */}
       <div
         data-tauri-drag-region
-        className="group flex h-11 shrink-0 items-center gap-2 px-3"
+        className={cn(
+          "group flex shrink-0 items-center gap-2 px-3",
+          miniCapsule ? "h-8" : "h-11",
+        )}
       >
         {/* Red pulse dot — turns warning while a stream error is up (e.g.
             the engine connection is down): the pill has no room for the

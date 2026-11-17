@@ -573,7 +573,7 @@ const en = {
     context_inbox_title: "Proactive suggestions",
     notch_island_title: "Dynamic Island",
     notch_island_enable: "Pin recording status to the display notch",
-    notch_island_hint: "While recording, the island docks flush below the display notch: collapsed it shows only the timer and waveform, hovering reveals the controls, and tapping opens the live transcript. Displays without a notch keep the classic floating pill.",
+    notch_island_hint: "While recording, the island docks flush at the top of the screen: collapsed it shows only the timer and waveform, hovering reveals the controls, and tapping opens the live transcript. Notched displays hang just below the cutout; others dock top-center.",
     context_inbox_enable: "Receive proactive suggestions",
     context_inbox_hint: "When on, the cloud continuously analyzes all of your synced meetings and delivers goal suggestions, follow-ups and review reminders to Notifications. This switch is the authorization: turning it on grants cloud analysis; turning it off stops it, discards in-progress results and applies to every device on this account.",
     context_inbox_sign_in: "Sign in to enable proactive suggestions.",

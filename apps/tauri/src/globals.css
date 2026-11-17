@@ -141,6 +141,27 @@ html:not([data-island-style="notch"]):not([data-window-effects="vibrancy"]) .isl
   background: color-mix(in srgb, var(--background) 96%, transparent);
 }
 
+/* Docked island content: fixed white-on-black — the iPhone Dynamic Island
+   treatment, independent of the user theme (the black surface above is
+   hardcoded too). Dimmed secondary content replaces text-muted-foreground
+   inside the capsule, and hover surfaces go translucent white instead of
+   the theme's muted gray. */
+html[data-island-style="notch"] .island-surface {
+  color: rgb(255 255 255 / 92%);
+}
+
+html[data-island-style="notch"] .island-surface .text-muted-foreground {
+  color: rgb(255 255 255 / 60%);
+}
+
+html[data-island-style="notch"] .island-surface .hover\:bg-muted:hover {
+  background-color: rgb(255 255 255 / 10%);
+}
+
+html[data-island-style="notch"] .island-surface .hover\:text-foreground:hover {
+  color: rgb(255 255 255);
+}
+
 /* Drawer reveal: the window itself unrolls downward (eased, see
    `animate_island_height` in live_translation.rs); the content rides it with
    a synced fade + drop from under the pill. That motion lives in

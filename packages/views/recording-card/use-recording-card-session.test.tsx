@@ -25,6 +25,9 @@ const mock = vi.hoisted(() => {
     downloadCalls: [] as { file: NvEasyDeviceFile; offset?: number }[],
     pauseCalls: 0,
     stopTransferCalls: 0,
+    lastOptions: undefined as
+      | { password: string; vendorId?: number; productId?: number; onDisconnect?: () => void }
+      | undefined,
     downloadScript:
       null as null | ((
         file: NvEasyDeviceFile,
@@ -92,8 +95,7 @@ const mock = vi.hoisted(() => {
     }
   }
 
-  const stateBag = state as typeof state & { lastOptions?: unknown };
-  return { state: stateBag, MockClient };
+  return { state, MockClient };
 });
 
 const sink = vi.hoisted(() => {

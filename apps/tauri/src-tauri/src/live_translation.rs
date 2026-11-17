@@ -3900,13 +3900,41 @@ static ISLAND_NOTCH_GEOMETRY: Mutex<Option<island_notch::NotchGeometry>> = Mutex
 /// runtime; the one-shot round-trip keeps both worlds happy.
 fn refresh_island_notch_geometry(app: &AppHandle) {
     let geometry = if ISLAND_NOTCH_MODE.load(Ordering::Acquire) {
-        detect_notch_on_main_thread(app)
+        // Displays with a hardware cutout get its real geometry; displays
+        // without one still dock the island flush at the top-center as a
+        // "fake island" (the MacIsland / Boring Notch behavior): a zero-size
+        // synthetic cutout at the screen midpoint, which `compact_island_size`
+        // clamps up to the renderable minimums. The visual language therefore
+        // stays identical when moving between notched and external displays.
+        detect_notch_on_main_thread(app).or_else(|| fake_island_geometry(app))
     } else {
         None
     };
     *ISLAND_NOTCH_GEOMETRY
         .lock()
         .unwrap_or_else(|error| error.into_inner()) = geometry;
+}
+
+/// Zero-size synthetic cutout at the primary screen's top-center, so the
+/// anchor math (flush top edge, horizontally centered) works identically with
+/// or without a hardware notch. macOS only — Windows keeps its own
+/// taskbar-anchored island and never enters notch mode.
+#[cfg(target_os = "macos")]
+fn fake_island_geometry(app: &AppHandle) -> Option<island_notch::NotchGeometry> {
+    let monitor = app.primary_monitor().ok().flatten()?;
+    let factor = monitor.scale_factor() as f64;
+    let width = monitor.size().width as f64 / factor;
+    let offset_x = monitor.position().x as f64 / factor;
+    Some(island_notch::NotchGeometry {
+        center_x: offset_x + width / 2.0,
+        width: 0.0,
+        height: 0.0,
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn fake_island_geometry(_app: &AppHandle) -> Option<island_notch::NotchGeometry> {
+    None
 }
 
 fn detect_notch_on_main_thread(app: &AppHandle) -> Option<island_notch::NotchGeometry> {
@@ -3926,28 +3954,33 @@ fn island_notch_geometry() -> Option<island_notch::NotchGeometry> {
 }
 
 /// Island window size for the collapsed state in the current mode: the mini
-/// notch pill, or the floating 340×44 capsule.
+/// stadium pill, or the floating 340×44 capsule.
 fn island_compact_size() -> (f64, f64) {
     match island_notch_geometry() {
-        Some(notch) => island_notch::compact_island_size(notch.width, notch.height),
+        Some(notch) => island_notch::compact_island_size(notch.width),
         None => (RECORDING_ISLAND_WIDTH, RECORDING_ISLAND_HEIGHT),
     }
 }
 
 /// Where the island window is pinned while it animates. Floating macOS pills
 /// hang from the menu bar (top edge fixed, grow downward); Windows pins the
-/// bottom edge above the taskbar (grow upward); the notch island is flush
-/// with the top edge and horizontally centered on the cutout.
+/// bottom edge above the taskbar (grow upward); the docked island stays
+/// horizontally centered on the notch with its top edge just below the
+/// cutout (flush with the screen top on notchless displays), so the stadium
+/// capsule reads as hanging from the notch without filling it.
 #[derive(Clone, Copy)]
 enum IslandAnchor {
     FloatingMac,
     Bottom(f64),
-    NotchCenterX(f64),
+    NotchCenter { center_x: f64, top_y: f64 },
 }
 
 fn island_anchor(app: &AppHandle) -> IslandAnchor {
     match island_notch_geometry() {
-        Some(notch) => IslandAnchor::NotchCenterX(notch.center_x),
+        Some(notch) => IslandAnchor::NotchCenter {
+            center_x: notch.center_x,
+            top_y: notch.height,
+        },
         None => match island_bottom_anchor(app) {
             Some(bottom_y) => IslandAnchor::Bottom(bottom_y),
             None => IslandAnchor::FloatingMac,
@@ -4036,8 +4069,8 @@ fn animate_island_size(
 /// above the taskbar's tray area (bottom-right, unrolling upward — the
 /// dynamic island on the opposite screen edge). Falls back to the screen
 /// centre (macOS) / right edge (Windows) when the tray rect is unavailable.
-/// On a notched display with the notch style enabled, the island instead
-/// docks flush against the screen's top edge, centered on the cutout.
+/// On a notched display with the docked style enabled, the island instead
+/// hangs as a stadium capsule centered on the cutout, just below it.
 fn position_recording_island(app: &AppHandle, window: &tauri::WebviewWindow) {
     let Some(monitor) = app.primary_monitor().ok().flatten() else {
         return;
@@ -4074,15 +4107,18 @@ fn position_recording_island(app: &AppHandle, window: &tauri::WebviewWindow) {
 
     #[cfg(not(target_os = "windows"))]
     {
-        // Notch mode wins over tray anchoring: flush against the screen's top
-        // edge, centered on the hardware cutout at the island's current width.
+        // Docked mode wins over tray anchoring: a stadium capsule centered on
+        // the notch (or the screen center), hanging just below the cutout.
         if let Some(notch) = island_notch_geometry() {
             let scale = window.scale_factor().unwrap_or(1.0);
             let width = window
                 .inner_size()
                 .map(|size| size.width as f64 / scale)
                 .unwrap_or(RECORDING_ISLAND_WIDTH);
-            let _ = window.set_position(LogicalPosition::new(notch.center_x - width / 2.0, 0.0));
+            let _ = window.set_position(LogicalPosition::new(
+                notch.center_x - width / 2.0,
+                notch.height,
+            ));
             return;
         }
         let (mut x, mut y) = {
@@ -4159,17 +4195,18 @@ fn keep_island_bottom(window: &tauri::WebviewWindow, bottom_y: Option<f64>) {
 }
 
 /// Re-anchors the island after every animation frame. `width` is the logical
-/// width just applied, so the notch arm can keep the island centered on the
-/// cutout without re-reading the window size.
+/// width just applied, so the docked arm can keep the island centered on the
+/// notch without re-reading the window size.
 fn keep_island_anchored(window: &tauri::WebviewWindow, width: f64, anchor: IslandAnchor) {
     match anchor {
         IslandAnchor::FloatingMac => {}
         IslandAnchor::Bottom(bottom_y) => keep_island_bottom(window, Some(bottom_y)),
-        IslandAnchor::NotchCenterX(center_x) => {
-            // Flush with the screen's top edge, horizontally centered on the
-            // notch: the island reads as growing out of the cutout at every
-            // size (mini pill, control bar, drawer).
-            let _ = window.set_position(LogicalPosition::new(center_x - width / 2.0, 0.0));
+        IslandAnchor::NotchCenter { center_x, top_y } => {
+            // Horizontally centered on the notch, top edge just below the
+            // cutout (flush with the screen top when there is none): the
+            // stadium capsule hangs from the notch at every size (mini pill,
+            // control bar, drawer).
+            let _ = window.set_position(LogicalPosition::new(center_x - width / 2.0, top_y));
         }
     }
 }

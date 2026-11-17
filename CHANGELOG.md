@@ -19,6 +19,34 @@
 > advertised it (its manifest mirror failed and the rollout was cancelled), so
 > that work plus the todo card redesign shipped together as 1.2.7.
 
+## 1.2.12 (2026-11-17)
+
+### New Features
+
+- Recording card USB plugin: install it from Settings → Plugins, then manage your recording card from the new web management page — connect over USB in Chrome or Edge, review the recordings stored on the card, download them to your computer with progress and resume support, and delete files behind a confirm step.
+- The recording island can now dock centered at the top of the screen even on displays without a hardware notch; on notched Macs it can hug the notch with a solid black backdrop. The preference lives in settings.
+- Wiki organization gains a dream mode: knowledge older than 30 days is deferred to the 23:00–7:00 night window, so long re-analysis no longer interrupts daytime work.
+- The knowledge base becomes a first-class plugin (beta): enable, disable or uninstall it from the plugin community — your knowledge data is never touched by uninstalling.
+
+### Improvements
+
+- The Markdown editor toolbar moved from the left sidebar to a floating bar at the bottom of the editor.
+- Annotated report screenshots can be copied straight to the clipboard, and cloud requests tolerate transient failures with spaced retries.
+- Knowledge organization caches authorization results and optimizes transfer scheduling, cutting redundant network round trips during Wiki runs.
+
+### 新功能
+
+- 录音卡 USB 插件：在「设置 → 插件社区」安装后，可在浏览器（Chrome 或 Edge）打开管理页，通过 USB 连接录音卡：查看卡内录音、下载到本机（带进度与断点续传），删除文件需二次确认。
+- 录制岛支持停靠在屏幕顶部居中位置，没有硬件刘海的屏幕也能使用；有刘海的 Mac 可吸附刘海并以纯黑不透明绘制，偏好可在设置中调整。
+- 知识整理新增「梦境模式」：超过 30 天的旧知识延迟到 23:00–7:00 夜间窗口分析，白天不再被长耗时整理打断。
+- 知识库成为一等插件（Beta）：可在插件社区中启用、停用或卸载，卸载不会动你的知识数据。
+
+### 改进
+
+- Markdown 编辑器工具栏从左侧栏改为编辑器底部悬浮条。
+- 报告标注截图支持直接复制到剪贴板；云端请求对瞬时故障增加间隔重试。
+- 知识整理缓存授权结果并优化传输调度，减少 Wiki 运行中的冗余网络往返。
+
 ## 1.2.11 (2026-11-15)
 
 ### New Features

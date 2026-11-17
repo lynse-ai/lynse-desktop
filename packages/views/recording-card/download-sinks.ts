@@ -1,3 +1,4 @@
+import { recordingCardDownloadName } from "./file-name";
 import type { NvEasyDeviceFile } from "./nveasy-types";
 
 /**
@@ -34,11 +35,13 @@ export interface RecordingCardDownloadSink {
 }
 
 export async function createRecordingCardDownloadSink(
-  file: Pick<NvEasyDeviceFile, "name">,
+  file: Pick<NvEasyDeviceFile, "name" | "startTime">,
 ): Promise<RecordingCardDownloadSink> {
   const pickerWindow = window as PickerWindow;
   if (typeof pickerWindow.showSaveFilePicker === "function") {
-    const handle = await pickerWindow.showSaveFilePicker({ suggestedName: file.name });
+    const handle = await pickerWindow.showSaveFilePicker({
+      suggestedName: recordingCardDownloadName(file),
+    });
     const writable = await handle.createWritable();
     let closed = false;
     return {
@@ -70,7 +73,7 @@ export async function createRecordingCardDownloadSink(
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = file.name;
+      anchor.download = recordingCardDownloadName(file);
       anchor.click();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
     },

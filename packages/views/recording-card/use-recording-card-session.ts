@@ -6,12 +6,16 @@ import {
   isUserCanceledDownload,
 } from "./download-sinks";
 import { fetchRecordingCardConfig } from "./credentials";
+import { recordingCardDisplayName } from "./file-name";
 import { loadNvEasyClient } from "./nveasy-loader";
 import {
   isWebUsbAvailable,
+  type NvEasyActionResult,
   type NvEasyClientLike,
   type NvEasyDeviceFile,
   type NvEasyErrorShape,
+  type NvEasyMicGain,
+  type NvEasyMicMode,
   type NvEasyStorageInfo,
 } from "./nveasy-types";
 
@@ -57,14 +61,29 @@ function isChooserCanceled(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
 }
 
+function isActionOk(result: NvEasyActionResult | null | undefined): boolean {
+  return result?.result === 0;
+}
+
+function parseAutoOffMinutes(result: NvEasyActionResult): number | null {
+  if (!isActionOk(result)) return null;
+  const minutes = Number(result.detail?.[0]);
+  return Number.isInteger(minutes) && minutes > 0 ? minutes : null;
+}
+
 export function useRecordingCardSession() {
   const [usbEnabled, setUsbEnabled] = useState(false);
   const [phase, setPhase] = useState<RecordingCardPhase>("off");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [deviceName, setDeviceName] = useState<string | null>(null);
+  const [deviceSn, setDeviceSn] = useState<string | null>(null);
+  const [clockSynced, setClockSynced] = useState<boolean | null>(null);
   const [files, setFiles] = useState<NvEasyDeviceFile[]>([]);
   const [storage, setStorage] = useState<NvEasyStorageInfo | null>(null);
   const [listError, setListError] = useState(false);
+  const [autoOffMinutes, setAutoOffMinutes] = useState<number | null>(null);
+  const [micGain, setMicGainState] = useState<NvEasyMicGain | null>(null);
+  const [settingsLoading, setSettingsLoading] = useState(false);
   const [download, setDownload] = useState<RecordingCardDownloadProgress | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -92,9 +111,14 @@ export function useRecordingCardSession() {
     clientRef.current = null;
     if (mountedRef.current) {
       setDeviceName(null);
+      setDeviceSn(null);
+      setClockSynced(null);
       setFiles([]);
       setStorage(null);
       setListError(false);
+      setAutoOffMinutes(null);
+      setMicGainState(null);
+      setSettingsLoading(false);
       setDownload(null);
       setActionError(null);
     }
@@ -124,6 +148,43 @@ export function useRecordingCardSession() {
       setStorage(storageInfo);
     } catch {
       if (clientRef.current === active) setListError(true);
+    }
+  }, []);
+
+  const refreshSettings = useCallback(async (client?: NvEasyClientLike) => {
+    const active = client ?? clientRef.current;
+    if (!active) return;
+    setSettingsLoading(true);
+    if (typeof active.getAutoOff !== "function") {
+      if (clientRef.current === active) setSettingsLoading(false);
+      return;
+    }
+    const [autoOffResult, micGainResult] = await Promise.allSettled([
+      active.getAutoOff(),
+      typeof active.getMicGain === "function" ? active.getMicGain(0) : Promise.reject(new Error("unsupported")),
+    ]);
+    if (clientRef.current !== active) return;
+    setAutoOffMinutes(
+      autoOffResult.status === "fulfilled" ? parseAutoOffMinutes(autoOffResult.value) : null,
+    );
+    setMicGainState(
+      micGainResult.status === "fulfilled" && micGainResult.value.result === 0
+        ? micGainResult.value
+        : null,
+    );
+    setSettingsLoading(false);
+  }, []);
+
+  const refreshMicGain = useCallback(async (mode: NvEasyMicMode) => {
+    const active = clientRef.current;
+    if (!active || typeof active.getMicGain !== "function") return;
+    try {
+      const result = await active.getMicGain(mode);
+      if (clientRef.current === active && result.result === 0) setMicGainState(result);
+    } catch (err) {
+      if (mountedRef.current) {
+        setActionError(err instanceof Error ? err.message : String(err));
+      }
     }
   }, []);
 
@@ -164,14 +225,26 @@ export function useRecordingCardSession() {
       }
       // Best-effort clock sync so listed startTimes are wall-clock times.
       try {
-        await client.setTime(Math.floor(Date.now() / 1000));
+        const clock = await client.setTime(Math.floor(Date.now() / 1000));
+        if (mountedRef.current) setClockSynced(clock.result === 0);
       } catch {
-        // Clock sync must never block the session.
+        if (mountedRef.current) setClockSynced(false);
+      }
+      // The serial is shown in the overview; older SDK builds may only expose
+      // it through getIdentity, so fall back to the device name.
+      let serial = info.serialNumber ?? null;
+      if (!serial && typeof client.getIdentity === "function") {
+        try {
+          serial = (await client.getIdentity()).sn || null;
+        } catch {
+          // Identity is cosmetic; never block the session on it.
+        }
       }
       if (!mountedRef.current) return;
       setDeviceName(info.name || null);
+      setDeviceSn(serial);
       setPhase("connected");
-      await refreshFiles(client);
+      await Promise.all([refreshFiles(client), refreshSettings(client)]);
     } catch (err) {
       await teardown();
       if (!mountedRef.current) return;
@@ -183,7 +256,7 @@ export function useRecordingCardSession() {
       setPhase("error");
       setErrorMessage(err instanceof Error ? err.message : String(err));
     }
-  }, [usbEnabled, refreshFiles, teardown]);
+  }, [usbEnabled, refreshFiles, refreshSettings, teardown]);
 
   const setAccess = useCallback(
     (enabled: boolean) => {
@@ -197,6 +270,28 @@ export function useRecordingCardSession() {
       }
     },
     [teardown],
+  );
+
+  /** Run one device action, surface failures, then let the caller refresh. */
+  const runAction = useCallback(
+    async (action: (client: NvEasyClientLike) => Promise<void>): Promise<boolean> => {
+      const client = clientRef.current;
+      if (!client || transferringRef.current) return false;
+      setActionError(null);
+      setSettingsLoading(true);
+      try {
+        await action(client);
+        return true;
+      } catch (err) {
+        if (mountedRef.current) {
+          setActionError(err instanceof Error ? err.message : String(err));
+        }
+        return false;
+      } finally {
+        if (mountedRef.current) setSettingsLoading(false);
+      }
+    },
+    [],
   );
 
   const deleteFile = useCallback(
@@ -217,6 +312,114 @@ export function useRecordingCardSession() {
     [refreshFiles],
   );
 
+  const deleteFiles = useCallback(
+    async (names: string[]): Promise<boolean> => {
+      const client = clientRef.current;
+      if (!client || transferringRef.current || names.length === 0) return false;
+      const ok = await runAction(async (active) => {
+        for (const name of names) {
+          const result = await active.deleteFile(name);
+          if (result.result !== 0) {
+            throw new Error(`device rejected deleting ${name} (code ${result.result})`);
+          }
+        }
+      });
+      if (ok) await refreshFiles(client);
+      return ok;
+    },
+    [refreshFiles, runAction],
+  );
+
+  const setAutoOff = useCallback(
+    async (minutes: number): Promise<boolean> => {
+      const ok = await runAction(async (client) => {
+        if (typeof client.setAutoOff !== "function") {
+          throw new Error("this SDK build does not support auto-off settings");
+        }
+        const result = await client.setAutoOff(minutes);
+        if (!isActionOk(result)) {
+          throw new Error(`device rejected auto-off (code ${result.result})`);
+        }
+      });
+      if (ok) await refreshSettings();
+      return ok;
+    },
+    [refreshSettings, runAction],
+  );
+
+  const setMicGain = useCallback(
+    async (mode: NvEasyMicMode, mic1: number, mic2: number): Promise<boolean> =>
+      runAction(async (client) => {
+        if (typeof client.setMicGain !== "function") {
+          throw new Error("this SDK build does not support microphone gain");
+        }
+        const result = await client.setMicGain(mode, mic1, mic2);
+        if (result.result !== 0) {
+          throw new Error(`device rejected microphone gain (code ${result.result})`);
+        }
+        if (mountedRef.current) setMicGainState(result);
+      }),
+    [runAction],
+  );
+
+  const setBound = useCallback(
+    async (bound: boolean): Promise<boolean> =>
+      runAction(async (client) => {
+        if (typeof client.setBound !== "function") {
+          throw new Error("this SDK build does not support device binding");
+        }
+        const result = await client.setBound(bound);
+        if (!isActionOk(result)) {
+          throw new Error(`device rejected binding (code ${result.result})`);
+        }
+      }),
+    [runAction],
+  );
+
+  const unbind = useCallback(
+    async (format = false): Promise<boolean> =>
+      runAction(async (client) => {
+        if (typeof client.unbind !== "function") {
+          throw new Error("this SDK build does not support device unbinding");
+        }
+        const result = await client.unbind(format);
+        if (!isActionOk(result)) {
+          throw new Error(`device rejected unbinding (code ${result.result})`);
+        }
+      }),
+    [runAction],
+  );
+
+  const factoryReset = useCallback(async (): Promise<boolean> => {
+    const client = clientRef.current;
+    const ok = await runAction(async (active) => {
+      if (typeof active.factoryReset !== "function") {
+        throw new Error("this SDK build does not support factory reset");
+      }
+      const result = await active.factoryReset();
+      if (!isActionOk(result)) {
+        throw new Error(`device rejected factory reset (code ${result.result})`);
+      }
+    });
+    if (ok && client) await Promise.all([refreshFiles(client), refreshSettings(client)]);
+    return ok;
+  }, [refreshFiles, refreshSettings, runAction]);
+
+  const formatStorage = useCallback(async (): Promise<boolean> => {
+    const client = clientRef.current;
+    const ok = await runAction(async (active) => {
+      if (typeof active.formatStorage !== "function") {
+        throw new Error("this SDK build does not support formatting");
+      }
+      const result = await active.formatStorage();
+      if (!isActionOk(result)) {
+        throw new Error(`device rejected formatting (code ${result.result})`);
+      }
+    });
+    if (ok && client) await refreshFiles(client);
+    return ok;
+  }, [refreshFiles, runAction]);
+
   const downloadFile = useCallback(
     async (file: NvEasyDeviceFile) => {
       const client = clientRef.current;
@@ -224,7 +427,7 @@ export function useRecordingCardSession() {
       if (transferringRef.current) return; // one download at a time
       transferringRef.current = file.name;
       setActionError(null);
-      setDownload({ fileName: file.name, loaded: 0, total: file.size });
+      setDownload({ fileName: recordingCardDisplayName(file), loaded: 0, total: file.size });
       let sink: Awaited<ReturnType<typeof createRecordingCardDownloadSink>> | null = null;
       try {
         // Pop the save picker up front, while the click's transient
@@ -241,7 +444,7 @@ export function useRecordingCardSession() {
                 (loaded) => {
                   if (mountedRef.current) {
                     setDownload({
-                      fileName: file.name,
+                      fileName: recordingCardDisplayName(file),
                       loaded: Math.min(loaded, file.size),
                       total: file.size,
                     });
@@ -268,14 +471,14 @@ export function useRecordingCardSession() {
             await sink.write(bytes);
             written += bytes.length;
             if (mountedRef.current) {
-              setDownload({ fileName: file.name, loaded: written, total: file.size });
+              setDownload({ fileName: recordingCardDisplayName(file), loaded: written, total: file.size });
             }
           }
         } else {
           // Whole-file fallback: one call, no pause, full buffer in memory.
           const bytes = await client.downloadFile(file, (loaded) => {
             if (mountedRef.current) {
-              setDownload({ fileName: file.name, loaded, total: file.size });
+              setDownload({ fileName: recordingCardDisplayName(file), loaded, total: file.size });
             }
           }, 0);
           if (bytes.length !== file.size) {
@@ -312,15 +515,29 @@ export function useRecordingCardSession() {
     phase,
     errorMessage,
     deviceName,
+    deviceSn,
+    clockSynced,
     files,
     storage,
     listError,
+    autoOffMinutes,
+    micGain,
+    settingsLoading,
     download,
     actionError,
     supported: isWebUsbAvailable(),
     connect,
     refreshFiles: () => void refreshFiles(),
+    refreshSettings: () => void refreshSettings(),
+    refreshMicGain,
     deleteFile: (name: string) => void deleteFile(name),
+    deleteFiles,
+    setAutoOff,
+    setMicGain,
+    setBound,
+    unbind,
+    factoryReset,
+    formatStorage,
     downloadFile: (file: NvEasyDeviceFile) => void downloadFile(file),
     downloading: download !== null,
   };

@@ -7,6 +7,11 @@ interface AudioVisualizerProps {
   level: number;
   /** Whether a recording session is currently active. */
   active: boolean;
+  /** Multiplier applied to the raw level before clamping to [0, 1]. Mic RMS
+   * levels hover low in normal speech; small canvases (the recording
+   * island's mini wave) pass >1 so bars visibly track the voice instead of
+   * reading as a flat sliver. */
+  gain?: number;
   className?: string;
 }
 
@@ -30,12 +35,14 @@ interface AudioVisualizerProps {
  * into a single path and filled once; the bar count adapts to the canvas
  * width (capped at 64).
  */
-export function AudioVisualizer({ level, active, className }: AudioVisualizerProps) {
+export function AudioVisualizer({ level, active, gain = 1, className }: AudioVisualizerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const levelRef = useRef(level);
   const activeRef = useRef(active);
+  const gainRef = useRef(gain);
   levelRef.current = level;
   activeRef.current = active;
+  gainRef.current = gain;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -89,7 +96,7 @@ export function AudioVisualizer({ level, active, className }: AudioVisualizerPro
       lastFrameAt = time;
 
       const isActive = activeRef.current;
-      const target = Math.min(1, Math.max(0, levelRef.current));
+      const target = Math.min(1, Math.max(0, levelRef.current * gainRef.current));
       const t = time / 1000;
       const mid = height / 2;
 

@@ -43,7 +43,10 @@ keyring = { version = "3", features = ["apple-native", "windows-native"] }
 libc = "0.2"
 log = "0.4"
 # Recording-card USB transport: device enumeration, control and bulk transfers.
-nusb = "0.2"
+nusb = { version = "0.2", features = ["tokio"] }
+# Recording-card files hold raw fixed-size Opus packets; decode them to
+# 16 kHz mono WAV with a valid RIFF header before saving to disk.
+opus = "0.3"
 md-5 = "0.10"
 mime_guess = "2"
 percent-encoding = "2"

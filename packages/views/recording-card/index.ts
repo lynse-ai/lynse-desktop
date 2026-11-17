@@ -10,10 +10,14 @@ export { useRecordingCardSessionDesktop } from "./use-recording-card-session-des
 export type {
   DesktopRecordingCardUsbApi,
   ProgressChannel,
-  RecordingCardFile,
-  RecordingCardStorage,
+  RecordingCardActionResult,
   RecordingCardConnectResult,
   RecordingCardDownloadProgress,
+  RecordingCardFile,
+  RecordingCardMicGain,
+  RecordingCardMicMode,
+  RecordingCardSessionView,
+  RecordingCardStorage,
 } from "./transport";
 export type {
   NvEasyClientLike,

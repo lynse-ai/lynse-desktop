@@ -42,6 +42,27 @@ export interface NvEasyDeviceInfo {
   authenticated: boolean;
 }
 
+export interface NvEasyDeviceIdentity {
+  sn: string;
+  bleMac: string;
+  wifiMac: string;
+  labelSn: string;
+}
+
+export type NvEasyMicMode = 0 | 1;
+
+export interface NvEasyMicGain {
+  result: number;
+  mode: NvEasyMicMode;
+  mic1: number;
+  mic2: number;
+}
+
+export interface NvEasyFormatResult extends NvEasyActionResult {
+  freeSpace?: number;
+  totalSpace?: number;
+}
+
 export interface NvEasyActionResult {
   result: number;
   detail: string[];
@@ -64,7 +85,20 @@ export interface NvEasyClientLike {
   getFileList(): Promise<NvEasyDeviceFile[]>;
   getStorage(): Promise<NvEasyStorageInfo>;
   getVersion(): Promise<NvEasyDeviceVersion>;
+  getIdentity(): Promise<NvEasyDeviceIdentity>;
   deleteFile(name: string): Promise<NvEasyActionResult>;
+  getAutoOff(): Promise<NvEasyActionResult>;
+  setAutoOff(minutes: number): Promise<NvEasyActionResult>;
+  getMicGain(mode: NvEasyMicMode): Promise<NvEasyMicGain>;
+  setMicGain(
+    mode: NvEasyMicMode,
+    mic1: number,
+    mic2: number,
+  ): Promise<NvEasyMicGain>;
+  setBound(bound: boolean): Promise<NvEasyActionResult>;
+  unbind(format: boolean): Promise<NvEasyActionResult>;
+  factoryReset(): Promise<NvEasyActionResult>;
+  formatStorage(): Promise<NvEasyFormatResult>;
   downloadFile(
     file: NvEasyDeviceFile,
     onProgress?: (loaded: number, total: number) => void,

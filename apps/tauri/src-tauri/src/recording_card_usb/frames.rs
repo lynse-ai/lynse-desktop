@@ -2,16 +2,19 @@
 //!
 //! Wire format (recovered from the vendor SDK, see
 //! specs/recorder-usb-access/webusb-protocol-notes.md):
-//!   text  frame: `<PREFIX>#<cmd>#<p1>#...#<pn>#` (UTF-8, NUL padded)
-//!   binary frame: `<PREFIX>#<cmd>#<len>#<crc32>#` + raw payload bytes
+//!   request text frame:  `*APP#<cmd>#<p1>#...#<pn>#` (UTF-8, NUL padded)
+//!   response text frame: `*DEV#<cmd>#<p1>#...#<pn>#` (UTF-8, NUL padded)
+//!   binary frame:        `<PREFIX>#<cmd>#<len>#<crc32>#` + raw payload bytes
 //! Frames are parsed by stripping NUL bytes, trimming, and splitting on '#'.
 
 use crc32fast::Hasher;
 
-/// Frame prefix token. The vendor SDK keeps this in its obfuscated string
-/// table; the old BLE firmware used `*APP#`/`*DEV#`. Kept as a single
-/// constant so a real-device capture can replace it without touching codecs.
-pub const DEFAULT_FRAME_PREFIX: &str = "*APP";
+/// Request frame prefix. Decoded from the vendor SDK's obfuscated string
+/// table and confirmed by running `getFileList()` against a mock device.
+pub const DEFAULT_REQUEST_FRAME_PREFIX: &str = "*APP";
+
+/// Response frame prefix. `readTextFrame()` in the SDK only accepts `*DEV#`.
+pub const DEFAULT_RESPONSE_FRAME_PREFIX: &str = "*DEV";
 
 /// Build a UTF-8 text command frame: `PREFIX#cmd#parts...#`.
 pub fn build_text_frame(prefix: &str, cmd: &str, parts: &[&str]) -> Vec<u8> {
@@ -112,14 +115,20 @@ mod tests {
 
     #[test]
     fn text_frame_layout() {
-        let frame = build_text_frame("*APP", "getlist", &[]);
+        let frame = build_text_frame(DEFAULT_REQUEST_FRAME_PREFIX, "getlist", &[]);
         assert_eq!(frame, b"*APP#getlist#");
     }
 
     #[test]
     fn text_frame_with_parts() {
-        let frame = build_text_frame("*APP", "filect", &["0", "1", "2"]);
+        let frame = build_text_frame(DEFAULT_REQUEST_FRAME_PREFIX, "filect", &["0", "1", "2"]);
         assert_eq!(frame, b"*APP#filect#0#1#2#");
+    }
+
+    #[test]
+    fn response_prefix_is_dev() {
+        assert_eq!(DEFAULT_REQUEST_FRAME_PREFIX, "*APP");
+        assert_eq!(DEFAULT_RESPONSE_FRAME_PREFIX, "*DEV");
     }
 
     #[test]
@@ -135,18 +144,18 @@ mod tests {
     #[test]
     fn binary_frame_roundtrip() {
         let payload = b"hello recording card";
-        let frame = build_binary_frame("*APP", "filedata", payload);
-        let (cmd, decoded) = parse_binary_frame(&frame, "*APP").unwrap();
+        let frame = build_binary_frame(DEFAULT_RESPONSE_FRAME_PREFIX, "filedata", payload);
+        let (cmd, decoded) = parse_binary_frame(&frame, DEFAULT_RESPONSE_FRAME_PREFIX).unwrap();
         assert_eq!(cmd, "filedata");
         assert_eq!(decoded, payload);
     }
 
     #[test]
     fn binary_frame_rejects_bad_crc() {
-        let mut frame = build_binary_frame("*APP", "filedata", b"payload");
+        let mut frame = build_binary_frame(DEFAULT_REQUEST_FRAME_PREFIX, "filedata", b"payload");
         let last = frame.len() - 1;
         frame[last] ^= 0xff;
-        assert!(parse_binary_frame(&frame, "*APP").is_err());
+        assert!(parse_binary_frame(&frame, DEFAULT_REQUEST_FRAME_PREFIX).is_err());
     }
 
     #[test]

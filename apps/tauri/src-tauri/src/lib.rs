@@ -5650,6 +5650,14 @@ pub fn run() {
             recording_card_usb::session::recording_card_usb_delete_file,
             recording_card_usb::session::recording_card_usb_download,
             recording_card_usb::session::recording_card_usb_cancel_download,
+            recording_card_usb::session::recording_card_usb_get_auto_off,
+            recording_card_usb::session::recording_card_usb_set_auto_off,
+            recording_card_usb::session::recording_card_usb_get_mic_gain,
+            recording_card_usb::session::recording_card_usb_set_mic_gain,
+            recording_card_usb::session::recording_card_usb_set_bound,
+            recording_card_usb::session::recording_card_usb_unbind,
+            recording_card_usb::session::recording_card_usb_factory_reset,
+            recording_card_usb::session::recording_card_usb_format_storage,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Lynse Tauri application")

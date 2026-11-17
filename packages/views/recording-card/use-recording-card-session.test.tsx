@@ -22,6 +22,12 @@ const mock = vi.hoisted(() => {
     fileList: [] as NvEasyDeviceFile[],
     deleteResult: 0,
     deleteCalls: [] as string[],
+    autoOffMinutes: 10,
+    autoOffCalls: [] as number[],
+    boundCalls: [] as boolean[],
+    unbindCalls: [] as boolean[],
+    factoryResetCalls: 0,
+    formatStorageCalls: 0,
     downloadCalls: [] as { file: NvEasyDeviceFile; offset?: number }[],
     pauseCalls: 0,
     stopTransferCalls: 0,
@@ -78,6 +84,39 @@ const mock = vi.hoisted(() => {
     async deleteFile(name: string) {
       state.deleteCalls.push(name);
       return { result: state.deleteResult, detail: [] };
+    }
+    async getIdentity() {
+      return { sn: "LYNSE-SN-1", bleMac: "", wifiMac: "", labelSn: "" };
+    }
+    async getAutoOff() {
+      return { result: 0, detail: [String(state.autoOffMinutes)] };
+    }
+    async setAutoOff(minutes: number) {
+      state.autoOffCalls.push(minutes);
+      state.autoOffMinutes = minutes;
+      return { result: 0, detail: [] };
+    }
+    async getMicGain(mode: 0 | 1) {
+      return { result: 0, mode, mic1: 5, mic2: 6 };
+    }
+    async setMicGain(mode: 0 | 1, mic1: number, mic2: number) {
+      return { result: 0, mode, mic1, mic2 };
+    }
+    async setBound(bound: boolean) {
+      state.boundCalls.push(bound);
+      return { result: 0, detail: [] };
+    }
+    async unbind(format: boolean) {
+      state.unbindCalls.push(format);
+      return { result: 0, detail: [] };
+    }
+    async factoryReset() {
+      state.factoryResetCalls++;
+      return { result: 0, detail: [] };
+    }
+    async formatStorage() {
+      state.formatStorageCalls++;
+      return { result: 0, detail: [] };
     }
     downloadFile(
       file: NvEasyDeviceFile,
@@ -150,6 +189,12 @@ beforeEach(() => {
   state.fileList = [];
   state.deleteResult = 0;
   state.deleteCalls = [];
+  state.autoOffMinutes = 10;
+  state.autoOffCalls = [];
+  state.boundCalls = [];
+  state.unbindCalls = [];
+  state.factoryResetCalls = 0;
+  state.formatStorageCalls = 0;
   state.downloadCalls = [];
   state.pauseCalls = 0;
   state.stopTransferCalls = 0;
@@ -189,6 +234,35 @@ describe("recording card USB session", () => {
       vendorId: 0x3654,
       productId: 0x4155,
     });
+  });
+
+  it("loads device settings and drives confirmed management actions", async () => {
+    const { result } = renderHook(() => useRecordingCardSession());
+
+    act(() => result.current.setAccess(true));
+    await act(async () => {
+      await result.current.connect();
+    });
+
+    expect(result.current.deviceSn).toBe("LYNSE-SN-1");
+    expect(result.current.autoOffMinutes).toBe(10);
+    expect(result.current.micGain).toEqual({ result: 0, mode: 0, mic1: 5, mic2: 6 });
+
+    await act(async () => {
+      expect(await result.current.setAutoOff(20)).toBe(true);
+      expect(await result.current.setBound(true)).toBe(true);
+      expect(await result.current.unbind(false)).toBe(true);
+      expect(await result.current.factoryReset()).toBe(true);
+      expect(await result.current.formatStorage()).toBe(true);
+      expect(await result.current.setMicGain(1, 7, 8)).toBe(true);
+    });
+
+    expect(mock.state.autoOffCalls).toEqual([20]);
+    expect(mock.state.boundCalls).toEqual([true]);
+    expect(mock.state.unbindCalls).toEqual([false]);
+    expect(mock.state.factoryResetCalls).toBe(1);
+    expect(mock.state.formatStorageCalls).toBe(1);
+    expect(result.current.micGain).toEqual({ result: 0, mode: 1, mic1: 7, mic2: 8 });
   });
 
   it("lets page descriptor inputs override the server prefill", async () => {

@@ -146,7 +146,7 @@ export function DynamicIsland({
         className={cn(
           "group flex h-11 shrink-0 items-center gap-2 px-3",
           "transition-transform duration-(--duration-quick)",
-          miniCapsule && "-translate-y-1.5",
+          miniCapsule && "-translate-y-1",
         )}
       >
         {/* Red pulse dot — turns warning while a stream error is up (e.g.
@@ -186,11 +186,13 @@ export function DynamicIsland({
         {/* Mini live waveform — the same wave the expanded drawer shows in its
             footer, shrunk to a sliver: just enough to read "recording" at a
             glance. Flexes to absorb leftover pill width, so the row always
-            fits the narrow capsule. */}
-        <div data-tauri-drag-region className="h-3 min-w-8 flex-1">
+            fits the narrow capsule. Gain >1 because raw mic RMS levels sit
+            low in normal speech — without it the wave reads as a flat line. */}
+        <div data-tauri-drag-region className="h-4 min-w-8 flex-1">
           <AudioVisualizer
             level={recordingLevel(view)}
             active={recording && !paused}
+            gain={2.6}
             className="h-full w-full"
           />
         </div>

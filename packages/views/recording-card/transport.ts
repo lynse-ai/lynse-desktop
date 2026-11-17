@@ -24,7 +24,26 @@ export interface RecordingCardStorage {
 export interface RecordingCardConnectResult {
   vendorId: number;
   productId: number;
+  /** Card serial from the authsn command; null when the device skipped it. */
+  deviceSn: string | null;
   storage: RecordingCardStorage | null;
+  /** Whether the RTC sync during connect was acknowledged by the card. */
+  clockSynced: boolean;
+}
+
+/** Two-channel gain for one scene (0 = meeting, 1 = call). */
+export type RecordingCardMicMode = 0 | 1;
+
+export interface RecordingCardMicGain {
+  result: number;
+  mode: number;
+  mic1: number;
+  mic2: number;
+}
+
+export interface RecordingCardActionResult {
+  result: number;
+  detail: string[];
 }
 
 export interface RecordingCardDownloadProgress {
@@ -49,6 +68,18 @@ export interface DesktopRecordingCardUsbApi {
   listFiles(): Promise<RecordingCardFile[]>;
   storage(): Promise<RecordingCardStorage>;
   deleteFile(name: string): Promise<void>;
+  getAutoOff(): Promise<number>;
+  setAutoOff(minutes: number): Promise<void>;
+  getMicGain(mode: RecordingCardMicMode): Promise<RecordingCardMicGain>;
+  setMicGain(
+    mode: RecordingCardMicMode,
+    mic1: number,
+    mic2: number,
+  ): Promise<RecordingCardMicGain>;
+  setBound(bound: boolean): Promise<void>;
+  unbind(format: boolean): Promise<void>;
+  factoryReset(): Promise<void>;
+  formatStorage(): Promise<void>;
   /** Download to a caller-chosen local path; progress via a Tauri Channel. */
   download(
     file: RecordingCardFile,
@@ -73,15 +104,31 @@ export interface RecordingCardSessionView {
   phase: "off" | "connecting" | "connected" | "error";
   errorMessage: string | null;
   deviceName: string | null;
+  /** Serial reported by authsn/getIdentity; falls back to deviceName. */
+  deviceSn: string | null;
+  /** RTC sync acknowledgement from the most recent connect. */
+  clockSynced: boolean | null;
   files: RecordingCardFile[];
   storage: RecordingCardStorage | null;
   listError: boolean;
+  autoOffMinutes: number | null;
+  micGain: RecordingCardMicGain | null;
+  settingsLoading: boolean;
   download: RecordingCardDownloadProgress | null;
   actionError: string | null;
   supported: boolean;
   connect: (descriptor?: { vendorId: number; productId: number }) => void;
   refreshFiles: () => void;
+  refreshSettings: () => void;
+  refreshMicGain: (mode: RecordingCardMicMode) => Promise<void>;
   deleteFile: (name: string) => void;
+  deleteFiles: (names: string[]) => Promise<boolean>;
+  setAutoOff: (minutes: number) => Promise<boolean>;
+  setMicGain: (mode: RecordingCardMicMode, mic1: number, mic2: number) => Promise<boolean>;
+  setBound: (bound: boolean) => Promise<boolean>;
+  unbind: (format?: boolean) => Promise<boolean>;
+  factoryReset: () => Promise<boolean>;
+  formatStorage: () => Promise<boolean>;
   downloadFile: (file: RecordingCardFile) => void;
   downloading: boolean;
 }

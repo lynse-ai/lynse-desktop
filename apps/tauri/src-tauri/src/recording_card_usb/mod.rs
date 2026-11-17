@@ -1,3 +1,4 @@
+mod audio;
 mod device;
 mod frames;
 mod protocol;

@@ -470,6 +470,15 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
       listFiles: () => command("recording_card_usb_list_files"),
       storage: () => command("recording_card_usb_storage"),
       deleteFile: (name) => command("recording_card_usb_delete_file", { name }),
+      getAutoOff: () => command<number>("recording_card_usb_get_auto_off"),
+      setAutoOff: (minutes) => command("recording_card_usb_set_auto_off", { minutes }),
+      getMicGain: (mode) => command("recording_card_usb_get_mic_gain", { mode }),
+      setMicGain: (mode, mic1, mic2) =>
+        command("recording_card_usb_set_mic_gain", { mode, mic1, mic2 }),
+      setBound: (bound) => command("recording_card_usb_set_bound", { bound }),
+      unbind: (format) => command("recording_card_usb_unbind", { format }),
+      factoryReset: () => command("recording_card_usb_factory_reset"),
+      formatStorage: () => command("recording_card_usb_format_storage"),
       download: async (file, onProgress) => {
         const channel = new Channel<RecordingCardDownloadProgress>();
         channel.onmessage = (progress) => {

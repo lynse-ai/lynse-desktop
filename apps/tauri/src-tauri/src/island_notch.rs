@@ -43,17 +43,16 @@ pub(crate) fn notch_from_auxiliary(left: AuxExtent, right: AuxExtent) -> Option<
     Some(((left.max_x + right.min_x) / 2.0, right.min_x - left.max_x))
 }
 
-/// Height of the docked island's collapsed mini capsule — slimmer than the
-/// 44pt floating pill row, since it only carries the dot, timer and waveform
-/// (controls only appear on hover at the full 44pt bar).
-pub(crate) const MINI_ISLAND_HEIGHT: f64 = 32.0;
+/// Height of the docked island's collapsed mini capsule — proportions match
+/// the cutout itself (~1:5), so the silhouette reads as the notch extending
+/// downward into a rounded island rather than a thin strip below it.
+pub(crate) const MINI_ISLAND_HEIGHT: f64 = 36.0;
 
 /// Logical size of the notch-mode island in its collapsed (mini) state —
-/// a full stadium capsule (no notch-filling square top), so the height is
-/// the slim mini row and the width is the notch plus a small lip (clamped
-/// to what the compact UI can render in).
+/// a full stadium capsule whose width hugs the cutout exactly (clamped to
+/// what the compact UI can render on notchless displays).
 pub(crate) fn compact_island_size(notch_width: f64) -> (f64, f64) {
-    ((notch_width + 40.0).max(200.0), MINI_ISLAND_HEIGHT)
+    (notch_width.max(180.0), MINI_ISLAND_HEIGHT)
 }
 
 /// Detects the display notch by asking AppKit. Must run on the main thread
@@ -88,7 +87,11 @@ pub(crate) fn detect_notch() -> Option<NotchGeometry> {
     Some(NotchGeometry {
         center_x,
         width,
-        height: insets.top,
+        // 1pt upward overlap: the capsule must fuse with the cutout with no
+        // hairline gap between the two black surfaces (subpixel rounding
+        // would otherwise leave a visible seam). Both surfaces are black, so
+        // the overlap is invisible.
+        height: (insets.top - 1.0).max(0.0),
     })
 }
 
@@ -129,12 +132,13 @@ mod tests {
     }
 
     #[test]
-    fn compact_size_is_wider_than_the_notch_at_mini_height() {
-        // Typical notch gets a small horizontal lip; the capsule is always the
-        // slim mini height (stadium shape, controls live on the hover bar).
-        assert_eq!(compact_island_size(185.0), (225.0, 32.0));
-        // Tiny cutouts clamp up to the minimum the compact UI can render in.
-        assert_eq!(compact_island_size(100.0), (200.0, 32.0));
-        assert_eq!(compact_island_size(0.0), (200.0, 32.0));
+    fn compact_size_hugs_the_notch_at_island_proportions() {
+        // The capsule is exactly the cutout's width, so it reads as the notch
+        // extending downward rather than a wider strip floating below it.
+        assert_eq!(compact_island_size(185.0), (185.0, 36.0));
+        // Tiny cutouts and the fake-island fallback clamp to the minimum the
+        // compact UI can render in.
+        assert_eq!(compact_island_size(100.0), (180.0, 36.0));
+        assert_eq!(compact_island_size(0.0), (180.0, 36.0));
     }
 }

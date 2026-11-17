@@ -1414,7 +1414,11 @@ export function ContentPanel() {
                 </div>
               )}
 
-              <div ref={contentPreviewRef} className={`content-preview mt-2 flex-1 min-h-0 ${contentTab === "transcription" || contentTab === "chapters" ? "lyse-transcription-preview flex flex-col flex-1 min-h-0" : ""}`}>
+              {/* Summary/note tabs host the docked Markdown toolbar, whose column
+                  must stretch to the panel bottom — otherwise the pill rests in
+                  flow right after the last paragraph instead of docking above
+                  the disclaimer strip. */}
+              <div ref={contentPreviewRef} className={`content-preview mt-2 flex-1 min-h-0 ${contentTab === "transcription" || contentTab === "chapters" ? "lyse-transcription-preview flex flex-col flex-1 min-h-0" : contentTab.startsWith("summary-") || contentTab.startsWith("note-") ? "flex flex-col" : ""}`}>
                 {/* Keyed by the resummary lifecycle: leaving the pending state
                     remounts this box and replays its entrance fade on the fresh
                     content instead of hard-swapping. While a replace regenerates

@@ -85,6 +85,10 @@ import type {
   DesktopAudioEditorApi,
 } from "@lynse/views/audio-editor";
 import type { DesktopCustomModelsApi } from "@lynse/views/custom-models";
+import type {
+  DesktopRecordingCardUsbApi,
+  RecordingCardDownloadProgress,
+} from "@lynse/views/recording-card";
 
 export type AppUpdateInfo = {
   currentVersion: string;
@@ -123,6 +127,7 @@ export type DesktopApi = {
     shareFile: (name: string, bytes: Uint8Array) => Promise<boolean>;
   };
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
+  recordingCardUsb: DesktopRecordingCardUsbApi;
   lynclawNotes: DesktopLynclawNotesApi;
   customModels: DesktopCustomModelsApi;
   cloudSync: DesktopCloudSyncApi;
@@ -456,6 +461,23 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
     mcp: desktopMcpApi,
     openExternal: async (url) => {
       await openUrl(url);
+    },
+    recordingCardUsb: {
+      connect: (password, vendorId, productId) =>
+        command("recording_card_usb_connect", { password, vendorId, productId }),
+      disconnect: () => command("recording_card_usb_disconnect"),
+      state: () => command("recording_card_usb_state"),
+      listFiles: () => command("recording_card_usb_list_files"),
+      storage: () => command("recording_card_usb_storage"),
+      deleteFile: (name) => command("recording_card_usb_delete_file", { name }),
+      download: async (file, onProgress) => {
+        const channel = new Channel<RecordingCardDownloadProgress>();
+        channel.onmessage = (progress) => {
+          onProgress.onmessage?.(progress);
+        };
+        return command<string | null>("recording_card_usb_download", { file, onProgress: channel });
+      },
+      cancelDownload: () => command("recording_card_usb_cancel_download"),
     },
     lynclawNotes: {
       list: (scope) => command("lynclaw_notes_list", { scope }),

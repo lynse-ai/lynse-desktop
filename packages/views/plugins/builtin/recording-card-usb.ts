@@ -1,5 +1,6 @@
 import { api } from "@lynse/core/api";
 import { definePlugin } from "../registry";
+import { RECORDING_CARD_PLUGIN_ID } from "../plugin-ids";
 import { buildRecordingCardManageUrl } from "../../recording-card/manage-url";
 import { Usb } from "../../icons";
 
@@ -12,7 +13,7 @@ import { Usb } from "../../icons";
  * browser session.
  */
 export const recordingCardUsbPlugin = definePlugin({
-  id: "lynse.recording-card-usb",
+  id: RECORDING_CARD_PLUGIN_ID,
   kind: "app",
   version: "1.0.0",
   minAppVersion: "1.2.11",

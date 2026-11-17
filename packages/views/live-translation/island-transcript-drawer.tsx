@@ -84,17 +84,19 @@ export function IslandTranscriptDrawer({
   return (
     <motion.div
       className="relative flex min-h-0 flex-1 flex-col"
-      initial={reduceMotion ? false : { y: -14, opacity: 0 }}
-      animate={{ y: closing ? -10 : 0, opacity: closing ? 0 : 1 }}
-      // Interruptible transition instead of one-shot keyframes: reopening
-      // mid-close retargets smoothly. Curves/durations match the window
-      // unroll (`animate_island_height` in live_translation.rs).
+      initial={reduceMotion ? false : { y: -6, opacity: 0 }}
+      animate={{ y: closing ? -4 : 0, opacity: closing ? 0 : 1 }}
+      // Interruptible fade instead of one-shot keyframes: reopening mid-close
+      // retargets smoothly. Durations track the native window animation
+      // (`animate_island_size`, 260ms open / 200ms close) so content and
+      // window land together — the drawer is a fade, not a tall slide, which
+      // avoids the "window bottom-out before content" mismatch.
       transition={
         reduceMotion
           ? { duration: 0 }
           : closing
-            ? { duration: 0.15, ease: [0.55, 0, 1, 0.45] }
-            : { duration: 0.32, ease: [0.22, 1, 0.36, 1] }
+            ? { duration: 0.18, ease: [0.55, 0, 1, 0.45] }
+            : { duration: 0.24, ease: [0.22, 1, 0.36, 1] }
       }
     >
       {/* Header */}

@@ -11,9 +11,18 @@ import { RESOURCES } from "../locales";
 import { useLiveTranslation } from "./use-live-translation";
 import type { LiveConnectionDescriptor, LiveTranslationTrayAction } from "./types";
 
-/** How long the drawer's collapse animation runs before the window shrinks.
-    Matches the closing transition in `IslandTranscriptDrawer` (150ms). */
-const DRAWER_CLOSE_ANIMATION_MS = 150;
+/** How long the drawer's fade-out runs before the window shrinks. Matches the
+    closing transition in `IslandTranscriptDrawer` (180ms). */
+const DRAWER_CLOSE_ANIMATION_MS = 180;
+/** Hover in responds fast; hover out waits long enough for the pointer to
+    travel back from the screen edge onto the still-open island. */
+const HOVER_ENTER_MS = 60;
+const HOVER_LEAVE_MS = 220;
+
+/** Layout phases of the docked island. Kept in one place (this window) so
+    hover and drawer transitions can never disagree about the target size.
+    Floating islands only ever use "controls"/"drawer". */
+type IslandPhase = "mini" | "controls" | "drawer" | "closing";
 
 /**
  * Recording-island mini window — the collapsed form of the recording page.
@@ -39,17 +48,21 @@ export function RecordingIslandWindow() {
   useMemo(() => initI18n({ resources: RESOURCES }), []);
   const { api, view } = useLiveTranslation();
   const { t } = useTranslation();
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerMounted, setDrawerMounted] = useState(false);
-  const closeTimer = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
-  // Notch-attached "Dynamic Island" build: Rust appends `style=notch` when it
-  // detects the display cutout (see `build_recording_island_window`). The
-  // floating-pill variant ignores the hover state entirely.
+  // Notch-attached "Dynamic Island" build: Rust appends `style=notch` when a
+  // notch is detected OR the fake-island fallback is active. The floating
+  // pill variant ignores hover and drawer phases entirely.
   const notchStyle = useMemo(
     () => new URLSearchParams(window.location.search).get("style") === "notch",
     [],
   );
-  const [hoverControls, setHoverControls] = useState(false);
+  // Single source of truth for the island layout. `pointerInside` is tracked
+  // here (not in the child) so closing the drawer while the pointer is still
+  // on the island keeps the control bar up instead of collapsing to mini.
+  const [phase, setPhase] = useState<IslandPhase>(notchStyle ? "mini" : "controls");
+  const [drawerMounted, setDrawerMounted] = useState(false);
+  const pointerInside = useRef(false);
+  const hoverTimer = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
+  const closeTimer = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
 
   // Point the running session's live cloud connections at `targetLanguage` —
   // "none" attaches pure transcription, a language code attaches translation.
@@ -90,44 +103,85 @@ export function RecordingIslandWindow() {
     [api, view.sessionId, view.epoch, view.sourceLanguage, view.audioSources, t],
   );
 
-  // Notch hover affordances: the window grows to the control bar while the
-  // pointer rests on the island and shrinks back to the mini pill when it
-  // leaves (the debounce itself lives in DynamicIsland).
-  const expandControls = useCallback(() => {
-    setHoverControls(true);
-    void api?.setIslandExpanded(true, "controls").catch(() => {});
-  }, [api]);
+  // The Rust window size follows `phase`, never a per-handler ad-hoc call, so
+  // hover and drawer can't leave the window and the DOM disagreeing.
+  const sizeForPhase = useCallback(
+    (next: IslandPhase) => {
+      if (!api) return;
+      if (next === "drawer") void api.setIslandExpanded(true, "drawer");
+      else if (next === "mini") void api.collapseIsland();
+      else void api.setIslandExpanded(true, "controls");
+    },
+    [api],
+  );
 
-  const collapseControls = useCallback(() => {
-    setHoverControls(false);
-    void api?.collapseIsland().catch(() => {});
-  }, [api]);
+  const clearHoverTimer = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = undefined;
+  };
+
+  // Pointer enters: cancel any pending collapse, grow to controls (or keep
+  // the drawer open). Fast in so the island feels responsive.
+  const handlePointerEnter = useCallback(() => {
+    if (!notchStyle) return;
+    pointerInside.current = true;
+    clearHoverTimer();
+    setPhase((current) => {
+      if (current === "drawer" || current === "closing") return current;
+      hoverTimer.current = setTimeout(() => {
+        setPhase("controls");
+        sizeForPhase("controls");
+      }, HOVER_ENTER_MS);
+      return current;
+    });
+  }, [notchStyle, sizeForPhase]);
+
+  // Pointer leaves: dismiss only the hover control bar. A drawer stays open
+  // (the user is reading it) until explicitly closed.
+  const handlePointerLeave = useCallback(() => {
+    if (!notchStyle) return;
+    pointerInside.current = false;
+    clearHoverTimer();
+    setPhase((current) => {
+      if (current !== "controls") return current;
+      hoverTimer.current = setTimeout(() => {
+        setPhase("mini");
+        sizeForPhase("mini");
+      }, HOVER_LEAVE_MS);
+      return current;
+    });
+  }, [notchStyle, sizeForPhase]);
 
   const collapseDrawer = useCallback(() => {
-    setDrawerOpen(false);
-    setHoverControls(false);
+    setPhase("closing");
     if (closeTimer.current) clearTimeout(closeTimer.current);
     closeTimer.current = setTimeout(() => {
       setDrawerMounted(false);
-      void api?.setIslandExpanded(false).catch(() => {});
+      // If the pointer is still over the island, return to the control bar —
+      // this was the "close then island vanishes" bug. Otherwise collapse to
+      // mini (docked) / stay floating (non-notch).
+      const next: IslandPhase = pointerInside.current && notchStyle ? "controls" : notchStyle ? "mini" : "controls";
+      setPhase(next);
+      sizeForPhase(next);
     }, DRAWER_CLOSE_ANIMATION_MS);
-  }, [api]);
+  }, [notchStyle, sizeForPhase]);
 
   const toggleDrawer = useCallback(() => {
-    if (drawerOpen) {
+    if (phase === "drawer" || phase === "closing") {
       collapseDrawer();
       return;
     }
+    clearHoverTimer();
     if (closeTimer.current) clearTimeout(closeTimer.current);
-    // Grow the window first so the drawer animates into real space.
+    // Grow the window first so the drawer fades into real space.
     void api?.setIslandExpanded(true, "drawer").catch(() => {});
     setDrawerMounted(true);
-    setDrawerOpen(true);
+    setPhase("drawer");
     // Opening the drawer only shows the transcript the session is already
     // producing. Attaching recognition here would silently open a cloud
     // stream the user never asked for — the language picker in the drawer is
     // the explicit way in.
-  }, [api, drawerOpen, collapseDrawer]);
+  }, [api, phase, collapseDrawer]);
 
   // Fold the drawer back up when the session winds down.
   useEffect(() => {
@@ -136,7 +190,15 @@ export function RecordingIslandWindow() {
     }
   }, [view.state, collapseDrawer]);
 
-  useEffect(() => () => clearTimeout(closeTimer.current), []);
+  useEffect(
+    () => () => {
+      clearHoverTimer();
+      clearTimeout(closeTimer.current);
+    },
+    [],
+  );
+
+  const drawerOpen = phase === "drawer";
 
   // Mirrors the resume branch of useRecordingSession.togglePause: when the
   // session targets a non-"none" language, re-attach the translation stream
@@ -216,13 +278,13 @@ export function RecordingIslandWindow() {
         onStop={() => void api?.stop()}
         onExpand={() => void api?.openRecordingPage()}
         notchStyle={notchStyle}
-        hoverControls={hoverControls}
-        onHoverExpand={expandControls}
-        onHoverCollapse={collapseControls}
+        controlsVisible={phase === "controls" || phase === "drawer" || phase === "closing"}
+        onPointerEnter={handlePointerEnter}
+        onPointerLeave={handlePointerLeave}
       >
         {drawerMounted && (
           <IslandTranscriptDrawer
-            closing={!drawerOpen}
+            closing={phase === "closing"}
             onSelectTargetLanguage={(code) => void applyLiveMode(code)}
           />
         )}

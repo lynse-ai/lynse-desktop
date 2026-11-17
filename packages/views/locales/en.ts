@@ -212,6 +212,7 @@ const en = {
   nav: {
     more: "More",
     memory: "Knowledge base",
+    devices: "Device files",
     pinned: "Pinned features",
     pin_to_sidebar: "Pin {{name}} to sidebar",
     unpin_from_sidebar: "Unpin {{name}} from sidebar",

@@ -191,6 +191,23 @@ describe("recording card USB session", () => {
     });
   });
 
+  it("lets page descriptor inputs override the server prefill", async () => {
+    mock.state.fileList = [];
+    const { result } = renderHook(() => useRecordingCardSession());
+
+    act(() => result.current.setAccess(true));
+    await act(async () => {
+      await result.current.connect({ vendorId: 0x1111, productId: 0x2222 });
+    });
+
+    expect(result.current.phase).toBe("connected");
+    expect(mock.state.lastOptions).toMatchObject({
+      password: "paired-key-123",
+      vendorId: 0x1111,
+      productId: 0x2222,
+    });
+  });
+
   it("surfaces a wrong password as an error and releases the device", async () => {
     mock.state.connectBehavior = "auth-fail";
     const { result } = renderHook(() => useRecordingCardSession());

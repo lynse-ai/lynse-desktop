@@ -22,6 +22,7 @@ const WorkspaceLayout = lazy(() => import("@lynse/views/workspace/workspace-layo
 const NotesPage = lazy(() => import("@lynse/views/notes").then(({ NotesPage }) => ({ default: NotesPage })));
 const TodoPage = lazy(() => import("@lynse/views/todo").then(({ TodoPage }) => ({ default: TodoPage })));
 const MemoryPage = lazy(() => import("@lynse/views/workbench/page").then(({ MemoryPage }) => ({ default: MemoryPage })));
+const RecordingCardDesktopPage = lazy(() => import("@lynse/views/recording-card").then(({ RecordingCardDesktopPage }) => ({ default: RecordingCardDesktopPage })));
 const AudioEditorPage = lazy(() => import("@lynse/views/audio-editor").then(({ AudioEditorPage }) => ({ default: AudioEditorPage })));
 const InspirationPage = lazy(() => import("@lynse/views/inspiration/page").then(({ InspirationPage }) => ({ default: InspirationPage })));
 const NotificationsPage = lazy(() => import("@lynse/views/notifications/page").then(({ NotificationsPage }) => ({ default: NotificationsPage })));
@@ -63,6 +64,9 @@ function PageRouter() {
   } else if (pathname.startsWith("/memory")) {
     page = <MemoryPage />;
     route = "memory";
+  } else if (pathname.startsWith("/devices")) {
+    page = <RecordingCardDesktopPage />;
+    route = "devices";
   }
   // Flag-gated WIP features fall through to the workspace above, so a stale
   // link can't reach the unfinished page.

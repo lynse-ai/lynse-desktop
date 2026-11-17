@@ -4011,15 +4011,6 @@ fn ease_out_quint(t: f64) -> f64 {
     1.0 - (1.0 - t).powi(5)
 }
 
-/// Symmetric ease for the collapse, so the drawer folds back up gently.
-fn ease_in_out_cubic(t: f64) -> f64 {
-    if t < 0.5 {
-        4.0 * t * t * t
-    } else {
-        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
-    }
-}
-
 /// Steps the island window towards `target_size` (logical width and height)
 /// with an eased curve, re-anchored each frame via `anchor`. The webview
 /// reflows live under the native vibrancy, so the frosted surface and the
@@ -4044,15 +4035,15 @@ fn animate_island_size(
     if (target_height - from_height).abs() < 0.5 && (target_width - from_width).abs() < 0.5 {
         return;
     }
-    let duration_ms = if expand { 360.0 } else { 280.0 };
+    // One resize per display frame (~60fps) instead of a 10ms busy loop:
+    // each set_size forces a WebView2/WKWebView reflow, so halving the frame
+    // count is the single biggest win against the visible stutter. Ease-out
+    // curves keep the departure fast and the landing soft.
+    let duration_ms = if expand { 260.0 } else { 200.0 };
     let start = Instant::now();
     loop {
         let linear = start.elapsed().as_secs_f64() * 1000.0 / duration_ms;
-        let eased = if expand {
-            ease_out_quint(linear.min(1.0))
-        } else {
-            ease_in_out_cubic(linear.min(1.0))
-        };
+        let eased = ease_out_quint(linear.min(1.0));
         let width = from_width + (target_width - from_width) * eased;
         let height = from_height + (target_height - from_height) * eased;
         let _ = window.set_size(tauri::LogicalSize::new(width, height));
@@ -4060,7 +4051,7 @@ fn animate_island_size(
         if linear >= 1.0 || ISLAND_ANIMATION_GENERATION.load(Ordering::Relaxed) != generation {
             return;
         }
-        thread::sleep(Duration::from_millis(10));
+        thread::sleep(Duration::from_millis(16));
     }
 }
 

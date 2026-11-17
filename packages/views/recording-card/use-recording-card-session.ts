@@ -127,7 +127,7 @@ export function useRecordingCardSession() {
     }
   }, []);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (descriptor?: { vendorId: number; productId: number }) => {
     if (!usbEnabled || transferringRef.current) return;
     setPhase("connecting");
     setErrorMessage(null);
@@ -137,12 +137,15 @@ export function useRecordingCardSession() {
         loadNvEasyClient(),
         fetchRecordingCardConfig(),
       ]);
+      // Descriptor precedence: page inputs (user-editable, prefilled with
+      // server values or the reference pair) → server config → omit both and
+      // let the SDK apply its built-in reference-hardware filter.
+      const vendorId = descriptor?.vendorId ?? config.vendorId;
+      const productId = descriptor?.productId ?? config.productId;
       const client = new ctor({
         password: config.password,
-        // Omit the descriptor pair entirely when the server didn't send one;
-        // the SDK then applies its built-in reference-hardware filter.
-        ...(config.vendorId !== undefined && config.productId !== undefined
-          ? { vendorId: config.vendorId, productId: config.productId }
+        ...(vendorId !== undefined && productId !== undefined
+          ? { vendorId, productId }
           : {}),
         onDisconnect: () => {
           // Unplug or link loss mid-session: full reset, back to the armed

@@ -214,6 +214,7 @@ const ja = {
   nav: {
     more: "その他",
     memory: "ナレッジベース",
+    devices: "デバイスファイル",
     pinned: "固定した機能",
     pin_to_sidebar: "{{name}} をサイドバーに固定",
     unpin_from_sidebar: "{{name}} の固定を解除",

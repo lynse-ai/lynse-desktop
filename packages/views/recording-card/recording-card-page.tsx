@@ -3,12 +3,12 @@
 import { AuthGate } from "../auth/auth-gate";
 import { PostLoginRedirectMarker } from "../auth/post-login-redirect";
 import { RecordingCardManager } from "./recording-card-manager";
+import { useRecordingCardSession } from "./use-recording-card-session";
 
 /**
  * Standalone (shell-free) web page for managing a recording card over USB.
- * The AuthGate renders the login page in place for logged-out visitors, so
- * in-page login channels land back here automatically; the marker parks the
- * path for the WeChat/Apple full-page redirect channels to return to.
+ * Uses the WebUSB backend. The desktop app renders RecordingCardDesktopPage
+ * with the native Rust backend instead (see apps/tauri/src/Dashboard.tsx).
  */
 export function RecordingCardPage() {
   return (
@@ -16,9 +16,14 @@ export function RecordingCardPage() {
       <div className="w-full">
         <PostLoginRedirectMarker />
         <AuthGate>
-          <RecordingCardManager />
+          <RecordingCardPageContent />
         </AuthGate>
       </div>
     </main>
   );
+}
+
+function RecordingCardPageContent() {
+  const session = useRecordingCardSession();
+  return <RecordingCardManager session={session} />;
 }

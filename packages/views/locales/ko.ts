@@ -213,6 +213,7 @@ const ko = {
   nav: {
     more: "더보기",
     memory: "지식 베이스",
+    devices: "장치 파일",
     pinned: "고정된 기능",
     pin_to_sidebar: "{{name}} 사이드바에 고정",
     unpin_from_sidebar: "{{name}} 사이드바 고정 해제",

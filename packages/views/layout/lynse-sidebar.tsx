@@ -17,7 +17,7 @@ import {
   selectUnreadByTypes,
 } from "../notifications/use-notification-store";
 import { AppUpdateDialog } from "../app-update-dialog";
-import { featureFlags } from "../feature-flags";
+import { featureFlags, useRecordingCardPluginEnabled } from "../feature-flags";
 import { BetaBadge } from "../beta-badge";
 import { getWorkbenchApi, useWorkbench, useWikiEnabled } from "../workbench/api";
 import { SettingsDialog } from "../settings/settings-dialog";
@@ -34,6 +34,7 @@ import {
   FolderOpen,
   Bot,
   BookOpen,
+  Usb,
   MoreHorizontal,
   Pin,
 } from "../icons";
@@ -102,6 +103,7 @@ export function LynseSidebar() {
   const togglePin = useSidebarPreferences((state) => state.togglePin);
   const hasWorkbenchStatus = useWorkbench((state) => !!state.status);
   const wikiEnabled = useWikiEnabled();
+  const recordingCardEnabled = useRecordingCardPluginEnabled();
   // Shared update store (already polled by the mounted AppUpdateDialog) — the
   // rail badge is just another subscriber.
   const { update } = useAppUpdate();
@@ -152,7 +154,12 @@ export function LynseSidebar() {
   // New optional destinations belong here so they share the More/pinning flow.
   const moreItems: NavItem[] = [
     { key: "wiki", label: t("nav.memory"), icon: BookOpen, path: "/memory", solid: false },
-  ].filter((item) => item.key !== "wiki" || (!isWeb && wikiEnabled && (hasWorkbenchStatus || !!getWorkbenchApi())));
+    { key: "devices", label: t("nav.devices"), icon: Usb, path: "/devices", solid: false },
+  ].filter((item) => {
+    if (item.key === "wiki") return !isWeb && wikiEnabled && (hasWorkbenchStatus || !!getWorkbenchApi());
+    if (item.key === "devices") return recordingCardEnabled;
+    return true;
+  });
   const pinnedItems = pinnedKeys.flatMap((key) => moreItems.filter((item) => item.key === key));
   const moreActive = moreItems.some((item) =>
     !pinnedKeys.includes(item.key) && isNavActive(pathname, item.path ?? ""),

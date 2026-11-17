@@ -1,7 +1,7 @@
 import { detectPluginPlatform } from "./plugins/registry";
 import { usePluginStore } from "./plugins/state";
 import type { PluginStateEntry } from "./plugins/types";
-import { KNOWLEDGE_BASE_PLUGIN_ID } from "./plugins/plugin-ids";
+import { KNOWLEDGE_BASE_PLUGIN_ID, RECORDING_CARD_PLUGIN_ID } from "./plugins/plugin-ids";
 
 /**
  * Release gates for work-in-progress features.
@@ -90,6 +90,17 @@ export function isKnowledgePluginActiveIn(entries: Record<string, PluginStateEnt
 /** Non-reactive read of the knowledge plugin's install state. */
 export function isKnowledgePluginActive(): boolean {
   return isKnowledgePluginActiveIn(usePluginStore.getState().entries);
+}
+
+/**
+ * Reactive gate for the recording-card USB sidebar entry: only desktop, and
+ * only while the plugin is installed and enabled. Subscribing callers (the
+ * sidebar) re-render as soon as the plugin state flips. Web always returns
+ * false — the standalone web page stays reachable by direct URL only.
+ */
+export function useRecordingCardPluginEnabled(): boolean {
+  const active = usePluginStore((state) => !!state.entries[RECORDING_CARD_PLUGIN_ID]?.enabled);
+  return detectPluginPlatform() === "desktop" && featureFlags.pluginMarketplace && active;
 }
 
 /**

@@ -25,6 +25,7 @@ strip = "none"
 [dependencies]
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
+crc32fast = "1"
 fern = "0.7"
 futures-util = "0.3"
 hmac = "0.12"
@@ -41,6 +42,8 @@ jieba-rs = "0.11"
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 libc = "0.2"
 log = "0.4"
+# Recording-card USB transport: device enumeration, control and bulk transfers.
+nusb = "0.2"
 md-5 = "0.10"
 mime_guess = "2"
 percent-encoding = "2"

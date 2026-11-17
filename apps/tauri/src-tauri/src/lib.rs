@@ -90,6 +90,8 @@ mod wechat_auth;
 // Problem report: main-window screenshot capture + CNB issue submission.
 mod report_screenshot;
 mod cnb_report;
+// Recording-card USB: NvEasy protocol codec + nusb transport.
+mod recording_card_usb;
 
 use live_translation::LiveTranslationManager;
 
@@ -5339,6 +5341,7 @@ pub fn run() {
         .manage(desktop_mcp::DesktopMcpState::default())
         .manage(workbench::WorkbenchState::default())
         .manage(inspiration_private::PrivateState::default())
+        .manage(recording_card_usb::RecordingCardSession::new())
         .register_asynchronous_uri_scheme_protocol("local-media", |context, request, responder| {
             // WKURLSchemeHandler fires this on the MAIN thread; a long
             // meeting's WAV is 100+ MB, so the file read must leave the main
@@ -5639,6 +5642,14 @@ pub fn run() {
             audio_editor::audio_editor_remove_silence,
             audio_editor::audio_editor_enhance_voice,
             audio_editor::audio_editor_cancel,
+            recording_card_usb::session::recording_card_usb_connect,
+            recording_card_usb::session::recording_card_usb_disconnect,
+            recording_card_usb::session::recording_card_usb_state,
+            recording_card_usb::session::recording_card_usb_list_files,
+            recording_card_usb::session::recording_card_usb_storage,
+            recording_card_usb::session::recording_card_usb_delete_file,
+            recording_card_usb::session::recording_card_usb_download,
+            recording_card_usb::session::recording_card_usb_cancel_download,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Lynse Tauri application")

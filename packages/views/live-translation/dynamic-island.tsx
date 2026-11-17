@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { cn } from "@lynse/ui/lib/utils";
 import { ChevronDown, Maximize2, Pause, Play, Square, X } from "../icons";
@@ -9,11 +10,6 @@ import { AudioSourceControls } from "./audio-source-controls";
 import { recordingLevel } from "./audio-sources";
 import { AudioVisualizer } from "./audio-visualizer";
 import { useLiveTranslation } from "./use-live-translation";
-
-/** Hover debounce in notch mode: how long the pointer must rest on the
- * island before it grows to the control bar — and how long it must stay off
- * before shrinking back to the mini pill. Mirrors the MacIsland timing. */
-const HOVER_DELAY_MS = 150;
 
 interface DynamicIslandProps {
   /** Called when user taps the close/dismiss button. */
@@ -30,16 +26,15 @@ interface DynamicIslandProps {
   onToggleDrawer?: () => void;
   /** Docked island (macOS "Dynamic Island"): opaque black stadium capsule
    * hanging below the hardware cutout. Collapsed it shrinks to a mini pill
-   * (dot + timer + waveform); hovering reveals the control bar via
-   * `hoverControls`. */
+   * (dot + timer + waveform); hovering reveals the control bar. */
   notchStyle?: boolean;
-  /** Notch mode: the pointer is on the island, so the full control bar
-   * shows. Ignored outside notch style (floating islands always show it). */
-  hoverControls?: boolean;
-  /** Notch mode: hover settled on the island — grow to the control bar. */
-  onHoverExpand?: () => void;
-  /** Notch mode: hover left the island — shrink back to the mini pill. */
-  onHoverCollapse?: () => void;
+  /** Whether the control bar (source icons + buttons + dismiss) is visible.
+   * Outside notch style this is always true; the parent owns the phase. */
+  controlsVisible?: boolean;
+  /** Pointer entered/left the island — hover debounce lives in the parent so
+   * a drawer closing while hovered keeps the control bar up. */
+  onPointerEnter?: () => void;
+  onPointerLeave?: () => void;
   /** Live-transcript drawer content rendered beneath the pill row. */
   children?: ReactNode;
   className?: string;
@@ -70,13 +65,14 @@ export function DynamicIsland({
   drawerOpen,
   onToggleDrawer,
   notchStyle,
-  hoverControls,
-  onHoverExpand,
-  onHoverCollapse,
+  controlsVisible,
+  onPointerEnter,
+  onPointerLeave,
   children,
   className,
 }: DynamicIslandProps) {
   const { t } = useTranslation();
+  const reduceMotion = useReducedMotion();
   const { api, view } = useLiveTranslation();
   const recording = view.state === "recording";
   const paused = view.state === "paused";
@@ -115,32 +111,15 @@ export function DynamicIsland({
     return () => clearTimeout(handle);
   }, [api, recording, paused, view.elapsedMs]);
 
-  // Notch hover state machine: enter arms the grow timer, leaving arms the
-  // shrink timer; the shared handle means re-entering cancels a pending
-  // collapse (and vice versa), so quick pointer crossings never flicker.
-  const hoverTimer = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
-  useEffect(() => () => clearTimeout(hoverTimer.current), []);
-  const clearHoverTimer = () => {
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-    hoverTimer.current = undefined;
-  };
-  const handleHoverStart = () => {
-    if (!notchStyle || drawerOpen || hoverControls) return;
-    clearHoverTimer();
-    hoverTimer.current = setTimeout(() => onHoverExpand?.(), HOVER_DELAY_MS);
-  };
-  const handleHoverEnd = () => {
-    if (!notchStyle || !hoverControls || drawerOpen) return;
-    clearHoverTimer();
-    hoverTimer.current = setTimeout(() => onHoverCollapse?.(), HOVER_DELAY_MS);
-  };
-
-  // Floating islands always show every control; the docked island collapses
-  // to the mini capsule until the pointer (or an open drawer) summons them.
-  const showAllControls = !notchStyle || hoverControls || drawerOpen;
-  // The collapsed mini capsule is slimmer than the control bar row and gets
-  // the full stadium radius; expanded states keep the 22px corners.
-  const miniCapsule = notchStyle && !showAllControls;
+  // Floating islands always show every control; the docked island follows
+  // the parent-controlled phase. During drawer fold-out (`drawerClosing`)
+  // controls stay put so the pill doesn't flicker mid-transition.
+  const showControls = !notchStyle || (controlsVisible ?? false);
+  // The capsule shape is driven by the window height (Rust sizes it), not by
+  // the DOM: the pill row is always the full 44pt and the window crops it to
+  // the 32pt mini capsule, so there is no internal height jump. Only the
+  // corner radius reacts, keeping a stadium silhouette in mini state.
+  const miniCapsule = notchStyle && !showControls;
 
   if (!recording && !paused) return null;
 
@@ -155,15 +134,19 @@ export function DynamicIsland({
           : "rounded-[22px] border border-border/50",
         className,
       )}
-      onMouseEnter={notchStyle ? handleHoverStart : undefined}
-      onMouseLeave={notchStyle ? handleHoverEnd : undefined}
+      onMouseEnter={notchStyle ? onPointerEnter : undefined}
+      onMouseLeave={notchStyle ? onPointerLeave : undefined}
     >
-      {/* Pill row — the entire collapsed island */}
+      {/* Pill row — fixed 44pt height; the native window crops it to the 32pt
+          mini capsule, so growth/drop is one smooth window animation rather
+          than a DOM height jump. Shifted up in mini state so the visible
+          dot/timer/waveform sit centered in the 32pt window. */}
       <div
         data-tauri-drag-region
         className={cn(
-          "group flex shrink-0 items-center gap-2 px-3",
-          miniCapsule ? "h-8" : "h-11",
+          "group flex h-11 shrink-0 items-center gap-2 px-3",
+          "transition-transform duration-(--duration-quick)",
+          miniCapsule && "-translate-y-1.5",
         )}
       >
         {/* Red pulse dot — turns warning while a stream error is up (e.g.
@@ -185,7 +168,20 @@ export function DynamicIsland({
           {fmt(view.elapsedMs)}
         </span>
 
-        {showAllControls && <AudioSourceControls compact />}
+        <AnimatePresence initial={false}>
+          {showControls && (
+            <motion.div
+              key="sources"
+              className="flex shrink-0 items-center overflow-hidden"
+              initial={reduceMotion ? false : { opacity: 0, width: 0, x: -6 }}
+              animate={{ opacity: 1, width: "auto", x: 0 }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, width: 0, x: -6 }}
+              transition={{ duration: reduceMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <AudioSourceControls compact />
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Mini live waveform — the same wave the expanded drawer shows in its
             footer, shrunk to a sliver: just enough to read "recording" at a
@@ -199,9 +195,18 @@ export function DynamicIsland({
           />
         </div>
 
-        {/* Controls (hidden on the notch mini pill until hover) */}
-        {showAllControls && (
-          <div className="ml-auto flex items-center gap-0.5">
+        {/* Controls — cross-fade in/out with the drawer-style motion; the
+            window grows in sync underneath. */}
+        <AnimatePresence initial={false}>
+          {showControls && (
+            <motion.div
+              key="controls"
+              className="ml-auto flex items-center gap-0.5 overflow-hidden"
+              initial={reduceMotion ? false : { opacity: 0, width: 0, x: 8 }}
+              animate={{ opacity: 1, width: "auto", x: 0 }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, width: 0, x: 8 }}
+              transition={{ duration: reduceMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+            >
             {onToggleDrawer && (
               <button
                 type="button"
@@ -252,20 +257,28 @@ export function DynamicIsland({
             >
               <Square className="size-3" />
             </button>
-          </div>
-        )}
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Dismiss (only if handler provided — e.g. mini-player mode) */}
-        {onDismiss && showAllControls && (
-          <button
-            type="button"
-            onClick={onDismiss}
-            aria-label={t("recording_mode.close")}
-            className="flex size-5 items-center justify-center rounded-full text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
-          >
-            <X className="size-3" />
-          </button>
-        )}
+        <AnimatePresence initial={false}>
+          {onDismiss && showControls && (
+            <motion.button
+              key="dismiss"
+              type="button"
+              onClick={onDismiss}
+              aria-label={t("recording_mode.close")}
+              initial={reduceMotion ? false : { opacity: 0, scale: 0.6 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.6 }}
+              transition={{ duration: reduceMotion ? 0 : 0.18, ease: [0.22, 1, 0.36, 1] }}
+              className="flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground/60 transition-colors hover:text-foreground"
+            >
+              <X className="size-3" />
+            </motion.button>
+          )}
+        </AnimatePresence>
       </div>
 
       {/* Live-transcript drawer (expanded state) */}

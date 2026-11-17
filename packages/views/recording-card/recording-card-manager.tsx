@@ -4,11 +4,32 @@ import { useState } from "react";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/ui/card";
+import { Input } from "@lynse/ui/components/ui/input";
 import { Progress } from "@lynse/ui/components/ui/progress";
 import { Switch } from "@lynse/ui/components/ui/switch";
 import { Loader2, RefreshCw, Usb } from "../icons";
-import { useRecordingCardSession } from "./use-recording-card-session";
-import type { NvEasyDeviceFile } from "./nveasy-types";
+import { DEFAULT_PRODUCT_ID, DEFAULT_VENDOR_ID } from "./credentials";
+import type { RecordingCardFile, RecordingCardSessionView } from "./transport";
+
+/** Parse "0x3654" or "13908" into a number; null when not a usable integer. */
+function parseDescriptor(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (!/^(0[xX][0-9a-fA-F]+|\d+)$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+const VID_STORAGE_KEY = "lynse_recording_card_vid";
+const PID_STORAGE_KEY = "lynse_recording_card_pid";
+
+function savedDescriptor(key: string, fallback: number): string {
+  try {
+    const saved = window.localStorage.getItem(key);
+    return saved && parseDescriptor(saved) !== null ? saved : `0x${fallback.toString(16)}`;
+  } catch {
+    return `0x${fallback.toString(16)}`;
+  }
+}
 
 /**
  * The recording-card USB management view. Rendered by the standalone web
@@ -17,13 +38,31 @@ import type { NvEasyDeviceFile } from "./nveasy-types";
  * browser (WebUSB); nothing about it goes through Lynse servers except the
  * firmware pairing password fetched after sign-in.
  */
-export function RecordingCardManager() {
+export function RecordingCardManager({ session }: { session: RecordingCardSessionView }) {
   const { t } = useTranslation();
-  const session = useRecordingCardSession();
   const [copied, setCopied] = useState(false);
   // Two-step delete: holds the file name armed for confirmation, mirroring
   // the plugin row's uninstall confirm.
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  // USB descriptor pair: prefilled with the reference hardware defaults,
+  // editable for other card models. Persisted so a model tweak survives a
+  // reload; the server config only supplies the initial password.
+  const [vendorIdRaw, setVendorIdRaw] = useState(() => savedDescriptor(VID_STORAGE_KEY, DEFAULT_VENDOR_ID));
+  const [productIdRaw, setProductIdRaw] = useState(() => savedDescriptor(PID_STORAGE_KEY, DEFAULT_PRODUCT_ID));
+  const vendorId = parseDescriptor(vendorIdRaw);
+  const productId = parseDescriptor(productIdRaw);
+  const descriptorValid = vendorId !== null && productId !== null;
+
+  const handleDescriptorChange = (key: string, raw: string, setter: (value: string) => void) => {
+    setter(raw);
+    if (parseDescriptor(raw) !== null) {
+      try {
+        window.localStorage.setItem(key, raw.trim());
+      } catch {
+        // Persistence is a convenience; ignore storage failures.
+      }
+    }
+  };
 
   const copyLink = () => {
     void navigator.clipboard?.writeText(window.location.href).then(() => {
@@ -50,7 +89,7 @@ export function RecordingCardManager() {
     return new Date(unixSeconds * 1000).toLocaleString();
   }
 
-  function handleDelete(file: NvEasyDeviceFile) {
+  function handleDelete(file: RecordingCardFile) {
     if (confirmingDelete !== file.name) {
       setConfirmingDelete(file.name);
       return;
@@ -105,6 +144,39 @@ export function RecordingCardManager() {
                 />
               </div>
 
+              {session.usbEnabled && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-3">
+                    <label className="flex shrink-0 items-center gap-1.5 text-2xs text-muted-foreground">
+                      <span>Vendor ID</span>
+                      <Input
+                        value={vendorIdRaw}
+                        onChange={(e) => handleDescriptorChange(VID_STORAGE_KEY, e.target.value, setVendorIdRaw)}
+                        className="h-7 w-24 px-2 font-mono text-2xs"
+                        spellCheck={false}
+                        aria-label="Vendor ID"
+                      />
+                    </label>
+                    <label className="flex shrink-0 items-center gap-1.5 text-2xs text-muted-foreground">
+                      <span>Product ID</span>
+                      <Input
+                        value={productIdRaw}
+                        onChange={(e) => handleDescriptorChange(PID_STORAGE_KEY, e.target.value, setProductIdRaw)}
+                        className="h-7 w-24 px-2 font-mono text-2xs"
+                        spellCheck={false}
+                        aria-label="Product ID"
+                      />
+                    </label>
+                    <span className="min-w-0 truncate text-2xs text-muted-foreground">
+                      {t("recordingCard.descriptor_hint")}
+                    </span>
+                  </div>
+                  {!descriptorValid && (
+                    <p className="text-2xs text-destructive">{t("recordingCard.descriptor_invalid")}</p>
+                  )}
+                </div>
+              )}
+
               <div className="flex items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-2 text-xs">
                   {session.phase === "connecting" && (
@@ -128,12 +200,30 @@ export function RecordingCardManager() {
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   {session.phase === "error" && (
-                    <Button size="sm" className="h-7 text-xs" onClick={session.connect}>
+                    <Button
+                      size="sm"
+                      className="h-7 text-xs"
+                      disabled={!descriptorValid}
+                      onClick={() =>
+                        vendorId !== null && productId !== null
+                          ? session.connect({ vendorId, productId })
+                          : undefined
+                      }
+                    >
                       {t("recordingCard.retry")}
                     </Button>
                   )}
                   {session.usbEnabled && session.phase === "off" && (
-                    <Button size="sm" className="h-7 text-xs" onClick={session.connect}>
+                    <Button
+                      size="sm"
+                      className="h-7 text-xs"
+                      disabled={!descriptorValid}
+                      onClick={() =>
+                        vendorId !== null && productId !== null
+                          ? session.connect({ vendorId, productId })
+                          : undefined
+                      }
+                    >
                       {t("recordingCard.connect")}
                     </Button>
                   )}
@@ -260,7 +350,7 @@ function FileRow({
   onDisarmDelete,
   labels,
 }: {
-  file: NvEasyDeviceFile;
+  file: RecordingCardFile;
   formatBytes: (bytes: number) => string;
   formatTime: (unixSeconds: number) => string;
   downloadDisabled: boolean;

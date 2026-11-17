@@ -211,6 +211,7 @@ const zh = {
   nav: {
     more: "更多",
     memory: "知识库",
+    devices: "设备文件",
     pinned: "已固定的功能",
     pin_to_sidebar: "将 {{name}} 固定到侧边栏",
     unpin_from_sidebar: "从侧边栏取消固定 {{name}}",

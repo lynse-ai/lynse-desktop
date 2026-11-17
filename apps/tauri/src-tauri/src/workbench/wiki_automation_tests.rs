@@ -1087,7 +1087,7 @@ fn manual_retry_preserves_completed_pages_catalog_and_progress() {
     assert_eq!(restored[1].last_fingerprint, "previous-success");
     assert!(restored[1].last_attempt_fingerprint.is_empty());
     assert!(restored[1].error.is_empty());
-    assert!(!restored[1].force_refresh);
+    assert!(restored[1].force_refresh);
     let catalog: Catalog = read_json(&catalog_path(&root)).unwrap();
     assert!(catalog.failed.is_empty());
     assert!(catalog.chunks.contains_key("completed"));
@@ -1099,6 +1099,8 @@ fn manual_retry_preserves_completed_pages_catalog_and_progress() {
         restored[0].last_fingerprint,
         page_version(&restored[0], &[source], &manifest, &Models::default())
     );
+    // A completed topic is not part of the retry sweep; force_refresh must
+    // stay false so its page is not regenerated from scratch.
     assert!(!restored[0].force_refresh);
     assert!(needs_compilation(
         &restored[1],
@@ -1288,7 +1290,7 @@ fn topic_retry_is_scoped_to_the_selected_topic_and_keeps_other_failures() {
 
     assert!(values[0].error.is_empty());
     assert!(values[0].last_attempt_fingerprint.is_empty());
-    assert!(!values[0].force_refresh);
+    assert!(values[0].force_refresh);
     assert_eq!(serde_json::to_value(&values[1]).unwrap(), other);
     assert_eq!(fs::read(catalog_path(&root)).unwrap(), catalog_before);
     assert_eq!(fs::read(graph_path).unwrap(), graph_before);
@@ -1668,4 +1670,58 @@ fn dream_window_covers_the_overnight_range() {
     assert!(is_dream_time_hour(6));
     assert!(!is_dream_time_hour(7));
     assert!(!is_dream_time_hour(12));
+}
+
+#[test]
+fn cross_section_stitched_quote_cannot_pass_restore_refs() {
+    // Reproduce the 2026-11-18 discard loop: a citation stitching the todos
+    // block together with the transcript tail (model-fabricated quote) must
+    // never survive restore_refs, otherwise the poisoned compile output is
+    // reused from cache every pass and valid_page discards it forever.
+    let mut todo_rows = Vec::new();
+    for title in [
+        "排查搜索接口问题，修复回收站清空的文件仍可被搜索到、11月录音文件在列表不显示但可被搜索到的bug",
+        "负责1.3.7版本的AI配置项优化，实现后台支持给不同功能指定不同模型、价值链，后续可纳入使用量消耗统计",
+        "完成总结带图片的功能优化",
+    ] {
+        todo_rows.push(json!({"todoContent": title, "completed": false}));
+    }
+    let transcript_tail = "他看他评估一下哪个哪个更快，对吧？\n因为这两个都是能用营销营销卖点。\n搞不好他觉得音频剪辑更快，这个库搞一下。";
+    let mut doc = Document {
+        id: "stitch-source".into(),
+        kind: "meeting".into(),
+        title: "11-16 产品研发周会".into(),
+        transcript: format!("{}{}", "前".repeat(12000), transcript_tail),
+        todos: todo_rows,
+        ai_context_enabled: true,
+        ..Default::default()
+    };
+    doc.refresh_revision();
+    let quote = format!(
+        "Task: {} · completed: false\n\nTask: {} · completed: false\n\nTask: {} · completed: false\n\n{}",
+        doc.todos[0]["todoContent"].as_str().unwrap(),
+        doc.todos[1]["todoContent"].as_str().unwrap(),
+        doc.todos[2]["todoContent"].as_str().unwrap(),
+        transcript_tail
+    );
+    let docs = vec![doc.clone()];
+    let mut value = json!({"summary":"x","citations":[{"id":doc.id,"revision":doc.revision,"kind":"meeting","quote":quote}]});
+    let result = restore_refs(&mut value, &docs);
+    assert!(
+        result.is_err(),
+        "a stitched todos+transcript quote must be rejected by restore_refs, got {:?}",
+        value["citations"]
+    );
+    let filtered = crate::workbench::markdown::source(doc).unwrap();
+    assert!(
+        !filtered.text().contains(&original_quote_text(&value)),
+        "the stitched quote must not exist inside the filtered document text"
+    );
+}
+
+fn original_quote_text(value: &serde_json::Value) -> String {
+    value["citations"][0]["quote"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
 }

@@ -2109,6 +2109,33 @@ pub(super) async fn run(
                     }
                     page.fingerprint = page_fingerprint(current, &latest, &config, &page.citations);
                     if !valid_page(&local, &latest, &page) {
+                        // Pinpoint which citation and check failed so a
+                        // representation drift cannot hide behind a bare
+                        // "discarded" line: log the per-citation verdict with
+                        // the exact validator error and a quote fingerprint.
+                        for reference in &page.citations {
+                            let verdict = PageSources::new(&local, &latest)
+                                .document(reference)
+                                .map(|doc| {
+                                    sync::validate_result(
+                                        std::slice::from_ref(doc),
+                                        &latest,
+                                        &json!({"citations":[reference]}),
+                                    )
+                                    .map(|_| "ok".to_string())
+                                    .unwrap_or_else(|error| format!("quote-check: {error} (doc text {} chars)", doc.text().chars().count()))
+                                })
+                                .unwrap_or_else(|| "source missing from filtered view".to_string());
+                            log::warn!(
+                                "[wiki-apply] invalid citation detail for {}: id={} kind={} rev={} quote={:?} -> {}",
+                                current.title,
+                                reference.id,
+                                reference.kind,
+                                reference.revision,
+                                reference.quote.chars().take(60).collect::<String>(),
+                                verdict
+                            );
+                        }
                         // Sources moved mid-compile (e.g. a deferred meeting
                         // finished transcribing during this wave). Keep the
                         // previous page and recompile on the next pass against
@@ -2123,8 +2150,20 @@ pub(super) async fn run(
                         );
                         discarded = true;
                         wave_discarded += 1;
-                        current.error.clear();
-                        current.failure = None;
+                        // The rejected page came from cached or saved state
+                        // (compile receipts, candidate sections). Keeping it
+                        // pending would replay the identical poisoned output
+                        // on every pass. Latch the attempt fingerprint so the
+                        // topic stops auto-retrying; an explicit retry clears
+                        // it and force-refreshes past every cache layer.
+                        for section in &page.sections {
+                            if !section.key.is_empty() {
+                                let _ = tasks::invalidate_completed(&root, &section.key);
+                            }
+                        }
+                        current.candidate = None;
+                        current.error = "Compiled citations did not match the current source view; retry to recompile".into();
+                        current.last_attempt_fingerprint = version.clone();
                     } else {
                         let was_auto_retried = current
                             .partial_compilation

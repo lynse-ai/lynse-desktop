@@ -333,8 +333,11 @@ pub(super) fn recover_abandoned(root: &Path) -> CommandResult<bool> {
 }
 
 pub(super) fn invalidate_completed(root: &Path, key: &str) -> CommandResult<()> {
-    connection(root)?.execute("UPDATE model_tasks SET state='validation_failed',output=NULL WHERE id=? AND state='done'",[key])
+    let changed = connection(root)?.execute("UPDATE model_tasks SET state='validation_failed',output=NULL WHERE id=? AND state='done'",[key])
         .map_err(|error| error.to_string())?;
+    if changed == 0 {
+        log::warn!("[model-tasks] invalidation matched no done row: {}", &key[..key.chars().count().min(20)]);
+    }
     Ok(())
 }
 

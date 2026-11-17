@@ -784,8 +784,11 @@ fn retry_failed_work(
             && (topic.force_refresh || !topic.error.is_empty())
             && id.is_none_or(|id| topic_store::matches_id(topic, id))
         {
-            // Retry failed work with its validated receipts and completed revision intact.
-            topic.force_refresh = false;
+            // Retry regenerates failed work for real: force-refresh bypasses
+            // every compile/section cache, so a poisoned cached output that
+            // validation keeps rejecting cannot come back from the receipt
+            // store and replay the same discard forever.
+            topic.force_refresh = true;
             if let Some(collection) = &mut topic.collection {
                 for link in &mut collection.links {
                     if !link.error.is_empty() {
@@ -3968,7 +3971,10 @@ mod tests {
             .unwrap(),
             result
         );
-        assert_eq!(calls.get(), 1);
+        // Retry now force-refreshes: the failed topic bypasses every cached
+        // receipt, so even the previously completed "first" batch is
+        // regenerated instead of replayed from the store.
+        assert_eq!(calls.get(), 2);
         cached_compilation(
             &root,
             "second",
@@ -3979,11 +3985,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(calls.get(), 2);
+        assert_eq!(calls.get(), 3);
         cached_compilation(&root, "first", &serial, &validate, false, generate())
             .await
             .unwrap();
-        assert_eq!(calls.get(), 3);
+        assert_eq!(calls.get(), 4);
         let mut invented = result.clone();
         invented["citations"][0]["quote"] = json!("An unsupported claim");
         assert!(
@@ -4021,7 +4027,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert_eq!(calls.get(), 4);
+        assert_eq!(calls.get(), 5);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

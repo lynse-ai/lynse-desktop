@@ -65,7 +65,9 @@ import { WechatBindForm } from "./wechat-bind-form";
 import { authErrorText } from "./auth-errors";
 import { ApiAuthPanel } from "./api-auth-panel";
 import { LYNSE_LOGO_SRC } from "./lynse-logo";
-import { LOGIN_ARTWORK_SRC, LOGIN_ARTWORK_SRC_WEB } from "./login-artwork";
+import { LOGIN_ARTWORK_SRC } from "./login-artwork";
+import { LOGIN_CAROUSEL_SRC_WEB } from "./login-carousel-artwork";
+import { LoginCarousel } from "./login-carousel";
 
 /** Login QR panel phases. "expired"/"error" offer a manual refresh. */
 type QrPhase = "creating" | "ready" | "scanned" | "expired" | "error";
@@ -80,8 +82,9 @@ type LoginView = "phone" | "email" | "more" | "qr" | "api";
  * the compact welcome window (690×450 — the window shape is AuthGate's
  * job). Qoder-welcome layout: a left column with the wordmark, a welcome
  * heading and the active sign-in form, and a rounded artwork card on the
- * right (desktop: LOGIN_ARTWORK_SRC full-height; web: LOGIN_ARTWORK_SRC_WEB,
- * both user-provided).
+ * right (desktop: LOGIN_ARTWORK_SRC full-height; web: the
+ * LOGIN_CAROUSEL_SRC_WEB storyboard carousel edge-to-edge, both
+ * user-provided).
  *
  * Every build uses the same phone, WeChat and app-scanned QR sign-in flow.
  * The API form (server selection + API key, the same UI as /api-config)
@@ -93,9 +96,10 @@ type LoginView = "phone" | "email" | "more" | "qr" | "api";
 export function LoginPage() {
   const { t } = useTranslation();
   const devApiAuth = hasDevApiAuth();
-  // The web build (www.lynse.ai/app) fills a real browser viewport instead of
+  // The web build (www.lynse.cn/app) fills a real browser viewport instead of
   // the desktop welcome window, so it gets a full-page split layout: centered
-  // form column on the left, brand panel on the right (see the aside below).
+  // form column on the left, storyboard carousel on the right (see the aside
+  // below).
   const web = isWebPlatform();
   // intl builds lead with Google / Apple / email sign-in; cn leads with the
   // phone + SMS form and WeChat (see the view branches below).
@@ -1011,25 +1015,16 @@ export function LoginPage() {
       </div>
 
       {/* ── Right column. Desktop: full-height rounded artwork card, inset on
-          all sides like the reference window. Web (lg+): a soft brand panel
-          with the headline and the same artwork; below lg the column hides
-          and the form takes the full width. ── */}
+          all sides like the reference window. Web (lg+): the three product
+          storyboards as an edge-to-edge auto-advancing carousel (user
+          request, 2026-11-18); below lg the column hides and the form takes
+          the full width. ── */}
       {web ? (
         <aside
           aria-hidden
-          className="hidden w-1/2 shrink-0 flex-col items-center justify-center bg-gradient-to-b from-primary/10 via-background to-secondary/30 px-10 lg:flex"
+          className="relative hidden w-1/2 shrink-0 overflow-hidden bg-background lg:block"
         >
-          <img
-            src={LOGIN_ARTWORK_SRC_WEB}
-            alt=""
-            className="max-h-[72vh] w-full select-none rounded-2xl object-cover shadow-sm"
-          />
-          <p className="mt-8 text-center text-lg font-semibold tracking-tight">
-            {t("auth.brand_title")}
-          </p>
-          <p className="mt-2 max-w-sm text-center text-sm leading-relaxed text-muted-foreground">
-            {t("auth.brand_subtitle")}
-          </p>
+          <LoginCarousel images={LOGIN_CAROUSEL_SRC_WEB} />
         </aside>
       ) : (
         <aside

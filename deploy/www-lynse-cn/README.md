@@ -4,6 +4,9 @@
 
 首次部署：2026-11-11（release /opt/lynse-web-cn/releases/20261111-0218，bundle sha256 89a1e57a…）。
 
+后续发版记录：
+- 2026-11-18：releases/20261118-1204，bundle sha256 8b5bd03f…（3007163d：微信扫码 web 闸门修复 + 绑定 landing authType/跳转；构建于干净 worktree，避开并行会话未提交的 locales 改动）。
+
 ## 构建与上传
 
 ```sh

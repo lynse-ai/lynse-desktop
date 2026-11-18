@@ -6,7 +6,10 @@
 
 ```sh
 # 1. 构建（basePath /app + gapp 测试后端 + 正式登录渠道）
-NEXT_PUBLIC_BASE_PATH=/app NEXT_PUBLIC_API_URL=https://gapp.lynse.cn \
+# ⚠️ NEXT_PUBLIC_LYNSE_EDITION=intl 必须带：未设置时编译期回退 cn 版
+# （登录页变手机+微信、连接器变 Feishu 集，2026-11-18 曾因此发错版）
+NEXT_PUBLIC_LYNSE_EDITION=intl NEXT_PUBLIC_BASE_PATH=/app \
+  NEXT_PUBLIC_API_URL=https://gapp.lynse.cn \
   NEXT_PUBLIC_BUILD_CHANNEL=official pnpm --filter @lynse/web build
 
 # 2. 组装 standalone bundle（monorepo 布局：server.js 在 apps/web/ 下）
@@ -34,6 +37,10 @@ deploy/www-lynse-ai/deploy.sh "$BUNDLE"
 - `/app/<route>` 反代 `127.0.0.1:3102`；静态资源走同前缀（`/app/_next/...`）。
 - include 片段安装为 `/etc/nginx/snippets/lynse-web-app.conf`，注入 `revelspark` 站点 443 server 块，修改前备份到远端 `~/apps/lynse-web/backups/`。
 
+
+## 发版记录
+
+- 2026-11-18：bundle 20261118-125738，tar sha256 7b0eb78d…（3bbfa5d1 + `NEXT_PUBLIC_LYNSE_EDITION=intl`：修复登录页/连接器误用 cn 版——此前构建命令漏该环境变量，编译期回退 cn）。API 仍指向 gapp 测试后端（MCP 桥接一致性约束，见下节）。
 
 ## 版本序列
 

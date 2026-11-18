@@ -11,13 +11,15 @@ import { useNavigation } from "../navigation";
 import { Loader2 } from "../icons";
 
 /**
- * Landing page for the Apple web login 302 redirects (web-bind-url from the
- * backend's Nacos config):
- *   ?thirdPartyId={apple_sub}  → the standalone binding card (cn binds a
+ * Landing page for the third-party web login 302 redirects (web-bind-url
+ * from the backend's Nacos config):
+ *   ?thirdPartyId={sub}        → the standalone binding card (cn binds a
  *                                phone, intl binds an email)
  *   ?error={key}               → a user-facing failure notice
- * A successful bind responds with the session token directly (bind = login),
- * so completing the form signs the user in.
+ * `authType` names the identity being bound — APPLE (the Apple web contract,
+ * the default) or WECHAT_SCAN (the backend's WeChat callback 302s here the
+ * same way). A successful bind responds with the session token directly
+ * (bind = login), so completing the form signs the user in.
  */
 
 /** Backend error keys → the few user-facing messages worth translating. */
@@ -35,12 +37,14 @@ export function AppleBindLanding() {
   const completeLogin = useAuthStore((s) => s.completeLogin);
   const [errorKey, setErrorKey] = useState<string | null>(null);
   const [thirdPartyId, setThirdPartyId] = useState<string | null>(null);
+  const [authType, setAuthType] = useState<"APPLE" | "WECHAT_SCAN">("APPLE");
   const [invalid, setInvalid] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const error = params.get("error");
     const id = params.get("thirdPartyId");
+    if (params.get("authType") === "WECHAT_SCAN") setAuthType("WECHAT_SCAN");
     if (error) {
       setErrorKey(error);
     } else if (id) {
@@ -58,7 +62,13 @@ export function AppleBindLanding() {
     return <LandingNotice message={appleErrorMessage(errorKey, t)} />;
   }
 
-  return <AppleBindCard thirdPartyId={thirdPartyId} onComplete={completeLogin} />;
+  return (
+    <AppleBindCard
+      thirdPartyId={thirdPartyId}
+      authType={authType}
+      onComplete={completeLogin}
+    />
+  );
 }
 
 function LandingNotice({ message }: { message: string }) {
@@ -78,13 +88,16 @@ function LandingNotice({ message }: { message: string }) {
 
 function AppleBindCard({
   thirdPartyId,
+  authType,
   onComplete,
 }: {
   thirdPartyId: string | null;
+  authType: "APPLE" | "WECHAT_SCAN";
   onComplete: (session: AuthSession) => void;
 }) {
   const [agreed, setAgreed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const navigation = useNavigation();
 
   if (!thirdPartyId) {
     return (
@@ -99,7 +112,7 @@ function AppleBindCard({
       <div className="w-full max-w-sm rounded-2xl border bg-card p-8 shadow-sm">
         <WechatBindForm
           thirdPartyId={thirdPartyId}
-          authType="APPLE"
+          authType={authType}
           agreed={agreed}
           variant="standalone"
           onBound={(vo: WechatLoginVo) => {
@@ -112,6 +125,9 @@ function AppleBindCard({
             // out of history once consumed.
             window.history.replaceState(null, "", window.location.pathname);
             onComplete(session);
+            // This standalone route has no AuthGate to react to the session —
+            // walk to the dashboard, which the fresh token lets render.
+            navigation.push("/home");
           }}
         />
         <AgreementCheckbox agreed={agreed} onToggle={() => setAgreed(!agreed)} onLink={() => {}} />

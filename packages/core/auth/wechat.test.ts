@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiClient, setApiInstance, setApiTransportMode } from "../api/client";
 import { createAuthStore } from "./index";
-import { bindWechatPhone, desktopWechatAuthorizeUrl, loginByWechat, wechatSessionFromVo } from "./wechat";
+import { bindWechatPhone, desktopWechatAuthorizeUrl, loginByWechat, wechatSessionFromVo, wechatWebFlowReady } from "./wechat";
 
 function renderedUrl(appId = "server-app", state = "server-state"): string {
   return `https://open.weixin.qq.com/connect/qrconnect?${new URLSearchParams({
@@ -124,5 +124,42 @@ describe("desktop WeChat server selection", () => {
     });
     expect(wechatSessionFromVo({ token: "bind-token", customerId: "unified-customer", isFirstLogin: true, isNeedBind: false })?.user.id).toBe("unified-customer");
     expect(wechatSessionFromVo({ token: null, customerId: null, thirdPartyId: "scan-openid", isFirstLogin: true, isNeedBind: true })).toBeNull();
+  });
+});
+
+describe("web WeChat flow gate", () => {
+  // Production contract: the backend bakes its own /auth/login into
+  // redirect_uri (matching the WeChat Open Platform callback domain) and
+  // 302s the session onto the web landing pages after the scan.
+  const backendCallbackUrl = `https://open.weixin.qq.com/connect/qrconnect?${new URLSearchParams({
+    appid: "prod-app",
+    state: "server-state",
+    redirect_uri: "https://api.lynse.cn/auth/login",
+    response_type: "code",
+    scope: "snsapi_login",
+  })}`;
+
+  it("lets the scan start when the redirect lands on the API server", () => {
+    expect(wechatWebFlowReady(backendCallbackUrl, "https://api.lynse.cn", "https://www.lynse.cn")).toBe(true);
+  });
+
+  it("lets the scan start when the redirect lands on the page's own origin", () => {
+    const frontendCallbackUrl = backendCallbackUrl.replace(
+      encodeURIComponent("https://api.lynse.cn/auth/login"),
+      encodeURIComponent("https://www.lynse.cn/app/auth/wechat"),
+    );
+    expect(wechatWebFlowReady(frontendCallbackUrl, "https://api.lynse.cn", "https://www.lynse.cn")).toBe(true);
+  });
+
+  it.each([
+    ["a dev tunnel", backendCallbackUrl.replace("api.lynse.cn", "5kt2352114jj.vicp.fun")],
+    ["an unrelated origin", backendCallbackUrl.replace("api.lynse.cn", "evil.example")],
+  ])("keeps the entry pending when the redirect lands on %s", (_label, authorizeUrl) => {
+    expect(wechatWebFlowReady(authorizeUrl, "https://api.lynse.cn", "https://www.lynse.cn")).toBe(false);
+  });
+
+  it("keeps the entry pending for a malformed or callback-less render", () => {
+    expect(wechatWebFlowReady("https://open.weixin.qq.com/connect/qrconnect?appid=x", "https://api.lynse.cn", "https://www.lynse.cn")).toBe(false);
+    expect(wechatWebFlowReady("not a url", "https://api.lynse.cn", "https://www.lynse.cn")).toBe(false);
   });
 });

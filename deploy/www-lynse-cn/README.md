@@ -46,19 +46,20 @@ ECS 无 SSH（安全组未开 22）：全部通过云助手执行 —— `python
 | 方式 | 状态 | 依赖 |
 | --- | --- | --- |
 | 手机验证码 | ✅ 可用 | 无（api.lynse.cn 既有接口，实测发送成功） |
-| Apple | ⏳ 后端配置 | CN Nacos `auth.apple` 仍为占位符（your-client-id），见下清单 |
-| 微信扫码 | ⏳ 后端配置 | WECHAT_SCAN redirect_uri 仍指向后端 /auth/login 页，见下清单 |
+| Apple | ⏳ 后端配置 | CN Nacos `auth.apple` 仍为占位符（your-client-id）、callback 500，见下清单 |
+| 微信扫码 | ⏳ 后端实现 | redirect_uri 固定为后端 /auth/login（回调域约束，2026-11-18 定案）；后端需实现换 code + 302 落地，见下清单与契约文档 |
 
-前端行为：未就绪的入口点击后 toast 提示（「苹果登录暂未配置」「微信扫码登录正在接入」），后端配置完成后**无需改前端**自动激活。
+前端行为：未就绪的入口点击后 toast 提示（「Apple 登录配置中」「微信扫码登录正在接入」）；微信入口前端已改为按 `redirect_uri` 的 origin 判定放行（`wechatWebFlowReady`），后端落地实现后**无需改前端**自动激活。
 
 ## 给后端的修改清单
 
-1. **CN Nacos `dting-auth` 的 `auth.apple` 节点**（现为占位符，照 Apple 网页接入文档配真值）：
+> 微信 web 流架构 2026-11-18 定案为**后端回调**（redirect_uri 固定 api.lynse.cn/auth/login，与开放平台回调域一致），完整契约见 `docs/cn-wechat-scan-web-login-backend-contract.md`（含 curl 验收命令）。
+
+1. **微信 `GET /auth/login` 浏览器回调落地**（P0，现为 HTTP 200 文本 gateway.internal.error）：校验 state → 换 code → 按结果 302 到 `web-success-url#token=…&expireIn=…`（已绑定）/ `web-bind-url?thirdPartyId=…&authType=WECHAT_SCAN`（未绑定）/ `web-bind-url?error=…`（失败）。Nacos 配 `web-success-url=https://www.lynse.cn/app/home`、`web-bind-url=https://www.lynse.cn/app/bind`（或 /bind，已做兼容 302）。
+2. **CN Nacos `dting-auth` 的 `auth.apple` 节点**（现为占位符，照 Apple 网页接入文档配真值）：
    - client-id=com.lynse.web、team-id=76HBB34PNK、key-id=Q2M7PBW9G7、private-key=.p8 内容
    - redirect-uri=https://api.lynse.cn/api/auth/apple/callback（与 Apple 后台 Return URL 逐字一致）
    - scope=name email、response-type=code id_token、**response_mode=form_post**（gapp 实测缺它被 Apple 拒绝 invalid_request）
-   - web-success-url=https://www.lynse.cn/app/home、web-bind-url=https://www.lynse.cn/app/bind（或 /bind，已做兼容 302）
-2. **微信 WECHAT_SCAN redirect_uri**：改为 https://www.lynse.cn/auth/wechat（前端回调页已就绪）；当前值 https://api.lynse.cn/auth/login 是后端自己的页面，web 拿不到 code。
 3. **gapp 测试后端同步**：Apple 授权 URL 补 response_mode=form_post；web-success-url=https://www.lynse.ai/app/home、web-bind-url=https://www.lynse.ai/app/bind。
 4. **Google（intl）**：后端 Firebase Admin SDK 的项目必须与前端 `lynse-6312d` 一致（前端已送出真实 token，后端返回 error.google.identity.token.invalid——项目不匹配的典型症状）。
 

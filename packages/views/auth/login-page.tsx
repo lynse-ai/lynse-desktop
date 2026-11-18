@@ -22,7 +22,7 @@ import {
   renderAppleLoginUrl,
   startAppleLogin,
 } from "@lynse/core/auth/apple";
-import { renderWechatLoginUrl } from "@lynse/core/auth/wechat";
+import { renderWechatLoginUrl, wechatWebFlowReady } from "@lynse/core/auth/wechat";
 import { toast } from "sonner";
 import {
   buildQrLoginPayload,
@@ -347,18 +347,22 @@ export function LoginPage() {
   }
 
   /**
-   * CN WeChat scan: the backend renders the qrconnect URL. The web app can
-   * only complete the flow when the authorize redirect points back at this
-   * origin — otherwise the backend callback page ends the journey and the
-   * entry explains it is still being configured.
+   * CN WeChat scan: the backend renders the qrconnect URL and owns the OAuth
+   * callback — its `redirect_uri` is the backend's `/auth/login` (matching
+   * the WeChat Open Platform callback domain), so a web scan ends at the
+   * backend, which 302s the session onto the frontend landing pages. The web
+   * app may only leave for WeChat when that redirect lands somewhere this
+   * client can finish the flow (see wechatWebFlowReady); otherwise the entry
+   * explains it is still being configured.
    */
   async function handleWechatQrLogin() {
     setError(null);
     try {
       const url = await renderWechatLoginUrl();
-      const sameOrigin =
-        !web || (typeof window !== "undefined" && new URL(url).origin === window.location.origin);
-      if (!sameOrigin) {
+      const finishable =
+        !web ||
+        wechatWebFlowReady(url, new URL(api().getBaseUrl()).origin, window.location.origin);
+      if (!finishable) {
         toast(t("auth.wechat_qr_pending"));
         return;
       }

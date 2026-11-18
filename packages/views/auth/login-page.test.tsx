@@ -2,6 +2,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { ApiClient, setApiInstance, setApiTransportMode } from "@lynse/core/api/client";
 import { createAuthStore, registerAuthStore } from "@lynse/core/auth";
 import { getDesktopAppApi } from "../app-update";
@@ -11,6 +12,7 @@ import { configureBuildChannel } from "../feature-flags";
 vi.mock("@lynse/core/i18n/react", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
+vi.mock("sonner", () => ({ toast: vi.fn() }));
 vi.mock("../app-update", () => ({ getDesktopAppApi: vi.fn(), openExternalUrl: vi.fn() }));
 vi.mock("../layout/app-title-bar", () => ({ WindowControls: () => null, showWindowControls: () => false }));
 vi.mock("./api-auth-panel", () => ({ ApiAuthPanel: () => null }));
@@ -228,5 +230,25 @@ describe("desktop WeChat sign-in", () => {
     await act(async () => callback("https://api.lynse.cn/auth/wechat/callback?error=access_denied&state=expected"));
     expect(screen.getByText("wechat.callback_denied")).toBeTruthy();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The web shell (jsdom here: no desktopAPI bridge) leaves the page for the
+// qrconnect URL instead of opening the desktop auth window. jsdom's location
+// is unforgeable, so navigation itself can't be observed here — the pass
+// branches live as pure-function tests in core/auth/wechat.test.ts, and this
+// page-level test pins the pending branch the user actually sees.
+const TUNNEL_AUTHORIZE_URL = "https://open.weixin.qq.com/connect/qrconnect?appid=wx3e6e41f00bb51c69&redirect_uri=https%3A%2F%2F5kt2352114jj.vicp.fun%2Fauth%2Flogin&state=expected&response_type=code&scope=snsapi_userinfo#wechat_redirect";
+
+describe("web WeChat QR gate", () => {
+  it("keeps the entry pending when the rendered redirect lands elsewhere", async () => {
+    fetchMock.mockImplementation(async () => Response.json({ code: 200, data: TUNNEL_AUTHORIZE_URL }));
+    render(<LoginPage />);
+    fireEvent.click(screen.getByRole("button", { name: "auth.wechat_qr_login" }));
+    await waitFor(() =>
+      expect(vi.mocked(toast)).toHaveBeenCalledWith("auth.wechat_qr_pending"),
+    );
+    // Only the render call happened — no exchange or bind traffic followed.
+    expect(fetchMock.mock.calls.every(([url]) => String(url).includes("/render"))).toBe(true);
   });
 });

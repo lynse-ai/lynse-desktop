@@ -80,6 +80,33 @@ export function stateFromAuthorizeUrl(authorizeUrl: string): string | null {
   }
 }
 
+/**
+ * Whether the web app may leave for the rendered authorize URL: the OAuth
+ * redirect (`redirect_uri` baked in by the backend) must land somewhere this
+ * client can finish the flow — the configured API server's origin (the
+ * backend owns the callback and 302s onto the web landing pages) or the
+ * origin the page itself lives on (a frontend callback route). Anything
+ * else — a dev tunnel, an unfinished config — keeps the entry pending
+ * instead of stranding a scan on a dead callback. Desktop shells skip this
+ * check: the embedded auth window intercepts the redirect before the page
+ * is ever requested.
+ */
+export function wechatWebFlowReady(
+  authorizeUrl: string,
+  apiOrigin: string,
+  webOrigin: string | null,
+): boolean {
+  let callbackOrigin: string | null;
+  try {
+    const callback = new URL(authorizeUrl).searchParams.get("redirect_uri");
+    callbackOrigin = callback ? new URL(callback).origin : null;
+  } catch {
+    return false;
+  }
+  if (!callbackOrigin) return false;
+  return callbackOrigin === apiOrigin || (webOrigin !== null && callbackOrigin === webOrigin);
+}
+
 /** Extract `code`/`state` from a WeChat redirect (callback URL or location). */
 export function wechatCallbackParams(callbackUrl: string): {
   code: string | null;

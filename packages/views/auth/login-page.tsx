@@ -66,7 +66,7 @@ import { authErrorText } from "./auth-errors";
 import { ApiAuthPanel } from "./api-auth-panel";
 import { LYNSE_LOGO_SRC } from "./lynse-logo";
 import { LOGIN_ARTWORK_SRC } from "./login-artwork";
-import { LOGIN_CAROUSEL_SRC_WEB } from "./login-carousel-artwork";
+import { LOGIN_CAROUSEL_SLIDES_WEB } from "./login-carousel-artwork";
 import { LoginCarousel } from "./login-carousel";
 
 /** Login QR panel phases. "expired"/"error" offer a manual refresh. */
@@ -83,8 +83,8 @@ type LoginView = "phone" | "email" | "more" | "qr" | "api";
  * job). Qoder-welcome layout: a left column with the wordmark, a welcome
  * heading and the active sign-in form, and a rounded artwork card on the
  * right (desktop: LOGIN_ARTWORK_SRC full-height; web: the
- * LOGIN_CAROUSEL_SRC_WEB storyboard carousel edge-to-edge, both
- * user-provided).
+ * LOGIN_CAROUSEL_SLIDES_WEB storyboard carousel — illustration card +
+ * caption + dots — both user-provided).
  *
  * Every build uses the same phone, WeChat and app-scanned QR sign-in flow.
  * The API form (server selection + API key, the same UI as /api-config)
@@ -1015,16 +1015,17 @@ export function LoginPage() {
       </div>
 
       {/* ── Right column. Desktop: full-height rounded artwork card, inset on
-          all sides like the reference window. Web (lg+): the three product
-          storyboards as an edge-to-edge auto-advancing carousel (user
+          all sides like the reference window. Web (lg+): a Notta-login-style
+          panel — muted backdrop with the three product storyboards as
+          illustration cards (live-text captions + dot indicators, user
           request, 2026-11-18); below lg the column hides and the form takes
           the full width. ── */}
       {web ? (
         <aside
           aria-hidden
-          className="relative hidden w-1/2 shrink-0 overflow-hidden bg-background lg:block"
+          className="relative hidden w-1/2 shrink-0 items-center justify-center overflow-hidden bg-muted/40 px-10 lg:flex"
         >
-          <LoginCarousel images={LOGIN_CAROUSEL_SRC_WEB} />
+          <LoginCarousel slides={LOGIN_CAROUSEL_SLIDES_WEB} />
         </aside>
       ) : (
         <aside

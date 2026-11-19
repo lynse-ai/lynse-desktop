@@ -1,6 +1,15 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const privatePlugins = new URL("./src/private-plugins/index.ts", import.meta.url);
+const hasPrivatePlugins = existsSync(privatePlugins);
+const hasPrivateBackend = existsSync(new URL("./src-tauri/src/recording_card_private/mod.rs", import.meta.url));
+if (hasPrivatePlugins !== hasPrivateBackend || (!hasPrivatePlugins && process.env.LYNSE_REQUIRE_PRIVATE_RECORDING_CARD === "1")) {
+  throw new Error("The private recording card plugin requires both desktop inputs");
+}
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -15,6 +24,9 @@ export default defineConfig({
   },
   resolve: {
     dedupe: ["react", "react-dom"],
+    alias: hasPrivatePlugins
+      ? [{ find: /^\.\/private-plugins$/, replacement: fileURLToPath(privatePlugins) }]
+      : [],
   },
   define: {
     // Edition split (see core/config): `LYNSE_EDITION=cn|intl` picks the

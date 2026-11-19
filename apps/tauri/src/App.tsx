@@ -20,6 +20,9 @@ import { secureStorage } from "./secure-storage";
 import { setReportChannel } from "@lynse/views/diagnostics";
 import type { DesktopApi } from "./tauri-bridge";
 import { Loading } from "./Loading";
+import { withPrivatePluginLocales } from "./private-plugins";
+
+const resources = withPrivatePluginLocales(RESOURCES);
 
 // Legacy feature-exposure overrides do not select login methods or servers.
 // Development and packaged apps share the standard default.
@@ -94,7 +97,7 @@ function renderWindow(kind: string | null) {
           wsUrl={import.meta.env.VITE_WS_URL}
           storage={secureStorage}
           identity={{ platform: "desktop", version: desktop?.appInfo?.version ?? "0.1.0" }}
-          resources={RESOURCES}
+          resources={resources}
         >
           <MainWindow />
         </CoreProvider>

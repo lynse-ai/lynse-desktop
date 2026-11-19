@@ -92,6 +92,16 @@ apps/tauri/src-tauri/aec3/lib/
 apps/tauri/.build/
 /.desktop-rsi/
 
+# Recording-card plugin inputs for private builds.
+/.recording-card-ownership/
+/apps/tauri/src/private-plugins/
+/apps/tauri/src-tauri/src/recording_card_private/
+/apps/tauri/src-tauri/recording-card-ownership/
+/apps/web/app/api/(private-plugins)/recording-card/
+/apps/web/app/plugins/(private-plugins)/recording-card/
+/packages/views/recording-card-private/
+/specs/private-recorder-usb-access/
+
 # Docs live outside the repo now — never re-track.
 /docs/
 

@@ -91,6 +91,8 @@ mod wechat_auth;
 mod report_screenshot;
 mod cnb_report;
 // Recording-card USB: NvEasy protocol codec + nusb transport.
+#[cfg(private_recording_card)]
+#[path = "recording_card_private/mod.rs"]
 mod recording_card_usb;
 
 use live_translation::LiveTranslationManager;
@@ -5314,6 +5316,15 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+fn with_private_commands(
+    commands: impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static,
+) -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync + 'static {
+    #[cfg(private_recording_card)]
+    let commands = recording_card_usb::with_commands(commands);
+
+    commands
+}
+
 pub fn run() {
     tauri::Builder::default()
         // Must be registered first: a second launch (the user re-clicks the
@@ -5341,7 +5352,6 @@ pub fn run() {
         .manage(desktop_mcp::DesktopMcpState::default())
         .manage(workbench::WorkbenchState::default())
         .manage(inspiration_private::PrivateState::default())
-        .manage(recording_card_usb::RecordingCardSession::new())
         .register_asynchronous_uri_scheme_protocol("local-media", |context, request, responder| {
             // WKURLSchemeHandler fires this on the MAIN thread; a long
             // meeting's WAV is 100+ MB, so the file read must leave the main
@@ -5352,6 +5362,9 @@ pub fn run() {
             });
         })
         .setup(|app| {
+            #[cfg(private_recording_card)]
+            app.manage(recording_card_usb::RecordingCardSession::new());
+
             // File logging needs the OS log dir, which only resolves with the
             // app handle — so the plugin registers here rather than on the
             // builder chain, and anything logged before this point reaches
@@ -5485,7 +5498,7 @@ pub fn run() {
             // needed since the stride-tightening hack was retired with the
             // rail-embedded lights.
         })
-        .invoke_handler(tauri::generate_handler![
+        .invoke_handler(with_private_commands(tauri::generate_handler![
             custom_models::custom_model_set_key,
             custom_models::custom_model_has_key,
             custom_models::custom_model_complete,
@@ -5642,23 +5655,7 @@ pub fn run() {
             audio_editor::audio_editor_remove_silence,
             audio_editor::audio_editor_enhance_voice,
             audio_editor::audio_editor_cancel,
-            recording_card_usb::session::recording_card_usb_connect,
-            recording_card_usb::session::recording_card_usb_disconnect,
-            recording_card_usb::session::recording_card_usb_state,
-            recording_card_usb::session::recording_card_usb_list_files,
-            recording_card_usb::session::recording_card_usb_storage,
-            recording_card_usb::session::recording_card_usb_delete_file,
-            recording_card_usb::session::recording_card_usb_download,
-            recording_card_usb::session::recording_card_usb_cancel_download,
-            recording_card_usb::session::recording_card_usb_get_auto_off,
-            recording_card_usb::session::recording_card_usb_set_auto_off,
-            recording_card_usb::session::recording_card_usb_get_mic_gain,
-            recording_card_usb::session::recording_card_usb_set_mic_gain,
-            recording_card_usb::session::recording_card_usb_set_bound,
-            recording_card_usb::session::recording_card_usb_unbind,
-            recording_card_usb::session::recording_card_usb_factory_reset,
-            recording_card_usb::session::recording_card_usb_format_storage,
-        ])
+        ]))
         .build(tauri::generate_context!())
         .expect("error while building Lynse Tauri application")
         .run(|app, event| match event {

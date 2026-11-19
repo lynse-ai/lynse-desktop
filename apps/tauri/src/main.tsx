@@ -1,6 +1,7 @@
 import ReactDOM from "react-dom/client";
 import "./globals.css";
 import { installTauriBridge } from "./tauri-bridge";
+import { installPrivatePlugins } from "./private-plugins";
 import { installLogger } from "./logger";
 import { installEventUnlistenGuard } from "./event-guard";
 import { initAppTheme } from "@lynse/views/settings/app-theme";
@@ -56,6 +57,7 @@ async function bootstrap() {
   }
 
   const [{ default: App }] = await Promise.all([import("./App"), installTauriBridge(windowKind)]);
+  if (!windowKind) installPrivatePlugins();
   syncWindowEffects();
   // Re-apply the persisted notch-island preference: the Rust flag is an
   // executor only and resets on launch, so the main window re-syncs it here

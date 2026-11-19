@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import { defaultStorage } from "@lynse/core/platform";
-import { getAllPlugins } from "./registry";
+import { getAllPlugins, isPluginAvailable } from "./registry";
 import type { PluginStateEntry } from "./types";
 
 const STORAGE_KEY = "lynse_plugins_state";
@@ -53,6 +53,14 @@ export const usePluginStore = create<PluginRuntimeState>((set) => ({
       return { entries: { ...s.entries, [pluginId]: { ...current, enabled: false } } };
     }),
 }));
+
+export function usePluginSidebarItems() {
+  const entries = usePluginStore((state) => state.entries);
+  return getAllPlugins().flatMap((plugin) => {
+    const item = plugin.contributions?.sidebarItem;
+    return item && entries[plugin.id]?.enabled && isPluginAvailable(plugin) ? [item] : [];
+  });
+}
 
 if (typeof window !== "undefined") {
   usePluginStore.subscribe((state) => {

@@ -1,6 +1,19 @@
 import type { NextConfig } from "next";
 import { cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 
+const privateRecordingCardInputs = [
+  "./app/plugins/(private-plugins)/recording-card/page.tsx",
+  "./app/api/(private-plugins)/recording-card/ownership/route.ts",
+  "./app/api/(private-plugins)/recording-card/ownership/verify.wasm",
+  "../../packages/views/recording-card-private/index.ts",
+].map((path) => existsSync(new URL(path, import.meta.url)));
+if (
+  (privateRecordingCardInputs.some(Boolean) || process.env.LYNSE_REQUIRE_PRIVATE_RECORDING_CARD === "1") &&
+  !privateRecordingCardInputs.every(Boolean)
+) {
+  throw new Error("The private recording card plugin requires both web routes, the verifier, and shared views");
+}
+
 // The web build inlines its own package version so the About panel can show
 // it (desktop reads the version from the Rust host bridge instead).
 const webPkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version: string };

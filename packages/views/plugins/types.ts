@@ -43,8 +43,9 @@ export interface PluginSidebarItemContribution {
   key: string;
   labelKey: string;
   icon: LucideIcon;
-  /** Route path; must start with `/plugin/<id>` to stay off core routes. */
+  /** Desktop route contributed by this plugin. Core routes take precedence. */
   path: string;
+  component: ComponentType;
 }
 
 export interface PluginContributions {

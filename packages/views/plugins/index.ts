@@ -30,7 +30,7 @@ export {
   getSettingsSections,
   getConnectionProviders,
 } from "./registry";
-export { usePluginStore, initPluginMigrations } from "./state";
+export { usePluginStore, usePluginSidebarItems, initPluginMigrations } from "./state";
 export { emitPluginEvent, subscribePluginEvent } from "./events";
 export { isBotChannelActive } from "./channel-plugin-gate";
 export { useEmitTranscriptionCompleted } from "./transcription-events";

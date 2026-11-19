@@ -1459,11 +1459,6 @@ local_summary_failed: "Deep summary failed",
       name: "Feishu Bot",
       description: "Answer questions in Feishu chats and push meeting summaries to your group.",
     },
-    recordingCardUsb: {
-      name: "Recording card manager",
-      description:
-        "Manage recordings on your recording card over USB — opens the management page in Chrome or Edge.",
-    },
     models: {
       title: "Offline models",
       hint: "Offline transcription models — download only what you need. An engine's runtime prepares automatically on first download.",

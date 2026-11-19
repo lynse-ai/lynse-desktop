@@ -69,3 +69,7 @@ ECS 无 SSH（安全组未开 22）：全部通过云助手执行 —— `python
 ## 版本序列
 
 web 端版本号从 **0.1.0** 起（`apps/web/package.json` 的 `@lynse/web`），独立于桌面端（根 `lynse-webapp` 1.2.x）与 MCP 服务（lynse-mcp 0.2.0）的版本序列。www.lynse.cn 的发布以 apps/web 版本号为准。
+
+## 桌面端发版与录音卡私有插件（2026-11-20）
+
+- 官方 tag→CI 发版为公开版安装包（不含录音卡设备页）；带设备页的安装包须在本机私有目录（`recording_card_private/` 等私有路径，见 www-lynse-ai README 同名小节）在位时构建，上传 GitHub Release 后刷新 dl.lynse.cn `updates/latest/`。

@@ -85,10 +85,6 @@ import type {
   DesktopAudioEditorApi,
 } from "@lynse/views/audio-editor";
 import type { DesktopCustomModelsApi } from "@lynse/views/custom-models";
-import type {
-  DesktopRecordingCardUsbApi,
-  RecordingCardDownloadProgress,
-} from "@lynse/views/recording-card";
 
 export type AppUpdateInfo = {
   currentVersion: string;
@@ -127,7 +123,6 @@ export type DesktopApi = {
     shareFile: (name: string, bytes: Uint8Array) => Promise<boolean>;
   };
   localTranscription: Record<string, (...args: any[]) => Promise<unknown>>;
-  recordingCardUsb: DesktopRecordingCardUsbApi;
   lynclawNotes: DesktopLynclawNotesApi;
   customModels: DesktopCustomModelsApi;
   cloudSync: DesktopCloudSyncApi;
@@ -461,32 +456,6 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
     mcp: desktopMcpApi,
     openExternal: async (url) => {
       await openUrl(url);
-    },
-    recordingCardUsb: {
-      connect: (password, vendorId, productId) =>
-        command("recording_card_usb_connect", { password, vendorId, productId }),
-      disconnect: () => command("recording_card_usb_disconnect"),
-      state: () => command("recording_card_usb_state"),
-      listFiles: () => command("recording_card_usb_list_files"),
-      storage: () => command("recording_card_usb_storage"),
-      deleteFile: (name) => command("recording_card_usb_delete_file", { name }),
-      getAutoOff: () => command<number>("recording_card_usb_get_auto_off"),
-      setAutoOff: (minutes) => command("recording_card_usb_set_auto_off", { minutes }),
-      getMicGain: (mode) => command("recording_card_usb_get_mic_gain", { mode }),
-      setMicGain: (mode, mic1, mic2) =>
-        command("recording_card_usb_set_mic_gain", { mode, mic1, mic2 }),
-      setBound: (bound) => command("recording_card_usb_set_bound", { bound }),
-      unbind: (format) => command("recording_card_usb_unbind", { format }),
-      factoryReset: () => command("recording_card_usb_factory_reset"),
-      formatStorage: () => command("recording_card_usb_format_storage"),
-      download: async (file, onProgress) => {
-        const channel = new Channel<RecordingCardDownloadProgress>();
-        channel.onmessage = (progress) => {
-          onProgress.onmessage?.(progress);
-        };
-        return command<string | null>("recording_card_usb_download", { file, onProgress: channel });
-      },
-      cancelDownload: () => command("recording_card_usb_cancel_download"),
     },
     lynclawNotes: {
       list: (scope) => command("lynclaw_notes_list", { scope }),

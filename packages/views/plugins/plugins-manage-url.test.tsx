@@ -5,7 +5,7 @@ import { cleanup, render, screen, fireEvent } from "@testing-library/react";
 import { PluginCommunitySection } from "./plugin-community-section";
 import { registerPlugin } from "./registry";
 import { usePluginStore } from "./state";
-import { recordingCardUsbPlugin } from "./builtin/recording-card-usb";
+import { Settings } from "../icons";
 
 /**
  * The manage-url row action: an installed + enabled plugin with manageUrl
@@ -14,13 +14,11 @@ import { recordingCardUsbPlugin } from "./builtin/recording-card-usb";
  */
 
 const openExternal = vi.fn();
+const pluginId = "lynse.example-managed";
+const managementUrl = "https://example.com/manage";
 
 vi.mock("@lynse/core/i18n/react", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
-}));
-
-vi.mock("@lynse/core/api", () => ({
-  api: () => ({ getBaseUrl: () => "https://api.lynse.cn" }),
 }));
 
 vi.mock("sonner", () => ({
@@ -37,7 +35,19 @@ vi.mock("../layout/use-maximized", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  registerPlugin(recordingCardUsbPlugin);
+  registerPlugin({
+    id: pluginId,
+    kind: "app",
+    version: "1.0.0",
+    minAppVersion: "1.2.11",
+    nameKey: "plugins.test.name",
+    descriptionKey: "plugins.test.description",
+    icon: Settings,
+    category: "tool",
+    platforms: ["desktop"],
+    permissions: [],
+    manageUrl: () => managementUrl,
+  });
   usePluginStore.setState({ entries: {} });
   (window as unknown as { desktopAPI?: unknown }).desktopAPI = { openExternal };
   vi.stubGlobal(
@@ -60,7 +70,7 @@ describe("plugin manage-url row action", () => {
     usePluginStore.setState((s) => ({
       entries: {
         ...s.entries,
-        "lynse.recording-card-usb": { installedAt: 1, enabled: true },
+        [pluginId]: { installedAt: 1, enabled: true },
       },
     }));
 
@@ -69,9 +79,7 @@ describe("plugin manage-url row action", () => {
     fireEvent.click(button);
 
     expect(openExternal).toHaveBeenCalledTimes(1);
-    expect(openExternal).toHaveBeenCalledWith(
-      "https://www.lynse.cn/app/plugins/recording-card",
-    );
+    expect(openExternal).toHaveBeenCalledWith(managementUrl);
   });
 
   it("shows no manage button before the plugin is installed", () => {

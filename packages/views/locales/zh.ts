@@ -1456,10 +1456,6 @@ local_summary_failed: "深度总结生成失败",
       name: "飞书机器人",
       description: "在飞书群聊中回答问题，并把会议总结推送到你的群里。",
     },
-    recordingCardUsb: {
-      name: "录音卡管理",
-      description: "通过 USB 管理录音卡内的录音——在 Chrome 或 Edge 中打开管理页。",
-    },
     models: {
       title: "离线模型",
       hint: "离线转写模型按需下载；首次下载某引擎的模型时会自动准备其运行时。",

@@ -17,7 +17,8 @@ import {
   selectUnreadByTypes,
 } from "../notifications/use-notification-store";
 import { AppUpdateDialog } from "../app-update-dialog";
-import { featureFlags, useRecordingCardPluginEnabled } from "../feature-flags";
+import { featureFlags } from "../feature-flags";
+import { usePluginSidebarItems } from "../plugins/state";
 import { BetaBadge } from "../beta-badge";
 import { getWorkbenchApi, useWorkbench, useWikiEnabled } from "../workbench/api";
 import { SettingsDialog } from "../settings/settings-dialog";
@@ -34,7 +35,6 @@ import {
   FolderOpen,
   Bot,
   BookOpen,
-  MergeUp,
   MoreHorizontal,
   Pin,
 } from "../icons";
@@ -103,7 +103,7 @@ export function LynseSidebar() {
   const togglePin = useSidebarPreferences((state) => state.togglePin);
   const hasWorkbenchStatus = useWorkbench((state) => !!state.status);
   const wikiEnabled = useWikiEnabled();
-  const recordingCardEnabled = useRecordingCardPluginEnabled();
+  const pluginItems = usePluginSidebarItems();
   // Shared update store (already polled by the mounted AppUpdateDialog) — the
   // rail badge is just another subscriber.
   const { update } = useAppUpdate();
@@ -154,12 +154,12 @@ export function LynseSidebar() {
   // New optional destinations belong here so they share the More/pinning flow.
   const moreItems: NavItem[] = [
     { key: "wiki", label: t("nav.memory"), icon: BookOpen, path: "/memory", solid: false },
-    { key: "devices", label: t("nav.devices"), icon: MergeUp, path: "/devices", solid: false },
-  ].filter((item) => {
-    if (item.key === "wiki") return !isWeb && wikiEnabled && (hasWorkbenchStatus || !!getWorkbenchApi());
-    if (item.key === "devices") return recordingCardEnabled;
-    return true;
-  });
+  ].filter(() => !isWeb && wikiEnabled && (hasWorkbenchStatus || !!getWorkbenchApi()));
+  if (!isWeb && featureFlags.pluginMarketplace) {
+    moreItems.push(...pluginItems.map(({ key, labelKey, icon, path }) => ({
+      key, label: t(labelKey), icon, path, solid: false,
+    })));
+  }
   const pinnedItems = pinnedKeys.flatMap((key) => moreItems.filter((item) => item.key === key));
   const moreActive = moreItems.some((item) =>
     !pinnedKeys.includes(item.key) && isNavActive(pathname, item.path ?? ""),

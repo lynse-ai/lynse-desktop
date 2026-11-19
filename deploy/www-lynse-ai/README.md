@@ -50,3 +50,9 @@ web 端版本号从 **0.1.0** 起（`apps/web/package.json` 的 `@lynse/web`）�
 
 - 授权管理页 `/app/authorizations` 同源调用 `/platform/oauth/api/authorizations` 等动作；桥接会话 cookie（path=/platform/oauth）与网页版账号 token 相互独立，通过桥接的 `token-login` 动作静默打通（用当前账号 token 换桥接会话，见 lynse-mcp 仓库 `docs/authorization-records-api.md`）。
 - 登录环境需与 MCP 实例一致：本部署指向 `gapp.lynse.cn`（测试账号系统），对应 lynse-mcp 测试环境。
+
+## 桌面端发版与录音卡私有插件（2026-11-20）
+
+- 录音卡「设备管理」插件源码不在公开仓库（`.gitignore` 私有路径：`recording_card_private/`、`recording-card-private/`、`private-plugins/`、web `(private-plugins)` 页面与校验路由、`recording-card-ownership/` 校验器、`.recording-card-ownership/` verify.c、`specs/private-recorder-usb-access/`），构建时按目录存在性自动启用；`LYNSE_REQUIRE_PRIVATE_RECORDING_CARD=1` 可强制要求私有输入，缺任一输入即构建失败。
+- tag→GitHub Actions 官方发版=公开版安装包（不含设备页）。带设备页的桌面安装包必须在私有目录在位（6 目标校验器静态库 + verify.wasm + 私有源码）的本机构建，随后上传到对应 GitHub Release 并刷新 dl.lynse.cn `updates/latest/`。
+- 绑定校验契约：设备文件管理前调 `GET /api/business/device/mine`，匹配 authSn + bleMac + `bindStatus==1` 才放行；连接即验、每次文件操作重验。

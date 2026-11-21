@@ -44,7 +44,6 @@ describe("knowledge base plugin", () => {
     expect(all[0]).toBe(manifest.knowledgeBasePlugin);
     expect(registry.getPluginById(KNOWLEDGE_BASE_PLUGIN_ID)?.kind).toBe("app");
     expect(manifest.knowledgeBasePlugin.platforms).toEqual(["desktop"]);
-    expect(manifest.knowledgeBasePlugin.migrate?.()).toBe(true);
     // Without a desktop bridge (web) the availability gate hides every
     // surface, community card included.
     expect(manifest.knowledgeBasePlugin.availability?.()).toBe(false);
@@ -101,12 +100,32 @@ describe("knowledge base plugin", () => {
     expect(flags.isWikiEnabled()).toBe(false);
   });
 
-  it("migrate seeds the plugin installed + enabled on first run", async () => {
+  it("starts off and follows the saved Desktop switch", async () => {
     const map = new Map<string, string>();
-    const { state, registry, manifest } = await loadModules(map);
+    const { state, registry, flags, manifest, windowShim } = await loadModules(map);
+    const unbind = vi.fn();
+    windowShim.desktopAPI = { workbench: { unbind } };
+    flags.configureBuildChannel("debug");
     registry.registerPlugin(manifest.knowledgeBasePlugin);
     await state.initPluginMigrations();
-    expect(state.usePluginStore.getState().entries[KNOWLEDGE_BASE_PLUGIN_ID]?.enabled).toBe(true);
-    expect(map.get("lynse_plugins_state")).toContain(KNOWLEDGE_BASE_PLUGIN_ID);
+    expect(state.usePluginStore.getState().entries[KNOWLEDGE_BASE_PLUGIN_ID]).toBeUndefined();
+    expect(flags.isWikiEnabled()).toBe(false);
+
+    state.usePluginStore.getState().install(KNOWLEDGE_BASE_PLUGIN_ID);
+    expect(flags.isWikiEnabled()).toBe(true);
+
+    await manifest.knowledgeBasePlugin.lifecycle?.onDisable?.();
+    state.usePluginStore.getState().disable(KNOWLEDGE_BASE_PLUGIN_ID);
+    expect(unbind).toHaveBeenCalledOnce();
+    expect(flags.isWikiEnabled()).toBe(false);
+
+    const restarted = await loadModules(map);
+    setDesktopPlatform(restarted.windowShim);
+    restarted.flags.configureBuildChannel("debug");
+    restarted.registry.registerPlugin(restarted.manifest.knowledgeBasePlugin);
+    await restarted.state.initPluginMigrations();
+    expect(restarted.flags.isWikiEnabled()).toBe(false);
+    restarted.state.usePluginStore.getState().enable(KNOWLEDGE_BASE_PLUGIN_ID);
+    expect(restarted.flags.isWikiEnabled()).toBe(true);
   });
 });

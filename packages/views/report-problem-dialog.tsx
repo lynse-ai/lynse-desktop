@@ -9,6 +9,7 @@ import {
 } from "@lynse/ui/components/ui/dialog";
 import { Button } from "@lynse/ui/components/ui/button";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { getAuthStore } from "@lynse/core/auth";
 import { Check, Loader2 } from "./icons";
 import { initI18n } from "@lynse/core/i18n";
 import { getAppInfoSync } from "./app-update";
@@ -52,7 +53,12 @@ function clampText(text: string, limit: number): string {
 }
 
 /** Markdown body for the CNB issue: description + environment + log tail. */
-function composeIssueBody(input: { description: string; logTail: LogTail | null }): string {
+function composeIssueBody(input: {
+  description: string;
+  logTail: LogTail | null;
+  /** Logged-in account submitting the report; null when signed out. */
+  user: { name: string; email: string; id: string } | null;
+}): string {
   const appInfo = getAppInfoSync();
   const lines = [
     "## 问题描述 / What happened",
@@ -64,6 +70,16 @@ function composeIssueBody(input: { description: string; logTail: LogTail | null 
     `- User agent: ${typeof navigator !== "undefined" ? navigator.userAgent : "unknown"}`,
     `- Date: ${new Date().toISOString()}`,
   ];
+  if (input.user) {
+    // The CNB issue is filed under the gateway's shared account, so the
+    // submitter only exists if the body says so. Name is the login identity
+    // (phone / email / nickname); uid pins it to the backend account.
+    const identity = [input.user.name, input.user.email]
+      .map((part) => part.trim())
+      .filter((part, index, all) => part && all.indexOf(part) === index)
+      .join(" · ");
+    lines.push(`- 提交者 / Submitted by: ${identity || "unknown"} (uid: ${input.user.id})`);
+  }
   if (input.logTail?.tail) {
     lines.push("", "## 日志（尾部）/ Logs (tail)", "```text", clampText(input.logTail.tail, 6000), "```");
   }
@@ -276,11 +292,22 @@ function ReportProblemForm({
     const appInfo = getAppInfoSync();
     const version = appInfo?.version || "unknown";
     const platform = appInfo?.platform ?? "unknown";
+    // Imperative read on purpose: the standalone report window runs outside
+    // CoreProvider, so the hook would throw; getState() simply yields no
+    // submitter there (or when signed out) and the title/body stay as before.
+    const user = getAuthStore()?.getState().user ?? null;
+    const submitter = user?.name.trim().slice(0, 40);
     try {
       const result = await api.submitCnbIssue({
         endpoint: channel.endpoint,
-        title: `[报告] v${version} / ${platform}`,
-        body: composeIssueBody({ description, logTail: includeLogs ? logTail : null }),
+        title: submitter
+          ? `[报告] v${version} / ${platform} / ${submitter}`
+          : `[报告] v${version} / ${platform}`,
+        body: composeIssueBody({
+          description,
+          logTail: includeLogs ? logTail : null,
+          user,
+        }),
         screenshotPath: screenshot?.path ?? null,
       });
       setSubmitted(result);

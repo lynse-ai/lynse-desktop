@@ -45,7 +45,4 @@ export const knowledgeBasePlugin = definePlugin({
     // No-op on purpose: user data (memories, artifacts, index) is kept.
     onUninstall: () => {},
   },
-  // The knowledge base predates the plugin system and shipped enabled for
-  // every beta user — come up installed + enabled (workbuddy precedent).
-  migrate: () => true,
 });

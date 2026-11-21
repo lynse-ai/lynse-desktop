@@ -104,6 +104,20 @@ type DesktopAppApi = {
       callback: (callbackUrl: string) => void,
     ) => Promise<() => void>;
   };
+  /** Account-center SSO window (desktop only): a generic OAuth authorize
+   * window — authorize URL, registered callback and expected state are all
+   * caller-supplied; the callback redirect never actually loads. */
+  oauth?: {
+    openAuthWindow: (
+      url: string,
+      callback: string,
+      state: string,
+    ) => Promise<void>;
+    closeAuthWindow: () => Promise<void>;
+    onAuthCallback: (
+      callback: (callbackUrl: string) => void,
+    ) => Promise<() => void>;
+  };
 };
 
 /** Access the desktop update API, or null when running outside the Tauri host. */

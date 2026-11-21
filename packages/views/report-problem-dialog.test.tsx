@@ -10,7 +10,7 @@ import { ReportProblemDialog } from "./report-problem-dialog";
 
 const mocks = vi.hoisted(() => ({
   capture: vi.fn(), submit: vi.fn(), annotate: vi.fn(), toastError: vi.fn(), t: (key: string) => key,
-  create: vi.fn(), listTickets: vi.fn(),
+  create: vi.fn(), listTickets: vi.fn(), getAuthStore: vi.fn(),
 }));
 vi.mock("@lynse/core/i18n/react", () => ({ useTranslation: () => ({ t: mocks.t }) }));
 vi.mock("@lynse/core/i18n", () => ({ initI18n: vi.fn() }));
@@ -21,6 +21,9 @@ vi.mock("./app-update", () => ({
   getAppInfoSync: () => ({ version: "test", platform: "win32" }), openExternalUrl: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: { error: mocks.toastError } }));
+// The dialog reads the submitter imperatively; undefined = the standalone
+// window / signed-out shape, so most tests below stay identity-free.
+vi.mock("@lynse/core/auth", () => ({ getAuthStore: mocks.getAuthStore }));
 // The mount-point dispatcher imports the suggestion center (FeedLog face),
 // which value-imports the feedlog API — stub it so the CNB tests below never
 // touch it.
@@ -79,6 +82,31 @@ describe("problem report screenshot recovery", () => {
     expect(mocks.submit).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "settings.report_submit" }));
     await waitFor(() => expect(mocks.submit).toHaveBeenCalledWith(expect.objectContaining({ body: expect.stringContaining(description) })));
+  });
+
+  it("tags the logged-in account into the title and environment block", async () => {
+    mocks.getAuthStore.mockReturnValue({
+      getState: () => ({ user: { id: "u-9", name: "张三", email: "zhang@example.com" } }),
+    });
+    openDialog();
+
+    fireEvent.change(await screen.findByLabelText("settings.report_problem_label"), { target: { value: "Crash on save" } });
+    fireEvent.click(screen.getByRole("button", { name: "settings.report_submit" }));
+    await waitFor(() => expect(mocks.submit).toHaveBeenCalledWith(expect.objectContaining({
+      title: "[报告] vtest / win32 / 张三",
+      body: expect.stringContaining("Submitted by: 张三 · zhang@example.com (uid: u-9)"),
+    })));
+  });
+
+  it("leaves the submitter out when no auth store is registered", async () => {
+    openDialog();
+
+    fireEvent.change(await screen.findByLabelText("settings.report_problem_label"), { target: { value: "Signed out report" } });
+    fireEvent.click(screen.getByRole("button", { name: "settings.report_submit" }));
+    await waitFor(() => expect(mocks.submit).toHaveBeenCalledWith(expect.objectContaining({
+      title: "[报告] vtest / win32",
+      body: expect.not.stringContaining("Submitted by"),
+    })));
   });
 
   it("replaces a broken preview with a retry hint while retaining the JPEG for submission", async () => {

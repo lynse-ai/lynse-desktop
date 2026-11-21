@@ -95,6 +95,12 @@ pub fn mask(text: &str) -> String {
         .map(|pattern| regex::Regex::new(pattern).expect("static privacy pattern"))
         .collect()
     });
+    // Fast path: mask() runs per chunk and per citation quote; most inputs
+    // contain no sensitive pattern, and the replace chain below would make
+    // up to six full copies of the text for nothing.
+    if patterns.iter().all(|pattern| pattern.find(text).is_none()) {
+        return text.to_owned();
+    }
     let mut result = text.to_owned();
     for pattern in patterns {
         result = pattern

@@ -20,7 +20,13 @@ fn progress_and_receipts_do_not_invalidate_browsing_but_content_and_permissions_
         .knowledge_events
         .insert("topic".into(), "delivered".into());
     assert_eq!(wiki_content_revision(&memory, &settings, &state), original);
-    fs::write(memory.join("wiki/topics.json"), "[]").unwrap();
+    let heads = memory.join("wiki/topics");
+    fs::create_dir_all(&heads).unwrap();
+    fs::write(
+        heads.join("00000000-0000-0000-0000-000000000000.json"),
+        "{\"id\":\"00000000-0000-0000-0000-000000000000\"}",
+    )
+    .unwrap();
     let content = wiki_content_revision(&memory, &settings, &state);
     assert_ne!(content, original);
     state.allow_ai = true;

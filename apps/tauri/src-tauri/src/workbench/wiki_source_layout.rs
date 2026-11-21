@@ -1,6 +1,21 @@
 //! Preserve old source chunks as ordered anchors and repartition only changed gaps.
 use super::*;
 
+fn layout_path(root: &Path, doc: &Document) -> std::path::PathBuf {
+    root.join("source-layouts")
+        .join(format!("{}.json", store::digest(&doc.id)))
+}
+
+/// Anchors from a stored layout file, in either format: legacy files are a
+/// bare chunk array, current files wrap the chunks with a producer marker.
+fn stored_anchors(value: &Value) -> Vec<String> {
+    if value.is_array() {
+        serde_json::from_value(value.clone()).unwrap_or_default()
+    } else {
+        serde_json::from_value(value["chunks"].clone()).unwrap_or_default()
+    }
+}
+
 fn split(text: &str, previous: &[String]) -> Vec<String> {
     let mut result = Vec::new();
     let mut cursor = 0;
@@ -23,19 +38,36 @@ fn split(text: &str, previous: &[String]) -> Vec<String> {
 /// Status rendering compares recorded failure keys against this key space, so
 /// it must match `prepare` exactly while leaving the anchor file untouched.
 pub(super) fn chunks(root: &Path, doc: &Document) -> CommandResult<Vec<String>> {
-    let path = root
-        .join("source-layouts")
-        .join(format!("{}.json", store::digest(&doc.id)));
-    let previous: Vec<String> = read_json(&path)?;
-    Ok(split(doc.text().trim(), &previous))
+    let value: Value = read_json(&layout_path(root, doc))?;
+    Ok(split(doc.text().trim(), &stored_anchors(&value)))
 }
 
-pub(super) fn prepare(root: &Path, doc: &Document) -> CommandResult<Vec<String>> {
-    let chunks = chunks(root, doc)?;
-    let path = root
-        .join("source-layouts")
-        .join(format!("{}.json", store::digest(&doc.id)));
-    write_json(&path, &chunks)?;
+pub(super) fn prepare(
+    root: &Path,
+    doc: &Document,
+    text_revision: &str,
+) -> CommandResult<Vec<String>> {
+    let path = layout_path(root, doc);
+    let value: Value = read_json(&path)?;
+    // Producer marker: while the source revision and splitter revision are
+    // unchanged the stored chunks stay authoritative, so heartbeats stop
+    // re-chunking and rewriting every document on every pass. Legacy files
+    // (bare arrays, no marker) are treated as stale.
+    if value["producer"] == json!(["wiki-layout-v1", doc.revision, text_revision]) {
+        if let Some(chunks) = value["chunks"].as_array() {
+            return serde_json::from_value(Value::Array(chunks.clone()))
+                .map_err(|error| error.to_string());
+        }
+    }
+    let previous = stored_anchors(&value);
+    let chunks = split(doc.text().trim(), &previous);
+    write_json(
+        &path,
+        &json!({
+            "producer": ["wiki-layout-v1", doc.revision, text_revision],
+            "chunks": chunks,
+        }),
+    )?;
     Ok(chunks)
 }
 

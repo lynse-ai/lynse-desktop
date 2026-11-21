@@ -8,6 +8,7 @@ import { CUSTOM_MODELS_CHANGED_EVENT, CUSTOM_MODELS_STORAGE_KEY } from "../custo
 import { featureFlags, isKnowledgePluginActiveIn, isWikiEnabled } from "../feature-flags";
 import { usePluginStore } from "../plugins/state";
 import { getWorkbenchApi, useWorkbench } from "./api";
+import type { WorkbenchStatus } from "./types";
 import { useMemoryDrafts } from "./memory-drafts";
 import { useWikiBrowser } from "./wiki-browser-state";
 import { resolveWorkbenchModelOverride, WORKBENCH_MODEL_CHANGED_EVENT, WORKBENCH_MODEL_STORAGE_KEY } from "./workbench-model";
@@ -70,8 +71,28 @@ export function WorkbenchSupervisor() {
         await bridge.setTextModel?.(resolveWorkbenchModelOverride());
       } })
       .catch((error: unknown) => { if (!disposed) useWorkbench.getState().setError(String(error)); });
+    // Workbench persists emit one event per progress push; during organize
+    // passes that fires several times a second and each setStatus re-renders
+    // every subscriber (home card, knowledge page). Coalesce to latest-wins
+    // at 1Hz with an immediate leading flush.
+    let pendingStatus: WorkbenchStatus | null = null;
+    let trailing: ReturnType<typeof setTimeout> | undefined;
+    let lastFlush = 0;
+    const flush = () => {
+      trailing = undefined;
+      const next = pendingStatus;
+      pendingStatus = null;
+      if (disposed || !next) return;
+      lastFlush = Date.now();
+      useWorkbench.getState().setStatus(next);
+    };
     void bridge.onUpdate((status) => {
-      if (!disposed && boundScope === status.scope) useWorkbench.getState().setStatus(status);
+      if (disposed || boundScope !== status.scope) return;
+      pendingStatus = status;
+      if (trailing) return;
+      const sinceLast = Date.now() - lastFlush;
+      if (sinceLast >= 1000) { flush(); return; }
+      trailing = setTimeout(flush, 1000 - sinceLast);
     }).then((cleanup) => { if (disposed) cleanup(); else unlisten = cleanup; });
     const resume = () => {
       if (document.visibilityState !== "hidden" && useWorkbench.getState().status?.enabled) {
@@ -81,7 +102,9 @@ export function WorkbenchSupervisor() {
     window.addEventListener("online", resume);
     document.addEventListener("visibilitychange", resume);
     return () => {
-      disposed = true; unlisten?.();
+      disposed = true;
+      if (trailing) clearTimeout(trailing);
+      unlisten?.();
       window.removeEventListener("online", resume);
       document.removeEventListener("visibilitychange", resume);
       void bridge.unbind();

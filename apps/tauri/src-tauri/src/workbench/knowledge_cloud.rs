@@ -325,7 +325,19 @@ fn filter_authorized_items(
             if item["document"]["aiContextEnabled"] == false {
                 return false;
             }
-            if item["kind"] == "wiki" || item["document"]["kind"] == "wiki" {
+            // Memory statements survive only when every underlying citation is
+            // still authorized at its recorded revision.
+            if item["kind"] == "memory" {
+                item["citations"].as_array().is_some_and(|refs| {
+                    !refs.is_empty()
+                        && refs.iter().all(|reference| {
+                            reference["id"]
+                                .as_str()
+                                .zip(reference["revision"].as_str())
+                                .is_some_and(|(id, revision)| allowed(id, Some(revision)))
+                        })
+                })
+            } else if item["kind"] == "wiki" || item["document"]["kind"] == "wiki" {
                 item["citations"]
                     .as_array()
                     .or(item["document"]["citations"].as_array())
@@ -370,7 +382,12 @@ pub(super) async fn filter_items(
     let (root, _) = roots(app, session)?;
     let mut identifiers = BTreeSet::new();
     for item in &items {
-        if item["kind"] == "wiki" || item["document"]["kind"] == "wiki" {
+        // Wiki pages and memory statements carry their evidence as citations;
+        // resolve the underlying sources so authorization can judge them.
+        if item["kind"] == "wiki"
+            || item["document"]["kind"] == "wiki"
+            || item["kind"] == "memory"
+        {
             if let Some(refs) = item["citations"]
                 .as_array()
                 .or(item["document"]["citations"].as_array())

@@ -348,11 +348,14 @@ pub(super) async fn sync_daily_note(app: &AppHandle, session: &Session) -> Comma
             super::persist(app, session, &latest)?;
         }
     }
-    let file = memory_root.join("daily").join(format!("{today}.md"));
-    let Ok(markdown) = fs::read_to_string(&file) else {
-        return Ok(());
-    };
-    let markdown = clip_chars(&markdown, DAILY_NOTE_MAX_CHARS);
+    // Render the cloud mirror separately from the local file: the cloud save
+    // path confirms whatever a new note contains, so unconfirmed candidates
+    // must stay desktop-only even though the local daily note shows them.
+    let cloud_manifest = super::load_state(app, session)?;
+    let markdown = clip_chars(
+        &super::store::cloud_daily_markdown(&memory_root, &cloud_manifest, &today),
+        DAILY_NOTE_MAX_CHARS,
+    );
     if markdown.trim().is_empty() || !markdown.contains("## ") {
         return Ok(());
     }

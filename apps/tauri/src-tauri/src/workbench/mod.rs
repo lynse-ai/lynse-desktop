@@ -62,6 +62,9 @@ pub struct WorkbenchState {
     epoch: AtomicU64,
     beta_enabled: AtomicBool,
     gmail_plugin_enabled: AtomicBool,
+    /// Coalesces progress-driven state writes during long wiki passes; see
+    /// `wiki::report_progress`.
+    pub(super) last_progress_persist: Mutex<Option<std::time::Instant>>,
 }
 
 #[derive(Deserialize)]
@@ -224,7 +227,6 @@ fn wiki_content_revision(
     state: &Manifest,
 ) -> String {
     let files = [
-        memory.join("wiki/topics.json"),
         memory.join("wiki/automatic-catalog.json"),
         memory.join("wiki/topic-hierarchy.json"),
         memory.join("wiki/evidence-graph.json"),
@@ -251,9 +253,13 @@ fn wiki_content_revision(
         .values()
         .map(|entry| json!([entry.id, entry.revision, entry.status, entry.excluded]))
         .collect::<Vec<_>>();
+    // Sharded topic heads replaced the single topics.json; the aggregate
+    // heads digest keeps the revision moving on any head write.
+    let heads = wiki::wiki_heads_signature(&memory.join("wiki"));
     store::digest(
         json!([
             files,
+            heads,
             sources,
             state.enabled,
             state.allow_ai,
@@ -846,8 +852,13 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                 if let Err(error) = memory_cloud::sync_daily_note(&app, &session).await {
                     log::debug!("Daily note mirror pending: {error}");
                 }
+                // Outbox entries carry per-event exponential backoff, so a
+                // pending-but-not-due backlog does not benefit from tight
+                // re-iteration: each pass reloads state and re-reads every
+                // outbox, which showed up as a periodic CPU pulse and heap
+                // churn. 15s keeps cloud delivery responsive without that cost.
                 tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(if more { 3 } else { 120 })) => {},
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(if more { 15 } else { 120 })) => {},
                     _ = state.cloud_wakeup.notified() => {},
                 }
             }
@@ -856,18 +867,39 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
             loop {
                 let state = app.state::<WorkbenchState>();
                 let more = if let Ok(session) = current(&state) {
-                    match meeting_candidates::extract_pending(&app, &state, &session).await {
+                    let extracted = match meeting_candidates::extract_pending(&app, &state, &session).await {
                         Ok(more) => more,
                         Err(error) => {
                             log::warn!("[meeting-candidates] pass deferred: {error}");
                             false
                         }
+                    };
+                    // The pending flag is recorded in the same transaction as
+                    // every candidate write, so a crashed pass replays here;
+                    // startup picks it up on this lane's first tick.
+                    if let Err(error) =
+                        meeting_candidates::sync_manifest_memories(&app, &state, &session).await
+                    {
+                        log::warn!("[meeting-candidates] memory projection deferred: {error}");
                     }
+                    // Nightly dreaming over the local candidates: overlays
+                    // land in the same lane, and the flag above re-projects
+                    // whatever they reshape.
+                    if let Err(error) =
+                        meeting_candidates::run_consolidation(&app, &state, &session).await
+                    {
+                        log::warn!("[meeting-candidates] consolidation deferred: {error}");
+                    }
+                    extracted
                 } else {
                     false
                 };
+                // Extract passes reload state and re-read summaries; a 1s
+                // backlog cadence kept the lane hot without making candidates
+                // meaningfully fresher. 5s matches the pipeline's progress
+                // granularity.
                 tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(if more { 1 } else { 120 })) => {},
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(if more { 5 } else { 120 })) => {},
                     _ = state.candidate_wakeup.notified() => {},
                 }
             }
@@ -886,8 +918,10 @@ pub(super) fn start_worker(app: &AppHandle, state: &WorkbenchState) {
                 } else {
                     false
                 };
+                // Same reasoning as the candidates lane: the wakeups carry
+                // immediacy, the backlog poll does not need 1s granularity.
                 tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(if more { 1 } else { 120 })) => {},
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(if more { 5 } else { 120 })) => {},
                     _ = state.publication_wakeup.notified() => {},
                 }
             }
@@ -1039,7 +1073,7 @@ async fn knowledge_search(
     query: &str,
     ai_mode: bool,
 ) -> CommandResult<(Vec<Value>, bool)> {
-    let (keyword, complete, semantic, topics) = {
+    let (keyword, complete, semantic, topics, memories) = {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
         let manifest = load_state(app, session)?;
@@ -1060,9 +1094,29 @@ async fn knowledge_search(
         } else {
             Vec::new()
         };
-        (keyword, manifest.initial_complete, semantic, topics)
+        // The memory lane is the representation half of combined recall: it
+        // surfaces distilled statements (each still citation-valid against its
+        // source) next to the chunk-level keyword and semantic lanes.
+        let memories: Vec<Value> = store::matching_memories(&root, &manifest, query, 8)
+            .into_iter()
+            .filter_map(|item| {
+                let citations = item["citations"].as_array()?.clone();
+                let first = citations.first()?.clone();
+                let text = item["text"].as_str()?;
+                Some(json!({
+                    "id": format!("memory:{}", item["id"].as_str().unwrap_or_default()),
+                    "title": text.chars().take(60).collect::<String>(),
+                    "kind": "memory",
+                    "updatedAt": item["updatedAt"].as_str().unwrap_or_default(),
+                    "excerpt": text.chars().take(240).collect::<String>(),
+                    "source": first,
+                    "citations": citations,
+                }))
+            })
+            .collect();
+        (keyword, manifest.initial_complete, semantic, topics, memories)
     };
-    let mut lanes = vec![keyword, topics];
+    let mut lanes = vec![keyword, topics, memories];
     if semantic {
         let lookup = wiki::semantic_search(app, state, session, query);
         if let Ok(Ok(matches)) =
@@ -1171,12 +1225,19 @@ pub async fn workbench_review(
         items
             .iter()
             .filter_map(|row| {
-                let id = row["id"].as_str()?;
+                // Memory rows carry their evidence as citations: resolve the
+                // underlying meeting source instead of the virtual id, which
+                // is not a manifest entry.
+                let (id, reference) = if row["kind"] == "memory" {
+                    let reference = row["citations"].as_array()?.first()?;
+                    (reference["id"].as_str()?, reference)
+                } else {
+                    (row["id"].as_str()?, &row["source"])
+                };
                 let entry = manifest
                     .entries
                     .get(id)
                     .filter(|entry| store::eligible(entry))?;
-                let reference = &row["source"];
                 if reference["revision"] != entry.revision {
                     return None;
                 }

@@ -398,9 +398,11 @@ mod tests {
                 .markdown,
             manual
         );
-        let saved = fs::read(root.join("topics.json")).unwrap();
+        let surviving = topics(&root).unwrap().pop().unwrap().id;
+        let head = root.join("topics").join(format!("{surviving}.json"));
+        let saved = fs::read(&head).unwrap();
         assert_eq!(topics(&root).unwrap().len(), 1);
-        assert_eq!(saved, fs::read(root.join("topics.json")).unwrap());
+        assert_eq!(saved, fs::read(&head).unwrap());
         fs::remove_dir_all(root).unwrap();
     }
 

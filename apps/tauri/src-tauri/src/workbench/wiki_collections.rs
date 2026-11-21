@@ -412,10 +412,12 @@ pub(super) async fn run(
             return Ok(());
         }
         let local = roots(app, session)?.0;
-        let values = topics(&wiki_root(app, session)?)?;
+        let wiki_dir = wiki_root(app, session)?;
+        let mut values = topics(&wiki_dir)?;
+        topic_archive::hydrate_collections(&wiki_dir, &mut values)?;
         let docs = collection_documents(&local, &manifest, &values);
         (
-            wiki_root(app, session)?,
+            wiki_dir,
             local.clone(),
             manifest.clone(),
             models(app, session)?,
@@ -501,6 +503,9 @@ pub(super) async fn run(
                 let _guard = state.serial.lock().await;
                 require_current(state, session)?;
                 let mut latest = topics(&root)?;
+        topic_archive::hydrate_collections(&root, &mut latest)?;
+            topic_archive::hydrate_collections(&root, &mut latest)?;
+                topic_archive::hydrate_collections(&root, &mut latest)?;
                 if let Some(c) = latest
                     .iter_mut()
                     .find(|t| t.id == topic.id)
@@ -523,6 +528,8 @@ pub(super) async fn run(
             let latest_manifest = load_state(app, session)?;
             ready(&latest_manifest)?;
             let mut latest = topics(&root)?;
+        topic_archive::hydrate_collections(&root, &mut latest)?;
+            topic_archive::hydrate_collections(&root, &mut latest)?;
             let latest_docs = collection_documents(&local, &latest_manifest, &latest);
             let Some(current_member) = latest
                 .iter()
@@ -584,6 +591,8 @@ pub(super) async fn run(
             let _guard = state.serial.lock().await;
             require_current(state, session)?;
             let mut latest = topics(&root)?;
+        topic_archive::hydrate_collections(&root, &mut latest)?;
+            topic_archive::hydrate_collections(&root, &mut latest)?;
             let mut source_cache = PageSources::new(&local, &manifest);
             let available: BTreeSet<_> = latest
                 .iter()
@@ -669,6 +678,7 @@ pub(super) async fn run(
         let latest_manifest = load_state(app, session)?;
         ready(&latest_manifest)?;
         let mut latest = topics(&root)?;
+        topic_archive::hydrate_collections(&root, &mut latest)?;
         let Some(target) = latest
             .iter_mut()
             .find(|t| t.id == topic.id && !t.excluded && !t.pinned)

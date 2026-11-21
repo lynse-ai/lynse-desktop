@@ -34,11 +34,14 @@ export function useWiki() {
   const scope = status?.scope;
   const queryKey = ["workbench-wiki", scope];
   const enabled = wikiEnabled && !!bridge?.wiki && !!scope;
-  const contentRevision = status?.wikiRevision ?? status?.updatedAt;
+  // wikiRevision pins actual wiki output (topics/catalog/graph files);
+  // updatedAt advances on every workbench persist, and refetching the whole
+  // WikiState per progress tick ballooned the webview heap.
+  const { wikiRevision } = status ?? {};
   const query = useQuery({ queryKey, queryFn: () => bridge!.wiki({ action: "state" }), enabled, networkMode: "always" });
   useEffect(() => {
     if (enabled) void qc.invalidateQueries({ queryKey: ["workbench-wiki", scope], exact: true }, { cancelRefetch: false });
-  }, [enabled, qc, scope, contentRevision]);
+  }, [enabled, qc, scope, wikiRevision]);
   async function mutate(request: WikiRequest) {
     if (!bridge || busy) return;
     setBusy(true);

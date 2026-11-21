@@ -18,6 +18,11 @@ pub(super) use analysis::part as analysis_part;
 mod direct;
 #[path = "wiki_automation.rs"]
 mod automation;
+
+/// Night-window gate shared with the candidates lane's consolidation pass.
+pub(super) fn is_dream_time() -> bool {
+    automation::is_dream_time()
+}
 #[path = "wiki_collections.rs"]
 mod collections;
 #[path = "wiki_content_cache.rs"]
@@ -47,8 +52,9 @@ pub(super) fn in_automatic_scope(doc: &Document, manifest: &Manifest) -> bool {
 }
 use super::store::WikiProgress;
 use super::{
-    current, invalidate_runtime, knowledge_cloud, load_state, persist, require_current, roots,
-    start_worker, store, sync, Document, Manifest, Session, SourceRef, WorkbenchState,
+    current, invalidate_runtime, knowledge_cloud, load_state, persist, public_status,
+    require_current, roots, start_worker, store, sync, Document, Manifest, Session, SourceRef,
+    WorkbenchState,
 };
 use crate::CommandResult;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -59,7 +65,7 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 pub(super) const MEMORY_KIND_GUIDANCE: &str = "For every memoryItems[].kind, use exactly one English value: \"observation\", \"proposal\", \"decision\", or \"unresolved\". Do not translate these values, combine them, or copy the pipe-separated schema as a value. Use observation for reported facts, proposal for suggestions, decision only for explicitly agreed decisions, and unresolved for open questions or conflicts. Source kinds such as meeting are not memory kinds.";
 
@@ -196,12 +202,28 @@ pub struct Topic {
     pub failure: Option<WikiFailure>,
     pub partial_compilation: Option<PartialCompilation>,
     pub collection: Option<collections::Collection>,
+    /// Digest of the on-disk collection sidecar (`topics/<id>.collection.json`).
+    /// Empty when the collection holds no member links; the head file keeps
+    /// only this reference so the common read path never loads link details.
+    #[serde(default)]
+    pub collection_ref: String,
+    /// Transient: whether this session has loaded the full collection detail
+    /// into `collection`. A save treats an empty-but-loaded collection as
+    /// legitimately emptied (sidecar removed) and an empty-unloaded one as
+    /// still parked in the sidecar.
+    #[serde(skip)]
+    pub collection_loaded: bool,
     pub automatic_key: String,
     pub topic_kind: String,
     pub source_ids: Vec<String>,
 }
 fn wiki_root(app: &AppHandle, session: &Session) -> CommandResult<PathBuf> {
     Ok(roots(app, session)?.1.join("wiki"))
+}
+/// Digest over the sharded head files; the UI-refresh revision and the
+/// idle-skip cache replace the legacy single topics.json stat with this.
+pub(super) fn wiki_heads_signature(root: &Path) -> Option<String> {
+    topic_archive::heads_signature(root)
 }
 fn models_path(app: &AppHandle, session: &Session) -> CommandResult<PathBuf> {
     Ok(super::state_path(app, session)?.with_file_name("wiki-models.json"))
@@ -656,6 +678,17 @@ fn receipt(root: &Path, id: &str) -> CommandResult<Option<Value>> {
     row.map(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))
         .transpose()
 }
+
+/// The completed-analysis lookup in dispatch order: the legacy jobs table
+/// first (older passes stored every output there), then the model-tasks
+/// store. Shared by the wiki memory harvest so stock analyses written by
+/// either generation are recoverable.
+pub(super) fn cached_analysis(root: &Path, id: &str) -> CommandResult<Option<Value>> {
+    if let Some(value) = receipt(root, id)? {
+        return Ok(Some(value));
+    }
+    tasks::completed(root, id)
+}
 fn job(
     root: &Path,
     id: &str,
@@ -682,6 +715,9 @@ pub(super) fn ready(manifest: &Manifest) -> CommandResult<()> {
     }
     Ok(())
 }
+/// On-disk progress checkpoints are coalesced to this interval; UI pushes in
+/// between are event-only. Stage transitions always checkpoint.
+const PROGRESS_PERSIST_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 async fn report_progress(
     app: &AppHandle,
     state: &WorkbenchState,
@@ -693,8 +729,32 @@ async fn report_progress(
     let mut manifest = load_state(app, session)?;
     ready(&manifest)?;
     manifest.phase = "processing".into();
+    let stage_changed = manifest
+        .wiki_progress
+        .as_ref()
+        .is_none_or(|current| current.stage != progress.stage);
     manifest.wiki_progress = Some(progress);
-    persist(app, session, &manifest)
+    // Progress pushes arrive per analysis chunk and per embedded passage; a
+    // full `persist` for each one (two manifest clones + state.json
+    // re-serialization + digest over every entry) was the dominant heap churn
+    // during organize passes. Keep the UI event flowing, but only touch disk
+    // on stage transitions or once per interval.
+    let since_last = state
+        .last_progress_persist
+        .lock()
+        .ok()
+        .and_then(|last| *last)
+        .map(|at| at.elapsed())
+        .unwrap_or(PROGRESS_PERSIST_INTERVAL);
+    if stage_changed || since_last >= PROGRESS_PERSIST_INTERVAL {
+        persist(app, session, &manifest)?;
+        if let Ok(mut last) = state.last_progress_persist.lock() {
+            *last = Some(std::time::Instant::now());
+        }
+        return Ok(());
+    }
+    let _ = app.emit("workbench-updated", public_status(session, &manifest));
+    Ok(())
 }
 fn fingerprint(topic: &Topic, manifest: &Manifest, config: &Models) -> String {
     scoped_fingerprint(topic, manifest, json!(config.text_revision))
@@ -757,6 +817,8 @@ fn retry_failed_work(
     manifest: &mut Manifest,
     id: Option<&str>,
 ) -> CommandResult<()> {
+    // Link-error clears need the full member detail, not head stubs.
+    topic_archive::hydrate_collections(root, topics)?;
     if id.is_some_and(|id| {
         !topics
             .iter()
@@ -1731,6 +1793,17 @@ pub(super) async fn synthesize_source(
 ) -> CommandResult<Value> {
     request_model(app, session, task, json!({"topic":query,"sources":[source]})).await
 }
+
+/// Zero-source synthesis for local-only tasks (memory consolidation) whose
+/// inputs ride entirely in the query instead of document sources.
+pub(super) async fn synthesize_query(
+    app: &AppHandle,
+    session: &Session,
+    task: &str,
+    query: &str,
+) -> CommandResult<Value> {
+    request_model(app, session, task, json!({"topic": query, "sources": []})).await
+}
 pub(super) fn sources_for(root: &Path, manifest: &Manifest) -> Vec<Document> {
     manifest
         .entries
@@ -1740,6 +1813,32 @@ pub(super) fn sources_for(root: &Path, manifest: &Manifest) -> Vec<Document> {
         .filter_map(super::markdown::source)
         .filter(|doc| automation::allows(doc, manifest))
         .collect()
+}
+/// Digest of everything that determines the rebuildable `sources` mirror
+/// table. Document content is pinned by the entry revision, and the
+/// eligibility filters read only these manifest fields, so an unchanged
+/// digest lets passes skip the full-corpus rebuild.
+static SOURCES_MIRROR: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, String>>,
+> = std::sync::OnceLock::new();
+
+fn sources_mirror_digest(manifest: &Manifest) -> String {
+    let mut rows: Vec<_> = manifest
+        .entries
+        .values()
+        .filter(|entry| store::eligible(entry))
+        .map(|entry| {
+            (
+                &entry.id,
+                &entry.kind,
+                &entry.revision,
+                &entry.title,
+                &entry.markdown_hash,
+            )
+        })
+        .collect();
+    rows.sort();
+    store::digest(json!([rows, manifest.wiki_automation, manifest.knowledge_policy]).to_string())
 }
 fn valid_page(root: &Path, manifest: &Manifest, page: &Revision) -> bool {
     PageSources::new(root, manifest).valid_page(page)
@@ -2312,8 +2411,33 @@ pub(super) async fn run(
             log::warn!("[wiki-run] pass aborted: {error}");
             return Err(error);
         }
-        log::info!("[wiki-run] pass completed");
-        Box::pin(hierarchy::run(app, state, session)).await?;
+        // Real passes log "pass finished in ..." with their work summary;
+        // idle heartbeats stay silent (see the automation idle exit).
+        log::debug!("[wiki-run] pass cycle done");
+        // The grouping lane re-reads every topic and page; skip it when its
+        // inputs match the last fully-settled grouping run — the pending
+        // scan it performs could only come back empty.
+        let hierarchy_gate = {
+            let root = wiki_root(app, session)?;
+            let manifest = load_state(app, session)?;
+            let config = models(app, session)?;
+            automation::idle_signature_hits(
+                &format!("{}:hierarchy", session.scope),
+                &automation::idle_signature(&root, &manifest, &config, &session.locale),
+            )
+        };
+        if !hierarchy_gate {
+            let remaining = Box::pin(hierarchy::run(app, state, session)).await?;
+            if remaining == 0 {
+                let root = wiki_root(app, session)?;
+                let manifest = load_state(app, session)?;
+                let config = models(app, session)?;
+                automation::record_idle_signature(
+                    &format!("{}:hierarchy", session.scope),
+                    &automation::idle_signature(&root, &manifest, &config, &session.locale),
+                );
+            }
+        }
         if publish_memory_events(app, state, session).await.is_err() {
             log::warn!("[knowledge-memory] candidate dispatch pending; Wiki publication preserved");
         }
@@ -2366,14 +2490,29 @@ pub(super) async fn run(
         // Preserve the old memory exactly once. It remains editable in the existing reader.
         backup_legacy(app, session)?;
         let conn = db(&root)?;
-        conn.execute("DELETE FROM sources", [])
-            .map_err(|e| e.to_string())?;
-        for doc in sources_for(&local, &manifest) {
-            conn.execute(
-                "INSERT INTO sources VALUES (?1,?2,?3,?4)",
-                params![doc.id, doc.revision, doc.title, doc.text()],
-            )
-            .map_err(|e| e.to_string())?;
+        // Rebuild the whole-corpus mirror only when the corpus actually
+        // changed: the digest pins every value written below, so an unchanged
+        // corpus skips a full `sources_for` read, `text()` materialization
+        // and rewrite on every pass.
+        let mirror_digest = sources_mirror_digest(&manifest);
+        let mirror_cache = SOURCES_MIRROR.get_or_init(Default::default);
+        let cached_mirror = mirror_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&session.scope).cloned());
+        if cached_mirror.as_deref() != Some(mirror_digest.as_str()) {
+            conn.execute("DELETE FROM sources", [])
+                .map_err(|e| e.to_string())?;
+            for doc in sources_for(&local, &manifest) {
+                conn.execute(
+                    "INSERT INTO sources VALUES (?1,?2,?3,?4)",
+                    params![doc.id, doc.revision, doc.title, doc.text()],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            if let Ok(mut cache) = mirror_cache.lock() {
+                cache.insert(session.scope.clone(), mirror_digest);
+            }
         }
         (root, local, config, initial)
     };
@@ -2737,14 +2876,33 @@ async fn embed_sources(
     }
     let manifest = load_state(app, session)?;
     ready(&manifest)?;
+    let revision = embedding_revision(config);
+    let conn = db(root)?;
+    // Embeddings depend only on chunk bodies: when the corpus, catalog and
+    // topics files match the last fully-idle pass and no chunk lacks a
+    // vector for this model revision, the full passages scan could not find
+    // new work.
+    let missing_vectors = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM chunks c LEFT JOIN passage_vectors v ON v.chunk_id=c.chunk_id AND v.model_revision=?1 WHERE v.chunk_id IS NULL)",
+            [&revision],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if !missing_vectors
+        && automation::idle_signature_hits(
+            &session.scope,
+            &automation::idle_signature(root, &manifest, config, &session.locale),
+        )
+    {
+        return Ok(0);
+    }
     let ids: std::collections::BTreeSet<_> = sources_for(local, &manifest)
         .into_iter()
         .filter(|doc| !crate::inspiration_private::source_is_protected(app, &doc.id))
         .map(|doc| doc.id)
         .collect();
     let passages = super::fulltext::passages(local)?;
-    let revision = embedding_revision(config);
-    let conn = db(root)?;
     let saved = {
         let mut statement = conn
             .prepare("SELECT chunk_id, input_key FROM passage_vectors WHERE model_revision=?1")
@@ -2782,14 +2940,22 @@ async fn embed_sources(
         .map_err(|error| error.to_string())?;
     }
     drop(conn);
+    // The pass used to reload the full manifest up to four times per passage;
+    // every load parses state.json + derived.json and clones both subtrees.
+    // The authorization cache below already trusts a 15s window, so share one
+    // snapshot over the same window instead.
+    let mut snapshot = (manifest, std::time::Instant::now());
     let mut failures = 0;
     let total = pending.len();
     let mut authorized = std::collections::BTreeMap::new();
     for (index, (passage, input)) in pending.into_iter().enumerate() {
-        let latest = load_state(app, session)?;
+        if snapshot.1.elapsed() >= Duration::from_secs(15) {
+            snapshot = (load_state(app, session)?, std::time::Instant::now());
+        }
+        let latest = &snapshot.0;
         if validate_request_sources(
             local,
-            &latest,
+            latest,
             &json!({"sources":[{"id":passage.doc_id,"revision":passage.revision}]}),
         )
         .is_err()
@@ -2836,7 +3002,7 @@ async fn embed_sources(
         )
         .await?;
         let request = json!({"sources":[{"id":doc.id,"revision":doc.revision}]});
-        validate_request_sources(local, &load_state(app, session)?, &request)?;
+        validate_request_sources(local, &snapshot.0, &request)?;
         if crate::inspiration_private::source_is_protected(app, &doc.id) {
             continue;
         }
@@ -2851,8 +3017,10 @@ async fn embed_sources(
         };
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
-        let latest = load_state(app, session)?;
-        if validate_request_sources(local, &latest, &request).is_ok()
+        if snapshot.1.elapsed() >= Duration::from_secs(15) {
+            snapshot = (load_state(app, session)?, std::time::Instant::now());
+        }
+        if validate_request_sources(local, &snapshot.0, &request).is_ok()
             && super::fulltext::chunk(local, passage.chunk_id)?
                 .is_some_and(|current| passage_embedding_key(&current) == input)
         {
@@ -2914,6 +3082,12 @@ pub async fn workbench_wiki(
         hierarchy::refresh(&root, &roots(&app, &session)?.0, &manifest, &session.locale)?;
     }
     let mut values = topics(&root)?;
+    // Mutation actions touch collection member links; a stub edit would
+    // overwrite the parked sidecar with its partial view. The state view
+    // keeps stubs so the item payload stays small.
+    if action != "state" {
+        topic_archive::hydrate_collections(&root, &mut values)?;
+    }
     let mut config = models(&app, &session)?;
     let mut created_topic_id: Option<String> = None;
     match action {
@@ -3017,6 +3191,8 @@ pub async fn workbench_wiki(
             hierarchy::retry(&root)?;
         }
         "topic_link" => {
+            // Link edits need the full member detail; the save re-parks it.
+            topic_archive::hydrate_collections(&root, &mut values)?;
             collections::edit_link(&mut values, &request)?;
             hierarchy::manual_link(&mut values, &request)?;
             save_topics(&root, &values)?;
@@ -3166,6 +3342,17 @@ pub async fn workbench_wiki(
         .iter()
         .map(|topic| {
             let mut value = serde_json::to_value(topic).unwrap_or_default();
+            // Collection links park in sidecars; the view filter needs the
+            // full detail to decide member visibility, so re-attach it to the
+            // serialized value only (filter_view trims it back down).
+            if topic.collection.is_some() && !topic.collection_ref.is_empty() {
+                if let (Some(detail), Some(slot)) = (
+                    topic_archive::collection_detail(&root, topic),
+                    value.get_mut("collection").and_then(Value::as_object_mut),
+                ) {
+                    slot["links"] = json!(detail.links);
+                }
+            }
             collections::filter_view(&mut value, &values, &mut page_sources, &manifest);
             value["inScope"] = json!(
                 topic.collection.is_some()
@@ -3192,6 +3379,9 @@ pub async fn workbench_wiki(
         .collect();
     let mut graph = graph::view(&root, &local, &manifest, &values, &config)?;
     graph::attach_todos(&app, &session, &root, &mut graph)?;
+    // The graph's contains-edges read collection member links; hydrate the
+    // in-memory values after the (stub-only) item payload was built.
+    topic_archive::hydrate_collections(&root, &mut values)?;
     let mut topic_graph = automation::topic_graph(&values, &items);
     topic_graph["insights"] = insights::attach(&mut topic_graph);
     let source_dates = page_sources.dates(&values);

@@ -450,7 +450,7 @@ pub(super) fn source_catalog_slices(
     let mut slices: BTreeMap<String, Value> = BTreeMap::new();
     for doc in docs {
         let mut chunks = BTreeMap::new();
-        for text in source_layout::prepare(root, doc)? {
+        for text in source_layout::prepare(root, doc, &config.text_revision)? {
             let key = catalog_chunk_key(doc, &text, config);
             if let Some(rows) = catalog.chunks.get(&key) {
                 let mut rows = rows.clone();
@@ -766,7 +766,7 @@ fn is_dream_time_hour(hour: u32) -> bool {
 }
 
 /// Whether the pipeline is inside the nightly dream window (23:00–07:00).
-fn is_dream_time() -> bool {
+pub(super) fn is_dream_time() -> bool {
     is_dream_time_hour(chrono::Timelike::hour(&chrono::Local::now()))
 }
 
@@ -783,6 +783,20 @@ fn source_is_recent(doc: &Document) -> bool {
     let cutoff =
         chrono::Local::now().date_naive() - chrono::Duration::days(DREAM_KNOWLEDGE_AGE_DAYS);
     day >= cutoff
+}
+
+/// Whether analysis of this document waits for the nightly dream window.
+/// Shared by `prepare_catalog` and the idle check so both agree on what is
+/// deferred: otherwise deferred chunks keep every daytime pass "pending".
+fn source_deferred(doc: &Document, dream_time: bool) -> bool {
+    !dream_time && !source_is_recent(doc)
+}
+
+/// Whether compilation of a topic waits for the nightly window: deferred when
+/// none of its selected sources are recent (mirrors the compile-phase
+/// deferral).
+fn topic_deferred(selected: &[Document], dream_time: bool) -> bool {
+    !dream_time && !selected.iter().any(source_is_recent)
 }
 
 fn source_content_key(id: &str, kind: &str, title: &str, text: &str, config: &Models) -> String {
@@ -1070,6 +1084,28 @@ fn needs_automatic_processing(
     config: &Models,
     catalog: &Catalog,
 ) -> bool {
+    needs_automatic_processing_at(
+        manifest,
+        topics,
+        docs,
+        config,
+        catalog,
+        is_dream_time(),
+    )
+}
+
+/// The clock-independent form of the idle check; `dream_time` mirrors the
+/// deferral gates in `prepare_catalog` and the compile phase. Without this,
+/// dream-deferred chunks and topics counted as pending on every daytime pass
+/// and the pass could never take its silent idle exit.
+fn needs_automatic_processing_at(
+    manifest: &Manifest,
+    topics: &[Topic],
+    docs: &[Document],
+    config: &Models,
+    catalog: &Catalog,
+    dream_time: bool,
+) -> bool {
     if manifest.wiki_attempted_fingerprint != processing_inputs(docs, topics, config) {
         return true;
     }
@@ -1079,14 +1115,102 @@ fn needs_automatic_processing(
             let key = catalog_chunk_key(doc, &text, config);
             if catalog.failed.contains_key(&key) {
                 failed_sources.insert(doc.id.clone());
-            } else if !catalog.chunks.contains_key(&key) {
+            } else if !catalog.chunks.contains_key(&key)
+                && !source_deferred(doc, dream_time)
+            {
                 return true;
             }
         }
     }
     topics.iter().any(|topic| {
-        pending_compilation(topic, docs, manifest, config, &failed_sources, None).is_some()
+        pending_compilation(topic, docs, manifest, config, &failed_sources, None)
+            .is_some_and(|(selected, _)| !topic_deferred(&selected, dream_time))
     })
+}
+
+/// Signatures recorded when a pass (or the hierarchy lane) ended with no work
+/// left. A pass whose cheap inputs match the recorded value can skip the
+/// corpus read entirely — nothing `documents()` could reveal changed.
+static IDLE_SIGNATURES: std::sync::OnceLock<
+    std::sync::Mutex<BTreeMap<String, String>>,
+> = std::sync::OnceLock::new();
+
+fn file_stat(path: &Path) -> Option<(u64, Option<u128>)> {
+    let meta = fs::metadata(path).ok()?;
+    Some((
+        meta.len(),
+        meta.modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|time| time.as_nanos()),
+    ))
+}
+
+/// Cheap identity of everything the idle decision (and the hierarchy lane's
+/// pending scan) reads: corpus identity via the sources mirror digest, the
+/// artifact summaries `preferred` folds into documents, the splitter/model
+/// revision, catalog and topics bookkeeping files, the attempted-inputs
+/// fingerprint, the session locale (hierarchy grouping version) and the
+/// dream-window bucket so the 23:00/07:00 boundary invalidates on its own.
+pub(super) fn idle_signature(
+    root: &Path,
+    manifest: &Manifest,
+    config: &Models,
+    locale: &str,
+) -> String {
+    idle_signature_at(root, manifest, config, locale, is_dream_time())
+}
+
+fn idle_signature_at(
+    root: &Path,
+    manifest: &Manifest,
+    config: &Models,
+    locale: &str,
+    dream_time: bool,
+) -> String {
+    let stats: Vec<_> = [catalog_path(root)]
+        .into_iter()
+        .map(|path| file_stat(&path))
+        .collect();
+    // Per-topic head files replaced the single topics.json; the aggregate
+    // heads digest still moves on any head write.
+    let heads = super::wiki_heads_signature(root).unwrap_or_default();
+    // `preferred()` folds artifact summaries into meeting text, so they are
+    // part of documents(); other artifact fields never reach the pipeline.
+    let summaries: BTreeMap<_, _> = manifest
+        .artifacts
+        .iter()
+        .map(|(id, artifact)| (id, artifact["summaries"].clone()))
+        .collect();
+    store::digest(
+        json!([
+            "wiki-auto-idle-v2",
+            heads,
+            super::sources_mirror_digest(manifest),
+            summaries,
+            config.text_revision,
+            locale,
+            stats,
+            manifest.wiki_attempted_fingerprint,
+            dream_time,
+        ])
+        .to_string(),
+    )
+}
+
+pub(super) fn idle_signature_hits(key: &str, signature: &str) -> bool {
+    IDLE_SIGNATURES
+        .get_or_init(Default::default)
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(key).cloned())
+        .is_some_and(|recorded| recorded == signature)
+}
+
+pub(super) fn record_idle_signature(key: &str, signature: &str) {
+    if let Ok(mut cache) = IDLE_SIGNATURES.get_or_init(Default::default).lock() {
+        cache.insert(key.to_string(), signature.to_string());
+    }
 }
 
 fn finish_idle_grouping(
@@ -1204,7 +1328,7 @@ async fn compile_automatic_profile(
         let chunks = {
             let _guard = state.serial.lock().await;
             require_current(state, session)?;
-            source_layout::prepare(root, doc)?
+            source_layout::prepare(root, doc, &config.text_revision)?
         };
         for text in chunks {
             let part = analysis::part(doc, text);
@@ -1267,6 +1391,11 @@ async fn compile_automatic_profile(
             });
         }
     }
+    // The shared analysis pass already distilled memory items with verified
+    // citations; persist them as wiki-lane candidates before the topic
+    // compiler narrows its view. Best-effort: a harvest failure never fails
+    // the page.
+    harvest_evidence(app, session, manifest, config, &evidence);
     if evidence.is_empty() && sections.is_empty() {
         let failures = analysis_failures.len();
         return Err(WikiFailure::new(
@@ -1461,6 +1590,208 @@ pub(super) fn section_source_key(topic: &Topic, source: &Document, config: &Mode
     )
 }
 
+/// Per-source harvest cap lives with the candidate store
+/// (`meeting_candidates::WIKI_HARVEST_CAP`) so both harvest paths share it.
+
+/// Persist the memory items the shared source-analysis pass distilled, with
+/// each item's citations re-verified against the exact chunk that produced
+/// it: a compile may run long after the analysis was cached, and a moved
+/// source must not land as fresh evidence.
+fn harvest_evidence(
+    app: &AppHandle,
+    session: &Session,
+    manifest: &Manifest,
+    config: &Models,
+    evidence: &[CompilationEvidence],
+) {
+    if evidence.is_empty() {
+        return;
+    }
+    let Ok((meetings_root, _)) = super::roots(app, session) else {
+        return;
+    };
+    // Group per source document in chunk order. Every chunk of a document
+    // shares one per-source extraction identity, so concurrent topics
+    // harvesting the same source converge instead of superseding each other.
+    let mut order: Vec<String> = Vec::new();
+    let mut rows: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for item in evidence {
+        let Some(items) = item
+            .value
+            .get("memoryItems")
+            .and_then(Value::as_array)
+            .filter(|items| !items.is_empty())
+        else {
+            continue;
+        };
+        if !order.contains(&item.source.id) {
+            order.push(item.source.id.clone());
+        }
+        let bucket = rows.entry(item.source.id.clone()).or_default();
+        for row in items {
+            if bucket.len() >= super::super::meeting_candidates::WIKI_HARVEST_CAP {
+                break;
+            }
+            let citations = row.get("citations").cloned().unwrap_or_else(|| json!([]));
+            let check = json!({"citations": citations});
+            if sync::validate_result(std::slice::from_ref(&item.source), manifest, &check).is_err()
+            {
+                continue;
+            }
+            let Some(text) = row["text"]
+                .as_str()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+            else {
+                continue;
+            };
+            bucket.push(json!({"text": text, "kind": row["kind"], "citations": citations}));
+        }
+    }
+    if rows.is_empty() {
+        return;
+    }
+    let mut sources = Vec::new();
+    for id in order {
+        let Some(items) = rows.get(&id).filter(|items| !items.is_empty()) else {
+            continue;
+        };
+        let Some(doc) = evidence
+            .iter()
+            .find(|item| item.source.id == id)
+            .map(|item| &item.source)
+        else {
+            continue;
+        };
+        sources.push(super::super::meeting_candidates::WikiHarvest {
+            source_id: doc.id.clone(),
+            source_revision: doc.revision.clone(),
+            event_date: doc.created_at.chars().take(10).collect(),
+            extraction: super::super::meeting_candidates::wiki_extraction_id(
+                &session.scope,
+                &doc.id,
+                &doc.revision,
+                &config.text_revision,
+            ),
+            items: items.clone(),
+        });
+    }
+    match super::super::meeting_candidates::store_wiki_harvest(&meetings_root, &session.scope, &sources) {
+        Ok(stored) if stored > 0 => {
+            log::info!(
+                "[wiki-run] harvested {stored} memory candidates from {} sources",
+                sources.len()
+            );
+        }
+        Ok(_) => {}
+        Err(error) => log::warn!("[wiki-run] memory harvest deferred: {error}"),
+    }
+}
+
+/// One-time sweep per splitter/processor revision: recover memory items from
+/// analyses cached before wiki harvesting existed. Section reuse skips
+/// re-analysis for already-compiled sources, so without this sweep their
+/// distilled candidates never land. A source with a partial analysis cache is
+/// skipped whole — a partial harvest would present as complete evidence.
+async fn harvest_stock(
+    state: &WorkbenchState,
+    session: &Session,
+    manifest: &Manifest,
+    docs: &[Document],
+    root: &Path,
+    local: &Path,
+    config: &Models,
+) {
+    let marker = format!("wiki-backfill-{}", config.text_revision);
+    let Ok(mut conn) = super::super::meeting_candidates::connection(local) else {
+        return;
+    };
+    if super::super::meeting_candidates::config_get(&conn, &marker)
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("done")
+    {
+        return;
+    }
+    let mut sources = Vec::new();
+    for doc in docs
+        .iter()
+        .filter(|doc| super::super::meeting_candidates::allowed(doc, manifest))
+    {
+        let chunks = {
+            let _guard = state.serial.lock().await;
+            if require_current(state, session).is_err() {
+                return;
+            }
+            match source_layout::prepare(root, doc, &config.text_revision) {
+                Ok(chunks) => chunks,
+                Err(error) => {
+                    log::warn!("[wiki-run] stock harvest skipped chunking {}: {error}", doc.id);
+                    continue;
+                }
+            }
+        };
+        let mut items: Vec<Value> = Vec::new();
+        let mut complete = true;
+        'chunks: for text in chunks {
+            let part = analysis::part(doc, text);
+            let key = source_evidence_key(&part, config);
+            let value = match super::cached_analysis(root, &key) {
+                Ok(Some(value)) => value,
+                _ => {
+                    complete = false;
+                    break 'chunks;
+                }
+            };
+            for row in value["memoryItems"].as_array().into_iter().flatten() {
+                if items.len() >= super::super::meeting_candidates::WIKI_HARVEST_CAP {
+                    break 'chunks;
+                }
+                let citations = row.get("citations").cloned().unwrap_or_else(|| json!([]));
+                let check = json!({"citations": citations});
+                if sync::validate_result(std::slice::from_ref(&part), manifest, &check).is_err() {
+                    continue;
+                }
+                let Some(text) = row["text"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                else {
+                    continue;
+                };
+                items.push(json!({"text": text, "kind": row["kind"], "citations": citations}));
+            }
+        }
+        if !complete || items.is_empty() {
+            continue;
+        }
+        sources.push(super::super::meeting_candidates::WikiHarvest {
+            source_id: doc.id.clone(),
+            source_revision: doc.revision.clone(),
+            event_date: doc.created_at.chars().take(10).collect(),
+            extraction: super::super::meeting_candidates::wiki_extraction_id(
+                &session.scope,
+                &doc.id,
+                &doc.revision,
+                &config.text_revision,
+            ),
+            items,
+        });
+    }
+    if !sources.is_empty() {
+        if let Err(error) =
+            super::super::meeting_candidates::store_wiki_harvest(local, &session.scope, &sources)
+        {
+            // Marker stays unset, so the sweep retries on a later pass.
+            log::warn!("[wiki-run] stock memory harvest deferred: {error}");
+            return;
+        }
+        log::info!("[wiki-run] stock memory harvest: {} sources", sources.len());
+    }
+    let _ = super::super::meeting_candidates::config_set(&conn, &marker, "done");
+}
+
 pub(super) fn publish_automatic(
     root: &Path,
     current: &mut Topic,
@@ -1598,15 +1929,36 @@ pub(super) async fn run(
         if ready(&manifest).is_err() {
             return Ok(());
         }
+        let config = models(app, session)?;
+        let root = wiki_root(app, session)?;
         let (local, _) = roots(app, session)?;
-        let docs = documents(&local, &manifest);
-        (
-            wiki_root(app, session)?,
-            local,
-            models(app, session)?,
-            manifest,
-            docs,
-        )
+        // Corpus-signature gate: when every cheap input matches the signature
+        // recorded by the last fully-idle pass, the pass has nothing to do
+        // that documents() could reveal — skip the whole corpus read. The
+        // task sweeps still run (cheap SQLite updates) so crashed passes
+        // keep healing, and any release falls through to a full pass.
+        let grouping_pending = manifest
+            .wiki_progress
+            .as_ref()
+            .is_some_and(|progress| progress.stage == "grouping");
+        if !grouping_pending
+            && !manifest.wiki_attempted_fingerprint.is_empty()
+            && idle_signature_hits(
+                &session.scope,
+                &idle_signature(&root, &manifest, &config, &session.locale),
+            )
+        {
+            if tasks::recover_abandoned(&root)? || tasks::release_due(&root)? {
+                // Recovered or released model tasks must re-enter through the
+                // needs check below.
+            } else {
+                return Ok(());
+            }
+        }
+        // Arc from the start: the corpus is shared with every wave below and
+        // cloning it per wave would double its residency for the whole pass.
+        let docs = std::sync::Arc::new(documents(&local, &manifest));
+        (root, local, config, manifest, docs)
     };
     if !docs.is_empty()
         && manifest.wiki_attempted_fingerprint.is_empty()
@@ -1622,6 +1974,9 @@ pub(super) async fn run(
         )
         .await;
     }
+    // Recover stock memory candidates from analyses cached before harvesting
+    // existed; marker-guarded, so later heartbeats skip the corpus chunking.
+    harvest_stock(state, session, &manifest, &docs, &root, &local, &config).await;
     let mut catalog: Catalog = read_json(&catalog_path(&root))?;
     catalog.deleted.extend(topic_store::deleted(&root)?);
     tasks::recover_abandoned(&root)?;
@@ -1650,18 +2005,24 @@ pub(super) async fn run(
         require_current(state, session)?;
         catalog = read_json(&catalog_path(&root))?;
         catalog.deleted.extend(topic_store::deleted(&root)?);
-        for doc in &docs {
+        for doc in docs.iter() {
             catalog
                 .layouts
-                .insert(doc.id.clone(), source_layout::prepare(&root, doc)?);
+                .insert(
+                    doc.id.clone(),
+                    source_layout::prepare(&root, doc, &config.text_revision)?,
+                );
         }
     }
     let initial_topics = {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
         // Rebind completed evidence for metadata-only changes before deciding
-        // whether this pass needs any model work.
+        // whether this pass needs any model work. Manual collection links
+        // feed the attempted-inputs fingerprint, so details must be loaded
+        // even though heads park them in sidecars.
         let mut values = topics(&root)?;
+        topic_archive::hydrate_collections(&root, &mut values)?;
         let current = load_state(app, session)?;
         if refresh_page_references(&root, &mut values, &docs, &current, &config)? {
             save_topics(&root, &values)?;
@@ -1687,6 +2048,14 @@ pub(super) async fn run(
             .sum();
         if finish_idle_grouping(&mut latest, &initial_topics, catalog_failures) {
             persist(app, session, &latest)?;
+        } else {
+            // This pass ended with nothing pending except dream-deferred
+            // items and wrote nothing; remember the inputs so identical
+            // future heartbeats skip the corpus read entirely.
+            record_idle_signature(
+                &session.scope,
+                &idle_signature(&root, &latest, &config, &session.locale),
+            );
         }
         // Heartbeats re-enter every two minutes; an idle pass must stay silent
         // so the file log only records real organize work.
@@ -1762,7 +2131,7 @@ pub(super) async fn run(
         wave_size
     );
     let shared_manifest = Arc::new(manifest.clone());
-    let shared_docs = Arc::new(docs.clone());
+    let shared_docs = Arc::clone(&docs);
     for wave in jobs.chunks(wave_size) {
         report_progress(
             app,
@@ -2084,10 +2453,23 @@ pub(super) async fn run(
             else {
                 continue;
             };
-            let latest_docs: Vec<_> = documents(&local, &latest)
-                .into_iter()
-                .filter(|doc| current.source_ids.contains(&doc.id))
-                .collect();
+            // Reuse the pass snapshot when the corpus fingerprint is
+            // unchanged; a full `documents()` re-read per topic dominated the
+            // compile phase's I/O on large vaults. Real drift still pays the
+            // fresh read, so the version check below keeps its meaning.
+            let latest_docs: Vec<_> = if super::sources_mirror_digest(&latest)
+                == super::sources_mirror_digest(&manifest)
+            {
+                docs.iter()
+                    .filter(|doc| current.source_ids.contains(&doc.id))
+                    .cloned()
+                    .collect()
+            } else {
+                documents(&local, &latest)
+                    .into_iter()
+                    .filter(|doc| current.source_ids.contains(&doc.id))
+                    .collect()
+            };
             if page_version(current, &latest_docs, &latest, &models(app, session)?) != *version {
                 log::warn!(
                     "[wiki-run] wave {} dropped completed page for {}: source version drifted mid-compile",
@@ -2283,7 +2665,15 @@ pub(super) async fn run(
         topic_failures_run,
         embedding_failures
     );
-    persist(app, session, &latest)
+    persist(app, session, &latest)?;
+    drop(_guard);
+    // Harvested wiki candidates mark the projection pending; drain it now so
+    // the local views land with this pass instead of the next lane tick.
+    match super::super::meeting_candidates::sync_manifest_memories(app, state, session).await {
+        Ok(_) => {}
+        Err(error) => log::warn!("[wiki-run] memory projection deferred: {error}"),
+    }
+    Ok(())
 }
 
 pub(super) fn topic_graph(topics: &[Topic], items: &[Value]) -> Value {

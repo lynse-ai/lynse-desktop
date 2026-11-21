@@ -48,9 +48,13 @@ fn publish_entries(
     source_id: &str,
     extraction: &str,
 ) -> CommandResult<Vec<Value>> {
+    // Wiki-lane rows never enter publish_queue, but the explicit lane filter
+    // keeps the publication package meeting-only even if a shared extraction
+    // id ever pointed here.
     let mut statement = conn.prepare(
         "SELECT id, kind, text, citations FROM candidate_entries
-         WHERE source_id=?1 AND extraction_id=?2 AND status IN ('candidate','confirmed') AND superseded_by=''
+         WHERE source_id=?1 AND extraction_id=?2 AND lane='meeting'
+           AND status IN ('candidate','confirmed') AND superseded_by=''
          ORDER BY event_time_ms IS NULL, event_time_ms, created_at, id",
     ).map_err(|error| error.to_string())?;
     let rows = statement

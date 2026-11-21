@@ -542,6 +542,69 @@ fn memory_body(root: &Path, items: &[Value]) -> String {
     text
 }
 
+/// MEMORY.md is the small rolling view a reader can absorb at a glance:
+/// pinned first, then confirmed, then the newest. The budget applies at this
+/// render layer only — the daily files keep the complete set, the store stays
+/// authoritative, and the count is characters (the same unit the direct
+/// pipeline's query budget uses).
+const MEMORY_VIEW_MAX_CHARS: usize = 12_000;
+const MEMORY_VIEW_OPEN_QUESTIONS: usize = 10;
+
+fn memory_view_items(items: &[Value]) -> Vec<Value> {
+    let updated = |item: &Value| item["updatedAt"].as_str().unwrap_or_default().to_string();
+    let mut sorted: Vec<Value> = items.to_vec();
+    sorted.sort_by(|a, b| {
+        let pinned = |item: &Value| item["pinned"] == true;
+        let confirmed = |item: &Value| item["status"].as_str() == Some("confirmed");
+        pinned(b).cmp(&pinned(a))
+            .then_with(|| confirmed(b).cmp(&confirmed(a)))
+            .then_with(|| updated(b).cmp(&updated(a)))
+    });
+    sorted
+}
+
+fn memory_dashboard(items: &[Value]) -> String {
+    let open: Vec<&Value> = items
+        .iter()
+        .filter(|item| item["kind"].as_str() == Some("unresolved"))
+        .collect();
+    if open.is_empty() {
+        return String::new();
+    }
+    let mut text = String::from("\n## 开放问题\n\n");
+    for item in open.iter().take(MEMORY_VIEW_OPEN_QUESTIONS) {
+        text.push_str(&format!("- {}\n", item["text"].as_str().unwrap_or_default()));
+    }
+    text
+}
+
+fn render_memory_view(root: &Path, date: &str, items: &[Value]) -> String {
+    let sorted = memory_view_items(items);
+    let mut text = format!("# Lynse Memory · {date}\n\n## 记忆观察\n\n");
+    let mut chars = text.chars().count();
+    let mut kept = 0usize;
+    for item in &sorted {
+        let body = memory_body(root, std::slice::from_ref(item));
+        let body_chars = body.chars().count();
+        // Always keep at least one item so a single oversized entry still
+        // surfaces instead of blanking the view.
+        if kept > 0 && chars + body_chars > MEMORY_VIEW_MAX_CHARS {
+            break;
+        }
+        text.push_str(&body);
+        chars += body_chars;
+        kept += 1;
+    }
+    if kept < sorted.len() {
+        text.push_str(&format!(
+            "\n（其余 {} 条已超出本视图预算，完整列表见 `entries/meeting-candidates.md` 与 daily 归档）\n",
+            sorted.len() - kept
+        ));
+    }
+    text.push_str(&memory_dashboard(&sorted));
+    text
+}
+
 /// Headings and structured key points distilled from a generated meeting
 /// summary. Deterministic and verbatim, mirroring lynclaw's daily-memory
 /// extractor: transcript/appendix sections are skipped, action bullets and
@@ -695,8 +758,9 @@ pub fn write_memory_views(root: &Path, state: &Manifest) -> CommandResult<()> {
         .collect();
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let render = |date: &str, items: &[Value]| -> String {
-        // Rolling view: observations only, unchanged shape.
-        format!("# Lynse Memory · {date}\n\n{}", memory_body(root, items))
+        // Rolling view with a budget and a dashboard; the full set stays in
+        // the daily files and the store.
+        render_memory_view(root, date, items)
     };
     let render_daily = |date: &str, items: &[Value]| -> String {
         // Authoritative daily note: desktop owns 记忆观察/会议纪要大纲,
@@ -753,6 +817,40 @@ pub fn write_memory_views(root: &Path, state: &Manifest) -> CommandResult<()> {
         )?;
     }
     crate::atomic_write(&root.join("MEMORY.md"), render(&today, &current).as_bytes())
+}
+
+/// The cloud mirror of the daily note: only human-edited and confirmed
+/// statements leave the desktop. Unconfirmed candidates stay local — the
+/// cloud markdown save path turns a new daily file into one global
+/// `record_status: confirmed` memory record visible to every recall lane, so
+/// candidate content must never ride this channel. Legacy items without a
+/// status field predate the candidate gate and keep mirroring.
+pub fn cloud_daily_markdown(root: &Path, state: &Manifest, date: &str) -> String {
+    let confirmed: Vec<Value> = state
+        .memories
+        .iter()
+        .filter(|item| {
+            item["excluded"] != true
+                && item["stale"] != true
+                && (item["userEdited"] == true
+                    || item["status"].as_str().unwrap_or_default() != "candidate")
+        })
+        .cloned()
+        .collect();
+    let mut text = format!(
+        "# Lynse Memory · {date}\n\n## 记忆观察\n\n{}",
+        memory_body(root, &confirmed)
+    );
+    let meetings = meeting_daily_section(state, date);
+    if !meetings.is_empty() {
+        text.push('\n');
+        text.push_str(&meetings);
+    }
+    if let Some(chat) = state.daily_chat.get(date) {
+        text.push('\n');
+        text.push_str(chat);
+    }
+    text
 }
 
 pub fn search(root: &Path, state: &Manifest, query: &str, limit: usize) -> Vec<Value> {
@@ -1050,7 +1148,7 @@ pub fn matching_memories(
     state: &Manifest,
     query: &str,
     limit: usize,
-) -> Vec<Document> {
+) -> Vec<Value> {
     let terms = query_terms(query);
     let mut items: Vec<_> = state
         .memories
@@ -1069,8 +1167,12 @@ pub fn matching_memories(
     items.sort_by_key(|item| std::cmp::Reverse(item["pinned"] == true));
     items
         .into_iter()
-        .filter_map(|item| memory_document(root, state, item))
+        // Every returned item must still cite a source that exists at its
+        // recorded revision with the quote intact — a moved source drops out
+        // of recall instead of surfacing stale evidence.
+        .filter(|item| memory_document(root, state, item).is_some())
         .take(limit)
+        .cloned()
         .collect()
 }
 
@@ -1096,11 +1198,84 @@ pub fn is_current_document(root: &Path, state: &Manifest, document: &Document) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_view_budget_sorts_and_surfaces_open_questions() {
+        let root = std::env::temp_dir().join(format!("lynse-view-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let items = vec![
+            json!({"id":"a","kind":"observation","text":"旧观察","updatedAt":"2026-01-01T00:00:00Z"}),
+            json!({"id":"b","kind":"decision","text":"已确认决定","status":"confirmed","updatedAt":"2026-01-02T00:00:00Z"}),
+            json!({"id":"c","kind":"observation","text":"置顶项","pinned":true,"updatedAt":"2026-01-01T00:00:00Z"}),
+            json!({"id":"d","kind":"unresolved","text":"预算未批准","updatedAt":"2026-01-03T00:00:00Z"}),
+        ];
+        let view = render_memory_view(&root, "2026-11-21", &items);
+        let position = |needle: &str| view.find(needle).unwrap();
+        // Pinned first, then confirmed, then the newest.
+        assert!(position("置顶项") < position("已确认决定"));
+        assert!(position("已确认决定") < position("预算未批准"));
+        assert!(position("预算未批准") < position("旧观察"));
+        // Dashboard surfaces the unresolved item.
+        assert!(view.contains("## 开放问题"));
+        assert!(view.contains("- 预算未批准"));
+        // Budget: the flood truncates with a pointer to the full list, while
+        // the first item always survives.
+        let flood: Vec<Value> = (0..40)
+            .map(|index| {
+                json!({"id": format!("f{index}"), "kind": "observation",
+                       "text": "很长的观察内容".repeat(400), "updatedAt": "2026-01-01T00:00:00Z"})
+            })
+            .collect();
+        let view = render_memory_view(&root, "2026-11-21", &flood);
+        assert!(view.contains("超出本视图预算"));
+        assert!(view.chars().count() < MEMORY_VIEW_MAX_CHARS + 4_000);
+        fs::remove_dir_all(&root).ok();
+    }
+
     fn root() -> PathBuf {
         let root = std::env::temp_dir().join(format!("lynse-workbench-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         root
     }
+
+    #[test]
+    fn matching_memories_drops_items_whose_evidence_moved() {
+        let workspace = root();
+        let meetings = workspace.join("Meetings").join("scope");
+        fs::create_dir_all(&meetings).unwrap();
+        let mut manifest = Manifest::default();
+        let mut document = Document {
+            id: "m1".into(),
+            kind: "meeting".into(),
+            title: "m1".into(),
+            created_at: "2026-11-12T10:00:00+08:00".into(),
+            transcript: "会议决定采用方案A。".into(),
+            ai_context_enabled: true,
+            ..Default::default()
+        };
+        document.refresh_revision();
+        let entry =
+            write_document(&meetings, &document, manifest.entries.get(&document.id))
+                .unwrap();
+        manifest.entries.insert(document.id.clone(), entry);
+        let citation = |revision: &str| {
+            json!([{"id": "m1", "revision": revision, "kind": "meeting",
+                    "quote": "会议决定采用方案A。", "segmentId": "s1", "startMs": 30_000}])
+        };
+        manifest.memories = vec![
+            json!({"id": "fresh", "text": "采用方案A", "kind": "decision",
+                   "citations": citation(&document.revision), "updatedAt": "t"}),
+            json!({"id": "drifted", "text": "采用方案A", "kind": "observation",
+                   "citations": citation("old-revision"), "updatedAt": "t"}),
+        ];
+        let matches = matching_memories(&meetings, &manifest, "方案", 10);
+        assert_eq!(matches.len(), 1, "only the citation-valid item recalls");
+        assert_eq!(matches[0]["id"], json!("fresh"));
+        let matches = matching_memories(&meetings, &manifest, "", 10);
+        assert_eq!(matches.len(), 1, "the empty query still respects validity");
+        fs::remove_dir_all(&workspace).ok();
+    }
+
     #[test]
     fn index_rebuild_and_offline_search_survive_restart_and_local_edits() {
         let root = root();

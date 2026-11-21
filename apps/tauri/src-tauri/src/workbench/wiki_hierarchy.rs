@@ -215,6 +215,7 @@ pub(super) fn refresh(
     locale: &str,
 ) -> CommandResult<()> {
     let mut values = topics(root)?;
+    topic_archive::hydrate_collections(root, &mut values)?;
     if !values.iter().any(parent) {
         return Ok(());
     }
@@ -414,22 +415,26 @@ fn pending_topics(
         .collect()
 }
 
+/// Runs the grouping lane; returns the number of topics still pending (0 =
+/// every pending grouping settled, which lets the caller record an idle
+/// signature for the lane).
 pub(super) async fn run(
     app: &AppHandle,
     state: &WorkbenchState,
     session: &Session,
-) -> CommandResult<()> {
+) -> CommandResult<usize> {
     let (root, local, manifest, config, mut pending) = {
         let _guard = state.serial.lock().await;
         require_current(state, session)?;
         let manifest = load_state(app, session)?;
         if ready(&manifest).is_err() {
-            return Ok(());
+            return Ok(0);
         }
         let root = wiki_root(app, session)?;
         let local = roots(app, session)?.0;
         let config = models(app, session)?;
-        let values = topics(&root)?;
+        let mut values = topics(&root)?;
+        topic_archive::hydrate_collections(&root, &mut values)?;
         let mut work: GroupState = read_json(&state_path(&root))?;
         snapshot_legacy_blocks(&mut work, &values, &session.locale, &config);
         for key in std::mem::take(&mut work.inflight) {
@@ -479,7 +484,11 @@ pub(super) async fn run(
         let latest = {
             let _guard = state.serial.lock().await;
             require_current(state, session)?;
-            topics(&root)?
+            {
+                let mut loaded = topics(&root)?;
+                topic_archive::hydrate_collections(&root, &mut loaded)?;
+                loaded
+            }
         };
         let mut groups: Vec<_> = latest
             .iter()
@@ -605,6 +614,7 @@ pub(super) async fn run(
             Ok(value) => {
                 let result = validate(value.clone(), members.len(), groups.len())?;
                 let mut values = topics(&root)?;
+                topic_archive::hydrate_collections(&root, &mut values)?;
                 let current_config = models(app, session)?;
                 let mut sources = PageSources::new(&local, &current_manifest);
                 let valid: BTreeSet<_> = members
@@ -700,19 +710,20 @@ pub(super) async fn run(
     let _guard = state.serial.lock().await;
     require_current(state, session)?;
     let manifest = load_state(app, session)?;
-    let values = topics(&root)?;
-    if pending_topics(
+    let mut values = topics(&root)?;
+    topic_archive::hydrate_collections(&root, &mut values)?;
+    let settled = pending_topics(
         &values,
         &local,
         &manifest,
         &session.locale,
         &models(app, session)?,
     )
-    .is_empty()
-    {
+    .is_empty();
+    if settled {
         write_json(&state_path(&root), &GroupState::default())?;
     }
-    Ok(())
+    Ok(settled as usize)
 }
 
 #[cfg(test)]

@@ -101,7 +101,8 @@ fn manual_group_preserves_original_pages_reviews_notes_and_distinct_meetings() {
     let originals = values.clone();
     let id=group(&root,&mut values,&json!({"ids":originals.iter().map(|t|&t.id).collect::<Vec<_>>(),"title":"Product development"})).unwrap();
     refresh(&root, &local, &manifest, "en").unwrap();
-    let values = topics(&root).unwrap();
+    let mut values = topics(&root).unwrap();
+    super::super::topic_archive::hydrate_collections(&root, &mut values).unwrap();
     let parent = values.iter().find(|t| t.id == id).unwrap();
     assert_eq!(parent.source_ids.len(), 2);
     assert_eq!(parent.collection.as_ref().unwrap().links.len(), 2);
@@ -117,9 +118,12 @@ fn manual_group_preserves_original_pages_reviews_notes_and_distinct_meetings() {
         assert_eq!(child.last_fingerprint, "old-success");
         assert!(child.grouping_manual);
     }
-    let before = fs::read(root.join("topics.json")).unwrap();
+    let before = super::super::topic_archive::heads_signature(&root).unwrap();
     refresh(&root, &local, &manifest, "en").unwrap();
-    assert_eq!(before, fs::read(root.join("topics.json")).unwrap());
+    assert_eq!(
+        before,
+        super::super::topic_archive::heads_signature(&root).unwrap()
+    );
     fs::remove_dir_all(root).unwrap();
 }
 

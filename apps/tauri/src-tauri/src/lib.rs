@@ -87,6 +87,8 @@ mod window_effects;
 mod sync_upload;
 // WeChat OAuth sign-in window (backend WECHAT_JUMP flow).
 mod wechat_auth;
+// Generic OAuth authorize window (account-center SSO, /oauth/* endpoints).
+mod oauth_auth;
 // Problem report: main-window screenshot capture + CNB issue submission.
 mod report_screenshot;
 mod cnb_report;
@@ -5612,6 +5614,7 @@ pub fn run() {
             feedlog::feedlog_api_request,
             open_logs_folder,
             wechat_auth::wechat_auth_window, wechat_auth::wechat_auth_window_close,
+            oauth_auth::oauth_auth_window, oauth_auth::oauth_auth_window_close,
             diagnostics_read_logs, diagnostics_prepare_report, attachment_save,
             attachment_text, share_file,
             live_translation::live_translation_permissions,

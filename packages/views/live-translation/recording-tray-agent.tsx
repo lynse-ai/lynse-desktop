@@ -7,16 +7,58 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
 import { audioModeSources } from "./api";
 import { useLiveTranslation } from "./use-live-translation";
+import { useRecordingCloudSync } from "./use-recording-cloud-sync";
+import { getDesktopLiveTranslationApi } from "./desktop-api";
+import { loadRememberPref } from "./recording-complete-dialog";
 import { useRecordingCompleteStore } from "./recording-complete-store";
+import { getWorkbenchApi } from "../workbench/api";
 import {
   refreshUntilRecordingVisible,
   usePendingRecordingStore,
 } from "./pending-recording-store";
-
+import type { CompletedLiveSession } from "./types";
 
 /** Stable sonner toast id, so repeated recovery scans replace the existing
  *  prompt instead of stacking duplicates. */
 const RECOVERY_TOAST_ID = "live-recording-recovery";
+
+/** What an auto-save attempt resolved to. `"saved"` — kept locally; `"cloud"`
+ *  — kept locally and handed to the upload pipeline; `"parked"` — handed to
+ *  the completion dialog instead (no desktop bridge); `"failed"` — the local
+ *  finalize errored and the session was parked for the dialog. */
+type AutoSaveOutcome = "saved" | "cloud" | "parked" | "failed";
+
+/** Save a completed session without asking — the "记住选择，以后不再询问"
+ *  promise. Keeps the recording locally (`finalizeLocal(false)`), refreshes
+ *  the workbench, and starts the cloud upload pipeline when the remembered
+ *  choice was "保存到云". Any finalize failure parks the session for the
+ *  completion dialog so the user can still decide: a failed auto-save must
+ *  not strand the audio silently. */
+export async function autoSaveCompletedSession(
+  session: CompletedLiveSession,
+  saveToCloud: boolean,
+  syncCloud: (session: CompletedLiveSession) => void,
+): Promise<AutoSaveOutcome> {
+  const desktopApi = getDesktopLiveTranslationApi();
+  if (!desktopApi) {
+    // No desktop bridge: the dialog's own save path owns the no-bridge flow.
+    useRecordingCompleteStore.getState().open(session);
+    return "parked";
+  }
+  try {
+    await desktopApi.finalizeLocal(session.sessionId, false);
+    useRecordingCompleteStore.getState().markSaved(session.recordId);
+    void getWorkbenchApi()?.sync(false).catch(() => undefined);
+    if (saveToCloud) {
+      syncCloud(session);
+      return "cloud";
+    }
+    return "saved";
+  } catch {
+    useRecordingCompleteStore.getState().open(session);
+    return "failed";
+  }
+}
 
 /**
  * Headless tray-action agent living in the main window.
@@ -112,6 +154,11 @@ export function RecordingTrayAgent() {
   // on its next visit). It also retires the optimistic pending card and
   // refreshes the notes lists until the persisted record shows up.
   const queryClient = useQueryClient();
+  // The cloud-sync hook's callback changes identity with auth/locale state;
+  // the completed listener subscribes once, so read it through a ref.
+  const { syncCompletedSession } = useRecordingCloudSync();
+  const syncCloudRef = useRef(syncCompletedSession);
+  syncCloudRef.current = syncCompletedSession;
   useEffect(() => {
     if (!api) return;
     let disposed = false;
@@ -126,7 +173,26 @@ export function RecordingTrayAgent() {
             toast.info(t("live_translation.auto_stopped_silence"));
           }
           void refreshUntilRecordingVisible(queryClient, event.session.sessionId);
-          useRecordingCompleteStore.getState().open(event.session);
+          // "记住选择" was ticked on an earlier completion dialog: honor the
+          // "以后不再询问" promise and save straight away with the remembered
+          // destination instead of asking again. Only a failure falls back to
+          // the dialog.
+          const pref = loadRememberPref();
+          if (pref.remember) {
+            void autoSaveCompletedSession(
+              event.session,
+              pref.saveToCloud,
+              (session) => syncCloudRef.current(session),
+            ).then((outcome) => {
+              if (outcome === "saved") {
+                toast.success(t("recording_mode.complete_auto_saved"));
+              } else if (outcome === "failed") {
+                toast.error(t("recording_mode.complete_auto_save_failed"));
+              }
+            });
+          } else {
+            useRecordingCompleteStore.getState().open(event.session);
+          }
         } else if (event.type === "error") {
           // Persist failures arrive as session-less errors after the stop
           // ack; drop the card that was promising the save. Errors while a

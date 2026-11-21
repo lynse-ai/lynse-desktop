@@ -11,6 +11,7 @@ import {
   generateSyncFileId,
   uploadAudioViaSyncChain,
 } from "../workspace/sync-upload";
+import { audioContentType } from "./audio-content-type";
 import { deriveFilename } from "./recording-complete-dialog";
 import { getDesktopLiveTranslationApi } from "./desktop-api";
 import { useNotificationStore } from "../notifications/use-notification-store";
@@ -25,8 +26,8 @@ import type { CompletedLiveSession } from "./types";
 // regular cloud note:
 //   1. uploadAudioViaSyncChain — POST sync/pre/create (placeholder) →
 //      POST sync/pre/sts (objectKey + STS credentials) → the Rust shell
-//      streams the recorded WAV straight to OSS → GET sync/pre/notify
-//      (idempotent completion notice)
+//      streams the recorded audio (M4A by default, WAV for older saves)
+//      straight to OSS → GET sync/pre/notify (idempotent completion notice)
 //   2. POST /api/business/file/trans — trigger the server-side
 //      transcription + summarization pipeline (no waiting here; the file
 //      list polls trans/status and shows the processing state)
@@ -74,7 +75,7 @@ async function runCloudSync(target: SyncTarget): Promise<void> {
   await uploadAudioViaSyncChain({
     recordId: target.recordId,
     saveFilename: target.filename,
-    contentType: "audio/wav",
+    contentType: audioContentType(target.filename),
     fileId,
     bizDuration: Math.max(1, Math.round(target.durationMs / 1000)),
     recordStartTime: target.startedAt

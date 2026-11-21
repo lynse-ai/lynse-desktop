@@ -61,12 +61,12 @@ function formatDuration(ms: number): string {
 // localStorage so the next recording opens with the same selection.
 const REMEMBER_PREF_KEY = "lynse_rec_save_to_cloud_pref";
 
-interface RememberPref {
+export interface RememberPref {
   remember: boolean;
   saveToCloud: boolean;
 }
 
-function loadRememberPref(): RememberPref {
+export function loadRememberPref(): RememberPref {
   if (typeof window === "undefined") return { remember: false, saveToCloud: false };
   try {
     const raw = window.localStorage.getItem(REMEMBER_PREF_KEY);
@@ -111,7 +111,10 @@ export function deriveFilename(
     String(d.getHours()).padStart(2, "0"),
     String(d.getMinutes()).padStart(2, "0"),
   ].join("");
-  return `${ts}_Recording.wav`;
+  // The persisted artifact defaults to M4A; the WAV fallback only fires for
+  // records that somehow lost their playback path, where the extension is
+  // unknowable anyway.
+  return `${ts}_Recording.m4a`;
 }
 
 export function RecordingCompleteDialog({

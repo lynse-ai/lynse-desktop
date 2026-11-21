@@ -16,12 +16,20 @@ import type { CompletedLiveSession } from "./types";
 
 interface RecordingCompleteState {
   session: CompletedLiveSession | null;
+  /** Record id of the most recent save (dialog "保存" or an auto-save from
+   *  the remembered "记住选择" choice). Drives the recording page's header
+   *  workbench button. Deliberately survives `clear()` — the button should
+   *  stay visible after the dialog closes. */
+  savedRecordId: string | null;
   open: (session: CompletedLiveSession) => void;
+  markSaved: (recordId: string) => void;
   clear: () => void;
 }
 
 export const useRecordingCompleteStore = create<RecordingCompleteState>((set) => ({
   session: null,
+  savedRecordId: null,
   open: (session) => set({ session }),
+  markSaved: (savedRecordId) => set({ savedRecordId }),
   clear: () => set({ session: null }),
 }));

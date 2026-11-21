@@ -115,7 +115,6 @@ export function TranscriptDetailPage() {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const session = useRecordingSession();
-  const [savedMeetingId, setSavedMeetingId] = useState<string | null>(null);
   const { syncCompletedSession } = useRecordingCloudSync();
   const reduceMotion = useReducedMotion();
   // Sessions stopped outside this page (float dock / tray / island) hand
@@ -123,6 +122,9 @@ export function TranscriptDetailPage() {
   // completion dialog for them.
   const pendingComplete = useRecordingCompleteStore((s) => s.session);
   const clearPendingComplete = useRecordingCompleteStore((s) => s.clear);
+  // Set by the dialog's save and by the agent's auto-save ("记住选择") alike;
+  // lives in the store so the header button shows for both paths.
+  const savedMeetingId = useRecordingCompleteStore((s) => s.savedRecordId);
 
   // Recording date under the page title: the session's own start date once
   // one exists, today otherwise. Long-form year/month/day per locale.
@@ -399,7 +401,7 @@ export function TranscriptDetailPage() {
         <RecordingCompleteDialog
           completedSession={pendingComplete}
           onSavedLocal={(completed) => {
-            setSavedMeetingId(completed.recordId);
+            useRecordingCompleteStore.getState().markSaved(completed.recordId);
             void getWorkbenchApi()?.sync(false).catch(() => undefined);
 
           }}

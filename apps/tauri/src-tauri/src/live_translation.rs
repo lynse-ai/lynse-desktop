@@ -1,6 +1,6 @@
 use crate::audio_contract::sources::{self, SourceSelection};
 use crate::island_notch;
-use crate::{now, remove_store_value, save_store_value, update_store_value, CommandResult};
+use crate::{now, remove_store_value, save_store_value, silent_command, update_store_value, CommandResult};
 use futures_util::{SinkExt, StreamExt};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::{Deserialize, Serialize};
@@ -37,11 +37,12 @@ const LIVE_EVENT: &str = "live-translation-event";
 pub(crate) const PCM_FRAME_BYTES: usize = 640;
 pub(crate) const AUDIO_HEADER_BYTES: usize = 19;
 
-/// Silence watchdog: while a session is recording, a microphone that carries
-/// neither recognized speech nor audible level for this long ends the session
-/// and saves it — a recording started by accident (or left running after
-/// everyone left) still lands in the library instead of growing a silent file.
-const SILENCE_AUTO_STOP: Duration = Duration::from_secs(60);
+/// Silence watchdog: while any session is recording (manual or automatic), a
+/// microphone that carries neither recognized speech nor audible level for
+/// this long ends the session and saves it — a recording started by accident
+/// (or left running after everyone left) still lands in the library instead of
+/// growing a silent file.
+const SILENCE_AUTO_STOP: Duration = Duration::from_secs(90);
 /// How often the watchdog re-checks the silence clock.
 const SILENCE_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 /// Mic peak amplitude (0..1, measured per 200 ms window) below which the room
@@ -2662,9 +2663,6 @@ fn silence_expired(state: &str, silent_for: Duration) -> bool {
 }
 
 fn spawn_silence_watchdog(app: AppHandle, session: Arc<LiveSession>) {
-    if !session.automatic {
-        return;
-    }
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(SILENCE_CHECK_INTERVAL).await;
@@ -2970,18 +2968,42 @@ fn persist_session(app: &AppHandle, session: &LiveSession) -> CommandResult<Comp
     // completion dialog and carried by the cloud upload, not an internal
     // "playback.wav".
     let ended_at = chrono::Local::now();
-    let playback = session
-        .directory
-        .join(format!("{}.wav", ended_at.format("%Y%m%d_%H%M%S")));
+    let stem = ended_at.format("%Y%m%d_%H%M%S");
+    // Mix down to PCM first, then compress: the persisted artifact defaults
+    // to M4A (~57 MB/h vs the 675 MB/h 48 kHz stereo WAV mixdown), falling
+    // back to WAV whenever the shared ffmpeg runtime is missing or the
+    // encode fails — a recording must never be lost to a codec.
+    let pcm_mixdown = session.directory.join(format!("{stem}.pcm.wav"));
     build_playback_wav(
         master.exists().then_some(master.as_path()),
         mic.exists().then_some(mic.as_path()),
         system.exists().then_some(system.as_path()),
-        &playback,
+        &pcm_mixdown,
     )?;
-    if let Ok(bytes) = fs::read(session.directory.join("waveform-windows.json")) {
+    // Measure the PCM before any transcode — the authoritative duration for
+    // waveform seeding (AAC decode length drifts a frame or two).
+    let pcm_duration_ms = inspect_wav(&pcm_mixdown).ok().map(|info| {
+        info.frames().saturating_mul(1_000) / u64::from(info.format.sample_rate.max(1))
+    });
+    let m4a = session.directory.join(format!("{stem}.m4a"));
+    let playback = if encode_playback_m4a(app, &pcm_mixdown, &m4a) {
+        let _ = fs::remove_file(&pcm_mixdown);
+        m4a
+    } else {
+        let wav = session.directory.join(format!("{stem}.wav"));
+        match fs::rename(&pcm_mixdown, &wav) {
+            Ok(()) => wav,
+            // Same-directory rename essentially never fails; keep the PCM
+            // path so even a failed rename persists a playable recording.
+            Err(_) => pcm_mixdown,
+        }
+    };
+    if let (Some(duration_ms), Ok(bytes)) = (
+        pcm_duration_ms,
+        fs::read(session.directory.join("waveform-windows.json")),
+    ) {
         if let Ok(windows) = serde_json::from_slice::<Vec<(u64, f32)>>(&bytes) {
-            let _ = crate::audio_contract::waveform::seed_from_windows(&playback, &windows);
+            let _ = crate::audio_contract::waveform::seed_from_windows(&playback, &windows, duration_ms);
         }
     }
     let waveform = crate::audio_contract::waveform::cached(&playback).ok();
@@ -3427,6 +3449,57 @@ pub(crate) fn write_pcm16_wav(path: &Path, samples: &[i16]) -> CommandResult<()>
     Ok(())
 }
 
+/// AAC bitrate for the persisted playback artifact. 128k keeps an hour of
+/// stereo meeting audio near 57 MB (vs ~675 MB for the 48 kHz WAV mixdown)
+/// with no perceptible loss for speech.
+const PLAYBACK_AAC_BITRATE: &str = "128k";
+
+/// Encode a PCM WAV into AAC inside an M4A container with the given ffmpeg
+/// binary. Kept free of the `AppHandle` so tests can drive the fallback
+/// contract directly.
+fn encode_m4a_with(ffmpeg: &Path, pcm: &Path, output: &Path) -> Result<(), String> {
+    let run = silent_command(ffmpeg)
+        .args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+        ])
+        .arg(pcm)
+        .args(["-c:a", "aac", "-b:a", PLAYBACK_AAC_BITRATE])
+        .arg(output)
+        .output()
+        .map_err(|error| format!("无法启动 FFmpeg：{error}"))?;
+    if !run.status.success() {
+        return Err(format!(
+            "FFmpeg 编码 M4A 失败：{}",
+            crate::stt::stderr_reason(&run.stderr)
+        ));
+    }
+    Ok(())
+}
+
+/// Try to compress the PCM mixdown into the M4A playback artifact. Returns
+/// true only when the encode fully succeeded; any failure (runtime missing,
+/// spawn error, non-zero exit) removes the partial output and reports false
+/// so the caller keeps the WAV — never a half-written M4A.
+fn encode_playback_m4a(app: &AppHandle, pcm: &Path, output: &Path) -> bool {
+    match crate::stt::sidecar_path(app, "ffmpeg") {
+        Ok(ffmpeg) => match encode_m4a_with(&ffmpeg, pcm, output) {
+            Ok(()) => true,
+            Err(error) => {
+                let _ = fs::remove_file(output);
+                log::warn!("playback M4A encode failed, keeping WAV: {error}");
+                false
+            }
+        },
+        Err(error) => {
+            log::info!("ffmpeg runtime unavailable, playback stays WAV: {error}");
+            false
+        }
+    }
+}
+
 #[tauri::command]
 pub fn live_translation_finalize_local(
     app: AppHandle,
@@ -3615,12 +3688,47 @@ fn run_reprocess(
         let playback_path = PathBuf::from(&playback);
         let system = directory.join("system.wav");
         let master = directory.join(MASTER_TRACK_FILE);
-        build_playback_wav(
+        let sources = (
             master.exists().then_some(master.as_path()),
             processed.exists().then_some(processed.as_path()),
             system.exists().then_some(system.as_path()),
-            &playback_path,
-        )?;
+        );
+        if playback_path.extension().and_then(|ext| ext.to_str()) == Some("m4a") {
+            // The stored artifact is AAC: rebuild the PCM mixdown beside it,
+            // encode, and only then swap — a failed encode must never leave
+            // WAV bytes under an .m4a name (every reader infers the codec
+            // from the extension). The old file stays untouched on failure.
+            let pcm_mixdown = directory.join("reprocess-mixdown.pcm.wav");
+            let encoded = directory.join("reprocess-mixdown.m4a");
+            build_playback_wav(sources.0, sources.1, sources.2, &pcm_mixdown)?;
+            let pcm_duration_ms = inspect_wav(&pcm_mixdown).ok().map(|info| {
+                info.frames().saturating_mul(1_000)
+                    / u64::from(info.format.sample_rate.max(1))
+            });
+            if !encode_playback_m4a(&app, &pcm_mixdown, &encoded) {
+                let _ = fs::remove_file(&pcm_mixdown);
+                return Err("重新处理完成，但音频压缩失败（离线运行时缺失），原音频保持不变".to_owned());
+            }
+            fs::rename(&encoded, &playback_path).map_err(|error| error.to_string())?;
+            let _ = fs::remove_file(&pcm_mixdown);
+            // The regenerated audio invalidated the peaks cache (new size +
+            // mtime); re-seed from the capture windows so native waveform
+            // serving survives the transcode.
+            if let (Some(duration_ms), Ok(bytes)) = (
+                pcm_duration_ms,
+                fs::read(directory.join("waveform-windows.json")),
+            ) {
+                if let Ok(windows) = serde_json::from_slice::<Vec<(u64, f32)>>(&bytes) {
+                    let _ = crate::audio_contract::waveform::seed_from_windows(
+                        &playback_path,
+                        &windows,
+                        duration_ms,
+                    );
+                }
+            }
+        } else {
+            build_playback_wav(sources.0, sources.1, sources.2, &playback_path)?;
+        }
 
         // Refresh the manifest-derived fields in the stored record.
         let track_manifest = crate::audio_contract::manifest::read_manifest(
@@ -5678,5 +5786,59 @@ mod tests {
         assert!(emission.is_some(), "recognition must survive transcript-only mode");
         // With translation requested for real, the same translation frame lands.
         assert!(qwen_message(&session, AudioSource::Mic, 0, 0, delta, false).is_some());
+    }
+
+    /// A real ffmpeg is only available on dev machines; when absent the
+    /// encode tests still cover the failure contract with a broken binary.
+    fn system_ffmpeg_available() -> bool {
+        std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn encode_m4a_produces_an_mp4_container_from_pcm() {
+        let directory = std::env::temp_dir().join(format!(
+            "lynse-m4a-encode-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let pcm = directory.join("mixdown.pcm.wav");
+        // Half a second of 48 kHz stereo: enough for a valid encode.
+        write_pcm16_wav(&pcm, &[0i16; 48000]).unwrap();
+        let output = directory.join("mixdown.m4a");
+        if system_ffmpeg_available() {
+            encode_m4a_with(Path::new("ffmpeg"), &pcm, &output).unwrap();
+            let bytes = fs::read(&output).unwrap();
+            assert!(bytes.len() > 32, "encoded M4A must not be empty");
+            // M4A is an MP4 container: the brand box sits at offset 4.
+            assert_eq!(&bytes[4..8], b"ftyp", "output must be MP4/M4A, not WAV");
+        } else {
+            // No system ffmpeg: the failure contract still holds.
+            assert!(encode_m4a_with(Path::new("lynse-not-a-real-ffmpeg"), &pcm, &output).is_err());
+            assert!(!output.exists(), "a failed encode must leave no output");
+        }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn encode_m4a_with_a_broken_binary_reports_failure() {
+        let directory = std::env::temp_dir().join(format!(
+            "lynse-m4a-fallback-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let pcm = directory.join("mixdown.pcm.wav");
+        write_pcm16_wav(&pcm, &[0i16; 96]).unwrap();
+        let output = directory.join("mixdown.m4a");
+        let missing = directory.join("definitely-not-ffmpeg");
+        let error = encode_m4a_with(&missing, &pcm, &output).unwrap_err();
+        assert!(error.contains("无法启动"), "spawn failure must surface: {error}");
+        assert!(!output.exists());
+        fs::remove_dir_all(directory).unwrap();
     }
 }

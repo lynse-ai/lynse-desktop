@@ -35,13 +35,21 @@ struct Cache {
 
 /// The capture sidecar accumulates 200 ms peaks from the actual playback
 /// master. Seeding these avoids rescanning hours of audio at stop time.
-pub fn seed_from_windows(path: &Path, windows: &[(u64, f32)]) -> Result<(), String> {
+///
+/// `duration_ms` is measured from the PCM mixdown before any transcode — the
+/// persisted artifact may be AAC (whose decoded length drifts a frame or
+/// two), so the caller passes the authoritative PCM duration. The cache is
+/// written against the FINAL artifact's size+mtime, so the M4A mixdown gets a
+/// usable native cache instead of falling into the WAV-only `extract`.
+pub fn seed_from_windows(
+    path: &Path,
+    windows: &[(u64, f32)],
+    duration_ms: u64,
+) -> Result<(), String> {
     if windows.is_empty() {
         return Ok(());
     }
-    let info = inspect(path)?;
     let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
-    let duration_ms = info.frames() * 1000 / u64::from(info.format.sample_rate.max(1));
     let mut peaks = vec![0.0f32; BARS];
     for &(at, peak) in windows {
         let index =
@@ -209,7 +217,7 @@ mod tests {
         writer.write_i16_at(7_199_990, &[0; 960]).unwrap();
         writer.close().unwrap();
         let windows = [(0, 0.0), (3_600_000, 0.8), (7_199_800, 0.2)];
-        seed_from_windows(&path, &windows).unwrap();
+        seed_from_windows(&path, &windows, 7_200_000).unwrap();
         let waveform = cached(&path).unwrap();
         assert_eq!(waveform.duration_ms, 7_200_000);
         assert_eq!(waveform.peaks[BARS / 2], 0.8);
@@ -243,6 +251,30 @@ mod tests {
         assert_eq!(waveform.peaks[0], 0.0);
         assert!(waveform.peaks[BARS - 1] > 0.4);
         assert_eq!(cached(&path).unwrap().peaks, waveform.peaks);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn seeded_cache_serves_an_m4a_artifact_without_wav_decoding() {
+        let directory =
+            std::env::temp_dir().join(format!("lynse-m4a-waveform-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        // The persisted artifact is AAC — opaque bytes to the WAV-only
+        // extractor. Peaks are seeded from the capture windows against this
+        // final file, so `cached` must hit the cache and never call extract.
+        let path = directory.join("20260101_120000.m4a");
+        fs::write(&path, b"fake aac bytes").unwrap();
+        seed_from_windows(&path, &[(0, 0.1), (500, 0.9)], 1_000).unwrap();
+        let waveform = cached_with(&path, || {
+            Err("WAV-only extractor must not run for a seeded M4A".to_owned())
+        })
+        .unwrap();
+        assert_eq!(waveform.duration_ms, 1_000);
+        assert_eq!(waveform.peaks[0], 0.1);
+        assert_eq!(waveform.peaks[BARS / 2], 0.9);
+        // The cache lives beside the artifact under the shared .wav.peaks.json
+        // suffix, whatever the artifact's own extension.
+        assert!(directory.join("20260101_120000.wav.peaks.json").exists());
         fs::remove_dir_all(directory).unwrap();
     }
 }

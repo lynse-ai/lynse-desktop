@@ -924,7 +924,7 @@ pub(crate) fn convert_to_wav_sr(
 /// The last few ffmpeg stderr lines, newest last — where ffmpeg puts its actual
 /// complaint. Its progress rewrites with `\r`, so each line is reduced to the
 /// text after the final one, and pure progress lines are skipped.
-fn stderr_reason(stderr: &[u8]) -> String {
+pub(crate) fn stderr_reason(stderr: &[u8]) -> String {
     let mut kept: Vec<String> = Vec::new();
     for line in String::from_utf8_lossy(stderr).lines().rev() {
         let current = line.rsplit('\r').next().unwrap_or_default().trim();

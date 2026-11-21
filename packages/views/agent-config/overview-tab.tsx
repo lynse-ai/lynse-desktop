@@ -3,12 +3,13 @@
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useAuthStore } from "@lynse/core/auth";
 import { api } from "@lynse/core/api/client";
+import { LYNSE_EDITION } from "@lynse/core/config";
 import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/ui/card";
 import { Button } from "@lynse/ui/components/ui/button";
 import { toast } from "sonner";
 import { Copy } from "../icons";
 import type { AgentConfigTab } from "./agent-config-view";
-import { mcpEndpointUrl } from "./shared";
+import { CLI_VERSION, MCP_CN_VERSION, mcpEndpointUrl } from "./shared";
 
 /** Static release notes shown on the overview tab (zh-primary content;
  *  structural labels are localized, entries are product changelog data). */
@@ -59,7 +60,10 @@ export function OverviewTab({ onNavigate }: { onNavigate: (tab: AgentConfigTab) 
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-xs">{t("agentConfig.quick_mcp")}</CardTitle>
+          <CardTitle className="flex items-center gap-2 text-xs">
+            {t("agentConfig.quick_mcp")}
+            {LYNSE_EDITION === "cn" && <span className="font-normal text-muted-foreground">v{MCP_CN_VERSION}</span>}
+          </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex items-center gap-2">
@@ -78,6 +82,21 @@ export function OverviewTab({ onNavigate }: { onNavigate: (tab: AgentConfigTab) 
               {t("agentConfig.goto_docs")}
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-xs">
+            {t("agentConfig.cli_title")}
+            <span className="font-normal text-muted-foreground">v{CLI_VERSION}</span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-2xs leading-relaxed text-muted-foreground">{t("agentConfig.quick_cli_hint")}</p>
+          <Button size="sm" variant="outline" onClick={() => onNavigate("agent")}>
+            {t("agentConfig.goto_setup")}
+          </Button>
         </CardContent>
       </Card>
 

@@ -25,6 +25,7 @@ import { SettingsDialog } from "../settings/settings-dialog";
 import { openAppUpdateDialog, useAppUpdate } from "../app-update";
 import { UserProfileDropdown } from "./user-profile-dropdown";
 import { useSidebarPreferences } from "./sidebar-preferences";
+import { LYNSE_LOGO_SRC } from "../auth/lynse-logo";
 import { DESKTOP_SIDEBAR_WIDTH, WEB_SIDEBAR_WIDTH } from "./sidebar-metrics";
 import {
   Bell,
@@ -208,8 +209,8 @@ export function LynseSidebar() {
         data-tauri-drag-region
       >
       {wide && (
-        <div className="px-1.5 pb-3 text-[15px] font-semibold tracking-tight text-foreground">
-          Lynse
+        <div className="px-1.5 pb-3">
+          <img src={LYNSE_LOGO_SRC} alt="Lynse" className="block h-5 w-auto dark:invert" />
         </div>
       )}
 

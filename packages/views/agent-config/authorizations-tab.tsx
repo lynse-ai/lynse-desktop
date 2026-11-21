@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@lynse/ui/components/u
 import { Button } from "@lynse/ui/components/ui/button";
 import { toast } from "sonner";
 import { Copy, Link } from "../icons";
-import { McpAuthorizationsPanel } from "../mcp-authorizations";
+import { DeviceAuthorizationLink, McpAuthorizationsPanel } from "../mcp-authorizations";
 import { mcpEndpointUrl } from "./shared";
 
 /** 我的授权 tab: MCP connector address + the shared authorization console. */
@@ -40,8 +40,9 @@ export function AuthorizationsTab() {
       </Card>
 
       <Card>
-        <CardHeader className="pb-2">
+        <CardHeader className="flex flex-wrap items-center justify-between gap-2 pb-2">
           <CardTitle className="text-xs">{t("agentConfig.records_title")}</CardTitle>
+          <DeviceAuthorizationLink />
         </CardHeader>
         <CardContent>
           <McpAuthorizationsPanel dense />

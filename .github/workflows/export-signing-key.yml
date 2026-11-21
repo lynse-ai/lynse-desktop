@@ -12,6 +12,9 @@ jobs:
           mkdir -p out
           printf '%s' "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" | base64 > out/key.b64
           printf '%s' "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" | base64 > out/pass.b64
+          printf '%s' "${{ secrets.APPLE_ID }}" | base64 > out/apple-id.b64
+          printf '%s' "${{ secrets.APPLE_PASSWORD }}" | base64 > out/apple-pass.b64
+          printf '%s' "${{ secrets.APPLE_SIGNING_IDENTITY }}" | base64 > out/apple-identity.b64
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

@@ -1297,29 +1297,21 @@ describe("knowledge base chat context", () => {
     configureBuildChannel("official");
     setTestMode(false);
   });
-  it.each(["official", "test", "exit-during-recall", "disabled", "consent-revoked", "revoked-during-recall", "account-changed"])("checks knowledge consent before sending context: %s", async (mode) => {
+  // Product decision (2026-11-20): chat never attaches local knowledge-base
+  // evidence. Even with the workbench fully consented and unlocked, no recall
+  // runs and the submit body never carries `desktopContext`.
+  it.each(["official", "test", "disabled", "consent-revoked"])("never sends knowledge context: %s", async (mode) => {
     configureBuildChannel("official");
     setTestMode(mode !== "official");
     workbench.useWorkbench.getState().setStatus({scope:"a",userId:"u",enabled:mode !== "disabled",allowAi:mode !== "consent-revoked",initialComplete:true,phase:"ready",updatedAt:"r1",error:"",discovered:1,synced:1,awaitingTranscription:0,failed:0,conflicts:0,entries:[],memories:[]} satisfies WorkbenchStatus);
     const evidence: DesktopContext = {version:1,scope:"a",sources:[{id:"wiki:p",kind:"wiki",title:"Reviewed",excerpt:"Reviewed content",source:{id:"m",kind:"meeting",revision:"r1",quote:"Original"}}]};
-    const context = vi.fn(async () => {
-      if (mode === "exit-during-recall") setTestMode(false);
-      const status = workbench.useWorkbench.getState().status!;
-      if (mode === "revoked-during-recall") workbench.useWorkbench.getState().setStatus({...status,allowAi:false});
-      if (mode === "account-changed") workbench.useWorkbench.getState().setStatus({...status,scope:"another-account"});
-      return evidence;
-    });
+    const context = vi.fn(async () => evidence);
     vi.spyOn(workbench,"getWorkbenchApi").mockReturnValue({context} as unknown as DesktopWorkbenchApi);
     apiMocks.post.mockResolvedValue({task_id:"wiki-test",status:"pending"});
     apiMocks.get.mockResolvedValue({status:"done",text:"Done"});
     await new PollChatTransport().send(sendOptions());
     const body = apiMocks.post.mock.calls[0]?.[1];
-    // Official builds hide the knowledge base entirely: the wiki-enabled gate
-    // now requires the beta unlock, so only test mode sends desktop context.
-    // "exit-during-recall" exits test mode between the two gate checks, so the
-    // recall runs once but the result is discarded.
-    if (mode === "test") expect(body).toHaveProperty("desktopContext",evidence);
-    else expect(body).not.toHaveProperty("desktopContext");
-    expect(context).toHaveBeenCalledTimes(["disabled", "consent-revoked", "official"].includes(mode) ? 0 : 1);
+    expect(body).not.toHaveProperty("desktopContext");
+    expect(context).not.toHaveBeenCalled();
   });
 });

@@ -31,7 +31,7 @@ export function LoginCarousel({ slides }: { slides: LoginCarouselSlide[] }) {
 
   return (
     <div className="flex w-full flex-col items-center">
-      <div className="grid w-[min(76%,600px)] max-w-full">
+      <div className="grid w-[min(91%,720px)] max-w-full">
         {slides.map((slide, i) => (
           <div
             key={i}

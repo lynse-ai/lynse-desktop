@@ -10,50 +10,15 @@ export const APP_URL =
 declare const process: { env: Record<string, string | undefined> } | undefined;
 
 /**
- * Production backend origin. Build-time `NEXT_PUBLIC_API_URL` wins when set
- * (web deployments point it at the live gateway); the hard-coded value is the
- * last-resort fallback when neither a saved server (`lynse_api_url`) nor a
- * build-time default exists: the packaged shells fetch directly from a
- * custom-scheme origin (tauri://localhost), where a relative request URL
- * cannot even be parsed — without a real backend target, sign-in dies with
- * WebKit's "The string did not match the expected pattern."
- */
-export const DEFAULT_API_URL =
-  (typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_URL) ||
-  "https://api.lynse.cn";
-
-/** Test backend origin (the other login-form preset). Kept beside the agent
- *  mapping below: the assistant environment must always move with it. */
-export const TEST_API_URL = "https://gapp.lynse.cn";
-
-/** Storage key for the optional dedicated AI-assistant (agent) backend origin.
- *  Empty/absent means the assistant rides the main backend gateway. */
-export const AGENT_API_URL_STORAGE_KEY = "lynse_agent_api_url";
-
-/** Connections use the deployed BFF in both development and packaged apps. */
-export const DEFAULT_INTEGRATIONS_API_URL = "https://www.lynse.ai";
-
-/** Storage key for an explicitly configured Connections BFF origin. */
-export const INTEGRATIONS_API_URL_STORAGE_KEY = "lynse_integrations_api_url";
-
-/** Root-absolute prefix of the web app's server-side CORS proxy route.
- *  Next.js basePath (subpath deployments such as /app on www.lynse.ai)
- *  shifts the route, and raw fetch()/img-src strings never get it applied
- *  automatically — always route through this constant instead of a
- *  hard-coded "/api/proxy". The `typeof` guard and literal member
- *  expression follow the NEXT_PUBLIC inlining rules documented above. */
-export const API_PROXY_PREFIX =
-  ((typeof process !== "undefined" && process.env.NEXT_PUBLIC_BASE_PATH) || "") + "/api/proxy";
-
-/**
  * Build-time edition split: one codebase, two packaged products.
  *   - `cn`   ships China-first connectors (Feishu today; WeCom/DingTalk later)
  *   - `intl` ships the overseas set (Google/Outlook/Notion/Todoist; Slack later)
  * Each bundler injects the value as a global define — apps/tauri's
  * vite.config already does (`LYNSE_EDITION=cn|intl pnpm dev:tauri|build`);
- * apps/web should add the same define in next.config. Unconfigured builds
- * fall back to `cn`. Language packs always ship in full; the edition decides
- * the connector list and, later, the default locale.
+ * apps/web sets it at build time via NEXT_PUBLIC_LYNSE_EDITION. Unconfigured
+ * builds fall back to `cn`. Language packs always ship in full; the edition
+ * decides the connector list, the default API gateway (DEFAULT_API_URL below)
+ * and, later, the default locale.
  */
 export type LynseEdition = "cn" | "intl";
 declare const __LYNSE_EDITION__: string | undefined;
@@ -75,6 +40,55 @@ export const LYNSE_EDITION: LynseEdition =
 /** True for dev servers; packaged builds are always false. Used only to gate
  *  debug affordances (e.g. the dev `lynse_edition` view override). */
 export const DEV_BUILD: boolean = typeof __LYNSE_DEV__ === "boolean" ? __LYNSE_DEV__ : false;
+
+/** Production gateway of each packaged edition. The two editions live on
+ *  separate account systems (intl: Google/Apple sign-in via Firebase; cn:
+ *  phone/WeChat) — a session issued by one never verifies on the other, so
+ *  never point an edition at its counterpart's gateway. */
+export function defaultApiUrlForEdition(edition: LynseEdition): string {
+  return edition === "intl" ? "https://api-en.lynse.ai" : "https://api.lynse.cn";
+}
+
+/**
+ * Production backend origin. Build-time `NEXT_PUBLIC_API_URL` wins when set
+ * (web deployments point it at the live gateway); otherwise the edition
+ * picks the gateway — intl rides api-en.lynse.ai, cn rides api.lynse.cn — so
+ * a build that forgets the env var still lands on the right backend. The
+ * hard-coded value is the last-resort fallback when neither a saved server
+ * (`lynse_api_url`) nor a build-time default exists: the packaged shells
+ * fetch directly from a custom-scheme origin (tauri://localhost), where a
+ * relative request URL cannot even be parsed — without a real backend
+ * target, sign-in dies with WebKit's "The string did not match the expected
+ * pattern."
+ */
+export const DEFAULT_API_URL =
+  (typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_URL) ||
+  defaultApiUrlForEdition(LYNSE_EDITION);
+
+/** Test backend origin (the other login-form preset). Kept beside the agent
+ *  mapping below: the assistant environment must always move with it. */
+export const TEST_API_URL = "https://gapp.lynse.cn";
+
+/** Storage key for the optional dedicated AI-assistant (agent) backend origin.
+ *  Empty/absent means the assistant rides the main backend gateway. */
+export const AGENT_API_URL_STORAGE_KEY = "lynse_agent_api_url";
+
+/** Connections use the deployed BFF in both development and packaged apps. */
+export const DEFAULT_INTEGRATIONS_API_URL = "https://www.lynse.ai";
+
+/** Storage key for an explicitly configured Connections BFF origin. */
+export const INTEGRATIONS_API_URL_STORAGE_KEY = "lynse_integrations_api_url";
+
+export const APP_BASE_PATH =
+  (typeof process !== "undefined" && process.env.NEXT_PUBLIC_BASE_PATH) || "";
+
+/** Root-absolute prefix of the web app's server-side CORS proxy route.
+ *  Next.js basePath (subpath deployments such as /app on www.lynse.ai)
+ *  shifts the route, and raw fetch()/img-src strings never get it applied
+ *  automatically — always route through this constant instead of a
+ *  hard-coded "/api/proxy". The `typeof` guard and literal member
+ *  expression follow the NEXT_PUBLIC inlining rules documented above. */
+export const API_PROXY_PREFIX = APP_BASE_PATH + "/api/proxy";
 
 /**
  * Route B preset: the lynclaw agent service deployed on Tencent CloudBase

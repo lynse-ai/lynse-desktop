@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { CoreProvider } from "@lynse/core/platform";
+import { configureLynseSso } from "@lynse/core/auth/lynse-sso";
 import {
   configureBuildChannel,
   type BuildChannel,
@@ -17,6 +18,21 @@ const WEB_VERSION = packageJson.version || "dev";
 configureBuildChannel(
   (process.env.NEXT_PUBLIC_BUILD_CHANNEL as BuildChannel | undefined) ??
     (process.env.NODE_ENV === "production" ? "official" : "debug"),
+);
+
+// Account-center SSO (public OAuth client, PKCE only). Both vars must be set
+// for the "Sign in with Lynse" entry to appear; the flow returns to
+// /auth/sso, which completes the exchange. See apps/web/.env.example.
+configureLynseSso(
+  process.env.NEXT_PUBLIC_LYNSE_SSO_URL && process.env.NEXT_PUBLIC_LYNSE_SSO_CLIENT_ID
+    ? {
+        origin: process.env.NEXT_PUBLIC_LYNSE_SSO_URL,
+        clientId: process.env.NEXT_PUBLIC_LYNSE_SSO_CLIENT_ID,
+        redirectUri:
+          process.env.NEXT_PUBLIC_LYNSE_SSO_REDIRECT_URI ||
+          `${new URL(process.env.NEXT_PUBLIC_LYNSE_SSO_URL).origin}/auth/sso`,
+      }
+    : null,
 );
 
 export function WebProviders({ children }: { children: React.ReactNode }) {

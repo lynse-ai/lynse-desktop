@@ -7,6 +7,7 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { wechatSessionFromVo, type WechatLoginVo } from "@lynse/core/auth/wechat";
 import { WechatBindForm } from "./wechat-bind-form";
 import { AgreementCheckbox } from "./agreement-checkbox";
+import { consumePostLoginRedirect } from "./post-login-redirect";
 import { useNavigation } from "../navigation";
 import { Loader2 } from "../icons";
 
@@ -125,9 +126,7 @@ function AppleBindCard({
             // out of history once consumed.
             window.history.replaceState(null, "", window.location.pathname);
             onComplete(session);
-            // This standalone route has no AuthGate to react to the session —
-            // walk to the dashboard, which the fresh token lets render.
-            navigation.push("/home");
+            navigation.replace(consumePostLoginRedirect() ?? "/home");
           }}
         />
         <AgreementCheckbox agreed={agreed} onToggle={() => setAgreed(!agreed)} onLink={() => {}} />

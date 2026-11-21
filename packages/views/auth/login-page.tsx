@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";import { QRCodeSVG } from "qrcode.react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import { Input } from "@lynse/ui/components/ui/input";
 import { Button } from "@lynse/ui/components/ui/button";
 import { useAuthStore } from "@lynse/core/auth";
@@ -22,7 +23,13 @@ import {
   renderAppleLoginUrl,
   startAppleLogin,
 } from "@lynse/core/auth/apple";
-import { renderWechatLoginUrl, wechatWebFlowReady } from "@lynse/core/auth/wechat";
+import { wechatWebFlowReady } from "@lynse/core/auth/wechat";
+import {
+  beginWebSsoLogin,
+  completeSsoLogin,
+  getLynseSsoConfig,
+  startSsoLogin,
+} from "@lynse/core/auth/lynse-sso";
 import { toast } from "sonner";
 import {
   buildQrLoginPayload,
@@ -93,7 +100,7 @@ type LoginView = "phone" | "email" | "more" | "qr" | "api";
  * Server / API-key configuration lives inside the API form itself (and the
  * standalone /api-config route); the page keeps no extra link to it.
  */
-export function LoginPage() {
+export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: ReactNode } = {}) {
   const { t } = useTranslation();
   const devApiAuth = hasDevApiAuth();
   // The web build (www.lynse.cn/app) fills a real browser viewport instead of
@@ -144,6 +151,15 @@ export function LoginPage() {
   const wechatUnlistenRef = useRef<(() => void) | null>(null);
   const wechatStateRef = useRef("");
   const wechatApiUrlRef = useRef("");
+  // Account-center SSO (Lynse 账号) — same shape as the WeChat flow: embedded
+  // authorize window, intercepted callback, state-bound completion.
+  const ssoCancelledRef = useRef(false);
+  const ssoAttemptRef = useRef(0);
+  const ssoActiveRef = useRef(false);
+  const ssoUnlistenRef = useRef<(() => void) | null>(null);
+  const ssoStateRef = useRef("");
+  const ssoVerifierRef = useRef("");
+  const [ssoWaiting, setSsoWaiting] = useState(false);
   // Bind-required login response — shows the phone + SMS form instead of
   // the sign-in views until the bind completes.
   // `?bind_preview=1` renders the dedicated binding screen directly (QA
@@ -197,7 +213,7 @@ export function LoginPage() {
   }, [view, startQrLogin]);
 
   useEffect(() => {
-    // Stop the QR poll and the WeChat auth-window listener when the login
+    // Stop the QR poll and the auth-window listeners when the login
     // page unmounts (e.g. after sign-in).
     return () => {
       qrCancelledRef.current = true;
@@ -205,6 +221,10 @@ export function LoginPage() {
       wechatAttemptRef.current += 1;
       wechatUnlistenRef.current?.();
       wechatUnlistenRef.current = null;
+      ssoCancelledRef.current = true;
+      ssoAttemptRef.current += 1;
+      ssoUnlistenRef.current?.();
+      ssoUnlistenRef.current = null;
     };
   }, []);
 
@@ -347,26 +367,32 @@ export function LoginPage() {
   }
 
   /**
-   * CN WeChat scan: the backend renders the qrconnect URL and owns the OAuth
-   * callback — its `redirect_uri` is the backend's `/auth/login` (matching
-   * the WeChat Open Platform callback domain), so a web scan ends at the
-   * backend, which 302s the session onto the frontend landing pages. The web
-   * app may only leave for WeChat when that redirect lands somewhere this
-   * client can finish the flow (see wechatWebFlowReady); otherwise the entry
-   * explains it is still being configured.
+   * CN WeChat scan: the backend renders the qrconnect URL. Its `redirect_uri`
+   * is fixed to the backend's `/auth/login` by WeChat's callback-domain rule;
+   * production now 302s that callback to this web app's `/auth/wechat` route,
+   * where the one-time code is exchanged through POST /api/auth/login (the
+   * same exchange the desktop shell performs in its embedded auth window).
+   * `startWechatLogin` stores the backend-issued `state` so the callback page
+   * can reject a forged redirect. The entry only leaves for WeChat when the
+   * redirect can be completed by a client; otherwise it explains it is still
+   * being configured.
    */
   async function handleWechatQrLogin() {
     setError(null);
     try {
-      const url = await renderWechatLoginUrl();
+      const started = await startWechatLogin();
       const finishable =
         !web ||
-        wechatWebFlowReady(url, new URL(api().getBaseUrl()).origin, window.location.origin);
+        wechatWebFlowReady(
+          started.authorizeUrl,
+          new URL(started.apiUrl).origin,
+          window.location.origin,
+        );
       if (!finishable) {
         toast(t("auth.wechat_qr_pending"));
         return;
       }
-      window.location.href = url;
+      window.location.href = started.authorizeUrl;
     } catch (e: unknown) {
       setError(authErrorText(e, t, "auth.login_failed"));
     }
@@ -500,6 +526,89 @@ export function LoginPage() {
     void getDesktopAppApi()?.wechat?.closeAuthWindow();
   }
 
+  function stopSsoListener() {
+    ssoUnlistenRef.current?.();
+    ssoUnlistenRef.current = null;
+  }
+
+  /** Account-center callback landed: relay URL carried code+state. */
+  async function finishSsoLogin(code: string | null, state: string | null, attempt: number) {
+    if (ssoCancelledRef.current || attempt !== ssoAttemptRef.current) return;
+    stopSsoListener();
+    try {
+      const session = await completeSsoLogin(ssoVerifierRef.current, code, state, ssoStateRef.current);
+      if (ssoCancelledRef.current || attempt !== ssoAttemptRef.current) return;
+      completeLogin(session);
+    } catch (e: unknown) {
+      if (!ssoCancelledRef.current && attempt === ssoAttemptRef.current) {
+        setError(authErrorText(e, t, "auth.login_failed"));
+      }
+    } finally {
+      if (attempt === ssoAttemptRef.current) {
+        ssoActiveRef.current = false;
+        setSsoWaiting(false);
+        stopSsoListener();
+        void getDesktopAppApi()?.oauth?.closeAuthWindow();
+      }
+    }
+  }
+
+  async function handleSsoLogin() {
+    if (ssoActiveRef.current || !getLynseSsoConfig()) return;
+    const desktopApi = getDesktopAppApi();
+    if (!desktopApi?.oauth) {
+      // Web: full-page redirect; the /auth/sso route completes the flow.
+      try {
+        window.location.assign(await beginWebSsoLogin());
+      } catch (e: unknown) {
+        setError(authErrorText(e, t, "auth.login_failed"));
+      }
+      return;
+    }
+    const attempt = ++ssoAttemptRef.current;
+    ssoActiveRef.current = true;
+    ssoCancelledRef.current = false;
+    setSsoWaiting(true);
+    setError(null);
+    try {
+      const started = await startSsoLogin();
+      if (attempt !== ssoAttemptRef.current) return;
+      ssoVerifierRef.current = started.verifier;
+      ssoStateRef.current = started.state;
+      // Listen before opening: the native window intercepts the redirect.
+      const unlisten = await desktopApi.oauth.onAuthCallback((callbackUrl) => {
+        const params = new URL(callbackUrl).searchParams;
+        void finishSsoLogin(params.get("code"), params.get("state"), attempt);
+      });
+      if (attempt !== ssoAttemptRef.current) {
+        unlisten();
+        return;
+      }
+      ssoUnlistenRef.current = unlisten;
+      await desktopApi.oauth.openAuthWindow(
+        started.authorizeUrl,
+        getLynseSsoConfig()!.redirectUri,
+        started.state,
+      );
+    } catch (e: unknown) {
+      if (attempt === ssoAttemptRef.current) {
+        ssoActiveRef.current = false;
+        stopSsoListener();
+        setSsoWaiting(false);
+        setError(authErrorText(e, t, "auth.login_failed"));
+      }
+    }
+  }
+
+  function handleCancelSsoLogin() {
+    ssoCancelledRef.current = true;
+    ssoAttemptRef.current += 1;
+    ssoActiveRef.current = false;
+    setSsoWaiting(false);
+    stopSsoListener();
+    void getDesktopAppApi()?.oauth?.closeAuthWindow();
+  }
+
   const qrHint =
     qrPhase === "scanned"
       ? t("auth.qr_scanned")
@@ -607,10 +716,10 @@ export function LoginPage() {
         <p
           className={cn(
             "mt-2.5 text-[13px] leading-relaxed text-muted-foreground",
-            web && "text-center",
+            web && "max-w-[300px] break-words text-center",
           )}
         >
-          {t("auth.login_subtitle")}
+          {subtitle ?? t("auth.login_subtitle")}
         </p>
 
         <div
@@ -626,6 +735,18 @@ export function LoginPage() {
               {t("auth.more_login")}
             </p>
             <div className="space-y-2">
+              {getLynseSsoConfig() && (
+                <button
+                  type="button"
+                  onClick={handleSsoLogin}
+                  disabled={ssoWaiting}
+                  className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
+                >
+                  <img src={LYNSE_LOGO_SRC} alt="" className="size-4 dark:invert" />
+                  <span className="text-sm">{t("auth.sso_login")}</span>
+                  <ChevronRight className="ml-auto size-4 text-muted-foreground" />
+                </button>
+              )}
               {intl && (
                 <button
                   type="button"
@@ -979,12 +1100,13 @@ export function LoginPage() {
         )}
 
         {error && <p className="mt-3 text-center text-xs text-destructive">{error}</p>}
+        {footer && <div className="mt-4 text-center">{footer}</div>}
         </div>
 
         {/* ── More ways to sign in (phone view) / WeChat wait state.
             Desktop pins it to the window's bottom edge; web keeps it right
             under the centered form. ── */}
-        {(view === "phone" || wechatWaiting) && (
+        {(view === "phone" || wechatWaiting || ssoWaiting) && (
           <div className={cn(web ? "mt-5" : "mt-auto pt-3")}>
             {wechatWaiting ? (
               <div className="space-y-1.5 text-center">
@@ -1000,6 +1122,24 @@ export function LoginPage() {
                   variant="ghost"
                   className="h-7 text-xs"
                   onClick={handleCancelWechatLogin}
+                >
+                  {t("auth.wechat_cancel")}
+                </Button>
+              </div>
+            ) : ssoWaiting ? (
+              <div className="space-y-1.5 text-center">
+                <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  {t("auth.sso_waiting")}
+                </p>
+                <p className="text-2xs leading-relaxed text-muted-foreground">
+                  {t("auth.sso_waiting_hint")}
+                </p>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs"
+                  onClick={handleCancelSsoLogin}
                 >
                   {t("auth.wechat_cancel")}
                 </Button>

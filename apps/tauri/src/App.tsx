@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { CoreProvider } from "@lynse/core/platform";
+import { configureLynseSso } from "@lynse/core/auth/lynse-sso";
 import { ThemeProvider } from "@lynse/ui/components/common/theme-provider";
 import { Toaster } from "@lynse/ui/components/ui/sonner";
 import { AuthGate } from "@lynse/views/auth/auth-gate";
@@ -23,6 +24,22 @@ import { Loading } from "./Loading";
 import { withPrivatePluginLocales } from "./private-plugins";
 
 const resources = withPrivatePluginLocales(RESOURCES);
+
+// Account-center SSO (public OAuth client, PKCE only — no secret in the app).
+// Both vars must be set for the "Sign in with Lynse" entry to appear on the
+// login page; the callback page is intercepted by the embedded auth window,
+// so it never needs to resolve.
+configureLynseSso(
+  import.meta.env.VITE_LYNSE_SSO_URL && import.meta.env.VITE_LYNSE_SSO_CLIENT_ID
+    ? {
+        origin: import.meta.env.VITE_LYNSE_SSO_URL,
+        clientId: import.meta.env.VITE_LYNSE_SSO_CLIENT_ID,
+        redirectUri:
+          import.meta.env.VITE_LYNSE_SSO_REDIRECT_URI ||
+          `${import.meta.env.VITE_LYNSE_SSO_URL}/oauth/desktop-callback`,
+      }
+    : null,
+);
 
 // Legacy feature-exposure overrides do not select login methods or servers.
 // Development and packaged apps share the standard default.

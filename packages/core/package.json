@@ -17,6 +17,7 @@
     "./auth/qrcode": "./auth/qrcode.ts",
     "./auth/session": "./auth/session.ts",
     "./auth/sms": "./auth/sms.ts",
+    "./auth/lynse-sso": "./auth/lynse-sso.ts",
     "./auth/wechat": "./auth/wechat.ts",
     "./auth/workbuddy": "./auth/workbuddy.ts",
     "./workbuddy": "./workbuddy/index.ts",

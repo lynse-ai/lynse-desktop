@@ -5,10 +5,11 @@ export const metadata = {
 };
 
 // Thin wrapper around the shared WeChat callback view (state check + code
-// exchange). Production uses the backend-callback architecture — WeChat
-// redirects to the backend's /auth/login, which 302s onto the landing
-// pages — so this route is idle there; it stays for deployments whose
-// `redirect_uri` points at this origin instead.
+// exchange). WeChat's callback-domain rule fixes the authorize URL's
+// `redirect_uri` to https://api.lynse.cn/auth/login, so production nginx 302s
+// that callback here with the one-time `code`/`state`. This route exchanges
+// the code through POST /api/auth/login — the same backend call the desktop
+// shell makes from its embedded auth window.
 export default function WechatCallbackRoute() {
   return <WechatCallback />;
 }

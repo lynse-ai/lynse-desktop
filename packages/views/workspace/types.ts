@@ -632,7 +632,7 @@ export interface PreSignedUrlVO {
  *  producing duplicate cloud records. */
 export interface SyncPreUploadReq {
   fileId: string;
-  /** Saved filename including extension, e.g. "20260923_142501.wav". */
+  /** Saved filename including extension, e.g. "20260923_142501.m4a". */
   saveFilename: string;
   /** File size in bytes. */
   fileSize: number;

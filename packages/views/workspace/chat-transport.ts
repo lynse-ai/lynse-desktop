@@ -1,5 +1,3 @@
-import { isWikiEnabled } from "../feature-flags";
-import { getWorkbenchApi, useWorkbench } from "../workbench/api";
 import type { DesktopContext } from "../workbench/types";
 import type {
   ChatProvider,
@@ -198,17 +196,15 @@ function pollSuggestions(data: ChatPollTaskResponse): string[] | undefined {
   return cleaned.length ? cleaned : undefined;
 }
 
-/** Keep stream, busy retries and poll recovery on the same authenticated turn. */
+/**
+ * Per product decision (2026-11-20): assistant chat must NEVER attach local
+ * knowledge-base evidence. The workbench recall pipeline remains available to
+ * the workbench UI, but chat turns always ride without `desktopContext` — this
+ * also removes the pre-submit recall latency from every turn.
+ */
 function hydrateDesktopContext(opts: SendChatOptions): Promise<void> | undefined {
-  const bridge = getWorkbenchApi();
   opts.desktopContext = null;
-  const consent = useWorkbench.getState().status;
-  if (!isWikiEnabled() || !bridge || opts.signal?.aborted || !consent?.enabled || !consent.allowAi || !consent.initialComplete) return;
-  const scope = consent.scope;
-  return bridge.context(opts.query).then((evidence) => {
-    const state = useWorkbench.getState().status;
-    if (isWikiEnabled() && !opts.signal?.aborted && state?.enabled && state.allowAi && state.initialComplete && state.updatedAt === consent.updatedAt && state.scope === scope) opts.desktopContext = evidence;
-  }).catch(() => { /* Optional recall failure does not prevent assistant use. */ });
+  return undefined;
 }
 
 function chatTurnBody(opts: SendChatOptions): Record<string, unknown> {
@@ -224,7 +220,8 @@ function chatTurnBody(opts: SendChatOptions): Record<string, unknown> {
   if (modelOverride) body.modelOverride = modelOverride;
   if (opts.images?.length) body.images = opts.images;
   if (opts.documents?.length) body.documents = opts.documents;
-  if (isWikiEnabled() && opts.desktopContext?.sources.length) body.desktopContext = opts.desktopContext;
+  // desktopContext is intentionally never sent: chat must not carry local
+  // knowledge-base evidence (product decision 2026-11-20).
   if (confirmToken) {
     body.confirm_token = confirmToken;
     body.confirmToken = confirmToken;

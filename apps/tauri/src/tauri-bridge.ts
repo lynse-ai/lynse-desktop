@@ -852,6 +852,18 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
           callback(event.payload),
         ),
     },
+    // Account-center SSO window (generic OAuth): same interception pattern,
+    // but the authorize URL, registered callback and expected state are all
+    // caller-supplied (the callback page never actually loads).
+    oauth: {
+      openAuthWindow: (url: string, callback: string, state: string) =>
+        command<void>("oauth_auth_window", { url, callback, state }),
+      closeAuthWindow: () => command<void>("oauth_auth_window_close"),
+      onAuthCallback: (callback: (callbackUrl: string) => void) =>
+        getCurrentWebview().listen<string>("oauth-auth-callback", (event) =>
+          callback(event.payload),
+        ),
+    },
   },
     attachment: {
       saveBytes: async (bytes, fileName) => {

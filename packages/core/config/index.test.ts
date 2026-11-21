@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { CLOUDBASE_AGENT_URL, CLOUDBASE_MEMORY_URL, agentUrlForApiUrl, memoryUrlForApiUrl } from "./index";
+import {
+  CLOUDBASE_AGENT_URL,
+  CLOUDBASE_MEMORY_URL,
+  agentUrlForApiUrl,
+  defaultApiUrlForEdition,
+  memoryUrlForApiUrl,
+} from "./index";
+
+describe("edition → gateway mapping", () => {
+  it("sends each packaged edition to its own production account system", () => {
+    // The two editions are separate account systems; DEFAULT_API_URL falls
+    // back to this mapping whenever a build forgets NEXT_PUBLIC_API_URL.
+    expect(defaultApiUrlForEdition("cn")).toBe("https://api.lynse.cn");
+    expect(defaultApiUrlForEdition("intl")).toBe("https://api-en.lynse.ai");
+  });
+});
 
 describe("login environment service routing", () => {
   it("routes every gateway to the single production CloudBase deployment", () => {

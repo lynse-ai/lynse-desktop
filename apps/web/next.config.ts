@@ -35,6 +35,15 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_APP_VERSION: webPkg.version,
   },
   transpilePackages: ["@lynse/core", "@lynse/ui", "@lynse/views"],
+  async headers() {
+    return [{
+      source: "/login/authorize",
+      headers: [
+        { key: "Referrer-Policy", value: "no-referrer" },
+        { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+      ],
+    }];
+  },
   // The www.lynse.ai deployment serves the app under the /app subpath of the
   // marketing site's origin (same-origin requirement of the MCP bridge).
   // Build-time env keeps local dev and other shells on the root path.

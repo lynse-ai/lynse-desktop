@@ -5,12 +5,23 @@
 ## 构建与部署
 
 ```sh
-# 1. 构建（basePath /app + gapp 测试后端 + 正式登录渠道）
-# ⚠️ NEXT_PUBLIC_LYNSE_EDITION=intl 必须带：未设置时编译期回退 cn 版
-# （登录页变手机+微信、连接器变 Feishu 集，2026-11-18 曾因此发错版）
+# 1. 构建（basePath /app + 海外生产后端 api-en + intl 版 + Firebase 谷歌登录）
+# ⚠️ 2026-11-18 下午定案：海外 web 后端 = api-en.lynse.ai（生产），lynse-mcp 桥接
+# （/etc/lynse-mcp-ai-test/environment 的 LYNSE_ACCOUNT_API_ORIGIN）已同步切 api-en。
+# 勿回退 gapp.lynse.cn：gapp 无 Google 验签，2026-11-18 上午回退过一次致谷歌登录失效。
+# Firebase 四值必须带（项目 lynse-6312d，缺失则 Google 按钮消失）；
+# NEXT_PUBLIC_LYNSE_EDITION=intl 必须带（缺失编译期回退 cn 版）。
+# 代码层兜底（2026-11-18 起）：core/config 的 defaultApiUrlForEdition 会按
+# edition 落默认网关（intl→api-en.lynse.ai / cn→api.lynse.cn），显式
+# NEXT_PUBLIC_API_URL 仍优先——双保险都保留，勿因兜底省略任一环境变量。
 NEXT_PUBLIC_LYNSE_EDITION=intl NEXT_PUBLIC_BASE_PATH=/app \
-  NEXT_PUBLIC_API_URL=https://gapp.lynse.cn \
-  NEXT_PUBLIC_BUILD_CHANNEL=official pnpm --filter @lynse/web build
+  NEXT_PUBLIC_API_URL=https://api-en.lynse.ai \
+  NEXT_PUBLIC_BUILD_CHANNEL=official \
+  NEXT_PUBLIC_FIREBASE_API_KEY=AIzaSyCbglCTXnSCd51GBKW4zlGiUogbWn-5p1A \
+  NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=lynse-6312d.firebaseapp.com \
+  NEXT_PUBLIC_FIREBASE_PROJECT_ID=lynse-6312d \
+  NEXT_PUBLIC_FIREBASE_APP_ID=1:602313552538:web:344447a428d7189dbee523 \
+  pnpm --filter @lynse/web build
 
 # 2. 组装 standalone bundle（monorepo 布局：server.js 在 apps/web/ 下）
 BUNDLE=/tmp/lynse-web-bundle
@@ -40,6 +51,7 @@ deploy/www-lynse-ai/deploy.sh "$BUNDLE"
 
 ## 发版记录
 
+- 2026-11-18 下午：bundle 20261118-132823。API 切回 **api-en.lynse.ai（生产）** + intl + Firebase 四值，Google 登录恢复（真机验证：弹窗→选账号→直接进应用）；同步把 lynse-mcp 桥接账号系统 `/etc/lynse-mcp-ai-test/environment` 的 `LYNSE_ACCOUNT_API_ORIGIN` 从 gapp 切到 api-en（授权管理页真机验证正常，授权记录从零开始）。上午 bundle 20261118-125738（3bbfa5d1 + intl，API 仍指 gapp）是为修 cn 回退问题，但其 gapp 指向 + 无 Firebase 配置导致谷歌登录失效，已由本次发版取代。
 - 2026-11-18：bundle 20261118-125738，tar sha256 7b0eb78d…（3bbfa5d1 + `NEXT_PUBLIC_LYNSE_EDITION=intl`：修复登录页/连接器误用 cn 版——此前构建命令漏该环境变量，编译期回退 cn）。API 仍指向 gapp 测试后端（MCP 桥接一致性约束，见下节）。
 
 ## 版本序列

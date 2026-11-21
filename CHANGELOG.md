@@ -19,6 +19,32 @@
 > advertised it (its manifest mirror failed and the rollout was cancelled), so
 > that work plus the todo card redesign shipped together as 1.2.7.
 
+## 1.2.14 (2026-11-21)
+
+### New Features
+
+- Sign in with your Lynse account: the login page gains account-center SSO (OAuth with PKCE, no app secret) — desktop completes authorization in an embedded window, web via redirect, and the account-center session unlocks one-click sign-in for companion services.
+- Agent authorization management (previously MCP-only): review new device connections with a one-time code on the web console, see CLI connections alongside MCP apps with their status (valid / expired / reset required), and unbind or reset grants — resetting invalidates existing tokens immediately.
+- Knowledge-base memory distillation: memory items distilled while organizing are no longer discarded — they land in a local store and MEMORY.md becomes a budgeted dashboard of memory observations and open questions; workbench search and AI review recall these memories with one-click jumps back to the exact meeting moment; a knowledge-base "purpose" steers what gets remembered; idle nights merge duplicates and fix clear contradictions while original rows stay traceable.
+
+### Improvements
+
+- Completed recordings can auto-save: with "remember my choice" enabled the completion dialog is skipped — the recording lands locally and cloud uploads start on their own when that was the remembered choice; a failed auto-save still returns to the dialog instead of stranding audio.
+- New recordings default to M4A (previously WAV): much smaller files with the same compatibility.
+- Wiki topic storage is sharded per topic: large knowledge bases start and save noticeably faster with lower memory use.
+
+### 新功能
+
+- 使用 Lynse 账号登录：登录页新增账号中心 SSO（OAuth + PKCE 公共客户端，应用侧无密钥）——桌面端在内嵌授权窗口完成登录，网页端经跳转完成，账号中心会话也为配套服务解锁一键登录。
+- Agent 授权管理（原「MCP 授权管理」）：网页控制台用一次性授权码审批新设备接入，授权列表同时呈现 CLI 连接与 MCP 应用及其状态（有效 / 过期 / 待重新授权），支持解绑与重置——重置后现有令牌立即失效。
+- 知识库记忆沉淀：整理过程中提炼的记忆条目不再丢弃——本地记忆库落盘，MEMORY.md 收敛为带预算的「记忆观察 + 开放问题」仪表盘；工作台搜索与 AI 回顾可召回这些记忆并一键跳回会议原声；设置知识库「用途」后，记忆提取围绕该目标进行；夜间空闲时段自动合并重复记忆、纠正明显矛盾，原始记录保持可追溯。
+
+### 改进
+
+- 录音完成可自动保存：勾选「记住选择」后不再弹窗——录音自动落本地，记住的是「保存到云」时自动开始上传；自动保存失败仍会回到完成弹窗，不会静默丢失音频。
+- 新录音默认改为 M4A 格式（原 WAV），体积大幅减小，兼容性不变。
+- 知识库专题存储按专题分片：大规模知识库启动与保存明显更快、内存占用更低。
+
 ## 1.2.13 (2026-11-18)
 
 ### New Features

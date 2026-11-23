@@ -154,25 +154,34 @@ export function RecordingIslandWindow() {
 
   const collapseDrawer = useCallback(() => {
     setPhase("closing");
+    // Start window shrinking concurrently with drawer fade-out so content
+    // and native window land together without an awkward 180ms empty void.
+    const next: IslandPhase = pointerInside.current && notchStyle ? "controls" : notchStyle ? "mini" : "controls";
+    sizeForPhase(next);
+
     if (closeTimer.current) clearTimeout(closeTimer.current);
     closeTimer.current = setTimeout(() => {
       setDrawerMounted(false);
-      // If the pointer is still over the island, return to the control bar —
-      // this was the "close then island vanishes" bug. Otherwise collapse to
-      // mini (docked) / stay floating (non-notch).
-      const next: IslandPhase = pointerInside.current && notchStyle ? "controls" : notchStyle ? "mini" : "controls";
-      setPhase(next);
-      sizeForPhase(next);
+      // Re-evaluate hover state when unmounting: user might have moved the
+      // pointer in or out during the 180ms closing transition.
+      const resolvedNext: IslandPhase = pointerInside.current && notchStyle ? "controls" : notchStyle ? "mini" : "controls";
+      setPhase(resolvedNext);
+      if (resolvedNext !== next) {
+        sizeForPhase(resolvedNext);
+      }
     }, DRAWER_CLOSE_ANIMATION_MS);
   }, [notchStyle, sizeForPhase]);
 
   const toggleDrawer = useCallback(() => {
-    if (phase === "drawer" || phase === "closing") {
+    if (phase === "drawer") {
       collapseDrawer();
       return;
     }
     clearHoverTimer();
-    if (closeTimer.current) clearTimeout(closeTimer.current);
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = undefined;
+    }
     // Grow the window first so the drawer fades into real space.
     void api?.setIslandExpanded(true, "drawer").catch(() => {});
     setDrawerMounted(true);
@@ -189,6 +198,17 @@ export function RecordingIslandWindow() {
       collapseDrawer();
     }
   }, [view.state, collapseDrawer]);
+
+  // Pressing Escape closes the expanded drawer.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && phase === "drawer") {
+        collapseDrawer();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [phase, collapseDrawer]);
 
   useEffect(
     () => () => {

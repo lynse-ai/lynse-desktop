@@ -17,8 +17,13 @@ export function ChatActivity({
 }) {
   const { t } = useTranslation();
   return (
-    <span className={cn("flex min-h-6 items-center gap-2 text-muted-foreground", className)}>
-      <ActivityIndicator />
+    <span
+      className={cn(
+        "inline-flex min-h-7 items-center gap-2 rounded-lg border border-border/50 bg-muted/30 px-3 py-1 text-xs text-muted-foreground shadow-2xs backdrop-blur-sm animate-in fade-in duration-150",
+        className
+      )}
+    >
+      <ActivityIndicator className="text-primary" />
       {status ? (
         <WaitingText status={status} startedAt={startedAt} />
       ) : (

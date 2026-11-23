@@ -23,8 +23,11 @@ import { useNavigation } from "../navigation";
  * after a launch, so a deadline that passed while the app was closed still
  * announces.
  *
- * In-app: sonner toasts with a jump action. Desktop additionally fires a
- * system notification through the bridge when OS permission is granted.
+ * The unified surface is the OS notification center (desktop bridge):
+ * in-app popups overflow the window when several long titles land at once.
+ * The in-app sonner toast — with a jump action — survives only as the
+ * fallback on the web and while OS permission is missing (the first
+ * firing reminder raises the prompt once; a denial keeps the fallback).
  * The whole system is opt-out via the bell toggle on the todo page, whose
  * enable path is also where the OS prompt is requested.
  */
@@ -90,23 +93,31 @@ export function TodoDueRemindersWatcher() {
       if (due.length === 0) return;
       writeNotifiedMap(updateNotified(due, todos, notified));
 
+      // The unified surface is the OS notification center; the in-app toast
+      // (with its jump action) only covers the web and an ungranted desktop
+      // permission, where a several-titles batch would overflow the window.
       const jump = () => navigate.push("/todo");
+      const toastFallback = (title: string, description?: string) =>
+        toast(title, { description, duration: 8000, action: { label: t("todo.due_open_page"), onClick: jump } });
+
       if (due.length === 1) {
         const first = due[0];
         if (!first) return;
         const { todo } = first;
         const time = formatDueDisplay(todo);
-        const description = time ? t("todo.due_toast_body", { time }) : undefined;
-        toast(todo.title, { description, duration: 8000, action: { label: t("todo.due_open_page"), onClick: jump } });
-        notifySystem(t("todo.due_notification_title"), todo.title);
+        const timeText = time ? t("todo.due_toast_body", { time }) : undefined;
+        void notifyDue(
+          t("todo.due_notification_title"),
+          timeText ? `${todo.title} · ${timeText}` : todo.title,
+          () => toastFallback(todo.title, timeText),
+        );
       } else {
-        const titles = due.map(({ todo }) => todo.title).join("、");
-        toast(t("todo.due_batch_title", { n: due.length }), {
-          description: titles,
-          duration: 8000,
-          action: { label: t("todo.due_open_page"), onClick: jump },
-        });
-        notifySystem(t("todo.due_batch_title", { n: due.length }), titles);
+        const titles = due.map(({ todo }) => todo.title);
+        // Keep the OS notification body readable — list the first few only.
+        const body = titles.slice(0, 5).join("、") + (titles.length > 5 ? "…" : "");
+        void notifyDue(t("todo.due_batch_title", { n: due.length }), body, () =>
+          toastFallback(t("todo.due_batch_title", { n: due.length }), titles.join("、")),
+        );
       }
     },
     [t, navigate],
@@ -130,9 +141,34 @@ export function TodoDueRemindersWatcher() {
   return null;
 }
 
-function notifySystem(title: string, body: string): void {
+/** Send a due reminder through the OS notification center when the desktop
+ *  permission is granted; otherwise run the in-app toast fallback. When the
+ *  OS surface exists but was never asked, raise the prompt once so future
+ *  reminders land in the notification center (a denial just keeps the
+ *  fallback — the request itself is a silent no-op then). */
+async function notifyDue(title: string, body: string, fallback: () => void): Promise<void> {
   const api = todoNotificationsApi();
-  api?.send?.(title, body).catch(() => {
-    /* OS surface unavailable — the in-app toast already fired */
-  });
+  if (!api) {
+    fallback();
+    return;
+  }
+  let granted = false;
+  try {
+    granted = (await api.status?.()) === "granted";
+    const request = api.request;
+    if (!granted && request) request().catch(() => {
+      /* prompt failed — keep the toast fallback */
+    });
+  } catch {
+    /* treat as ungranted */
+  }
+  if (!granted) {
+    fallback();
+    return;
+  }
+  try {
+    await api.send?.(title, body);
+  } catch {
+    fallback();
+  }
 }

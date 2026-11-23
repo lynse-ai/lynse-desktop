@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useLayoutEffect, useState, useMemo } from "react";
-import { X, Send, FileText, Plus, Square, Clock, Image as ImageIcon, Headphones } from "../../icons";
+import { X, Send, FileText, Plus, Square, Clock, Image as ImageIcon, Headphones, Copy, Check } from "../../icons";
 import { Button } from "@lynse/ui/components/ui/button";
 import { Input } from "@lynse/ui/components/ui/input";
 import { useAutoScroll } from "@lynse/ui/hooks/use-auto-scroll";
@@ -64,11 +64,19 @@ export function ChatPanel() {
   const viewMessages = useMemo(() => viewActiveId ? messages : [], [viewActiveId, messages]);
   const viewLoading = !!viewActiveId && isLoading;
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const images = useChatImages(`panel:${selectedItemId}:${viewActiveId ?? "new"}`);
   const scrollRef = useRef<HTMLDivElement>(null);
   const { t } = useTranslation();
   const { data: files } = useFiles({ pageSize: 200 });
+
+  const handleCopyMessage = (id: string, text: string) => {
+    if (!text) return;
+    void navigator.clipboard?.writeText(text);
+    setCopiedMessageId(id);
+    setTimeout(() => setCopiedMessageId(null), 2000);
+  };
 
   useLayoutEffect(() => {
     setInput("");
@@ -224,11 +232,11 @@ export function ChatPanel() {
                 </div>
               )}
               <div
-                className={`max-w-[85%] rounded-lg px-3 py-2 text-xs leading-relaxed ${
+                className={
                   msg.role === "user"
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-muted text-foreground"
-                }`}
+                    ? "max-w-[85%] rounded-2xl rounded-br-sm bg-primary px-3.5 py-2.5 text-xs leading-relaxed text-primary-foreground shadow-2xs"
+                    : "w-full py-0.5 text-xs leading-relaxed text-foreground"
+                }
               >
                 {msg.role === "user" ? (
                   <>
@@ -257,53 +265,71 @@ export function ChatPanel() {
                       <span className="text-muted-foreground">{msg.status || "…"}</span>
                     )}
                   </>
-                ) : msg.content || msg.error ? (
-                  <ChatReplyBody message={msg} isStreaming={messageIsStreaming} />
-                ) : msg.attachments?.length || msg.sources?.length || msg.humanSupportLink?.url || msg.connectionRequests?.length ? (
-                  // Attachment-only reply (empty body server-side): the cards
-                  // render below — don't keep "typing" forever.
-                  null
-                ) : showActivity ? (
-                  <ChatActivity status={msg.status} startedAt={msg.timestamp} />
-                ) : null}
-                {msg.role === "assistant" && msg.content && msg.status && showActivity && (
-                  <ChatActivity status={msg.status} startedAt={msg.timestamp} className="mt-2 text-3xs" />
-                )}
-                {msg.role === "assistant" && msg.humanSupportLink?.url && (
-                  <a
-                    href={msg.humanSupportLink.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className={`mt-2 flex w-fit items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-3xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent ${
-                      revealed ? "animate-in fade-in duration-300 delay-[350ms] fill-mode-backwards" : ""
-                    }`}
-                  >
-                    <Headphones className="size-3 shrink-0 text-primary/70" />
-                    {msg.humanSupportLink.label?.trim() || t("chat.contact_support")}
-                  </a>
-                )}
-                {msg.role === "assistant" && msg.confirm && (
-                  <div className="mt-2">
-                    <ConfirmCard
-                      confirm={msg.confirm}
-                      onSelect={(value) => answerConfirm(msg.id, value, getWorkspaceState().selectedItemId)}
-                      onDismiss={() => {
-                        if (getWorkspaceState().selectedItemId === selectedItemId) dismissConfirm(msg.id);
-                      }}
-                    />
-                  </div>
-                )}
-                {msg.role === "assistant" ? (
-                  <div
-                    className={
-                      revealed ? "animate-in fade-in duration-300 delay-[350ms] fill-mode-backwards" : undefined
-                    }
-                  >
-                    <ChatAttachments attachments={msg.attachments} compact />
-                    {!!msg.connectionRequests?.length && <ChatConnectionCards requests={msg.connectionRequests} messageId={msg.id} />}
-                  </div>
                 ) : (
-                  <ChatAttachments attachments={msg.attachments} compact />
+                  <>
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <AssistantAvatar size={20} />
+                        <span className="text-2xs font-semibold text-foreground/90">{t("chat.assistant_lynse")}</span>
+                        <span className="rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.2 text-3xs font-medium text-primary">
+                          {t("chat.assistant_badge")}
+                        </span>
+                      </div>
+                      {msg.content && !msg.error && (
+                        <button
+                          type="button"
+                          onClick={() => handleCopyMessage(msg.id, msg.content)}
+                          className="rounded p-1 text-muted-foreground/60 hover:bg-muted hover:text-foreground transition-colors"
+                          title={copiedMessageId === msg.id ? t("chat.copied") : t("chat.copy")}
+                          aria-label={copiedMessageId === msg.id ? t("chat.copied") : t("chat.copy")}
+                        >
+                          {copiedMessageId === msg.id ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
+                        </button>
+                      )}
+                    </div>
+                    {msg.content || msg.error ? (
+                      <ChatReplyBody message={msg} isStreaming={messageIsStreaming} className="chat-reply-content" />
+                    ) : msg.attachments?.length || msg.sources?.length || msg.humanSupportLink?.url || msg.connectionRequests?.length ? (
+                      null
+                    ) : showActivity ? (
+                      <ChatActivity status={msg.status} startedAt={msg.timestamp} />
+                    ) : null}
+                    {msg.content && msg.status && showActivity && (
+                      <ChatActivity status={msg.status} startedAt={msg.timestamp} className="mt-2 text-3xs" />
+                    )}
+                    {msg.humanSupportLink?.url && (
+                      <a
+                        href={msg.humanSupportLink.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className={`mt-2 flex w-fit items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-3xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent ${
+                          revealed ? "animate-in fade-in duration-300 delay-[350ms] fill-mode-backwards" : ""
+                        }`}
+                      >
+                        <Headphones className="size-3 shrink-0 text-primary/70" />
+                        {msg.humanSupportLink.label?.trim() || t("chat.contact_support")}
+                      </a>
+                    )}
+                    {msg.confirm && (
+                      <div className="mt-2">
+                        <ConfirmCard
+                          confirm={msg.confirm}
+                          onSelect={(value) => answerConfirm(msg.id, value, getWorkspaceState().selectedItemId)}
+                          onDismiss={() => {
+                            if (getWorkspaceState().selectedItemId === selectedItemId) dismissConfirm(msg.id);
+                          }}
+                        />
+                      </div>
+                    )}
+                    <div
+                      className={
+                        revealed ? "animate-in fade-in duration-300 delay-[350ms] fill-mode-backwards" : undefined
+                      }
+                    >
+                      <ChatAttachments attachments={msg.attachments} compact />
+                      {!!msg.connectionRequests?.length && <ChatConnectionCards requests={msg.connectionRequests} messageId={msg.id} />}
+                    </div>
+                  </>
                 )}
               </div>
               {msg.role === "assistant" && (

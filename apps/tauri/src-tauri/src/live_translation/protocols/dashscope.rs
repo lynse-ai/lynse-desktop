@@ -210,11 +210,12 @@ pub(crate) fn apply_qwen_message(
     if content.is_empty() {
         return None;
     }
-    // Qwen auto-detects utterance boundaries, so we approximate the utterance
-    // start with the latest captured audio time on this source.
-    let start_ms = ctx
-        .epoch_offset_ms
-        .saturating_add(ctx.session.last_elapsed_ms.load(std::sync::atomic::Ordering::Relaxed));
+    // Qwen auto-detects utterance boundaries and carries no provider-side
+    // clock, so the utterance start is simply the capture timeline — the
+    // epoch offset is only for providers that timestamp from their own
+    // attach moment (Volcengine AST); adding it here doubled every qwen
+    // timestamp whenever translation was attached mid-session.
+    let start_ms = ctx.session.last_elapsed_ms.load(std::sync::atomic::Ordering::Relaxed);
     ingest_provider_text(
         ctx.session,
         ctx.source,
@@ -262,7 +263,11 @@ fn classify_qwen_event(event_type: &str, value: &Value) -> Option<(bool, bool, S
         let text = event_text(value);
         return if event_type.ends_with(".completed") {
             Some((true, true, text))
-        } else if event_type.ends_with(".text") {
+        } else if event_type.ends_with(".text") || event_type.ends_with(".delta") {
+            // qwen3.5 streams partials as `…transcription.text`; qwen3.8
+            // renamed them to `…transcription.delta`. Both carry the rolling
+            // partial — without `.delta` here the qwen3.8 live transcript
+            // stays invisible until an utterance completes.
             Some((true, false, text))
         } else {
             None
@@ -272,7 +277,10 @@ fn classify_qwen_event(event_type: &str, value: &Value) -> Option<(bool, bool, S
         let text = event_text(value);
         return if event_type.ends_with(".done") {
             Some((false, true, text))
-        } else if event_type.ends_with(".delta") {
+        } else if event_type.ends_with(".delta") || event_type.ends_with(".text") {
+            // `.delta` is the qwen3.8 streaming form; `.text` is the
+            // qwen3.5 form (confirmed prefix + `stash` tail, see
+            // `event_text`). Both are rolling partials of the translation.
             Some((false, false, text))
         } else {
             None
@@ -283,10 +291,17 @@ fn classify_qwen_event(event_type: &str, value: &Value) -> Option<(bool, bool, S
 
 /// Extract the streamed text from a Qwen event. The field name varies by event
 /// family (`text` / `delta` / `transcript` / `content`), so try each in order.
+/// The qwen3.5-style `…​.text` partials keep the confirmed prefix in `text`
+/// (often empty) and the in-flight tail in `stash` — concatenate both so the
+/// rolling partial shows the utterance instead of an empty string.
 fn event_text(value: &Value) -> String {
     for key in ["text", "delta", "transcript", "content"] {
         if let Some(text) = value.get(key).and_then(Value::as_str) {
-            return text.to_owned();
+            let mut full = text.to_owned();
+            if let Some(stash) = value.get("stash").and_then(Value::as_str) {
+                full.push_str(stash);
+            }
+            return full;
         }
     }
     String::new()

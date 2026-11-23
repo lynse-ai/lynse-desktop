@@ -59,6 +59,7 @@ export {
   Upload,           // Upload action
   Copy,             // Copy to clipboard
   Check,            // Confirm / Copied
+  CheckCircle2,     // Task completed indicator / Done column
   Pencil,           // Rename / Edit inline; screenshot annotation pen
   ArrowUpRight,     // Screenshot annotation arrow tool
   Eraser,           // Screenshot annotation eraser

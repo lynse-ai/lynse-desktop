@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo, useEffect } from "react";
-import { Plus, Calendar, Trash2, X, RefreshCw, Loader2, List, User, Columns2, Search, Bell } from "../icons";
+import { Plus, Calendar, Trash2, X, RefreshCw, Loader2, List, User, Columns2, Search, Bell, CheckCircle2 } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { SqueezePanel } from "../squeeze-panel";
 import { Button } from "@lynse/ui/components/ui/button";
@@ -25,6 +25,7 @@ import { TodoExportDialog } from "./export-action-items";
 import { TodoCardContextMenu } from "./card-context-menu";
 import { TodoCalendarView } from "./calendar-view";
 import { TodoKanbanView } from "./kanban-view";
+import { kanbanColumnFor } from "./kanban";
 import { applyTodoFilter, collectOwners, DEFAULT_FILTER, type SmartFilter } from "./filters";
 import { parseNaturalWhen } from "./natural-date";
 import {
@@ -77,10 +78,12 @@ function AddTodoInput({ onAdd }: { onAdd: (title: string) => void }) {
 
   return (
     <div className="px-6 pb-2 pt-3">
-      <div className="flex h-9 items-center gap-2 rounded-full border border-border/60 bg-muted/40 px-3.5 transition-colors focus-within:border-ring/60 focus-within:bg-background focus-within:ring-3 focus-within:ring-ring/20">
-        <Plus className="size-4 shrink-0 text-muted-foreground" />
+      <div className="flex h-9 items-center gap-2.5 rounded-xl border border-border/60 bg-card/60 px-3 transition-colors focus-within:border-ring/60 focus-within:bg-card focus-within:ring-2 focus-within:ring-ring/20 shadow-2xs">
+        <div className="flex size-5 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+          <Plus className="size-3.5" />
+        </div>
         <input
-          className="h-full flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
+          className="h-full flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground/80 outline-none"
           placeholder={t("todo.add_placeholder")}
           value={value}
           onChange={(e) => setValue(e.target.value)}
@@ -114,17 +117,21 @@ function AddTodoTrigger({ onOpen }: { onOpen: () => void }) {
             onOpen();
           }
         }}
-        className="flex h-9 cursor-pointer items-center gap-2 rounded-full border border-border/60 bg-muted/40 px-3.5 transition-colors hover:border-ring/50 hover:bg-accent/40"
+        className="group flex h-9 cursor-pointer items-center gap-2.5 rounded-xl border border-border/60 bg-card/60 px-3 shadow-2xs transition-colors hover:border-border hover:bg-card"
       >
-        <Plus className="size-4 shrink-0 text-muted-foreground" />
-        <span className="flex-1 truncate text-sm text-muted-foreground/80">
+        <div className="flex size-5 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary transition-transform group-hover:scale-105">
+          <Plus className="size-3.5" />
+        </div>
+        <span className="flex-1 truncate text-sm text-muted-foreground/80 group-hover:text-foreground/90">
           {t("inspiration.todo_placeholder")}
         </span>
+        <kbd className="pointer-events-none inline-flex h-5 items-center gap-0.5 rounded border border-border/50 bg-muted/50 px-1.5 text-3xs font-medium text-muted-foreground">
+          {isWebPlatform() ? "Enter" : "⌘↵"}
+        </kbd>
       </div>
     </div>
   );
 }
-
 
 /** Non-owner smart filter chips, in row order. */
 const FILTER_CHIPS: { kind: Exclude<SmartFilter["kind"], "owner">; labelKey: string }[] = [
@@ -136,9 +143,9 @@ const FILTER_CHIPS: { kind: Exclude<SmartFilter["kind"], "owner">; labelKey: str
 ];
 
 const CHIP_BASE =
-  "rounded-full border px-2.5 py-1 text-xs transition-colors";
-const CHIP_ON = "border-primary/40 bg-primary/10 text-accent-brand-text";
-const CHIP_OFF = "border-border text-muted-foreground hover:text-foreground";
+  "rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors";
+const CHIP_ON = "border-primary/40 bg-primary/10 text-primary";
+const CHIP_OFF = "border-border/50 bg-muted/20 text-muted-foreground hover:bg-muted/40 hover:text-foreground";
 
 /**
  * Search input + smart-filter chips between the add bar and the views.
@@ -152,86 +159,92 @@ function FilterBar({
   query,
   onQueryChange,
   owners,
+  trailing,
 }: {
   filter: SmartFilter;
   onFilterChange: (filter: SmartFilter) => void;
   query: string;
   onQueryChange: (query: string) => void;
   owners: string[];
+  trailing?: React.ReactNode;
 }) {
   const { t } = useTranslation();
   const ownerActive = filter.kind === "owner";
 
   return (
-    <div className="flex flex-wrap items-center gap-2 px-6 pb-2">
-      <div className="flex h-8 w-full max-w-60 items-center gap-1.5 rounded-full border border-border/60 bg-muted/40 px-3 transition-colors focus-within:border-ring/60 focus-within:bg-background">
-        <Search className="size-3.5 shrink-0 text-muted-foreground" />
-        <input
-          className="h-full min-w-0 flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
-          placeholder={t("todo.search_placeholder")}
-          value={query}
-          onChange={(e) => onQueryChange(e.target.value)}
-        />
-        {query && (
-          <button
-            type="button"
-            aria-label={t("todo.cancel")}
-            onClick={() => onQueryChange("")}
-            className="shrink-0 rounded p-0.5 hover:bg-accent/50"
-          >
-            <X className="size-3 text-muted-foreground" />
-          </button>
+    <div className="flex flex-wrap items-center justify-between gap-2 px-6 pb-2.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex h-8 w-56 items-center gap-1.5 rounded-lg border border-border/60 bg-muted/30 px-2.5 transition-colors focus-within:border-ring/60 focus-within:bg-background">
+          <Search className="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            className="h-full min-w-0 flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
+            placeholder={t("todo.search_placeholder")}
+            value={query}
+            onChange={(e) => onQueryChange(e.target.value)}
+          />
+          {query && (
+            <button
+              type="button"
+              aria-label={t("todo.cancel")}
+              onClick={() => onQueryChange("")}
+              className="shrink-0 rounded p-0.5 hover:bg-accent/50"
+            >
+              <X className="size-3 text-muted-foreground" />
+            </button>
+          )}
+        </div>
+
+        {FILTER_CHIPS.map(({ kind, labelKey }) => {
+          const active = filter.kind === kind;
+          return (
+            <button
+              key={kind}
+              type="button"
+              aria-pressed={active}
+              onClick={() => onFilterChange(active ? DEFAULT_FILTER : ({ kind } as SmartFilter))}
+              className={`${CHIP_BASE} ${
+                active
+                  ? kind === "overdue"
+                    ? "border-destructive/40 bg-destructive/10 text-destructive"
+                    : CHIP_ON
+                  : CHIP_OFF
+              }`}
+            >
+              {t(labelKey)}
+            </button>
+          );
+        })}
+
+        {owners.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              type="button"
+              aria-pressed={ownerActive}
+              className={`${CHIP_BASE} ${ownerActive ? CHIP_ON : CHIP_OFF} inline-flex items-center gap-1`}
+            >
+              <User className="size-3" />
+              <span className="max-w-32 truncate">
+                {ownerActive ? filter.owner : t("todo.filter_owner")}
+              </span>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="max-h-64 overflow-y-auto">
+              {owners.map((owner) => (
+                // Base UI menu items fire onClick only (onSelect never does).
+                <DropdownMenuItem key={owner} onClick={() => onFilterChange({ kind: "owner", owner })}>
+                  <span className="truncate">{owner}</span>
+                </DropdownMenuItem>
+              ))}
+              {ownerActive && (
+                <DropdownMenuItem onClick={() => onFilterChange(DEFAULT_FILTER)}>
+                  {t("todo.filter_reset")}
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
       </div>
 
-      {FILTER_CHIPS.map(({ kind, labelKey }) => {
-        const active = filter.kind === kind;
-        return (
-          <button
-            key={kind}
-            type="button"
-            aria-pressed={active}
-            onClick={() => onFilterChange(active ? DEFAULT_FILTER : ({ kind } as SmartFilter))}
-            className={`${CHIP_BASE} ${
-              active
-                ? kind === "overdue"
-                  ? "border-destructive/40 bg-destructive/10 text-destructive"
-                  : CHIP_ON
-                : CHIP_OFF
-            }`}
-          >
-            {t(labelKey)}
-          </button>
-        );
-      })}
-
-      {owners.length > 0 && (
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            type="button"
-            aria-pressed={ownerActive}
-            className={`${CHIP_BASE} ${ownerActive ? CHIP_ON : CHIP_OFF} inline-flex items-center gap-1`}
-          >
-            <User className="size-3" />
-            <span className="max-w-32 truncate">
-              {ownerActive ? filter.owner : t("todo.filter_owner")}
-            </span>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="max-h-64 overflow-y-auto">
-            {owners.map((owner) => (
-              // Base UI menu items fire onClick only (onSelect never does).
-              <DropdownMenuItem key={owner} onClick={() => onFilterChange({ kind: "owner", owner })}>
-                <span className="truncate">{owner}</span>
-              </DropdownMenuItem>
-            ))}
-            {ownerActive && (
-              <DropdownMenuItem onClick={() => onFilterChange(DEFAULT_FILTER)}>
-                {t("todo.filter_reset")}
-              </DropdownMenuItem>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
+      {trailing && <div className="flex items-center">{trailing}</div>}
     </div>
   );
 }
@@ -628,6 +641,7 @@ export function TodoPage() {
   // The board is the default landing view — the triage columns beat the
   // flat list for day-to-day use.
   const [viewMode, setViewMode] = useState<"list" | "kanban" | "calendar">("kanban");
+  const [showDone, setShowDone] = useState(false);
   // Smart filters + search (see filters.ts) — the local answer to Reminders'
   // smart lists; chips row sits between the add bar and the views.
   const [filter, setFilter] = useState<SmartFilter>(DEFAULT_FILTER);
@@ -653,7 +667,8 @@ export function TodoPage() {
   );
 
   /** Bell toggle: flips the persisted flag and, when enabling on desktop,
-   *  raises the OS notification prompt (in-app toasts work regardless). */
+   *  raises the OS prompt (reminders surface through the OS notification
+   *  center; the in-app toast is only the fallback while ungranted). */
   const handleToggleReminders = useCallback(async () => {
     const next = !todoRemindersEnabled();
     setTodoRemindersEnabled(next);
@@ -731,6 +746,10 @@ export function TodoPage() {
 
   // Smart filter + search apply across list / kanban / calendar.
   const visibleTodos = useMemo(() => applyTodoFilter(todos, filter, query), [todos, filter, query]);
+  const kanbanDoneCount = useMemo(
+    () => visibleTodos.filter((x) => kanbanColumnFor(x) === "done").length,
+    [visibleTodos],
+  );
   const groups = useMemo(() => groupTodos(visibleTodos), [visibleTodos]);
   const owners = useMemo(() => collectOwners(todos), [todos]);
   const selected = todos.find((x) => x.id === selectedId) ?? null;
@@ -862,6 +881,29 @@ export function TodoPage() {
             query={query}
             onQueryChange={setQuery}
             owners={owners}
+            trailing={
+              viewMode === "kanban" ? (
+                <button
+                  type="button"
+                  onClick={() => setShowDone((prev) => !prev)}
+                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
+                    showDone
+                      ? "border-primary/40 bg-primary/10 text-primary"
+                      : "border-border/60 bg-muted/30 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                  }`}
+                  title={showDone ? t("todo.kanban_hide_done") : t("todo.kanban_show_done")}
+                  aria-pressed={showDone}
+                >
+                  <CheckCircle2 className="size-3.5" />
+                  <span>{showDone ? t("todo.kanban_hide_done") : t("todo.kanban_show_done")}</span>
+                  {kanbanDoneCount > 0 && (
+                    <span className="rounded-full bg-muted/80 px-1.5 py-0.2 text-3xs font-medium tabular-nums text-muted-foreground">
+                      {kanbanDoneCount}
+                    </span>
+                  )}
+                </button>
+              ) : undefined
+            }
           />
 
           {/* List / kanban / calendar — one view at a time; the edit panel
@@ -870,6 +912,8 @@ export function TodoPage() {
             <TodoKanbanView
               todos={visibleTodos}
               selectedId={selectedId}
+              showDone={showDone}
+              onToggleShowDone={() => setShowDone((prev) => !prev)}
               onSelect={setSelectedId}
               onToggle={handleToggle}
               onMoveKanban={handleMoveKanban}

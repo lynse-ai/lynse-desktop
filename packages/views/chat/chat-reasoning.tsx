@@ -15,12 +15,13 @@ import {
   Check,
   ChevronDown,
   CircleStop,
+  Copy,
   FileSearch,
-  Lightbulb,
   Pencil,
   Plug,
   ScrollText,
   Search,
+  Sparkles,
   SquareTerminal,
   Wrench,
 } from "../icons";
@@ -75,10 +76,22 @@ const KIND_ICON: Record<ToolKind, React.ComponentType<{ className?: string }>> =
   execute: Wrench,
 };
 
+const KIND_STYLE: Record<ToolKind, { bg: string; text: string; border: string }> = {
+  think: { bg: "bg-indigo-500/10", text: "text-indigo-600 dark:text-indigo-400", border: "border-indigo-500/20" },
+  search: { bg: "bg-sky-500/10", text: "text-sky-600 dark:text-sky-400", border: "border-sky-500/20" },
+  read: { bg: "bg-amber-500/10", text: "text-amber-600 dark:text-amber-400", border: "border-amber-500/20" },
+  edit: { bg: "bg-emerald-500/10", text: "text-emerald-600 dark:text-emerald-400", border: "border-emerald-500/20" },
+  terminal: { bg: "bg-purple-500/10", text: "text-purple-600 dark:text-purple-400", border: "border-purple-500/20" },
+  task: { bg: "bg-blue-500/10", text: "text-blue-600 dark:text-blue-400", border: "border-blue-500/20" },
+  stop: { bg: "bg-rose-500/10", text: "text-rose-600 dark:text-rose-400", border: "border-rose-500/20" },
+  mcp: { bg: "bg-fuchsia-500/10", text: "text-fuchsia-600 dark:text-fuchsia-400", border: "border-fuchsia-500/20" },
+  execute: { bg: "bg-muted/80", text: "text-muted-foreground", border: "border-border/60" },
+};
+
 /** Compact running/done chip rows for every tool call in the current turn. */
 export function ToolActivity({ tools }: { tools: ChatToolUse[] }) {
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1.5">
       {tools.map((tool) => (
         <ToolChip key={tool.id} tool={tool} />
       ))}
@@ -86,32 +99,31 @@ export function ToolActivity({ tools }: { tools: ChatToolUse[] }) {
   );
 }
 
-/** One bordered tool chip: icon tile + kind label + mono name + live state. */
+/** One tool activity row: icon + kind label + mono name + live state (borderless T3 Code style). */
 function ToolChip({ tool }: { tool: ChatToolUse }) {
   const { t } = useTranslation();
   const kind = toolKind(tool.name);
   const Icon = KIND_ICON[kind];
+  const style = KIND_STYLE[kind];
   const running = tool.state === "running";
   const elapsed = useElapsedSeconds(tool.startedAt, running);
   return (
     <div
-      className="flex items-center gap-2 rounded-lg border border-border/60 bg-card/40 px-2 py-1.5 text-xs text-muted-foreground"
+      className="group flex items-center gap-2 py-0.5 px-0.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
       aria-label={t("chat.tool_activity", { tool: tool.name })}
     >
-      <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted/60">
-        <Icon className="size-3" />
-      </span>
-      <span className="shrink-0 font-medium text-foreground/80">{t(`chat.tool_${kind}`)}</span>
-      <span className="min-w-0 flex-1 truncate font-mono">{tool.name}</span>
+      <Icon className={cn("size-3.5 shrink-0", style.text)} />
+      <span className="shrink-0 font-medium text-foreground/85">{t(`chat.tool_${kind}`)}</span>
+      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-muted-foreground/75">{tool.name}</span>
       {running ? (
-        <span className="flex shrink-0 items-center gap-1.5 tabular-nums">
+        <span className="flex shrink-0 items-center gap-1.5 tabular-nums text-primary/90 text-2xs">
           {elapsed != null && <span>{t("chat.elapsed_seconds", { seconds: elapsed })}</span>}
-          <StatusGlyph activity="running" className="size-3" />
+          <StatusGlyph activity="running" className="size-3 text-primary" />
         </span>
       ) : tool.state === "error" ? (
-        <AlertCircle className="size-3 shrink-0 text-destructive" aria-label={t("chat.tool_failed")} />
+        <AlertCircle className="size-3.5 shrink-0 text-destructive" aria-label={t("chat.tool_failed")} />
       ) : (
-        <Check className="size-3 shrink-0 text-success" />
+        <Check className="size-3.5 shrink-0 text-success" />
       )}
     </div>
   );
@@ -136,7 +148,7 @@ function useElapsedSeconds(startedAt: number | undefined, running: boolean): num
 /**
  * Collapsible chain-of-thought trace. While reasoning is streaming the block
  * is pinned open with a live label and an elapsed counter; when the answer
- * starts it folds away (ZCode behavior) showing "已思考 N 秒", and the user
+ * starts it folds away (ZCode/T3 Code behavior) showing "已思考 N 秒", and the user
  * can reopen it manually. Without a `startedAt` anchor (persisted history) it
  * falls back to the static labels.
  */
@@ -155,6 +167,8 @@ export function ThinkingBlock({
   // Elapsed seconds, frozen the moment reasoning ends so the folded label
   // keeps the final duration instead of drifting with the wall clock.
   const [frozenSeconds, setFrozenSeconds] = React.useState<number | null>(null);
+  const [copied, setCopied] = React.useState(false);
+
   // The trace lives in a fixed-height scroll box (it would otherwise push the
   // whole conversation apart while streaming). `stick` tracks whether the
   // user is parked at the bottom: while they are, the box follows the stream;
@@ -189,31 +203,63 @@ export function ThinkingBlock({
   const liveSeconds = useElapsedSeconds(startedAt, Boolean(active) && startedAt != null);
   const elapsed = active ? liveSeconds : null;
 
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!text || copied) return;
+    void navigator.clipboard?.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   return (
-    <div className="w-full">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <Lightbulb className="size-3.5 shrink-0" />
-        {active ? (
-          <>
-            <ActivityLabel text={t("chat.thinking_active")} />
-            {elapsed != null && (
-              <span aria-hidden="true" className="tabular-nums">
-                · {t("chat.elapsed_seconds", { seconds: elapsed })}
-              </span>
-            )}
-          </>
-        ) : frozenSeconds != null ? (
-          <span>{t("chat.thinking_elapsed_done", { seconds: frozenSeconds })}</span>
-        ) : (
-          <span>{t("chat.thought_process")}</span>
-        )}
-        <ChevronDown className={cn("size-3 shrink-0 transition-transform", open && "rotate-180")} />
-      </button>
+    <div className="w-full py-0.5 transition-all duration-200">
+      <div className="flex w-full items-center justify-between py-1 text-xs text-muted-foreground">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-label={
+            active
+              ? t("chat.thinking_active")
+              : frozenSeconds != null
+                ? t("chat.thinking_elapsed_done", { seconds: frozenSeconds })
+                : t("chat.thought_process")
+          }
+          className="inline-flex items-center gap-1.5 text-left text-xs text-muted-foreground/80 hover:text-foreground transition-colors group cursor-pointer"
+        >
+          <Sparkles className={cn("size-3.5 shrink-0 text-muted-foreground/70 group-hover:text-primary transition-colors", active && "text-primary animate-pulse")} />
+          {active ? (
+            <div className="flex items-center gap-1.5 font-medium text-foreground/90">
+              <ActivityLabel text={t("chat.thinking_active")} />
+              {elapsed != null && (
+                <span aria-hidden="true" className="tabular-nums text-muted-foreground">
+                  · {t("chat.elapsed_seconds", { seconds: elapsed })}
+                </span>
+              )}
+            </div>
+          ) : frozenSeconds != null ? (
+            <span className="font-medium text-foreground/80">{t("chat.thinking_elapsed_done", { seconds: frozenSeconds })}</span>
+          ) : (
+            <span className="font-medium text-foreground/80">{t("chat.thought_process")}</span>
+          )}
+          <ChevronDown className={cn("size-3.5 shrink-0 text-muted-foreground/60 transition-transform duration-200", open && "rotate-180")} />
+        </button>
+
+        <div className="flex items-center gap-1 shrink-0 ml-2">
+          {open && text && (
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-3xs text-muted-foreground/70 hover:bg-muted hover:text-foreground transition-colors"
+              title={copied ? t("chat.copied") : t("chat.copy_thought")}
+              aria-label={copied ? t("chat.copied") : t("chat.copy_thought")}
+            >
+              {copied ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
+              <span>{copied ? t("chat.copied") : t("chat.copy_thought")}</span>
+            </button>
+          )}
+        </div>
+      </div>
       {open && (
         <div
           ref={scrollRef}
@@ -222,9 +268,9 @@ export function ThinkingBlock({
             if (!el) return;
             stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
           }}
-          className="mt-1.5 max-h-40 overflow-y-auto rounded-lg border border-border/60 bg-card/40 px-3 py-2 text-xs leading-5 text-muted-foreground"
+          className="border-l-2 border-border/70 pl-3.5 my-1 text-xs text-muted-foreground/80 max-h-40 overflow-y-auto"
         >
-          <div className="whitespace-pre-wrap">{text}</div>
+          <div className="whitespace-pre-wrap font-mono text-[11.5px] leading-relaxed">{text}</div>
         </div>
       )}
     </div>

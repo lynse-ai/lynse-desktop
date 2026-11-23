@@ -14,6 +14,7 @@ import {
 } from "../workspace/local-transcription";
 import type { LocalHotwordPackage, LocalVoiceprint } from "../workspace/types";
 import { SttConfigSection } from "./stt-config-section";
+import { HotwordLibraryCard } from "./hotword-library-card";
 
 /**
  * The offline-transcription settings surface (PRD §5.3①): master toggle,
@@ -168,6 +169,8 @@ export function SttSettingsSection({ onBrowseModels }: { onBrowseModels?: () => 
           )}
         </CardContent>
       </Card>
+
+      <HotwordLibraryCard />
 
       <Card>
         <CardHeader className="pb-2">

@@ -203,6 +203,11 @@ export function useRecordingSession(): UseRecordingSessionReturn {
       if (engineUrl) {
         toast(t("live_translation.engine_attached", { engine: realtimeEngineLabel(engineUrl) }));
       }
+      // The floating captions follow the session: every surface that reaches
+      // this hook (island, float dock, tray) has no subtitle button of its
+      // own, so attaching live text opens the window — closing it again
+      // stays the user's call until the next attach.
+      void api.showSubtitles(true).catch(() => undefined);
       return true;
     } catch (error) {
       toast.warning(String(error));
@@ -370,6 +375,9 @@ export function useRecordingSession(): UseRecordingSessionReturn {
         epoch: credentials.epoch,
         connections: credentials.connections,
       });
+      // Switching to a real direction (or 转写) mid-session is an explicit
+      // "I want live text now" gesture — bring the captions up with it.
+      void api.showSubtitles(true).catch(() => undefined);
       return true;
     } catch (error) {
       toast.warning(String(error));

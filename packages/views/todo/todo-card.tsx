@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Calendar, User } from "../icons";
+import { Calendar, User, Check } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { useNavigation } from "../navigation";
 import { useWorkbench } from "../workbench";
@@ -130,15 +130,24 @@ export function TodoItemCard({
           : "border-border/60 bg-card/40 hover:border-ring/40 hover:bg-accent/30"
       }`}
     >
-      <div className="flex items-start gap-2">
-        <input
-          type="checkbox"
-          checked={todo.completed}
-          onChange={(e) => { e.stopPropagation(); onToggle(); }}
-          className="mt-0.5 size-4 shrink-0 rounded border-border accent-primary"
-          onClick={(e) => e.stopPropagation()}
+      <div className="flex items-start gap-2.5">
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={todo.completed}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggle();
+          }}
+          className={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-[5px] border transition-all duration-150 ${
+            todo.completed
+              ? "border-primary bg-primary text-primary-foreground shadow-2xs"
+              : "border-border/80 bg-background/50 hover:border-primary/60 hover:bg-primary/5 active:scale-90"
+          }`}
           aria-label={t("todo.completed_toggle")}
-        />
+        >
+          {todo.completed && <Check className="size-2.5 stroke-[3]" />}
+        </button>
         {editing ? (
           <input
             ref={inputRef}
@@ -177,21 +186,23 @@ export function TodoItemCard({
         <span className="flex min-w-0 items-center gap-1.5">
           {dueText && (
             <span
-              className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 tabular-nums ${
-                overdue && !closed ? "bg-destructive/10 text-destructive" : "bg-muted/60"
+              className={`inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-3xs font-medium tabular-nums ${
+                overdue && !closed
+                  ? "border border-destructive/25 bg-destructive/10 text-destructive/90"
+                  : "border border-border/30 bg-muted/40 text-muted-foreground"
               }`}
             >
-              <Calendar className="size-3 shrink-0" />
+              <Calendar className="size-2.5 shrink-0" />
               {dueText}
             </span>
           )}
           {todo.owner && (
             <span
-              className="inline-flex min-w-0 items-center gap-1 rounded-full bg-muted/60 px-2 py-0.5"
+              className="inline-flex min-w-0 items-center gap-1 rounded-md border border-border/30 bg-muted/40 px-1.5 py-0.5 text-3xs"
               title={todo.owner}
             >
-              <User className="size-3 shrink-0" />
-              <span className="truncate">{todo.owner}</span>
+              <User className="size-2.5 shrink-0 text-muted-foreground/70" />
+              <span className="truncate max-w-28">{todo.owner}</span>
             </span>
           )}
         </span>

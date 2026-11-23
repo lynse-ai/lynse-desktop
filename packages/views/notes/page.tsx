@@ -69,7 +69,6 @@ import {
   Monitor,
   CalendarDays,
   Clock,
-  MergeUp,
   Upload,
 } from "../icons";
 import { UploadDialog } from "../workspace/upload-dialog";
@@ -874,7 +873,7 @@ export function NotesPage() {
                       {vaultSyncing ? (
                         <Loader2 className="size-4 animate-spin" />
                       ) : (
-                        <MergeUp className="size-4" />
+                        <RefreshCw className="size-4" />
                       )}
                     </IconSwap>
                   </button>

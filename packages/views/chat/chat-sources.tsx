@@ -54,24 +54,28 @@ export function ChatSources({
 
   return (
     <div className="flex items-center gap-1.5">
-      <span className="text-2xs uppercase tracking-[0.08em] text-muted-foreground/70">
-        {t("chat.sources")}
-      </span>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
-          className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/60 px-2 py-0.5 text-3xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent data-popup-open:border-primary/30 data-popup-open:bg-accent"
+          className="inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground transition-all duration-150 hover:border-primary/30 hover:bg-muted/60 hover:text-foreground data-popup-open:border-primary/40 data-popup-open:bg-accent/60"
           aria-label={t("chat.sources")}
         >
-          <FileText className="size-3 shrink-0 text-primary/70" />
-          <span>{sources.length}</span>
+          <FileText className="size-3.5 shrink-0 text-primary/80" />
+          <span className="font-medium text-foreground/80">{t("chat.sources_title")}</span>
+          <span className="rounded-full bg-primary/10 px-1.5 py-0.2 text-3xs font-medium text-primary">
+            {sources.length}
+          </span>
         </PopoverTrigger>
         <PopoverContent
           side="bottom"
           align="start"
           sideOffset={6}
-          className="w-[360px] gap-0 p-1.5"
+          className="w-[360px] gap-0 p-0 shadow-lg border-border/70 rounded-xl overflow-hidden"
         >
-          <div className="flex max-h-64 flex-col gap-1 overflow-y-auto">
+          <div className="flex items-center justify-between border-b border-border/50 bg-muted/20 px-3 py-2 text-xs font-medium text-muted-foreground">
+            <span>{t("chat.sources_title")}</span>
+            <span className="text-3xs text-muted-foreground/70">{t("chat.sources_count", { count: sources.length })}</span>
+          </div>
+          <div className="flex max-h-64 flex-col gap-1 overflow-y-auto p-1.5">
             {sources.map((source, index) => {
               // Empty placeholders fall back to the reply-table topic, then
               // resolveLabel upgrades it to the full note title (with its
@@ -85,18 +89,18 @@ export function ChatSources({
                 <button
                   key={`${source}-${index}`}
                   type="button"
-                  className="flex w-full items-center gap-2 rounded-lg border border-border/70 bg-background/60 px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent"
+                  className="group flex w-full items-center gap-2.5 rounded-lg border border-border/60 bg-background/60 p-2 text-left text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent"
                   title={label}
                   onClick={() => {
                     setOpen(false);
                     onOpen?.(source.trim() || label);
                   }}
                 >
-                  <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/10">
-                    <FileText className="size-3.5 text-primary/70" />
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 ring-1 ring-inset ring-primary/20">
+                    <FileText className="size-3.5 text-primary" />
                   </span>
-                  <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
-                  <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 flex-1 truncate font-medium text-foreground/90 group-hover:text-primary transition-colors">{label}</span>
+                  <ChevronRight className="size-3.5 shrink-0 text-muted-foreground group-hover:text-primary group-hover:translate-x-0.5 transition-all" />
                 </button>
               );
             })}

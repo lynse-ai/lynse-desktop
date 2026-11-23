@@ -38,17 +38,17 @@
 }
 
 .chat-composer {
-  border-color: var(--input);
-  background: var(--card);
-  box-shadow: var(--shadow-input);
+  border-color: color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--card) 95%, transparent);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.02);
   transition:
     border-color var(--duration-quick) var(--ease-out),
     box-shadow var(--duration-quick) var(--ease-out);
 }
 
 .chat-composer:focus-within {
-  border-color: var(--ring);
-  box-shadow: var(--shadow-input-focus);
+  border-color: color-mix(in srgb, var(--foreground) 25%, var(--border));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05), 0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -56,4 +56,35 @@
   .chat-history-offset {
     transition: none;
   }
+}
+
+/* T3 Code-inspired AI reply card styles */
+.chat-reply-content {
+  letter-spacing: -0.01em;
+  word-break: break-word;
+}
+
+.chat-reply-content p {
+  margin-block: 0.5rem;
+}
+
+.chat-reply-content p:first-child {
+  margin-top: 0;
+}
+
+.chat-reply-content p:last-child {
+  margin-bottom: 0;
+}
+
+.chat-reply-content pre {
+  margin-block: 0.75rem;
+  border-radius: var(--radius);
+}
+
+.chat-reply-content blockquote {
+  border-inline-start: 2px solid var(--primary);
+  padding-inline-start: 0.875rem;
+  margin-block: 0.5rem;
+  font-style: italic;
+  opacity: 0.9;
 }

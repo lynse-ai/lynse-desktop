@@ -24,3 +24,6 @@ export type {
   NotesUpdateInput,
   NotesUpdateResult,
 } from "./notes";
+export { listHotwords, addHotword, updateHotword, deleteHotword } from "./hotwords";
+export type { HotwordVO, AddHotwordInput, UpdateHotwordInput } from "./hotwords";
+

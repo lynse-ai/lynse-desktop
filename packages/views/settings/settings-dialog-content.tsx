@@ -25,6 +25,7 @@ import {
   Bot,
   Plug,
   Palette,
+  Tag,
 } from "../icons";
 import { cn } from "@lynse/ui/lib/utils";
 import { isWebPlatform } from "../platform";
@@ -58,6 +59,7 @@ import { CustomModelsCard, getCustomModelsApi } from "../custom-models";
 import { WorkBuddyConfigCard } from "./workbuddy-config-card";
 import { AppearanceSection } from "./appearance-settings";
 import { ContextInboxCard } from "./context-inbox-card";
+import { HotwordLibraryCard } from "./hotword-library-card";
 
 import {
   getSettingsSections,
@@ -78,6 +80,7 @@ type SettingsSectionId =
   | "account"
   | "appearance"
   | "ai_assistant"
+  | "hotwords"
   | "live_translation"
   | "auto_record"
   | "sync"
@@ -169,6 +172,14 @@ export function SettingsDialogContent({
         <McpConsoleCard />
       </>
     ),
+  });
+
+  // User custom hotwords library (cloud-backed, available on both web & desktop)
+  sections.push({
+    id: "hotwords",
+    label: t("settings.hotword_library"),
+    icon: Tag,
+    content: <HotwordLibraryCard />,
   });
 
   // Custom models: shared BYO endpoints for features that run on the user's

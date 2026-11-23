@@ -2167,6 +2167,7 @@ async fn websocket_loop(
 }
 
 
+#[derive(Debug)]
 enum ProviderEmission {
     Segment(LiveSegment),
     Segments(Vec<LiveSegment>),
@@ -4091,13 +4092,22 @@ fn fake_island_geometry(_app: &AppHandle) -> Option<island_notch::NotchGeometry>
     None
 }
 
+#[cfg(target_os = "macos")]
 fn detect_notch_on_main_thread(app: &AppHandle) -> Option<island_notch::NotchGeometry> {
+    if objc2::MainThreadMarker::new().is_some() {
+        return island_notch::detect_notch();
+    }
     let (sender, receiver) = std::sync::mpsc::channel();
     app.run_on_main_thread(move || {
         let _ = sender.send(island_notch::detect_notch());
     })
     .ok()?;
     receiver.recv().ok().flatten()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn detect_notch_on_main_thread(_app: &AppHandle) -> Option<island_notch::NotchGeometry> {
+    None
 }
 
 /// The cached notch geometry when the notch style is active.
@@ -4159,10 +4169,10 @@ static ISLAND_PENDING_REVEAL: AtomicBool = AtomicBool::new(false);
 /// pill for a session that is already gone.
 static ISLAND_REVEAL_WANTED: AtomicBool = AtomicBool::new(false);
 
-/// Quintic ease-out — the "scroll snaps down" curve: a fast departure that
-/// settles silky-smooth into place.
-fn ease_out_quint(t: f64) -> f64 {
-    1.0 - (1.0 - t).powi(5)
+/// Quartic ease-out — fast initial response with smooth, natural deceleration,
+/// avoiding the sluggish tail of higher-order polynomials.
+fn ease_out_quart(t: f64) -> f64 {
+    1.0 - (1.0 - t).powi(4)
 }
 
 /// Steps the island window towards `target_size` (logical width and height)
@@ -4197,7 +4207,7 @@ fn animate_island_size(
     let start = Instant::now();
     loop {
         let linear = start.elapsed().as_secs_f64() * 1000.0 / duration_ms;
-        let eased = ease_out_quint(linear.min(1.0));
+        let eased = ease_out_quart(linear.min(1.0));
         let width = from_width + (target_width - from_width) * eased;
         let height = from_height + (target_height - from_height) * eased;
         let _ = window.set_size(tauri::LogicalSize::new(width, height));
@@ -4533,6 +4543,9 @@ fn reveal_recording_island(app: &AppHandle, window: &tauri::WebviewWindow) {
         ISLAND_PENDING_REVEAL.store(true, Ordering::Release);
         return;
     }
+    // Re-detect display and notch geometry dynamically on every reveal,
+    // ensuring multi-monitor changes or resolution shifts stay aligned.
+    refresh_island_notch_geometry(app);
     position_recording_island(app, window);
     let anchor = island_anchor(app);
     let scale = window.scale_factor().unwrap_or(1.0);
@@ -5856,6 +5869,58 @@ mod tests {
         assert!(emission.is_some(), "recognition must survive transcript-only mode");
         // With translation requested for real, the same translation frame lands.
         assert!(qwen_message(&session, AudioSource::Mic, 0, 0, delta, false).is_some());
+    }
+
+    #[test]
+    fn qwen38_transcription_delta_partials_reach_the_transcript() {
+        // qwen3.8 streams the rolling source transcript as
+        // `conversation.item.input_audio_transcription.delta` (qwen3.5 used
+        // `…​.text`). Dropping `.delta` frames left the live transcript empty
+        // until an utterance completed — issue #34's "no dynamic text".
+        let session = live_session();
+        let partial =
+            r#"{"type":"conversation.item.input_audio_transcription.delta","delta":"今天"}"#;
+        let emission = qwen_message(&session, AudioSource::Mic, 0, 0, partial, false);
+        let Some(ProviderEmission::Segment(segment)) = emission else {
+            panic!("qwen3.8 transcription delta must produce a segment update");
+        };
+        assert_eq!(segment.recognized_text, "今天");
+        assert!(!segment.is_final);
+    }
+
+    #[test]
+    fn qwen35_text_partials_read_text_plus_stash() {
+        // The qwen3.5-style partial keeps the confirmed prefix in `text`
+        // (often empty) and the in-flight tail in `stash`; reading only
+        // `text` yields an empty string that the empty-content filter then
+        // silently drops.
+        let session = live_session();
+        let partial =
+            r#"{"type":"conversation.item.input_audio_transcription.text","text":"","stash":"今天天气真好"}"#;
+        let emission = qwen_message(&session, AudioSource::Mic, 0, 0, partial, false);
+        let Some(ProviderEmission::Segment(segment)) = emission else {
+            panic!("text+stash partial must produce a segment update");
+        };
+        assert_eq!(segment.recognized_text, "今天天气真好");
+    }
+
+    #[test]
+    fn qwen_timestamps_stay_on_the_capture_timeline() {
+        // Qwen reports no provider clock, so its segment timestamps are the
+        // capture elapsed directly. Adding the epoch offset (the Volcengine
+        // convention for attach-relative provider stamps) doubled every
+        // timestamp whenever translation was attached mid-session.
+        let session = live_session();
+        session.last_elapsed_ms.store(57_000, Ordering::Relaxed);
+        let completed = r#"{"type":"conversation.item.input_audio_transcription.completed","transcript":"你好世界"}"#;
+        let emission = qwen_message(&session, AudioSource::Mic, 1, 50_000, completed, false);
+        // A final event returns the full sorted snapshot, not a single update.
+        let Some(ProviderEmission::Segments(segments)) = emission else {
+            panic!("completed transcript must produce the segment snapshot, got {emission:?}");
+        };
+        let segment = segments.iter().find(|s| s.source == AudioSource::Mic).unwrap();
+        assert_eq!(segment.start_ms, 57_000);
+        assert_eq!(segment.recognized_text, "你好世界");
     }
 
     /// A real ffmpeg is only available on dev machines; when absent the

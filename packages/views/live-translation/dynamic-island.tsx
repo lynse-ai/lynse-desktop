@@ -115,10 +115,12 @@ export function DynamicIsland({
   // the parent-controlled phase. During drawer fold-out (`drawerClosing`)
   // controls stay put so the pill doesn't flicker mid-transition.
   const showControls = !notchStyle || (controlsVisible ?? false);
+  // Docked notch island is pinned flush under the hardware cutout; dragging
+  // it would conflict with anchor re-centering, so drag region is disabled.
+  const dragRegion = notchStyle ? undefined : true;
   // The capsule shape is driven by the window height (Rust sizes it), not by
   // the DOM: the pill row is always the full 44pt and the window crops it to
-  // the 32pt mini capsule, so there is no internal height jump. Only the
-  // corner radius reacts, keeping a stadium silhouette in mini state.
+  // the 32pt mini capsule, so there is no internal height jump.
   const miniCapsule = notchStyle && !showControls;
 
   if (!recording && !paused) return null;
@@ -129,8 +131,8 @@ export function DynamicIsland({
         "island-surface flex h-full w-full flex-col overflow-hidden",
         notchStyle
           ? // Opaque black stadium capsule hanging below the hardware cutout —
-            // same runway silhouette as the floating pill, never a notch fill.
-            cn("bg-neutral-950", miniCapsule ? "rounded-full" : "rounded-[22px]")
+            // rounded-[22px] matches both the 44pt controls bar and 36pt mini capsule.
+            "bg-neutral-950 rounded-[22px]"
           : "rounded-[22px] border border-border/50",
         className,
       )}
@@ -142,7 +144,7 @@ export function DynamicIsland({
           than a DOM height jump. Shifted up in mini state so the visible
           dot/timer/waveform sit centered in the 32pt window. */}
       <div
-        data-tauri-drag-region
+        data-tauri-drag-region={dragRegion}
         className={cn(
           "group flex h-11 shrink-0 items-center gap-2 px-3",
           "transition-transform duration-(--duration-quick)",
@@ -153,7 +155,7 @@ export function DynamicIsland({
             the engine connection is down): the pill has no room for the
             message itself, the expanded drawer shows it. */}
         <span
-          data-tauri-drag-region
+          data-tauri-drag-region={dragRegion}
           className={cn(
             "size-2 shrink-0 rounded-full",
             paused ? "bg-warning" : view.lastError ? "bg-warning animate-pulse" : "bg-destructive animate-pulse",
@@ -162,7 +164,7 @@ export function DynamicIsland({
 
         {/* Timer */}
         <span
-          data-tauri-drag-region
+          data-tauri-drag-region={dragRegion}
           className="min-w-[3ch] text-center font-mono text-xs font-semibold tabular-nums"
         >
           {fmt(view.elapsedMs)}
@@ -188,7 +190,7 @@ export function DynamicIsland({
             glance. Flexes to absorb leftover pill width, so the row always
             fits the narrow capsule. Gain >1 because raw mic RMS levels sit
             low in normal speech — without it the wave reads as a flat line. */}
-        <div data-tauri-drag-region className="h-4 min-w-8 flex-1">
+        <div data-tauri-drag-region={dragRegion} className="h-4 min-w-8 flex-1">
           <AudioVisualizer
             level={recordingLevel(view)}
             active={recording && !paused}

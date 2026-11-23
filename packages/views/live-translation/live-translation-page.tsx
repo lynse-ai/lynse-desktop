@@ -466,6 +466,11 @@ export function LiveTranslationPage() {
           if (engineUrl) {
             toast(t("live_translation.engine_attached", { engine: realtimeEngineLabel(engineUrl) }));
           }
+          // Live text attached — the floating captions come up with it, the
+          // same contract as the island path; closing it again stays the
+          // user's choice for the rest of the session.
+          void api?.showSubtitles(true).catch(() => undefined);
+          setSubtitlesVisible(true);
         } catch (error) {
           // The recording keeps running; live text is simply unavailable.
           toast.warning(String(error));

@@ -790,19 +790,30 @@ export function ChatPage() {
                   </div>
                 </div>
               ) : (
-                <article key={message.id} className="group flex items-start gap-3">
+                <article key={message.id} className="group flex items-start gap-3.5">
                   {activeProvider === "workbuddy" ? (
-                    <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
+                    <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
                       <WorkBuddy className="size-4 text-primary" />
                     </span>
                   ) : (
-                    <AssistantAvatar size={36} className="mt-0.5 shrink-0" />
+                    <AssistantAvatar size={34} className="mt-0.5 shrink-0" />
                   )}
                   <div className="min-w-0 flex-1">
-                    <div className="mb-1.5 text-2xs font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
-                      {activeProvider === "workbuddy"
-                        ? t("chat.assistant_workbuddy")
-                        : t("chat.assistant_lynse")}
+                    <div className="mb-1.5 flex items-center gap-2">
+                      <span className="text-13 font-semibold tracking-tight text-foreground">
+                        {activeProvider === "workbuddy"
+                          ? t("chat.assistant_workbuddy")
+                          : t("chat.assistant_lynse")}
+                      </span>
+                      <span className="rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-3xs font-medium text-primary">
+                        {activeProvider === "workbuddy" ? "WorkBuddy Agent" : t("chat.assistant_badge")}
+                      </span>
+                      {message.id === streamingMessageId && (
+                        <span className="flex items-center gap-1.5 text-2xs text-muted-foreground/75">
+                          <span className="size-1.5 rounded-full bg-primary animate-ping" />
+                          {t("chat.responding")}
+                        </span>
+                      )}
                     </div>
                     <AssistantMessage
                       message={message}
@@ -880,7 +891,7 @@ export function ChatPage() {
               disabled={isLoading}
             />
           )}
-          <div className="chat-composer relative rounded-xl border p-2">
+          <div className="chat-composer relative rounded-2xl border p-2.5 transition-all">
             {!isWorkBuddy && mentionDetection && (
               <div className="absolute bottom-full left-0 right-0 z-30 mb-2">
                 <MentionPicker
@@ -951,27 +962,27 @@ export function ChatPage() {
                 }
               }}
               placeholder={t("chat.page_placeholder")}
-              className="max-h-40 min-h-12 resize-none border-0 bg-transparent px-2.5 py-2 text-13 text-foreground shadow-none placeholder:text-muted-foreground/70 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
+              className="max-h-40 min-h-12 resize-none border-0 bg-transparent px-2.5 py-1.5 text-[13.5px] leading-relaxed text-foreground shadow-none placeholder:text-muted-foreground/50 focus-visible:border-transparent focus-visible:ring-0 dark:bg-transparent"
               // Stays editable while a response streams so the user can
               // pre-type; sending is what's blocked (button + handleSend).
               rows={1}
               autoFocus
             />
-            <div className="flex items-center gap-1 px-0.5 pb-0.5 pt-1">
+            <div className="flex items-center gap-1.5 px-1 pb-0.5 pt-1">
               <div className="flex items-center gap-0.5">
                 {!isWorkBuddy && <ChatImagePicker key={images.scope} onFiles={files => { void images.add(files); }} disabled={images.reading} />}
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="size-8 border-0 bg-transparent text-muted-foreground shadow-none transition-colors hover:bg-muted hover:text-foreground dark:hover:bg-white/[0.06]"
+                  className="size-7.5 rounded-lg border-0 bg-transparent text-muted-foreground/75 shadow-none transition-colors hover:bg-muted hover:text-foreground dark:hover:bg-white/[0.06]"
                   title={t("chat.microphone")}
                   aria-label={t("chat.microphone")}
                 >
                   <Mic className="size-4" strokeWidth={1.8} />
                 </Button>
               </div>
-              <span className="ml-1 min-w-0 flex-1 truncate text-2xs text-muted-foreground/55 dark:text-muted-foreground/65">
+              <span className="ml-1 min-w-0 flex-1 truncate text-3xs text-muted-foreground/50 dark:text-muted-foreground/60 select-none">
                 {!chatReady
                   ? t("workspace.loading")
                   : isLoading
@@ -989,7 +1000,7 @@ export function ChatPage() {
                   type="button"
                   size="icon"
                   variant="outline"
-                  className="size-8 border-border bg-background text-foreground shadow-none transition-colors hover:bg-muted"
+                  className="size-8 rounded-full border-border/80 bg-background text-foreground shadow-none transition-colors hover:bg-muted"
                   onClick={stopStreaming}
                   title={t("chat.stop")}
                   aria-label={t("chat.stop")}
@@ -1000,7 +1011,7 @@ export function ChatPage() {
                 <Button
                   type="button"
                   size="icon"
-                  className="size-8 bg-foreground text-background shadow-[0_1px_2px_rgba(0,0,0,0.12)] transition-[background-color,box-shadow] hover:bg-foreground/85 hover:shadow-[0_2px_7px_rgba(0,0,0,0.12)] disabled:bg-muted disabled:text-muted-foreground disabled:shadow-none dark:bg-primary dark:text-primary-foreground dark:hover:bg-primary/90"
+                  className="size-8 rounded-full bg-foreground text-background shadow-none transition-all hover:bg-foreground/85 active:scale-95 disabled:bg-muted/40 disabled:text-muted-foreground/30 dark:bg-primary dark:text-primary-foreground dark:hover:bg-primary/90"
                   onClick={() => handleSend()}
                   disabled={
                     !chatReady || (!input.trim() && !images.drafts.length) ||
@@ -1016,7 +1027,7 @@ export function ChatPage() {
               )}
             </div>
           </div>
-          <p className="mt-2 text-center text-3xs text-muted-foreground">
+          <p className="mt-2 text-center text-3xs text-muted-foreground/60 select-none">
             {t("chat.disclaimer")}
           </p>
         </div>
@@ -1105,7 +1116,7 @@ function QuickPromptStrip({
         <button
           type="button"
           onClick={() => scrollStrip(-1)}
-          className="flex size-6 shrink-0 items-center justify-center rounded-full border border-border/70 bg-card text-muted-foreground shadow-sm transition-[border-color,background-color,color] hover:border-primary/25 hover:bg-accent/50 hover:text-foreground"
+          className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted/40 text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground"
           title={t("chat.prompts_previous")}
           aria-label={t("chat.prompts_previous")}
         >
@@ -1123,7 +1134,7 @@ function QuickPromptStrip({
             key={prompt.key}
             type="button"
             onClick={() => onSelect(prompt.prompt)}
-            className="flex shrink-0 items-center gap-1.5 rounded-full border border-border/70 bg-card px-3 py-1.5 text-xs text-muted-foreground shadow-sm transition-[border-color,background-color,color] hover:border-primary/25 hover:bg-accent/50 hover:text-foreground"
+            className="flex shrink-0 items-center gap-1.5 rounded-full bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground transition-all duration-150 hover:bg-muted/80 hover:text-foreground active:scale-[0.98]"
           >
             {prompt.skill ? (
               // Skill chip: layered-skill glyph + accent skill name + plain
@@ -1140,7 +1151,7 @@ function QuickPromptStrip({
               </>
             ) : (
               <>
-                <prompt.icon className="size-3.5 shrink-0 text-primary/70" />
+                <prompt.icon className="size-3.5 shrink-0 text-muted-foreground/70" />
                 <span className="whitespace-nowrap">{prompt.label}</span>
               </>
             )}
@@ -1151,7 +1162,7 @@ function QuickPromptStrip({
         <button
           type="button"
           onClick={() => scrollStrip(1)}
-          className="flex size-6 shrink-0 items-center justify-center rounded-full border border-border/70 bg-card text-muted-foreground shadow-sm transition-[border-color,background-color,color] hover:border-primary/25 hover:bg-accent/50 hover:text-foreground"
+          className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted/40 text-muted-foreground transition-colors hover:bg-muted/80 hover:text-foreground"
           title={t("chat.prompts_next")}
           aria-label={t("chat.prompts_next")}
         >
@@ -1265,35 +1276,35 @@ function AssistantMessage({
     }
   }, [todoCandidates, todoConvertBusy, todoConverted, t]);
 
-  // Per-message actions (insert into note, convert to todos, copy). They
-  // render inline ahead of the citation strip when one exists, else on their
-  // own row below.
+  // Per-message actions (insert into note, convert to todos, copy).
   const messageActions = (
-    <>
-      {!isStreaming && todoCandidates.length > 0 && (
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className="text-muted-foreground"
-          disabled={todoConvertBusy}
-          onClick={() => void handleConvertTodos()}
-          title={todoConverted ? t("todo.converted_done") : t("chat.convert_to_todo")}
-          aria-label={todoConverted ? t("todo.converted_done") : t("chat.convert_to_todo")}
-        >
-          {todoConvertBusy ? (
-            <Loader2 className="size-3 animate-spin" />
-          ) : todoConverted ? (
-            <Check className="size-3" />
-          ) : (
-            <ListChecks className="size-3" />
-          )}
-        </Button>
-      )}
+    <div className="flex flex-wrap items-center gap-1">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 px-2.5 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/70 rounded-lg transition-colors"
+        onClick={onCopy}
+        title={copied ? t("chat.copied") : t("chat.copy")}
+        aria-label={copied ? t("chat.copied") : t("chat.copy")}
+      >
+        {copied ? (
+          <>
+            <Check className="size-3.5 text-success" />
+            <span className="text-success font-medium text-2xs">{t("chat.copied")}</span>
+          </>
+        ) : (
+          <>
+            <Copy className="size-3.5" />
+            <span className="text-2xs">{t("chat.copy")}</span>
+          </>
+        )}
+      </Button>
+
       {insertTarget && onInsertToNote && (
         <Button
           variant="ghost"
-          size="icon-xs"
-          className="text-muted-foreground"
+          size="sm"
+          className="h-7 px-2.5 gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/70 rounded-lg transition-colors"
           disabled={insertState === "inserting"}
           onClick={onInsertToNote}
           title={
@@ -1304,25 +1315,55 @@ function AssistantMessage({
           }
         >
           {insertState === "inserting" ? (
-            <Loader2 className="size-3 animate-spin" />
+            <>
+              <Loader2 className="size-3.5 animate-spin" />
+              <span className="text-2xs">{t("workspace.saving")}</span>
+            </>
           ) : insertState === "inserted" ? (
-            <Check className="size-3" />
+            <>
+              <Check className="size-3.5 text-success" />
+              <span className="text-success font-medium text-2xs">{t("chat.inserted_to_note")}</span>
+            </>
           ) : (
-            <NotePlus className="size-3" />
+            <>
+              <NotePlus className="size-3.5" />
+              <span className="text-2xs">{t("chat.insert_to_note")}</span>
+            </>
           )}
         </Button>
       )}
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        className="text-muted-foreground"
-        onClick={onCopy}
-        title={copied ? t("chat.copied") : t("chat.copy")}
-        aria-label={copied ? t("chat.copied") : t("chat.copy")}
-      >
-        {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
-      </Button>
-    </>
+
+      {!isStreaming && todoCandidates.length > 0 && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 px-2.5 gap-1.5 text-xs text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-lg transition-colors"
+          disabled={todoConvertBusy}
+          onClick={() => void handleConvertTodos()}
+          title={todoConverted ? t("todo.converted_done") : t("chat.convert_to_todo")}
+          aria-label={todoConverted ? t("todo.converted_done") : t("chat.convert_to_todo")}
+        >
+          {todoConvertBusy ? (
+            <>
+              <Loader2 className="size-3.5 animate-spin" />
+              <span className="text-2xs">{t("chat.converting")}</span>
+            </>
+          ) : todoConverted ? (
+            <>
+              <Check className="size-3.5 text-success" />
+              <span className="text-2xs">{t("todo.converted_done")}</span>
+            </>
+          ) : (
+            <>
+              <ListChecks className="size-3.5 text-primary" />
+              <span className="text-2xs font-medium">
+                {t("chat.convert_to_todo")}{todoCandidates.length > 0 ? ` (${todoCandidates.length})` : ""}
+              </span>
+            </>
+          )}
+        </Button>
+      )}
+    </div>
   );
 
   return (
@@ -1346,7 +1387,7 @@ function AssistantMessage({
       ) : (
         <>
           {message.thinking && (
-            <div className="mb-2">
+            <div className="mb-2.5">
               <ThinkingBlock
                 text={message.thinking}
                 active={isStreaming && message.thinkingActive && !waitingForConfirm}
@@ -1356,7 +1397,7 @@ function AssistantMessage({
           )}
 
           {!!message.toolUses?.length && (
-            <div className="mb-2">
+            <div className="mb-2.5">
               <ToolActivity tools={message.toolUses} />
             </div>
           )}
@@ -1365,7 +1406,7 @@ function AssistantMessage({
             <ChatReplyBody
               message={message}
               isStreaming={isStreaming}
-              className="rounded-2xl rounded-tl-md border border-border bg-card px-4 py-3.5 text-sm leading-6 text-foreground shadow-sm"
+              className="relative py-0.5 text-[13.5px] leading-relaxed text-foreground chat-reply-content"
             />
           ) : message.attachments?.length || message.sources?.length || message.humanSupportLink?.url || message.connectionRequests?.length || message.workbuddyStopReason ? (
             // Attachment-only reply: the report-PDF turn empties the body
@@ -1377,11 +1418,11 @@ function AssistantMessage({
           ) : null}
 
           {message.content && message.status && showActivity && (
-            <ChatActivity status={message.status} startedAt={message.timestamp} className="mt-2 text-xs" />
+            <ChatActivity status={message.status} startedAt={message.timestamp} className="mt-2.5 text-xs" />
           )}
 
           {message.confirm && (
-            <div className="mt-2 max-w-md">
+            <div className="mt-2.5 max-w-md">
               <ConfirmCard
                 confirm={message.confirm}
                 onSelect={(value) => onConfirmSelect?.(message.id, value)}
@@ -1402,17 +1443,6 @@ function AssistantMessage({
       <div
         className={revealed ? "animate-in fade-in duration-300 delay-[350ms] fill-mode-backwards" : undefined}
       >
-        {!!message.sources?.length && (
-          <div className="mt-2 flex items-center gap-1.5">
-            {message.content && !message.error && <>{messageActions}</>}
-            <ChatSources
-              sources={message.sources}
-              resolveLabel={resolveSourceLabel}
-              content={message.content}
-              onOpen={onOpenSource}
-            />
-          </div>
-        )}
         <ChatAttachments attachments={message.attachments} />
         {!!message.connectionRequests?.length && <ChatConnectionCards requests={message.connectionRequests} messageId={message.id} />}
       </div>
@@ -1422,7 +1452,7 @@ function AssistantMessage({
           href={message.humanSupportLink.url}
           target="_blank"
           rel="noreferrer"
-          className={`mt-2 inline-flex w-fit items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs text-foreground shadow-sm transition-colors hover:border-primary/30 hover:bg-accent ${
+          className={`mt-2.5 inline-flex w-fit items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-xs text-foreground shadow-sm transition-colors hover:border-primary/30 hover:bg-accent ${
             revealed ? "animate-in fade-in duration-300 delay-[350ms] fill-mode-backwards" : ""
           }`}
         >
@@ -1431,16 +1461,27 @@ function AssistantMessage({
         </a>
       )}
 
+      {/* Turn Action Toolbar: Copy, Insert to note, Convert to todo, Sources */}
+      {(message.content && !message.error) || message.sources?.length ? (
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          {message.content && !message.error && messageActions}
+          {!!message.sources?.length && (
+            <ChatSources
+              sources={message.sources}
+              resolveLabel={resolveSourceLabel}
+              content={message.content}
+              onOpen={onOpenSource}
+            />
+          )}
+        </div>
+      ) : null}
+
       {!!message.followUps?.length && onPickFollowUp && (
         <FollowUpChips
           suggestions={message.followUps}
           onPick={onPickFollowUp}
-          className="mt-2"
+          className="mt-2.5"
         />
-      )}
-
-      {message.content && !message.error && !message.sources?.length && (
-        <div className="mt-2 flex items-center">{messageActions}</div>
       )}
     </>
   );

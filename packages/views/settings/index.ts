@@ -32,3 +32,6 @@ export {
 export { McpConfigCard } from "./mcp-config-card";
 
 export { ModelConfigCard } from "./model-config-card";
+
+export { HotwordLibraryCard } from "./hotword-library-card";
+

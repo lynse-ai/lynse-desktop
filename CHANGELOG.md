@@ -19,6 +19,22 @@
 > advertised it (its manifest mirror failed and the rollout was cancelled), so
 > that work plus the todo card redesign shipped together as 1.2.7.
 
+## 1.2.16 (2026-11-23)
+
+### Improvements
+
+- Knowledge base organization overhauled: removed daytime Dream Mode restrictions so historical and recent meetings organize immediately without waiting for late-night windows; isolated the knowledge graph extraction queue and boosted compilation concurrency up to 8 workers in parallel.
+- Robust cloud authorization & fallback: bounded cloud eligibility and capabilities checks with a strict 5-second timeout, falling back gracefully to local access policies on network timeouts or gateway errors to eliminate organize pipeline stalls.
+- Retry deadlock resolved: resetting idle state fingerprints and clearing validation/authorization failures so that clicking "Retry" in the supervisor immediately wakes up and executes pending tasks.
+- Chat UI and hotwords library: improved reasoning foldouts, citation sources, and follow-up prompts; added hotword library configuration in settings.
+
+### 改进
+
+- 知识库整理全面提速与时间限制解除：取消白天的整理限制（Dream Mode），历史与最新会议无需推迟至夜间、即时处理；开辟独立的知识图谱提取队列，主题编译并发上限提升至 8 路并行。
+- 云端鉴权弹性降级：云端权限与合规检查增加 5 秒超时保护，遇到网络抖动或服务端异常时自动安全降级至本地策略，彻底解决整理流程被外部网络异常中断的问题。
+- 修复重试死锁：点击重试时强制清除空闲指纹并重置失败任务状态，使处于校验或授权失败的任务能够立即被唤醒并重新执行。
+- 聊天与热词设置优化：优化思考链折叠展示、引用来源与追问建议交互，设置中新增热词库管理与查看功能。
+
 ## 1.2.15 (2026-11-23)
 
 ### New Features

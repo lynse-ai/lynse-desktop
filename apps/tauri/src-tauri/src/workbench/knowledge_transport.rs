@@ -173,7 +173,11 @@ impl Transport {
             let call = call
                 .try_clone()
                 .ok_or("Cloud knowledge unavailable")?
-                .timeout(if read {
+                .timeout(if stage == "identity_binding" {
+                    remaining.min(Duration::from_secs(8))
+                } else if stage == "source_eligibility" {
+                    remaining.min(Duration::from_secs(5))
+                } else if read {
                     remaining.min(Duration::from_secs(15))
                 } else {
                     remaining
@@ -274,7 +278,8 @@ impl Transport {
     ) -> CommandResult<()> {
         if session.agent_url != session.base_url {
             // Single-flight binding is separate from the local commit lock.
-            let mut binding = tokio::time::timeout(REQUEST_BUDGET, self.binding.lock())
+            let binding_budget = Duration::from_secs(12);
+            let mut binding = tokio::time::timeout(binding_budget, self.binding.lock())
                 .await
                 .map_err(|_| {
                     "Cloud knowledge connection failed (stage: identity_binding; reason: timeout)"
@@ -285,6 +290,7 @@ impl Transport {
                 .is_some_and(|(cached, until)| cached == key && *until > Instant::now())
             {
                 *binding = None;
+                let binding_deadline = deadline.min(Instant::now() + Duration::from_secs(12));
                 let value = self
                     .send(
                         client
@@ -294,7 +300,7 @@ impl Transport {
                         "identity_binding",
                         true,
                         key,
-                        deadline,
+                        binding_deadline,
                         check,
                     )
                     .await?;
@@ -389,6 +395,8 @@ impl Transport {
             .await?;
         let stage = if path == "/capabilities" {
             "capabilities"
+        } else if path == "/source-eligibility" {
+            "source_eligibility"
         } else if path.starts_with("/wiki-topics/") && body.is_some() {
             "wiki_sync"
         } else {

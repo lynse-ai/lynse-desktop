@@ -38,7 +38,6 @@ pub(super) struct Session {
     pub locale: String,
 }
 
-#[derive(Default)]
 pub struct WorkbenchState {
     pub(super) session: Mutex<Option<Session>>,
     pub(super) worker: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
@@ -47,6 +46,7 @@ pub struct WorkbenchState {
     pub(super) wiki_cloud_run: tokio::sync::Mutex<()>,
     pub(super) graph_run: tokio::sync::Mutex<()>,
     pub(super) synthesis_queue: synthesis_scheduler::Scheduler,
+    pub(super) graph_queue: synthesis_scheduler::Scheduler,
     pub(super) synthesis_http: tokio::sync::Mutex<Option<(String, reqwest::Client)>>,
     pub(super) pending_receipts: std::sync::atomic::AtomicUsize,
     pub(super) knowledge_transport: knowledge_transport::Transport,
@@ -65,6 +65,37 @@ pub struct WorkbenchState {
     /// Coalesces progress-driven state writes during long wiki passes; see
     /// `wiki::report_progress`.
     pub(super) last_progress_persist: Mutex<Option<std::time::Instant>>,
+}
+
+impl Default for WorkbenchState {
+    fn default() -> Self {
+        Self {
+            session: Mutex::new(None),
+            worker: Mutex::new(None),
+            serial: tokio::sync::Mutex::new(()),
+            wiki_run: tokio::sync::Mutex::new(()),
+            wiki_cloud_run: tokio::sync::Mutex::new(()),
+            graph_run: tokio::sync::Mutex::new(()),
+            synthesis_queue: synthesis_scheduler::Scheduler::for_wiki(),
+            graph_queue: synthesis_scheduler::Scheduler::for_graph(),
+            synthesis_http: tokio::sync::Mutex::new(None),
+            pending_receipts: std::sync::atomic::AtomicUsize::new(0),
+            knowledge_transport: knowledge_transport::Transport::default(),
+            knowledge_capabilities: tokio::sync::Mutex::new(None),
+            sync_requested: tokio::sync::Notify::new(),
+            wiki_wakeup: tokio::sync::Notify::new(),
+            candidate_wakeup: tokio::sync::Notify::new(),
+            publication_wakeup: tokio::sync::Notify::new(),
+            cloud_wakeup: tokio::sync::Notify::new(),
+            wiki_requested: AtomicBool::new(false),
+            refresh_existing: AtomicBool::new(false),
+            discovery_requested: tokio::sync::Notify::new(),
+            epoch: AtomicU64::new(0),
+            beta_enabled: AtomicBool::new(false),
+            gmail_plugin_enabled: AtomicBool::new(false),
+            last_progress_persist: Mutex::new(None),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -464,6 +495,26 @@ pub async fn workbench_bind(
     let agent = normalize_url(request.agent_url.as_deref().unwrap_or(&base))?;
     if request.token.trim().is_empty() {
         return Err("Sign in first".into());
+    }
+    // Fast path: if the session parameters and feature flags are identical to the
+    // currently active session, do not invalidate the runtime, bump the epoch, or abort
+    // running in-flight worker passes.
+    {
+        let bound = state.session.lock().map_err(|_| "Session unavailable")?;
+        if let Some(session) = bound.as_ref() {
+            if session.base_url == base
+                && session.agent_url == agent
+                && session.token == request.token
+                && session.locale == request.locale
+                && session.model_override == request.model_override
+                && state.beta_enabled.load(Ordering::SeqCst) == request.beta_enabled
+                && state.gmail_plugin_enabled.load(Ordering::SeqCst) == request.gmail_plugin_enabled
+            {
+                start_worker(&app, &state);
+                let manifest = load_state(&app, session)?;
+                return Ok(public_status(session, &manifest));
+            }
+        }
     }
     // Invalidate the previous account before starting identity verification.
     let generation = state.epoch.fetch_add(1, Ordering::SeqCst) + 1;

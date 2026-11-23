@@ -11,6 +11,7 @@ fn doc(id: &str, folder: &str) -> Document {
         folder_id: folder.into(),
         transcript: "A项目周五提交预算，日期待确认。".into(),
         ai_context_enabled: true,
+        created_at: crate::now(),
         ..Default::default()
     };
     doc.refresh_revision();

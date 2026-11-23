@@ -19,8 +19,16 @@ fn configured_slots() -> usize {
     std::env::var("LYNSE_WIKI_CONCURRENCY")
         .ok()
         .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .map(|slots| slots.clamp(1, 16))
+        .unwrap_or(8)
+}
+
+fn configured_graph_slots() -> usize {
+    std::env::var("LYNSE_GRAPH_CONCURRENCY")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
         .map(|slots| slots.clamp(1, 8))
-        .unwrap_or(4)
+        .unwrap_or(3)
 }
 
 impl Default for Scheduler {
@@ -35,6 +43,14 @@ pub(super) struct Permit {
 }
 
 impl Scheduler {
+    pub fn for_wiki() -> Self {
+        Self::with_slots(configured_slots())
+    }
+
+    pub fn for_graph() -> Self {
+        Self::with_slots(configured_graph_slots())
+    }
+
     pub fn with_slots(slots: usize) -> Self {
         let capacity = slots.max(1);
         Self {

@@ -312,7 +312,7 @@ pub(super) async fn execute(
 }
 
 pub(super) fn retry_unknown(root: &Path) -> CommandResult<()> {
-    connection(root)?.execute("UPDATE model_tasks SET state='ready',retry_at=0,updated_at=? WHERE state IN ('running','unknown','retryable')",
+    connection(root)?.execute("UPDATE model_tasks SET state='ready',retry_at=0,updated_at=? WHERE state IN ('running','unknown','retryable','authorization_failed','validation_failed')",
         [crate::now()]).map_err(|error| error.to_string())?;
     Ok(())
 }

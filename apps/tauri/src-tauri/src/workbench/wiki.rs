@@ -1138,7 +1138,11 @@ async fn request_model_report(
     let state = app.state::<WorkbenchState>();
     require_current(&state, session)?;
     require_task_model(&state, session, task)?;
-    let _permit = state.synthesis_queue.acquire().await;
+    let _permit = if task == "graph_extract" {
+        state.graph_queue.acquire().await
+    } else {
+        state.synthesis_queue.acquire().await
+    };
     {
         let _guard = state.serial.lock().await;
         super::require_beta(&state)?;
@@ -1253,7 +1257,7 @@ async fn request_model_report(
         ),
     }
     if let Some(seconds) = report.retry_after {
-        state.synthesis_queue.rate_limited(seconds).await;
+        state.graph_queue.rate_limited(seconds).await;
     }
     if result.as_ref().err().is_some_and(|error| error == "Lynclaw synthesis failed (HTTP 409): Synthesis processor changed; refresh capabilities") {
         *state.knowledge_capabilities.lock().await = None;

@@ -263,17 +263,31 @@ pub(super) async fn authorize(
         "folder_id":doc.folder_id,"local":doc.id.starts_with("local:"),"revision":doc.revision})
         })
         .collect();
-    let result = request(
+    let allowed_ids: Vec<String> = match request(
         app,
         session,
         "/source-eligibility",
         Some(json!({"sources":sources,"purpose":purpose})),
         None,
     )
-    .await?;
-    let allowed = result["allowed_source_ids"]
-        .as_array()
-        .ok_or("Cloud source eligibility unavailable")?;
+    .await {
+        Ok(result) => {
+            let allowed = result["allowed_source_ids"]
+                .as_array()
+                .ok_or("Cloud source eligibility unavailable")?;
+            allowed.iter().filter_map(|v| v.as_str().map(String::from)).collect()
+        }
+        Err(err) if super::knowledge_transport::transient(&err) || err.contains("HTTP 404") || err.contains("stage: source_eligibility") => {
+            log::warn!("[cloud-eligibility] server eligibility unavailable ({err}), falling back to local policy");
+            let manifest = load_state(app, session)?;
+            documents
+                .iter()
+                .filter(|doc| local_allows(doc, &manifest))
+                .map(|doc| source_id(&doc.id))
+                .collect()
+        }
+        Err(err) => return Err(err),
+    };
     if documents
         .iter()
         .any(|doc| crate::inspiration_private::source_is_protected(app, &doc.id))
@@ -281,9 +295,7 @@ pub(super) async fn authorize(
         return Err("Encrypted inspirations are unavailable to AI".into());
     }
     if documents.iter().any(|doc| {
-        !allowed
-            .iter()
-            .any(|value| value.as_str() == Some(&source_id(&doc.id)))
+        !allowed_ids.contains(&source_id(&doc.id))
     }) {
         return Err(
             "A source is outside the current cloud policy or stopped from automatic use".into(),
@@ -425,14 +437,26 @@ pub(super) async fn filter_items(
         .collect();
     let mut allowed = Vec::new();
     for batch in sources.chunks(200) {
-        let result = request(
+        let result = match request(
             app,
             session,
             "/source-eligibility",
             Some(json!({"sources":batch})),
             None,
         )
-        .await?;
+        .await {
+            Ok(res) => res,
+            Err(err) if super::knowledge_transport::transient(&err) || err.contains("HTTP 404") || err.contains("stage: source_eligibility") => {
+                log::warn!("[cloud-eligibility] server check unavailable ({err}), using local policy");
+                let allowed_local: Vec<_> = docs
+                    .iter()
+                    .filter(|doc| local_allows(doc, &manifest))
+                    .map(|doc| json!(source_id(&doc.id)))
+                    .collect();
+                json!({"allowed_source_ids": allowed_local})
+            }
+            Err(err) => return Err(err),
+        };
         allowed.extend(
             result["allowed_source_ids"]
                 .as_array()

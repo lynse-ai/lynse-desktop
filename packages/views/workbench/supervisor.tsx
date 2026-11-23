@@ -16,7 +16,7 @@ import { resolveWorkbenchModelOverride, WORKBENCH_MODEL_CHANGED_EVENT, WORKBENCH
 /** Account lifecycle stays outside AuthGate so logout also cancels native work. */
 export function WorkbenchSupervisor() {
   const authenticated = useAuthStore((s) => s.isAuthenticated);
-  const user = useAuthStore((s) => s.user);
+  const userId = useAuthStore((s) => s.user?.id);
   const hasMemoryDrafts = useMemoryDrafts((state) => Object.values(state.drafts).some((draft) => draft.markdown !== draft.original));
   useEffect(() => {
     if (!hasMemoryDrafts) return;
@@ -24,7 +24,7 @@ export function WorkbenchSupervisor() {
     window.addEventListener("beforeunload", leave);
     return () => window.removeEventListener("beforeunload", leave);
   }, [hasMemoryDrafts]);
-  useEffect(() => { useMemoryDrafts.getState().clear(); useWikiBrowser.getState().setScope(undefined); }, [user?.id, authenticated]);
+  useEffect(() => { useMemoryDrafts.getState().clear(); useWikiBrowser.getState().setScope(undefined); }, [userId, authenticated]);
   const gmailPluginEnabled = usePluginStore((state) => !featureFlags.pluginMarketplace || !!state.entries["lynse.gmail"]?.enabled);
   // Same idiom as gmailPluginEnabled: disabling the knowledge plugin tears the
   // native worker down via this effect's cleanup (unbind), enabling re-binds.
@@ -109,7 +109,7 @@ export function WorkbenchSupervisor() {
       document.removeEventListener("visibilitychange", resume);
       void bridge.unbind();
     };
-  }, [authenticated, user, i18n.language, configurationVersion, gmailPluginEnabled, wikiPluginActive]);
+  }, [authenticated, userId, i18n.language, configurationVersion, gmailPluginEnabled, wikiPluginActive]);
   return null;
 }
 

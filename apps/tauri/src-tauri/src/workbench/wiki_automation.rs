@@ -766,8 +766,14 @@ fn is_dream_time_hour(hour: u32) -> bool {
 }
 
 /// Whether the pipeline is inside the nightly dream window (23:00–07:00).
+/// Time restriction is lifted by default so that knowledge organization
+/// proceeds immediately without waiting for overnight dream mode.
+/// Setting LYNSE_DREAM_MODE=1 restores the overnight-only restriction.
 pub(super) fn is_dream_time() -> bool {
-    is_dream_time_hour(chrono::Timelike::hour(&chrono::Local::now()))
+    if std::env::var("LYNSE_DREAM_MODE").as_deref() == Ok("1") {
+        return is_dream_time_hour(chrono::Timelike::hour(&chrono::Local::now()));
+    }
+    true
 }
 
 /// Whether a document carries knowledge from the last 30 days, judged by its
@@ -1210,6 +1216,12 @@ pub(super) fn idle_signature_hits(key: &str, signature: &str) -> bool {
 pub(super) fn record_idle_signature(key: &str, signature: &str) {
     if let Ok(mut cache) = IDLE_SIGNATURES.get_or_init(Default::default).lock() {
         cache.insert(key.to_string(), signature.to_string());
+    }
+}
+
+pub(super) fn clear_idle_signatures() {
+    if let Ok(mut cache) = IDLE_SIGNATURES.get_or_init(Default::default).lock() {
+        cache.clear();
     }
 }
 
@@ -1870,7 +1882,9 @@ pub(super) fn publish_automatic(
 pub(super) fn retry(root: &Path) -> CommandResult<()> {
     let mut catalog: Catalog = read_json(&catalog_path(root))?;
     catalog.failed.clear();
-    write_json(&catalog_path(root), &catalog)
+    write_json(&catalog_path(root), &catalog)?;
+    clear_idle_signatures();
+    Ok(())
 }
 
 pub(super) fn retry_service_failures(root: &Path) -> CommandResult<bool> {

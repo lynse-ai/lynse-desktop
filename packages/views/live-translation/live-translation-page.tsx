@@ -18,27 +18,39 @@ import {
 } from "@lynse/ui/components/ui/command";
 import { Alert, AlertDescription, AlertTitle } from "@lynse/ui/components/ui/alert";
 import {
+  Bookmark,
   Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Globe,
   Headphones,
+  ListTodo,
   Loader2,
   Mic,
   Monitor,
   NotebookPen,
   Pause,
   Play,
+  Plus,
   RefreshCw,
   Repeat,
+  Sparkles,
   Square,
   Volume2,
+  X,
 } from "../icons";
 import { realtimeEngineLabel, requestRealtimeSession } from "./api";
 import { disposeLiveNotes, finalizeLiveNotes, useLiveNotes } from "./notes/engine";
 import { LiveNotesPanel } from "./notes/notes-panel";
-import { needsTranslationService, translateSegment } from "./translation-service";
+import {
+  TRANSLATION_ENGINES,
+  needsTranslationService,
+  readTranslationServiceConfig,
+  saveTranslationServiceConfig,
+  translateSegment,
+} from "./translation-service";
 import { ProviderSettings } from "./provider-settings";
 import { isProviderConfigured, resolveProvider } from "./providers";
 import { useNavigation } from "../navigation";
@@ -48,6 +60,7 @@ import type {
   LivePermissionStatus,
   LiveTranslationTrayAction,
   LiveTranslationProviderConfig,
+  RecordingMarker,
 } from "./types";
 import {
   SOURCE_LANGUAGE_OPTIONS,
@@ -86,6 +99,15 @@ export function LiveTranslationPage() {
   const [savingProviderConfig, setSavingProviderConfig] = useState(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const pendingTrayActionRef = useRef<LiveTranslationTrayAction | null>(null);
+  // Translation engine chain (Apple/Google/Ling/Qwen-MT order). Persisted in
+  // its own localStorage blob; read per translate call, so edits apply live.
+  const [chain, setChain] = useState<string[]>(() => readTranslationServiceConfig().providers);
+  function updateChain(next: string[]) {
+    if (next.length === 0) return;
+    setChain(next);
+    saveTranslationServiceConfig({ providers: next });
+    toast.success(t("live_translation.chain_saved"));
+  }
   // True once the user edited a provider field on this page without saving.
   // start() re-reads the keychain before connecting; without this flag that
   // refetch would silently replace the user's typed-but-unsaved key with the
@@ -209,6 +231,67 @@ export function LiveTranslationPage() {
   // leg (Apple on-device, Tencent ASR), finalized segments come back without
   // a translation — run them through the configured chain and patch the view.
   const activeProviderId = providerConfig.activeProvider;
+  // Stream recovery sweep: after a provider stream drops and reconnects, any
+  // finals that landed (or failed translating) during the outage are retried
+  // once the whole chain of streams is back to "connected".
+  const [recoveredNonce, setRecoveredNonce] = useState(0);
+  const streamDegradedRef = useRef(false);
+  useEffect(() => {
+    const states = Object.values(view.streamStates);
+    if (states.length === 0) return;
+    const degraded = states.some((state) => state !== "connected");
+    if (degraded) {
+      streamDegradedRef.current = true;
+    } else if (streamDegradedRef.current) {
+      streamDegradedRef.current = false;
+      setRecoveredNonce((nonce) => nonce + 1);
+    }
+  }, [view.streamStates]);
+
+  // In-session quick bookmarks: ⌘M highlight, ⌘⇧M decision, ⌘⌥M todo —
+  // zero-UI capture while a session runs. Input fields are skipped so typing
+  // M into the notes editor never drops a stray marker.
+  useEffect(() => {
+    if (!active) return;
+    function onBookmarkKey(event: KeyboardEvent) {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "m") return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      event.preventDefault();
+      const kind = event.altKey ? "todo" : event.shiftKey ? "decision" : "highlight";
+      void api?.marker?.(kind)
+        .then(() => toast.success(t(`workbench.${kind}`)))
+        .catch((error) => toast.error(String(error)));
+    }
+    window.addEventListener("keydown", onBookmarkKey);
+    return () => window.removeEventListener("keydown", onBookmarkKey);
+  }, [api, active, t]);
+
+  // Map each bookmark onto the transcript row it landed in (the segment the
+  // marker's timestamp falls after) so rows show their inline badges.
+  const markersBySegmentId = useMemo(() => {
+    const map = new Map<string, RecordingMarker[]>();
+    for (const marker of view.markers ?? []) {
+      let owner: string | undefined;
+      for (const segment of visibleSegments) {
+        if (segment.startMs <= marker.startMs) owner = segment.id;
+        else break;
+      }
+      if (owner) map.set(owner, [...(map.get(owner) ?? []), marker]);
+    }
+    return map;
+  }, [visibleSegments, view.markers]);
+  const degradedSources = Object.entries(view.streamStates).filter(([, state]) => state !== "connected");
+
+  function moveChainEngine(index: number, delta: -1 | 1) {
+    const target = index + delta;
+    if (target < 0 || target >= chain.length) return;
+    const reordered = [...chain];
+    const [moved] = reordered.splice(index, 1);
+    if (moved === undefined) return;
+    reordered.splice(target, 0, moved);
+    updateChain(reordered);
+  }
   useEffect(() => {
     if (!active || !needsTranslationService(activeProviderId)) return;
     if (transcriptOnly) return;
@@ -232,19 +315,27 @@ export function LiveTranslationPage() {
         );
         if (cancelled) return;
         if (translated) {
-          // Patch through the same event channel the reducer consumes.
+          // Patch through the same event channel the reducer consumes…
           window.dispatchEvent(
             new CustomEvent("lynse:local-translation-patch", {
               detail: { sessionId: view.sessionId, segmentId: segment.id, text: translated },
             }),
           );
+          // …and write the translation back onto the Rust-side segment, so
+          // the persisted transcript keeps the bilingual pair (view patches
+          // alone never reach persist_session).
+          api?.patchTranslation?.({
+            sessionId: view.sessionId ?? "",
+            segmentId: segment.id,
+            translatedText: translated,
+          }).catch(() => undefined);
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [active, activeProviderId, transcriptOnly, sourceLanguage, targetLanguage, providerConfig, view.segments, view.sessionId]);
+  }, [active, activeProviderId, transcriptOnly, sourceLanguage, targetLanguage, providerConfig, view.segments, view.sessionId, api, recoveredNonce]);
   // The active provider plugin decides whether its credentials are complete;
   // the Lynse backend relay needs no local configuration.
   const providerReady =
@@ -554,6 +645,68 @@ export function LiveTranslationPage() {
           </section>
 
           <section className="mt-6 space-y-3">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {t("live_translation.chain_title")}
+            </h2>
+            <div className="space-y-1.5">
+              {chain.map((engine, index) => (
+                <div
+                  key={engine}
+                  className="flex items-center gap-1 rounded-md border border-border/60 bg-background/40 px-2 py-1.5 text-xs"
+                >
+                  <span className="flex-1 truncate">
+                    {t(TRANSLATION_ENGINES.find((item) => item.id === engine)?.labelKey ?? engine)}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label={t("live_translation.chain_move_up")}
+                    disabled={index === 0}
+                    onClick={() => moveChainEngine(index, -1)}
+                    className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30"
+                  >
+                    <ChevronUp className="size-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={t("live_translation.chain_move_down")}
+                    disabled={index === chain.length - 1}
+                    onClick={() => moveChainEngine(index, 1)}
+                    className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30"
+                  >
+                    <ChevronDown className="size-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={t("live_translation.chain_remove")}
+                    onClick={() => updateChain(chain.filter((item) => item !== engine))}
+                    className="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            {TRANSLATION_ENGINES.filter((engine) => !chain.includes(engine.id)).length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {TRANSLATION_ENGINES.filter((engine) => !chain.includes(engine.id)).map((engine) => (
+                  <button
+                    key={engine.id}
+                    type="button"
+                    onClick={() => updateChain([...chain, engine.id])}
+                    className="flex items-center gap-1 rounded-full border border-dashed border-border px-2 py-1 text-2xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <Plus className="size-3" />
+                    {t(engine.labelKey)}
+                  </button>
+                ))}
+              </div>
+            )}
+            <p className="text-2xs leading-relaxed text-muted-foreground">
+              {t("live_translation.chain_hint")}
+            </p>
+          </section>
+
+          <section className="mt-6 space-y-3">
             <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("live_translation.audio_sources")}</h2>
             <AudioSourceControls onPreferenceChange={(audioSource) => setProviderConfig((config) => ({ ...config, audioSource }))} />
             <p className="text-2xs leading-relaxed text-muted-foreground">
@@ -649,6 +802,31 @@ export function LiveTranslationPage() {
                 )}
               </button>
             </div>
+            {active && (
+              <div className="flex items-center gap-0.5" role="group" aria-label={t("live_translation.bookmark_group")}>
+                {([
+                  { kind: "highlight", icon: <Sparkles className="size-3.5" /> },
+                  { kind: "decision", icon: <Check className="size-3.5" /> },
+                  { kind: "todo", icon: <ListTodo className="size-3.5" /> },
+                ] as const).map(({ kind, icon }) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    title={t(`workbench.${kind}`)}
+                    aria-label={t(`workbench.${kind}`)}
+                    onClick={() => {
+                      void api?.marker?.(kind)
+                        .then(() => toast.success(t(`workbench.${kind}`)))
+                        .catch((error) => toast.error(String(error)));
+                    }}
+                    className="flex size-7 items-center justify-center rounded-full border border-border/60 bg-background/40 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-background/70 hover:text-foreground"
+                  >
+                    {icon}
+                  </button>
+                ))}
+                <Bookmark className="ml-1 size-3.5 text-muted-foreground/50" aria-hidden />
+              </div>
+            )}
             <Popover open={langOpen} onOpenChange={setLangOpen}>
               <PopoverTrigger
                 aria-label={t("live_translation.translation_direction")}
@@ -682,6 +860,25 @@ export function LiveTranslationPage() {
               </PopoverContent>
             </Popover>
           </div>
+          {active && degradedSources.length > 0 && (
+            <div
+              className={`flex items-center gap-2 border-b px-5 py-1.5 text-2xs ${
+                degradedSources.some(([, state]) => state === "failed")
+                  ? "border-border bg-warning/10 text-warning-text"
+                  : "border-border bg-muted/40 text-muted-foreground"
+              }`}
+              role="status"
+            >
+              <span
+                className={`size-1.5 shrink-0 rounded-full ${
+                  degradedSources.some(([, state]) => state === "failed") ? "bg-warning" : "bg-primary animate-pulse"
+                }`}
+              />
+              {degradedSources.some(([, state]) => state === "failed")
+                ? t("live_translation.stream_failed")
+                : t("live_translation.stream_connecting")}
+            </div>
+          )}
           <div ref={transcriptRef} className="flex-1 overflow-y-auto px-6 py-5">
             {visibleSegments.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center text-center text-muted-foreground">
@@ -713,6 +910,15 @@ export function LiveTranslationPage() {
                               {t("live_translation.speaker")} {segment.speaker}
                             </span>
                           )}
+                          {markersBySegmentId.get(segment.id)?.map((marker) => (
+                            <span
+                              key={marker.id}
+                              className="inline-flex items-center gap-0.5 rounded-sm bg-primary/10 px-1 font-medium text-primary"
+                            >
+                              <Sparkles className="size-2.5" aria-hidden />
+                              {t(`workbench.${marker.kind}`)}
+                            </span>
+                          ))}
                         </div>
                       )}
                       <p className="text-sm leading-relaxed text-foreground">

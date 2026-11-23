@@ -1,8 +1,10 @@
 //! Standalone translation service layer for providers whose ASR leg carries
 //! no translation (Apple on-device, Tencent ASR). Chain mirrors the Cicada
-//! design: a provider-priority list — Ling (needs a key, best quality),
-//! Google (free unofficial endpoint), Apple Translation (on-device, macOS
-//! 15+) — tried in order until one returns text.
+//! design: a provider-priority list — Qwen-MT (DashScope, dedicated MT model
+//! with glossary support, reuses the realtime provider's BYO key), Ling
+//! (needs a key, best quality), Google (free unofficial endpoint), Apple
+//! Translation (on-device, macOS 15+) — tried in order until one returns
+//! text.
 
 use serde_json::{json, Value};
 
@@ -64,6 +66,8 @@ pub async fn translate(
     kind: TranslateKind,
     providers: &[String],
     ling_key: Option<&str>,
+    qwen_key: Option<&str>,
+    qwen_endpoint: Option<&str>,
 ) -> Result<TranslateOutcome, String> {
     if text.trim().is_empty() {
         return Err("text is empty".to_owned());
@@ -80,6 +84,9 @@ pub async fn translate(
         let name = provider.trim().to_lowercase();
         let started = std::time::Instant::now();
         let result = match name.as_str() {
+            "qwen_mt" => {
+                translate_via_qwen_mt(text, source, target, kind, qwen_key, qwen_endpoint).await
+            }
             "ling" => translate_via_ling(text, source, target, kind, ling_key).await,
             "google" => translate_via_google(text, source, target).await,
             "apple" => translate_via_apple(text.to_owned(), source, target).await,
@@ -174,6 +181,97 @@ async fn translate_via_ling(
         || content.starts_with("根据检索")
     {
         return Err("hijacked".to_owned());
+    }
+    Ok(content.trim().to_owned())
+}
+
+/// Map our UI language codes onto Qwen-MT's expected names. The model accepts
+/// ISO codes too, but the Chinese variants need explicit names (zh-TW is
+/// `zh_tw`, Cantonese has no ISO-639-1 code); unknown codes pass through and
+/// a rejection just falls through the chain to the next provider.
+fn qwen_mt_lang(code: &str) -> String {
+    match code.trim().to_lowercase().as_str() {
+        "zh" | "zh-cn" | "zh-hans" => "Chinese".to_owned(),
+        "zh-tw" | "zh-hk" | "zh-hant" => "Traditional Chinese".to_owned(),
+        "zh-yue" | "yue" => "Cantonese".to_owned(),
+        "" | "none" => "Chinese".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+const QWEN_MT_MODEL: &str = "qwen-mt-flash";
+const QWEN_MT_ENDPOINT: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
+
+/// Build the qwen-mt chat/completions body. Pure so tests can lock the wire
+/// format: exactly one user message (the protocol forbids system messages and
+/// multi-turn), with translation_options riding as a top-level body field —
+/// in OpenAI-compatible mode that is where DashScope's `extra_body` lands.
+/// `terms` is plumbed but empty for now; the glossary UI lands later and
+/// feeds `{"source": .., "target": ..}` entries straight into this array.
+fn qwen_mt_body(text: &str, source: &str, target: &str) -> Value {
+    json!({
+        "model": QWEN_MT_MODEL,
+        "messages": [{"role": "user", "content": text}],
+        "translation_options": {
+            "source_lang": qwen_mt_lang(source),
+            "target_lang": qwen_mt_lang(target),
+            "terms": [],
+        },
+    })
+}
+
+/// Alibaba Qwen-MT — DashScope's dedicated machine-translation model family
+/// (OpenAI-compatible endpoint). Shares the realtime provider's BYO DashScope
+/// key; stream is left off because this leg only ever translates finalized
+/// sentences, where a single round-trip beats incremental delivery.
+async fn translate_via_qwen_mt(
+    text: &str,
+    source: &str,
+    target: &str,
+    kind: TranslateKind,
+    key: Option<&str>,
+    endpoint: Option<&str>,
+) -> Result<String, String> {
+    let key = key.map(str::trim).filter(|value| !value.is_empty()).ok_or("qwen key missing")?;
+    let endpoint = endpoint
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(QWEN_MT_ENDPOINT);
+    let body = qwen_mt_body(text, source, target);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(kind.timeout_secs()))
+        .build()
+        .map_err(|error| error.to_string())?;
+    let response = client
+        .post(endpoint)
+        .bearer_auth(key)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| format!("network: {error}"))?;
+    let status = response.status().as_u16();
+    if status == 401 || status == 403 {
+        return Err("invalidKey".to_owned());
+    }
+    if status == 429 {
+        return Err("rateLimited".to_owned());
+    }
+    if status != 200 {
+        return Err(format!("http{status}"));
+    }
+    let parsed: Value = response.json().await.map_err(|error| format!("parse: {error}"))?;
+    let content = parsed
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if content.trim().is_empty() {
+        // DashScope reports model-level failures as a 200 with an error body;
+        // surface its message so diagnostics show why instead of "empty".
+        let detail = parsed
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .unwrap_or("empty");
+        return Err(detail.to_owned());
     }
     Ok(content.trim().to_owned())
 }
@@ -307,27 +405,95 @@ mod tests {
         assert_eq!(normalize_locale("auto"), "zh-Hans");
     }
 
+    #[test]
+    fn qwen_mt_lang_maps_chinese_variants() {
+        assert_eq!(qwen_mt_lang("zh"), "Chinese");
+        assert_eq!(qwen_mt_lang("zh-TW"), "Traditional Chinese");
+        assert_eq!(qwen_mt_lang("zh-yue"), "Cantonese");
+        assert_eq!(qwen_mt_lang("en"), "en");
+        assert_eq!(qwen_mt_lang("ja"), "ja");
+    }
+
+    #[test]
+    fn qwen_mt_body_has_single_user_message_and_options() {
+        let body = qwen_mt_body("你好", "zh", "en");
+        assert_eq!(body["model"], "qwen-mt-flash");
+        let messages = body["messages"].as_array().expect("messages array");
+        assert_eq!(messages.len(), 1, "protocol forbids system messages");
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"], "你好");
+        assert_eq!(body["translation_options"]["source_lang"], "Chinese");
+        assert_eq!(body["translation_options"]["target_lang"], "en");
+        assert_eq!(body["translation_options"]["terms"], json!([]));
+    }
+
     #[tokio::test]
     async fn passthrough_when_same_language() {
-        let outcome = translate("你好", "zh-Hans", "zh-Hans", TranslateKind::Sentence, &["google".to_owned()], None)
-            .await
-            .unwrap();
+        let outcome = translate(
+            "你好",
+            "zh-Hans",
+            "zh-Hans",
+            TranslateKind::Sentence,
+            &["google".to_owned()],
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(outcome.provider, "passthrough");
         assert_eq!(outcome.text, "你好");
     }
 
     #[tokio::test]
     async fn empty_text_errors() {
-        assert!(translate(" ", "zh", "en", TranslateKind::Sentence, &["google".to_owned()], None)
-            .await
-            .is_err());
+        assert!(translate(
+            " ",
+            "zh",
+            "en",
+            TranslateKind::Sentence,
+            &["google".to_owned()],
+            None,
+            None,
+            None,
+        )
+        .await
+        .is_err());
     }
 
     #[tokio::test]
     async fn unknown_provider_records_failure() {
-        let error = translate("你好", "zh", "en", TranslateKind::Sentence, &["nope".to_owned()], None)
-            .await
-            .err().expect("An unknown provider must fail");
+        let error = translate(
+            "你好",
+            "zh",
+            "en",
+            TranslateKind::Sentence,
+            &["nope".to_owned()],
+            None,
+            None,
+            None,
+        )
+        .await
+        .err()
+        .expect("An unknown provider must fail");
         assert!(error.contains("unknown translation provider"));
+    }
+
+    #[tokio::test]
+    async fn qwen_mt_without_key_errors_before_network() {
+        let error = translate(
+            "你好",
+            "zh",
+            "en",
+            TranslateKind::Sentence,
+            &["qwen_mt".to_owned()],
+            None,
+            None,
+            None,
+        )
+        .await
+        .err()
+        .expect("A missing key must fail the qwen_mt attempt");
+        assert!(error.contains("qwen key missing"));
     }
 }

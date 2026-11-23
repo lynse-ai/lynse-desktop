@@ -270,6 +270,13 @@ pub struct LiveSegment {
     /// 1-based speaker index derived from the Volcengine AST `spk_chg` marker.
     /// `None` for providers without speaker-change detection (iLiveData, Qwen).
     speaker: Option<u32>,
+    /// Recording-timeline arrival stamps of each final (first arrival wins, so
+    /// re-issued finals keep the original latency measurement). The HUD reads
+    /// the gap as "translation lag". Skipped from JSON while absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recognized_final_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    translated_final_at_ms: Option<u64>,
     #[serde(default, skip_serializing)]
     recognized_final: bool,
     #[serde(default, skip_serializing)]
@@ -348,6 +355,31 @@ pub fn live_translation_marker(
     let snapshot = session.snapshot();
     let _ = app.emit(LIVE_EVENT, json!({ "type": "state", "snapshot": snapshot }));
     Ok(snapshot)
+}
+
+/// Merge a frontend-chain translation (Apple/Google/Ling/Qwen-MT legs run in
+/// the frontend translation service) onto the Rust-side live segment, so
+/// `persist_session` writes a bilingual transcript. The frontend view state is
+/// patched separately via the local-translation-patch CustomEvent — this
+/// command deliberately emits nothing, it only repairs the persisted record.
+#[tauri::command]
+pub fn live_translation_patch_translation(
+    state: State<LiveTranslationManager>,
+    sessionId: String,
+    segmentId: String,
+    translatedText: String,
+) -> CommandResult<()> {
+    let session = state.session.lock().map_err(|_| "Session unavailable")?
+        .clone().ok_or("No active recording")?;
+    let mut segments = session.segments.lock().map_err(|_| "Segments unavailable")?;
+    if let Some(segment) = segments
+        .iter_mut()
+        .find(|segment| segment.id == segmentId && segment.session_id == sessionId)
+    {
+        segment.translated_text = translatedText;
+        segment.translated_final = true;
+    }
+    Ok(())
 }
 
 /// Persist incremental structured meeting notes (the frontend notes engine
@@ -2296,6 +2328,8 @@ fn ingest_provider_text(
             task_id: Some(task_id.clone()),
             echo_of: None,
             speaker,
+            recognized_final_at_ms: None,
+            translated_final_at_ms: None,
             recognized_final: false,
             translated_final: false,
         });
@@ -2323,6 +2357,18 @@ fn ingest_provider_text(
     };
     apply_method_text(segment, method, text);
     segment.is_final = segment.recognized_final && segment.translated_final;
+    // First-arrival stamps for the translation-lag HUD: re-issued finals must
+    // not refresh the measurement, hence the is_none gate.
+    if is_final {
+        let now = session.last_elapsed_ms.load(Ordering::Relaxed);
+        if is_recognized {
+            if segment.recognized_final_at_ms.is_none() {
+                segment.recognized_final_at_ms = Some(now);
+            }
+        } else if segment.translated_final_at_ms.is_none() {
+            segment.translated_final_at_ms = Some(now);
+        }
+    }
 
     if is_final {
         // Dual-channel sessions keep simultaneous-speech overlaps visible:
@@ -5018,6 +5064,8 @@ mod tests {
             task_id: None,
             echo_of: None,
             speaker: None,
+            recognized_final_at_ms: None,
+            translated_final_at_ms: None,
             recognized_final: true,
             translated_final: false,
         }
@@ -5348,6 +5396,28 @@ mod tests {
         assert_eq!(segments[0].end_ms, Some(5_080));
         assert!(segments[0].is_final);
         assert!(segments[0].id.contains(":2:Mic:9:"));
+    }
+
+    #[test]
+    fn arrival_stamps_record_first_final_latency() {
+        let session = live_session();
+        let recognized_final = r#"{"method":"recognizedResult","streamId":"9","taskId":"3","startTs":"20","endTs":"80","asr":"最终"}"#;
+        let translated_final = r#"{"method":"translatedResult","streamId":"9","taskId":"3","startTs":"20","endTs":"80","trans":"final"}"#;
+
+        // The session clock advances between arrivals, simulating the audio
+        // loop updating last_elapsed_ms as the recording plays on.
+        session.last_elapsed_ms.store(10_000, Ordering::Relaxed);
+        direct_message(&session, AudioSource::Mic, 0, 0, recognized_final).unwrap();
+        session.last_elapsed_ms.store(11_800, Ordering::Relaxed);
+        direct_message(&session, AudioSource::Mic, 0, 0, translated_final).unwrap();
+        // Providers may re-issue finals; the first arrival must win so the
+        // measured translation lag stays honest.
+        session.last_elapsed_ms.store(12_000, Ordering::Relaxed);
+        direct_message(&session, AudioSource::Mic, 0, 0, translated_final).unwrap();
+
+        let segments = session.segments.lock().unwrap();
+        assert_eq!(segments[0].recognized_final_at_ms, Some(10_000));
+        assert_eq!(segments[0].translated_final_at_ms, Some(11_800));
     }
 
     #[test]

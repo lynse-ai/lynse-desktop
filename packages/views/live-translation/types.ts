@@ -101,6 +101,10 @@ export interface LiveTranslationSegment {
   echoOf?: string;
   /** 1-based speaker index from Volcengine AST `spk_chg` (undefined for providers without diarization). */
   speaker?: number;
+  /** Recording-timeline arrival stamps of each final (Rust-side, first arrival
+   *  wins). The HUD reads the gap as translation lag; absent on older builds. */
+  recognizedFinalAtMs?: number;
+  translatedFinalAtMs?: number;
 }
 
 export interface RecordingMarker {
@@ -110,6 +114,11 @@ export interface RecordingMarker {
   note: string;
   startMs: number;
 }
+
+/** Subtitle overlay window geometry preset: `default` is the compact
+ *  subtitle bar the Rust side creates, `stage` grows the window for
+ *  projection-style viewing. */
+export type SubtitleWindowPreset = "default" | "stage";
 
 export interface LiveTranslationSnapshot {
   markers?: RecordingMarker[];
@@ -313,8 +322,14 @@ export interface DesktopLiveTranslationApi {
     kind: "draft" | "sentence" | "speak";
     providers: string[];
     lingKey?: string | null;
+    qwenKey?: string | null;
+    qwenEndpoint?: string | null;
   }) => Promise<{ text: string; provider: string; attempts: unknown[] }>;
   checkLingKey?: (key: string) => Promise<{ ok: boolean; ms: number }>;
+  /** Merge a frontend-chain translation onto the Rust-side live segment so
+   *  the persisted transcript keeps the bilingual pair. Optional so older
+   *  desktop builds keep working — callers treat an absent method as skip. */
+  patchTranslation?: (args: { sessionId: string; segmentId: string; translatedText: string }) => Promise<void>;
   stop: () => Promise<void>;
   getState: () => Promise<LiveTranslationSnapshot>;
   finalizeLocal: (sessionId: string, synced: boolean) => Promise<void>;
@@ -334,6 +349,13 @@ export interface DesktopLiveTranslationApi {
    *  重新处理 entry). Resolves with the refreshed transcription record. */
   reprocess: (sessionId: string) => Promise<Record<string, unknown>>;
   showSubtitles: (show: boolean) => Promise<void>;
+  /** Resize/re-position the subtitle overlay window for a display preset:
+   *  `default` is the compact subtitle bar, `stage` is the enlarged
+   *  projection-style window. Optional so the web build hides the control. */
+  setSubtitleWindowPreset?: (preset: SubtitleWindowPreset) => Promise<void>;
+  /** Move the subtitle overlay to the screen the cursor currently sits on
+   *  (multi-monitor following). Optional — absent on the web build. */
+  moveSubtitleToCursorScreen?: () => Promise<void>;
   minimizeToTray: () => Promise<void>;
   showMainWindow: () => Promise<void>;
   /** Hide the main window (close-to-tray); the recording island pops when a

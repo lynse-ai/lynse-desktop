@@ -1,11 +1,13 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { ChevronDown, ChevronUp, CircleDot, Fish, ListTodo, NotebookPen, ScrollText, Tag } from "../../icons";
+import { toast } from "sonner";
+import { ChevronDown, ChevronUp, Check, CircleDot, Fish, ListTodo, NotebookPen, ScrollText, Tag } from "../../icons";
 import type { NoteItem, NoteTerm, NoteTopic } from "@lynse/core/api";
 import { FishboneDiagram } from "./fishbone-diagram";
 import type { LiveNotesState } from "./engine";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { createTodosFromSeeds } from "../../todo/create-from-source";
 
 /** Structured live notes panel: summary + topics (expandable fishbone) +
  *  conclusions + todos + terms. Renders the engine's latest revision; the
@@ -58,13 +60,7 @@ export function LiveNotesPanel({ state }: { state: LiveNotesState }) {
       )}
 
       {notes.todos.length > 0 && (
-        <Section icon={<ListTodo className="size-3.5" />} label={t("live_translation.notes_todos")}>
-          <ul className="space-y-1.5">
-            {notes.todos.map((item, index) => (
-              <ItemRow key={index} item={item} />
-            ))}
-          </ul>
-        </Section>
+        <TodoItemsSection todos={notes.todos} sourceTitle={notes.title || undefined} />
       )}
 
       {notes.terms.length > 0 && (
@@ -196,6 +192,88 @@ function ItemRow({ item }: { item: NoteItem }) {
         {item.owner && <span className="text-muted-foreground"> · {item.owner}</span>}
       </span>
     </li>
+  );
+}
+
+/**
+ * Action items with one-tap conversion into real todos (create-from-source
+ * path — local todos carrying owner / evidence / source title). Converted
+ * items flip to a check for the session; the guard is per-panel, so
+ * converting the same note twice after a remount would duplicate — the
+ * toast naming the count keeps that honest.
+ */
+function TodoItemsSection({ todos, sourceTitle }: { todos: NoteItem[]; sourceTitle?: string }) {
+  const { t } = useTranslation();
+  const [converted, setConverted] = useState<Set<string>>(new Set());
+  const [busy, setBusy] = useState(false);
+
+  const convert = async (items: NoteItem[]) => {
+    const pending = items.filter((item) => !converted.has(item.text));
+    if (pending.length === 0 || busy) return;
+    setBusy(true);
+    try {
+      const created = await createTodosFromSeeds(
+        pending.map((item) => ({
+          title: item.text,
+          ...(item.owner ? { owner: item.owner } : {}),
+          ...(item.evidence.length > 0 ? { notes: item.evidence.join("\n") } : {}),
+          ...(sourceTitle ? { sourceTitle } : {}),
+        })),
+      );
+      toast.success(t("todo.converted_toast", { n: created.length }));
+      setConverted((prev) => new Set([...prev, ...pending.map((item) => item.text)]));
+    } catch (error) {
+      console.error("[Notes] convert to todos failed:", error);
+      toast.error(t("todo.convert_failed"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remaining = todos.filter((item) => !converted.has(item.text));
+
+  return (
+    <Section icon={<ListTodo className="size-3.5" />} label={t("live_translation.notes_todos")}>
+      {remaining.length > 1 && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void convert(todos)}
+          className="mb-1.5 flex items-center gap-1 text-2xs font-medium text-primary transition-colors hover:text-primary/80 disabled:opacity-50"
+        >
+          <ListTodo className="size-3" />
+          {t("todo.convert_all")}
+        </button>
+      )}
+      <ul className="space-y-1.5">
+        {todos.map((item, index) => {
+          const done = converted.has(item.text);
+          return (
+            <li key={index} className="flex items-start gap-1.5 text-2xs leading-relaxed text-foreground/90">
+              <span
+                className={`mt-1 size-1.5 shrink-0 rounded-full ${item.support === 0 ? "bg-muted-foreground/40" : "bg-primary/60"}`}
+              />
+              <span className="min-w-0 flex-1">
+                {item.text}
+                {item.owner && <span className="text-muted-foreground"> · {item.owner}</span>}
+              </span>
+              <button
+                type="button"
+                disabled={busy || done}
+                title={done ? t("todo.converted_done") : t("todo.convert_one")}
+                aria-label={done ? t("todo.converted_done") : t("todo.convert_one")}
+                onClick={() => void convert([item])}
+                className={`shrink-0 rounded p-0.5 transition-colors ${
+                  done ? "text-success" : "text-muted-foreground/60 hover:bg-accent/50 hover:text-primary"
+                } disabled:opacity-60`}
+              >
+                {done ? <Check className="size-3" /> : <ListTodo className="size-3" />}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </Section>
   );
 }
 

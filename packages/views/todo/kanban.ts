@@ -44,8 +44,9 @@ export function kanbanColumnFor(todo: TodoItem): KanbanColumnKey {
 /**
  * In-column order: overdue first (the triage queue), then dated todos by
  * due date ascending, undated last. Ties keep the store order (stable sort).
+ * Exported for the owner view, which sorts each owner's pile the same way.
  */
-function compareTodos(a: TodoItem, b: TodoItem): number {
+export function compareTodos(a: TodoItem, b: TodoItem): number {
   const aOverdue = isOverdueTodo(a);
   const bOverdue = isOverdueTodo(b);
   if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;

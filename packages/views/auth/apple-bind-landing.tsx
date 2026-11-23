@@ -23,8 +23,9 @@ import { Loader2 } from "../icons";
  * (bind = login), so completing the form signs the user in.
  */
 
-/** Backend error keys → the few user-facing messages worth translating. */
-function appleErrorMessage(key: string, t: (k: string) => string): string {
+/** Backend error keys → the few user-facing messages worth translating.
+ *  Shared with the desktop Apple auth window's landing handler. */
+export function appleErrorMessage(key: string, t: (k: string) => string): string {
   if (key === "error.apple.state.invalid") return t("auth.apple_err_state");
   if (key === "error.apple.config.missing") return t("auth.apple_err_config");
   if (key === "error.sub.already.bind") return t("auth.apple_err_already_bound");

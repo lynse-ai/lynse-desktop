@@ -3,9 +3,10 @@ import type { DesktopLynclawNotesApi } from "@lynse/views/notes";
 import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { openUrl, openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize, PhysicalPosition, availableMonitors, currentMonitor, cursorPosition } from "@tauri-apps/api/window";
 
 /** Window frame to restore when the permission onboarding closes. Captured
  * at enter time so a user-resized (or maximized — untouched) frame comes
@@ -132,6 +133,18 @@ export type DesktopApi = {
   meetingDetector: DesktopMeetingDetectorApi;
   vault: DesktopVaultApi;
   todo: Record<string, (...args: any[]) => Promise<unknown>>;
+  // OS notifications (tauri-plugin-notification) — todo due reminders. The
+  // renderer never touches the plugin directly; views feature-detects this
+  // object and degrades to in-app toasts on the web.
+  notifications: {
+    /** Current OS permission without prompting: "granted" or "default"/"denied"
+     *  collapsed — distinguishing them would require asking. */
+    status: () => Promise<"granted" | "not-granted">;
+    /** Shows the OS authorization prompt when needed; resolves the result. */
+    request: () => Promise<"granted" | "denied" | "default">;
+    /** Fire-and-forget; silently no-ops when permission is missing. */
+    send: (title: string, body?: string) => Promise<void>;
+  };
   inspiration: DesktopInspirationApi;
   webdavSync: DesktopWebdavSyncApi;
   storage: DesktopStorageApi;
@@ -220,6 +233,26 @@ export type DesktopApi = {
     // window and the code+state redirect is relayed back as a URL event.
     wechat: {
       openAuthWindow: (url: string) => Promise<void>;
+      closeAuthWindow: () => Promise<void>;
+      onAuthCallback: (
+        callback: (callbackUrl: string) => void,
+      ) => Promise<() => void>;
+    };
+    // Account-center SSO window (generic OAuth): authorize URL, registered
+    // callback and expected state are caller-supplied; the callback redirect
+    // never actually loads.
+    oauth: {
+      openAuthWindow: (url: string, callback: string, state: string) => Promise<void>;
+      closeAuthWindow: () => Promise<void>;
+      onAuthCallback: (
+        callback: (callbackUrl: string) => void,
+      ) => Promise<() => void>;
+    };
+    // Apple sign-in window: the backend-mediated form-post contract 302s to
+    // its web landing pages; the landing navigation on the expected web
+    // origin is relayed back as a URL event.
+    apple: {
+      openAuthWindow: (url: string, landingOrigin: string) => Promise<void>;
       closeAuthWindow: () => Promise<void>;
       onAuthCallback: (
         callback: (callbackUrl: string) => void,
@@ -457,6 +490,14 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
     openExternal: async (url) => {
       await openUrl(url);
     },
+    notifications: {
+      status: async () => ((await isPermissionGranted()) ? "granted" : "not-granted"),
+      request: async () => await requestPermission(),
+      send: async (title, body) => {
+        if (!(await isPermissionGranted())) return;
+        await sendNotification({ title, body: body ?? "" });
+      },
+    },
     lynclawNotes: {
       list: (scope) => command("lynclaw_notes_list", { scope }),
       create: (scope, note) => command("lynclaw_note_create", { scope, note }),
@@ -582,9 +623,11 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
       saveNotes: (sessionId: string, notes: unknown) =>
         command<void>("live_notes_save", { sessionId, notes: notes ?? null }),
       macosMajorVersion: () => command<number | null>("macos_major_version"),
-      translate: (args: { text: string; source: string; target: string; kind: "draft" | "sentence" | "speak"; providers: string[]; lingKey?: string | null }) =>
+      translate: (args: { text: string; source: string; target: string; kind: "draft" | "sentence" | "speak"; providers: string[]; lingKey?: string | null; qwenKey?: string | null; qwenEndpoint?: string | null }) =>
         command<{ text: string; provider: string; attempts: unknown[] }>("translation_translate", args),
       checkLingKey: (key: string) => command<{ ok: boolean; ms: number }>("translation_check_key", { key }),
+      patchTranslation: (args: { sessionId: string; segmentId: string; translatedText: string }) =>
+        command<void>("live_translation_patch_translation", args),
       stop: () => command<void>("live_translation_stop"),
       getState: () => command<LiveTranslationSnapshot>("live_translation_state"),
       finalizeLocal: (sessionId, synced) => command<void>("live_translation_finalize_local", { sessionId, synced }),
@@ -597,6 +640,32 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
       reprocess: (sessionId: string) =>
         command<Record<string, unknown>>("live_translation_reprocess", { sessionId }),
       showSubtitles: (show) => command<void>("live_translation_show_subtitles", { show }),
+      // Overlay geometry presets run from the overlay webview itself, so
+      // getCurrentWindow() IS the live-subtitles window — no label lookup.
+      setSubtitleWindowPreset: async (preset) => {
+        const win = getCurrentWindow();
+        await win.setSize(preset === "stage" ? new LogicalSize(900, 420) : new LogicalSize(720, 190));
+      },
+      moveSubtitleToCursorScreen: async () => {
+        const win = getCurrentWindow();
+        const [cursor, monitors] = await Promise.all([cursorPosition(), availableMonitors()]);
+        const size = await win.innerSize();
+        const target =
+          monitors.find(
+            (monitor) =>
+              cursor.x >= monitor.position.x &&
+              cursor.x < monitor.position.x + monitor.size.width &&
+              cursor.y >= monitor.position.y &&
+              cursor.y < monitor.position.y + monitor.size.height,
+          ) ?? (await currentMonitor());
+        if (!target) return;
+        await win.setPosition(
+          new PhysicalPosition(
+            target.position.x + Math.round((target.size.width - size.width) / 2),
+            target.position.y + Math.round((target.size.height - size.height) / 2),
+          ),
+        );
+      },
       showMainWindow: () => command<void>("live_translation_show_main"),
       // Hide the main window (close-to-tray). Rust shows the recording island
       // when a session is running, so the session stays reachable without the
@@ -861,6 +930,19 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
       closeAuthWindow: () => command<void>("oauth_auth_window_close"),
       onAuthCallback: (callback: (callbackUrl: string) => void) =>
         getCurrentWebview().listen<string>("oauth-auth-callback", (event) =>
+          callback(event.payload),
+        ),
+    },
+    // Apple sign-in window: appleid.apple.com form-posts the code to the
+    // backend, which 302s to its web landing pages; the landing navigation
+    // (session fragment / bind+error query on the expected web origin) is
+    // relayed back as a URL event.
+    apple: {
+      openAuthWindow: (url: string, landingOrigin: string) =>
+        command<void>("apple_auth_window", { url, landingOrigin }),
+      closeAuthWindow: () => command<void>("apple_auth_window_close"),
+      onAuthCallback: (callback: (callbackUrl: string) => void) =>
+        getCurrentWebview().listen<string>("apple-auth-callback", (event) =>
           callback(event.payload),
         ),
     },

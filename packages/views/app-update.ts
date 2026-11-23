@@ -118,6 +118,17 @@ type DesktopAppApi = {
       callback: (callbackUrl: string) => void,
     ) => Promise<() => void>;
   };
+  /** Apple sign-in window (desktop only): the authorize page form-posts to
+   * the backend, which 302s to its web landing pages; the landing navigation
+   * on the expected web origin is relayed back as a URL (session token in
+   * the fragment, thirdPartyId/error in the query). */
+  apple?: {
+    openAuthWindow: (url: string, landingOrigin: string) => Promise<void>;
+    closeAuthWindow: () => Promise<void>;
+    onAuthCallback: (
+      callback: (callbackUrl: string) => void,
+    ) => Promise<() => void>;
+  };
 };
 
 /** Access the desktop update API, or null when running outside the Tauri host. */

@@ -1,17 +1,23 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import { Plus, Calendar, Trash2, X, RefreshCw, Loader2, List, User, Columns2 } from "../icons";
+import { useState, useCallback, useMemo, useEffect } from "react";
+import { Plus, Calendar, Trash2, X, RefreshCw, Loader2, List, User, Columns2, Search, Bell } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
 import { SqueezePanel } from "../squeeze-panel";
 import { Button } from "@lynse/ui/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@lynse/ui/components/ui/dropdown-menu";
 import { toast } from "sonner";
 import { featureFlags } from "../feature-flags";
 import { getDesktopInspirationApi } from "../inspiration/desktop-api";
 import { isWebPlatform } from "../platform";
 import { useInspirationCaptureStore } from "../inspiration/capture-store";
 import { type TodoItem, type TodoStatus, type KanbanLane, todoStatus, todoClosed, addTodoToSystemCalendar, isCalendarAvailable, saveTodo, moveTodoKanban } from "./todo-api";
-import { groupTodos, formatDueDisplay, type GroupKey } from "./grouping";
+import { groupTodos, type GroupKey } from "./grouping";
 import { DatePickerPopover, TimePickerPopover } from "./date-time-picker";
 import { TodoStateControl } from "./state-control";
 import { useTodos } from "./use-todos";
@@ -19,9 +25,15 @@ import { TodoExportDialog } from "./export-action-items";
 import { TodoCardContextMenu } from "./card-context-menu";
 import { TodoCalendarView } from "./calendar-view";
 import { TodoKanbanView } from "./kanban-view";
-import { useWorkbench } from "../workbench";
+import { applyTodoFilter, collectOwners, DEFAULT_FILTER, type SmartFilter } from "./filters";
+import { parseNaturalWhen } from "./natural-date";
+import {
+  requestTodoNotificationPermission,
+  setTodoRemindersEnabled,
+  todoRemindersEnabled,
+} from "./due-reminders";
+import { GroupSection, TodoItemCard, hasTodoSource, openTodoSource } from "./todo-card";
 import { useNavigation } from "../navigation";
-import { getWorkspaceState } from "../workspace/store";
 import { ResizableHandle } from "../workspace/resizable-handle";
 import { TitleBarSlot } from "../layout/app-title-bar";
 
@@ -37,30 +49,6 @@ function toLocalDateInput(d: Date): string {
 /** Local-time HH:mm for <input type="time"> / display. */
 function toLocalTimeInput(d: Date): string {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-}
-
-/** True when the todo carries a resolvable extraction source. */
-function hasTodoSource(todo: TodoItem): boolean {
-  return Boolean(todo.sourceRef || todo.sourceFileId);
-}
-
-/**
- * Jump to the note a todo was extracted from. Capture-sheet todos carry a
- * workbench sourceRef; cloud ones only a fileId whose display title was
- * resolved against the notes list on load. Returns false when there is
- * nothing to open — callers keep their chip hidden in that case.
- */
-function openTodoSource(todo: TodoItem, push: (path: string) => void): boolean {
-  if (todo.sourceRef) {
-    useWorkbench.getState().showSource(todo.sourceRef);
-    return true;
-  }
-  if (todo.sourceFileId) {
-    getWorkspaceState().selectItem(todo.sourceFileId, "meeting", todo.sourceTitle);
-    push("/notes");
-    return true;
-  }
-  return false;
 }
 
 /** Section render order; overdue is flagged so its label renders in danger color. */
@@ -137,201 +125,113 @@ function AddTodoTrigger({ onOpen }: { onOpen: () => void }) {
   );
 }
 
+
+/** Non-owner smart filter chips, in row order. */
+const FILTER_CHIPS: { kind: Exclude<SmartFilter["kind"], "owner">; labelKey: string }[] = [
+  { kind: "all", labelKey: "todo.filter_all" },
+  { kind: "overdue", labelKey: "todo.filter_overdue" },
+  { kind: "today", labelKey: "todo.filter_today" },
+  { kind: "week", labelKey: "todo.filter_week" },
+  { kind: "starred", labelKey: "todo.filter_starred" },
+];
+
+const CHIP_BASE =
+  "rounded-full border px-2.5 py-1 text-xs transition-colors";
+const CHIP_ON = "border-primary/40 bg-primary/10 text-accent-brand-text";
+const CHIP_OFF = "border-border text-muted-foreground hover:text-foreground";
+
 /**
- * One todo as a card in the responsive grid. A plain div with role=button so
- * the source chip (a real button), the checkbox and the inline title
- * editor can nest inside without invalid button-in-button markup.
- *
- * The title edits in place on double-click (same entry point as the edit
- * panel; both persist through saveTodo).
+ * Search input + smart-filter chips between the add bar and the views.
+ * The owner chip opens a picker over the owners present on the board
+ * (speaker labels included — that's the meeting follow-up lens); hidden
+ * when no todo carries an owner.
  */
-function TodoItemCard({
-  todo,
-  active,
-  overdue = false,
-  onSelect,
-  onToggle,
-  onRename,
+function FilterBar({
+  filter,
+  onFilterChange,
+  query,
+  onQueryChange,
+  owners,
 }: {
-  todo: TodoItem;
-  active: boolean;
-  /** Set for the overdue section — the due date renders in danger color. */
-  overdue?: boolean;
-  onSelect: () => void;
-  onToggle: () => void;
-  /** Persist a new title (optimistic patch + saveTodo). */
-  onRename: (todo: TodoItem, title: string) => void;
+  filter: SmartFilter;
+  onFilterChange: (filter: SmartFilter) => void;
+  query: string;
+  onQueryChange: (query: string) => void;
+  owners: string[];
 }) {
   const { t } = useTranslation();
-  const navigate = useNavigation();
-  const dueText = formatDueDisplay(todo);
-  const closed = todoClosed(todo);
-
-  // ── Inline title editing ──
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(todo.title);
-  // Set when Escape backs out, so the blur-triggered commit keeps the old title.
-  const skipCommitRef = useRef(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  // Follow store-side title changes (edit panel saves) while not editing.
-  useEffect(() => {
-    if (!editing) setDraft(todo.title);
-  }, [todo.title, editing]);
-
-  useEffect(() => {
-    if (editing) inputRef.current?.select();
-  }, [editing]);
-
-  const startEdit = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setDraft(todo.title);
-    skipCommitRef.current = false;
-    setEditing(true);
-  }, [todo.title]);
-
-  const commitEdit = useCallback(() => {
-    setEditing(false);
-    if (skipCommitRef.current) {
-      skipCommitRef.current = false;
-      setDraft(todo.title);
-      return;
-    }
-    const trimmed = draft.trim();
-    if (trimmed && trimmed !== todo.title) onRename(todo, trimmed);
-  }, [draft, todo, onRename]);
-
-  const handleSourceClick = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
-      openTodoSource(todo, (path) => navigate.push(path));
-    },
-    [todo, navigate],
-  );
+  const ownerActive = filter.kind === "owner";
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onSelect}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect();
-        }
-      }}
-      className={`flex cursor-pointer flex-col gap-2 rounded-xl border p-3 text-left transition-colors ${
-        active
-          ? "border-ring/40 bg-accent/50"
-          : "border-border/60 bg-card/40 hover:border-ring/40 hover:bg-accent/30"
-      }`}
-    >
-      <div className="flex items-start gap-2">
+    <div className="flex flex-wrap items-center gap-2 px-6 pb-2">
+      <div className="flex h-8 w-full max-w-60 items-center gap-1.5 rounded-full border border-border/60 bg-muted/40 px-3 transition-colors focus-within:border-ring/60 focus-within:bg-background">
+        <Search className="size-3.5 shrink-0 text-muted-foreground" />
         <input
-          type="checkbox"
-          checked={todo.completed}
-          onChange={(e) => { e.stopPropagation(); onToggle(); }}
-          className="mt-0.5 size-4 shrink-0 rounded border-border accent-primary"
-          onClick={(e) => e.stopPropagation()}
-          aria-label={t("todo.completed_toggle")}
+          className="h-full min-w-0 flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
+          placeholder={t("todo.search_placeholder")}
+          value={query}
+          onChange={(e) => onQueryChange(e.target.value)}
         />
-        {editing ? (
-          <input
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={commitEdit}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === "Enter") {
-                e.preventDefault();
-                inputRef.current?.blur();
-              } else if (e.key === "Escape") {
-                skipCommitRef.current = true;
-                inputRef.current?.blur();
-              }
-            }}
-            className="mt-px min-w-0 flex-1 rounded-md bg-muted/50 px-1 py-0.5 text-sm leading-snug text-foreground outline-none focus:ring-2 focus:ring-ring/30"
-            aria-label={t("todo.rename_hint")}
-          />
-        ) : (
-          <span
-            onDoubleClick={startEdit}
-            title={t("todo.rename_hint")}
-            className={`line-clamp-2 min-w-0 flex-1 cursor-text text-sm leading-snug ${
-              closed ? "line-through text-muted-foreground" : "text-foreground"
-            }`}
-          >
-            {todo.title}
-          </span>
-        )}
-      </div>
-
-      {/* Meta chips: date + owner pinned to one line, source and status follow. */}
-      <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-        <span className="flex min-w-0 items-center gap-1.5">
-          {dueText && (
-            <span
-              className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 tabular-nums ${
-                overdue && !closed ? "bg-destructive/10 text-destructive" : "bg-muted/60"
-              }`}
-            >
-              <Calendar className="size-3 shrink-0" />
-              {dueText}
-            </span>
-          )}
-          {todo.owner && (
-            <span
-              className="inline-flex min-w-0 items-center gap-1 rounded-full bg-muted/60 px-2 py-0.5"
-              title={todo.owner}
-            >
-              <User className="size-3 shrink-0" />
-              <span className="truncate">{todo.owner}</span>
-            </span>
-          )}
-        </span>
-        {hasTodoSource(todo) && (
+        {query && (
           <button
             type="button"
-            onClick={handleSourceClick}
-            title={`${t("todo.source_from")}${todo.sourceTitle ?? t("todo.source_note")}`}
-            className="inline-flex max-w-full items-center truncate rounded-full bg-muted/60 px-2 py-0.5 text-left underline-offset-2 transition-colors hover:bg-accent hover:text-foreground hover:underline"
+            aria-label={t("todo.cancel")}
+            onClick={() => onQueryChange("")}
+            className="shrink-0 rounded p-0.5 hover:bg-accent/50"
           >
-            {t("todo.source_from")}{todo.sourceTitle ?? t("todo.source_note")}
+            <X className="size-3 text-muted-foreground" />
           </button>
         )}
-        {todo.status && (
-          <span className="shrink-0 rounded-full bg-muted/60 px-2 py-0.5">
-            {t(`memory_manager.todo_${todoStatus(todo)}`)}
-          </span>
-        )}
-        {!todo.calendarEventId && (
-          <Calendar className="ml-auto size-3.5 shrink-0 text-muted-foreground/40" />
-        )}
       </div>
-    </div>
-  );
-}
 
-function GroupSection({
-  label,
-  count,
-  labelClassName,
-  children,
-}: {
-  label: string;
-  count: number;
-  labelClassName?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="py-2">
-      <div className="flex items-center gap-2 px-6 pb-1 pt-1">
-        <span className={`text-sm font-medium ${labelClassName ?? "text-foreground"}`}>{label}</span>
-        <span className="text-xs text-muted-foreground tabular-nums">{count}</span>
-      </div>
-      <div className="flex flex-col gap-px">{children}</div>
+      {FILTER_CHIPS.map(({ kind, labelKey }) => {
+        const active = filter.kind === kind;
+        return (
+          <button
+            key={kind}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onFilterChange(active ? DEFAULT_FILTER : ({ kind } as SmartFilter))}
+            className={`${CHIP_BASE} ${
+              active
+                ? kind === "overdue"
+                  ? "border-destructive/40 bg-destructive/10 text-destructive"
+                  : CHIP_ON
+                : CHIP_OFF
+            }`}
+          >
+            {t(labelKey)}
+          </button>
+        );
+      })}
+
+      {owners.length > 0 && (
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            type="button"
+            aria-pressed={ownerActive}
+            className={`${CHIP_BASE} ${ownerActive ? CHIP_ON : CHIP_OFF} inline-flex items-center gap-1`}
+          >
+            <User className="size-3" />
+            <span className="max-w-32 truncate">
+              {ownerActive ? filter.owner : t("todo.filter_owner")}
+            </span>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="max-h-64 overflow-y-auto">
+            {owners.map((owner) => (
+              // Base UI menu items fire onClick only (onSelect never does).
+              <DropdownMenuItem key={owner} onClick={() => onFilterChange({ kind: "owner", owner })}>
+                <span className="truncate">{owner}</span>
+              </DropdownMenuItem>
+            ))}
+            {ownerActive && (
+              <DropdownMenuItem onClick={() => onFilterChange(DEFAULT_FILTER)}>
+                {t("todo.filter_reset")}
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
     </div>
   );
 }
@@ -728,6 +628,12 @@ export function TodoPage() {
   // The board is the default landing view — the triage columns beat the
   // flat list for day-to-day use.
   const [viewMode, setViewMode] = useState<"list" | "kanban" | "calendar">("kanban");
+  // Smart filters + search (see filters.ts) — the local answer to Reminders'
+  // smart lists; chips row sits between the add bar and the views.
+  const [filter, setFilter] = useState<SmartFilter>(DEFAULT_FILTER);
+  const [query, setQuery] = useState("");
+  // Due-reminder bell; the watcher (dashboard layout) reads the same flag.
+  const [remindersOn, setRemindersOn] = useState(() => todoRemindersEnabled());
   // Export now lives in the card context menu: pick a cloud todo, right-click,
   // 导出 — the dialog opens for that single item. The menu component hides the
   // entry for local todos (no cloud id) and when connections are off.
@@ -737,11 +643,26 @@ export function TodoPage() {
 
   const handleAdd = useCallback(
     (title: string) => {
-      addLocal(title);
+      // Natural-language due dates ("周五下午3点交周报") are parsed off the
+      // title; the capture-sheet path does the same for desktop quick-add.
+      const parsed = parseNaturalWhen(title);
+      void addLocal(parsed?.title ?? title, parsed?.dueDate ? { dueDate: parsed.dueDate } : undefined);
       setSelectedId(null);
     },
     [addLocal],
   );
+
+  /** Bell toggle: flips the persisted flag and, when enabling on desktop,
+   *  raises the OS notification prompt (in-app toasts work regardless). */
+  const handleToggleReminders = useCallback(async () => {
+    const next = !todoRemindersEnabled();
+    setTodoRemindersEnabled(next);
+    setRemindersOn(next);
+    if (next) {
+      const granted = await requestTodoNotificationPermission();
+      if (granted === false) toast.info(t("todo.reminder_in_app_only"));
+    }
+  }, [t]);
 
   const handleToggle = useCallback(
     (id: string) => {
@@ -808,7 +729,10 @@ export function TodoPage() {
     [patchLocal, load],
   );
 
-  const groups = useMemo(() => groupTodos(todos), [todos]);
+  // Smart filter + search apply across list / kanban / calendar.
+  const visibleTodos = useMemo(() => applyTodoFilter(todos, filter, query), [todos, filter, query]);
+  const groups = useMemo(() => groupTodos(visibleTodos), [visibleTodos]);
+  const owners = useMemo(() => collectOwners(todos), [todos]);
   const selected = todos.find((x) => x.id === selectedId) ?? null;
 
   /** Shared per-card context menu props (list grid + kanban board). The menu
@@ -840,8 +764,21 @@ export function TodoPage() {
       <TitleBarSlot
         actions={
           <>
+            {/* Due-reminder bell — flips the persisted flag the dashboard
+                watcher reads; enabling raises the OS prompt on desktop. */}
+            <button
+              onClick={() => void handleToggleReminders()}
+              className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs hover:bg-accent/50 ${
+                remindersOn ? "text-foreground" : "text-muted-foreground/60"
+              }`}
+              title={t("todo.reminder_toggle")}
+              aria-pressed={remindersOn}
+            >
+              <Bell className={`size-3.5 ${remindersOn ? "" : "opacity-50"}`} />
+              {t("todo.reminder_toggle")}
+            </button>
             {/* View switcher — list / kanban / calendar as a compact
-                segmented control now that there are three modes. */}
+                segmented control. */}
             <div className="flex items-center gap-0.5 rounded-md border border-border/50 bg-muted/30 p-0.5">
               {([
                 { mode: "list" as const, icon: <List className="size-3.5" />, label: t("todo.view_list") },
@@ -916,11 +853,22 @@ export function TodoPage() {
               web falls back to the inline input. */}
           {sheetAvailable ? <AddTodoTrigger onOpen={() => openCapture("todo")} /> : <AddTodoInput onAdd={handleAdd} />}
 
+          {/* Smart filters + search — chips lens the views (overdue / today /
+              week / starred / per-owner), the input free-text-matches the
+              human-visible fields. */}
+          <FilterBar
+            filter={filter}
+            onFilterChange={setFilter}
+            query={query}
+            onQueryChange={setQuery}
+            owners={owners}
+          />
+
           {/* List / kanban / calendar — one view at a time; the edit panel
-              works on all of them. */}
+              works on all of them. All receive the filtered list. */}
           {viewMode === "kanban" ? (
             <TodoKanbanView
-              todos={todos}
+              todos={visibleTodos}
               selectedId={selectedId}
               onSelect={setSelectedId}
               onToggle={handleToggle}
@@ -931,7 +879,7 @@ export function TodoPage() {
             />
           ) : viewMode === "calendar" ? (
             <TodoCalendarView
-              todos={todos}
+              todos={visibleTodos}
               selectedId={selectedId}
               onSelect={setSelectedId}
               onToggle={handleToggle}
@@ -944,6 +892,19 @@ export function TodoPage() {
                 <div className="flex flex-col items-center justify-center py-16 text-center">
                   <p className="text-sm font-medium text-foreground">{t("todo.empty")}</p>
                   <p className="mt-1 text-xs text-muted-foreground">{t("todo.empty_hint")}</p>
+                </div>
+              ) : visibleTodos.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-center">
+                  <p className="text-sm font-medium text-foreground">{t("todo.filter_no_match")}</p>
+                  <button
+                    className="mt-1 text-xs text-muted-foreground underline-offset-2 hover:underline"
+                    onClick={() => {
+                      setFilter(DEFAULT_FILTER);
+                      setQuery("");
+                    }}
+                  >
+                    {t("todo.filter_reset")}
+                  </button>
                 </div>
               ) : (
                 GROUP_SECTIONS.map(({ key, labelKey, danger }) => {

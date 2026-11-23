@@ -57,6 +57,8 @@ import {
   LOCAL_TRANSCRIPTION_FOLDER_ID,
 } from "../workspace/local-transcription";
 import { ChatActivity } from "./chat-activity";
+import { extractChatTodoTitles } from "../todo/chat-todos";
+import { createTodosFromSeeds } from "../todo/create-from-source";
 import { ConfirmCard } from "../workspace/confirm-card";
 import { hasWorkBuddyAcpBridge, hasWorkBuddyCloudScopes } from "@lynse/core/workbuddy";
 import { isFreshlyRevealed } from "../workspace/chat-reveal";
@@ -1239,10 +1241,54 @@ function AssistantMessage({
   const waitingForConfirm = !!message.confirm && message.confirm.resolvedChoice === undefined;
   const showActivity = isStreaming && !message.thinkingActive && !waitingForConfirm;
 
-  // Per-message actions (insert into note, copy). They render inline ahead of
-  // the citation strip when one exists, else on their own row below.
+  // 转为待办 — offered on assistant answers carrying checkbox/bullet todo
+  // items (see chat-todos.ts). Converted state is per-bubble; re-running a
+  // turn produces a new bubble and a fresh action.
+  const todoCandidates = useMemo(
+    () => (isStreaming ? [] : extractChatTodoTitles(message.content ?? "")),
+    [isStreaming, message.content],
+  );
+  const [todoConverted, setTodoConverted] = useState(false);
+  const [todoConvertBusy, setTodoConvertBusy] = useState(false);
+  const handleConvertTodos = useCallback(async () => {
+    if (todoCandidates.length === 0 || todoConvertBusy || todoConverted) return;
+    setTodoConvertBusy(true);
+    try {
+      const created = await createTodosFromSeeds(todoCandidates.map((title) => ({ title })));
+      toast.success(t("todo.converted_toast", { n: created.length }));
+      setTodoConverted(true);
+    } catch (error) {
+      console.error("[Chat] convert to todos failed:", error);
+      toast.error(t("todo.convert_failed"));
+    } finally {
+      setTodoConvertBusy(false);
+    }
+  }, [todoCandidates, todoConvertBusy, todoConverted, t]);
+
+  // Per-message actions (insert into note, convert to todos, copy). They
+  // render inline ahead of the citation strip when one exists, else on their
+  // own row below.
   const messageActions = (
     <>
+      {!isStreaming && todoCandidates.length > 0 && (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="text-muted-foreground"
+          disabled={todoConvertBusy}
+          onClick={() => void handleConvertTodos()}
+          title={todoConverted ? t("todo.converted_done") : t("chat.convert_to_todo")}
+          aria-label={todoConverted ? t("todo.converted_done") : t("chat.convert_to_todo")}
+        >
+          {todoConvertBusy ? (
+            <Loader2 className="size-3 animate-spin" />
+          ) : todoConverted ? (
+            <Check className="size-3" />
+          ) : (
+            <ListChecks className="size-3" />
+          )}
+        </Button>
+      )}
       {insertTarget && onInsertToNote && (
         <Button
           variant="ghost"

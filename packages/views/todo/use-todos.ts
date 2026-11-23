@@ -58,7 +58,9 @@ interface TodoStore {
    *  throttle so a new session never inherits the previous user's list. */
   lastLoadedAuthed: boolean | null;
   load: (opts?: { initial?: boolean; force?: boolean }) => Promise<void>;
-  addLocal: (title: string) => Promise<void>;
+  /** `extra` carries optional seed fields (e.g. a parsed dueDate from
+   *  natural-language quick-add) layered onto the fresh item. */
+  addLocal: (title: string, extra?: Partial<TodoItem>) => Promise<void>;
   toggle: (todo: TodoItem) => Promise<void>;
   remove: (todo: TodoItem) => Promise<void>;
   patchLocal: (updated: TodoItem) => void;
@@ -178,11 +180,12 @@ const useTodoStore = create<TodoStore>((set, get) => ({
     return request;
   },
 
-  addLocal: async (title) => {
+  addLocal: async (title, extra) => {
     const t: TodoItem = {
       id: newLocalId(),
       title,
       completed: false,
+      ...extra,
       createdAt: nowIso(),
       updatedAt: nowIso(),
       backend: false,

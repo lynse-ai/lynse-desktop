@@ -89,6 +89,8 @@ mod sync_upload;
 mod wechat_auth;
 // Generic OAuth authorize window (account-center SSO, /oauth/* endpoints).
 mod oauth_auth;
+// Apple sign-in window (backend-mediated form-post contract, landing 302).
+mod apple_auth;
 // Problem report: main-window screenshot capture + CNB issue submission.
 mod report_screenshot;
 mod cnb_report;
@@ -3449,9 +3451,10 @@ fn local_transcription_save_chapters(
     Ok(())
 }
 
-/// Translate one string through the configured provider chain (Ling →
-/// Google → Apple on-device, order given by the caller). Stateless: the Ling
-/// key rides in per call from the frontend's keychain vault.
+/// Translate one string through the configured provider chain (Qwen-MT →
+/// Ling → Google → Apple on-device, order given by the caller). Stateless:
+/// the Ling/Qwen-MT keys ride in per call from the frontend's keychain vault,
+/// and the Qwen-MT endpoint override supports international-station keys.
 #[tauri::command]
 async fn translation_translate(
     text: String,
@@ -3460,6 +3463,8 @@ async fn translation_translate(
     kind: String,
     providers: Vec<String>,
     lingKey: Option<String>,
+    qwenKey: Option<String>,
+    qwenEndpoint: Option<String>,
 ) -> CommandResult<Value> {
     let parsed_kind = match kind.as_str() {
         "draft" => translation::TranslateKind::Draft,
@@ -3473,6 +3478,8 @@ async fn translation_translate(
         parsed_kind,
         &providers,
         lingKey.as_deref(),
+        qwenKey.as_deref(),
+        qwenEndpoint.as_deref(),
     )
     .await?;
     Ok(json!({
@@ -5341,6 +5348,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
+        // System notifications — todo due reminders (the meeting-reminder
+        // banner stays in-app only, see calendar-reminder.ts).
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             model_download_in_progress: Mutex::new(false),
@@ -5615,6 +5625,7 @@ pub fn run() {
             open_logs_folder,
             wechat_auth::wechat_auth_window, wechat_auth::wechat_auth_window_close,
             oauth_auth::oauth_auth_window, oauth_auth::oauth_auth_window_close,
+            apple_auth::apple_auth_window, apple_auth::apple_auth_window_close,
             diagnostics_read_logs, diagnostics_prepare_report, attachment_save,
             attachment_text, share_file,
             live_translation::live_translation_permissions,
@@ -5645,6 +5656,7 @@ pub fn run() {
             live_translation::live_translation_set_sources,
             local_media::local_audio_waveform,
             live_translation::live_translation_marker, live_translation::live_notes_save,
+            live_translation::live_translation_patch_translation,
             meeting_detector::meeting_detector_set_config,
             meeting_detector::meeting_detector_get_state,
             window_effects::window_effects_mode,

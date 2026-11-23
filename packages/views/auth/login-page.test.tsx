@@ -24,8 +24,10 @@ vi.mock("../feature-flags", async () => ({
 }));
 
 const AUTHORIZE_URL = "https://open.weixin.qq.com/connect/qrconnect?appid=wx61e2752a63d15239&redirect_uri=https%3A%2F%2Fapi.lynse.cn%2Fauth%2Fwechat%2Fcallback&state=expected&response_type=code&scope=snsapi_login#wechat_redirect";
+const APPLE_AUTHORIZE_URL = "https://appleid.apple.com/auth/authorize?response_type=code%20id_token&response_mode=form_post&client_id=com.lynse.web&redirect_uri=https%3A%2F%2Fapi.lynse.cn%2Fapi%2Fauth%2Fapple%2Fcallback&scope=name%20email&state=expected";
 let auth: ReturnType<typeof createAuthStore>;
 let callback: (url: string) => void;
+let appleCallback: ((url: string) => void) | undefined;
 let fetchMock: ReturnType<typeof vi.fn<(url: string, init?: RequestInit) => Promise<Response>>>;
 let openAuthWindow: ReturnType<typeof vi.fn>;
 let closeAuthWindow: ReturnType<typeof vi.fn>;
@@ -48,11 +50,19 @@ beforeEach(() => {
   unlisten = vi.fn();
   openAuthWindow = vi.fn(async () => {});
   closeAuthWindow = vi.fn(async () => {});
-  vi.mocked(getDesktopAppApi).mockReturnValue({ wechat: {
-    openAuthWindow,
-    closeAuthWindow,
-    onAuthCallback: vi.fn(async (handler) => { callback = handler; return unlisten; }),
-  } } as unknown as ReturnType<typeof getDesktopAppApi>);
+  appleCallback = undefined;
+  vi.mocked(getDesktopAppApi).mockReturnValue({
+    wechat: {
+      openAuthWindow,
+      closeAuthWindow,
+      onAuthCallback: vi.fn(async (handler) => { callback = handler; return unlisten; }),
+    },
+    apple: {
+      openAuthWindow,
+      closeAuthWindow,
+      onAuthCallback: vi.fn(async (handler) => { appleCallback = handler; return unlisten; }),
+    },
+  } as unknown as ReturnType<typeof getDesktopAppApi>);
 });
 
 afterEach(() => {
@@ -250,5 +260,77 @@ describe("web WeChat QR gate", () => {
     );
     // Only the render call happened — no exchange or bind traffic followed.
     expect(fetchMock.mock.calls.every(([url]) => String(url).includes("/render"))).toBe(true);
+  });
+});
+
+// Desktop Apple sign-in: the app-scanned QR entry made way for an Apple
+// entry, and the authorize page opens in the embedded auth window whose
+// backend landing (session fragment / bind identity / error key) is relayed
+// back. The gapp API base in this suite pairs with the www.lynse.ai landing.
+describe("desktop Apple sign-in", () => {
+  // isWebPlatform() keys off the desktop bridge on window — present in the
+  // real shell, absent in jsdom. Set it so the page renders the desktop
+  // branch (QR entry hidden, Apple entry shown).
+  beforeEach(() => {
+    (window as unknown as { desktopAPI?: unknown }).desktopAPI = {};
+  });
+  afterEach(() => {
+    delete (window as unknown as { desktopAPI?: Record<string, unknown> }).desktopAPI;
+  });
+
+  function startApple() {
+    render(<LoginPage />);
+    fireEvent.click(screen.getByRole("button", { name: "auth.more_login" }));
+    expect(screen.queryByRole("button", { name: "auth.qr_login" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "auth.apple_login" }));
+  }
+
+  it("replaces the scan entry with Apple and opens the embedded auth window", async () => {
+    fetchMock.mockImplementation(async () => Response.json({ code: 200, data: APPLE_AUTHORIZE_URL }));
+    startApple();
+    await waitFor(() => expect(openAuthWindow).toHaveBeenCalledTimes(1));
+    expect(openAuthWindow).toHaveBeenCalledWith(APPLE_AUTHORIZE_URL, "https://www.lynse.ai");
+  });
+
+  it("signs in from the relayed success fragment", async () => {
+    fetchMock.mockImplementation(async () => Response.json({ code: 200, data: APPLE_AUTHORIZE_URL }));
+    startApple();
+    await waitFor(() => expect(appleCallback).toBeDefined());
+    await act(async () => appleCallback!("https://www.lynse.ai/app#token=apple-session&expireIn=3600"));
+    expect(auth.getState().isAuthenticated).toBe(true);
+    const { api } = await import("@lynse/core/api");
+    expect(api().getToken()).toBe("apple-session");
+  });
+
+  it("shows the phone binding form for a first-time Apple identity", async () => {
+    fetchMock.mockImplementation(async (url) => {
+      if (url.includes("/render")) return Response.json({ code: 200, data: APPLE_AUTHORIZE_URL });
+      if (url.includes("/captcha/sms?")) return Response.json({ code: 200, data: { success: true, cooldown: 60 } });
+      if (url.includes("/bind?")) return Response.json({ code: 200, data: {
+        token: "bound-session", expireIn: 3600, isFirstLogin: false, isNeedBind: false, customerId: "unified-customer", thirdPartyId: null,
+      } });
+      return Response.json({ code: 200, data: {} });
+    });
+    startApple();
+    await waitFor(() => expect(appleCallback).toBeDefined());
+    await act(async () => appleCallback!("https://www.lynse.ai/bind?thirdPartyId=apple-sub-1"));
+    expect(screen.getByText("auth.wechat_bind_title")).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText("auth.sms_phone_placeholder"), { target: { value: "13800000000" } });
+    fireEvent.change(screen.getByPlaceholderText("auth.sms_code_placeholder"), { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: "auth.wechat_bind_submit" }));
+    await waitFor(() => expect(auth.getState().isAuthenticated).toBe(true));
+    const bind = new URL(fetchMock.mock.calls.find(([url]) => url.includes("/bind?"))![0]);
+    expect(bind.searchParams.get("authType")).toBe("APPLE");
+    expect(bind.searchParams.get("thirdPartyId")).toBe("apple-sub-1");
+  });
+
+  it("surfaces backend landing errors and closes the auth window", async () => {
+    fetchMock.mockImplementation(async () => Response.json({ code: 200, data: APPLE_AUTHORIZE_URL }));
+    startApple();
+    await waitFor(() => expect(appleCallback).toBeDefined());
+    await act(async () => appleCallback!("https://www.lynse.ai/bind?error=error.apple.state.invalid"));
+    expect(screen.getByText("auth.apple_err_state")).toBeTruthy();
+    expect(closeAuthWindow).toHaveBeenCalled();
   });
 });

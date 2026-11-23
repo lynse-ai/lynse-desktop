@@ -19,8 +19,11 @@ import {
   signInWithGoogle,
 } from "@lynse/core/auth/google";
 import {
+  appleLandingFromUrl,
+  appleWebLandingOrigin,
   isAppleAuthorizeUrlConfigured,
   renderAppleLoginUrl,
+  sessionFromAppleFragment,
   startAppleLogin,
 } from "@lynse/core/auth/apple";
 import { wechatWebFlowReady } from "@lynse/core/auth/wechat";
@@ -69,6 +72,7 @@ import { AgreementCheckbox } from "./agreement-checkbox";
 import { WechatIcon } from "./wechat-icon";
 import { AppleIcon } from "./apple-icon";
 import { WechatBindForm } from "./wechat-bind-form";
+import { appleErrorMessage } from "./apple-bind-landing";
 import { authErrorText } from "./auth-errors";
 import { ApiAuthPanel } from "./api-auth-panel";
 import { LYNSE_LOGO_SRC } from "./lynse-logo";
@@ -160,6 +164,13 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
   const ssoStateRef = useRef("");
   const ssoVerifierRef = useRef("");
   const [ssoWaiting, setSsoWaiting] = useState(false);
+  // Apple sign-in (desktop) — same shape as the WeChat/SSO flows: embedded
+  // authorize window, intercepted backend landing, attempt-bound completion.
+  const appleCancelledRef = useRef(false);
+  const appleAttemptRef = useRef(0);
+  const appleActiveRef = useRef(false);
+  const appleUnlistenRef = useRef<(() => void) | null>(null);
+  const [appleWaiting, setAppleWaiting] = useState(false);
   // Bind-required login response — shows the phone + SMS form instead of
   // the sign-in views until the bind completes.
   // `?bind_preview=1` renders the dedicated binding screen directly (QA
@@ -225,6 +236,10 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
       ssoAttemptRef.current += 1;
       ssoUnlistenRef.current?.();
       ssoUnlistenRef.current = null;
+      appleCancelledRef.current = true;
+      appleAttemptRef.current += 1;
+      appleUnlistenRef.current?.();
+      appleUnlistenRef.current = null;
     };
   }, []);
 
@@ -609,6 +624,94 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
     void getDesktopAppApi()?.oauth?.closeAuthWindow();
   }
 
+  function stopAppleListener() {
+    appleUnlistenRef.current?.();
+    appleUnlistenRef.current = null;
+  }
+
+  /** Desktop auth-window landing relayed: the backend's APPLE 302 target
+   *  carried the session fragment, a bind identity or an error key. */
+  function finishAppleLogin(landingUrl: string, attempt: number) {
+    if (appleCancelledRef.current || attempt !== appleAttemptRef.current) return;
+    const landing = appleLandingFromUrl(landingUrl);
+    if (landing?.kind === "session") {
+      completeLogin(sessionFromAppleFragment(landing.token));
+    } else if (landing?.kind === "bind") {
+      setBindAuthType("APPLE");
+      setWechatBindVo({ thirdPartyId: landing.thirdPartyId });
+    } else {
+      setError(
+        landing?.kind === "error"
+          ? appleErrorMessage(landing.key, t)
+          : t("auth.login_failed"),
+      );
+    }
+    appleActiveRef.current = false;
+    setAppleWaiting(false);
+    stopAppleListener();
+    void getDesktopAppApi()?.apple?.closeAuthWindow();
+  }
+
+  /**
+   * CN/desktop Apple scan-in: the authorize page opens in the embedded auth
+   * window (the web flow's whole-page redirect would navigate the app shell
+   * away) and the backend's landing 302 — session fragment, bind identity or
+   * error key — is intercepted and relayed back. The web origin the backend
+   * lands on is derived from the API host (core/auth/apple.ts).
+   */
+  async function handleAppleDesktopLogin() {
+    if (appleActiveRef.current) return;
+    const attempt = ++appleAttemptRef.current;
+    appleActiveRef.current = true;
+    appleCancelledRef.current = false;
+    setAppleWaiting(true);
+    setError(null);
+    const appleBridge = getDesktopAppApi()?.apple;
+    if (!appleBridge) {
+      appleActiveRef.current = false;
+      setAppleWaiting(false);
+      return;
+    }
+    try {
+      const url = await renderAppleLoginUrl();
+      if (attempt !== appleAttemptRef.current) return;
+      // Placeholder configs surface as the pending toast instead of a
+      // broken redirect to Apple.
+      if (!isAppleAuthorizeUrlConfigured(url)) {
+        toast(t("auth.apple_pending"));
+        appleActiveRef.current = false;
+        setAppleWaiting(false);
+        return;
+      }
+      // Listen before opening: the native window intercepts the landing.
+      const unlisten = await appleBridge.onAuthCallback((landingUrl) => {
+        finishAppleLogin(landingUrl, attempt);
+      });
+      if (attempt !== appleAttemptRef.current) {
+        unlisten();
+        return;
+      }
+      appleUnlistenRef.current = unlisten;
+      await appleBridge.openAuthWindow(url, appleWebLandingOrigin(api().getBaseUrl()));
+    } catch (e: unknown) {
+      if (attempt === appleAttemptRef.current) {
+        appleActiveRef.current = false;
+        stopAppleListener();
+        setAppleWaiting(false);
+        setError(authErrorText(e, t, "auth.login_failed"));
+      }
+    }
+  }
+
+  function handleCancelAppleLogin() {
+    appleCancelledRef.current = true;
+    appleAttemptRef.current += 1;
+    appleActiveRef.current = false;
+    setAppleWaiting(false);
+    stopAppleListener();
+    void getDesktopAppApi()?.apple?.closeAuthWindow();
+  }
+
   const qrHint =
     qrPhase === "scanned"
       ? t("auth.qr_scanned")
@@ -768,15 +871,38 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
                 <span className="text-sm">{t("auth.wechat_login")}</span>
                 <ChevronRight className="ml-auto size-4 text-muted-foreground" />
               </button>
-              <button
-                type="button"
-                onClick={() => setView("qr")}
-                className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
-              >
-                <QrCode className="size-4" />
-                <span className="text-sm">{t("auth.qr_login")}</span>
-                <ChevronRight className="ml-auto size-4 text-muted-foreground" />
-              </button>
+              {/* App-scanned QR entry is web-only: on desktop it made way
+                  for Apple sign-in (embedded auth window, same shape as the
+                  WeChat/SSO flows). */}
+              {web && (
+                <button
+                  type="button"
+                  onClick={() => setView("qr")}
+                  className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
+                >
+                  <QrCode className="size-4" />
+                  <span className="text-sm">{t("auth.qr_login")}</span>
+                  <ChevronRight className="ml-auto size-4 text-muted-foreground" />
+                </button>
+              )}
+              {!web && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (getDesktopAppApi()?.apple) {
+                      void handleAppleDesktopLogin();
+                    } else {
+                      void handleAppleWebLogin();
+                    }
+                  }}
+                  disabled={appleBusy || appleWaiting}
+                  className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
+                >
+                  <AppleIcon className="size-4" />
+                  <span className="text-sm">{t("auth.apple_login")}</span>
+                  <ChevronRight className="ml-auto size-4 text-muted-foreground" />
+                </button>
+              )}
               {devApiAuth && (
                 <button
                   type="button"
@@ -1103,10 +1229,10 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
         {footer && <div className="mt-4 text-center">{footer}</div>}
         </div>
 
-        {/* ── More ways to sign in (phone view) / WeChat wait state.
-            Desktop pins it to the window's bottom edge; web keeps it right
-            under the centered form. ── */}
-        {(view === "phone" || wechatWaiting || ssoWaiting) && (
+        {/* ── More ways to sign in (phone view) / WeChat, SSO or Apple wait
+            state. Desktop pins it to the window's bottom edge; web keeps it
+            right under the centered form. ── */}
+        {(view === "phone" || wechatWaiting || ssoWaiting || appleWaiting) && (
           <div className={cn(web ? "mt-5" : "mt-auto pt-3")}>
             {wechatWaiting ? (
               <div className="space-y-1.5 text-center">
@@ -1140,6 +1266,24 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
                   variant="ghost"
                   className="h-7 text-xs"
                   onClick={handleCancelSsoLogin}
+                >
+                  {t("auth.wechat_cancel")}
+                </Button>
+              </div>
+            ) : appleWaiting ? (
+              <div className="space-y-1.5 text-center">
+                <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" />
+                  {t("auth.apple_waiting")}
+                </p>
+                <p className="text-2xs leading-relaxed text-muted-foreground">
+                  {t("auth.sso_waiting_hint")}
+                </p>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs"
+                  onClick={handleCancelAppleLogin}
                 >
                   {t("auth.wechat_cancel")}
                 </Button>

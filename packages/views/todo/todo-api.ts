@@ -287,6 +287,9 @@ export function normalizeStored(raw: unknown): TodoItem {
     dueDate: t.dueDate ? String(t.dueDate) : undefined,
     sourceRef: t.sourceRef && typeof t.sourceRef === "object" ? t.sourceRef as SourceRef : undefined,
     workbenchScope: typeof t.workbenchScope === "string" ? t.workbenchScope : undefined,
+    // Kept so the owner view works for local todos too (chat/note conversions
+    // carry the speaker / assignee onto the item).
+    owner: t.owner ? String(t.owner) : undefined,
     sourceTitle: t.sourceTitle ? String(t.sourceTitle) : undefined,
     sourceFileId: t.sourceFileId ? String(t.sourceFileId) : undefined,
     sourceMeetingTime: t.sourceMeetingTime ? String(t.sourceMeetingTime) : undefined,

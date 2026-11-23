@@ -23,6 +23,7 @@
     "core:window:allow-set-theme",
     "dialog:default",
     "log:default",
+    "notification:default",
     "opener:default",
     "opener:allow-reveal-item-in-dir",
     {

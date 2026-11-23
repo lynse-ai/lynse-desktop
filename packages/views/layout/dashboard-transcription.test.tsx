@@ -18,6 +18,7 @@ vi.mock("../workspace/local-transcription", async (original) => ({
 vi.mock("./lynse-sidebar", () => ({ LynseSidebar: () => null }));
 vi.mock("./app-title-bar", () => ({ AppTitleBar: () => null }));
 vi.mock("../connections", () => ({ CalendarReminderBanner: () => null }));
+vi.mock("../todo/due-reminders", () => ({ TodoDueRemindersWatcher: () => null }));
 vi.mock("../about/about-dialog", () => ({ AboutDialog: () => null }));
 vi.mock("../workspace/dnd-provider", () => ({ DndProvider: ({ children }: { children: ReactNode }) => children }));
 beforeEach(() => {

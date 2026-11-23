@@ -76,3 +76,48 @@ export function bindAppleIdentity(input: {
 export function sessionFromAppleFragment(token: string): AuthSession {
   return { accessToken: token, user: { id: "", name: "", email: "" } };
 }
+
+/**
+ * Web origin the backend 302s its APPLE flow to, derived from the API host
+ * (the same site pairing the rest of the desktop uses: production CN
+ * api.lynse.cn → www.lynse.cn, gapp.lynse.cn → www.lynse.ai; anything else —
+ * dev/staging APIs included — falls back to the CN site). The desktop auth
+ * window matches its landing interception against this origin.
+ */
+export function appleWebLandingOrigin(apiBaseUrl: string): string {
+  try {
+    if (new URL(apiBaseUrl).hostname === "gapp.lynse.cn") return "https://www.lynse.ai";
+  } catch {
+    // Malformed base URL: fall through to the CN site.
+  }
+  return "https://www.lynse.cn";
+}
+
+/** One outcome relayed from an intercepted Apple landing URL. */
+export type AppleLanding =
+  | { kind: "session"; token: string }
+  | { kind: "bind"; thirdPartyId: string }
+  | { kind: "error"; key: string };
+
+/** Parse an intercepted Apple landing URL into its outcome. The backend's
+ *  contract (see the module docs): bound accounts land on web-success-url
+ *  with the session in the fragment (#token=…&expireIn=…), first logins on
+ *  web-bind-url?thirdPartyId={sub}, failures on web-bind-url?error={key}.
+ *  Null when the URL carries none of the markers. */
+export function appleLandingFromUrl(url: string): AppleLanding | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.hash) {
+    const token = new URLSearchParams(parsed.hash.slice(1)).get("token");
+    if (token) return { kind: "session", token };
+  }
+  const thirdPartyId = parsed.searchParams.get("thirdPartyId");
+  if (thirdPartyId) return { kind: "bind", thirdPartyId };
+  const error = parsed.searchParams.get("error");
+  if (error) return { kind: "error", key: error };
+  return null;
+}

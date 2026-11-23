@@ -18,6 +18,7 @@ import { parseHashtags, splitByHashRuns, stripHashtags } from "./tags";
 import { formatVoiceDuration, useInspirationVoice } from "./use-inspiration-voice";
 import { saveTodo, type TodoItem } from "../todo/todo-api";
 import { useTodoStore } from "../todo/use-todos";
+import { parseNaturalWhen } from "../todo/natural-date";
 import {
   LINK_RECORD_TAG,
   type InspirationImage,
@@ -448,10 +449,13 @@ export function InspirationCaptureSheet() {
       setSaving(true);
       try {
         const now = new Date().toISOString();
-        const dueDate = dueDateValue(due);
+        // Natural-language dates typed into the title ("周五下午3点交周报")
+        // win over the quick chip; the chip covers the bare tap-and-go case.
+        const parsed = parseNaturalWhen(todoTitle);
+        const dueDate = parsed?.dueDate ?? dueDateValue(due);
         const todo: TodoItem = {
           id: newTodoId(),
-          title: todoTitle,
+          title: parsed?.title ?? todoTitle,
           completed: false,
           ...(dueDate ? { dueDate } : {}),
           createdAt: now,

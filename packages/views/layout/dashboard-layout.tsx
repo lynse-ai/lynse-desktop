@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { LynseSidebar } from "./lynse-sidebar";
 import { AppTitleBar } from "./app-title-bar";
 import { CalendarReminderBanner } from "../connections";
+import { TodoDueRemindersWatcher } from "../todo/due-reminders";
 import { DndProvider } from "../workspace/dnd-provider";
 import { AboutDialog } from "../about/about-dialog";
 import { useLocalTranscriptionUpdates } from "../workspace/hooks/use-files";
@@ -43,6 +44,8 @@ export function DashboardLayout({ children, extra }: DashboardLayoutProps) {
             {extra}
             {/* Pre-meeting reminder (Connections, in-app only in P0). */}
             <CalendarReminderBanner />
+            {/* Todo due reminders — app-wide toasts + desktop notifications. */}
+            <TodoDueRemindersWatcher />
           </main>
         </div>
       </div>

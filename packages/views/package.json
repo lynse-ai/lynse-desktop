@@ -77,6 +77,7 @@
     "@milkdown/kit": "^7.19.2",
     "@milkdown/react": "^7.3.0",
     "@tauri-apps/api": "^2.0.0",
+    "chrono-node": "^2.10.3",
     "jspdf": "^4.2.1",
     "lucide-react": "catalog:",
     "modern-screenshot": "^4.7.0",

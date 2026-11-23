@@ -19,6 +19,40 @@
 > advertised it (its manifest mirror failed and the rollout was cancelled), so
 > that work plus the todo card redesign shipped together as 1.2.7.
 
+## 1.2.15 (2026-11-23)
+
+### New Features
+
+- Real-time translation overhaul: a rebuilt floating caption bar with three display modes (bilingual / translation-only / original), three scenario presets (meeting / listen / stage that also enlarge the window), adjustable font size and line count, pin-to-top/bottom, scroll-back through recent captions, and a latency HUD that honestly shows how far translation trails the speaker.
+- Qwen-MT translation engine: a dedicated machine-translation model (Alibaba DashScope) joins the translation chain — it reuses the same key as Qwen realtime ASR, supports international-station endpoints, and ships with a glossary pipeline ready for the upcoming term library.
+- Translation engine chain picker: order Qwen-MT / Ling / Google / Apple as fallbacks right on the translation page; failed translations retry with backoff, and anything missed during a stream drop is back-filled automatically once the connection recovers.
+- In-session quick bookmarks: ⌘M / ⌘⇧M / ⌘⌥M (or toolbar buttons) mark the sentence just spoken as a highlight, decision, or todo; badges show inline in the transcript and markers persist with the recording.
+- Bilingual transcripts persist: translations produced by the fallback chain are now written back into the saved session, so saved transcripts keep both languages.
+- Todo upgrades: due-date reminders (in-app toast plus system notification), natural-language dates typed straight into titles ("周五下午3点" is parsed automatically), saved filter views, and an owner view.
+- One-tap convert to todos: assistant replies and live meeting notes with checklist items gain a convert action; inspiration quick-capture also parses natural-language dates.
+- Sign in with Apple on desktop: a native authorization window intercepts the landing page, covering CN and international sites, first-login account binding, and error surfacing.
+
+### Improvements
+
+- Caption stability: finalized sentences hold for 2.5 seconds before scrolling and in-flight speech renders dimmed with a breathing ellipsis, so captions stop flickering.
+- The transcript page shows a status banner while a stream is reconnecting, and the subtitle bar mirrors stream health in its HUD.
+
+### 新功能
+
+- 实时字幕浮窗全面重构：双语对照 / 只看译文 / 只看原文三种显示模式，会议 / 旁听 / 演讲三种场景预设（演讲档联动放大窗口），字号与行数可调，可钉在屏幕顶部或底部，滚轮回看最近字幕，延迟 HUD 诚实显示翻译落后讲者多少秒。
+- Qwen-MT 专用翻译引擎：阿里 DashScope 机器翻译大模型加入翻译链——与 Qwen 实时识别共用同一密钥，支持国际站端点，并内置术语表管道为后续术语库铺路。
+- 翻译引擎链可编排：在翻译页直接调整 Qwen-MT / Ling / Google / Apple 的回退顺序；翻译失败自动退避重试，断流恢复后自动补翻缺失译文。
+- 会中快书签：⌘M / ⌘⇧M / ⌘⌥M（或工具栏按钮）随手把刚说的句子标为重点 / 决定 / 待办；徽标内嵌在转录行里，书签随录音持久保存。
+- 会后转写保留双语：回退链产出的翻译现在会写回会话，保存的转写稿自带双语对照。
+- 待办升级：到期提醒（应用内提醒 + 系统通知）、标题里直接写自然语言日期自动识别（如「周五下午3点」）、筛选保存视图、负责人视图。
+- 一键转待办：小灵回复和实时会议纪要中带清单条目的内容可一键转成待办；灵感速记同样支持自然语言日期。
+- 桌面端支持 Apple 登录：原生授权窗口 + 落地页拦截，覆盖国内 / 国际站点，支持首次登录绑定账号与错误提示。
+
+### 改进
+
+- 字幕稳定性：定稿句停留 2.5 秒再滚动、正在说的内容半透明呈现（带呼吸省略号），字幕不再闪变。
+- 识别流断线重连时转录页显示状态横幅，字幕条 HUD 同步呈现流健康状态。
+
 ## 1.2.14 (2026-11-21)
 
 ### New Features

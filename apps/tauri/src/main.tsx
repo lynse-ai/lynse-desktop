@@ -6,6 +6,7 @@ import { installLogger } from "./logger";
 import { installEventUnlistenGuard } from "./event-guard";
 import { initAppTheme } from "@lynse/views/settings/app-theme";
 import { syncNotchIslandPreference, useIslandPreferences } from "@lynse/views/settings/island-preferences";
+import { analytics } from "@lynse/core/analytics";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -57,7 +58,15 @@ async function bootstrap() {
   }
 
   const [{ default: App }] = await Promise.all([import("./App"), installTauriBridge(windowKind)]);
-  if (!windowKind) installPrivatePlugins();
+  if (!windowKind) {
+    installPrivatePlugins();
+    analytics.track("app_launched", {
+      platform: "desktop",
+      version: "1.2.17",
+      os: /Macintosh|Mac OS/i.test(navigator.userAgent) ? "macos" : /Windows/i.test(navigator.userAgent) ? "windows" : "other",
+      locale: navigator.language,
+    });
+  }
   syncWindowEffects();
   // Re-apply the persisted notch-island preference: the Rust flag is an
   // executor only and resets on launch, so the main window re-syncs it here

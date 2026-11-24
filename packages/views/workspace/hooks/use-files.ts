@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   useQuery,
   useMutation,
@@ -9,6 +9,7 @@ import { useTranslation } from "@lynse/core/i18n/react";
 import { toast } from "sonner";
 import { api, ApiError, type ApiClient } from "@lynse/core/api/client";
 import { getAuthStore, useAuthStore } from "@lynse/core/auth";
+import { analytics } from "@lynse/core/analytics";
 import { readLynclawSummary, type LynclawSummaryFormat } from "../lynclaw-summary";
 import { deleteLynclawNotesForSources } from "../lynclaw-notes";
 import type {
@@ -566,6 +567,8 @@ export function useReplaceSummaryTemplate() {
       replaceSummaryTemplate(req),
     onSuccess: (_data, req) => {
       qc.invalidateQueries({ queryKey: ["file-conclusions", req.fileId] });
+      qc.invalidateQueries({ queryKey: ["file-transcription", req.fileId] });
+      qc.invalidateQueries({ queryKey: ["file-outline", req.fileId] });
       qc.invalidateQueries({ queryKey: ["files"] });
       qc.invalidateQueries({ queryKey: ["notes"] });
     },
@@ -667,11 +670,19 @@ export function useTransferFile() {
       transcribeWithCreditsToast(() =>
         api().post<TransferFileResult>("/api/business/file/trans", req),
       ),
-    onSuccess: () => {
+    onSuccess: (_data, req) => {
       qc.invalidateQueries({ queryKey: ["files"] });
+      qc.invalidateQueries({ queryKey: ["notes"] });
       // The submission just charged credits — refresh balance displays.
       qc.invalidateQueries({ queryKey: ["user", "credits"] });
       qc.invalidateQueries({ queryKey: ["user", "membership"] });
+      if (req?.fileId) {
+        qc.invalidateQueries({ queryKey: ["file-transcription", req.fileId] });
+        qc.invalidateQueries({ queryKey: ["file-conclusions", req.fileId] });
+        qc.invalidateQueries({ queryKey: ["file-outline", req.fileId] });
+        qc.invalidateQueries({ queryKey: ["file", req.fileId] });
+        qc.invalidateQueries({ queryKey: ["file-audio-url", req.fileId] });
+      }
     },
   });
 }
@@ -756,8 +767,10 @@ export function useRenameFile() {
 export function useTranscriptionStatus(fileIds: string[]) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const enabled = fileIds.length > 0 && isAuthenticated;
+  const qc = useQueryClient();
+  const prevCompletedRef = useRef<Set<string>>(new Set());
 
-  return useQuery({
+  const query = useQuery({
     queryKey: ["trans-status", fileIds],
     queryFn: () =>
       api().post<TransStatusMap>("/api/business/file/trans/status", {
@@ -775,6 +788,30 @@ export function useTranscriptionStatus(fileIds: string[]) {
       return allDone ? false : 3000;
     },
   });
+
+  useEffect(() => {
+    if (!query.data) return;
+    const completedNow: string[] = [];
+    for (const [id, val] of Object.entries(query.data)) {
+      const status = getTranscriptionStatus(val);
+      if (isCompletedStatus(status) && !prevCompletedRef.current.has(id)) {
+        prevCompletedRef.current.add(id);
+        completedNow.push(id);
+      }
+    }
+    if (completedNow.length > 0) {
+      qc.invalidateQueries({ queryKey: ["files"] });
+      qc.invalidateQueries({ queryKey: ["notes"] });
+      for (const id of completedNow) {
+        qc.invalidateQueries({ queryKey: ["file-transcription", id] });
+        qc.invalidateQueries({ queryKey: ["file-conclusions", id] });
+        qc.invalidateQueries({ queryKey: ["file-outline", id] });
+        qc.invalidateQueries({ queryKey: ["file", id] });
+      }
+    }
+  }, [query.data, qc]);
+
+  return query;
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 3000;
@@ -1058,10 +1095,14 @@ export function useAddSummary() {
   return useMutation({
     mutationFn: (req: AiTaskAddReq & { modelId?: string; languageId?: string }) =>
       addSummaryPipeline({ req, modelId: req.modelId, languageId: req.languageId }),
-    onSuccess: () => {
+    onSuccess: (_data, req) => {
       qc.invalidateQueries({ queryKey: ["file-conclusions"] });
       qc.invalidateQueries({ queryKey: ["files"] });
       qc.invalidateQueries({ queryKey: ["notes"] });
+      if (req?.fileId) {
+        qc.invalidateQueries({ queryKey: ["file-transcription", req.fileId] });
+        qc.invalidateQueries({ queryKey: ["file-outline", req.fileId] });
+      }
     },
   });
 }
@@ -1122,11 +1163,23 @@ export function useRerunSummary() {
       // Transcription charged credits at submission — refresh balance displays.
       qc.invalidateQueries({ queryKey: ["user", "credits"] });
       qc.invalidateQueries({ queryKey: ["user", "membership"] });
+      qc.invalidateQueries({ queryKey: ["file-transcription", req.fileId] });
+      qc.invalidateQueries({ queryKey: ["file-outline", req.fileId] });
+      qc.invalidateQueries({ queryKey: ["file", req.fileId] });
+      qc.invalidateQueries({ queryKey: ["file-audio-url", req.fileId] });
       if (data.conclusion) {
         qc.setQueryData(["file-conclusions", req.fileId], [data.conclusion]);
+        analytics.track("summary_generated", {
+          template_id: req.templateId,
+          success: true,
+        });
       } else {
         qc.invalidateQueries({ queryKey: ["file-conclusions", req.fileId] });
       }
+      analytics.track("transcription_completed", {
+        engine: "cloud",
+        success: true,
+      });
     },
   });
 }
@@ -1162,6 +1215,10 @@ export function useLocalTranscriptionUpdates() {
         // `transcribing` only moves the list; announcing a job the user just
         // submitted would be noise.
         if (update.status === "completed") {
+          analytics.track("transcription_completed", {
+            engine: "local",
+            success: true,
+          });
           toast.success(t("workspace.local_transcribe_done", { title: update.title }));
           // Deep summary via the agent service runs unattended right after the
           // transcript lands; refresh the note once it is stored.
@@ -1179,6 +1236,10 @@ export function useLocalTranscriptionUpdates() {
             }
           });
         } else if (update.status === "failed") {
+          analytics.track("transcription_completed", {
+            engine: "local",
+            success: false,
+          });
           toast.error(t("workspace.local_transcribe_failed", { title: update.title }), {
             description: update.error ?? undefined,
           });

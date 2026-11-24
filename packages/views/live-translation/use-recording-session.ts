@@ -3,6 +3,7 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { analytics } from "@lynse/core/analytics";
 import { useLiveTranslation } from "./use-live-translation";
 import { recordingLevel } from "./audio-sources";
 import { audioModeSources, realtimeEngineLabel, requestRealtimeSession } from "./api";
@@ -232,7 +233,12 @@ export function useRecordingSession(): UseRecordingSessionReturn {
         // completion dialog through the `completed` event (routed into the
         // recording-complete store by the tray agent), so the UI never
         // freezes on the stop click.
+        const elapsedSec = Math.round(view.elapsedMs / 1000);
         await api.stop();
+        analytics.track("recording_completed", {
+          source: "mic",
+          duration_seconds: elapsedSec,
+        });
       } catch (error) {
         toast.error(String(error));
       } finally {

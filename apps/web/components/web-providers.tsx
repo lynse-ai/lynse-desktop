@@ -47,6 +47,21 @@ export function WebProviders({ children }: { children: React.ReactNode }) {
       wsUrl={process.env.NEXT_PUBLIC_WS_URL}
       identity={identity}
       resources={RESOURCES}
+      analyticsConfig={{
+        apiKey: process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN || process.env.NEXT_PUBLIC_POSTHOG_KEY,
+        apiHost: process.env.NEXT_PUBLIC_POSTHOG_HOST,
+        platform: "web",
+        appVersion: WEB_VERSION,
+        enabled: Boolean(process.env.NEXT_PUBLIC_POSTHOG_PROJECT_TOKEN || process.env.NEXT_PUBLIC_POSTHOG_KEY),
+        debug: process.env.NODE_ENV !== "production",
+      }}
+      telemetryConfig={{
+        dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
+        release: `lynse-web@${WEB_VERSION}`,
+        environment: process.env.NODE_ENV ?? "production",
+        enabled: Boolean(process.env.NEXT_PUBLIC_SENTRY_DSN),
+        debug: process.env.NODE_ENV !== "production",
+      }}
     >
       <WebNavigationProvider>{children}</WebNavigationProvider>
     </CoreProvider>

@@ -19,6 +19,20 @@
 > advertised it (its manifest mirror failed and the rollout was cancelled), so
 > that work plus the todo card redesign shipped together as 1.2.7.
 
+## 1.2.17 (2026-11-24)
+
+### Improvements
+
+- Recording card & device management UI overhaul: modernized visual hierarchy with typography aligned across cards, borderless smooth progress tracks for device storage, refined spacing, and updated high-fidelity hardware device graphics.
+- Windows cross-platform device readiness: ensured device management and USB direct connection support is fully enabled and compiled in on Windows desktop builds.
+- Maintenance actions and layout: improved bottom viewport clearance and scroll padding so maintenance actions remain fully accessible without clipping.
+
+### 改进
+
+- 录音卡设备管理界面全面升级：对齐各卡片字号与信息层级，精简嵌套边框，设备存储进度条升级为无边框平滑微圆角轨道，并更新全新高清晰度硬件设备渲染图。
+- 确保 Windows 桌面端设备管理支持：全面启用并验证 Windows 平台录音卡直连与设备管理编译配置，保持跨平台一致体验。
+- 布局与维护操作优化：优化页面底部滚动留白与视口自适应，确保格式化、恢复出厂等维护选项在各类窗口尺寸下均不被截断。
+
 ## 1.2.16 (2026-11-23)
 
 ### Improvements

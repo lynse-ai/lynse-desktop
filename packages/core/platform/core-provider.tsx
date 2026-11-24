@@ -7,6 +7,8 @@ import { DEFAULT_API_URL, AGENT_API_URL_STORAGE_KEY, CLOUDBASE_AGENT_URL, STAGIN
 import { defaultStorage } from "./storage";
 import { QueryProvider } from "../provider";
 import { initI18n } from "../i18n";
+import { analytics, PostHogProvider, posthog } from "../analytics";
+import { telemetry, SentryErrorBoundary } from "../telemetry";
 import type { CoreProviderProps } from "./types";
 import type { StorageAdapter } from "../types/storage";
 
@@ -64,11 +66,34 @@ export function initCore(
   apiClient.setIntegrationsBaseUrl(savedIntegrationsUrl || DEFAULT_INTEGRATIONS_API_URL);
   setApiInstance(apiClient);
 
-  authStore = createAuthStore({ api: apiClient, storage, onLogin, onLogout, cookieAuth });
+  authStore = createAuthStore({
+    api: apiClient,
+    storage,
+    onLogin: () => {
+      onLogin?.();
+      const user = authStore?.getState().user;
+      if (user?.id) {
+        analytics.identify(user.id);
+        telemetry.setUser({ id: user.id });
+      }
+    },
+    onLogout: () => {
+      onLogout?.();
+      analytics.reset();
+      telemetry.setUser(null);
+    },
+    cookieAuth,
+  });
   registerAuthStore(authStore);
 
   // Restore auth state from saved credentials
-  authStore.getState().restoreSession();
+  authStore.getState().restoreSession().then(() => {
+    const user = authStore?.getState().user;
+    if (user?.id) {
+      analytics.identify(user.id);
+      telemetry.setUser({ id: user.id });
+    }
+  }).catch(() => {});
 
   initialized = true;
 }
@@ -83,10 +108,18 @@ export function CoreProvider({
   identity,
   locale,
   resources,
+  analyticsConfig,
+  telemetryConfig,
 }: CoreProviderProps) {
   useMemo(
     () => {
       initI18n({ locale, resources });
+      if (analyticsConfig) {
+        analytics.init(analyticsConfig);
+      }
+      if (telemetryConfig) {
+        telemetry.init(telemetryConfig);
+      }
       initCore(apiBaseUrl, storage, onLogin, onLogout, cookieAuth, identity);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -94,8 +127,12 @@ export function CoreProvider({
   );
 
   return (
-    <QueryProvider storage={storage}>
-      {children}
-    </QueryProvider>
+    <SentryErrorBoundary fallback={<div className="p-4 text-center text-sm text-destructive">Application error occurred.</div>}>
+      <PostHogProvider client={posthog}>
+        <QueryProvider storage={storage}>
+          {children}
+        </QueryProvider>
+      </PostHogProvider>
+    </SentryErrorBoundary>
   );
 }

@@ -18,9 +18,20 @@ async function loadModules(map: Map<string, string>) {
     removeItem: (key: string) => void map.delete(key),
   };
   (globalThis as { localStorage?: unknown }).localStorage = localStorageShim;
+  const locationShim = {
+    origin: "http://localhost:3000",
+    href: "http://localhost:3000/",
+    pathname: "/",
+    search: "",
+    hash: "",
+  };
+  (globalThis as { location?: unknown }).location = locationShim;
   const windowShim: Record<string, unknown> = {
-    location: { origin: "http://localhost:3000" },
+    location: locationShim,
     localStorage: localStorageShim,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
   };
   (globalThis as { window?: unknown }).window = windowShim;
   const registry = await import("../registry");

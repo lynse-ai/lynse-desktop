@@ -88,6 +88,7 @@ import {
   getDesktopLocalTranscriptionApi,
   isLocalFileId,
   LOCAL_TRANSCRIPTION_FOLDER_ID,
+  formatLocalTimestamp,
 } from "./local-transcription";
 import {
   pendingRecordingRecordId,
@@ -202,7 +203,11 @@ export function ContentPanel() {
     isLoading: conclusionsLoading,
     error: conclusionsError,
   } = useFileConclusions(selectedItemId);
-  const { data: transcription, isLoading: transLoading } = useFileTranscription(selectedItemId);
+  const {
+    data: transcription,
+    isLoading: transLoading,
+    refetch: refetchTranscription,
+  } = useFileTranscription(selectedItemId);
   // Whether the Notion export entry renders in the header menu; the menu's
   // trailing separator must follow it or the hidden entry leaves an empty
   // separator-only group between "Resummarize" and "Share".
@@ -526,20 +531,72 @@ export function ContentPanel() {
           break;
         }
       }
+      if (records.length === 0) {
+        const rawContent =
+          typeof obj.content === "string"
+            ? obj.content.trim()
+            : typeof obj.transcriptText === "string"
+              ? obj.transcriptText.trim()
+              : "";
+        if (rawContent) {
+          try {
+            const parsed = JSON.parse(rawContent);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              records = parsed;
+            } else if (parsed && typeof parsed === "object") {
+              for (const k of ["records", "list", "data", "transcriptionRecords", "segments"]) {
+                const innerArr = (parsed as Record<string, unknown>)[k];
+                if (Array.isArray(innerArr) && innerArr.length > 0) {
+                  records = innerArr;
+                  break;
+                }
+              }
+            }
+          } catch {
+            const lines = rawContent.split("\n").map((l) => l.trim()).filter(Boolean);
+            if (lines.length > 0) {
+              return lines.map((line, idx) => ({
+                id: `line-${idx}`,
+                speaker: "",
+                time: "",
+                text: line,
+                translatedText: "",
+                source: "",
+                beginTimeMs: null,
+              }));
+            }
+          }
+        }
+      }
     }
     if (records.length === 0) return null;
-    return records.map((seg) => {
-      const s = seg as Record<string, unknown>;
+    const mapped = records.map((seg, idx) => {
+      const s = (seg && typeof seg === "object" ? seg : {}) as Record<string, unknown>;
+      const beginTimeMs =
+        typeof s.beginTime === "number"
+          ? s.beginTime
+          : typeof s.startMs === "number"
+            ? s.startMs
+            : null;
+      const time = String(
+        s.beginTimeStr ||
+          s.time ||
+          (beginTimeMs != null ? formatLocalTimestamp(beginTimeMs) : ""),
+      );
       return {
-        id: String(s.id ?? ""),
-        speaker: String(s.speakerName ?? ""),
-        time: String(s.beginTimeStr ?? ""),
-        text: String(s.text ?? ""),
+        id: String(s.id || s.sentenceId || `segment-${idx}`),
+        speaker: String(s.speakerName || s.speaker || s.spkName || s.speakerId || ""),
+        time,
+        text: String(s.text || s.recognizedText || s.content || s.transcriptionText || ""),
         translatedText: String(s.translatedText ?? ""),
         source: String(s.source ?? ""),
-        beginTimeMs: typeof s.beginTime === "number" ? s.beginTime : null,
+        beginTimeMs,
       };
     });
+    const hasAnyText = mapped.some(
+      (s) => s.text.trim().length > 0 || s.translatedText.trim().length > 0,
+    );
+    return hasAnyText ? mapped : null;
   }, [transcription]);
 
   // Headings
@@ -888,6 +945,29 @@ export function ContentPanel() {
     (isLocalSelectedItem && regeneratingLocalSummary);
   const summaryRegenOverlay = replaceRegenerating && contentTab.startsWith("summary-");
 
+  // Auto-refetch transcription if the user views the transcription tab
+  // while segments are missing on a cloud file that is not currently summarizing.
+  useEffect(() => {
+    if (
+      contentTab === "transcription" &&
+      selectedItemId &&
+      !isLocalSelectedItem &&
+      !transLoading &&
+      !transSegments &&
+      !currentFileSummarizing
+    ) {
+      void refetchTranscription();
+    }
+  }, [
+    contentTab,
+    selectedItemId,
+    isLocalSelectedItem,
+    transLoading,
+    transSegments,
+    currentFileSummarizing,
+    refetchTranscription,
+  ]);
+
   const handleResummaryStarted = useCallback((
     fileId: string,
     mode: SummaryTemplateDialogMode,
@@ -1004,6 +1084,8 @@ export function ContentPanel() {
         languageId: (fileDetail as Record<string, unknown> | undefined)?.languageId as string | undefined,
       });
       handleResummaryFinished(fileId, true, "rerun", {});
+      await qc.invalidateQueries({ queryKey: ["file-transcription", fileId] });
+      await qc.invalidateQueries({ queryKey: ["file-outline", fileId] });
       if (!result.conclusion) {
         await qc.invalidateQueries({ queryKey: ["file-conclusions", fileId] });
       }
@@ -1695,6 +1777,13 @@ export function ContentPanel() {
                             buttonText={t("workspace.transcription_generate_button")}
                             onGenerate={handleAutoRerun}
                             disabled={currentFileSummarizing || !defaultTemplateId}
+                            onRefresh={() => {
+                              if (selectedItemId) {
+                                void qc.invalidateQueries({ queryKey: ["file-transcription", selectedItemId] });
+                                void refetchTranscription();
+                              }
+                            }}
+                            refreshText={t("workspace.refresh_transcription", "刷新逐字稿")}
                           />
                         ))}
                       </div>
@@ -2322,11 +2411,15 @@ function TranscriptionGeneratePrompt({
   buttonText,
   onGenerate,
   disabled,
+  onRefresh,
+  refreshText,
 }: {
   hint: string;
   buttonText: string;
   onGenerate: () => void;
   disabled?: boolean;
+  onRefresh?: () => void;
+  refreshText?: string;
 }) {
   return (
     <div className="flex flex-1 w-full flex-col items-center justify-center gap-5 py-10">
@@ -2334,17 +2427,31 @@ function TranscriptionGeneratePrompt({
         <MessageSquare className="size-6" />
       </div>
       <p className="text-sm text-muted-foreground">{hint}</p>
-      <Button
-        variant="contrast"
-        size="lg"
-        type="button"
-        onClick={onGenerate}
-        disabled={disabled}
-        className="gap-2 px-6"
-      >
-        <Sparkles className="size-4" />
-        <span>{buttonText}</span>
-      </Button>
+      <div className="flex flex-wrap items-center justify-center gap-3">
+        {onRefresh && (
+          <Button
+            variant="outline"
+            size="lg"
+            type="button"
+            onClick={onRefresh}
+            className="gap-2 px-5"
+          >
+            <RefreshCw className="size-4" />
+            <span>{refreshText || "刷新逐字稿"}</span>
+          </Button>
+        )}
+        <Button
+          variant="contrast"
+          size="lg"
+          type="button"
+          onClick={onGenerate}
+          disabled={disabled}
+          className="gap-2 px-6"
+        >
+          <Sparkles className="size-4" />
+          <span>{buttonText}</span>
+        </Button>
+      </div>
     </div>
   );
 }

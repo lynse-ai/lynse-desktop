@@ -39,12 +39,17 @@
     "./api/memory": "./api/memory.ts",
     "./auth/email": "./auth/email.ts",
     "./auth/google": "./auth/google.ts",
-    "./auth/apple": "./auth/apple.ts"
+    "./auth/apple": "./auth/apple.ts",
+    "./analytics": "./analytics/index.ts",
+    "./telemetry": "./telemetry/index.ts"
   },
   "dependencies": {
+    "@posthog/react": "^1.11.3",
+    "@sentry/react": "^11.17.0",
     "@tanstack/react-query": "catalog:",
     "firebase": "^13.2.0",
     "i18next": "catalog:",
+    "posthog-js": "^1.454.2",
     "react-i18next": "catalog:",
     "zod": "catalog:",
     "zustand": "catalog:"

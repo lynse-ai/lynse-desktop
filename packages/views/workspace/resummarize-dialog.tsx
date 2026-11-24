@@ -22,6 +22,7 @@ import {
 } from "@lynse/ui/components/ui/select";
 import { Trash2 } from "../icons";
 import { useTranslation } from "@lynse/core/i18n/react";
+import { analytics } from "@lynse/core/analytics";
 import { useAddSummary, useReplaceSummaryTemplate, useRerunSummary, useTemplateCategories, useFileDetail } from "./hooks/use-files";
 import { isInsufficientCreditsError } from "../layout/use-user-credits";
 import { isLynclawSummaryTabsEnabled } from "../feature-flags";
@@ -304,9 +305,15 @@ export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mo
           : text("resummarize.success", fallback.rerunSuccess),
       );
       onFinished?.(currentFileId, true, currentMode, { pendingId, conclusion });
+      analytics.track("summary_generated", {
+        template_id: currentTemplateId,
+        success: true,
+      });
       if (currentMode !== "rerun" || !conclusion) {
         await qc.invalidateQueries({ queryKey: ["file-conclusions", currentFileId] });
       }
+      await qc.invalidateQueries({ queryKey: ["file-transcription", currentFileId] });
+      await qc.invalidateQueries({ queryKey: ["file-outline", currentFileId] });
     } catch (err) {
       const isCreditsError = isInsufficientCreditsError(err);
       const msg = err instanceof Error ? err.message : text("resummarize.unknown_error", fallback.unknownError);
@@ -321,6 +328,10 @@ export function ResummarizeDialog({ open, onOpenChange, fileId, conclusionId, mo
         { description: isCreditsError ? undefined : msg },
       );
       onFinished?.(currentFileId, false, currentMode, { pendingId });
+      analytics.track("summary_generated", {
+        template_id: currentTemplateId,
+        success: false,
+      });
     }
   }, [fileId, effectiveId, mode, conclusionId, allTemplates, lynclawEnabled, onLynclawApply, onStarted, onOpenChange, qc, addSummary, replaceSummary, rerunSummary, text, fallback, onFinished]);
 

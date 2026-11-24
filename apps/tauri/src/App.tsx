@@ -108,13 +108,34 @@ function renderWindow(kind: string | null) {
     case "report": return <ReportProblemWindow />;
     default: {
       const desktop = (window as Window & { desktopAPI?: DesktopApi }).desktopAPI;
+      const appVersion = desktop?.appInfo?.version ?? "1.2.17";
+      const isMac = /Macintosh|Mac OS/i.test(navigator.userAgent);
+      const isWin = /Windows/i.test(navigator.userAgent);
+      const os = isMac ? "macos" : isWin ? "windows" : "other";
+
       return (
         <CoreProvider
           apiBaseUrl={import.meta.env.VITE_API_URL}
           wsUrl={import.meta.env.VITE_WS_URL}
           storage={secureStorage}
-          identity={{ platform: "desktop", version: desktop?.appInfo?.version ?? "0.1.0" }}
+          identity={{ platform: "desktop", version: appVersion }}
           resources={resources}
+          analyticsConfig={{
+            apiKey: import.meta.env.VITE_POSTHOG_PROJECT_TOKEN || import.meta.env.VITE_POSTHOG_KEY,
+            apiHost: import.meta.env.VITE_POSTHOG_HOST,
+            platform: "desktop",
+            appVersion,
+            os,
+            enabled: Boolean(import.meta.env.VITE_POSTHOG_PROJECT_TOKEN || import.meta.env.VITE_POSTHOG_KEY),
+            debug: import.meta.env.DEV,
+          }}
+          telemetryConfig={{
+            dsn: import.meta.env.VITE_SENTRY_DSN,
+            release: `lynse-desktop@${appVersion}`,
+            environment: import.meta.env.MODE,
+            enabled: Boolean(import.meta.env.VITE_SENTRY_DSN),
+            debug: import.meta.env.DEV,
+          }}
         >
           <MainWindow />
         </CoreProvider>

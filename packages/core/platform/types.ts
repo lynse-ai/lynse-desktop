@@ -1,4 +1,6 @@
 import type { StorageAdapter } from "../types/storage";
+import type { AnalyticsConfig } from "../analytics/types";
+import type { SentryConfig } from "../telemetry";
 
 export interface ClientIdentity {
   platform?: string;
@@ -19,4 +21,6 @@ export interface CoreProviderProps {
   locale?: string;
   resources: Record<string, Record<string, unknown>>;
   localeAdapter?: { get(): string | null; set(locale: string): void };
+  analyticsConfig?: AnalyticsConfig;
+  telemetryConfig?: SentryConfig;
 }

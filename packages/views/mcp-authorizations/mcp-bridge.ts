@@ -135,7 +135,8 @@ export async function fetchMcpConsent(ticket: string) {
     || typeof data.csrf !== "string" || !isStringArray(data.scopes) || data.scopes.length === 0) {
     throw new Error("invalid MCP authorization request");
   }
-  return { clientName: data.client_name, csrf: data.csrf, scopes: data.scopes };
+  const source = data.source === "web" ? "web" : "mcp";
+  return { clientName: data.client_name, csrf: data.csrf, scopes: data.scopes, source };
 }
 
 export async function fetchMcpConsentAccount(ticket: string, csrf: string, token: string) {

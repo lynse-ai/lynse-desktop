@@ -11,6 +11,7 @@ import { AppleFragmentBootstrap, LoginPage, PostLoginRedirectMarker } from "../a
 import { Check } from "../icons";
 import { AuthorizationAccount, AuthorizationCard, AuthorizationFrame } from "./authorization-layout";
 import { completeMcpConsent, fetchMcpConsent, fetchMcpConsentAccount } from "./mcp-bridge";
+import { SsoConsent } from "./sso-consent-view";
 
 export function McpConsentView({ ticket, logoSrc }: { ticket: string | null; logoSrc: string }) {
   const { t } = useTranslation();
@@ -27,7 +28,11 @@ export function McpConsentView({ ticket, logoSrc }: { ticket: string | null; log
     <>
       <AppleFragmentBootstrap />
       {ticket && context.data ? (
-        <McpConsent key={ticket} ticket={ticket} context={context.data} logoSrc={logoSrc} />
+        context.data.source === "web" ? (
+          <SsoConsent key={ticket} ticket={ticket} context={context.data} logoSrc={logoSrc} />
+        ) : (
+          <McpConsent key={ticket} ticket={ticket} context={context.data} logoSrc={logoSrc} />
+        )
       ) : (
         <AuthorizationFrame logoSrc={logoSrc}>
           <AuthorizationCard title={t("mcpAuthorizations.consent_title")}>
@@ -47,7 +52,7 @@ export function McpConsentView({ ticket, logoSrc }: { ticket: string | null; log
   );
 }
 
-function McpConsent({ ticket, context, logoSrc }: {
+export function McpConsent({ ticket, context, logoSrc }: {
   ticket: string;
   context: Awaited<ReturnType<typeof fetchMcpConsent>>;
   logoSrc: string;

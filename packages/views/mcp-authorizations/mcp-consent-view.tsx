@@ -174,7 +174,17 @@ function McpConsent({ ticket, context, logoSrc }: {
             {scopes.map((scope) => (
               <li key={scope} className="flex items-center gap-2">
                 <Check aria-hidden="true" className="size-4 shrink-0 text-primary" />
-                {t(scope === "lynse:read" ? "mcpAuthorizations.device_scope_read" : "mcpAuthorizations.device_scope_write")}
+                {scope === "lynse:read"
+                  ? t("mcpAuthorizations.device_scope_read")
+                  : scope === "lynse:write"
+                    ? t("mcpAuthorizations.device_scope_write")
+                    : scope === "openid"
+                      ? "OpenID Connect"
+                      : scope === "profile"
+                        ? "Profile"
+                        : scope === "email"
+                          ? "Email"
+                          : scope}
               </li>
             ))}
           </ul>

@@ -119,6 +119,9 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
 
   // Active sign-in view. Phone is the CN default; intl leads with email.
   const [view, setView] = useState<LoginView>(intl ? "email" : "phone");
+  // Overseas (intl) edition only supports Email, Google, and Apple sign-in.
+  // All other login methods (phone SMS, WeChat, QR) are strictly excluded.
+  const activeView: LoginView = intl ? (view === "api" ? "api" : "email") : view;
 
   // Create a challenge, show its QR, then
   // poll until the Lynse mobile app scans + confirms it.
@@ -256,13 +259,13 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
 
   async function handleSendCode() {
     if (codeSending || resendIn > 0) return;
-    if (view === "email" && !isValidEmail(email)) return;
-    if (view !== "email" && !isValidChinaPhone(phone)) return;
+    if (activeView === "email" && !isValidEmail(email)) return;
+    if (activeView !== "email" && !isValidChinaPhone(phone)) return;
     setSmsError(null);
     setCodeSending(true);
     try {
       const res =
-        view === "email"
+        activeView === "email"
           ? await sendEmailCaptcha(email.trim())
           : await sendSmsCaptcha(phone.trim());
       if (res.success) {
@@ -283,7 +286,7 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
 
   async function handleSmsLogin(codeOverride?: string) {
     const code = codeOverride ?? smsCode;
-    const emailView = view === "email";
+    const emailView = activeView === "email";
     const targetValid = emailView ? isValidEmail(email) : isValidChinaPhone(phone);
     if (!agreed || !targetValid || !isCompleteSmsCode(code) || smsSubmitting) return;
     setSmsError(null);
@@ -831,7 +834,7 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
             web ? "w-full max-w-[300px]" : "w-full max-w-[260px] flex-1",
           )}
         >
-        {view === "more" ? (
+        {activeView === "more" ? (
           /* ── More ways to sign in ─────────────────────── */
           <div className="space-y-4">
             <p className="text-center text-sm font-medium">
@@ -850,31 +853,22 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
                   <ChevronRight className="ml-auto size-4 text-muted-foreground" />
                 </button>
               )}
-              {intl && (
+              {!intl && (
                 <button
                   type="button"
-                  onClick={() => setView("phone")}
+                  onClick={handleWechatLogin}
+                  disabled={wechatWaiting}
                   className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
                 >
-                  <KeyRound className="size-4" />
-                  <span className="text-sm">{t("auth.phone_code_login")}</span>
+                  <WechatIcon className="size-4" />
+                  <span className="text-sm">{t("auth.wechat_login")}</span>
                   <ChevronRight className="ml-auto size-4 text-muted-foreground" />
                 </button>
               )}
-              <button
-                type="button"
-                onClick={handleWechatLogin}
-                disabled={wechatWaiting}
-                className="flex h-9 w-full items-center gap-3 rounded-full bg-muted px-3.5 text-left transition-colors hover:bg-muted/70"
-              >
-                <WechatIcon className="size-4" />
-                <span className="text-sm">{t("auth.wechat_login")}</span>
-                <ChevronRight className="ml-auto size-4 text-muted-foreground" />
-              </button>
               {/* App-scanned QR entry is web-only: on desktop it made way
                   for Apple sign-in (embedded auth window, same shape as the
                   WeChat/SSO flows). */}
-              {web && (
+              {web && !intl && (
                 <button
                   type="button"
                   onClick={() => setView("qr")}
@@ -885,7 +879,7 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
                   <ChevronRight className="ml-auto size-4 text-muted-foreground" />
                 </button>
               )}
-              {!web && (
+              {!web && !intl && (
                 <button
                   type="button"
                   onClick={() => {
@@ -920,9 +914,9 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
                 size="sm"
                 variant="ghost"
                 className="h-8 text-xs text-muted-foreground"
-                onClick={() => setView("phone")}
+                onClick={() => setView(intl ? "email" : "phone")}
               >
-                {t("auth.back_to_phone")}
+                {t(intl ? "auth.back_to_login" : "auth.back_to_phone")}
               </Button>
               {isTestMode() && (
                 <Button
@@ -931,7 +925,7 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
                   className="h-8 text-xs text-muted-foreground"
                   onClick={() => {
                     setTestMode(false);
-                    setView("phone");
+                    setView(intl ? "email" : "phone");
                   }}
                 >
                   {t("auth.test_mode_exit")}
@@ -939,8 +933,8 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
               )}
             </div>
           </div>
-        ) : view !== "api" ? (
-          view === "email" ? (
+        ) : activeView !== "api" ? (
+          activeView === "email" ? (
             /* ── Email + code sign-in (intl default), Google/Apple above ── */
             <>
               {/* Google/Apple stay visible on intl: clicking without the
@@ -1053,7 +1047,7 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
                 onLink={handleAgreeLink}
               />
             </>
-          ) : view === "phone" ? (
+          ) : activeView === "phone" ? (
             <>
               {/* ── Social sign-in above the form (web, CN edition) ── */}
               {web && !intl && (
@@ -1217,9 +1211,9 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
                   size="sm"
                   variant="ghost"
                   className="h-8 text-xs text-muted-foreground"
-                  onClick={() => setView("phone")}
+                  onClick={() => setView(intl ? "email" : "phone")}
                 >
-                  {t("auth.back_to_phone")}
+                  {t(intl ? "auth.back_to_login" : "auth.back_to_phone")}
                 </Button>
             </div>
           </>
@@ -1232,7 +1226,7 @@ export function LoginPage({ subtitle, footer }: { subtitle?: string; footer?: Re
         {/* ── More ways to sign in (phone view) / WeChat, SSO or Apple wait
             state. Desktop pins it to the window's bottom edge; web keeps it
             right under the centered form. ── */}
-        {(view === "phone" || wechatWaiting || ssoWaiting || appleWaiting) && (
+        {(!intl && (activeView === "phone" || wechatWaiting || ssoWaiting || appleWaiting)) && (
           <div className={cn(web ? "mt-5" : "mt-auto pt-3")}>
             {wechatWaiting ? (
               <div className="space-y-1.5 text-center">

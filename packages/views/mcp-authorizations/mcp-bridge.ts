@@ -126,16 +126,13 @@ export async function fetchDeviceAccount(csrf: string, token: string) {
   return parseAuthorizationAccount(await consoleAction("agent/device/account", csrf, { token }));
 }
 
-type McpScope = "lynse:read" | "lynse:write";
-
 export async function fetchMcpConsent(ticket: string) {
   const query = new URLSearchParams({ ticket });
   const response = await fetch(`${API}/context?${query}`, { credentials: "same-origin", cache: "no-store" });
   if (!response.ok) throw new Error(await readError(response, "authorization service unavailable"));
   const data: unknown = await response.json();
   if (!isRecord(data) || data.web_account !== true || typeof data.client_name !== "string"
-    || typeof data.csrf !== "string" || !isStringArray(data.scopes) || !data.scopes.includes("lynse:read")
-    || !data.scopes.every((scope): scope is McpScope => scope === "lynse:read" || scope === "lynse:write")) {
+    || typeof data.csrf !== "string" || !isStringArray(data.scopes) || data.scopes.length === 0) {
     throw new Error("invalid MCP authorization request");
   }
   return { clientName: data.client_name, csrf: data.csrf, scopes: data.scopes };

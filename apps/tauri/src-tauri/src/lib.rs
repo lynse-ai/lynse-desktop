@@ -43,6 +43,7 @@ mod bots;
 mod audio_editor;
 mod stt;
 mod translation;
+mod ai_observability;
 // Microphone TCC prompt from the main app process (macOS); stubs elsewhere.
 mod mic_permission;
 // Wire codec for the Volcengine AST provider used by `live_translation`. Kept
@@ -3457,6 +3458,7 @@ fn local_transcription_save_chapters(
 /// and the Qwen-MT endpoint override supports international-station keys.
 #[tauri::command]
 async fn translation_translate(
+    app: AppHandle,
     text: String,
     source: String,
     target: String,
@@ -3471,7 +3473,8 @@ async fn translation_translate(
         "speak" => translation::TranslateKind::Speak,
         _ => translation::TranslateKind::Sentence,
     };
-    let outcome = translation::translate(
+    let outcome = translation::translate_with_observability(
+        Some(&app),
         &text,
         &source,
         &target,
@@ -3493,8 +3496,8 @@ async fn translation_translate(
 /// round-trip in ms (a 429 counts as valid — the key works, the account is
 /// just busy).
 #[tauri::command]
-async fn translation_check_key(key: String) -> CommandResult<Value> {
-    let ms = translation::check_ling_key(&key).await?;
+async fn translation_check_key(app: AppHandle, key: String) -> CommandResult<Value> {
+    let ms = translation::check_ling_key(&app, &key).await?;
     Ok(json!({ "ok": true, "ms": ms }))
 }
 

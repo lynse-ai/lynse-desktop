@@ -1226,6 +1226,8 @@ async fn request_model_report(
         .as_str()
         .map(|id| id.chars().take(8).collect::<String>())
         .unwrap_or_default();
+    let ai_input = body.clone();
+    let ai_trace_id = uuid::Uuid::new_v4().to_string();
     let result = send_synthesis_report(
         &client,
         &format!("{}{path}", session.agent_url),
@@ -1239,6 +1241,18 @@ async fn request_model_report(
         },
     )
     .await;
+    crate::ai_observability::capture_generation(
+        app,
+        &ai_trace_id,
+        Some(&session.scope),
+        report.model.as_deref().unwrap_or("lynclaw-synthesis"),
+        "lynclaw",
+        json!([{"role": "user", "content": ai_input.to_string()}]),
+        result.as_ref().ok().map(Value::to_string),
+        model_started.elapsed().as_secs_f64(),
+        None,
+        result.as_ref().err().map(|_| "synthesis request failed".to_owned()),
+    );
     match &result {
         Ok(_) => log::info!(
             "[wiki-model] task={} sources={} op={} ok in {:.1}s",

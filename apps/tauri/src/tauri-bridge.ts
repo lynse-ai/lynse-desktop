@@ -17,6 +17,7 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { setApiTransportMode } from "@lynse/core/api/client";
 import { normalizeReleaseNotesLocales, type ReleaseNotesLocales } from "@lynse/core/i18n";
 import { installWorkBuddyBridge } from "./workbuddy-bridge";
+import { posthog, posthogLogs } from "./posthog";
 import { desktopMcpApi, installDesktopMcpBridge, type DesktopMcpApi } from "./mcp-bridge";
 import { hydrateSecrets, refreshSecret, registerSecretKeys, removeSecret, secureStorage, setSecret } from "./secure-storage";
 import {
@@ -522,7 +523,12 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
         return typeof selected === "string" ? selected : null;
       },
       transcribe: (audioPath: string, options?: unknown) => command("local_transcription_transcribe", { audioPath, options }),
-      start: (audioPath: string, options?: unknown) => command("local_transcription_start", { audioPath, options }),
+      start: async (audioPath: string, options?: unknown) => {
+        const result = await command("local_transcription_start", { audioPath, options });
+        posthog.capture("local_transcription_started");
+        posthogLogs.localTranscriptionStarted();
+        return result;
+      },
       list: () => command("local_transcription_list"),
       get: (id: string) => command("local_transcription_get", { id }),
       saveSummary: (id: string, title: string | null, markdown: string) =>
@@ -613,9 +619,22 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
       vaultAccessCheck: () => command<VaultAccessReport>("vault_access_check"),
       vaultRepairConsent: () => command<boolean>("vault_repair_folder_consent"),
       audioDevices: () => command<AudioDevicesSnapshot>("live_translation_audio_devices"),
-      start: (request: LiveStartRequest) => command<LiveTranslationSnapshot>("live_translation_start", { request }),
-      pause: () => command<LiveTranslationSnapshot>("live_translation_pause"),
-      resume: (request: LiveResumeRequest) => command<LiveTranslationSnapshot>("live_translation_resume", { request }),
+      start: async (request: LiveStartRequest) => {
+        const snapshot = await command<LiveTranslationSnapshot>("live_translation_start", { request });
+        posthog.capture("live_translation_started");
+        posthogLogs.liveTranslationStarted();
+        return snapshot;
+      },
+      pause: async () => {
+        const snapshot = await command<LiveTranslationSnapshot>("live_translation_pause");
+        posthog.capture("live_translation_paused");
+        return snapshot;
+      },
+      resume: async (request: LiveResumeRequest) => {
+        const snapshot = await command<LiveTranslationSnapshot>("live_translation_resume", { request });
+        posthog.capture("live_translation_resumed");
+        return snapshot;
+      },
       setMode: (request: LiveSetModeRequest) => command<LiveTranslationSnapshot>("live_translation_set_mode", { request }),
       setSources: (request) => command<LiveTranslationSnapshot>("live_translation_set_sources", { request }),
       waveformPeaks: (src, recordId) => command<{ peaks: number[]; durationMs: number }>("local_audio_waveform", { src, recordId }),
@@ -628,7 +647,10 @@ export async function installTauriBridge(windowKind: string | null = null): Prom
       checkLingKey: (key: string) => command<{ ok: boolean; ms: number }>("translation_check_key", { key }),
       patchTranslation: (args: { sessionId: string; segmentId: string; translatedText: string }) =>
         command<void>("live_translation_patch_translation", args),
-      stop: () => command<void>("live_translation_stop"),
+      stop: async () => {
+        await command<void>("live_translation_stop");
+        posthog.capture("live_translation_stopped");
+      },
       getState: () => command<LiveTranslationSnapshot>("live_translation_state"),
       finalizeLocal: (sessionId, synced) => command<void>("live_translation_finalize_local", { sessionId, synced }),
       setCloudFileId: (sessionId, cloudFileId) =>

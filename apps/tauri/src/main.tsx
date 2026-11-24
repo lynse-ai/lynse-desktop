@@ -1,9 +1,11 @@
 import ReactDOM from "react-dom/client";
+import { posthogLogs } from "./posthog";
 import "./globals.css";
 import { installTauriBridge } from "./tauri-bridge";
 import { installPrivatePlugins } from "./private-plugins";
 import { installLogger } from "./logger";
 import { installEventUnlistenGuard } from "./event-guard";
+import { installAiObservability } from "./ai-observability";
 import { initAppTheme } from "@lynse/views/settings/app-theme";
 import { syncNotchIslandPreference, useIslandPreferences } from "@lynse/views/settings/island-preferences";
 import { invoke } from "@tauri-apps/api/core";
@@ -21,6 +23,7 @@ async function bootstrap() {
   // the first listener is registered in installTauriBridge, so every teardown
   // path in the app goes through the guard.
   installEventUnlistenGuard();
+  installAiObservability();
   const windowKind = new URLSearchParams(window.location.search).get("window");
   // Transparent floating windows must render the webview body transparent too,
   // otherwise the theme background shows through as a square frame.
@@ -57,6 +60,7 @@ async function bootstrap() {
   }
 
   const [{ default: App }] = await Promise.all([import("./App"), installTauriBridge(windowKind)]);
+  posthogLogs.rendererBooted();
   if (!windowKind) installPrivatePlugins();
   syncWindowEffects();
   // Re-apply the persisted notch-island preference: the Rust flag is an
